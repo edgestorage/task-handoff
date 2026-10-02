@@ -1,9 +1,13 @@
 import { computed, reactive, ref, watch } from "vue";
+import { MODEL_REQUEST_MAPPING_PRESETS } from "@task-handoff/protocol/control-plane";
 import { copyModel, createModel, createNodeModel, deleteModel, deleteNodeModel, discoverModels, mergeModel as mergeModelRequest, reorderModels, syncModel as syncModelRequest, testModel, updateModel } from "../../../api/queries";
-import type { DiscoveredModel, ModelApp, ModelConfig, ModelLocation, ModelProtocol, Node } from "../../../api/types";
+import type { DiscoveredModel, ModelApp, ModelConfig, ModelLocation, ModelProtocol, ModelRequestMapping, Node } from "../../../api/types";
+import { nodeSupportsModelRequestMappings } from "../../../api/nodeCapabilities";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
+
+const REQUEST_MAPPING_LIMIT = 64;
 
 type UseModelSettingsInput = {
   errorText: (error: unknown) => string;
@@ -36,6 +40,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     key: "",
     model: "",
     modelNames: [] as Array<{ name: string; upstreamName?: string; order: number }>,
+    mappings: [] as ModelRequestMapping[],
     protocols: ["openai-responses"] as ModelProtocol[],
     app: "codex" as ModelApp,
     enabled: true,
@@ -56,6 +61,17 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     return Boolean(capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
       && (capabilities as Record<string, unknown>).modelEndpointProbe === true);
   });
+  /**
+   * Request mappings are stored per model entity. Control-plane records stay
+   * editable and degrade visibly per node on sync; a node owned record is
+   * editable only while its node declares the capability.
+   */
+  const mappingsEditable = computed(() => settingsModel.locationScope === "control-plane"
+    || nodeSupportsModelRequestMappings(nodes().find((item) => item.id === settingsModel.locationScope)));
+  const mappingTargetDefault = () => {
+    const primary = settingsModel.modelNames[0];
+    return primary?.upstreamName?.trim() || primary?.name.trim() || "";
+  };
   const canDiscoverModels = computed(() => Boolean(
     selectedNodeSupportsModelEndpointProbe.value
     &&
@@ -78,6 +94,16 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     if (!editingModelId.value && settingsModel.locationScope !== "control-plane" && !nodes().some((node) => node.id === settingsModel.locationScope)) {
       return false;
     }
+    if (settingsModel.mappings.length > REQUEST_MAPPING_LIMIT) return false;
+    if (settingsModel.mappings.some((entry) => !entry.name.trim() || !entry.upstreamName.trim())) return false;
+    const mappingNames = new Set<string>();
+    if (settingsModel.mappings.some((entry) => {
+      const name = entry.name.trim();
+      if (mappingNames.has(name)) return true;
+      mappingNames.add(name);
+      return false;
+    })) return false;
+    if (!mappingsEditable.value && settingsModel.mappings.length) return false;
     return settingsModel.protocols.length > 0;
   });
 
@@ -89,6 +115,43 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   function syncPrimaryModelName() { settingsModel.model = settingsModel.modelNames[0]?.name.trim() || ""; }
   function addModelName() { settingsModel.modelNames.push({ name: "", upstreamName: "", order: (settingsModel.modelNames.length + 1) * 100 }); }
   function removeModelName(index: number) { if (settingsModel.modelNames.length > 1) { settingsModel.modelNames.splice(index, 1); syncPrimaryModelName(); } }
+  function renumberMappings() { settingsModel.mappings.forEach((entry, index) => { entry.order = (index + 1) * 100; }); }
+  function addMapping() {
+    if (!mappingsEditable.value || settingsModel.mappings.length >= REQUEST_MAPPING_LIMIT) return;
+    settingsModel.mappings.push({ name: "", upstreamName: mappingTargetDefault(), order: (settingsModel.mappings.length + 1) * 100 });
+  }
+  function removeMapping(index: number) {
+    settingsModel.mappings.splice(index, 1);
+    renumberMappings();
+  }
+  function moveMapping(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= settingsModel.mappings.length) return;
+    const [entry] = settingsModel.mappings.splice(index, 1);
+    settingsModel.mappings.splice(target, 0, entry);
+    renumberMappings();
+  }
+  /** Inserts a preset's request names; existing rows and the target stay untouched. */
+  function applyMappingPreset(presetId: string) {
+    if (!mappingsEditable.value) return;
+    const preset = MODEL_REQUEST_MAPPING_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+    const target = mappingTargetDefault();
+    let added = 0;
+    for (const name of preset.names) {
+      if (settingsModel.mappings.length >= REQUEST_MAPPING_LIMIT) break;
+      if (settingsModel.mappings.some((entry) => entry.name.trim() === name)) continue;
+      settingsModel.mappings.push({ name, upstreamName: target, order: (settingsModel.mappings.length + 1) * 100 });
+      added += 1;
+    }
+    if (added) showControlPlaneToast(t("settings.modelRegistry.mappingPresetApplied", { count: added }), "success");
+    return added;
+  }
+  /** True when the model name list already resolves this request name. */
+  function requestMappingInactive(entry: { name: string }) {
+    const name = entry.name.trim();
+    return Boolean(name) && settingsModel.modelNames.some((item) => item.name.trim() === name);
+  }
   function reorderModelName(source: number, target: number) {
     if (source < 0 || target < 0 || source >= settingsModel.modelNames.length || target >= settingsModel.modelNames.length || source === target) return;
     const [entry] = settingsModel.modelNames.splice(source, 1);
@@ -181,6 +244,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.key = "";
     settingsModel.model = "";
     settingsModel.modelNames = [{ name: "", upstreamName: "", order: 100 }];
+    settingsModel.mappings = [];
     settingsModel.protocols = ["openai-responses"];
     settingsModel.app = "codex";
     settingsModel.enabled = true;
@@ -203,6 +267,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           order: entry.order,
         }))
       : [{ name: model.model, upstreamName: model.model, order: 100 }];
+    settingsModel.mappings = (model.mappings || []).map((entry) => ({
+      name: entry.name,
+      upstreamName: entry.upstreamName,
+      order: entry.order,
+    }));
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
@@ -226,6 +295,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           order: entry.order,
         }))
       : [{ name: model.model, upstreamName: model.model, order: 100 }];
+    settingsModel.mappings = (model.mappings || []).map((entry) => ({
+      name: entry.name,
+      upstreamName: entry.upstreamName,
+      order: entry.order,
+    }));
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
@@ -249,6 +323,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         modelNames: settingsModel.modelNames.map((entry, index) => ({
           name: entry.name.trim(),
           upstreamName: entry.upstreamName?.trim() || entry.name.trim(),
+          order: (index + 1) * 100,
+        })),
+        mappings: settingsModel.mappings.map((entry, index) => ({
+          name: entry.name.trim(),
+          upstreamName: entry.upstreamName.trim(),
           order: (index + 1) * 100,
         })),
         protocols: [...settingsModel.protocols],
@@ -441,6 +520,12 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     removeModelName,
     moveModelName,
     reorderModelName,
+    addMapping,
+    applyMappingPreset,
+    mappingsEditable,
+    moveMapping,
+    removeMapping,
+    requestMappingInactive,
     fetchModelOptions,
   };
 }

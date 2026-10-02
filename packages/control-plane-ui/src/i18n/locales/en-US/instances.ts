@@ -325,7 +325,6 @@ export const instances = {
     imageFailed: "Image preparation failed",
     created: "Instance created",
     preparingRuntime: "Preparing runtime",
-    startingContainer: "Starting container",
     connecting: "Connecting instance",
     stopping: "Stopping instance",
     stopped: "Instance stopped",

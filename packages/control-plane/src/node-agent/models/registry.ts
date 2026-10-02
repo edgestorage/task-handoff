@@ -13,6 +13,7 @@ import {
   modelConfigHash,
   modelContentRevision,
   normalizeModelNameEntries,
+  normalizeModelRequestMappings,
   projectModelNameEntries,
   supportsControlledInstanceModelRelay,
   supportsControlledInstanceModelRelayProtocol,
@@ -35,6 +36,18 @@ type InstanceAccess = {
   require(id: string): ControlledInstance;
   put(instance: ControlledInstance): ControlledInstance;
 };
+
+/**
+ * Compatibility for v0.0.34: a legacy hash identity addresses a record by its
+ * content, so it can never carry request mappings (two records with equal
+ * content but different mappings would collide on one hash).
+ */
+function legacyMappingIdentityError() {
+  return Object.assign(new Error("Model request mappings require a stable model entity identity."), {
+    statusCode: 400,
+    code: "NODE_MODEL_REQUEST_MAPPING_REQUIRES_STABLE_IDENTITY",
+  });
+}
 
 export class NodeModelRegistry {
   private readonly models: ModelRepository;
@@ -136,7 +149,13 @@ export class NodeModelRegistry {
   create(input: z.infer<typeof CreateNodeModelSchema>) {
     const timestamp = now();
     const modelNames = normalizeModelNames(input.modelNames, input.model);
-    const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
+    const normalizedInput = {
+      ...input,
+      model: modelNames[0].name,
+      modelNames,
+      mappings: normalizeModelRequestMappings(input.mappings),
+      protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app),
+    };
     // Entity identity is opaque and stable. Re-adding the same content still
     // converges on the existing entity, but a new record mints a short id.
     const contentRevision = modelContentRevision(normalizedInput);
@@ -162,7 +181,14 @@ export class NodeModelRegistry {
     const expectedHash = modelConfigHash(input);
     const existing = this.models.get(input.id);
     const modelNames = normalizeModelNames(input.modelNames, input.model);
-    const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
+    const mappings = normalizeModelRequestMappings(input.mappings);
+    const normalizedInput = {
+      ...input,
+      model: modelNames[0].name,
+      modelNames,
+      mappings,
+      protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app),
+    };
     if (input.id !== expectedHash && !existing && isModelConfigHashId(input.id)) {
       // Compatibility for v0.0.34: released control planes deploy under the
       // content hash, so a hash-shaped unknown id must still match its content.
@@ -181,6 +207,11 @@ export class NodeModelRegistry {
       }
       if (existing) this.assertReferencingInstancesAllowMapped(existing.id, normalizedInput);
     }
+    if (mappings.length && isModelConfigHashId(input.id)) {
+      // Compatibility for v0.0.34: legacy hash ids cannot be edited in place,
+      // so request mappings must never be stored under one.
+      throw legacyMappingIdentityError();
+    }
     const stored = this.models.put(NodeModelConfigSchema.parse({
       ...normalizedInput,
       createdAt: existing?.createdAt || normalizedInput.createdAt,
@@ -196,6 +227,16 @@ export class NodeModelRegistry {
     const protocols = input.protocols?.length
       ? input.protocols
       : current.protocols?.length ? current.protocols : defaultProtocols(input.app || current.app);
+    // An explicit empty list clears every mapping; a missing field keeps the
+    // stored list. Unlike modelNames there is no legacy fallback to derive.
+    const mappings = input.mappings !== undefined
+      ? normalizeModelRequestMappings(input.mappings)
+      : normalizeModelRequestMappings(current.mappings);
+    // Only an explicit mapping edit trips this check, so untouched patches to a
+    // stored legacy record keep working; deploy() carries the same invariant.
+    if (input.mappings !== undefined && mappings.length && isModelConfigHashId(id)) {
+      throw legacyMappingIdentityError();
+    }
     const candidate = NodeModelConfigSchema.parse({
       ...current,
       ...input,
@@ -203,6 +244,7 @@ export class NodeModelRegistry {
       protocols,
       model: modelNames[0].name,
       modelNames,
+      mappings,
       createdAt: current.createdAt,
       updatedAt: now(),
     });

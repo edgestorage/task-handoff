@@ -37,7 +37,7 @@ import {
   AiSessionTurnIndexReadSchema,
   AiSessionTurnBodyReadSchema,
   AiSessionQueueMutationResponseSchema,
-  AiSessionUnreadStateSchema,
+  AiSessionReadResultSchema,
   AiSessionsSnapshotSchema,
   type AiSessionCreateRefInput,
   type AiSessionForkInput,
@@ -59,9 +59,9 @@ import { jsonRequest } from "./json-request.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 
-export const ControlPlaneAiSessionSummarySchema = AiSessionSummarySchema.extend({
-  unread: z.boolean().default(false),
-});
+// The Control Plane projection is the protocol AI session model: `unread` is
+// owned by the controlled-instance session runtime and now travels with it.
+export const ControlPlaneAiSessionSummarySchema = AiSessionSummarySchema;
 export const ControlPlaneAiSessionsSnapshotSchema = AiSessionsSnapshotSchema.extend({
   sessions: z.array(ControlPlaneAiSessionSummarySchema),
 });
@@ -173,8 +173,8 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     executeCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/commands`, AiSessionCommandResultSchema, jsonRequest("POST", AiSessionCommandInputSchema.parse(input)));
     },
-    markRead(instanceId: string, sessionId: string, sessionUpdatedAt: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/read`, AiSessionUnreadStateSchema, jsonRequest("POST", { sessionUpdatedAt }));
+    markRead(instanceId: string, sessionId: string) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/read`, AiSessionReadResultSchema, jsonRequest("POST", {}));
     },
     sendMessage(instanceId: string, sessionId: string, input: {
       message: string;

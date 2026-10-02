@@ -12,7 +12,7 @@ import {
   type InstanceLifecycleSnapshot,
   type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemDeltaEventSchema, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, normalizeAiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemDeltaEventSchema, AiSessionTimelineItemEventSchema, normalizeAiSessionMessageDeltaEvent, normalizeAiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
 import { ControlPlaneAiSessionTriggerBoundEventSchema, ControlPlaneAiSessionTriggerUnboundEventSchema } from "@task-handoff/protocol/triggers";
@@ -61,7 +61,6 @@ export function useControlPlaneEvents(input: {
   enabled?: MaybeRefOrGetter<boolean>;
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
-    applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
     applyMessageDelta: (payload: AiSessionMessageDeltaEvent, options?: { replay?: boolean }) => boolean;
     applyTimelineItem: (payload: AiSessionTimelineItemEvent) => boolean;
     applyTimelineItemDelta: (payload: AiSessionTimelineItemDeltaEvent) => boolean;
@@ -278,11 +277,6 @@ export function useControlPlaneEvents(input: {
       if (event.id) rememberTransientEventId(event.id);
       const delta = safeParseResponse(AiSessionTimelineItemDeltaEventSchema, event.payload);
       return delta.success ? input.aiSessions.applyTimelineItemDelta(delta.data) : false;
-    }
-    if (event.type === AiSessionUnreadEventType.Updated) {
-      const state = safeParseResponse(AiSessionUnreadStateSchema, event.payload);
-      if (!state.success || event.scope?.instanceId !== state.data.instanceId) return false;
-      return input.aiSessions.applyUnreadEvent(state.data);
     }
     if (event.type === AiSessionEventType.Snapshot || event.type === AiSessionEventType.Patch || event.type === AiSessionEventType.Removed) {
       const sessionEvent = { type: event.type, payload: event.payload } as AiSessionDeltaResponse["events"][number];

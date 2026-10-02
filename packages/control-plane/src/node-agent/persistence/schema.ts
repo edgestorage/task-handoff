@@ -78,6 +78,9 @@ export const models = sqliteTable("na_models", {
   // repository stores the compressed projection (upstreamName omitted while it
   // equals name) and normalizes on read, so this stays the only mapping store.
   modelNames: text("model_names_json", { mode: "json" }).$type<unknown[]>().notNull(),
+  // Node-private relay request name mappings ({ name, upstreamName, order }).
+  // Both names are always explicit, so the stored list is the normalized one.
+  mappings: text("mappings_json", { mode: "json" }).$type<unknown[]>().notNull(),
   protocols: text("protocols_json", { mode: "json" }).$type<string[]>().notNull(),
   labels: text("labels_json", { mode: "json" }).$type<Record<string, string>>().notNull(),
   createdAt: text("created_at").notNull(),

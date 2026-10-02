@@ -1,4 +1,5 @@
 import type {
+  AiSessionLifecycle,
   AiSessionRealtimeInput,
   AiSessionSnapshotInput,
   AiSessionStatus,
@@ -57,6 +58,7 @@ export type AiSessionPatch = Partial<
     | "completedAt"
     | "error"
     | "queue"
+    | "unread"
   >
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
@@ -110,6 +112,7 @@ function buildAiSessionPatch(
     !latestTurn.lastMessage
   );
   const status = patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status;
+  const unread = patch.unread !== undefined ? patch.unread : nextUnread(current.unread, current.status, status);
   const actions = {
     ...(patch.actions || current.actions),
     // Action availability is part of the lifecycle projection. Adapter snapshots
@@ -128,6 +131,7 @@ function buildAiSessionPatch(
     startedAt: current.startedAt,
     updatedAt,
     status,
+    unread,
     phase: patch.phase ? normalizeAiSessionPhase(patch.phase) : current.phase,
     actions,
     summary: options.replaceActivity
@@ -196,7 +200,14 @@ const AI_SESSION_BUSINESS_KEYS = [
   "error",
   "counters",
   "queue",
+  "unread",
 ] as const satisfies readonly AiSessionBusinessKey[];
+
+function nextUnread(current: boolean, previousStatus: AiSessionLifecycle, status: AiSessionLifecycle) {
+  if (status === "running" || status === "waiting") return false;
+  if (previousStatus === "running" || previousStatus === "waiting") return true;
+  return current;
+}
 
 // Keep this list exhaustive when the persisted session model grows.
 const _allAiSessionBusinessKeysCovered: Exclude<AiSessionBusinessKey, typeof AI_SESSION_BUSINESS_KEYS[number]> extends never ? true : never = true;

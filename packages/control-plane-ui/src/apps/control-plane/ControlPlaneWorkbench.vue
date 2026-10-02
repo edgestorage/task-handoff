@@ -306,6 +306,7 @@
         v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
+        :active-instance-action-label="activeInstanceActionLabel"
         :ai-session-count="instanceAiSessionCount"
         :active-instance-id="activeInstanceId"
         :can-export-config="canExportConfig"
@@ -1761,6 +1762,7 @@ async function resolveAiSessionApprovalAction(instance: InstanceBoardItem, sessi
 
 const {
   activeActionLabel,
+  activeInstanceActionLabel,
   canExportConfig,
   closeDeleteDialog,
   confirmDeleteInstance,

@@ -69,7 +69,7 @@ export function SessionDetail({
   timelineHistoryEnabled?: boolean;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onContinueFromTurn?(turn: DetailTurn): void;
-  onVisible?(sessionUpdatedAt: string): void;
+  onVisible?(): void;
   turnIndex?: number;
   pendingTurnIndex?: number;
   turnLoading?: boolean;
@@ -176,7 +176,7 @@ export function SessionDetail({
     if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current)) scheduleScrollToBottom(false);
   }, [scheduleScrollToBottom]);
   useEffect(() => {
-    if (session) onVisible?.(session.updatedAt);
+    if (session) onVisible?.();
   }, [onVisible, session]);
   useLayoutEffect(() => {
     if (resetSessionId.current === projectionId) return;

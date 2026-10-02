@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   CustomImageProfileSchema,
   DEFAULT_IMAGE_COVER,
@@ -213,7 +214,7 @@ export class ControlPlaneCatalogService {
 
   private normalizeProjectRecord(record: unknown) {
     const project = normalizeProject(record);
-    if (project !== record) this.options.projects.put(project);
+    if (!isDeepStrictEqual(project, record)) this.options.projects.put(project);
     return project;
   }
 

@@ -191,6 +191,8 @@ onBeforeUnmount(() => {
   color: var(--text);
   font-size: 14px;
   line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
   white-space: normal;
 }
 

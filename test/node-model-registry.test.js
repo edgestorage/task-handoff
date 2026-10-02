@@ -383,3 +383,42 @@ test("node agent never treats model sidecars created after SQLite migration as a
   assert.equal(fs.existsSync(`${legacyDir}.migrated-v0.0.28/inst_mappable.json`), true);
   assert.equal(fs.existsSync(`${legacyDir}.migrated-v0.0.28/inst_unmappable.json`), true);
 });
+
+test("node model request mappings persist, keep absent patches untouched and clear explicitly", async (t) => {
+  const dataDir = tempDataDir();
+  let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_mappings" });
+  t.after(async () => { if (!app.closed) await app.close(); });
+
+  const created = await request(app, "POST", "/api/node-agent/models", modelInput({
+    mappings: [{ name: " gpt-5.6-luna ", upstreamName: " upstream-a ", order: 300 }],
+  }));
+  assert.equal(created.statusCode, 201, created.body);
+  const model = created.json().data;
+  assert.deepEqual(model.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-a", order: 100 }]);
+
+  const database = new DatabaseSync(path.join(dataDir, "node-agent.sqlite"), { readOnly: true });
+  const row = database.prepare("SELECT mappings_json FROM na_models WHERE id = ?").get(model.id);
+  assert.deepEqual(JSON.parse(row.mappings_json), [{ name: "gpt-5.6-luna", upstreamName: "upstream-a", order: 100 }]);
+  database.close();
+
+  // A patch that does not mention mappings never clears them.
+  const renamed = await request(app, "PATCH", `/api/node-agent/models/${model.id}`, { name: "Renamed" });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  assert.deepEqual(renamed.json().data.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-a", order: 100 }]);
+
+  // Survives a restart from SQLite without a sidecar.
+  await app.close();
+  app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_mappings" });
+  const reread = (await request(app, "GET", "/api/node-agent/models")).json().data.find((entry) => entry.id === model.id);
+  assert.deepEqual(reread.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-a", order: 100 }]);
+
+  // An explicit empty list is the only way to clear mappings.
+  const cleared = await request(app, "PATCH", `/api/node-agent/models/${model.id}`, { mappings: [] });
+  assert.equal(cleared.statusCode, 200, cleared.body);
+  assert.deepEqual(cleared.json().data.mappings, []);
+
+  // Records created without mappings store and project an empty list.
+  const plain = await request(app, "POST", "/api/node-agent/models", modelInput({ name: "Plain", model: "gpt-plain", key: "plain-key" }));
+  assert.equal(plain.statusCode, 201, plain.body);
+  assert.deepEqual(plain.json().data.mappings, []);
+});

@@ -11,8 +11,11 @@ const {
   DeployNodeModelSchema,
   FederatedModelRegistrySchema,
   ModelConfigSchema,
+  MODEL_REQUEST_MAPPING_PRESETS,
+  ModelRequestMappingListSchema,
   NodeAgentModelRelaySchema,
   UpdateNodeAgentModelRelaySchema,
+  UpdateNodeModelSchema,
   createModelEntityId,
   isModelConfigHashId,
   isModelContentRevision,
@@ -20,9 +23,11 @@ const {
   modelContentRevision,
   normalizeControlledInstanceCapabilities,
   normalizeModelNameEntries,
+  normalizeModelRequestMappings,
   normalizeNodeAgentModelRelaySettings,
   projectModelNameEntries,
   sanitizeModelNameEntries,
+  sanitizeModelRequestMappings,
   supportsControlledInstanceModelRelay,
   supportsControlledInstanceModelRelayProtocol,
   supportsControlledInstanceModelRelayStreaming,
@@ -61,6 +66,10 @@ function mappedModelInput(overrides = {}) {
     modelNames: [{ name: "coding-fast", upstreamName: "provider-model-2026-09", order: 100 }],
     ...overrides,
   };
+}
+
+function mappingInput(overrides = {}) {
+  return { name: "gpt-5.6-luna", upstreamName: "provider-model-2026-09", order: 100, ...overrides };
 }
 
 function modelRecord(overrides = {}) {
@@ -170,6 +179,85 @@ test("mapping, endpoint and key edits advance the content revision while the leg
   assert.equal(isModelConfigHashId(legacyId), true);
   assert.equal(isModelConfigHashId(baseRevision), false);
   assert.match(baseRevision, /^mdlr_[a-f0-9]{64}$/);
+});
+
+test("request mappings stay a separate strict list that never changes exposed names or the legacy hash", () => {
+  const base = modelRecord();
+  const baseRevision = modelContentRevision(base);
+  const mapping = { name: "gpt-5.6-luna", upstreamName: "provider-model-2026-09", order: 100 };
+  const withMapping = modelRecord({ mappings: [mapping] });
+
+  // The record keeps both lists separate: mappings never join modelNames.
+  assert.deepEqual(withMapping.mappings, [mapping]);
+  assert.deepEqual(withMapping.modelNames, base.modelNames);
+  assert.equal(projectModelNameEntries(withMapping.modelNames).some((entry) => entry.name === "gpt-5.6-luna"), false);
+
+  // The content revision tracks mapped requests; an empty list keeps the exact
+  // released canonical payload, and the legacy hash never changes.
+  assert.equal(modelContentRevision(base), baseRevision);
+  assert.equal(modelContentRevision(modelRecord({ mappings: [] })), baseRevision);
+  assert.notEqual(modelContentRevision(withMapping), baseRevision);
+  assert.equal(modelConfigHash(withMapping), modelConfigHash(base));
+});
+
+test("request mapping writes are strict while patches keep absent and empty distinguishable", () => {
+  const input = { ...mappedModelInput(), mappings: [{ name: " gpt-5.6-luna ", upstreamName: " provider-model ", order: 200 }] };
+  assert.deepEqual(CreateModelInputSchema.parse(input).mappings, [{ name: "gpt-5.6-luna", upstreamName: "provider-model", order: 200 }]);
+  assert.deepEqual(CreateNodeModelSchema.parse(input).mappings, [{ name: "gpt-5.6-luna", upstreamName: "provider-model", order: 200 }]);
+  assert.equal(DeployNodeModelSchema.safeParse({
+    ...modelRecord({ mappings: [mappingInput()] }),
+  }).success, true);
+
+  // Duplicate request names, unknown entry fields and oversized lists fail closed.
+  assert.throws(() => CreateModelInputSchema.parse({
+    ...mappedModelInput(),
+    mappings: [mappingInput(), { ...mappingInput(), upstreamName: "elsewhere" }],
+  }), /Duplicate request mapping/i);
+  assert.throws(() => CreateModelInputSchema.parse({
+    ...mappedModelInput(),
+    mappings: [{ ...mappingInput(), alias: "x" }],
+  }), /alias|Unrecognized key/i);
+  assert.equal(ModelRequestMappingListSchema.safeParse(
+    Array.from({ length: 65 }, (_, index) => ({ name: `n${index}`, upstreamName: "upstream", order: index })),
+  ).success, false);
+
+  // Create defaults to no mappings; PATCH keeps "absent" distinct from an
+  // explicit clear so an unrelated edit never drops stored mappings.
+  assert.equal(CreateNodeModelSchema.parse(mappedModelInput()).mappings, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(UpdateNodeModelSchema.parse({ name: "Renamed" }), "mappings"), false);
+  assert.deepEqual(UpdateNodeModelSchema.parse({ mappings: [] }).mappings, []);
+});
+
+test("request mappings sanitize like name entries and presets stay read-only metadata", () => {
+  const warnings = [];
+  assert.deepEqual(sanitizeModelRequestMappings([
+    { name: " gpt-5.6-luna ", upstreamName: " upstream ", order: 100, alias: "dropped" },
+  ], (warning) => warnings.push(warning)), [{ name: "gpt-5.6-luna", upstreamName: "upstream", order: 100 }]);
+  assert.deepEqual(warnings, [{ field: "mappings[0].alias" }]);
+
+  const duplicateWarnings = [];
+  assert.deepEqual(sanitizeModelRequestMappings([
+    { name: "a", upstreamName: "upstream-a", order: 100 },
+    { name: "a", upstreamName: "upstream-b", order: 200 },
+  ], (warning) => duplicateWarnings.push(warning)), [{ name: "a", upstreamName: "upstream-a", order: 100 }]);
+  assert.deepEqual(duplicateWarnings, [{ field: "mappings[1].name" }]);
+  // A row that lost its required target still fails the schema instead of
+  // silently degrading to a same-name no-op.
+  assert.throws(() => ModelConfigSchema.parse({ ...modelRecord(), mappings: [{ name: "a", order: 100 }] }));
+
+  assert.deepEqual(normalizeModelRequestMappings([
+    { name: " b ", upstreamName: " upstream-b ", order: 200 },
+    { name: "a", upstreamName: "upstream-a", order: 100 },
+  ]), [
+    { name: "a", upstreamName: "upstream-a", order: 100 },
+    { name: "b", upstreamName: "upstream-b", order: 200 },
+  ]);
+  assert.deepEqual(normalizeModelRequestMappings([{ name: "a", upstreamName: "b", order: 7 }], { renumber: false }), [
+    { name: "a", upstreamName: "b", order: 7 },
+  ]);
+
+  assert.deepEqual(MODEL_REQUEST_MAPPING_PRESETS.map((preset) => preset.id), ["codex-auto-approval", "codex-background-tasks"]);
+  assert.deepEqual(MODEL_REQUEST_MAPPING_PRESETS[0].names, ["codex-auto-review", "gpt-5.6-luna"]);
 });
 
 test("mixed deployments keep the v0.0.34 hash projection and allow cross-entity duplicate names", () => {

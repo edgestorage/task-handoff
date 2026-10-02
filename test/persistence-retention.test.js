@@ -122,6 +122,22 @@ test("control-plane maintenance removes invites and retires redacted legacy proj
   assert.deepEqual(fs.readdirSync(retiredRoot), []);
 });
 
+test("retired persistence entries age out by canonical and v0.0.28 archive names", () => {
+  const paths = controlPlaneStorePaths(tempDir("control-plane-retention-names"));
+  const retiredRoot = path.join(paths.dataDir, "retired-persistence");
+  fs.mkdirSync(path.join(retiredRoot, "1000-controlled-instances"), { recursive: true });
+  fs.mkdirSync(path.join(retiredRoot, "v0.0.28-control-plane-p0-2026-08-02T03-04-05-000Z"), { recursive: true });
+  fs.mkdirSync(path.join(retiredRoot, "v0.0.28-control-plane-p0-2026-08-31T03-04-05-000Z"), { recursive: true });
+  fs.mkdirSync(path.join(retiredRoot, "unreadable-name"), { recursive: true });
+
+  new ControlPlanePersistenceMaintenance(paths, { now: () => Date.parse("2026-09-01T00:00:00.000Z") }).run();
+
+  assert.deepEqual(fs.readdirSync(retiredRoot).sort(), [
+    "unreadable-name",
+    "v0.0.28-control-plane-p0-2026-08-31T03-04-05-000Z",
+  ]);
+});
+
 test("node-agent maintenance retains active data and ages orphan data through trash", (t) => {
   const paths = nodeAgentStorePaths(tempDir("node-agent-retention"));
   const root = path.join(paths.dataDir, "local-instances");

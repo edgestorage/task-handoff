@@ -1112,6 +1112,56 @@ export const ModelNameEntriesSchema = z.array(ModelNameEntrySchema).max(256).def
   }
 });
 
+/**
+ * Relay-only request name mapping: an operator-authored rewrite from a model
+ * name a client asks for (for example a product's hidden background model) to
+ * the name this entity's upstream endpoint expects. Mappings are deliberately
+ * independent from {@link ModelNameEntrySchema}: they never join the entity's
+ * exposed model names, so they cannot change identity, catalogs, assignments,
+ * defaults or session selection. Resolution order is modelNames first, so
+ * adding a mapping never changes how an already-resolvable name resolves.
+ */
+export const ModelRequestMappingSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  upstreamName: z.string().trim().min(1).max(240),
+  order: z.number().int().min(0).max(1_000_000).default(0),
+}).strict();
+export type ModelRequestMapping = z.infer<typeof ModelRequestMappingSchema>;
+
+/**
+ * Request names within one entity must be unique: the relay fails closed on
+ * ambiguous input, and duplicate rows would make the same request resolve
+ * differently depending on row order.
+ */
+export const ModelRequestMappingListSchema = z.array(ModelRequestMappingSchema).max(64).superRefine((entries, context) => {
+  const seen = new Set<string>();
+  for (const [index, entry] of entries.entries()) {
+    if (seen.has(entry.name)) {
+      context.addIssue({ code: "custom", path: [index, "name"], message: `Duplicate request mapping ${entry.name}.` });
+    }
+    seen.add(entry.name);
+  }
+});
+
+/**
+ * Record shape: every stored entity carries a list (possibly empty).
+ * Patch inputs use {@link ModelRequestMappingListSchema}.optional() instead so
+ * "field absent" stays distinguishable from an explicit empty list.
+ */
+export const ModelRequestMappingsSchema = ModelRequestMappingListSchema.default([]);
+
+/**
+ * Built-in mapping presets for request names the upstream products emit for
+ * background work. Presets are read-only metadata: applying one only inserts
+ * rows, the upstream target defaults to the entity's first upstream name and
+ * every row stays editable. Labels and descriptions live in the UI locales.
+ */
+export const MODEL_REQUEST_MAPPING_PRESETS = [
+  { id: "codex-auto-approval", names: ["codex-auto-review", "gpt-5.6-luna"] },
+  { id: "codex-background-tasks", names: ["gpt-5.6-luna", "gpt-5.6-terra"] },
+] as const;
+export type ModelRequestMappingPreset = (typeof MODEL_REQUEST_MAPPING_PRESETS)[number];
+
 export const ProjectSchema = z
   .object({
     id: IdSchema,
@@ -1135,6 +1185,9 @@ export const ModelConfigSchema = z
     model: z.string().trim().min(1).max(240),
     // Ordered names served by this endpoint; legacy records are normalized from `model`.
     modelNames: ModelNameEntriesSchema,
+    // Relay-only request name rewrites; never projected into the exposed model
+    // name list and inert outside the node model relay.
+    mappings: ModelRequestMappingsSchema,
     // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
     protocols: z.array(ModelProtocolSchema).max(3).default([]),
     /** @deprecated Compatibility discriminator for pre-protocol model records. */
@@ -1225,6 +1278,10 @@ export const CreateNodeModelSchema = ModelConfigSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  // No default here: an absent field means "unchanged" on PATCH, while an
+  // explicit empty list means "clear every mapping".
+  mappings: ModelRequestMappingListSchema.optional(),
 }).strict();
 
 export const UpdateNodeModelSchema = CreateNodeModelSchema.partial().strict();
@@ -1300,7 +1357,7 @@ export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "
  * external names are reduced to the first entry. Values that still have the
  * wrong type pass through so the schema parse reports a structured error.
  */
-export function sanitizeModelNameEntries(input: unknown, onWarning?: (warning: { field: string }) => void) {
+function sanitizeNameEntryList(input: unknown, label: "modelNames" | "mappings", onWarning?: (warning: { field: string }) => void) {
   if (!Array.isArray(input)) return input;
   const names = new Set<string>();
   return input.flatMap((raw, index) => {
@@ -1308,14 +1365,14 @@ export function sanitizeModelNameEntries(input: unknown, onWarning?: (warning: {
     const source = raw as Record<string, unknown>;
     for (const key of Object.keys(source)) {
       if (key !== "name" && key !== "upstreamName" && key !== "order") {
-        onWarning?.({ field: `modelNames[${index}].${key}` });
+        onWarning?.({ field: `${label}[${index}].${key}` });
       }
     }
     const name = typeof source.name === "string" ? source.name.trim() : undefined;
     const upstreamName = typeof source.upstreamName === "string" ? source.upstreamName.trim() : undefined;
     if (name) {
       if (names.has(name)) {
-        onWarning?.({ field: `modelNames[${index}].name` });
+        onWarning?.({ field: `${label}[${index}].name` });
         return [];
       }
       names.add(name);
@@ -1326,6 +1383,21 @@ export function sanitizeModelNameEntries(input: unknown, onWarning?: (warning: {
       order: source.order,
     }];
   });
+}
+
+export function sanitizeModelNameEntries(input: unknown, onWarning?: (warning: { field: string }) => void) {
+  return sanitizeNameEntryList(input, "modelNames", onWarning);
+}
+
+/**
+ * Read-side sanitize for stored or remote request mappings. Same rules as the
+ * model name list: unknown keys are dropped (optionally reported), values are
+ * trimmed and duplicate request names keep the first row. `upstreamName` stays
+ * required, so a row that loses it still fails the schema parse instead of
+ * silently becoming a same-name no-op.
+ */
+export function sanitizeModelRequestMappings(input: unknown, onWarning?: (warning: { field: string }) => void) {
+  return sanitizeNameEntryList(input, "mappings", onWarning);
 }
 
 /**
@@ -1371,6 +1443,29 @@ export function projectModelNameEntries(entries: ModelNameEntry[]): ModelNameEnt
 }
 
 /**
+ * Normalization for request mappings: trim both names and sort by order then
+ * request name. Write paths renumber onto the persisted 100-step grid; read
+ * paths pass `renumber: false` so stored order values survive a round trip.
+ * Duplicates are preserved so the {@link ModelRequestMappingsSchema} refine
+ * rejects ambiguous rows instead of silently dropping one of them.
+ */
+export function normalizeModelRequestMappings(
+  entries: ModelRequestMapping[] | undefined,
+  options: { renumber?: boolean } = {},
+): ModelRequestMapping[] {
+  const normalized = (entries ?? [])
+    .map((entry) => ({
+      name: entry.name.trim(),
+      upstreamName: entry.upstreamName.trim(),
+      order: entry.order,
+    }))
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
+  return options.renumber === false
+    ? normalized
+    : normalized.map((entry, index) => ({ ...entry, order: (index + 1) * 100 }));
+}
+
+/**
  * Canonical content revision for current writers. Mapping, endpoint, key or
  * model-name edits advance this revision while the entity id stays stable.
  * Display-level metadata (entity name, labels, enabled, order, timestamps)
@@ -1381,11 +1476,13 @@ export function projectModelNameEntries(entries: ModelNameEntry[]): ModelNameEnt
 export function modelContentRevision(
   input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & {
     modelNames?: ModelNameEntry[];
+    mappings?: ModelRequestMapping[];
     protocols?: ModelProtocol[];
   },
 ) {
   const app = ModelAppSchema.parse(input.app);
   const modelNames = normalizeModelNameEntries(input.modelNames, input.model);
+  const mappings = normalizeModelRequestMappings(input.mappings);
   const protocols = input.protocols?.length ? input.protocols : defaultModelProtocols(app);
   const canonical = {
     algorithm: "model-content-revision-v1",
@@ -1395,6 +1492,11 @@ export function modelContentRevision(
     model: ModelConfigSchema.shape.model.parse(input.model),
     modelNames: modelNames.map((entry) => ({ name: entry.name, upstreamName: entry.upstreamName, order: entry.order })),
     protocols: [...new Set(protocols)].sort(),
+    // Entities without request mappings keep the exact v0.0.34 canonical
+    // payload (and therefore their existing revision) byte for byte.
+    ...(mappings.length
+      ? { mappings: mappings.map((entry) => ({ name: entry.name, upstreamName: entry.upstreamName, order: entry.order })) }
+      : {}),
   };
   return `mdlr_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
 }

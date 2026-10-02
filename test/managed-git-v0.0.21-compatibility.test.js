@@ -82,10 +82,17 @@ test("v0.0.21 instance private config remains readable for startup migration", (
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
     store.init();
-    fs.writeFileSync(store.filePath(fixture.instancePrivateConfig.instanceId), JSON.stringify(fixture.instancePrivateConfig));
+    // Compatibility for v0.0.21: that release wrote a single <instanceId>.json
+    // file, which the current store keeps readable through legacyFilePath.
+    fs.writeFileSync(store.legacyFilePath(fixture.instancePrivateConfig.instanceId), JSON.stringify(fixture.instancePrivateConfig));
     const migrated = store.inspectMaterialized(fixture.instancePrivateConfig.instanceId);
     assert.equal(migrated.instanceCredential, fixture.instancePrivateConfig.registrationToken);
     assert.equal("gitCredentials" in migrated, false);
+    // The next startup migrates the legacy file into the per-instance directory
+    // without changing what readers observe.
+    store.init();
+    assert.deepEqual(store.inspectMaterialized(fixture.instancePrivateConfig.instanceId), migrated);
+    assert.equal(fs.existsSync(store.filePath(fixture.instancePrivateConfig.instanceId)), true);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

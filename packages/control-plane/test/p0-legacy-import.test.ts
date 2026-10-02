@@ -178,7 +178,7 @@ test("committed migration rejects changed sources and recovers a failed archive"
   const secrets = new SecretEnvelopeService(current.paths.databaseEncryptionKeyPath);
   secrets.init();
   const archiveTime = new Date("2026-08-02T03:04:05.000Z");
-  const archive = path.join(current.paths.dataDir, "retired-persistence", "v0.0.28-control-plane-p0-2026-08-02T03-04-05-000Z");
+  const archive = path.join(current.paths.dataDir, "retired-persistence", `${archiveTime.getTime()}-v0.0.28-control-plane-p0`);
   try {
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     fs.writeFileSync(archive, "archive collision");

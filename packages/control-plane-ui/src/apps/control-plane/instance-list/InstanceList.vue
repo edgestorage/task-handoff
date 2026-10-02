@@ -12,6 +12,7 @@
         <InstanceList
           class="instances-temporary-list"
           :active-action-label="activeActionLabel"
+          :active-instance-action-label="activeInstanceActionLabel"
           :ai-session-count="aiSessionCount"
           :active-instance-id="activeInstanceId"
           :can-export-config="canExportConfig"
@@ -122,7 +123,11 @@
                       </span>
                       <strong>{{ instanceDisplayName(instance) }}</strong>
                     </span>
-                    <small>{{ instanceSourceLabel(instance, t) }}</small>
+                    <small v-if="instanceRowStatus(instance)" class="instance-row-status">
+                      <LoaderCircle :size="11" aria-hidden="true" />
+                      <span>{{ instanceRowStatus(instance) }}</span>
+                    </small>
+                    <small v-else>{{ instanceSourceLabel(instance, t) }}</small>
                     <small v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
                       {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
                     </small>
@@ -176,7 +181,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../..
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, imageProvisioningLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
+import { canShowInstanceAction, imageProvisioningLabel, instancePendingStatusLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";
@@ -187,6 +192,7 @@ defineOptions({ name: "InstanceList" });
 
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
+  activeInstanceActionLabel?: (instance: InstanceBoardItem) => string | undefined;
   aiSessionCount: (instance: InstanceBoardItem) => number;
   activeInstanceId?: string;
   canExportConfig: (instance: InstanceBoardItem) => boolean;
@@ -239,6 +245,15 @@ function instanceRuntimeLabel(instance: InstanceBoardItem) {
     return t("instances.list.dockerRuntime");
   }
   return t("instances.list.kubernetesRuntime");
+}
+
+/**
+ * Rows surface in-progress lifecycle copy only. The authoritative record wins
+ * so wording stays stable once the node-agent reports the transition; the
+ * in-flight action label covers requests the record does not reflect yet.
+ */
+function instanceRowStatus(instance: InstanceBoardItem) {
+  return instancePendingStatusLabel(instance, t) ?? props.activeInstanceActionLabel?.(instance);
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
@@ -537,7 +552,7 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-group-status svg {
   flex: 0 0 auto;
-  animation: instance-group-connecting-spin 900ms linear infinite;
+  animation: instance-pending-spin 900ms linear infinite;
 }
 
 .instance-list-pending {
@@ -553,15 +568,16 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-list-pending svg {
   flex: 0 0 auto;
-  animation: instance-group-connecting-spin 900ms linear infinite;
+  animation: instance-pending-spin 900ms linear infinite;
 }
 
-@keyframes instance-group-connecting-spin {
+@keyframes instance-pending-spin {
   to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .instance-group-status svg,
+  .instance-row-main .instance-row-status svg,
   .instance-list-pending svg {
     animation: none;
   }
@@ -810,6 +826,29 @@ function openNewInstanceFromTemporaryList() {
 .instance-row-main .runtime-unavailable-status {
   color: var(--status-warning);
   font-size: 12px;
+}
+
+.instance-row-main .instance-row-status {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  /* Match the source label's line box so rows do not jump during transitions. */
+  line-height: 15px;
+}
+
+.instance-row-main .instance-row-status svg {
+  flex: 0 0 auto;
+  animation: instance-pending-spin 900ms linear infinite;
+}
+
+.instance-row-main .instance-row-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .instance-row-session {

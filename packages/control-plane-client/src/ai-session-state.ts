@@ -7,7 +7,6 @@ import {
   type AiSessionSummary,
   type AiSessionSummaryTurn,
   type AiSessionTurn,
-  type AiSessionUnreadState,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneAiSessions } from "./ai-sessions.ts";
@@ -203,15 +202,6 @@ export function redactedAiSessionError(session: Pick<AiSessionSummary, "status" 
   return "Session failed. Open the desktop app for diagnostic details.";
 }
 
-export function deriveAiSessionUnreadAfterStreamEvent(session: AiSessionSummary, previousUnread?: boolean) {
-  return session.status === "running" || session.status === "waiting" ? false : Boolean(previousUnread);
-}
-
-export function applyAiSessionUnreadState<T extends AiSessionSummary>(session: T, state: AiSessionUnreadState): T {
-  if (session.id !== state.sessionId || session.updatedAt !== state.sessionUpdatedAt) return session;
-  return { ...session, unread: state.unread };
-}
-
 export type ControlPlaneAiSessionInstance = ControlPlaneAiSessions["instances"][number];
 
 export function applyControlPlaneAiSessionStreamEvent(
@@ -222,17 +212,10 @@ export function applyControlPlaneAiSessionStreamEvent(
     streamId: current.streamId,
     revision: current.revision ?? 0,
     lastEventAt: current.lastEventAt ?? current.aiSessions.updatedAt,
-    // `unread` belongs to the Control Plane projection, not the public AI
-    // Session stream protocol. Passing decorated sessions into the strict
-    // protocol reducer makes every partial patch fail schema validation.
-    snapshot: {
-      ...current.aiSessions,
-      sessions: current.aiSessions.sessions.map(({ unread: _unread, ...session }) => session),
-    },
+    snapshot: current.aiSessions,
   } : undefined;
   const result = applyAiSessionStreamEvent(projection, event);
   if (result.kind !== "applied") return { result, entry: current };
-  const previousUnread = new Map(current?.aiSessions.sessions.map((session) => [session.id, session.unread]) ?? []);
   return {
     result,
     entry: {
@@ -240,13 +223,7 @@ export function applyControlPlaneAiSessionStreamEvent(
       streamId: result.projection.streamId,
       revision: result.projection.revision,
       lastEventAt: result.projection.lastEventAt,
-      aiSessions: {
-        ...result.projection.snapshot,
-        sessions: result.projection.snapshot.sessions.map((session) => ({
-          ...session,
-          unread: deriveAiSessionUnreadAfterStreamEvent(session, previousUnread.get(session.id)),
-        })),
-      },
+      aiSessions: result.projection.snapshot,
     },
   };
 }

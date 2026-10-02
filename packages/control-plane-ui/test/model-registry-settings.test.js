@@ -210,3 +210,42 @@ test("model reference distribution expands node instances and opens their model 
     assert.match(locale, /unlistedReferences: "/);
   }
 });
+
+test("model request mappings stay independent, preset-driven, and hint relay dependency", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
+  const capabilities = read("src/api/nodeCapabilities.ts");
+  const zh = read("src/i18n/locales/zh-CN/settings.ts");
+  const en = read("src/i18n/locales/en-US/settings.ts");
+
+  assert.match(state, /import \{ MODEL_REQUEST_MAPPING_PRESETS \} from "@task-handoff\/protocol\/control-plane"/);
+  assert.match(state, /mappings: \[\] as ModelRequestMapping\[\]/);
+  assert.match(state, /function addMapping\(\)/);
+  assert.match(state, /function removeMapping\(index: number\)/);
+  assert.match(state, /function moveMapping\(index: number, direction: -1 \| 1\)/);
+  assert.match(state, /function applyMappingPreset\(presetId: string\)/);
+  // Presets fill the first upstream name by default and remain editable.
+  assert.match(state, /const mappingTargetDefault = \(\) => \{[\s\S]*upstreamName\?\.trim\(\) \|\| primary\?\.name\.trim\(\) \|\| ""/);
+  assert.match(state, /const mappingsEditable = computed/);
+  assert.match(state, /mappings: settingsModel\.mappings\.map\(\(entry, index\) => \(\{/);
+  assert.match(state, /if \(!mappingsEditable\.value && settingsModel\.mappings\.length\) return false/);
+
+  assert.match(capabilities, /supportsNodeModelRequestMappings/);
+  assert.match(settings, /v-for="\(entry, index\) in settingsModel\.mappings"/);
+  assert.match(settings, /v-for="preset in mappingPresets"/);
+  assert.match(settings, /@select="applyMappingPreset\(preset\.id\)"/);
+  assert.match(settings, /@click="addMapping"/);
+  assert.match(settings, /requestMappingInactive\(entry\)/);
+  assert.match(settings, /settings\.modelRegistry\.mappingsRelayHint/);
+  assert.match(settings, /settings\.modelRegistry\.mappingsUnsupported/);
+  assert.match(settings, /:disabled="!mappingsEditable/);
+  assert.match(settings, /grid-template-columns: minmax\(0,1fr\) 22px minmax\(0,1fr\) auto/);
+
+  for (const locale of [zh, en]) {
+    assert.match(locale, /mappings: "/);
+    assert.match(locale, /mappingsRelayHint: "/);
+    assert.match(locale, /mappingsUnsupported: "/);
+    assert.match(locale, /"codex-auto-approval": \{ label: "/);
+    assert.match(locale, /"codex-background-tasks": \{ label: "/);
+  }
+});

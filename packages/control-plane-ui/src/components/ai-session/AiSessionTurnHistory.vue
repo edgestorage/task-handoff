@@ -183,7 +183,7 @@ watch(() => [props.active, props.startedAt, props.endedAt], syncElapsedTimer);
   padding: 12px 0 0 12px;
   border-left: 1px solid var(--line-subtle);
 }
-.ai-session-turn-history-message { color: var(--text); font-size: 14px; line-height: 1.55; }
+.ai-session-turn-history-message { color: var(--text); font-size: 14px; line-height: 1.55; user-select: text; -webkit-user-select: text; }
 .ai-session-turn-history-message-user {
   justify-self: end;
   width: fit-content;

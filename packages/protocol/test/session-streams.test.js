@@ -163,13 +163,13 @@ test("v0.0.28 projection preserves child records while omitting subagent lineage
   assert.equal(legacySnapshot.sessions[1].lineage, undefined);
   assert.equal(projectAiSessionsSnapshotForConsumer(snapshot, { subagents: true }).sessions[1].lineage?.kind, "subagent");
 
-  const decoratedSnapshot = {
+  const unreadSnapshot = {
     ...snapshot,
     sessions: snapshot.sessions.map((entry) => ({ ...entry, unread: entry.id === "child" })),
   };
-  const projectedDecoratedSnapshot = projectAiSessionsSnapshotForConsumer(decoratedSnapshot, undefined);
-  assert.deepEqual(projectedDecoratedSnapshot.sessions.map((entry) => entry.unread), [false, true]);
-  assert.equal(projectedDecoratedSnapshot.sessions[1].lineage, undefined);
+  const projectedUnreadSnapshot = projectAiSessionsSnapshotForConsumer(unreadSnapshot, undefined);
+  assert.deepEqual(projectedUnreadSnapshot.sessions.map((entry) => entry.unread), [false, true]);
+  assert.equal(projectedUnreadSnapshot.sessions[1].lineage, undefined);
 
   const delta = AiSessionDeltaResponseSchema.parse({
     streamId: "stream-a",
@@ -186,7 +186,9 @@ test("v0.0.28 projection preserves child records while omitting subagent lineage
       },
     }],
   });
-  assert.equal(projectAiSessionDeltaForConsumer(delta, undefined).events[0].payload.upserted[0].lineage, undefined);
+  const projectedDelta = projectAiSessionDeltaForConsumer(delta, undefined);
+  assert.equal(projectedDelta.events[0].payload.upserted[0].lineage, undefined);
+  assert.equal(projectedDelta.events[0].payload.upserted[0].unread, false);
 
   const history = AiSessionHistoryItemSchema.parse({
     id: child.id,

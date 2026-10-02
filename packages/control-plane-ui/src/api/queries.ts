@@ -590,8 +590,8 @@ export function useControlPlaneAiSessionsQuery(instanceId: MaybeRefOrGetter<stri
   });
 }
 
-export function markAiSessionRead(instanceId: string, sessionId: string, sessionUpdatedAt: string) {
-  return sharedAiSessionsApi.markRead(instanceId, sessionId, sessionUpdatedAt);
+export function markAiSessionRead(instanceId: string, sessionId: string) {
+  return sharedAiSessionsApi.markRead(instanceId, sessionId);
 }
 
 export function getAiSessionHistory(instanceId: string) {

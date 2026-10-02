@@ -19,6 +19,7 @@ import {
   AiSessionResumeResultSchema,
   AiSessionModelSelectionActionResponseSchema,
   AiSessionReasoningEffortActionResponseSchema,
+  AiSessionReadResultSchema,
   AiSessionRenameInputSchema,
   AiSessionRenameResultSchema,
   AiSessionStatusSchema,
@@ -53,6 +54,7 @@ import {
   type AiSessionStatus,
   type AiSessionModelSelection,
   type AiSessionReasoningEffort,
+  type AiSessionReadResult,
   type AiSessionRenameInput,
   type AiSessionRenameResult,
   type AiSessionTurn,
@@ -403,6 +405,10 @@ export class AiSessionActionService {
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
     const result = parseResponse(AiSessionOpenAppResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
     return result;
+  }
+
+  async read(instanceId: string, aiSessionId: string): Promise<AiSessionReadResult> {
+    return parseResponse(AiSessionReadResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "read"), {}));
   }
 
   async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {

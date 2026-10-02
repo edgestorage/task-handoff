@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionUnreadEventType, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
@@ -11,7 +11,6 @@ import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-agg
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
 import type { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
-import type { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { appendServerTiming, clientRequestTraceId, serverTimingDuration, traceId as normalizedTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
   IdParamsSchema,
@@ -32,7 +31,6 @@ export type RegisterSessionRoutesOptions = {
   events: ControlPlaneEventBus;
   appSessionAggregator: ControlPlaneAppSessionAggregator;
   aiSessionAggregator: ControlPlaneAiSessionAggregator;
-  aiSessionUnread: AiSessionUnreadStore;
   aiSessionAttachments: AiSessionAttachmentStore;
   aiSessionAttachmentCache: AiSessionAttachmentCache;
 };
@@ -108,7 +106,6 @@ export function registerSessionRoutes({
   events,
   appSessionAggregator,
   aiSessionAggregator,
-  aiSessionUnread,
   aiSessionAttachments,
   aiSessionAttachmentCache,
 }: RegisterSessionRoutesOptions) {
@@ -703,27 +700,14 @@ export function registerSessionRoutes({
       ...fullView,
       instances: fullView.instances.filter((entry) => visibleInstanceIds.has(entry.instanceId) && (!query.instanceId || entry.instanceId === query.instanceId)),
     };
-    for (const entry of view.instances) aiSessionUnread.reconcile(entry.instanceId, entry.aiSessions);
     return { data: {
       ...view,
-      instances: view.instances.map((entry) => ({ ...entry, aiSessions: projectAiSessionsSnapshotForConsumer(aiSessionUnread.decorate(entry.instanceId, entry.aiSessions), hierarchy) })),
+      instances: view.instances.map((entry) => ({ ...entry, aiSessions: projectAiSessionsSnapshotForConsumer(entry.aiSessions, hierarchy) })),
     } };
   });
 
-  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/read", async (request, reply) => {
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/read", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    const input = z.object({ sessionUpdatedAt: z.string().datetime() }).strict().parse(request.body || {});
-    const view = await aiSessionAggregator.list();
-    const entry = view.instances.find((item) => item.instanceId === params.id);
-    const session = entry?.aiSessions.sessions.find((item) => item.id === params.sessionId);
-    if (!entry || !session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session was not found." } });
-    aiSessionUnread.reconcile(params.id, entry.aiSessions);
-    const state = aiSessionUnread.markRead(params.id, params.sessionId, input.sessionUpdatedAt);
-    if (!state) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session was not found." } });
-    events.publish(AiSessionUnreadEventType.Updated, state, {
-      topic: "ai.sessions",
-      scope: { instanceId: params.id, sessionId: params.sessionId },
-    });
-    return { data: state };
+    return { data: await service.readAiSession(params.id, params.sessionId) };
   });
 }

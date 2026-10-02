@@ -14,6 +14,14 @@ import type { Translate } from "../../i18n/status.ts";
 
 export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "delete";
 
+const actionLoadingKeys: Record<InstanceAction, string> = {
+  start: "instances.actions.starting",
+  stop: "instances.actions.stopping",
+  restart: "instances.actions.restarting",
+  "retry-image": "instances.actions.retryingImage",
+  delete: "instances.actions.deleting",
+};
+
 type UseInstanceActionsInput = {
   clearActiveInstance: (instanceId: string) => void;
   closeInstanceMenu: () => void;
@@ -127,18 +135,21 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
 
   function activeActionLabel(instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) {
     if (activeInstanceActionId.value !== instance.id || activeInstanceAction.value !== action) return idleLabel;
-    const key: Record<InstanceAction, string> = {
-      start: "instances.actions.starting",
-      stop: "instances.actions.stopping",
-      restart: "instances.actions.restarting",
-      "retry-image": "instances.actions.retryingImage",
-      delete: "instances.actions.deleting",
-    };
-    return t(key[action]);
+    return t(actionLoadingKeys[action]);
+  }
+
+  /**
+   * In-flight action copy for row surfaces that need to reflect a request
+   * before the authoritative instance record reports the transition.
+   */
+  function activeInstanceActionLabel(instance: InstanceBoardItem) {
+    if (activeInstanceActionId.value !== instance.id || !activeInstanceAction.value) return undefined;
+    return t(actionLoadingKeys[activeInstanceAction.value]);
   }
 
   return {
     activeActionLabel,
+    activeInstanceActionLabel,
     canExportConfig,
     closeDeleteDialog,
     confirmDeleteInstance,

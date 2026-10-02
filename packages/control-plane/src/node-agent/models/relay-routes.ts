@@ -6,7 +6,7 @@ import {
   type ModelProtocol,
   type NodeModelConfig,
 } from "@task-handoff/protocol/control-plane";
-import { normalizeModelNameEntries } from "@task-handoff/protocol/control-plane";
+import { normalizeModelNameEntries, normalizeModelRequestMappings } from "@task-handoff/protocol/control-plane";
 import type { NodeModelRegistry } from "./registry.ts";
 
 /**
@@ -137,16 +137,25 @@ export class NodeModelRelayResolver {
   /**
    * Map the request's external model name onto the upstream name. Unknown or
    * ambiguous names fail closed before any upstream contact; there is no
-   * default-model fallback.
+   * default-model fallback. Declared model names always win, so an explicit
+   * request mapping can never change how an exposed name resolves; mappings
+   * only extend resolution to names the entity does not expose (for example a
+   * product's hidden background model).
    */
-  resolveUpstreamModelName(model: Pick<NodeModelConfig, "modelNames" | "model">, requestedName: string) {
+  resolveUpstreamModelName(
+    model: Pick<NodeModelConfig, "modelNames" | "model"> & { mappings?: NodeModelConfig["mappings"] },
+    requestedName: string,
+  ) {
     const matches = normalizeModelNameEntries(model.modelNames, model.model).filter((entry) => entry.name === requestedName);
-    if (!matches.length) {
-      throw relayError(400, "MODEL_RELAY_UNKNOWN_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is not assigned to this relay route.`);
-    }
     if (matches.length > 1) {
       throw relayError(409, "MODEL_RELAY_AMBIGUOUS_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is ambiguous on this relay route.`);
     }
-    return matches[0].upstreamName!;
+    if (matches.length) return matches[0].upstreamName!;
+    const mapped = normalizeModelRequestMappings(model.mappings).filter((entry) => entry.name === requestedName);
+    if (mapped.length > 1) {
+      throw relayError(409, "MODEL_RELAY_AMBIGUOUS_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is ambiguous on this relay route.`);
+    }
+    if (mapped.length) return mapped[0].upstreamName;
+    throw relayError(400, "MODEL_RELAY_UNKNOWN_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is not assigned to this relay route.`);
   }
 }

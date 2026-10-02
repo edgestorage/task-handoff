@@ -7,8 +7,6 @@ import {
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   AiSessionTimelineItemEventSchema,
-  AiSessionUnreadEventType,
-  AiSessionUnreadStateSchema,
   type AiSessionStreamEvent,
 } from '@task-handoff/protocol/ai-sessions';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
@@ -200,11 +198,6 @@ export class MobileAiSessionController {
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       this.store.applyTimelineItem(this.controlPlaneId, parsed.data);
       return true;
-    }
-    if (event.type === AiSessionUnreadEventType.Updated) {
-      const parsed = safeParseResponse(AiSessionUnreadStateSchema, event.payload);
-      if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
-      return this.store.applyUnread(this.controlPlaneId, parsed.data);
     }
     const schemas = {
       [AiSessionEventType.Snapshot]: AiSessionSnapshotEventSchema,

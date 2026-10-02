@@ -22,9 +22,6 @@ export const AiSessionEventType = {
   TimelineItemDelta: "ai-session.timeline-item-delta",
   SyncRequired: "ai-session.sync-required",
 } as const;
-export const AiSessionUnreadEventType = {
-  Updated: "ai-session.unread.updated",
-} as const;
 export const AI_SESSION_TOMBSTONE_RETENTION_MS = 60 * 60 * 1000;
 export const AI_SESSION_DELTA_RETENTION_MS = AI_SESSION_TOMBSTONE_RETENTION_MS;
 
@@ -103,14 +100,6 @@ export const AiSessionLifecycleSchema = z.enum([
   "idle",
   "failed",
 ]);
-
-export const AiSessionUnreadStateSchema = z.object({
-  instanceId: z.string().trim().min(1).max(160),
-  sessionId: z.string().trim().min(1).max(120),
-  unread: z.boolean(),
-  sessionUpdatedAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
-}).strict();
 
 export const AiSessionPhaseSchema = z.enum([
   "thinking",
@@ -580,6 +569,11 @@ export const AiSessionStoryActionResponseSchema = z.object({
   storyId: StoryIdSchema.optional(),
 }).strict();
 
+export const AiSessionReadResultSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  unread: z.boolean(),
+}).strict();
+
 export const AiSessionCreateResultSchema = z.object({
   disposition: z.enum(["created", "already-created"]),
   aiSessionId: z.string().trim().min(1).max(120),
@@ -797,6 +791,9 @@ export const AiSessionStatusSchema = z
     error: z.string().trim().max(4000).optional(),
     counters: AiSessionCountersSchema,
     queue: AiSessionQueueSchema,
+    // Owned by the controlled-instance AI session runtime: set when a turn
+    // settles without a reader and cleared by the explicit read action.
+    unread: z.boolean().default(false),
   })
   .strict();
 
@@ -1016,6 +1013,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   startedAt: true,
   updatedAt: true,
   error: true,
+  unread: true,
 }).extend({
   // Compatibility for v0.0.21: list snapshots retain the bounded turn summary
   // shape when reading an older producer. Current producers omit turns and use
@@ -1513,7 +1511,6 @@ export const AiSessionReducerInputSchema = z.discriminatedUnion("type", [
 export type AiAgentKind = z.infer<typeof AiAgentKindSchema>;
 export type AiSessionCreationSource = z.infer<typeof AiSessionCreationSourceSchema>;
 export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
-export type AiSessionUnreadState = z.infer<typeof AiSessionUnreadStateSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
 export type AiSessionTool = z.infer<typeof AiSessionToolSchema>;
 export type AiSessionTimelineActivityStatus = z.infer<typeof AiSessionTimelineActivityStatusSchema>;
@@ -1563,6 +1560,7 @@ export type AiSessionModelSelectionInput = z.infer<typeof AiSessionModelSelectio
 export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionModelSelectionActionResponseSchema>;
 export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
 export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
+export type AiSessionReadResult = z.infer<typeof AiSessionReadResultSchema>;
 export type AiSessionResumeInput = z.infer<typeof AiSessionResumeInputSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateWorkspaceSelection = z.infer<typeof AiSessionCreateWorkspaceSelectionSchema>;

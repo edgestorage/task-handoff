@@ -498,6 +498,7 @@ test("conversation Timeline composes every turn from the same compact result com
   const appStyles = fs.readFileSync(new URL("../src/styles/app.css", import.meta.url), "utf8");
   const turnActions = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnActions.vue", import.meta.url), "utf8");
   const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+  const compactPrompt = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCompactPrompt.vue", import.meta.url), "utf8");
   const streamingMarkdown = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
   const markdownContent = fs.readFileSync(new URL("../../web-theme/MarkdownContent.vue", import.meta.url), "utf8");
   const english = fs.readFileSync(new URL("../src/i18n/locales/en-US/sessions.ts", import.meta.url), "utf8");
@@ -528,6 +529,15 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(disclosureTransition, /function scheduleTransitionFrame[\s\S]*cancelAnimationFrame/);
   assert.match(disclosureTransition, /export function cancelDisclosureTransition[\s\S]*pendingScrollAnchorLocks\.set\(viewport, pending - 1\)/);
   assert.match(history, /\.ai-session-turn-history-summary \{[\s\S]*user-select: none;/);
+  for (const [source, block] of [
+    [compactPrompt, "\\.ai-session-user-prompt-content"],
+    [timeline, "\\.ai-session-timeline-message"],
+    [timeline, "\\.ai-session-timeline-stored-response"],
+    [history, "\\.ai-session-turn-history-message"],
+    [result, "\\.ai-session-detail-response"],
+  ]) {
+    assert.match(source, new RegExp(`${block} \\{[^}]*user-select: text;`));
+  }
   assert.match(history, /v-else-if="nodes\.length \|\| loadable \|\| loading"[\s\S]*:aria-expanded="historyRevealed"[\s\S]*@click="toggleHistory"[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
   assert.match(history, /watch\(\(\) => historyOpen\.value && props\.loadable, \(load\) => \{\s*if \(load\) emit\("load"\);/);
   assert.match(history, /<Transition[\s\S]*name="turn-history-disclosure"[\s\S]*@before-enter="prepareDisclosureEnter"[\s\S]*@after-leave="finishDisclosureLeave"/);

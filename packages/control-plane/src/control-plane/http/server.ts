@@ -10,7 +10,6 @@ import { isControlPlaneCredentialHeader } from "./proxy-headers.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
-import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
@@ -47,7 +46,6 @@ import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
 import { registerInstanceProxyRoutes } from "./instance-proxy-routes.ts";
 import { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
 import { StorySessionIndex } from "../sessions/story-session-index.ts";
-import { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
@@ -601,13 +599,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
-  const aiSessionUnread = new AiSessionUnreadStore(paths, {
-    onChanged: (state) => queueMicrotask(() => events.publish(AiSessionUnreadEventType.Updated, state, {
-      topic: "ai.sessions",
-      scope: { instanceId: state.instanceId, sessionId: state.sessionId },
-    })),
-  });
-  aiSessionUnread.init();
   const aiSessionAggregator = new ControlPlaneAiSessionAggregator({
     bootstrap: () => service.bootstrapAiSessionsFromInstances(),
     logger: diagnosticLogger,
@@ -617,7 +608,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   const storySessionIndex = new StorySessionIndex();
   aiSessionAggregator.onSnapshot((update) => {
-    aiSessionUnread.reconcile(update.instanceId, update.aiSessions);
     storySessionIndex.replaceInstance(update.instanceId, update.aiSessions);
   });
   const appSessionAggregator = new ControlPlaneAppSessionAggregator({
@@ -644,7 +634,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
           appSessionAggregator.removeInstance(instanceId);
           aiSessionAggregator.removeInstance(instanceId);
           storySessionIndex.removeInstance(instanceId);
-          aiSessionUnread.removeInstance(instanceId);
         }
         aiSessionAttachmentCache.removeInstance(instanceId);
       }
@@ -1228,7 +1217,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     events,
     appSessionAggregator,
     aiSessionAggregator,
-    aiSessionUnread,
     chatGateway,
     aiSessionAttachments,
     aiSessionAttachmentCache,

@@ -5,7 +5,7 @@ import {
   type ControlPlaneAiSessions,
   type ControlPlaneClient,
 } from '@task-handoff/control-plane-client';
-import { AiSessionDetailSchema, AiSessionEventType, AiSessionStatusSchema, AiSessionTurnIndexSchema, AiSessionUnreadEventType, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
+import { AiSessionDetailSchema, AiSessionEventType, AiSessionStatusSchema, AiSessionTurnIndexSchema, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
 import { supportsDirectoryAiSessionTimelineCapability } from '@task-handoff/protocol/control-plane-directory';
 import type { MobileControlPlaneEventHandlers, MobileControlPlaneTransport } from '../src/control-plane/transport';
 
@@ -55,9 +55,8 @@ describe('MobileAiSessionStore identity isolation', () => {
       queue: { revision: 2, pendingCount: 1, items: [] },
     };
     store.replaceSnapshot('cp-detail', compact);
-    const { unread: _unread, ...detailBase } = summary;
     const detail = AiSessionStatusSchema.parse({
-      ...detailBase,
+      ...summary,
       turns: [{
         id: 'turn-1',
         status: 'completed',
@@ -160,7 +159,6 @@ describe('MobileAiSessionStore identity isolation', () => {
     const initial = snapshot('instance-1', 'session-1');
     store.replaceSnapshot('cp-monotonic', initial);
     const current = initial.instances[0].aiSessions.sessions[0];
-    const { unread: _unread, ...protocolSession } = current;
     store.applyStreamEvent('cp-monotonic', {
       type: AiSessionEventType.Patch,
       payload: {
@@ -173,7 +171,7 @@ describe('MobileAiSessionStore identity isolation', () => {
           generatedAt: '2026-08-05T00:01:00.000Z',
           reason: 'provider-event',
         },
-        upserted: [{ ...protocolSession, status: 'running', updatedAt: '2026-08-05T00:01:00.000Z' }],
+        upserted: [{ ...current, status: 'running', updatedAt: '2026-08-05T00:01:00.000Z' }],
         removed: [],
       },
     });
@@ -239,7 +237,7 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.sessionView('cp-retention', 'instance-1', 'session-0').messages).toHaveLength(0);
   });
 
-  test('controller initializes snapshot then consumes stream, unread, and message events', async () => {
+  test('controller initializes snapshot then consumes stream, unread patch, and message events', async () => {
     const store = new MobileAiSessionStore();
     const initial = snapshot('instance-1', 'session-1');
     const delta = jest.fn();
@@ -262,7 +260,6 @@ describe('MobileAiSessionStore identity isolation', () => {
     await controller.start();
 
     const current = initial.instances[0].aiSessions.sessions[0];
-    const { unread: _unread, ...protocolSession } = current;
     const updatedAt = '2026-08-05T00:01:00.000Z';
     staleHandlers?.onEvent({
       type: AiSessionEventType.Patch,
@@ -278,7 +275,7 @@ describe('MobileAiSessionStore identity isolation', () => {
           generatedAt: updatedAt,
           reason: 'provider-event',
         },
-        upserted: [{ ...protocolSession, status: 'failed', updatedAt }],
+        upserted: [{ ...current, status: 'failed', updatedAt }],
         removed: [],
       },
     });
@@ -297,7 +294,7 @@ describe('MobileAiSessionStore identity isolation', () => {
           generatedAt: updatedAt,
           reason: 'provider-event',
         },
-        upserted: [{ ...protocolSession, status: 'running', updatedAt }],
+        upserted: [{ ...current, status: 'running', updatedAt }],
         removed: [],
       },
     })).toBe(true);
@@ -315,7 +312,7 @@ describe('MobileAiSessionStore identity isolation', () => {
           generatedAt: `2026-08-05T00:0${revision}:00.000Z`,
           reason: 'provider-event' as const,
         },
-        upserted: [{ ...protocolSession, status, updatedAt: `2026-08-05T00:0${revision}:00.000Z` }],
+        upserted: [{ ...current, status, updatedAt: `2026-08-05T00:0${revision}:00.000Z` }],
         removed: [],
       },
     });
@@ -345,15 +342,21 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.session('cp-a', 'instance-1', 'session-1')?.status).toBe('waiting');
 
     expect(controller.applyEvent({
-      type: AiSessionUnreadEventType.Updated,
+      type: AiSessionEventType.Patch,
       topic: 'ai.sessions',
       scope: { instanceId: 'instance-1' },
       payload: {
-        instanceId: 'instance-1',
-        sessionId: 'session-1',
-        sessionUpdatedAt: '2026-08-05T00:04:00.000Z',
-        unread: true,
-        updatedAt,
+        meta: {
+          streamId: 'stream-instance-1',
+          instanceId: 'instance-1',
+          revision: 5,
+          previousRevision: 4,
+          traceId: 'trace-unread',
+          generatedAt: updatedAt,
+          reason: 'control-action',
+        },
+        upserted: [{ ...current, status: 'idle', unread: true, updatedAt }],
+        removed: [],
       },
     })).toBe(true);
     expect(store.session('cp-a', 'instance-1', 'session-1')?.unread).toBe(true);
@@ -470,7 +473,6 @@ describe('MobileAiSessionStore identity isolation', () => {
   test('Web projection and React Native store converge for the same reducer sequence', () => {
     const initial = snapshot('instance-contract', 'session-contract');
     const base = initial.instances[0].aiSessions.sessions[0];
-    const { unread: _unread, ...protocolSession } = base;
     const patch: AiSessionStreamEvent = {
       type: AiSessionEventType.Patch,
       payload: {
@@ -483,7 +485,7 @@ describe('MobileAiSessionStore identity isolation', () => {
           generatedAt: '2026-08-05T00:02:00.000Z',
           reason: 'provider-event' as const,
         },
-        upserted: [{ ...protocolSession, status: 'running' as const, updatedAt: '2026-08-05T00:02:00.000Z' }],
+        upserted: [{ ...base, status: 'running' as const, updatedAt: '2026-08-05T00:02:00.000Z' }],
         removed: [],
       },
     };

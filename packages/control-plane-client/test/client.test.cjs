@@ -11,10 +11,8 @@ const {
   classifyAiSessionPastedText,
   aiSessionElapsedSeconds,
   applyControlPlaneAiSessionStreamEvent,
-  applyAiSessionUnreadState,
   AiSessionConversationCache,
   createControlPlaneClient,
-  deriveAiSessionUnreadAfterStreamEvent,
   isAiSessionApprovalPending,
   mergeAiSessionSummaryWithDetail,
   mergeAiSessionSummaryTurnsWithDetail,
@@ -1059,22 +1057,13 @@ test("shared trigger client owns template, binding, and run routes", async () =>
   assert.deepEqual(JSON.parse(requests[5].init.body), { deploymentId: deployment.deploymentId });
 });
 
-test("shared AI Session state preserves Web sorting, unread, approval, and delta behavior", () => {
+test("shared AI Session state preserves Web sorting, approval, and delta behavior", () => {
   const idle = { id: "idle", status: "idle", phase: "ready", updatedAt: "2026-08-05T00:00:00.000Z", unread: true };
   const running = { id: "running", status: "running", phase: "responding", updatedAt: "2026-08-05T00:01:00.000Z", unread: true };
   const approval = { id: "approval", status: "waiting", phase: "approval", updatedAt: "2026-08-05T00:02:00.000Z", unread: true };
 
   assert.deepEqual(sortedAiSessions([idle, running, approval]).map((session) => session.id), ["approval", "running", "idle"]);
   assert.equal(isAiSessionApprovalPending(approval), true);
-  assert.equal(deriveAiSessionUnreadAfterStreamEvent(running, true), false);
-  assert.equal(deriveAiSessionUnreadAfterStreamEvent(idle, true), true);
-  assert.equal(applyAiSessionUnreadState(idle, {
-    instanceId: "instance-1",
-    sessionId: "idle",
-    sessionUpdatedAt: idle.updatedAt,
-    unread: false,
-    updatedAt: "2026-08-05T00:03:00.000Z",
-  }).unread, false);
 
   assert.deepEqual(appendAiSessionMessageDelta({
     receivedText: "hel",
@@ -1091,7 +1080,7 @@ test("shared AI Session state preserves Web sorting, unread, approval, and delta
   });
 });
 
-test("Control Plane AI Session patches preserve unread without leaking it into the strict stream reducer", () => {
+test("Control Plane AI Session patches carry the controlled-instance unread state", () => {
   const current = {
     instanceId: "instance-1",
     streamId: "stream-1",
@@ -1103,7 +1092,7 @@ test("Control Plane AI Session patches preserve unread without leaking it into t
       staleCount: 0,
       updatedAt: "2026-08-05T00:00:00.000Z",
       sessions: [
-        { id: "changed", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: false },
+        { id: "changed", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: true },
         { id: "unchanged", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: true },
       ],
     },
@@ -1121,7 +1110,7 @@ test("Control Plane AI Session patches preserve unread without leaking it into t
         reason: "provider-event",
       },
       upserted: [
-        { id: "changed", agent: "codex", status: "running", phase: "responding", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:01:00.000Z" },
+        { id: "changed", agent: "codex", status: "running", phase: "responding", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:01:00.000Z", unread: false },
       ],
       removed: [],
     },

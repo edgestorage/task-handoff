@@ -43,7 +43,7 @@ type LegacyFile = { filePath: string; value: unknown; digest: string };
 const LEGACY_FIELDS = {
   folder: ["id", "nodeId", "name", "path", "defaultImageSelection", "labels", "createdAt", "updatedAt"],
   runtime: ["id", "nodeId", "name", "type", "status", "accessStrategy", "capabilities", "labels", "createdAt", "updatedAt"],
-  model: ["id", "name", "endpoint", "key", "model", "modelNames", "protocols", "app", "enabled", "order", "labels", "createdAt", "updatedAt"],
+  model: ["id", "name", "endpoint", "key", "model", "modelNames", "mappings", "protocols", "app", "enabled", "order", "labels", "createdAt", "updatedAt"],
   assignment: ["instanceId", "modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash", "updatedAt"],
   gitPayload: ["id", "payload", "createdAt", "updatedAt"],
   gitAuthorization: ["id", "instanceId", "generation", "credentialIds", "createdAt", "updatedAt"],
@@ -94,7 +94,7 @@ export function migrateLegacyP0State(
       const source = object(file.value);
       warnUnknownFields(file, LEGACY_FIELDS.model, warnings);
       const parsed = parse(file, NodeModelConfigSchema, pick(source, [
-        "id", "name", "endpoint", "key", "model", "modelNames", "protocols", "app", "enabled", "order", "labels", "createdAt", "updatedAt",
+        "id", "name", "endpoint", "key", "model", "modelNames", "mappings", "protocols", "app", "enabled", "order", "labels", "createdAt", "updatedAt",
       ]));
       if (path.basename(file.filePath, ".json") !== parsed.id || modelConfigHash(parsed) !== parsed.id) {
         warnings.push({ source: file.filePath, field: "identity-or-content-hash" });

@@ -44,11 +44,9 @@ export default function SessionDetailRoute() {
   const renameRequestId = useRef('');
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
-  const markVisible = useCallback((sessionUpdatedAt: string) => {
+  const markVisible = useCallback(() => {
     if (!client || !controlPlaneId || !session?.unread) return;
-    void client.aiSessions.markRead(params.instanceId, params.sessionId, sessionUpdatedAt).then((unread) => {
-      mobileAiSessionStore.applyUnread(controlPlaneId, unread);
-    }).catch(() => undefined);
+    void client.aiSessions.markRead(params.instanceId, params.sessionId).catch(() => undefined);
   }, [client, controlPlaneId, params.instanceId, params.sessionId, session?.unread]);
   const title = session?.title || session?.agent || 'AI Session';
   const trackedSession = taskStatus.trackedSession;

@@ -325,7 +325,7 @@ export const instances = {
   },
   lifecycle: {
     preparing: "正在准备实例", imageFailed: "镜像准备失败", created: "实例已创建", preparingRuntime: "正在准备运行环境",
-    startingContainer: "正在启动容器", connecting: "正在连接实例", stopping: "正在停止实例", stopped: "实例已停止", failed: "实例失败",
+    connecting: "正在连接实例", stopping: "正在停止实例", stopped: "实例已停止", failed: "实例失败",
     unhealthy: "实例不健康", starting: "正在启动实例", updatingRuntime: "正在升级实例运行时",
     runtimeUnavailable: "运行环境不可用", runtimeUnavailableDocker: "Docker 未运行", runtimeUnavailableLocal: "本机运行环境不可用",
     runtimeNameDocker: "Docker/OrbStack", runtimeNameLocal: "本机运行环境",

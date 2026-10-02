@@ -323,6 +323,13 @@ UPDATE na_agent_runs SET orchestration_id = (
 ) WHERE orchestration_id IS NULL;
 `;
 
+// Relay-only request name mappings ({ name, upstreamName, order } per row).
+// Existing rows read back an empty list; the field needs a stable model entity
+// identity only on write, which every node at this migration already has.
+const modelRequestMappings = `
+ALTER TABLE na_models ADD COLUMN mappings_json TEXT NOT NULL DEFAULT '[]';
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -338,4 +345,5 @@ export const nodeAgentMigrations = [
   migration("0010_agent_run_member_input", agentRunMemberInput),
   migration("0011_agent_run_member_request_identity", agentRunMemberRequestIdentity),
   migration("0012_agent_orchestration_domain", agentOrchestrationDomain),
+  migration("0013_model_request_mappings", modelRequestMappings),
 ] as const;

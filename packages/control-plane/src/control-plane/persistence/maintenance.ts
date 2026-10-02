@@ -35,6 +35,9 @@ export class ControlPlanePersistenceMaintenance {
     this.removePersistedInvites();
     this.retireLegacyProjection("controlled-instances", this.legacyControlledInstancesDir, true);
     this.retireLegacyProjection("node-runtimes", this.legacyNodeRuntimesDir, false);
+    // Unread state moved into the controlled-instance AI session record; the
+    // control-plane projection directory is retired without migration.
+    this.retireLegacyProjection("ai-session-unread", path.join(this.paths.dataDir, "ai-session-unread"), false);
     return sweepRetiredDirectories({
       trashRoot: this.retiredRoot,
       retentionMs: this.options.retentionMs ?? DEFAULT_RETENTION_MS,

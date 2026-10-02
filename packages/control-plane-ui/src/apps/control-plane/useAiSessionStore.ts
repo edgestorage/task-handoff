@@ -1,7 +1,7 @@
 import { computed, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import type { AiSessionStreamEvent, AiSessionTimelineItemDeltaEvent, AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
-import { applyAiSessionUnreadState, applyControlPlaneAiSessionStreamEvent } from "@task-handoff/control-plane-client";
+import { applyControlPlaneAiSessionStreamEvent } from "@task-handoff/control-plane-client";
 import { sharedAiSessionsApi } from "../../api/sharedClient";
 import {
   AiSessionEventType,
@@ -11,7 +11,6 @@ import {
   type AiSessionPatchEvent,
   type AiSessionRemovedEvent,
   type AiSessionSnapshotEvent,
-  type AiSessionUnreadState,
   type AiSessionsSnapshot,
   type ControlPlaneAiSessions,
   type InstanceBoardItem,
@@ -149,25 +148,6 @@ export function useAiSessionStore(input: {
     return applied || Boolean(streamRecovery.streamId(instanceId));
   }
 
-  function applyUnreadEvent(state: AiSessionUnreadState) {
-    if (!acceptsInstance(state.instanceId)) return false;
-    let applied = false;
-    queryClient.setQueryData<ControlPlaneAiSessions>(input.queryKey(), (current) => {
-      if (!current) return current;
-      const instances = current.instances.map((entry) => {
-        if (entry.instanceId !== state.instanceId) return entry;
-        const sessions = entry.aiSessions.sessions.map((session) => {
-          if (session.id !== state.sessionId || session.updatedAt !== state.sessionUpdatedAt) return session;
-          applied = true;
-          return applyAiSessionUnreadState(session, state);
-        });
-        return applied ? { ...entry, aiSessions: { ...entry.aiSessions, sessions } } : entry;
-      });
-      return applied ? { ...current, updatedAt: state.updatedAt, instances } : current;
-    });
-    return applied;
-  }
-
   function cleanupInstance(instanceId: string) {
     streamingMessages.cleanupInstance(instanceId);
     timelineItems.cleanupInstance(instanceId);
@@ -196,7 +176,6 @@ export function useAiSessionStore(input: {
     applyTimelineItemDelta,
     recoverTimelineItems: timelineItems.recoverConnection,
     applyEvent,
-    applyUnreadEvent,
     recoverDescriptor: streamRecovery.recoverDescriptor,
   };
 }
