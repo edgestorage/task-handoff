@@ -112,24 +112,27 @@ const DirectoryErrorSchema = z.object({
 
 export const ControlPlaneFleetResourceSchema = z.enum(["instances", "runtimes", "models"]);
 export const ControlPlaneFleetResourcePhaseSchema = z.enum(["uninitialized", "loading", "ready", "stale", "error"]);
+/** One node-agent request failure scoped to the node it was read from. */
+export const ControlPlaneNodeFleetErrorSchema = z.object({
+  nodeId: IdSchema,
+  route: z.string().trim().min(1).max(500),
+  method: z.string().trim().min(1).max(20),
+  code: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(4096),
+  statusCode: z.number().int().optional(),
+  issues: z.array(z.object({
+    path: z.array(z.union([z.string(), z.number()])).optional(),
+    message: z.string(),
+  }).passthrough()).optional(),
+}).passthrough();
+
 export const ControlPlaneNodeFleetStateSchema = z.object({
   nodeId: IdSchema,
   resource: ControlPlaneFleetResourceSchema,
   phase: ControlPlaneFleetResourcePhaseSchema,
   revision: z.number().int().nonnegative().optional(),
   updatedAt: TimestampSchema.optional(),
-  error: z.object({
-    nodeId: IdSchema,
-    route: z.string().trim().min(1).max(500),
-    method: z.string().trim().min(1).max(20),
-    code: z.string().trim().min(1).max(120),
-    message: z.string().trim().min(1).max(4096),
-    statusCode: z.number().int().optional(),
-    issues: z.array(z.object({
-      path: z.array(z.union([z.string(), z.number()])).optional(),
-      message: z.string(),
-    }).passthrough()).optional(),
-  }).passthrough().optional(),
+  error: ControlPlaneNodeFleetErrorSchema.optional(),
 }).strict();
 
 // Event wire model is intentionally separate from the directory snapshot.

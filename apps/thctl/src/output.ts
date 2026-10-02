@@ -1,4 +1,5 @@
 import { ThctlError } from "./errors.ts";
+import { redactSecrets, redactText } from "./redact.ts";
 
 export type CliColumn = {
   key: string;
@@ -81,7 +82,7 @@ export class CliOutput {
   }
 
   warn(text: string) {
-    this.streams.stderr(`${text}\n`);
+    this.streams.stderr(`${redactText(text)}\n`);
   }
 
   error(error: ThctlError) {
@@ -89,12 +90,12 @@ export class CliOutput {
       this.streams.stderr(`${JSON.stringify({
         error: {
           code: error.code,
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
+          message: redactText(error.message),
+          ...(error.details ? { details: redactSecrets(error.details) } : {}),
         },
       })}\n`);
       return;
     }
-    this.streams.stderr(`${error.code}: ${error.message}\n`);
+    this.streams.stderr(`${error.code}: ${redactText(error.message)}\n`);
   }
 }

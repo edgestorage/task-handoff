@@ -18,7 +18,7 @@ test("node update clients expose one rollout without an instance target", () => 
 
   assert.doesNotMatch(types, /type UpdateTarget/);
   assert.match(queries, /checkNodeUpdate\(nodeId: string, channel: UpdateChannel\)[\s\S]*\{ channel \}/);
-  assert.match(queries, /applyNodeUpdate\(nodeId: string, input: ApplyUpdateRequest\)[\s\S]*postApiData<UpdateJob>[\s\S]*input/);
+  assert.match(queries, /applyNodeUpdate\(nodeId: string, input: ApplyUpdateRequest\)[\s\S]*sharedControlPlaneClient\.nodeAdmin\.applyUpdate\(nodeId, input\)/);
   assert.match(settings, /targetVersion: check\.availableVersion/);
   assert.match(settings, /preflightToken: check\.preflightToken/);
   assert.doesNotMatch(settings, /instanceId|controlled-instance/);

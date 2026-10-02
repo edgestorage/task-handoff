@@ -6,6 +6,7 @@ import { CLI_EXIT_CODES, ThctlError, notImplementedError, toThctlError } from ".
 import { THCTL_VERSION } from "./client-info.ts";
 import { openInBrowser } from "./login.ts";
 import { CliOutput, defaultStreams, type CliStreams } from "./output.ts";
+import type { CliResult } from "./runtime.ts";
 import { promptConfirm, type CliContext } from "./runtime.ts";
 
 const GLOBAL_OPTIONS: readonly [string, string][] = [
@@ -13,6 +14,7 @@ const GLOBAL_OPTIONS: readonly [string, string][] = [
   ["--json", "Emit machine-readable JSON on stdout"],
   ["--yes", "Skip interactive confirmation for write commands"],
   ["--dry-run", "Print the request a write command would send without sending it"],
+  ["--token-stdin", "Read a secret (token, join token, credential) from stdin instead of a flag"],
 ];
 
 function addGlobalOptions(command: Command) {
@@ -65,7 +67,21 @@ async function executeLeaf(leaf: CliLeaf, context: CliContext, command: Command)
     dryRun: options.dryRun === true,
   };
   if (!leaf.handler) throw notImplementedError(leaf.id, leaf.stage);
-  const result = await leaf.handler(invocationContext, { args, options, rawArgs: command.args });
+  let result: CliResult | void;
+  try {
+    result = await leaf.handler(invocationContext, { args, options, rawArgs: command.args });
+  } catch (error) {
+    // 未注册路由归一为能力缺失，并补上命令上下文，方便脚本按域降级。
+    if (error instanceof ThctlError && error.code === "CLI_ROUTE_MISSING") {
+      throw new ThctlError(
+        "CLI_CAPABILITY_MISSING",
+        `${error.message} \`${leaf.id}\` is unavailable on this server version.`,
+        error.exitCode,
+        { ...error.details, command: leaf.id },
+      );
+    }
+    throw error;
+  }
   if (!result) return;
   if (result.data !== undefined) invocationContext.output.data(result.data, result.columns);
   if (result.message) invocationContext.output.message(result.message);

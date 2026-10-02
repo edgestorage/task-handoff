@@ -5,6 +5,7 @@ import { ThctlError, CLI_EXIT_CODES } from "./errors.ts";
 import type { CliEventSocketFactory } from "./event-socket.ts";
 import { discoverLocalControlPlane, ensureLocalProfile, localControlPlaneLockPath } from "./local-control-plane.ts";
 import type { CliOutput } from "./output.ts";
+import { redactSecrets, registerSecretsFromValue } from "./redact.ts";
 
 export type CliContext = {
   store: CliProfileStore;
@@ -173,14 +174,16 @@ export async function performWrite<T>(
         dryRun: true,
         method: request.method,
         path: request.path,
-        ...(request.body === undefined ? {} : { body: request.body }),
+        ...(request.body === undefined ? {} : { body: redactSecrets(request.body) }),
       }
       : {
         dryRun: true,
-        steps: steps.map((step) => ({ method: step.method, path: step.path, ...(step.body === undefined ? {} : { body: step.body }) })),
+        steps: steps.map((step) => ({ method: step.method, path: step.path, ...(step.body === undefined ? {} : { body: redactSecrets(step.body) }) })),
       });
     return undefined as T;
   }
+  // 真实写请求发送前登记敏感明文，保证服务端回显到错误信息时也能擦除。
+  for (const step of steps) registerSecretsFromValue(step.body);
   await requireConfirmation(context, commandId, steps.length === 1
     ? `${request.method} ${request.path} — continue?`
     : `${steps.length} requests will be sent (${steps.map((step) => `${step.method} ${step.path}`).join(", ")}) — continue?`);

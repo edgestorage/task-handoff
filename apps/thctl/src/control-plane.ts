@@ -10,7 +10,7 @@ import {
 import { createControlPlaneClient, type ControlPlaneClient, type ControlPlaneClientTransport } from "@task-handoff/control-plane-client";
 import { cliClientInfo } from "./client-info.ts";
 import type { CliCredential, CliProfile, CliProfileStore } from "./config.ts";
-import { ThctlError, CLI_EXIT_CODES, networkError, protocolError, serverError } from "./errors.ts";
+import { ThctlError, CLI_EXIT_CODES, networkError, protocolError, routeMissingError, serverError } from "./errors.ts";
 
 const CLOCK_SKEW_MS = 60_000;
 /** Ed25519 SPKI 前缀；Node 不能直接从裸公钥构造 KeyObject，这里补 DER 头。 */
@@ -110,6 +110,11 @@ export function createThctlTransport(options: ThctlTransportOptions): ControlPla
             }
           }
           if (!envelope.success) {
+            // 无结构化错误信封的 404/405/501 表示服务端未注册该路由；交回命令层归一为能力缺失。
+            const method = (init.method ?? "GET").toUpperCase();
+            if (response.status === 404 || response.status === 405 || response.status === 501) {
+              throw routeMissingError(response.status, method, path);
+            }
             throw serverError(response.status, `HTTP_${response.status}`, `Control Plane request failed with HTTP ${response.status}.`, { path });
           }
           const { code, message, details, retryable } = envelope.data.error;
@@ -124,6 +129,32 @@ export function createThctlTransport(options: ThctlTransportOptions): ControlPla
         }
         return parsed.data;
       }
+    },
+    async requestBinary(path: string, init: RequestInit = {}) {
+      const headers = new Headers(init.headers);
+      headers.set("accept", "application/octet-stream, application/gzip, */*");
+      const token = options.sessionToken?.();
+      if (token) headers.set("authorization", `Bearer ${token}`);
+      let response: Response;
+      try {
+        response = await options.fetchImpl(requestUrl(options.origin, path), { ...init, headers, redirect: "error" });
+      } catch (error) {
+        if (error instanceof ThctlError) throw error;
+        throw networkError(`Could not reach ${options.origin}: ${error instanceof Error ? error.message : String(error)}`, { origin: options.origin });
+      }
+      if (!response.ok) {
+        if (response.status === 404 || response.status === 405 || response.status === 501) {
+          throw routeMissingError(response.status, (init.method ?? "GET").toUpperCase(), path);
+        }
+        throw serverError(response.status, `HTTP_${response.status}`, `Control Plane request failed with HTTP ${response.status}.`, { path });
+      }
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)?.[1];
+      return {
+        body: new Uint8Array(await response.arrayBuffer()),
+        ...(filename ? { filename: decodeURIComponent(filename) } : {}),
+        ...(response.headers.get("content-type") ? { contentType: response.headers.get("content-type") as string } : {}),
+      };
     },
   };
 }
@@ -140,7 +171,7 @@ export async function fetchControlPlaneIdentity(origin: string, fetchImpl: typeo
   try {
     document = await client.auth.identity();
   } catch (error) {
-    if (error instanceof ThctlError && error.exitCode === CLI_EXIT_CODES.notFound) {
+    if (error instanceof ThctlError && (error.exitCode === CLI_EXIT_CODES.notFound || error.code === "CLI_ROUTE_MISSING")) {
       throw new ThctlError(
         "CLI_IDENTITY_UNAVAILABLE",
         `${origin} did not return a Control Plane identity document. Check the address and that the Control Plane is running.`,

@@ -34,7 +34,8 @@ thctl events --instance <instanceId> --json
 thctl schema --format json
 ```
 
-- 全局参数：`--profile <label>`、`--json`、`--yes`、`--dry-run`。
+- 全局参数：`--profile <label>`、`--json`、`--yes`、`--dry-run`、`--config <file>`、`--token-stdin`。
+- 密钥只从 `--config <file>` 或 `--token-stdin` 进入，位置参数与普通选项不接受 secret；`--dry-run`、stderr 与错误详情中的 secret 统一脱敏为 `***`。
 - 写命令默认要求交互确认；非 TTY 环境必须显式 `--yes`，`--dry-run` 只打印将要发送的请求。
 - 数据写 stdout、诊断写 stderr；`--json` 输出与服务端 wire 模型的字段名一致。
 - 退出码：0 成功、2 用法错误、3 未实现、4 需要确认、5 未认证、6 无权限、7 未找到、8 冲突、9 限流、10 网络、11 协议、12 服务端、13 身份、14 能力缺失、15 取消。
@@ -55,10 +56,24 @@ thctl schema --format json
 - `profile add|list|use|show|remove|trust`、`login [--device]`、`logout`、`whoami`、`schema`；
 - `instance list|show|create|delete|start|stop|restart|rename`；
 - `ai-session list|show|history|turns|turn|timeline|turn-timeline|create|send|interrupt|approval|resume|read|rename|fork|close|model|reasoning`、`ai-session queue list|steer|retry|remove|edit|reorder`；
-- `app-session list|show|start|stop|rename|access|restart`、`node list|show|rename`；
+- `app-session list|show|start|stop|rename|access|restart`；
+- `node list|show|rename|create|remove|check|sync-local`、`node folders list|tree|add|update|remove`、`node runtimes list|create|update|remove|check`、`node docker images`、`node image-options`、`node settings external-listener show|set`、`node settings model-relay show|set`、`node updates jobs|check|apply`、`node pairing invite`、`node pairings list|remove`、`node connections list|create|remove`、`node-join invite|status|complete`；
 - `story list|show|create|update|archive|restore|remove`、`story document update|remove|reorder`、`story automation list|show|create|update|remove|enable|disable|run|runs`；
-- `trigger list|show|create|update|remove|run|bind|unbind|apply`、`model list|show`、`user list|show|sessions|session-revoke`；
+- `trigger list|show|create|update|remove|run|bind|unbind|apply`；
+- `model list|show|create|copy|discover|test|reorder|update|sync|merge|remove`、`model node list|create|update|remove|discover|test`；
+- `project list|show|create|update|remove`、`image list|show|create|update|remove|options`、`market catalog|refresh`、`env-template list|show|create|remove`；
+- `git-credential list|show|create|update|remove`、`git-credential assignments list|assign|unassign`、`chat status`、`chat bridges list|create|update|start|stop|remove`、`chat sessions list|show`、`mobile-session list|revoke`；
+- `control-plane status|settings show|settings update|diagnostic-logs export`、`cloud show|challenge|remote-access|disconnect`、`proxy invites list|create|remove`、`proxy bindings list|remove`、`proxy diagnostics`、`proxy pending-claims list|resume|remove`；
+- `user list|show|sessions|session-revoke|create|update|access|password-reset`、`user role list|create|update|remove`、`user permission list`、`user identity-provider list|create|update|remove`、`user external-identity list|approve|reject`；
 - `events [--topic <topic>]... [--instance <instanceId>]`：订阅 `/api/events`，每个事件输出一行 JSON（JSON Lines）；断线按连接 epoch 重连并重新订阅，握手前不输出，重放事件按 id 去重，不退化为轮询。
+
+命令面共 204 个叶子，`thctl schema` 导出的契约是唯一来源。
+
+### 能力门控
+
+- 节点命令（`node *`、`node-join *`）按目标节点的结构化 capability 文档（`GET /api/nodes/:id` 的 `capabilities.agent.capabilities`）查询，统一走 `supportsNode*`；
+- 控制面板管理命令（`user *`、`control-plane *`、`cloud *`、`proxy *`、`mobile-session *`）按身份文档里的 `supportsControlPlane*` 查询；
+- 旧服务端缺路由返回无信封的 404/405/501 时归一为 `CLI_CAPABILITY_MISSING`（退出码 14），只关闭该命令域，登录、`whoami` 与其他命令域不受影响；协议版本不匹配只产生 warning。
 
 `instance logs`（阶段 C 预留）仍是未实现契约，调用会以未实现错误（退出码 3）退出，不会发送业务请求。`thctl schema` 是全部契约的唯一来源，`outputMode: json-lines` 标记流式命令。`story` 系列的 `--node` 在省略时按权威目录解析 ownerNodeId，不做本地缓存。
 

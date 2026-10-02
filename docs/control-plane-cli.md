@@ -77,7 +77,7 @@ thctl whoami        # discovers the local Control Plane, writes the managed `loc
 
 ## Command surface
 
-Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`.
+Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <file>`, `--token-stdin`.
 
 | group | commands |
 | --- | --- |
@@ -86,19 +86,40 @@ Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`.
 | `instance` | `list`, `show`, `create`, `delete`, `start`, `stop`, `restart`, `rename` |
 | `ai-session` | `list`, `show`, `history`, `turns`, `turn`, `timeline`, `turn-timeline`, `create`, `send`, `interrupt`, `approval`, `resume`, `read`, `rename`, `fork`, `close`, `model`, `reasoning`, `queue list`, `queue steer`, `queue retry`, `queue remove`, `queue edit`, `queue reorder` |
 | `app-session` | `list`, `show`, `start`, `stop`, `rename`, `access`, `restart` |
-| `node` | `list`, `show`, `rename` |
+| `node` | `list`, `show`, `rename`, `create`, `remove`, `check`, `sync-local`, `folders list`, `folders tree`, `folders add`, `folders update`, `folders remove`, `runtimes list`, `runtimes create`, `runtimes update`, `runtimes remove`, `runtimes check`, `docker images`, `image-options`, `settings external-listener show`, `settings external-listener set`, `settings model-relay show`, `settings model-relay set`, `updates jobs`, `updates check`, `updates apply`, `pairing invite`, `pairings list`, `pairings remove`, `connections list`, `connections create`, `connections remove` |
+| `node-join` | `invite`, `status`, `complete` |
 | `story` | `list`, `show`, `create`, `update`, `archive`, `restore`, `remove`, `document update`, `document remove`, `document reorder`, `automation list`, `automation show`, `automation create`, `automation update`, `automation remove`, `automation enable`, `automation disable`, `automation run`, `automation runs` |
 | `trigger` | `list`, `show`, `create`, `update`, `remove`, `run`, `bind`, `unbind`, `apply` |
-| `model` | `list`, `show` |
-| `user` | `list`, `show`, `sessions`, `session-revoke` |
+| `model` | `list`, `show`, `create`, `copy`, `discover`, `test`, `reorder`, `update`, `sync`, `merge`, `remove`, `node list`, `node create`, `node update`, `node remove`, `node discover`, `node test` |
+| `project` | `list`, `show`, `create`, `update`, `remove` |
+| `image` | `list`, `show`, `create`, `update`, `remove`, `options` |
+| `market` | `catalog`, `refresh` |
+| `env-template` | `list`, `show`, `create`, `remove` |
+| `git-credential` | `list`, `show`, `create`, `update`, `remove`, `assignments list`, `assignments assign`, `assignments unassign` |
+| `chat` | `status`, `bridges list`, `bridges create`, `bridges update`, `bridges start`, `bridges stop`, `bridges remove`, `sessions list`, `sessions show` |
+| `mobile-session` | `list`, `revoke` |
+| `control-plane` | `status`, `settings show`, `settings update`, `diagnostic-logs export` |
+| `cloud` | `show`, `challenge`, `remote-access`, `disconnect` |
+| `proxy` | `invites list`, `invites create`, `invites remove`, `bindings list`, `bindings remove`, `diagnostics`, `pending-claims list`, `pending-claims resume`, `pending-claims remove` |
+| `user` | `list`, `show`, `sessions`, `session-revoke`, `create`, `update`, `access`, `password-reset`, `role list`, `role create`, `role update`, `role remove`, `permission list`, `identity-provider list`, `identity-provider create`, `identity-provider update`, `identity-provider remove`, `external-identity list`, `external-identity approve`, `external-identity reject` |
 | stream | `events` |
 | contract | `schema` |
 
 - Data goes to stdout, diagnostics to stderr; `--json` keeps the server wire field names.
+- `--config <file>` carries a JSON request body for commands whose input is too large for flags (write inputs such as `instance create`, `node create`, `project create`, `image create`, `model create`, `chat bridges create`); the file must parse to a JSON object. `--token-stdin` reads a one-time token from stdin (for example `node-join complete`). Secrets are never accepted as positional arguments, so `--config` and `--token-stdin` are the only secret input channels.
 - Write commands require confirmation. Non-TTY callers must pass `--yes`; `--dry-run` prints the request (or the ordered requests of a multi-step write) without sending it.
 - Exit codes: `0` ok, `2` usage, `3` not implemented, `4` confirmation required, `5` not authenticated, `6` forbidden, `7` not found, `8` conflict, `9` rate limited, `10` network, `11` protocol, `12` server, `13` identity, `14` capability missing, `15` cancelled.
 - `thctl schema [group [leaf]] [--format json|md] [--out <file>]` exports the contract; leaves marked `outputMode: json-lines` stream one JSON document per line.
 - `story automation create|update` read the automation payload from `--config <file>`: the file never carries `storyId` (it comes from the argument) — `create` takes `{ actionId, schedule, enabled?, policy? }`, `update` takes any non-empty subset of `{ actionId, schedule, enabled, policy }`.
+
+### Capability gating
+
+Management commands are gated by the capabilities the target advertises, and a missing capability only closes that one command domain:
+
+- Node-scoped commands (`node check`, `node folders *`, `node runtimes *`, `node docker images`, `node image-options`, `node settings *`, `node updates *`, `node pairing invite`, `node pairings *`, `node connections *`, `node-join *`) query the node's structured capability document from `GET /api/nodes/:id` through the shared `supportsNode*` helpers.
+- Control Plane management commands (`user *`, `control-plane *`, `cloud *`, `proxy *`, `mobile-session *`) query the identity payload's `supportsControlPlane*` helpers (`userManagement`, `customRoles`, `externalIdentityLogin`).
+- A server that predates a route answers with `404`/`405`/`501` without the structured error envelope; the CLI normalizes this to `CLI_CAPABILITY_MISSING` and exits `14`, naming both the command and the capability it required. Login, `whoami`, and commands in domains that are still supported keep working.
+- A protocol-version mismatch is only a warning; it never blocks registration, login, or existing commands.
 
 ### Instances
 
@@ -122,6 +143,49 @@ thctl instance delete <instanceId> --volumes --yes
 - 带 `gitCredentialRetention: "instance-retained"` 的创建要求账号具备 `manage-secrets` 权限，否则退出码 6。
 - 创建返回 `startOutcome`：`not-requested`（body 未要求 start）、`started`（已请求启动，Docker 镜像可能仍在 provisioning）、`failed`（已创建但启动失败，错误在 `startOutcome.error`）。
 - `delete` 的 `deleteVolumes` 恒为布尔值：不带 `--volumes` 发送 `false`（卷保留），带 `--volumes` 发送 `true`；删除未完成时命令以退出码 8 结束，`volumeResults` 在错误详情里，重跑同一命令即可重试。
+
+### Nodes, settings, and access
+
+```bash
+# Node inventory and ownership
+thctl node list --json
+thctl node check <nodeId>
+thctl node folders tree <nodeId> --json
+thctl node runtimes list <nodeId> --json
+thctl node docker images <nodeId> --json
+thctl node settings external-listener show <nodeId>
+thctl node updates check <nodeId> --config ./check.json
+thctl node updates apply <nodeId> --config ./rollout.json --wait
+
+# Enroll another machine
+thctl node-join invite --config ./join-invite.json --yes
+thctl node-join status <inviteId>
+thctl node-join complete --config ./join-complete.json --yes
+
+# Catalogs and settings
+thctl project create --config ./project.json --yes
+thctl image list --json
+thctl market catalog --json
+thctl model discover --config ./discover.json
+thctl env-template create <instanceId> --config ./env-template.json --yes
+thctl git-credential create --config ./credential.json --yes
+echo "$GIT_TOKEN" | thctl git-credential create --config ./credential.json --token-stdin --yes
+echo "$NEW_PASSWORD" | thctl user password-reset <userId> --token-stdin --yes
+thctl chat status --json
+thctl control-plane settings show --json
+thctl control-plane diagnostic-logs export --out ./diagnostic-logs.tar.gz
+thctl cloud challenge --json
+
+# Access management
+thctl user create --config ./user.json --yes
+thctl user role list --json
+thctl user identity-provider list --json
+thctl user external-identity approve <approvalId> --yes
+```
+
+- `node updates apply --wait` polls `updates/jobs` until the rollout reaches a terminal state; an interrupted wait exits `15`.
+- `control-plane diagnostic-logs export` streams the archive to `--out` and never prints the payload to stdout.
+- `user create|update|access|password-reset`, `role *`, `identity-provider *`, and `external-identity *` are each independently gated by `userManagement`, `customRoles`, and `externalIdentityLogin`; losing one does not disable `user list|show|sessions`.
 
 ## Event stream
 
