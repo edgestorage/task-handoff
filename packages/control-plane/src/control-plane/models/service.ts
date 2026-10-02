@@ -15,8 +15,6 @@ import {
   normalizeModelRequestMappings,
   projectModelNameEntries,
   NodeModelMergeSchema,
-  supportsControlledInstanceModelRelay,
-  supportsControlledInstanceModelRelayProtocol,
   supportsNodeMultiEntityModelAssignment,
   supportsNodeModelRequestMappings,
   supportsNodeModelRelay,
@@ -25,7 +23,6 @@ import {
   type ModelLocationSyncResult,
   type ModelConfig,
   type ModelNameEntry,
-  type ModelProtocol,
   type ModelRequestMapping,
   type Node,
   type NodeModelPublicRecord,
@@ -67,14 +64,6 @@ function relayUnsupportedError(node: Node, mapping = false) {
     : `Node ${node.id} does not support the model relay.`), {
     statusCode: 409,
     code: "NODE_MODEL_RELAY_UNSUPPORTED",
-    details: { nodeId: node.id },
-  });
-}
-
-function relayDisabledError(node: Node) {
-  return Object.assign(new Error(`Node ${node.id} has the model relay disabled; enable it before saving or assigning a model name mapping.`), {
-    statusCode: 409,
-    code: "NODE_MODEL_RELAY_DISABLED",
     details: { nodeId: node.id },
   });
 }
@@ -767,35 +756,24 @@ export class ControlPlaneModelService {
   private async createNodeModelWrite(node: Node, input: ReturnType<typeof CreateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
     assertRequestMappingsSupported(target, input.mappings);
-    const payload = await this.projectNodeModelWrite(target, input);
-    return this.options.gateway.createModel(target, payload);
+    return this.options.gateway.createModel(target, nodeModelWirePatch(target, input));
   }
 
   private async updateNodeModelWrite(node: Node, modelId: string, input: ReturnType<typeof UpdateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
     assertRequestMappingsSupported(target, input.mappings);
-    const payload = await this.projectNodeModelWrite(target, input);
-    return this.options.gateway.updateModel(target, modelId, payload);
+    return this.options.gateway.updateModel(target, modelId, nodeModelWirePatch(target, input));
   }
 
   /**
    * Explicit node model saves revalidate the capability document, project the
-   * wire names and require the relay switch before a mapping is stored. The
-   * explicit probe keeps a recently updated node from being misclassified by
-   * a cached capability document.
+   * wire names and fail closed on nodes whose wire model cannot carry a
+   * mapping. The explicit probe keeps a recently updated node from being
+   * misclassified by a cached capability document.
    */
   private async refreshModelWriteNode(node: Node) {
     const [resolved] = await this.withFreshNodeCapabilities([node], true);
     return resolved || node;
-  }
-
-  private async projectNodeModelWrite<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[] }>(node: Node, patch: T): Promise<T> {
-    const projected = nodeModelWirePatch(node, patch);
-    if (modelRecordHasMapping(projected)) {
-      const relay = await this.options.gateway.getModelRelay(node);
-      if (!relay.enabled) throw relayDisabledError(node);
-    }
-    return projected;
   }
 
   deleteOnNode(nodeId: string, modelId: string) {
@@ -853,7 +831,7 @@ export class ControlPlaneModelService {
     };
     const entityIds = storedSelection.modelEntityIds || [];
     const controlPlaneModels = this.listAll();
-    await this.assertMappedAssignmentAllowed(node, storedSelection, nodeModels, instance);
+    this.assertMappedAssignmentAllowed(node, storedSelection, nodeModels);
     const resolvedEntities: ModelConfig[] = [];
     // Selections persisted before a rekey reference the content-hash projection
     // the node still holds; fold it back onto the entity so replaying the
@@ -965,17 +943,15 @@ export class ControlPlaneModelService {
 
   /**
    * Fail closed before any node write when the selection contains mapped
-   * entities. Mapped models need the node relay capability, the node switch
-   * and, once the target instance has registered, the instance relay consumer
-   * capability for at least one protocol of each mapped entity. Running the
-   * check up front keeps a rejected assignment from leaving a half-deployed
-   * model or a changed assignment behind.
+   * entities and the node wire model cannot carry them: the node relay
+   * producer capability is the only gate. Relay support and the relay switch
+   * are consumption concerns, so a consumer that cannot relay simply
+   * projects nothing.
    */
-  private async assertMappedAssignmentAllowed(
+  private assertMappedAssignmentAllowed(
     node: Node,
     selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
     nodeModels: NodeModelPublicRecord[],
-    instance?: ControlledInstance,
   ) {
     const ids = [...new Set([
       ...(selection.modelEntityIds || []),
@@ -996,38 +972,9 @@ export class ControlPlaneModelService {
       return modelRecordHasMapping(record) ? [record] : [];
     });
     if (!mapped.length) return;
-    // A mapped assignment needs a controlled instance that has registered its
-    // relay consumer capability; an instance that has never registered (or a
-    // creation call without an instance yet) is unknown rather than capable,
-    // so it fails closed with the same upgrade-required error a v0.0.34
-    // instance produces.
-    const instanceIds = instance ? [instance.id] : [];
-    if (!instance || instance.protocolVersion === undefined) {
-      throw Object.assign(new Error(instance
-        ? `Instance ${instance.id} has not registered its relay capability yet; start it before assigning a mapped model.`
-        : "Model name mappings can only be assigned to a controlled instance that has registered its relay capability."), {
-        statusCode: 409,
-        code: "NODE_MODEL_RELAY_UNSUPPORTED",
-        details: { instanceIds },
-      });
-    }
-    const usable = supportsControlledInstanceModelRelay(instance.capabilities)
-      && mapped.every((model) => {
-        const protocols = model.protocols?.length ? model.protocols : defaultModelProtocols(model.app);
-        return protocols.some((protocol: ModelProtocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol));
-      });
-    if (!usable) {
-      throw Object.assign(new Error(`Instance ${instance.id} cannot consume a mapped model over the relay protocols declared by the selected model entities.`), {
-        statusCode: 409,
-        code: "NODE_MODEL_RELAY_UNSUPPORTED",
-        details: { instanceIds },
-      });
-    }
     if (!supportsNodeModelRelay(nodeAgentCapabilities(node))) {
       throw relayUnsupportedError(node, true);
     }
-    const relay = await this.options.gateway.getModelRelay(node);
-    if (!relay.enabled) throw relayDisabledError(node);
   }
 
   /**

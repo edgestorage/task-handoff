@@ -18,8 +18,10 @@ test("model editor exposes external and upstream name fields per entry", () => {
   // Discovered ids initialize both fields before the external name is edited.
   assert.match(modelSettings, /empty\.name = value;\s*empty\.upstreamName = value;/);
   assert.match(modelSettings, /push\(\{ name: value, upstreamName: value, order:/);
-  // The composer sends the explicit mapping on save.
-  assert.match(modelSettingsComposable, /upstreamName: entry\.upstreamName\?\.trim\(\) \|\| entry\.name\.trim\(\)/);
+  // The composer resolves every row through the shared upstream-name helper on save.
+  assert.match(modelSettingsComposable, /export function modelUpstreamName\(entry: \{ name: string; upstreamName\?: string \}\)/);
+  assert.match(modelSettingsComposable, /return entry\.upstreamName\?\.trim\(\) \|\| entry\.name\.trim\(\);/);
+  assert.match(modelSettingsComposable, /upstreamName: modelUpstreamName\(entry\),/);
 });
 
 test("model name fields stay at the 12px body metric and keep secondary weight", () => {

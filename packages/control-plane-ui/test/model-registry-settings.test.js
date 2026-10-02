@@ -38,7 +38,9 @@ test("model edits use one authoritative call and report per-location sync state"
   assert.match(settings, /function staleLocations\(model: ModelConfig\)/);
   assert.match(settings, /function mergeCandidates\(model: ModelConfig\)/);
   assert.match(settings, /createNodeModel\(settingsModel\.locationScope/);
-  assert.match(settings, /deleteNodeModel\(location\.nodeId/);
+  // Legacy node replicas live under the content-hash projection id exposed as
+  // `replicaId`, so deleting a location must address that replica.
+  assert.match(settings, /deleteNodeModel\(location\.nodeId, location\.replicaId \|\| model\.id\)/);
   assert.match(settings, /removeModel\(model: ModelConfig, location: ModelLocation\)/);
   assert.match(settings, /settingsModel\.locationScope === "control-plane"/);
   assert.match(settings, /finally \{\s*savingModelId\.value = ""/);
@@ -82,7 +84,7 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /:external-label="t\('settings\.modelRegistry\.externalName'\)"/);
   assert.match(settings, /:upstream-label="t\('settings\.modelRegistry\.upstreamName'\)"/);
   assert.match(settings, /:upstream-placeholder="modelNameUpstreamPlaceholder"/);
-  assert.match(settings, /function modelNameUpstreamPlaceholder\(entry: \{ name: string \}\)/);
+  assert.match(settings, /function modelNameUpstreamPlaceholder\(entry: \{ name: string; upstreamName\?: string \}\)/);
   assert.match(settings, /@remove="removeModelName"/);
   assert.match(settings, /@move="moveModelName"/);
   assert.match(settings, /@reorder="reorderModelName"/);
@@ -121,6 +123,13 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list" :scrollable="false">/);
   assert.match(settings, /v-for="option in discoveredModels"/);
   assert.match(settings, /<span>\{\{ option\.id \}\}<\/span>[\s\S]*<Check :size="14"/);
+  // The picker's check state tracks the upstream model, because the external
+  // name is operator-owned and may differ from the discovered id.
+  assert.match(state, /export function modelUpstreamName\(entry: \{ name: string; upstreamName\?: string \}\) \{/);
+  assert.match(state, /return entry\.upstreamName\?\.trim\(\) \|\| entry\.name\.trim\(\);/);
+  assert.match(settings, /'model-option-unselected': !settingsModel\.modelNames\.some\(\(entry\) => modelUpstreamName\(entry\) === option\.id\)/);
+  assert.match(settings, /findIndex\(\(entry\) => modelUpstreamName\(entry\) === value\)/);
+  assert.match(state, /upstreamName: modelUpstreamName\(entry\),/);
   assert.match(settings, /:global\(\.model-picker-popover\) \{[\s\S]*height: min\(360px,var\(--reka-popover-content-available-height\)\);[\s\S]*overflow: hidden;[\s\S]*padding: 4px;/);
   assert.match(settings, /\.model-picker-command \{[\s\S]*grid-template-rows: auto minmax\(0,1fr\);/);
   assert.match(settings, /\.model-picker-scroll \{ min-height: 0; \}/);
@@ -245,7 +254,7 @@ test("model request mappings stay independent, preset-driven, and hint relay dep
   assert.match(state, /function reorderMapping\(source: number, target: number\)/);
   assert.match(state, /function applyMappingPreset\(presetId: string\)/);
   // Presets fill the first upstream name by default and remain editable.
-  assert.match(state, /const mappingTargetDefault = \(\) => \{[\s\S]*upstreamName\?\.trim\(\) \|\| primary\?\.name\.trim\(\) \|\| ""/);
+  assert.match(state, /const mappingTargetDefault = \(\) => \{[\s\S]*return primary \? modelUpstreamName\(primary\) : ""/);
   assert.match(state, /const mappingsEditable = computed/);
   assert.match(state, /mappings: settingsModel\.mappings\.map\(\(entry, index\) => \(\{/);
   assert.match(state, /if \(!mappingsEditable\.value && settingsModel\.mappings\.length\) return false/);

@@ -115,11 +115,14 @@ export class NodeModelRegistry {
   }
 
   /**
-   * Instance ids whose assignment contains a non-same-name mapping. Disabling
-   * the relay switch must be rejected while this list is non-empty.
+   * Instance ids whose assignment contains a non-same-name mapping and that
+   * actually consume relay routes. Disabling the relay switch must be rejected
+   * while this list is non-empty; instances without relay support are not
+   * affected by the switch, so they never pin it.
    */
   mappedAssignmentInstanceIds() {
     return this.instances.list().flatMap((instance) => {
+      if (!supportsControlledInstanceModelRelay(instance.capabilities)) return [];
       const assignment = this.assignments.get(instance.id);
       if (!assignment) return [];
       const mapped = this.assignmentModelIds(assignment).some((id) => {
@@ -205,7 +208,6 @@ export class NodeModelRegistry {
           code: "NODE_MODEL_RELAY_MAPPING_REQUIRES_STABLE_IDENTITY",
         });
       }
-      if (existing) this.assertReferencingInstancesAllowMapped(existing.id, normalizedInput);
     }
     if (mappings.length && isModelConfigHashId(input.id)) {
       // Compatibility for v0.0.34: legacy hash ids cannot be edited in place,
@@ -250,7 +252,6 @@ export class NodeModelRegistry {
     });
     // The entity id is stable: editing content updates this record in place so
     // instance assignments and AI session selections keep resolving to it.
-    this.assertReferencingInstancesAllowMapped(id, candidate);
     const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id }));
     return this.toPublic(stored, this.referenceIds(id).length);
   }
@@ -278,7 +279,6 @@ export class NodeModelRegistry {
     const current = this.instances.require(instanceId);
     for (const modelEntityId of input.modelEntityIds) {
       this.validateEntityRef(modelEntityId);
-      this.assertMappedModelAssignmentAllowed(current, this.requireModel(modelEntityId));
     }
     if (input.modelSelection.modelEntityIds !== undefined
       && JSON.stringify(input.modelSelection.modelEntityIds) !== JSON.stringify(input.modelEntityIds)) {
@@ -287,9 +287,6 @@ export class NodeModelRegistry {
     this.validateRef("codex", input.codexModelHash);
     this.validateRef("claude", input.claudeModelHash);
     this.validateRef("opencode", input.opencodeModelHash);
-    for (const modelHash of [input.codexModelHash, input.claudeModelHash, input.opencodeModelHash]) {
-      if (modelHash) this.assertMappedModelAssignmentAllowed(current, this.requireModel(modelHash));
-    }
     if (input.modelSelection.codexModelHash !== undefined && (input.modelSelection.codexModelHash ?? undefined) !== input.codexModelHash) {
       throw Object.assign(new Error("Codex model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
@@ -467,12 +464,6 @@ export class NodeModelRegistry {
       throw Object.assign(new Error("A model cannot be merged into itself."), { statusCode: 400, code: "NODE_MODEL_MERGE_SAME" });
     }
     this.validateEntityRef(target.id);
-    if (this.isMappedModel(target)) {
-      const referencing = [...new Set([...this.referenceIds(id), ...this.referenceIds(target.id)])];
-      for (const instanceId of referencing) {
-        this.assertMappedModelAssignmentAllowed(this.instances.require(instanceId), target);
-      }
-    }
     for (const app of ["codex", "claude", "opencode"] as const) {
       if (this.modelSupportsApp(ghost, app) && !this.modelSupportsApp(target, app)) {
         throw Object.assign(new Error(`Model ${target.id} does not support the ${app} runtime protocol required by ${ghost.id}.`), {
@@ -550,39 +541,6 @@ export class NodeModelRegistry {
       assignment.claudeModelHash,
       assignment.opencodeModelHash,
     ].filter((id): id is string => Boolean(id)))];
-  }
-
-  /**
-   * Mapped entities may only be assigned to instances that can consume relay
-   * routes while the node switch is on. The relay switch is the sole enable
-   * authority, so both conditions are checked here on every write instead of
-   * being inferred from a previously projected catalog.
-   */
-  private assertMappedModelAssignmentAllowed(instance: ControlledInstance, model: Pick<NodeModelConfig, "id" | "app" | "protocols" | "model" | "modelNames">) {
-    if (!this.isMappedModel(model)) return;
-    const protocols = model.protocols?.length ? model.protocols : defaultProtocols(model.app);
-    if (!supportsControlledInstanceModelRelay(instance.capabilities)
-      || !protocols.some((protocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol))) {
-      throw Object.assign(new Error(`Instance ${instance.id} cannot consume a mapped model over the relay protocols declared by ${model.id}.`), {
-        statusCode: 409,
-        code: "NODE_MODEL_RELAY_UNSUPPORTED",
-        details: { instanceIds: [instance.id] },
-      });
-    }
-    if (!this.modelRelayEnabled()) {
-      throw Object.assign(new Error(`Model ${model.id} uses a model name mapping and the node model relay is disabled.`), {
-        statusCode: 409,
-        code: "NODE_MODEL_RELAY_DISABLED",
-        details: { instanceIds: [instance.id] },
-      });
-    }
-  }
-
-  private assertReferencingInstancesAllowMapped(modelId: string, model: Pick<NodeModelConfig, "id" | "app" | "protocols" | "model" | "modelNames">) {
-    if (!this.isMappedModel(model)) return;
-    for (const instanceId of this.referenceIds(modelId)) {
-      this.assertMappedModelAssignmentAllowed(this.instances.require(instanceId), model);
-    }
   }
 
   private environmentForRef(app: "codex" | "claude", modelHash?: string) {

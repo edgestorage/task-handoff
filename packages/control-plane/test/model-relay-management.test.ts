@@ -220,32 +220,32 @@ test("node model saves project mapping only to relay-capable nodes and require t
   }
 });
 
-test("mapped node model saves fail closed while the node relay is disabled", async () => {
+test("mapped node model saves stay writable while the node relay is disabled", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: false } });
   try {
-    await assert.rejects(
-      () => harness.service.createOnNode("node_relay", mappedModelInput()),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
-    );
-    assert.equal(harness.calls.create.length, 0);
+    await harness.service.createOnNode("node_relay", mappedModelInput());
+    assert.equal(harness.calls.create.length, 1);
+    assert.deepEqual((harness.calls.create[0].input.modelNames as Array<Record<string, unknown>>)[0], {
+      name: "public-model",
+      upstreamName: "upstream-model",
+      order: 100,
+    });
 
     const same = await harness.service.createOnNode("node_relay", { name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", modelNames: [{ name: "same-model", order: 100 }], app: "codex" });
     const sameId = (same as { id: string }).id;
-    await assert.rejects(
-      () => harness.service.updateOnNode("node_relay", sameId, { modelNames: [{ name: "same-model", upstreamName: "elsewhere", order: 100 }] }),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
-    );
-    assert.equal(harness.calls.update.length, 0);
-
-    // A same-name patch is still allowed while the switch is off.
-    await harness.service.updateOnNode("node_relay", sameId, { name: "Renamed" });
+    await harness.service.updateOnNode("node_relay", sameId, { modelNames: [{ name: "same-model", upstreamName: "elsewhere", order: 100 }] });
     assert.equal(harness.calls.update.length, 1);
+    assert.deepEqual((harness.calls.update[0].input.modelNames as Array<Record<string, unknown>>)[0], {
+      name: "same-model",
+      upstreamName: "elsewhere",
+      order: 100,
+    });
   } finally {
     await harness.close();
   }
 });
 
-test("mapped assignments require node capability, the node switch and a registered consumer", async () => {
+test("mapped assignments require only the node relay wire capability", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: true } });
   try {
     const model = await harness.service.create(mappedModelInput());
@@ -261,21 +261,16 @@ test("mapped assignments require node capability, the node switch and a register
       order: 100,
     });
 
-    // A creation call has no registered instance yet and must fail closed.
-    await assert.rejects(
-      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
-    );
-    // An instance that never registered has no relay consumer capability yet.
-    await assert.rejects(
-      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, { id: "inst_new", nodeId: relay.id, capabilities: {} } as unknown as ControlledInstance),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
-    );
-    // A v0.0.34 instance never declares the relay consumer capability.
-    await assert.rejects(
-      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, relayInstance("inst_old", relay.id, { features: {} })),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
-    );
+    // A creation call has no registered instance yet, an unregistered
+    // instance carries no capability document, and a v0.0.34 instance never
+    // declares the relay consumer capability: all three keep the assignment
+    // and simply project no relay routes.
+    const creation = await harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] });
+    assert.deepEqual(creation.modelSelection.modelEntityIds, [model.id]);
+    const unregistered = await harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, { id: "inst_new", nodeId: relay.id, capabilities: {} } as unknown as ControlledInstance);
+    assert.deepEqual(unregistered.modelSelection.modelEntityIds, [model.id]);
+    const legacyConsumer = await harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, relayInstance("inst_old", relay.id, { features: {} }));
+    assert.deepEqual(legacyConsumer.modelSelection.modelEntityIds, [model.id]);
 
     const nodeWithoutRelay = await createHarness({ nodes: [legacyNode("node_legacy")], relayEnabled: { node_legacy: true } });
     try {
@@ -291,15 +286,13 @@ test("mapped assignments require node capability, the node switch and a register
     const disabled = await createHarness({ relayEnabled: { node_relay: false } });
     try {
       const disabledModel = await disabled.service.create(mappedModelInput());
-      await assert.rejects(
-        () => disabled.service.prepareAssignment(disabled.nodes[0], { modelEntityIds: [disabledModel.id] }, relayInstance("inst_disabled", "node_relay")),
-        (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
-      );
+      const disabledAssignment = await disabled.service.prepareAssignment(disabled.nodes[0], { modelEntityIds: [disabledModel.id] }, relayInstance("inst_disabled", "node_relay"));
+      assert.deepEqual(disabledAssignment.modelSelection.modelEntityIds, [disabledModel.id]);
     } finally {
       await disabled.close();
     }
 
-    // Same-name selections never query the switch or the consumer capability.
+    // Same-name selections never query the relay capability or switch.
     const same = await harness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
     const sameAssigned = await harness.service.prepareAssignment(legacy, { modelEntityIds: [same.id] });
     assert.equal(typeof sameAssigned.codexModelHash, "string");
@@ -426,7 +419,7 @@ test("different entities may share one external name and keep distinct upstreams
   }
 });
 
-test("a rejected mapped assignment keeps the previous authoritative assignment", async () => {
+test("a mapped assignment applies while the relay is off and follows the stored selection", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: false } });
   try {
     const same = await harness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
@@ -437,11 +430,10 @@ test("a rejected mapped assignment keeps the previous authoritative assignment",
 
     const mapped = await harness.service.create(mappedModelInput());
     instance.modelSelection = { modelEntityIds: [mapped.id] } as never;
-    await assert.rejects(
-      () => harness.service.ensureInstanceAssignment(instance),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
-    );
-    assert.equal(harness.calls.assign.length, 1);
+    await harness.service.ensureInstanceAssignment(instance);
+    assert.equal(harness.calls.assign.length, 2);
+    const assignedSelection = (harness.calls.assign[1].input as { modelSelection: { modelEntityIds: string[] } }).modelSelection;
+    assert.deepEqual(assignedSelection.modelEntityIds, [mapped.id]);
   } finally {
     await harness.close();
   }

@@ -22,6 +22,15 @@ function legacyProtocols(app: ModelApp): ModelProtocol[] {
   return app === "claude" ? ["anthropic-messages"] : app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
 }
 
+/**
+ * The name a provider request must address: `upstreamName` when the operator
+ * overrode it, otherwise the external `name`. This mirrors the persisted
+ * projection, which omits `upstreamName` while it equals the external name.
+ */
+export function modelUpstreamName(entry: { name: string; upstreamName?: string }) {
+  return entry.upstreamName?.trim() || entry.name.trim();
+}
+
 export function useModelSettings({ errorText, models, nodes, onModelDeleted, refreshModels, translate: t }: UseModelSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const editingModelId = ref("");
@@ -70,7 +79,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     || nodeSupportsModelRequestMappings(nodes().find((item) => item.id === settingsModel.locationScope)));
   const mappingTargetDefault = () => {
     const primary = settingsModel.modelNames[0];
-    return primary?.upstreamName?.trim() || primary?.name.trim() || "";
+    return primary ? modelUpstreamName(primary) : "";
   };
   const canDiscoverModels = computed(() => Boolean(
     selectedNodeSupportsModelEndpointProbe.value
@@ -220,7 +229,8 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.modelRegistry.testing"));
     try {
       // Probes must address the upstream model, not the external name.
-      const probeModel = settingsModel.modelNames[0]?.upstreamName?.trim() || settingsModel.modelNames[0]?.name.trim() || "";
+      const primary = settingsModel.modelNames[0];
+      const probeModel = primary ? modelUpstreamName(primary) : "";
       const results = await Promise.all(settingsModel.protocols.map((protocol) => testModel({
         ...endpointDraft(),
         model: probeModel,
@@ -324,7 +334,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         model: settingsModel.modelNames[0]?.name.trim() || "",
         modelNames: settingsModel.modelNames.map((entry, index) => ({
           name: entry.name.trim(),
-          upstreamName: entry.upstreamName?.trim() || entry.name.trim(),
+          upstreamName: modelUpstreamName(entry),
           order: (index + 1) * 100,
         })),
         mappings: settingsModel.mappings.map((entry, index) => ({
@@ -382,7 +392,10 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     deletingModelId.value = model.id;
     clearModelFeedback();
     try {
-      if (location.type === "node") await deleteNodeModel(location.nodeId, model.id);
+      // A legacy replica is stored under its content-hash projection id, which
+      // the federated registry exposes as `replicaId`; newer replicas use the
+      // entity id.
+      if (location.type === "node") await deleteNodeModel(location.nodeId, location.replicaId || model.id);
       else await deleteModel(model.id);
       if (editingModelId.value === model.id && (model.locations?.length || 1) === 1) {
         resetModelForm();

@@ -121,7 +121,7 @@ test("node relay settings default to off, persist across restart, and reject inv
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), false);
 });
 
-test("node relay gate protects mapped assignments and refuses to disable while they exist", async (t) => {
+test("node relay gate keeps mapped records writable and pins the switch only for relay consumers", async (t) => {
   const dataDir = tempDataDir();
   const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_gate" });
   t.after(async () => app.close());
@@ -145,34 +145,42 @@ test("node relay gate protects mapped assignments and refuses to disable while t
     protocols: ["openai-responses"],
   }));
 
-  const plainGate = await request(app, "PUT", "/api/node-agent/instances/inst_relay_plain/model-assignment", assignPayload(mappedId, "codex"));
-  assert.equal(plainGate.statusCode, 409);
-  assert.equal(plainGate.json().error.code, "NODE_MODEL_RELAY_UNSUPPORTED");
-
+  // Neither the switch nor the instance relay capability gates a write: with
+  // the relay off the assignment still stores and simply projects nothing.
   assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: false })).statusCode, 200);
-  const disabledGate = await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", assignPayload(mappedId, "codex"));
-  assert.equal(disabledGate.statusCode, 409);
-  assert.equal(disabledGate.json().error.code, "NODE_MODEL_RELAY_DISABLED");
+  const offAssignment = await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", assignPayload(mappedId, "codex"));
+  assert.equal(offAssignment.statusCode, 200);
+  assert.deepEqual(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_ready").entities, []);
 
   assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: true })).statusCode, 200);
+  assert.equal(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_ready").entities.length, 1);
+  // Instance relay support is not a write-time gate: a plain instance accepts
+  // the assignment and simply projects no relay routes.
+  const plainGate = await request(app, "PUT", "/api/node-agent/instances/inst_relay_plain/model-assignment", assignPayload(mappedId, "codex"));
+  assert.equal(plainGate.statusCode, 200);
+  assert.deepEqual(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain"), {});
+  assert.deepEqual(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_plain").entities, []);
+
   const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", assignPayload(mappedId, "codex"));
   assert.equal(assigned.statusCode, 200);
 
   const refused = await relaySettingsPayload(app, "PATCH", { enabled: false });
   assert.equal(refused.statusCode, 409);
   assert.equal(refused.json().error.code, "NODE_MODEL_RELAY_IN_USE");
+  // Only instances that actually consume relay routes pin the switch.
   assert.deepEqual(refused.json().error.details.instanceIds, ["inst_relay_ready"]);
   assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, source: "persisted" });
 
-  // Editing an already assigned same-name entity into a mapping is gated too.
+  // Editing an already assigned same-name entity into a mapping applies
+  // directly; the plain consumer keeps projecting nothing.
   const sameName = await request(app, "POST", "/api/node-agent/models", modelInput({ name: "Same name", key: "same-secret", model: "same-model" }));
   const sameNameId = sameName.json().data.id;
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_plain/model-assignment", assignPayload(sameNameId, "codex"))).statusCode, 200);
   const promoted = await request(app, "PATCH", `/api/node-agent/models/${sameNameId}`, {
     modelNames: [{ name: "same-model", upstreamName: "elsewhere", order: 100 }],
   });
-  assert.equal(promoted.statusCode, 409);
-  assert.equal(promoted.json().error.code, "NODE_MODEL_RELAY_UNSUPPORTED");
+  assert.equal(promoted.statusCode, 200);
+  assert.deepEqual(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain"), {});
 
   // Same-name assignment stays allowed on a plain instance while relay is on.
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", { modelSelection: {} })).statusCode, 200);

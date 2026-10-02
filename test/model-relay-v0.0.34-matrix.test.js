@@ -15,7 +15,8 @@ const { supportsControlledInstanceModelRelay } = require("../packages/protocol/s
 // the model relay change. A v0.0.34 control-plane sends `{ name, order }` only
 // and never touches the relay settings; a v0.0.34 controlled instance never
 // declares the relay consumer capability. Both must keep the released
-// same-name direct path, and mappings must fail closed instead of degrading.
+// same-name direct path; a mapped assignment stays writable and simply never
+// reaches a v0.0.34 instance's direct catalog.
 
 function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-relay-matrix-"));
@@ -117,7 +118,7 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
   );
 });
 
-test("a v0.0.34 controlled instance keeps the direct catalog and rejects mapped assignments", async (t) => {
+test("a v0.0.34 controlled instance keeps the direct catalog and ignores mapped assignments", async (t) => {
   const dataDir = tempDataDir();
   const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_matrix_legacy_instance" });
   t.after(async () => { await app.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
@@ -152,9 +153,18 @@ test("a v0.0.34 controlled instance keeps the direct catalog and rejects mapped 
     modelNames: [{ name: "public-model", upstreamName: "upstream-model", order: 100 }],
   }));
   assert.equal(mapped.statusCode, 201, mapped.body);
-  const refused = await request(app, "PUT", "/api/node-agent/instances/inst_matrix_legacy_instance/model-assignment", assignPayload(mapped.json().data.id));
-  assert.equal(refused.statusCode, 409, refused.body);
-  assert.equal(refused.json().error.code, "NODE_MODEL_RELAY_UNSUPPORTED");
+  // Instance relay support is a consumption capability, not an assignment
+  // gate: the selection is stored and the direct catalog keeps ignoring the
+  // mapped entity while the same-name entity stays usable.
+  assert.equal((await request(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true })).statusCode, 200);
+  const sameNameId = sameName.json().data.id;
+  const mappedId = mapped.json().data.id;
+  const mappedAssignment = await request(app, "PUT", "/api/node-agent/instances/inst_matrix_legacy_instance/model-assignment", {
+    modelSelection: { modelEntityIds: [sameNameId, mappedId], codexModelHash: sameNameId },
+    modelEntityIds: [sameNameId, mappedId],
+    codexModelHash: sameNameId,
+  });
+  assert.equal(mappedAssignment.statusCode, 200, mappedAssignment.body);
 
   const unchanged = app.nodeAgentState.modelRegistry.privateCatalog("inst_matrix_legacy_instance");
   assert.equal(unchanged.protocolVersion, "2026-08-27");

@@ -51,6 +51,10 @@ test("instance rows render pending copy instead of the source label", () => {
   assert.match(instanceList, /<small v-else>{{ instanceSourceLabel\(instance, t\) }}<\/small>/);
   assert.match(instanceList, /return instancePendingStatusLabel\(instance, t\) \?\? props\.activeInstanceActionLabel\?\.\(instance\);/);
   assert.match(instanceList, /\.instance-row-main \.instance-row-status \{[\s\S]*?font-size: 12px;/);
+  assert.match(instanceList, /\.instance-row-main small \{[\s\S]*?line-height: 16px;/);
+  const statusRule = instanceList.match(/\.instance-row-main \.instance-row-status \{([\s\S]*?)\n\}/);
+  assert.ok(statusRule, "pending status rule should exist");
+  assert.doesNotMatch(statusRule[1], /line-height/, "pending status must reuse the shared meta line box so rows keep their height");
   assert.match(instanceList, /\.instance-row-main \.instance-row-status svg \{[\s\S]*?animation: instance-pending-spin/);
   assert.match(instanceList, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.instance-row-main \.instance-row-status svg/);
 });
