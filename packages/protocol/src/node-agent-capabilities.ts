@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ModelProtocolSchema, type ModelProtocol } from "./model-protocol.ts";
 
 // Compatibility for v0.0.32: older control planes ignore this additive event and
 // retain their connection; current consumers re-read the authoritative health document.
@@ -24,6 +25,14 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   // content hash and reject in-place edits, so writers must fall back to the
   // legacy deploy shape for them.
   stableModelIdentity: z.boolean().default(false),
+  // Additive capability: the node can relay model traffic for assigned
+  // entities over the declared protocols. Absence (v0.0.34 and earlier) keeps
+  // mapping deployment disabled; the relay switch is node configuration and
+  // is deliberately not part of the capability document.
+  modelRelay: z.object({
+    protocols: z.array(ModelProtocolSchema).max(3).default([]),
+    streaming: z.boolean().default(false),
+  }).strip().default(() => ({ protocols: [], streaming: false })),
 }).strip();
 
 export const NodeAgentStoryAgentToolCapabilitiesSchema = z.object({
@@ -139,6 +148,23 @@ export function supportsNodePrivateModelCatalog(capabilities: unknown) {
 
 export function supportsNodeStableModelIdentity(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.stableModelIdentity;
+}
+
+/** Single query for the relay producer capability declared by this boundary. */
+export function nodeAgentModelRelayCapabilities(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.modelRelay;
+}
+
+export function supportsNodeModelRelay(capabilities: unknown) {
+  return nodeAgentModelRelayCapabilities(capabilities).protocols.length > 0;
+}
+
+export function supportsNodeModelRelayProtocol(capabilities: unknown, protocol: ModelProtocol) {
+  return nodeAgentModelRelayCapabilities(capabilities).protocols.includes(protocol);
+}
+
+export function supportsNodeModelRelayStreaming(capabilities: unknown) {
+  return nodeAgentModelRelayCapabilities(capabilities).streaming;
 }
 
 export function supportsNodeCodexManagedSettings(capabilities: unknown) {

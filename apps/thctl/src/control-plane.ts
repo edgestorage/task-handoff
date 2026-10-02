@@ -3,11 +3,13 @@ import { z } from "zod";
 import {
   controlPlaneIdentitySigningInput,
   supportsControlPlaneCliSessions,
+  supportsControlPlaneLocalCliSessions,
   ControlPlanePublicIdentityDocumentSchema,
   type ControlPlanePublicIdentityPayload,
 } from "@task-handoff/protocol/control-plane-access";
 import { createControlPlaneClient, type ControlPlaneClient, type ControlPlaneClientTransport } from "@task-handoff/control-plane-client";
-import type { CliProfile, CliProfileStore } from "./config.ts";
+import { cliClientInfo } from "./client-info.ts";
+import type { CliCredential, CliProfile, CliProfileStore } from "./config.ts";
 import { ThctlError, CLI_EXIT_CODES, networkError, protocolError, serverError } from "./errors.ts";
 
 const CLOCK_SKEW_MS = 60_000;
@@ -67,49 +69,61 @@ export type ThctlTransportOptions = {
   fetchImpl: typeof fetch;
   sessionToken?: () => string | undefined;
   onUnauthorized?: () => void;
+  /** 受管本地信任凭证被服务端拒绝时重新签发；返回 true 时用新凭证把本次请求重试一次。 */
+  refreshCredential?: () => Promise<boolean>;
 };
 
 /** 所有网络访问都经过共享 client；这里只实现 transport 接口（凭证注入与错误归一）。 */
 export function createThctlTransport(options: ThctlTransportOptions): ControlPlaneClientTransport {
   return {
     async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}) {
-      const headers = new Headers(init.headers);
-      headers.set("accept", "application/json");
-      const token = options.sessionToken?.();
-      if (token) headers.set("authorization", `Bearer ${token}`);
-      let response: Response;
-      try {
-        response = await options.fetchImpl(requestUrl(options.origin, path), { ...init, headers, redirect: "error" });
-      } catch (error) {
-        if (error instanceof ThctlError) throw error;
-        throw networkError(`Could not reach ${options.origin}: ${error instanceof Error ? error.message : String(error)}`, { origin: options.origin });
-      }
-      const text = await response.text().catch(() => "");
-      let body: unknown;
-      if (text) {
+      let refreshed = false;
+      for (;;) {
+        const headers = new Headers(init.headers);
+        headers.set("accept", "application/json");
+        const token = options.sessionToken?.();
+        if (token) headers.set("authorization", `Bearer ${token}`);
+        let response: Response;
         try {
-          body = JSON.parse(text);
-        } catch {
-          throw protocolError("The Control Plane returned a non-JSON response.", { status: response.status, path });
+          response = await options.fetchImpl(requestUrl(options.origin, path), { ...init, headers, redirect: "error" });
+        } catch (error) {
+          if (error instanceof ThctlError) throw error;
+          throw networkError(`Could not reach ${options.origin}: ${error instanceof Error ? error.message : String(error)}`, { origin: options.origin });
         }
-      }
-      if (!response.ok) {
-        const envelope = ErrorEnvelopeSchema.safeParse(body);
-        if (response.status === 401) options.onUnauthorized?.();
-        if (!envelope.success) {
-          throw serverError(response.status, `HTTP_${response.status}`, `Control Plane request failed with HTTP ${response.status}.`, { path });
+        const text = await response.text().catch(() => "");
+        let body: unknown;
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            throw protocolError("The Control Plane returned a non-JSON response.", { status: response.status, path });
+          }
         }
-        const { code, message, details, retryable } = envelope.data.error;
-        throw serverError(response.status, code, message, { ...details, ...(retryable === undefined ? {} : { retryable }), path });
+        if (!response.ok) {
+          const envelope = ErrorEnvelopeSchema.safeParse(body);
+          if (response.status === 401) {
+            options.onUnauthorized?.();
+            // 本地信任会话被撤销/轮换时同一命令内重新签发；401 未进入业务处理，重试是安全的。
+            if (!refreshed && options.refreshCredential && await options.refreshCredential()) {
+              refreshed = true;
+              continue;
+            }
+          }
+          if (!envelope.success) {
+            throw serverError(response.status, `HTTP_${response.status}`, `Control Plane request failed with HTTP ${response.status}.`, { path });
+          }
+          const { code, message, details, retryable } = envelope.data.error;
+          throw serverError(response.status, code, message, { ...details, ...(retryable === undefined ? {} : { retryable }), path });
+        }
+        const parsed = schema.safeParse(body);
+        if (!parsed.success) {
+          throw protocolError("The Control Plane response does not match the expected protocol schema.", {
+            path,
+            issues: parsed.error.issues.slice(0, 5).map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })),
+          });
+        }
+        return parsed.data;
       }
-      const parsed = schema.safeParse(body);
-      if (!parsed.success) {
-        throw protocolError("The Control Plane response does not match the expected protocol schema.", {
-          path,
-          issues: parsed.error.issues.slice(0, 5).map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })),
-        });
-      }
-      return parsed.data;
     },
   };
 }
@@ -159,15 +173,58 @@ export function assertProfileIdentity(profile: CliProfile, identity: VerifiedCon
   }
 }
 
+/** 本地信任只对 loopback origin 生效；http 是本地明文约定，https 走普通远程授权。 */
+export function isLoopbackOrigin(origin: string) {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:"
+      && (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]");
+  } catch {
+    return false;
+  }
+}
+
 export function assertCliCapability(profile: CliProfile, identity: VerifiedControlPlaneIdentity) {
-  if (!supportsControlPlaneCliSessions(identity.payload.capabilities)) {
+  const capabilities = identity.payload.capabilities;
+  if (supportsControlPlaneCliSessions(capabilities)) return;
+  if (supportsControlPlaneLocalCliSessions(capabilities) && isLoopbackOrigin(profile.origin)) return;
+  if (supportsControlPlaneLocalCliSessions(capabilities)) {
     throw new ThctlError(
-      "CLI_CAPABILITY_MISSING",
-      `The Control Plane at ${profile.origin} does not declare the \`cliSessions\` capability. Upgrade it to the release that ships the Control Plane CLI endpoints.`,
+      "CLI_LOCAL_SESSION_UNAVAILABLE_REMOTE",
+      `${profile.origin} runs with Control Plane authentication disabled and only issues CLI sessions to clients on the same machine. Run thctl on that machine, or enable user management to sign in with \`thctl login\`.`,
       CLI_EXIT_CODES.capability,
       { profile: profile.label, origin: profile.origin, protocolVersion: identity.payload.protocolVersion },
     );
   }
+  throw new ThctlError(
+    "CLI_CAPABILITY_MISSING",
+    `The Control Plane at ${profile.origin} does not declare the \`cliSessions\` capability. Upgrade it to the release that ships the Control Plane CLI endpoints.`,
+    CLI_EXIT_CODES.capability,
+    { profile: profile.label, origin: profile.origin, protocolVersion: identity.payload.protocolVersion },
+  );
+}
+
+/** 本地信任会话自动签发：仅 loopback + `localCliSessions` 且没有任何本地凭证时调用。 */
+async function acquireLocalTrustCredential(options: {
+  profile: CliProfile;
+  identity: VerifiedControlPlaneIdentity;
+  fetchImpl: typeof fetch;
+  secrets: ReturnType<CliProfileStore["secrets"]>;
+}): Promise<CliCredential | undefined> {
+  const { profile, identity, fetchImpl, secrets } = options;
+  if (!supportsControlPlaneLocalCliSessions(identity.payload.capabilities)) return undefined;
+  if (!isLoopbackOrigin(profile.origin)) return undefined;
+  const client = createControlPlaneClient(createThctlTransport({ origin: profile.origin, fetchImpl }));
+  const session = await client.auth.cliLocalSession({ client: cliClientInfo() });
+  const credential: CliCredential = {
+    sessionToken: session.sessionToken,
+    sessionId: session.session.id,
+    expiresAt: session.session.expiresAt,
+    mode: "local-trust",
+    savedAt: new Date().toISOString(),
+  };
+  secrets.write(profile.label, credential);
+  return credential;
 }
 
 export type ThctlConnection = {
@@ -188,7 +245,16 @@ export async function connectToControlPlane(options: {
   assertProfileIdentity(profile, identity);
   assertCliCapability(profile, identity);
   const secrets = store.secrets();
-  const credential = options.withSession === false ? undefined : secrets.read(profile.label);
+  let credential = options.withSession === false ? undefined : secrets.read(profile.label);
+  if (credential?.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) {
+    secrets.remove(profile.label);
+    credential = undefined;
+  }
+  let mintedLocalTrust = false;
+  if (options.withSession !== false && !credential) {
+    credential = await acquireLocalTrustCredential({ profile, identity, fetchImpl, secrets });
+    mintedLocalTrust = Boolean(credential);
+  }
   if (options.withSession !== false && !credential) {
     throw new ThctlError(
       "CLI_NOT_AUTHENTICATED",
@@ -197,14 +263,32 @@ export async function connectToControlPlane(options: {
       { profile: profile.label },
     );
   }
+  const localTrust = credential?.mode === "local-trust";
   const transport = createThctlTransport({
     origin: profile.origin,
     fetchImpl,
     sessionToken: credential ? () => secrets.read(profile.label)?.sessionToken : undefined,
     onUnauthorized: credential ? () => secrets.remove(profile.label) : undefined,
+    ...(localTrust
+      ? {
+        refreshCredential: async () => {
+          secrets.remove(profile.label);
+          const minted = await acquireLocalTrustCredential({ profile, identity, fetchImpl, secrets });
+          return Boolean(minted);
+        },
+      }
+      : {}),
   });
   const refreshed = refreshProfileSnapshot(profile, identity);
   const client = createControlPlaneClient(transport);
+  // disabled 模式不会对失效 bearer 返回 401，而是回退匿名：本地信任凭证必须先验证会话仍然有效，
+  // 否则请求会以 system actor 归属。被撤销/轮换时同一命令内重新签发。
+  if (credential?.mode === "local-trust" && !mintedLocalTrust) {
+    const session = await client.auth.session();
+    if (!session.authenticated || !session.user) {
+      await acquireLocalTrustCredential({ profile, identity, fetchImpl, secrets });
+    }
+  }
   return { profile: refreshed, identity, client, store } satisfies ThctlConnection;
 }
 

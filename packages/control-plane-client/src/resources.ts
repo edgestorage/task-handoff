@@ -6,6 +6,13 @@ import {
   ControlPlaneNodeDirectorySchema,
   type ControlPlaneInstanceDirectoryEntry,
 } from "@task-handoff/protocol/control-plane-directory";
+import {
+  InstanceCreateInputSchema,
+  InstanceCreateResultSchema,
+  InstanceDeleteInputSchema,
+  InstanceDeleteResultSchema,
+  type InstanceCreateInput,
+} from "@task-handoff/protocol/control-plane";
 import { AiSessionPermissionModeSchema, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
@@ -38,7 +45,7 @@ export const PublicModelRegistryEntrySchema = z.object({
     id: z.string().trim().min(1).max(120),
     name: z.string().trim().min(1).max(160),
     model: z.string().trim().min(1).max(240),
-    modelNames: z.array(z.object({ name: z.string(), order: z.number().int() }).strip()).default([]),
+    modelNames: z.array(z.object({ name: z.string(), upstreamName: z.string().optional(), order: z.number().int() }).strip()).default([]),
     protocols: z.array(z.string()).default([]),
     app: z.string().optional(),
     enabled: z.boolean(),
@@ -139,6 +146,31 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
         },
       );
       return response.data.config.defaultCodexPermissionMode;
+    },
+    async createInstance(input: InstanceCreateInput) {
+      const response = await transport.request(
+        "/api/controlled-instances",
+        DataSchema(InstanceCreateResultSchema),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      return response.data;
+    },
+    async deleteInstance(instanceId: string, input: z.infer<typeof InstanceDeleteInputSchema>) {
+      const parsedInput = InstanceDeleteInputSchema.parse(input);
+      const response = await transport.request(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}`,
+        DataSchema(InstanceDeleteResultSchema),
+        {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(parsedInput),
+        },
+      );
+      return response.data;
     },
     nodeLocalFolders(nodeId: string, signal?: AbortSignal) {
       return requestData(`/api/nodes/${encodeURIComponent(nodeId)}/local-folders`, z.array(ControlPlaneNodeLocalFolderSchema), signal);

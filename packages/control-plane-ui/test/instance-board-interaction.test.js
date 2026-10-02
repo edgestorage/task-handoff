@@ -153,11 +153,12 @@ test("app launch menu names and paths use the shared menu typography", () => {
 });
 
 test("app launch menus use product and terminal icons instead of a generic launch glyph", () => {
-  assert.match(appLaunchItems, /<AppLaunchIcon :app-id="app\.id" \/>/);
-  assert.match(appLaunchIcon, /terminalAppIds = new Set\(\["terminal", "terminal-tty", "gui-terminal"\]\)/);
+  assert.match(appLaunchItems, /<AppLaunchIcon :app="app" \/>/);
+  assert.match(appLaunchIcon, /appLaunchIconKind\(props\.app\)/);
   assert.match(appLaunchIcon, /<AiAgentIcon v-if="agent"/);
-  assert.match(appLaunchIcon, /props\.appId === "codex" \|\| props\.appId === "claude" \|\| props\.appId === "opencode"/);
-  assert.match(appLaunchIcon, /<SquareTerminal v-else-if=/);
+  assert.match(appLaunchIcon, /<SquareTerminal v-else-if="iconKind === 'terminal'"/);
+  assert.match(appLaunchIcon, /<Globe2 v-else-if="iconKind === 'browser' \|\| iconKind === 'web'"/);
+  assert.match(appLaunchIcon, /<Monitor v-else-if="iconKind === 'desktop'"/);
   assert.match(appLaunchIcon, /<Play v-else/);
 });
 

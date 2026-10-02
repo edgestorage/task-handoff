@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CLI_GROUPS, CLI_LEAVES, type CliGroup, type CliLeaf } from "./contracts.ts";
-import { THCTL_VERSION } from "./login.ts";
+import { THCTL_VERSION } from "./client-info.ts";
 
 export const CLI_CONTRACT_VERSION = "1";
 

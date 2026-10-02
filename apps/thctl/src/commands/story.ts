@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { StoryAutomationInputSchema, StoryAutomationUpdateInputSchema } from "@task-handoff/protocol/stories";
 import { ThctlError, usageError } from "../errors.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import type { ControlPlaneClient } from "@task-handoff/control-plane-client";
-import { optionString, requireArgument } from "./support.ts";
+import { optionString, readJsonFile, requireArgument, requireOption } from "./support.ts";
 
 const STORY_COLUMNS = [
   { key: "id", header: "story" },
@@ -246,6 +247,74 @@ export async function storyAutomationShow(context: CliContext, invocation: CliIn
     { key: "lastRun.status", header: "last run" },
     { key: "nextRunAt", header: "next run" },
   ] };
+}
+
+const AUTOMATION_STATUS_COLUMNS = [
+  { key: "automation.id", header: "automation" },
+  { key: "automation.enabled", header: "enabled" },
+  { key: "effectiveStatus", header: "status" },
+  { key: "automation.actionId", header: "action" },
+  { key: "nextRunAt", header: "next run" },
+];
+
+/** create/update 输出服务端 StoryAutomationStatus；表格列与 automation list 保持一致。 */
+function automationStatusResult(context: CliContext, status: unknown) {
+  if (context.output.json) return { data: status };
+  return { data: status, columns: AUTOMATION_STATUS_COLUMNS };
+}
+
+// --config 只承载 automation 自身字段：storyId 由命令参数绑定并注入，避免与路由维度重复
+// （不一致时服务端以 STORY_AUTOMATION_STORY_MISMATCH 409 失败）。派生自权威 schema，保持 strict 与默认值语义。
+const StoryAutomationConfigSchema = StoryAutomationInputSchema.omit({ storyId: true });
+
+export async function storyAutomationCreate(context: CliContext, invocation: CliInvocation) {
+  const storyId = requireArgument(invocation, "storyId");
+  const configFile = requireOption(invocation, "config");
+  const config = readJsonFile(configFile, StoryAutomationConfigSchema, "story automation config");
+  const connection = await openConnection(context);
+  const nodeId = await resolveStoryNodeId(connection, storyId, optionString(invocation, "node"));
+  const input = { storyId, ...config };
+  const result = await performWrite(
+    context,
+    "story automation create",
+    () => ({ method: "POST", path: `/api/stories/${encodeURIComponent(storyId)}/automations`, body: { nodeId, input } }),
+    () => connection.client.stories.createAutomation(storyId, nodeId, input),
+  );
+  if (!result) return;
+  return { ...automationStatusResult(context, result), message: `Automation \`${result.automation.id}\` created on story \`${storyId}\`.` };
+}
+
+export async function storyAutomationUpdate(context: CliContext, invocation: CliInvocation) {
+  const storyId = requireArgument(invocation, "storyId");
+  const automationId = requireArgument(invocation, "automationId");
+  const configFile = requireOption(invocation, "config");
+  const input = readJsonFile(configFile, StoryAutomationUpdateInputSchema, "story automation update config");
+  const connection = await openConnection(context);
+  const nodeId = await resolveStoryNodeId(connection, storyId, optionString(invocation, "node"));
+  const result = await performWrite(
+    context,
+    "story automation update",
+    () => ({ method: "PATCH", path: `/api/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}`, body: { nodeId, input } }),
+    () => connection.client.stories.updateAutomation(storyId, automationId, nodeId, input),
+  );
+  if (!result) return;
+  return { ...automationStatusResult(context, result), message: `Automation \`${automationId}\` on story \`${storyId}\` updated.` };
+}
+
+export async function storyAutomationRemove(context: CliContext, invocation: CliInvocation) {
+  const storyId = requireArgument(invocation, "storyId");
+  const automationId = requireArgument(invocation, "automationId");
+  const connection = await openConnection(context);
+  const nodeId = await resolveStoryNodeId(connection, storyId, optionString(invocation, "node"));
+  const removed = await performWrite(
+    context,
+    "story automation remove",
+    () => ({ method: "DELETE", path: `/api/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}?nodeId=${encodeURIComponent(nodeId)}` }),
+    () => connection.client.stories.removeAutomation(storyId, automationId, nodeId),
+  );
+  if (!removed) return;
+  if (!removed.deleted) throw new ThctlError("CLI_STORY_AUTOMATION_NOT_REMOVED", `Automation \`${automationId}\` on story \`${storyId}\` was not removed.`, 8, { storyId, automationId });
+  return { data: removed, message: `Automation \`${automationId}\` removed from story \`${storyId}\`.` };
 }
 
 function automationEnabled(enabled: boolean) {

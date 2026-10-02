@@ -24,7 +24,7 @@ export const CONTROL_PLANE_PERMISSION_IDS = [
 
 export const ControlPlanePermissionIdSchema = z.enum(CONTROL_PLANE_PERMISSION_IDS);
 export const ControlPlaneUserStatusSchema = z.enum(["active", "disabled", "archived"]);
-export const ControlPlaneLoginIdentityKindSchema = z.enum(["local-password", "oidc", "oauth"]);
+export const ControlPlaneLoginIdentityKindSchema = z.enum(["local-password", "oidc", "oauth", "local-trust"]);
 export const ControlPlaneRoleStatusSchema = z.enum(["active", "archived"]);
 export const ControlPlaneIdentityProviderKindSchema = z.enum(["oidc", "github"]);
 export const ControlPlaneIdentityProviderStatusSchema = z.enum(["enabled", "disabled"]);
@@ -106,7 +106,7 @@ export const ControlPlaneLoginIdentitySummarySchema = z.object({
   if (identity.kind === "local-password" && !identity.loginName) {
     context.addIssue({ code: "custom", path: ["loginName"], message: "Local password identities require loginName." });
   }
-  if (identity.kind !== "local-password" && (!identity.providerId || !identity.subject)) {
+  if (identity.kind !== "local-password" && identity.kind !== "local-trust" && (!identity.providerId || !identity.subject)) {
     context.addIssue({ code: "custom", path: ["providerId"], message: "External identities require providerId and subject." });
   }
 });

@@ -106,5 +106,8 @@ test("terminal launch selection uses the shared provider priority", () => {
   assert.equal(terminalAppIdForLaunchableApps([{ id: "gui-terminal" }, { id: "terminal-tty" }]), "terminal-tty");
   assert.equal(terminalAppIdForLaunchableApps([{ id: "terminal" }, { id: "gui-terminal" }]), "terminal");
   assert.equal(terminalAppIdForLaunchableApps([{ id: "codex" }]), undefined);
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "terminal-gui", kind: "gui" }, { id: "terminal-tty", kind: "tty" }]), "terminal-tty");
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "codex", kind: "tty", agent: true }, { id: "chromium", kind: "gui" }]), undefined);
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "terminal-gui", kind: "gui" }]), "terminal-gui");
   assert.equal(terminalAppIdForLaunchableApps(undefined), undefined);
 });

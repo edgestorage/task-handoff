@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import {
   AiSessionApprovalInputSchema,
+  AiSessionForkInputSchema,
+  AiSessionReasoningEffortSchema,
   AiSessionSendModeSchema,
   type AiSessionApprovalInput,
+  type AiSessionTimelineItem,
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
 import { ThctlError } from "../errors.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import {
   optionString,
+  parseWithSchema,
   requireArgument,
   requireOption,
   requireUpdatedDetail,
@@ -105,6 +109,98 @@ export async function aiSessionHistory(context: CliContext, invocation: CliInvoc
       { key: "lastActiveAt", header: "last active" },
     ],
     message: rows.length ? undefined : "No provider session history matched.",
+  };
+}
+
+export async function aiSessionTurns(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const revision = optionString(invocation, "revision");
+  const connection = await openConnection(context);
+  const read = await connection.client.aiSessions.turnIndex(instanceId, sessionId, revision, context.signal);
+  if (context.output.json) return { data: read };
+  if (read.kind === "not-modified") {
+    return { data: read, message: `Turn index for \`${sessionId}\` is unchanged at revision ${read.revision}.` };
+  }
+  return {
+    data: read.index.turns,
+    columns: [
+      { key: "id", header: "turn", width: 40 },
+      { key: "status", header: "status" },
+      { key: "phase", header: "phase" },
+      { key: "startedAt", header: "started" },
+      { key: "completedAt", header: "completed" },
+    ],
+    message: read.index.turns.length ? undefined : `AI session \`${sessionId}\` has no turns yet.`,
+  };
+}
+
+export async function aiSessionTurn(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const turnId = requireArgument(invocation, "turnId");
+  const revision = optionString(invocation, "revision");
+  const connection = await openConnection(context);
+  const read = await connection.client.aiSessions.turnBody(instanceId, sessionId, turnId, revision, context.signal);
+  if (context.output.json) return { data: read };
+  if (read.kind === "not-modified") {
+    return { data: read, message: `Turn \`${turnId}\` is unchanged at revision ${read.revision}.` };
+  }
+  const turn = read.body.turn;
+  const rows = [
+    ...(turn.userMessages ?? []).map((message) => ({ kind: "user", message: message.id, text: message.text })),
+    ...(turn.lastMessage ? [{ kind: "assistant", message: turn.lastMessageItemId ?? "", text: turn.lastMessage }] : []),
+  ];
+  return {
+    data: rows,
+    columns: [
+      { key: "kind", header: "kind" },
+      { key: "message", header: "message", width: 24 },
+      { key: "text", header: "text", width: 60 },
+    ],
+    message: `Turn \`${turnId}\` is ${turn.status}.`,
+  };
+}
+
+type TimelineRow = { type: string; turn: string; title: string; detail: string };
+
+function timelineRows(items: readonly AiSessionTimelineItem[]): TimelineRow[] {
+  return items.map((item) => item.type === "activity"
+    ? { type: item.activityKind, turn: item.turnId, title: item.title, detail: item.output ?? item.summary ?? item.input ?? "" }
+    : { type: item.type, turn: item.turnId, title: "", detail: item.text });
+}
+
+const TIMELINE_COLUMNS = [
+  { key: "type", header: "type" },
+  { key: "turn", header: "turn", width: 40 },
+  { key: "title", header: "title", width: 24 },
+  { key: "detail", header: "detail", width: 60 },
+];
+
+export async function aiSessionTimeline(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const connection = await openConnection(context);
+  const timeline = await connection.client.aiSessions.timeline(instanceId, sessionId, context.signal);
+  if (context.output.json) return { data: timeline };
+  return {
+    data: timelineRows(timeline.items),
+    columns: TIMELINE_COLUMNS,
+    message: timeline.items.length ? undefined : `AI session \`${sessionId}\` has no timeline items.`,
+  };
+}
+
+export async function aiSessionTurnTimeline(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const turnId = requireArgument(invocation, "turnId");
+  const connection = await openConnection(context);
+  const timeline = await connection.client.aiSessions.turnTimeline(instanceId, sessionId, turnId, context.signal);
+  if (context.output.json) return { data: timeline };
+  return {
+    data: timelineRows(timeline.items),
+    columns: TIMELINE_COLUMNS,
+    message: timeline.items.length ? undefined : `Turn \`${turnId}\` has no timeline items.`,
   };
 }
 
@@ -222,6 +318,137 @@ export async function aiSessionRead(context: CliContext, invocation: CliInvocati
   return { data: result, message: `AI session \`${sessionId}\` marked as read.` };
 }
 
+export async function aiSessionRename(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const input = {
+    title: requireOption(invocation, "title"),
+    clientRequestId: optionString(invocation, "request-id") ?? randomUUID(),
+  };
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "ai-session rename",
+    () => ({ method: "PUT", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/title`, body: input }),
+    () => connection.client.aiSessions.rename(instanceId, sessionId, input),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    columns: [
+      { key: "aiSessionId", header: "session" },
+      { key: "disposition", header: "disposition" },
+      { key: "title", header: "title", width: 40 },
+    ],
+    message: `AI session \`${result.aiSessionId}\` is ${result.disposition}.`,
+  };
+}
+
+export async function aiSessionFork(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const throughTurnId = optionString(invocation, "through-turn");
+  const workspaceMode = optionString(invocation, "workspace");
+  const input = parseWithSchema(AiSessionForkInputSchema, {
+    clientRequestId: optionString(invocation, "request-id") ?? randomUUID(),
+    ...(throughTurnId ? { throughTurnId } : {}),
+    ...(workspaceMode ? { workspace: { mode: workspaceMode } } : {}),
+  }, "fork input");
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "ai-session fork",
+    () => ({ method: "POST", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/fork`, body: input }),
+    () => connection.client.aiSessions.fork(instanceId, sessionId, input),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    columns: [
+      { key: "aiSessionId", header: "session" },
+      { key: "disposition", header: "disposition" },
+      { key: "providerSessionId", header: "provider session" },
+    ],
+    message: `AI session \`${result.aiSessionId}\` is ${result.disposition}.`,
+  };
+}
+
+export async function aiSessionClose(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const clientRequestId = optionString(invocation, "request-id") ?? randomUUID();
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "ai-session close",
+    () => ({ method: "POST", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/close`, body: { clientRequestId } }),
+    () => connection.client.aiSessions.close(instanceId, sessionId, clientRequestId),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    columns: [
+      { key: "aiSessionId", header: "session" },
+      { key: "disposition", header: "disposition" },
+      { key: "providerSessionId", header: "provider session" },
+    ],
+    message: `AI session \`${result.aiSessionId}\` is ${result.disposition}.`,
+  };
+}
+
+export async function aiSessionModel(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const modelSelection = {
+    modelEntityId: requireOption(invocation, "entity"),
+    modelName: requireOption(invocation, "name"),
+  };
+  const clientRequestId = optionString(invocation, "request-id") ?? randomUUID();
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "ai-session model",
+    () => ({ method: "PUT", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/model-selection`, body: { clientRequestId, modelSelection } }),
+    () => connection.client.aiSessions.updateModelSelection(instanceId, sessionId, clientRequestId, modelSelection),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    columns: [
+      { key: "sessionId", header: "session" },
+      { key: "accepted", header: "accepted" },
+    ],
+    message: `Model selection for AI session \`${sessionId}\` updated.`,
+  };
+}
+
+export async function aiSessionReasoning(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const requested = requireOption(invocation, "effort");
+  const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(requested);
+  if (!reasoningEffort.success) {
+    throw new ThctlError("CLI_INVALID_OPTION", `--effort must be one of: ${AiSessionReasoningEffortSchema.options.join(", ")}.`, 2, { option: "effort", value: requested });
+  }
+  const clientRequestId = optionString(invocation, "request-id") ?? randomUUID();
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "ai-session reasoning",
+    () => ({ method: "PUT", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/reasoning-effort`, body: { clientRequestId, reasoningEffort: reasoningEffort.data } }),
+    () => connection.client.aiSessions.updateReasoningEffort(instanceId, sessionId, clientRequestId, reasoningEffort.data),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    columns: [
+      { key: "sessionId", header: "session" },
+      { key: "accepted", header: "accepted" },
+    ],
+    message: `Reasoning effort for AI session \`${sessionId}\` updated.`,
+  };
+}
+
 export async function aiSessionQueueList(context: CliContext, invocation: CliInvocation) {
   const instanceId = requireArgument(invocation, "instanceId");
   const sessionId = requireArgument(invocation, "sessionId");
@@ -267,6 +494,61 @@ function queueMutation(commandId: string, action: "steer" | "retry" | "remove") 
 export const aiSessionQueueSteer = queueMutation("ai-session queue steer", "steer");
 export const aiSessionQueueRetry = queueMutation("ai-session queue retry", "retry");
 export const aiSessionQueueRemove = queueMutation("ai-session queue remove", "remove");
+
+async function resolveQueueRevision(
+  context: CliContext,
+  connection: Awaited<ReturnType<typeof openConnection>>,
+  instanceId: string,
+  sessionId: string,
+  invocation: CliInvocation,
+) {
+  const explicit = optionString(invocation, "expected-revision");
+  if (explicit !== undefined) {
+    const value = Number(explicit);
+    if (!Number.isInteger(value) || value < 0) {
+      throw new ThctlError("CLI_INVALID_OPTION", "--expected-revision must be a non-negative integer.", 2, { option: "expected-revision", value: explicit });
+    }
+    return value;
+  }
+  const detail = requireUpdatedDetail(await connection.client.aiSessions.detail(instanceId, sessionId, undefined, context.signal), sessionId);
+  return detail.queue?.revision ?? 0;
+}
+
+export async function aiSessionQueueEdit(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const queueId = requireArgument(invocation, "queueId");
+  const message = requireOption(invocation, "message");
+  const connection = await openConnection(context);
+  const input = { expectedRevision: await resolveQueueRevision(context, connection, instanceId, sessionId, invocation), message };
+  const result = await performWrite(
+    context,
+    "ai-session queue edit",
+    () => ({ method: "PATCH", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, body: input }),
+    () => connection.client.aiSessions.editQueue(instanceId, sessionId, queueId, input),
+  );
+  if (!result) return;
+  return { data: result, message: `Queued message \`${queueId}\` updated.` };
+}
+
+export async function aiSessionQueueReorder(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const queueIds = repeatableOption(invocation, "queue");
+  if (!queueIds.length) {
+    throw new ThctlError("CLI_OPTION_MISSING", "Pass at least one --queue <queueId> to reorder.", 2, { option: "queue" });
+  }
+  const connection = await openConnection(context);
+  const input = { expectedRevision: await resolveQueueRevision(context, connection, instanceId, sessionId, invocation), queueIds };
+  const result = await performWrite(
+    context,
+    "ai-session queue reorder",
+    () => ({ method: "PATCH", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/queue/reorder`, body: input }),
+    () => connection.client.aiSessions.reorderQueue(instanceId, sessionId, input),
+  );
+  if (!result) return;
+  return { data: result, message: `Queue for AI session \`${sessionId}\` reordered.` };
+}
 
 function parseSendMode(value: string): AiSessionSendMode {
   const parsed = AiSessionSendModeSchema.safeParse(value);

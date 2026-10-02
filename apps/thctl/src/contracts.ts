@@ -12,17 +12,27 @@ import {
   ControlPlaneNodeDirectoryEntrySchema,
   ControlPlaneNodeDirectorySchema,
 } from "@task-handoff/protocol/control-plane-directory";
+import { InstanceCreateResultSchema, InstanceDeleteResultSchema } from "@task-handoff/protocol/control-plane";
 import {
   AiSessionActionCompatibleResponseSchema,
+  AiSessionCloseResultSchema,
   AiSessionCreateResultSchema,
   AiSessionDetailReadSchema,
+  AiSessionForkResultSchema,
   AiSessionHistoryListSchema,
+  AiSessionModelSelectionActionResponseSchema,
   AiSessionQueueMutationResponseSchema,
   AiSessionQueueSchema,
+  AiSessionReasoningEffortActionResponseSchema,
+  AiSessionRenameResultSchema,
   AiSessionResumeResultSchema,
+  AiSessionTimelineSchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionTurnIndexReadSchema,
+  AiSessionTurnTimelineSchema,
   AiSessionUnreadStateSchema,
 } from "@task-handoff/protocol/ai-sessions";
-import { AppSessionRecordSchema } from "@task-handoff/protocol/app-sessions";
+import { AppSessionAccessLeaseSchema, AppSessionRecordSchema } from "@task-handoff/protocol/app-sessions";
 import {
   ControlPlaneUserDetailSchema,
   ControlPlaneUserSessionSummarySchema,
@@ -36,27 +46,44 @@ import {
   StorySchema,
 } from "@task-handoff/protocol/stories";
 import { EventWireEnvelopeSchema } from "@task-handoff/protocol/events";
-import { ControlPlaneTriggerSchema, ControlPlaneTriggersSchema } from "@task-handoff/protocol/triggers";
+import {
+  ControlPlaneTriggerSchema,
+  ControlPlaneTriggersSchema,
+  TriggerConfigSchema,
+  TriggerDeploymentSchema,
+  TriggerRuntimeStateSchema,
+} from "@task-handoff/protocol/triggers";
 import { CliProfileSchema } from "./config.ts";
 import type { CliHandler } from "./runtime.ts";
 import {
   aiSessionApproval,
+  aiSessionClose,
   aiSessionCreate,
+  aiSessionFork,
   aiSessionHistory,
   aiSessionInterrupt,
   aiSessionList,
+  aiSessionModel,
+  aiSessionQueueEdit,
   aiSessionQueueList,
   aiSessionQueueRemove,
+  aiSessionQueueReorder,
   aiSessionQueueRetry,
   aiSessionQueueSteer,
   aiSessionRead,
+  aiSessionReasoning,
+  aiSessionRename,
   aiSessionResume,
   aiSessionSend,
   aiSessionShow,
+  aiSessionTimeline,
+  aiSessionTurn,
+  aiSessionTurnTimeline,
+  aiSessionTurns,
 } from "./commands/ai-session.ts";
-import { appSessionList, appSessionShow, appSessionStart, appSessionStop } from "./commands/app-session.ts";
+import { appSessionAccess, appSessionList, appSessionRename, appSessionRestart, appSessionShow, appSessionStart, appSessionStop } from "./commands/app-session.ts";
 import { eventsCommand } from "./commands/events.ts";
-import { instanceList, instanceRestart, instanceShow, instanceStart, instanceStop } from "./commands/instance.ts";
+import { instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop } from "./commands/instance.ts";
 import { modelList, modelShow } from "./commands/model.ts";
 import { nodeList, nodeRename, nodeShow } from "./commands/node.ts";
 import { profileAdd, profileList, profileRemove, profileShow, profileTrust, profileUse } from "./commands/profile.ts";
@@ -64,12 +91,15 @@ import { loginCommand, logoutCommand, whoamiCommand } from "./commands/session.t
 import { schemaCommand } from "./commands/schema.ts";
 import {
   storyArchive,
+  storyAutomationCreate,
   storyAutomationDisable,
   storyAutomationEnable,
   storyAutomationList,
+  storyAutomationRemove,
   storyAutomationRun,
   storyAutomationRuns,
   storyAutomationShow,
+  storyAutomationUpdate,
   storyCreate,
   storyDocumentRemove,
   storyDocumentReorder,
@@ -80,7 +110,7 @@ import {
   storyShow,
   storyUpdate,
 } from "./commands/story.ts";
-import { triggerCreate, triggerList, triggerRemove, triggerRun, triggerShow, triggerUpdate } from "./commands/trigger.ts";
+import { triggerApply, triggerBind, triggerCreate, triggerList, triggerRemove, triggerRun, triggerShow, triggerUnbind, triggerUpdate } from "./commands/trigger.ts";
 import { userList, userSessionRevoke, userSessions, userShow } from "./commands/user.ts";
 
 export type CliArgument = {
@@ -242,6 +272,33 @@ const instanceGroup = group("instance", "Inspect and control instances", [
     handler: instanceShow,
   },
   {
+    id: "instance create", group: "instance", name: "create", stage: "B", write: true,
+    summary: "Create a controlled instance from a JSON request body",
+    options: [
+      { flags: "--config <file>", description: "Instance create request JSON (Control Plane wire body)" },
+      { flags: "--name <name>", description: "Override the instance display name" },
+      { flags: "--node <nodeId>", description: "Override the target node" },
+      { flags: "--start", description: "Set start: true (server default is false)" },
+    ],
+    input: inputOf({ config: z.string(), name: z.string().optional(), node: z.string().optional(), start: z.boolean().optional() }),
+    output: InstanceCreateResultSchema,
+    examples: [
+      "thctl instance create --config ./instance.json --start",
+      "thctl instance create --config ./instance.json --name demo --node node_x --dry-run",
+    ],
+    handler: instanceCreate,
+  },
+  {
+    id: "instance delete", group: "instance", name: "delete", stage: "B", write: true,
+    summary: "Delete a controlled instance, optionally deleting its volumes",
+    args: [instanceIdArg],
+    options: [{ flags: "--volumes", description: "Also delete the instance's managed volumes (irreversible)" }],
+    input: inputOf({ instanceId: z.string(), volumes: z.boolean().optional() }),
+    output: InstanceDeleteResultSchema,
+    examples: ["thctl instance delete <instanceId> --yes", "thctl instance delete <instanceId> --volumes --yes"],
+    handler: instanceDelete,
+  },
+  {
     id: "instance start", group: "instance", name: "start", stage: "A", write: true,
     summary: "Start a controlled instance",
     args: [instanceIdArg],
@@ -273,6 +330,17 @@ const instanceGroup = group("instance", "Inspect and control instances", [
     input: inputOf({ instanceId: z.string(), follow: z.boolean().optional() }),
     output: looseOutput, outputPinned: false,
   },
+  {
+    id: "instance rename", group: "instance", name: "rename", stage: "B", write: true,
+    summary: "Rename a controlled instance",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "name", description: "New display name", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), name: z.string() }),
+    output: z.object({ id: z.string(), name: z.string() }),
+    handler: instanceRename,
+  },
 ]);
 
 const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
@@ -303,6 +371,54 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     input: inputOf({ instanceId: z.string(), agent: z.array(z.string()).optional() }),
     output: AiSessionHistoryListSchema,
     handler: aiSessionHistory,
+  },
+  {
+    id: "ai-session turns", group: "ai-session", name: "turns", stage: "B",
+    summary: "List turn index entries of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--revision <revision>", description: "Return not-modified when this revision already matches" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), revision: z.string().optional() }),
+    output: AiSessionTurnIndexReadSchema,
+    handler: aiSessionTurns,
+  },
+  {
+    id: "ai-session turn", group: "ai-session", name: "turn", stage: "B",
+    summary: "Show one turn body of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "turnId", description: "Turn ID", required: true },
+    ],
+    options: [{ flags: "--revision <revision>", description: "Return not-modified when this revision already matches" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), turnId: z.string(), revision: z.string().optional() }),
+    output: AiSessionTurnBodyReadSchema,
+    handler: aiSessionTurn,
+  },
+  {
+    id: "ai-session timeline", group: "ai-session", name: "timeline", stage: "B",
+    summary: "Show the conversation timeline of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string() }),
+    output: AiSessionTimelineSchema,
+    handler: aiSessionTimeline,
+  },
+  {
+    id: "ai-session turn-timeline", group: "ai-session", name: "turn-timeline", stage: "B",
+    summary: "Show the timeline of one AI session turn",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "turnId", description: "Turn ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), turnId: z.string() }),
+    output: AiSessionTurnTimelineSchema,
+    handler: aiSessionTurnTimeline,
   },
   {
     id: "ai-session create", group: "ai-session", name: "create", stage: "B", write: true,
@@ -378,6 +494,80 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     handler: aiSessionRead,
   },
   {
+    id: "ai-session rename", group: "ai-session", name: "rename", stage: "B", write: true,
+    summary: "Rename an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--title <title>", description: "New session title" },
+      { flags: "--request-id <id>", description: "Client request ID for retry-safe rename" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), title: z.string(), requestId: z.string().optional() }),
+    output: AiSessionRenameResultSchema,
+    handler: aiSessionRename,
+  },
+  {
+    id: "ai-session fork", group: "ai-session", name: "fork", stage: "B", write: true,
+    summary: "Fork an AI session into a new session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--through-turn <turnId>", description: "Fork after this turn" },
+      { flags: "--workspace <current|managed-worktree>", description: "Workspace mode for the fork" },
+      { flags: "--request-id <id>", description: "Client request ID for retry-safe fork" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), throughTurn: z.string().optional(), workspace: z.string().optional(), requestId: z.string().optional() }),
+    output: AiSessionForkResultSchema,
+    handler: aiSessionFork,
+  },
+  {
+    id: "ai-session close", group: "ai-session", name: "close", stage: "B", write: true,
+    summary: "Close an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--request-id <id>", description: "Client request ID for retry-safe close" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), requestId: z.string().optional() }),
+    output: AiSessionCloseResultSchema,
+    handler: aiSessionClose,
+  },
+  {
+    id: "ai-session model", group: "ai-session", name: "model", stage: "B", write: true,
+    summary: "Switch the model of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--entity <modelEntityId>", description: "Model entity ID" },
+      { flags: "--name <modelName>", description: "Model name within the entity" },
+      { flags: "--request-id <id>", description: "Client request ID for retry-safe switching" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), entity: z.string(), name: z.string(), requestId: z.string().optional() }),
+    output: AiSessionModelSelectionActionResponseSchema,
+    handler: aiSessionModel,
+  },
+  {
+    id: "ai-session reasoning", group: "ai-session", name: "reasoning", stage: "B", write: true,
+    summary: "Set the reasoning effort of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--effort <none|minimal|low|medium|high|xhigh|max|ultra>", description: "Reasoning effort" },
+      { flags: "--request-id <id>", description: "Client request ID for retry-safe updates" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), effort: z.string(), requestId: z.string().optional() }),
+    output: AiSessionReasoningEffortActionResponseSchema,
+    handler: aiSessionReasoning,
+  },
+  {
     id: "ai-session queue list", group: "ai-session", name: "queue list", stage: "B",
     summary: "List queued messages of an AI session",
     args: [
@@ -424,6 +614,37 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     output: AiSessionQueueMutationResponseSchema,
     handler: aiSessionQueueRemove,
   },
+  {
+    id: "ai-session queue edit", group: "ai-session", name: "queue edit", stage: "B", write: true,
+    summary: "Edit a queued message of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "queueId", description: "Queued message ID", required: true },
+    ],
+    options: [
+      { flags: "--message <text>", description: "Replacement message text" },
+      { flags: "--expected-revision <revision>", description: "Queue revision for optimistic concurrency (defaults to the current queue)" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), queueId: z.string(), message: z.string(), expectedRevision: z.string().optional() }),
+    output: AiSessionQueueMutationResponseSchema,
+    handler: aiSessionQueueEdit,
+  },
+  {
+    id: "ai-session queue reorder", group: "ai-session", name: "queue reorder", stage: "B", write: true,
+    summary: "Reorder queued messages of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--queue <queueId>", description: "Queued message ID in the new order", repeatable: true },
+      { flags: "--expected-revision <revision>", description: "Queue revision for optimistic concurrency (defaults to the current queue)" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), queue: z.array(z.string()).optional(), expectedRevision: z.string().optional() }),
+    output: AiSessionQueueMutationResponseSchema,
+    handler: aiSessionQueueReorder,
+  },
 ]);
 
 const appSessionGroup = group("app-session", "Inspect and control app sessions", [
@@ -469,6 +690,40 @@ const appSessionGroup = group("app-session", "Inspect and control app sessions",
     output: AppSessionRecordSchema,
     handler: appSessionStop,
   },
+  {
+    id: "app-session rename", group: "app-session", name: "rename", stage: "B", write: true,
+    summary: "Rename an app session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+      { name: "title", description: "New session title", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string(), title: z.string() }),
+    output: AppSessionRecordSchema,
+    handler: appSessionRename,
+  },
+  {
+    id: "app-session access", group: "app-session", name: "access", stage: "B", write: true,
+    summary: "Create a terminal or VNC access lease for an app session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string() }),
+    output: AppSessionAccessLeaseSchema,
+    handler: appSessionAccess,
+  },
+  {
+    id: "app-session restart", group: "app-session", name: "restart", stage: "B", write: true,
+    summary: "Restart an app session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string() }),
+    output: AppSessionRecordSchema,
+    handler: appSessionRestart,
+  },
 ]);
 
 const nodeGroup = group("node", "Inspect nodes", [
@@ -506,6 +761,9 @@ const storyAutomationArgs: CliArgument[] = [
   { name: "automationId", description: "Automation ID", required: true },
 ];
 const storyAutomationInput = inputOf({ storyId: z.string(), automationId: z.string(), node: z.string().optional() });
+const storyAutomationConfigOption = { flags: "--config <file>", description: "Story automation JSON file" };
+const storyAutomationCreateInput = inputOf({ storyId: z.string(), node: z.string().optional(), config: z.string() });
+const storyAutomationUpdateInput = inputOf({ storyId: z.string(), automationId: z.string(), node: z.string().optional(), config: z.string() });
 
 const storyGroup = group("story", "Work with stories, documents and automations", [
   {
@@ -637,6 +895,33 @@ const storyGroup = group("story", "Work with stories, documents and automations"
     handler: storyAutomationShow,
   },
   {
+    id: "story automation create", group: "story", name: "automation create", stage: "B", write: true,
+    summary: "Create a story automation from a JSON config file",
+    args: [{ name: "storyId", description: "Story ID", required: true }],
+    options: [storyNodeOption, storyAutomationConfigOption],
+    input: storyAutomationCreateInput,
+    output: StoryAutomationStatusSchema,
+    handler: storyAutomationCreate,
+  },
+  {
+    id: "story automation update", group: "story", name: "automation update", stage: "B", write: true,
+    summary: "Update a story automation from a JSON config file",
+    args: storyAutomationArgs,
+    options: [storyNodeOption, storyAutomationConfigOption],
+    input: storyAutomationUpdateInput,
+    output: StoryAutomationStatusSchema,
+    handler: storyAutomationUpdate,
+  },
+  {
+    id: "story automation remove", group: "story", name: "automation remove", stage: "B", write: true,
+    summary: "Remove a story automation",
+    args: storyAutomationArgs,
+    options: [storyNodeOption],
+    input: storyAutomationInput,
+    output: z.object({ deleted: z.boolean() }),
+    handler: storyAutomationRemove,
+  },
+  {
     id: "story automation enable", group: "story", name: "automation enable", stage: "B", write: true,
     summary: "Enable a story automation",
     args: storyAutomationArgs,
@@ -735,6 +1020,43 @@ const triggerGroup = group("trigger", "Inspect and run instance triggers", [
     input: inputOf({ instanceId: z.string(), configHash: z.string(), deployment: z.string().optional() }),
     output: z.unknown(),
     handler: triggerRun,
+  },
+  {
+    id: "trigger bind", group: "trigger", name: "bind", stage: "B", write: true,
+    summary: "Bind a trigger template to an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "configHash", description: "Trigger config hash", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), configHash: z.string() }),
+    output: z.object({ config: TriggerConfigSchema, deployment: TriggerDeploymentSchema, runtime: TriggerRuntimeStateSchema.optional() }),
+    handler: triggerBind,
+  },
+  {
+    id: "trigger unbind", group: "trigger", name: "unbind", stage: "B", write: true,
+    summary: "Unbind a trigger template from an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "configHash", description: "Trigger config hash", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), configHash: z.string() }),
+    output: z.unknown(),
+    handler: triggerUnbind,
+  },
+  {
+    id: "trigger apply", group: "trigger", name: "apply", stage: "B", write: true,
+    summary: "Apply a trigger template to instances targeting an AI session",
+    args: [{ name: "configHash", description: "Trigger config hash", required: true }],
+    options: [
+      { flags: "--instance <instanceId>", description: "Instance to deploy to (repeatable)", repeatable: true },
+      { flags: "--session <sessionId>", description: "Target AI session ID" },
+      { flags: "--disabled", description: "Create the deployment disabled" },
+    ],
+    input: inputOf({ configHash: z.string(), instance: z.array(z.string()).min(1), session: z.string(), disabled: z.boolean().optional() }),
+    output: z.looseObject({ configHash: z.string(), results: z.array(z.unknown()) }),
+    handler: triggerApply,
   },
 ]);
 

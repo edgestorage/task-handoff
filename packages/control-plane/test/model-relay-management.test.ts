@@ -1,0 +1,354 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { createModelEntityId, type ControlledInstance, type Node } from "@task-handoff/protocol/control-plane";
+import { ControlPlaneModelService } from "../src/control-plane/models/service.ts";
+import { ControlPlaneModelRepository } from "../src/control-plane/models/repository.ts";
+import { createControlPlaneDatabase } from "../src/control-plane/persistence/database/index.ts";
+import { controlPlaneStorePaths } from "../src/control-plane/persistence/paths.ts";
+import { SecretEnvelopeService } from "../src/control-plane/persistence/secret-envelope.ts";
+
+const ENDPOINT = "https://api.example.test/v1";
+const KEY = "secret-key";
+
+function nodeAgentCapabilities(managedModels: Record<string, unknown>) {
+  return { agent: { capabilities: { managedModels } } };
+}
+
+function relayNode(id = "node_relay") {
+  return {
+    id,
+    capabilities: nodeAgentCapabilities({
+      multiEntityAssignment: true,
+      privateModelCatalog: true,
+      stableModelIdentity: true,
+      modelRelay: { protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"], streaming: true },
+    }),
+  } as unknown as Node;
+}
+
+function legacyNode(id = "node_legacy") {
+  return {
+    id,
+    capabilities: nodeAgentCapabilities({ multiEntityAssignment: false, privateModelCatalog: false, stableModelIdentity: false }),
+  } as unknown as Node;
+}
+
+/** A node with stable identities from before the relay producer landed. */
+function stableNodeWithoutRelay(id = "node_stable") {
+  return {
+    id,
+    capabilities: nodeAgentCapabilities({
+      multiEntityAssignment: true,
+      privateModelCatalog: true,
+      stableModelIdentity: true,
+      modelRelay: { protocols: [], streaming: false },
+    }),
+  } as unknown as Node;
+}
+
+function relayInstance(id: string, nodeId: string, capabilities: unknown = {
+  features: { modelRelay: { protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"], streaming: true } },
+}): ControlledInstance {
+  return { id, nodeId, protocolVersion: "2026-10-02", capabilities } as unknown as ControlledInstance;
+}
+
+type GatewayCall = { nodeId: string; input: Record<string, unknown> };
+
+async function createHarness(options: { nodes?: Node[]; relayEnabled?: Record<string, boolean> } = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-relay-management-"));
+  const paths = controlPlaneStorePaths(directory);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const repository = new ControlPlaneModelRepository(database, secrets);
+  const nodes = options.nodes ?? [relayNode(), legacyNode()];
+  const nodeModels = new Map(nodes.map((node) => [node.id, new Map<string, Record<string, unknown>>()]));
+  const calls = {
+    create: [] as GatewayCall[],
+    update: [] as Array<GatewayCall & { id: string }>,
+    deploy: [] as Array<GatewayCall & { id: string }>,
+    assign: [] as Array<{ nodeId: string; instanceId: string; input: unknown }>,
+  };
+  const gateway = {
+    listModels: async (node: Node) => [...(nodeModels.get(node.id)?.values() ?? [])],
+    createModel: async (node: Node, input: Record<string, unknown>) => {
+      calls.create.push({ nodeId: node.id, input });
+      const record = { ...input, id: createModelEntityId(), referenceCount: 0 };
+      nodeModels.get(node.id)!.set(record.id as string, record);
+      return record;
+    },
+    updateModel: async (node: Node, id: string, input: Record<string, unknown>) => {
+      calls.update.push({ nodeId: node.id, id, input });
+      const current = nodeModels.get(node.id)!.get(id) ?? { id };
+      const record = { ...current, ...input, id };
+      nodeModels.get(node.id)!.set(id, record);
+      return record;
+    },
+    deployModel: async (node: Node, id: string, input: Record<string, unknown>) => {
+      calls.deploy.push({ nodeId: node.id, id, input });
+      const record = { ...input, id };
+      nodeModels.get(node.id)!.set(id, record);
+      return record;
+    },
+    deleteModel: async (node: Node, id: string) => {
+      nodeModels.get(node.id)!.delete(id);
+      return { id, accepted: true };
+    },
+    assignInstanceModels: async (node: Node, instanceId: string, input: unknown) => {
+      calls.assign.push({ nodeId: node.id, instanceId, input });
+      return { instance: { id: instanceId, nodeId: node.id, modelSelection: (input as { modelSelection: unknown }).modelSelection } };
+    },
+    getModelRelay: async (node: Node) => ({
+      enabled: options.relayEnabled?.[node.id] ?? true,
+      source: "persisted" as const,
+    }),
+    readFleetModels: (fleetNodes: Node[]) => ({
+      items: fleetNodes.flatMap((node) => [...(nodeModels.get(node.id)?.values() ?? [])].map((model) => ({ nodeId: node.id, model }))),
+      nodeErrors: [],
+      nodeStates: fleetNodes.map((node) => ({ nodeId: node.id, resource: "models", phase: "ready" })),
+    }),
+    listFleetModels: async (fleetNodes: Node[]) => gateway.readFleetModels(fleetNodes),
+  };
+  const service = new ControlPlaneModelService({
+    repository,
+    gateway: gateway as never,
+    listNodes: () => nodes,
+    requireNode: (id: string) => {
+      const node = nodes.find((candidate) => candidate.id === id);
+      if (!node) throw new Error(`Node ${id} was not found.`);
+      return node;
+    },
+    fetchImpl: fetch,
+  });
+  await service.init();
+  return {
+    service,
+    nodes,
+    nodeModels,
+    calls,
+    close: async () => {
+      await database.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+function mappedModelInput(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "Primary",
+    endpoint: ENDPOINT,
+    key: KEY,
+    model: "public-model",
+    modelNames: [{ name: "public-model", upstreamName: "upstream-model", order: 100 }],
+    protocols: ["openai-responses"],
+    app: "codex",
+    ...overrides,
+  };
+}
+
+function errorCode(error: unknown) {
+  return (error as { code?: string }).code;
+}
+
+test("node model saves project mapping only to relay-capable nodes and require the switch", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: true, node_legacy: true } });
+  try {
+    await harness.service.createOnNode("node_relay", mappedModelInput());
+    assert.equal(harness.calls.create.length, 1);
+    assert.deepEqual(harness.calls.create[0].input.modelNames, [{ name: "public-model", upstreamName: "upstream-model", order: 100 }]);
+
+    // Same-name records keep the v0.0.34 wire shape even on a relay node.
+    await harness.service.createOnNode("node_relay", {
+      name: "Same",
+      endpoint: ENDPOINT,
+      key: KEY,
+      model: "same-model",
+      modelNames: [{ name: "same-model", order: 100 }],
+      app: "codex",
+    });
+    assert.deepEqual(harness.calls.create[1].input.modelNames, [{ name: "same-model", order: 100 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call((harness.calls.create[1].input.modelNames as Array<Record<string, unknown>>)[0], "upstreamName"), false);
+
+    // A legacy node still accepts a same-name model without the additive field.
+    await harness.service.createOnNode("node_legacy", {
+      name: "Legacy same",
+      endpoint: ENDPOINT,
+      key: KEY,
+      model: "legacy-same",
+      modelNames: [{ name: "legacy-same", order: 100 }],
+      app: "codex",
+    });
+    assert.deepEqual(harness.calls.create[2].input.modelNames, [{ name: "legacy-same", order: 100 }]);
+
+    await assert.rejects(
+      () => harness.service.createOnNode("node_legacy", mappedModelInput({ modelNames: [{ name: "public-model", upstreamName: "elsewhere", order: 100 }] })),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+    );
+    assert.equal(harness.calls.create.length, 3);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("mapped node model saves fail closed while the node relay is disabled", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: false } });
+  try {
+    await assert.rejects(
+      () => harness.service.createOnNode("node_relay", mappedModelInput()),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
+    );
+    assert.equal(harness.calls.create.length, 0);
+
+    const same = await harness.service.createOnNode("node_relay", { name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", modelNames: [{ name: "same-model", order: 100 }], app: "codex" });
+    const sameId = (same as { id: string }).id;
+    await assert.rejects(
+      () => harness.service.updateOnNode("node_relay", sameId, { modelNames: [{ name: "same-model", upstreamName: "elsewhere", order: 100 }] }),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
+    );
+    assert.equal(harness.calls.update.length, 0);
+
+    // A same-name patch is still allowed while the switch is off.
+    await harness.service.updateOnNode("node_relay", sameId, { name: "Renamed" });
+    assert.equal(harness.calls.update.length, 1);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("mapped assignments require node capability, the node switch and a registered consumer", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: true } });
+  try {
+    const model = await harness.service.create(mappedModelInput());
+    const relay = harness.nodes[0];
+    const legacy = harness.nodes[1];
+
+    const assigned = await harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, relayInstance("inst_relay", relay.id));
+    assert.deepEqual(assigned.modelSelection.modelEntityIds, [model.id]);
+    assert.equal(harness.calls.deploy.length, 1);
+    assert.deepEqual((harness.calls.deploy[0].input.modelNames as Array<Record<string, unknown>>)[0], {
+      name: "public-model",
+      upstreamName: "upstream-model",
+      order: 100,
+    });
+
+    // A creation call has no registered instance yet and must fail closed.
+    await assert.rejects(
+      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+    );
+    // An instance that never registered has no relay consumer capability yet.
+    await assert.rejects(
+      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, { id: "inst_new", nodeId: relay.id, capabilities: {} } as unknown as ControlledInstance),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+    );
+    // A v0.0.34 instance never declares the relay consumer capability.
+    await assert.rejects(
+      () => harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, relayInstance("inst_old", relay.id, { features: {} })),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+    );
+
+    const nodeWithoutRelay = await createHarness({ nodes: [legacyNode("node_legacy")], relayEnabled: { node_legacy: true } });
+    try {
+      const legacyModel = await nodeWithoutRelay.service.create(mappedModelInput());
+      await assert.rejects(
+        () => nodeWithoutRelay.service.prepareAssignment(nodeWithoutRelay.nodes[0], { modelEntityIds: [legacyModel.id] }, relayInstance("inst_legacy_node", "node_legacy")),
+        (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+      );
+    } finally {
+      await nodeWithoutRelay.close();
+    }
+
+    const disabled = await createHarness({ relayEnabled: { node_relay: false } });
+    try {
+      const disabledModel = await disabled.service.create(mappedModelInput());
+      await assert.rejects(
+        () => disabled.service.prepareAssignment(disabled.nodes[0], { modelEntityIds: [disabledModel.id] }, relayInstance("inst_disabled", "node_relay")),
+        (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
+      );
+    } finally {
+      await disabled.close();
+    }
+
+    // Same-name selections never query the switch or the consumer capability.
+    const same = await harness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
+    const sameAssigned = await harness.service.prepareAssignment(legacy, { modelEntityIds: [same.id] });
+    assert.equal(typeof sameAssigned.codexModelHash, "string");
+    assert.equal(sameAssigned.modelSelection.codexModelHash, sameAssigned.codexModelHash);
+    assert.equal(sameAssigned.modelSelection.modelEntityIds, undefined);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("mapped entities refuse to converge onto nodes that cannot store the mapping", async () => {
+  const stable = stableNodeWithoutRelay();
+  const harness = await createHarness({ nodes: [relayNode(), stable], relayEnabled: { node_relay: true, node_stable: true } });
+  try {
+    const model = await harness.service.create(mappedModelInput());
+    // Simulate a fleet where the pre-relay node already holds a stale replica.
+    harness.nodeModels.get(stable.id)!.set(model.id, {
+      ...mappedModelInput({ modelNames: [{ name: "public-model", order: 100 }] }),
+      id: model.id,
+      revision: "stale",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const result = await harness.service.sync(model.id);
+    const stableLocation = result.locations.find((location) => location.nodeId === stable.id);
+    assert.equal(stableLocation?.state, "error");
+    assert.equal(stableLocation?.code, "NODE_MODEL_RELAY_UNSUPPORTED");
+    assert.equal(harness.calls.deploy.some((call) => call.nodeId === stable.id), false);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("different entities may share one external name and keep distinct upstreams", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: true } });
+  try {
+    const first = await harness.service.create(mappedModelInput({ name: "First", endpoint: "https://a.example.test/v1", modelNames: [{ name: "shared-name", upstreamName: "upstream-a", order: 100 }] }));
+    const second = await harness.service.create(mappedModelInput({ name: "Second", endpoint: "https://b.example.test/v1", key: "second-key", modelNames: [{ name: "shared-name", upstreamName: "upstream-b", order: 100 }] }));
+    assert.notEqual(first.id, second.id);
+    // The management projection carries the mapping but never the credential.
+    assert.deepEqual(first.modelNames, [{ name: "shared-name", upstreamName: "upstream-a", order: 100 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(first, "key"), false);
+    assert.equal(typeof first.keyPreview, "string");
+
+    const assigned = await harness.service.prepareAssignment(
+      harness.nodes[0],
+      { modelEntityIds: [first.id, second.id] },
+      relayInstance("inst_shared", "node_relay"),
+    );
+    assert.deepEqual(assigned.modelSelection.modelEntityIds, [first.id, second.id]);
+    const deployed = harness.calls.deploy.map((call) => call.input);
+    assert.deepEqual(deployed.map((input) => (input.modelNames as Array<{ name: string; upstreamName?: string }>)[0]), [
+      { name: "shared-name", upstreamName: "upstream-a", order: 100 },
+      { name: "shared-name", upstreamName: "upstream-b", order: 100 },
+    ]);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("a rejected mapped assignment keeps the previous authoritative assignment", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: false } });
+  try {
+    const same = await harness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
+    const instance = relayInstance("inst_stable", "node_relay");
+    instance.modelSelection = { modelEntityIds: [same.id] } as never;
+    await harness.service.ensureInstanceAssignment(instance);
+    assert.equal(harness.calls.assign.length, 1);
+
+    const mapped = await harness.service.create(mappedModelInput());
+    instance.modelSelection = { modelEntityIds: [mapped.id] } as never;
+    await assert.rejects(
+      () => harness.service.ensureInstanceAssignment(instance),
+      (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
+    );
+    assert.equal(harness.calls.assign.length, 1);
+  } finally {
+    await harness.close();
+  }
+});

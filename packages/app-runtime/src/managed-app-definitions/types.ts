@@ -9,6 +9,7 @@ export type ManagedAppProviderContext = {
 export type ManagedAppProviderCapabilities = {
   supportsCwdSelection?: boolean;
   supportsAiSessionResume?: boolean;
+  supportsProfiles?: boolean;
 };
 
 export type ManagedAppRuntimeHost = {
@@ -20,6 +21,7 @@ export type ManagedAppRuntimeHost = {
   waitForUnixSocket(socketPath: string, timeoutMs: number, getError?: () => Error | undefined): void;
   waitForHttp(url: string, headers: Record<string, string>, timeoutMs: number, getError?: () => Error | undefined): void;
   patchSession(sessionId: string, patch: { ai: AppSession["ai"] }): void;
+  activeAppSessions(): AppSession[];
 };
 
 export type ManagedAppTtyLaunchInput = {
@@ -52,8 +54,29 @@ export type ManagedAppGuiLaunchInput = {
   app: AppCatalogItem;
   sessionDir: string;
   automationPort: number;
+  launch: AppLaunchOptions;
   launchArgs: string[];
   defaultArgs: string[];
+};
+
+export type ManagedAppProfileRecord = {
+  id: string;
+  name: string;
+  directory: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ManagedAppProfilesRuntime = {
+  list(): ManagedAppProfileRecord[];
+  defaultProfileId(): string;
+  create(name: string): ManagedAppProfileRecord;
+  rename(profileId: string, name: string): ManagedAppProfileRecord;
+  remove(profileId: string): void;
+  setDefault(profileId: string): ManagedAppProfileRecord;
+  usageBytes(profileId: string): Promise<number>;
+  resolveLaunchProfile(profileId: string): ManagedAppProfileRecord;
 };
 
 export type ManagedAppWebLaunchInput = {
@@ -87,6 +110,7 @@ export type ManagedAppRuntimeExtension = {
   managedEnvironmentChanged?(): void;
   stopAll?(): void;
   sharedResource?: ManagedAppSharedResource;
+  profiles?: ManagedAppProfilesRuntime;
 };
 
 export interface ManagedAppProvider {

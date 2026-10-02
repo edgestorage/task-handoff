@@ -76,6 +76,8 @@ export class ControlPlaneIdentityService {
       // Compatibility for the CLI release: additive capability with no frozen-payload projection for
       // older clients; they must move to CONTROL_PLANE_ACCESS_PROTOCOL_VERSION 2026-10-01.
       cliSessions: authentication === "required",
+      // 本地信任会话只在 disabled 模式可用，且仅对 loopback 来源生效。
+      localCliSessions: authentication === "disabled",
       ...(authentication === "required" ? {
         accessManagement: {
           userManagement: {

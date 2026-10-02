@@ -4,7 +4,8 @@ import { createChromiumRuntime } from "./runtime";
 
 export const chromiumProvider: ManagedAppProvider = {
   id: "chromium",
-  createRuntime: () => createChromiumRuntime(),
+  capabilities: { supportsProfiles: true },
+  createRuntime: (host) => createChromiumRuntime(host),
   definition: ({ env }) => ({
     launcher: {
       id: "chromium",

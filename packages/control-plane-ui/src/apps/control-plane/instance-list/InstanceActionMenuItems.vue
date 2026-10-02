@@ -59,6 +59,7 @@
     <PackagePlus :size="14" />
     <span>{{ t("instances.actions.saveEnvironmentTemplate") }}</span>
   </component>
+  <component :is="separatorComponent" class="instance-action-separator" />
   <component :is="itemComponent" class="instance-action-item danger" :disabled="!aiSessionCount(instance) || isInstanceActionBusy(instance) || isClosingAllSessions(instance)" @select="emit('closeAllSessions')">
     <CircleX :size="14" />
     <span>{{ t(isClosingAllSessions(instance) ? "instances.actions.closingAllSessions" : "instances.actions.closeAllSessions") }}</span>
@@ -72,8 +73,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { ContextMenuItem } from "../../../components/ui/context-menu";
-import { DropdownMenuItem } from "../../../components/ui/dropdown-menu";
+import { ContextMenuItem, ContextMenuSeparator } from "../../../components/ui/context-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "../../../components/ui/dropdown-menu";
 import { CircleX, Download, ExternalLink, PackagePlus, Play, RotateCw, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
@@ -99,4 +100,5 @@ const emit = defineEmits<{
   closeAllSessions: [];
 }>();
 const itemComponent = computed(() => props.variant === "context" ? ContextMenuItem : DropdownMenuItem);
+const separatorComponent = computed(() => props.variant === "context" ? ContextMenuSeparator : DropdownMenuSeparator);
 </script>

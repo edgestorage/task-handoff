@@ -70,6 +70,10 @@
       "types": "./src/app-sessions.ts",
       "default": "./src/app-sessions.ts"
     },
+    "./app-profiles": {
+      "types": "./src/app-profiles.ts",
+      "default": "./src/app-profiles.ts"
+    },
     "./browser-tunnel": {
       "types": "./src/browser-tunnel.ts",
       "default": "./src/browser-tunnel.ts"

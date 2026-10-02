@@ -182,7 +182,7 @@ test("controlled app runtime reaps descendants abandoned by an exited launcher",
 test("terminal GUI provider applies xterm behavior to matching custom launchers", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-xterm-provider-"));
   const runtime = new AppRuntimeManager(storagePaths(root));
-  const args = runtime.guiArgs({ id: "custom-xterm", name: "Custom Xterm", kind: "gui", command: "/usr/bin/xterm" }, root, 0, []);
+  const args = runtime.guiArgs({ id: "custom-xterm", name: "Custom Xterm", kind: "gui", command: "/usr/bin/xterm" }, root, 0, {});
   assert.deepEqual(args.slice(0, 4), ["-fa", process.env.TASK_HANDOFF_XTERM_FONT_FAMILY || "Monospace", "-fs", process.env.TASK_HANDOFF_XTERM_FONT_SIZE || "11"]);
   runtime.stopAll();
 });

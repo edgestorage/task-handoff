@@ -45,7 +45,7 @@ export default function NewAppSessionRoute() {
   const browserSupported = browserCapability.key === browserCapabilityKey && browserCapability.supported;
   const availableApps = selectedInstance
     ? [
-      ...(browserSupported ? [{ id: EMBEDDED_BROWSER_APP_ID, name: t('browser.browser'), kind: 'web' as const, supportsCwdSelection: false }] : []),
+      ...(browserSupported ? [{ id: EMBEDDED_BROWSER_APP_ID, name: t('browser.embeddedBrowser'), kind: 'web' as const, supportsCwdSelection: false }] : []),
       ...selectedInstance.availableApps,
     ]
     : [];

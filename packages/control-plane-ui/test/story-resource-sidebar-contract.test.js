@@ -203,10 +203,10 @@ test("resource menu exposes Apps, Files, Review Changes, and Worktrees", () => {
 test("empty Story resource sidebar offers the same quick open actions", () => {
   assert.match(sidebar, /<div v-if="!activeResource" class="story-resource-empty">[\s\S]*class="story-resource-empty-actions"[\s\S]*v-for="option in openOptions"/);
   assert.match(sidebar, /const openOptions = computed<StoryResourceOpenOption\[\]>\(\(\) => \[\.\.\.appOpenOptions\.value, \.\.\.repositoryOpenOptions\.value\]\)/);
-  assert.match(sidebar, /launchableApps\(instance\)\.map\(\(app\) => \(\{ key: `app:\$\{app\.id\}`, kind: "app", appId: app\.id, label: app\.label \}\)\)/);
-  assert.match(sidebar, /<AppLaunchIcon v-if="option\.kind === 'app'" :app-id="option\.appId" :size="16"/);
+  assert.match(sidebar, /launchableApps\(instance\)\.map\(\(app\) => \(\{ key: `app:\$\{app\.id\}`, kind: "app", app, label: app\.label \}\)\)/);
+  assert.match(sidebar, /<AppLaunchIcon v-if="option\.kind === 'app'" :app="option\.app" :size="16"/);
   assert.match(sidebar, /:disabled="optionDisabled\(option\)"[\s\S]*@click="runOpenOption\(option\)"/);
-  assert.match(sidebar, /function runOpenOption\(option: StoryResourceOpenOption\)[\s\S]*launchTargetApp\(option\.appId\)[\s\S]*openTargetRepository\(option\.page\)/);
+  assert.match(sidebar, /function runOpenOption\(option: StoryResourceOpenOption\)[\s\S]*launchTargetApp\(option\.app\.id\)[\s\S]*openTargetRepository\(option\.page\)/);
   assert.match(sidebar, /\.story-resource-empty-action \{[^}]*height:32px;[^}]*font-size:12px;[^}]*font-weight:500;/);
   assert.match(sidebar, /\.story-resource-empty-action:hover:not\(:disabled\), \.story-resource-empty-action:focus-visible:not\(:disabled\) \{ border-color:var\(--brand-accent\); background:var\(--surface-active\); color:var\(--text-strong\); \}/);
   assert.doesNotMatch(sidebar, /story-resource-empty-action[\s\S]{0,240}brand-accent-foreground/);
@@ -220,7 +220,7 @@ test("resource menu targets the current AI Session instance without an instance 
   assert.match(sidebar, /:disabled="!targetInstance \|\| !targetAiSessionId"/);
   assert.match(sidebar, /:cwd-selection="false"/);
   assert.match(sidebar, /targetInstance\?\.aiSessions\.sessions\.find\(\(session\) => session\.id === props\.targetAiSessionId\)/);
-  assert.match(sidebar, /emit\("launchApp", props\.targetInstance, appId, undefined, \{ cwd: targetAiSession\.value\.cwd \}\)/);
+  assert.match(sidebar, /emit\("launchApp", props\.targetInstance, appId, undefined, \{ cwd: targetAiSession\.value\.cwd, \.\.\.\(profileId \? \{ profileId \} : \{\}\) \}\)/);
   assert.doesNotMatch(sidebar, /@new-project|chooseProject/);
   assert.match(sidebar, /emit\("openRepository", props\.targetInstance\.id, "ai-session", props\.targetAiSessionId, page, undefined, targetAiSession\.value\?\.cwdFolderId\)/);
   assert.match(sidebar, /resource\.cwdFolderId \? \{ cwdFolderId: resource\.cwdFolderId \} : \{\}/);

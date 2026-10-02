@@ -685,7 +685,10 @@ test("external listener updates execute serially", async () => {
   const manager = new NodeAgentExternalListenerManager({
     app: { server, log: { error: () => undefined } },
     state: { runningInstanceCount: () => 0, setListenerPort: () => undefined },
-    settings: { put: (settings) => persistedPorts.push(settings.externalListener.port) },
+    settings: {
+      get: () => ({ version: 1, externalListener: { bindScope: "loopback", port: 18091 } }),
+      put: (settings) => persistedPorts.push(settings.externalListener.port),
+    },
     config: { bindScope: "loopback", port: 18091 },
     source: "bootstrap",
     onActiveListener: (listener) => publishedPorts.push(listener.port),
@@ -720,7 +723,10 @@ test("external listener live update rolls the listener and instances back when e
       runningInstanceCount: () => 1,
       setListenerPort: (port) => { activePort = port; events.push(`state:${port}`); },
     },
-    settings: { put: () => events.push("persist") },
+    settings: {
+      get: () => ({ version: 1, externalListener: { bindScope: "loopback", port: 18091 } }),
+      put: () => events.push("persist"),
+    },
     config: { bindScope: "loopback", port: 18091 },
     source: "persisted",
     validateUpdate: (candidate) => events.push(`validate:${candidate.port}`),

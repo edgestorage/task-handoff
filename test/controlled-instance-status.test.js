@@ -22,6 +22,7 @@ const {
   supportsAiSessionPersistenceSettings,
   supportsAiSessionFileSizeLimitSettings,
   supportsControlledInstanceNodeAgentConnectionUpdate,
+  supportsControlledInstanceModelRelay,
   supportsRepositoryPathSearch,
   supportsRepositoryWorktreeMoveToMain,
   supportsAiSessionTimelineCapability,
@@ -103,6 +104,11 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(supportsAiSessionWorkspaceCheckout(capabilities), true);
   assert.equal(capabilities.features.codexManagedSettings, true);
   assert.equal(capabilities.features.nodeAgentConnectionUpdate, true);
+  assert.deepEqual(capabilities.features.modelRelay, {
+    protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"],
+    streaming: true,
+  });
+  assert.equal(supportsControlledInstanceModelRelay(capabilities), true);
   assert.equal(capabilities.features.repositoryPathSearch, true);
   assert.equal(capabilities.features.repositoryWorktreeMoveToMain, true);
   assert.equal(supportsControlledInstanceNodeAgentConnectionUpdate(capabilities), true);

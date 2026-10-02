@@ -7396,7 +7396,7 @@ test("web app imports and exports built-in config sync presets", async () => {
     });
     assert.equal(batchExported.statusCode, 200);
     assert.equal(fs.readFileSync(path.join(workspace, "backups", "browser", "chromium", "Default", "Bookmarks"), "utf8"), "{}");
-    assert.equal(fs.readFileSync(path.join(workspace, "backups", "browser", "chromium-2", "Profile 1", "Bookmarks"), "utf8"), "configured");
+    assert.equal(fs.readFileSync(path.join(workspace, "backups", "browser", "chromium-default", "Profile 1", "Bookmarks"), "utf8"), "configured");
 
     const escapedBatch = await app.inject({
       method: "POST",
@@ -9170,7 +9170,7 @@ test("app runtime loads configured chromium extension dirs", () => {
       },
       path.join(paths.appSessionsDir, "browser"),
       9222,
-      [],
+      {},
     );
     assert.equal(args.includes(`--load-extension=${extensionOne},${extensionTwo}`), true);
   } finally {
@@ -9182,7 +9182,6 @@ test("app runtime isolates chromium profile by default", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-chromium-profile-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_CHROMIUM_PROFILE_MODE: undefined,
     TASK_HANDOFF_CHROMIUM_USER_DATA_DIR: undefined,
   });
   try {
@@ -9197,7 +9196,7 @@ test("app runtime isolates chromium profile by default", () => {
       },
       sessionDir,
       9222,
-      [],
+      {},
     );
     assert.equal(args.includes(`--user-data-dir=${path.join(sessionDir, "profile")}`), true);
   } finally {
@@ -9205,15 +9204,17 @@ test("app runtime isolates chromium profile by default", () => {
   }
 });
 
-test("app runtime keeps chromium profile isolated when explicitly requested", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-chromium-isolated-profile-"));
+test("app runtime launches chromium into a persistent profile on request", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-chromium-durable-profile-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_CHROMIUM_PROFILE_MODE: "isolated",
     TASK_HANDOFF_CHROMIUM_USER_DATA_DIR: undefined,
   });
   try {
     const runtime = new AppRuntimeManager(paths);
+    const profile = runtime.createAppProfile("chromium", "工作");
+    assert.match(profile.id, /^brp_/);
+    assert.equal(profile.isDefault, false);
     const sessionDir = path.join(paths.appSessionsDir, "browser");
     const args = runtime.guiArgs(
       {
@@ -9224,15 +9225,49 @@ test("app runtime keeps chromium profile isolated when explicitly requested", ()
       },
       sessionDir,
       9222,
-      [],
+      { profileId: profile.id },
     );
-    assert.equal(args.includes(`--user-data-dir=${path.join(sessionDir, "profile")}`), true);
+    const profileDir = path.join(paths.dataDir, "chromium-profiles", profile.id);
+    assert.equal(args.includes(`--user-data-dir=${profileDir}`), true);
+    assert.equal(fs.existsSync(profileDir), true);
   } finally {
     restoreEnv();
   }
 });
 
-test("app runtime can use an explicitly configured shared chromium profile", () => {
+test("app runtime rejects unknown or unsupported chromium profile ids", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-chromium-profile-errors-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_CHROMIUM_USER_DATA_DIR: undefined,
+  });
+  try {
+    const runtime = new AppRuntimeManager(paths);
+    const sessionDir = path.join(paths.appSessionsDir, "browser");
+    assert.throws(
+      () => runtime.guiArgs(
+        {
+          id: "chromium",
+          command: "chromium",
+          args: ["about:blank"],
+          automation: { type: "cdp" },
+        },
+        sessionDir,
+        9222,
+        { profileId: "brp_missing00000000" },
+      ),
+      (error) => error.code === "BROWSER_PROFILE_NOT_FOUND",
+    );
+    assert.throws(
+      () => runtime.start("terminal-gui", { profileId: "brp_missing00000000" }),
+      (error) => error.code === "BROWSER_PROFILE_UNSUPPORTED",
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("app runtime binds the configured user data dir to the default chromium profile", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-chromium-shared-profile-"));
   const paths = appRuntimeTestPaths(root);
   const userDataDir = path.join(root, "chromium-profile");
@@ -9241,6 +9276,9 @@ test("app runtime can use an explicitly configured shared chromium profile", () 
   });
   try {
     const runtime = new AppRuntimeManager(paths);
+    const [defaultProfile] = runtime.appProfiles("chromium");
+    assert.equal(defaultProfile.isDefault, true);
+    assert.equal(defaultProfile.directory, userDataDir);
     const args = runtime.guiArgs(
       {
         id: "chromium",
@@ -9250,7 +9288,7 @@ test("app runtime can use an explicitly configured shared chromium profile", () 
       },
       path.join(paths.appSessionsDir, "browser"),
       9222,
-      [],
+      { profileId: defaultProfile.id },
     );
     assert.equal(args.includes(`--user-data-dir=${userDataDir}`), true);
   } finally {

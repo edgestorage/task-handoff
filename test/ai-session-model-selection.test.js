@@ -86,10 +86,10 @@ function codexBridgeStub(switches) {
   };
 }
 
-async function createRuntime() {
+async function createRuntime(catalog = catalogWith([codexModel("mdl_current", "gpt-5.6-sol")])) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-model-selection-"));
   const paths = pathsFor(dataRoot);
-  const restore = setEnvironment(paths, catalogWith([codexModel("mdl_current", "gpt-5.6-sol")]));
+  const restore = setEnvironment(paths, catalog);
   const switches = [];
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
   const app = await createWebApp({
@@ -172,6 +172,67 @@ test("a live catalog push heals a switch target the runtime had not loaded", asy
     });
     assert.equal(accepted.statusCode, 200, JSON.stringify(accepted.json()));
     assert.deepEqual(switches, [{ sessionId: session.id, selection: { modelEntityId: "mdl_fresh", modelName: "gpt-5.6-terra" } }]);
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+function relayCatalogWith(entities) {
+  return { protocolVersion: "2026-10-02", instanceId, entities, updatedAt: "2026-10-02T00:00:00.000Z" };
+}
+
+function relayCodexModel(id, name) {
+  return {
+    id,
+    protocols: ["openai-responses"],
+    modelNames: [{ name, order: 0 }],
+    routes: [{
+      protocol: "openai-responses",
+      baseUrl: `http://127.0.0.1:9/api/node-agent/model-relay/instances/${instanceId}/routes/rly_${id}/v1`,
+    }],
+  };
+}
+
+test("a relay catalog selects and persists only the external model identity", async () => {
+  const { app, restore, session, switches } = await createRuntime(relayCatalogWith([
+    relayCodexModel("mdl_relay_current", "public-codex"),
+  ]));
+  try {
+    const diagnostic = await app.inject({
+      method: "GET",
+      url: "/api/internal/model-catalog",
+      headers: { authorization: `Bearer ${registrationToken}` },
+    });
+    assert.equal(diagnostic.statusCode, 200);
+    const serialized = JSON.stringify(diagnostic.json());
+    assert.equal(serialized.includes("baseUrl"), false);
+    assert.equal(serialized.includes("http://127.0.0.1:9"), false);
+    assert.deepEqual(diagnostic.json().data.catalog.entities, [{
+      id: "mdl_relay_current",
+      protocols: ["openai-responses"],
+      modelNames: [{ name: "public-codex", order: 0 }],
+    }]);
+
+    const accepted = await app.inject({
+      method: "PUT",
+      url: `/api/ai-sessions/${session.id}/model-selection`,
+      payload: { clientRequestId: "relay-switch", modelSelection: { modelEntityId: "mdl_relay_current", modelName: "public-codex" } },
+    });
+    assert.equal(accepted.statusCode, 200, JSON.stringify(accepted.json()));
+    assert.deepEqual(switches, [{
+      sessionId: session.id,
+      selection: { modelEntityId: "mdl_relay_current", modelName: "public-codex" },
+    }]);
+    assert.equal(JSON.stringify(switches).includes("upstream"), false);
+
+    const unknownName = await app.inject({
+      method: "PUT",
+      url: `/api/ai-sessions/${session.id}/model-selection`,
+      payload: { clientRequestId: "relay-switch-unknown", modelSelection: { modelEntityId: "mdl_relay_current", modelName: "upstream-model" } },
+    });
+    assert.equal(unknownName.statusCode, 409);
+    assert.equal(unknownName.json().error.code, "AI_SESSION_MODEL_TARGET_UNAVAILABLE");
   } finally {
     await app.close();
     restore();

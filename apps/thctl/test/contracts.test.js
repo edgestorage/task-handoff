@@ -11,17 +11,24 @@ import { runCli } from "../src/program.ts";
 const DECLARED_COMMANDS = [
   "profile add", "profile list", "profile use", "profile show", "profile remove", "profile trust",
   "login", "logout", "whoami",
-  "instance list", "instance show", "instance start", "instance stop", "instance restart", "instance logs",
-  "ai-session list", "ai-session show", "ai-session history", "ai-session create", "ai-session send",
-  "ai-session interrupt", "ai-session approval", "ai-session resume", "ai-session read",
+  "instance list", "instance show", "instance create", "instance delete", "instance start", "instance stop", "instance restart", "instance logs",
+  "instance rename",
+  "ai-session list", "ai-session show", "ai-session history", "ai-session turns", "ai-session turn",
+  "ai-session timeline", "ai-session turn-timeline", "ai-session create", "ai-session send",
+  "ai-session interrupt", "ai-session approval", "ai-session resume", "ai-session read", "ai-session rename",
+  "ai-session fork", "ai-session close", "ai-session model", "ai-session reasoning",
   "ai-session queue list", "ai-session queue steer", "ai-session queue retry", "ai-session queue remove",
+  "ai-session queue edit", "ai-session queue reorder",
   "app-session list", "app-session show", "app-session start", "app-session stop",
+  "app-session rename", "app-session access", "app-session restart",
   "node list", "node show", "node rename",
   "story list", "story show", "story create", "story update", "story archive", "story restore", "story remove",
   "story document update", "story document remove", "story document reorder",
-  "story automation list", "story automation show", "story automation enable", "story automation disable",
+  "story automation list", "story automation show", "story automation create", "story automation update",
+  "story automation remove", "story automation enable", "story automation disable",
   "story automation run", "story automation runs",
   "trigger list", "trigger show", "trigger create", "trigger update", "trigger remove", "trigger run",
+  "trigger bind", "trigger unbind", "trigger apply",
   "model list", "model show",
   "user list", "user show", "user sessions", "user session-revoke",
   "events",
@@ -114,7 +121,7 @@ test("help lists implemented and unimplemented commands", async () => {
   const code = await runCli(["node", "thctl", "instance", "--help"], { store: tempStore(), streams: output.streams, isTty: false });
   assert.equal(code, 0);
   assert.match(output.stdout(), /list \[options\]\s+List controlled instances/);
-  assert.match(output.stdout(), /logs \[options\] <instanceId>\s+Stream instance logs[\s\S]*not implemented — planned stage\s+C/);
+  assert.match(output.stdout(), /logs \[options\] <instanceId>\s+Stream instance logs[\s\S]*not implemented\s+—\s+planned\s+stage\s+C/);
 });
 
 test("schema command writes matches to stdout and to --out files", async () => {

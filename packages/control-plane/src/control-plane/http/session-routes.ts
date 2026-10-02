@@ -5,6 +5,7 @@ import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionUnreadEventType, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
+import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
@@ -56,6 +57,17 @@ const AppSessionAccessRevokeRequestSchema = z
   .strict();
 
 const EmptyRequestSchema = z.object({}).strict();
+
+const AppProfileParamsSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    appId: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+const AppProfileTargetParamsSchema = AppProfileParamsSchema.extend({
+  profileId: z.string().trim().min(1).max(120),
+}).strict();
 
 function attachmentName(disposition: string | undefined, fallback: string) {
   if (!disposition) return fallback;
@@ -143,10 +155,43 @@ export function registerSessionRoutes({
     events.publish("instance.app-session.launched", { instanceId: params.id, sessionId: typeof session.id === "string" ? session.id : undefined, appId: parsed.appId });
     return { data: session };
   });
+  app.get("/api/controlled-instances/:id/apps/:appId/profiles", async (request) => {
+    const params = AppProfileParamsSchema.parse(request.params);
+    return { data: await service.listAppProfiles(params.id, params.appId) };
+  });
+  app.post("/api/controlled-instances/:id/apps/:appId/profiles", async (request) => {
+    const params = AppProfileParamsSchema.parse(request.params);
+    const input = AppProfileCreateInputSchema.parse(request.body);
+    return { data: await service.createAppProfile(params.id, params.appId, input.name) };
+  });
+  app.patch("/api/controlled-instances/:id/apps/:appId/profiles/:profileId", async (request) => {
+    const params = AppProfileTargetParamsSchema.parse(request.params);
+    const input = AppProfileRenameInputSchema.parse(request.body);
+    return { data: await service.renameAppProfile(params.id, params.appId, params.profileId, input.name) };
+  });
+  app.post("/api/controlled-instances/:id/apps/:appId/profiles/:profileId/default", async (request) => {
+    const params = AppProfileTargetParamsSchema.parse(request.params);
+    return { data: await service.setDefaultAppProfile(params.id, params.appId, params.profileId) };
+  });
+  app.delete("/api/controlled-instances/:id/apps/:appId/profiles/:profileId", async (request) => {
+    const params = AppProfileTargetParamsSchema.parse(request.params);
+    await service.deleteAppProfile(params.id, params.appId, params.profileId);
+    return { data: { removed: true } };
+  });
   app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/stop", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const session = await service.stopAppSession(params.id, params.sessionId);
     events.publish("instance.app-session.stopped", { instanceId: params.id, sessionId: params.sessionId });
+    return { data: session };
+  });
+  app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/restart", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const session = await service.restartAppSession(params.id, params.sessionId);
+    events.publish("instance.app-session.restarted", {
+      instanceId: params.id,
+      sessionId: params.sessionId,
+      appSessionId: typeof session.id === "string" ? session.id : undefined,
+    });
     return { data: session };
   });
   app.patch("/api/controlled-instances/:id/apps/sessions/:sessionId", async (request) => {

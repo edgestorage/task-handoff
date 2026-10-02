@@ -26,14 +26,6 @@ export function guiAppHomeDir() {
   return process.env.TASK_HANDOFF_GUI_APP_HOME || process.env.HOME || os.homedir();
 }
 
-export function chromiumUserDataDir(sessionDir: string) {
-  const configured = process.env.TASK_HANDOFF_CHROMIUM_USER_DATA_DIR?.trim();
-  if (configured) {
-    return configured;
-  }
-  return path.join(sessionDir, "profile");
-}
-
 export function codexAppServerSocketPath(runtimeDir: string) {
   const configuredRoot = process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR?.trim();
   const root = configuredRoot ? fs.realpathSync(configuredRoot) : process.platform === "darwin" ? "/private/tmp" : fs.realpathSync(os.tmpdir());

@@ -267,6 +267,40 @@ CREATE UNIQUE INDEX cp_user_sessions_token_hash_uq ON cp_user_sessions(token_has
 CREATE INDEX cp_user_sessions_identity_idx ON cp_user_sessions(identity_id);
 CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
 `),
+  // Compatibility for the local-session release: rebuild both tables so the identities CHECK
+  // constraint also accepts the built-in local-trust operator. SQLite rewrites foreign key
+  // references when a table is renamed, so the referencing sessions table is rebuilt as well.
+  migration("0007_local_trust_identities", `
+ALTER TABLE cp_user_sessions RENAME TO cp_user_sessions_pre_local_trust;
+ALTER TABLE cp_login_identities RENAME TO cp_login_identities_pre_local_trust;
+CREATE TABLE cp_login_identities (
+  id TEXT PRIMARY KEY NOT NULL, user_id TEXT NOT NULL REFERENCES cp_users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('local-password','oidc','oauth','local-trust')), normalized_login_name TEXT, password_hash TEXT,
+  requires_password_change INTEGER, provider_id TEXT, subject TEXT, verified_email TEXT, last_used_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO cp_login_identities (id, user_id, kind, normalized_login_name, password_hash, requires_password_change, provider_id, subject, verified_email, last_used_at, created_at, updated_at)
+  SELECT id, user_id, kind, normalized_login_name, password_hash, requires_password_change, provider_id, subject, verified_email, last_used_at, created_at, updated_at
+  FROM cp_login_identities_pre_local_trust;
+CREATE TABLE cp_user_sessions (
+  id TEXT PRIMARY KEY NOT NULL, identity_id TEXT NOT NULL REFERENCES cp_login_identities(id) ON DELETE CASCADE,
+  authorization_revision INTEGER NOT NULL,
+  token_hash TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen_at TEXT,
+  client_type TEXT NOT NULL CHECK(client_type IN ('web','mobile','cli')),
+  device TEXT, client_info TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO cp_user_sessions (id, identity_id, authorization_revision, token_hash, expires_at, last_seen_at, client_type, device, client_info, created_at, updated_at)
+  SELECT id, identity_id, authorization_revision, token_hash, expires_at, last_seen_at, client_type, device, client_info, created_at, updated_at
+  FROM cp_user_sessions_pre_local_trust;
+DROP TABLE cp_user_sessions_pre_local_trust;
+DROP TABLE cp_login_identities_pre_local_trust;
+CREATE UNIQUE INDEX cp_login_identities_login_name_uq ON cp_login_identities(normalized_login_name);
+CREATE UNIQUE INDEX cp_login_identities_provider_subject_uq ON cp_login_identities(provider_id, subject);
+CREATE INDEX cp_login_identities_user_idx ON cp_login_identities(user_id);
+CREATE UNIQUE INDEX cp_user_sessions_token_hash_uq ON cp_user_sessions(token_hash);
+CREATE INDEX cp_user_sessions_identity_idx ON cp_user_sessions(identity_id);
+CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
+`),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -283,5 +317,9 @@ CREATE INDEX cp_model_legacy_projections_model_idx ON cp_model_legacy_projection
 ALTER TABLE cp_user_sessions DROP CONSTRAINT IF EXISTS cp_user_sessions_client_type_check;
 ALTER TABLE cp_user_sessions ADD CONSTRAINT cp_user_sessions_client_type_check CHECK (client_type IN ('web','mobile','cli'));
 ALTER TABLE cp_user_sessions ADD COLUMN IF NOT EXISTS client_info JSONB;
+`),
+  migration("0007_local_trust_identities", `
+ALTER TABLE cp_login_identities DROP CONSTRAINT IF EXISTS cp_login_identities_kind_check;
+ALTER TABLE cp_login_identities ADD CONSTRAINT cp_login_identities_kind_check CHECK (kind IN ('local-password','oidc','oauth','local-trust'));
 `),
 ];

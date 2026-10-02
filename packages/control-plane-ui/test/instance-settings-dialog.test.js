@@ -33,7 +33,7 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
   assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
   assert.match(workbench, /:initial-section="instanceSettingsSection"/);
-  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "browser" \| "codex" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 
@@ -68,6 +68,28 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /t\("instances\.settings\.sessionPermissionsDescription"\)/);
   assert.match(dialog, /t\("instances\.settings\.aiSessionHistoryLimit"\)/);
   assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
+});
+
+test("instance settings sections use a grouped vertical navigation", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  const zh = read("src/i18n/locales/zh-CN/instances.ts");
+  const en = read("src/i18n/locales/en-US/instances.ts");
+
+  assert.match(dialog, /<Tabs\s+v-model="section"\s+orientation="vertical"/);
+  assert.match(dialog, /<TabsList class="instance-settings-nav" :aria-label="t\('instances\.settings\.sections'\)">/);
+  assert.match(dialog, /class="instance-settings-nav-group-title"/);
+  assert.match(dialog, /\.instance-settings-nav \{[\s\S]*?flex-direction: column[\s\S]*?\}/);
+  assert.doesNotMatch(dialog, /instance-settings-tabs-list/);
+  assert.match(dialog, /\.instance-settings-tabs \{[\s\S]*?grid-template-areas: "nav content"/);
+  assert.match(dialog, /<div v-if="instance" class="instance-settings-sidebar">/);
+  assert.match(dialog, /class="instance-settings-identity-name">\{\{ instance\.name \}\}/);
+  assert.doesNotMatch(dialog.match(/<div class="instance-settings-identity">[\s\S]*?<\/div>/)?.[0] || "", /<Badge/);
+  assert.match(dialog, /<DialogDescription id="instance-settings-description" class="sr-only">/);
+  assert.match(dialog, /\.instance-settings-close \{[\s\S]*?position: absolute/);
+  assert.match(dialog, /<h2 class="instance-settings-content-title">\{\{ activeSectionLabel \}\}<\/h2>/);
+  assert.match(dialog, /const activeSectionLabel = computed/);
+  for (const group of ["instance", "agent", "provisioning"]) assert.match(dialog, new RegExp(`sectionGroups\\.${group}`));
+  for (const locale of [zh, en]) assert.match(locale, /sectionGroups: \{ instance: /);
 });
 
 test("instance settings exposes managed Codex behavior and multi-agent defaults", () => {

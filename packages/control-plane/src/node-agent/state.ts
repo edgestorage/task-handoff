@@ -39,6 +39,7 @@ import {
   UpdateNodeRuntimeSchema,
 } from "./schemas.ts";
 import { NodeModelRegistry } from "./models/registry.ts";
+import { NodeModelRelaySwitch } from "./models/relay-settings.ts";
 import { NodeUpdateJobs } from "./updates.ts";
 import { EnvironmentTemplateStore } from "./environment-templates/store.ts";
 import { InstancePrivateConfigStore } from "./instances/private-config-store.ts";
@@ -195,6 +196,7 @@ export class NodeAgentState {
   readonly environmentTemplates: EnvironmentTemplateStore;
   readonly instancePrivateConfigs: InstancePrivateConfigStore;
   readonly modelRegistry: NodeModelRegistry;
+  readonly modelRelaySwitch: NodeModelRelaySwitch;
   readonly gitCredentials: NodeGitCredentialStore;
   readonly updateJobs: NodeUpdateJobs;
   readonly node: Node;
@@ -214,12 +216,20 @@ export class NodeAgentState {
     this.controlledInstances = new ControlledInstanceCollection(persistence.topology.instances);
     this.environmentTemplates = new EnvironmentTemplateStore(paths);
     this.gitCredentials = new NodeGitCredentialStore(paths, { repository: persistence.git });
+    this.modelRelaySwitch = new NodeModelRelaySwitch();
     this.modelRegistry = new NodeModelRegistry(paths, nodeId, {
       has: (id) => Boolean(this.controlledInstances.get(id)),
       list: () => this.listInstances(),
       require: (id) => this.requireInstance(id),
       put: (instance) => this.controlledInstances.put(instance),
-    }, persistence.model);
+    }, persistence.model, {
+      enabled: () => this.modelRelaySwitch.enabled(),
+      // Relay routes must be reachable from inside the instance: Docker
+      // containers use the host-gateway alias, local runtimes use loopback.
+      originFor: (instance) => instance.runtime.kind === "docker"
+        ? this.containerUrl
+        : `http://127.0.0.1:${this.listenerPort}`,
+    });
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
     this.platform = platform;

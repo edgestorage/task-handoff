@@ -7,6 +7,7 @@ export type AvailableInstanceApp = {
   capabilities: {
     automation?: "cdp";
     supportsCwdSelection: boolean;
+    supportsProfiles: boolean;
   };
   diagnosticCode?: "APP_EXECUTABLE_NOT_FOUND";
 };

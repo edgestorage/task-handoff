@@ -114,6 +114,15 @@ export class ControlPlaneUserStore {
     this.stateValue = { ...this.state(), initialized: true };
   }
 
+  /**
+   * 本地信任账号在 authentication disabled 模式创建：需要系统角色已就绪，
+   * 但不能写 initializedAt，否则切换到 required 模式后无法创建首个管理员。
+   */
+  async ensureSystemRolesForLocalAccess() {
+    await this.init();
+    await this.ensureSystemRoles();
+  }
+
   transaction<T>(operation: (repository: ControlPlaneUserRepository) => Promise<T>) {
     return this.repository().transaction(operation);
   }

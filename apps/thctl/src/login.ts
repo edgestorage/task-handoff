@@ -1,17 +1,14 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import { spawn } from "node:child_process";
-import os from "node:os";
 import type { CliProfileStore } from "./config.ts";
+import { cliClientInfo, THCTL_VERSION } from "./client-info.ts";
 import { ThctlError, CLI_EXIT_CODES, protocolError } from "./errors.ts";
 import { connectToControlPlane, type ThctlConnection } from "./control-plane.ts";
 import type { CliOutput } from "./output.ts";
-import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 
 const LOOPBACK_ATTEMPTS = 5;
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
-export const THCTL_CLI_NAME = "thctl";
-export const THCTL_VERSION = resolvePackageVersion("@task-handoff/thctl");
 
 export type CliLoginMode = "browser" | "device";
 
@@ -115,11 +112,6 @@ export async function startLoopbackCallback(): Promise<LoopbackCallback> {
   );
 }
 
-export function cliClientInfo() {
-  const platform = process.platform === "darwin" || process.platform === "linux" || process.platform === "win32" ? process.platform : "linux";
-  return { name: os.hostname() || THCTL_CLI_NAME, platform, version: THCTL_VERSION };
-}
-
 export function createPkce() {
   const verifier = crypto.randomBytes(32).toString("base64url");
   return { verifier, challenge: crypto.createHash("sha256").update(verifier).digest("base64url") };
@@ -188,6 +180,7 @@ export async function storeCliSession(
     sessionToken: session.sessionToken,
     sessionId: session.session.id,
     expiresAt: session.session.expiresAt,
+    mode: "authorization",
     savedAt: new Date().toISOString(),
   });
   connection.store.save({ ...connection.profile, loginMode, lastUsedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });

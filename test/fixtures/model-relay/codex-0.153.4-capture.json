@@ -1,0 +1,34 @@
+{
+  "artifact": {
+    "app": "codex",
+    "version": "0.153.4",
+    "capturedAt": "2026-10-01",
+    "capture": "codex exec --skip-git-repo-check --sandbox read-only \"reply with the single word pong\" against a local recording endpoint configured through CODEX_HOME config.toml model_providers.capture",
+    "note": "Request headers and body summary only; no prompt content or credentials were persisted."
+  },
+  "operations": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "requestHeaders": {
+        "accept": "text/event-stream",
+        "content-type": "application/json",
+        "originator": "codex_exec"
+      },
+      "body": {
+        "model": "gpt-5.1",
+        "stream": true,
+        "store": false,
+        "topLevelKeys": ["client_metadata", "include", "input", "instructions", "model", "parallel_tool_calls", "prompt_cache_key", "reasoning", "store", "stream", "tool_choice", "tools"],
+        "inputItemTypes": ["message"],
+        "tools": 9,
+        "bytes": 39695
+      }
+    }
+  ],
+  "modelsRequests": [],
+  "cancel": {
+    "observed": "response-closed-before-end",
+    "scenario": "codex exec killed while the upstream stream was still open"
+  }
+}

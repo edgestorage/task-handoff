@@ -58,6 +58,10 @@ import {
   runtimeUsesManagedArtifacts,
 } from "./state.ts";
 import { registerNodeModelRoutes } from "./models/routes.ts";
+import { NodeModelRelaySettings, registerNodeModelRelaySettingsRoutes } from "./models/relay-settings.ts";
+import { NodeModelRelayResolver, parseModelRelayRoutePathname } from "./models/relay-routes.ts";
+import { createModelRelayAdapters } from "./models/relay/adapters/index.ts";
+import { ModelRelayService } from "./models/relay/server.ts";
 import type { InstancePrivateModelCatalog } from "./models/private-catalog.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
@@ -123,7 +127,7 @@ import {
 import {
   bootstrapExternalListener,
   createRuntimeSettingsFile,
-} from "./external-listener-settings.ts";
+} from "./runtime-settings.ts";
 import {
   desiredControlledInstanceVersion,
   runtimeVersionStateForActual,
@@ -149,6 +153,7 @@ declare module "fastify" {
     nodeAgentStartRecoverySupervisor?: () => void;
     nodeAgentStartRuntimeAvailabilityMonitor?: () => void;
     nodeAgentResolveInstanceNodeAgentUrl?: (instance: ControlledInstance) => Promise<string>;
+    nodeAgentModelRelay?: ModelRelayService;
   }
 
   interface FastifyRequest {
@@ -1371,6 +1376,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       Object.assign(error, { statusCode: 401, code: "NODE_AGENT_CONTAINER_IPC_ROUTE_FORBIDDEN" });
       throw error;
     }
+    // Relay routes authenticate the calling controlled instance with its
+    // registration token, so they opt out of the node-agent management auth
+    // hook and are handled by ModelRelayService instead.
+    const relayPathname = request.url.split("?")[0];
+    if (parseModelRelayRoutePathname(relayPathname)) return;
     const hmacKeyId = pairedHmac.verify(request);
     if (hmacKeyId) {
       if (identity.isRevokedPairing(hmacKeyId) && !isPairingSelfRevokeRoute(request.url)) {
@@ -1460,7 +1470,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       capabilities: {
         modelEndpointProbe: true,
-        managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+        managedModels: {
+          multiEntityAssignment: true,
+          privateModelCatalog: true,
+          stableModelIdentity: true,
+          // Protocol capabilities follow the registered adapters: the switch is
+          // node configuration and deliberately not part of this document.
+          modelRelay: (() => {
+            const protocols = modelRelay.protocolCapabilities();
+            return { protocols, streaming: protocols.length > 0 };
+          })(),
+        },
         aiSessionHistoryLimit: true,
         aiSessionAttachmentRetention: true,
         aiSessionFileAttachmentLimit: true,
@@ -1546,6 +1566,32 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
+
+  const modelRelay = new ModelRelayService({
+    resolver: new NodeModelRelayResolver(state.modelRegistry),
+    adapters: createModelRelayAdapters(),
+    log: app.log,
+    fetchImpl,
+  });
+  app.decorate("nodeAgentModelRelay", modelRelay);
+  modelRelay.registerRoutes(app);
+
+  // The relay switch is node-scoped configuration, not a capability. Both the
+  // settings route and the durable resolver read one live switch; toggling it
+  // re-materializes assigned instances so their projected catalog follows
+  // without restarting node-agent or any controlled instance.
+  const modelRelaySettings = new NodeModelRelaySettings({
+    settings: createRuntimeSettingsFile(paths, bootstrapExternalListener("127.0.0.1", port)),
+    registry: state.modelRegistry,
+    relaySwitch: state.modelRelaySwitch,
+  });
+  modelRelaySettings.restore();
+  registerNodeModelRelaySettingsRoutes(app, modelRelaySettings, async (current) => {
+    for (const instanceId of state.modelRegistry.assignedInstanceIds()) {
+      await syncAssignedModelEnvironment(fetchImpl, state, instanceId, lifecycleLoggers.warn, resolveInstanceWeb);
+    }
+    if (!current.enabled) await modelRelay.drainActive();
+  });
 
   registerNodeGitCredentialRoutes(app, state);
   registerNodeAgentDefinitionRoutes(app, agentDefinitions);

@@ -2,6 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   NodeModelAssignmentSchema,
   NodeModelConfigSchema,
+  normalizeModelNameEntries,
+  projectModelNameEntries,
+  sanitizeModelNameEntries,
   type NodeModelAssignment,
   type NodeModelConfig,
 } from "@task-handoff/protocol/control-plane";
@@ -34,7 +37,7 @@ export class ModelRepository {
         model_names_json=excluded.model_names_json, protocols_json=excluded.protocols_json,
         labels_json=excluded.labels_json, updated_at=excluded.updated_at`)
       .run(value.id, value.name, value.endpoint, value.key, value.model, value.app, value.enabled ? 1 : 0, value.order,
-        json(value.modelNames), json(value.protocols), json(value.labels), value.createdAt, value.updatedAt);
+        json(projectModelNameEntries(value.modelNames)), json(value.protocols), json(value.labels), value.createdAt, value.updatedAt);
     return value;
   }
 
@@ -136,8 +139,14 @@ export function createModelRepositories(client: DatabaseSync) {
 }
 
 function modelFromRow(row: Row): NodeModelConfig {
-  const modelNames = parseJson<Array<{ name: string; order: number }>>(row.model_names_json);
-  return NodeModelConfigSchema.parse({
+  const modelNames = sanitizeModelNameEntries(parseJson<unknown>(row.model_names_json), (warning) => {
+    console.warn(JSON.stringify({
+      message: "unknown or invalid stored node model name entry was sanitized",
+      modelId: row.id,
+      field: warning.field,
+    }));
+  });
+  const parsed = NodeModelConfigSchema.parse({
     id: row.id,
     name: row.name,
     endpoint: row.endpoint,
@@ -152,4 +161,7 @@ function modelFromRow(row: Row): NodeModelConfig {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+  // Read path: fill upstreamName from the legacy `model` field without
+  // rewriting stored order values (v0.0.28 migrated records use order 0).
+  return { ...parsed, modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }) };
 }

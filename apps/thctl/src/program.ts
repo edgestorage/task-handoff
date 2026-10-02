@@ -3,7 +3,8 @@ import { CliProfileStore, resolveCliConfigDir } from "./config.ts";
 import type { CliEventSocketFactory } from "./event-socket.ts";
 import { CLI_GROUPS, type CliLeaf } from "./contracts.ts";
 import { CLI_EXIT_CODES, ThctlError, notImplementedError, toThctlError } from "./errors.ts";
-import { openInBrowser, THCTL_VERSION } from "./login.ts";
+import { THCTL_VERSION } from "./client-info.ts";
+import { openInBrowser } from "./login.ts";
 import { CliOutput, defaultStreams, type CliStreams } from "./output.ts";
 import { promptConfirm, type CliContext } from "./runtime.ts";
 

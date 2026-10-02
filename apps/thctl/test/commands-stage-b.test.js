@@ -275,6 +275,69 @@ test("stage B writes keep the confirmation gate and dry-run stays local", async 
   assert.equal(JSON.parse(multiStep.stdout()).steps.length, 2);
 });
 
+test("instance create and delete drive the shared client behind the write gate", async () => {
+  const { store, fake } = await signedIn();
+  const configFile = path.join(path.dirname(store.file), "instance-create.json");
+  fs.writeFileSync(configFile, JSON.stringify({
+    nodeId: "node_fake0000001",
+    runtimeId: "runtime_local_docker",
+    source: { type: "local-folder", path: "/workspace/fake" },
+    imageSelection: { imageId: "img_fake0001" },
+    start: true,
+  }));
+
+  const blocked = await run(fake, store, ["instance", "create", "--config", configFile]);
+  assert.equal(blocked.code, 4);
+  assert.match(blocked.stderr(), /CLI_CONFIRMATION_REQUIRED/);
+
+  const dryRun = await run(fake, store, ["instance", "create", "--config", configFile, "--name", "override-name", "--dry-run"]);
+  assert.equal(dryRun.code, 0, dryRun.stderr());
+  const plan = JSON.parse(dryRun.stdout());
+  assert.equal(plan.method, "POST");
+  assert.equal(plan.path, "/api/controlled-instances");
+  assert.equal(plan.body.name, "override-name");
+  assert.equal(plan.body.start, true);
+
+  const created = await run(fake, store, ["instance", "create", "--config", configFile, "--yes", "--json"]);
+  assert.equal(created.code, 0, created.stderr());
+  const record = JSON.parse(created.stdout());
+  assert.equal(record.id, "inst_created0001");
+  assert.equal(record.startOutcome.status, "started");
+  assert.equal(record.registrationToken, undefined);
+  const createCall = fake.state.calls.find((call) => call.method === "POST" && call.path === "/api/controlled-instances");
+  assert.equal(createCall?.body.start, true);
+  assert.equal(createCall?.headers["content-type"], "application/json");
+
+  const invalidJson = path.join(path.dirname(store.file), "instance-invalid.json");
+  fs.writeFileSync(invalidJson, "{not json");
+  const badFile = await run(fake, store, ["instance", "create", "--config", invalidJson, "--yes"]);
+  assert.equal(badFile.code, 2);
+  assert.match(badFile.stderr(), /CLI_FILE_INVALID_JSON/);
+
+  const blockedDelete = await run(fake, store, ["instance", "delete", "instance_fake001"]);
+  assert.equal(blockedDelete.code, 4);
+
+  const deleteDryRun = await run(fake, store, ["instance", "delete", "instance_fake001", "--volumes", "--dry-run"]);
+  assert.equal(deleteDryRun.code, 0, deleteDryRun.stderr());
+  const deletePlan = JSON.parse(deleteDryRun.stdout());
+  assert.equal(deletePlan.method, "DELETE");
+  assert.deepEqual(deletePlan.body, { deleteVolumes: true });
+
+  const deleted = await run(fake, store, ["instance", "delete", "instance_fake001", "--yes", "--json"]);
+  assert.equal(deleted.code, 0, deleted.stderr());
+  assert.equal(JSON.parse(deleted.stdout()).completed, true);
+  const deleteCall = fake.state.calls.find((call) => call.method === "DELETE" && call.path === "/api/controlled-instances/instance_fake001");
+  assert.deepEqual(deleteCall?.body, { deleteVolumes: false });
+  assert.equal(deleteCall?.headers["content-type"], "application/json");
+
+  fake.state.deleteIncomplete = true;
+  const incomplete = await run(fake, store, ["instance", "delete", "instance_fake002", "--yes", "--json"]);
+  assert.equal(incomplete.code, 8);
+  const incompleteError = JSON.parse(incomplete.stderr()).error;
+  assert.equal(incompleteError.code, "CLI_INSTANCE_DELETE_INCOMPLETE");
+  assert.equal(incompleteError.details.volumeResults[0].status, "failed");
+});
+
 test("stage C commands that are still planned stay declared but unimplemented", async () => {
   const { store, fake } = await signedIn();
   const logs = await run(fake, store, ["instance", "logs", "instance_fake001"]);

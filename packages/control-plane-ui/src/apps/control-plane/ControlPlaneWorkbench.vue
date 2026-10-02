@@ -440,6 +440,7 @@
             @close="closeStoryResource"
             @reorder="storyResourceSidebar.reorder"
             @launch-app="launchStoryResourceApp"
+            @focus-app-session="(instanceId, sessionId) => storyResourceSidebar.focusApp(instanceId, sessionId)"
             @open-repository="openStoryRepositoryResource"
           />
         </Transition>
@@ -604,6 +605,7 @@
       :refresh-app-management="recoverInstanceAppManagement"
       :manage-app="manageInstanceApp"
       :update-instance="updateInstanceSettings"
+      @open-app-session="focusAppSessionById"
     />
 
   </div>
@@ -923,7 +925,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "ai" | "codex" | "models" | "git-credentials" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -1390,6 +1392,7 @@ const {
   boardSessionKeys,
   closeFloatingLayers,
   errorText,
+  focusAppSession,
   notifyError: showToast,
   refresh,
   sessionMenuOpen,
@@ -1402,7 +1405,7 @@ const storyBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
       key: storyResourceKey(resource),
       kind: "embedded-browser",
       label: EMBEDDED_BROWSER_APP_ID,
-      title: resource.title || t("sessions.tabs.browser"),
+      title: resource.title || t("sessions.tabs.embeddedBrowser"),
       status: resource.status || "running",
       source: {
         browserTabId: resource.browserTabId,
@@ -1867,11 +1870,25 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "ai" | "codex" | "models" | "git-credentials" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;
   closeFloatingLayers();
+}
+
+// Profile 运行会话的唯一权威入口：切换实例视图并聚焦该会话，不发起新的启动请求。
+function focusAppSession(instance: InstanceBoardItem, sessionId: string) {
+  setActiveInstance(instance.id);
+  workbenchView.value = "instance";
+  boardSessionKeys[instance.id] = sessionId;
+  closeFloatingLayers();
+  void refresh();
+}
+
+function focusAppSessionById(instanceId: string, sessionId: string) {
+  const instance = boardInstancesWithAppSessions.value.find((candidate) => candidate.id === instanceId);
+  if (instance) focusAppSession(instance, sessionId);
 }
 
 async function renameSession(instance: InstanceBoardItem, session: SessionTab, title: string) {

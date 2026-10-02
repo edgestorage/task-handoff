@@ -6,7 +6,11 @@ import {
   NodeAgentCapabilitiesSchema,
   ModelConfigSchema,
   modelConfigHash,
+  modelContentRevision,
+  normalizeModelNameEntries,
   ProjectSchema,
+  projectModelNameEntries,
+  sanitizeModelNameEntries,
   sanitizeStoredProject,
   type ControlledInstance,
   type ModelConfig,
@@ -191,9 +195,10 @@ export function publicModel(model: ModelConfig) {
   const { key: _key, ...publicRecord } = model;
   return {
     ...publicRecord,
+    modelNames: projectModelNameEntries(model.modelNames),
     keyPreview: keyPreview(model.key),
     keySet: true,
-    revision: modelConfigHash(model),
+    revision: modelContentRevision(model),
   };
 }
 
@@ -207,25 +212,18 @@ export function normalizeModel(model: unknown) {
     if (!Array.isArray(record.protocols) || record.protocols.length === 0) {
       record.protocols = record.app === "claude" ? ["anthropic-messages"] : record.app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
     }
-    const sourceModelNames = Array.isArray(record.modelNames) && record.modelNames.length > 0
-      ? record.modelNames
+    const sanitizedModelNames = sanitizeModelNameEntries(record.modelNames);
+    const sourceModelNames = Array.isArray(sanitizedModelNames) && sanitizedModelNames.length > 0
+      ? sanitizedModelNames
       : [{ name: record.model, order: 100 }];
-    const names = new Set<string>();
-    const normalizedModelNames = sourceModelNames
-      .flatMap((entry) => {
-        if (!entry || typeof entry !== "object") return [];
-        const item = entry as Record<string, unknown>;
-        if (typeof item.name !== "string" || !item.name.trim() || names.has(item.name.trim())) return [];
-        names.add(item.name.trim());
-        return [{ name: item.name.trim(), order: typeof item.order === "number" ? item.order : 0 }];
-      })
-      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-      .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
-    record.modelNames = normalizedModelNames.length === 0 && typeof record.model === "string" && record.model.trim()
-      ? [{ name: record.model.trim(), order: 100 }]
-      : normalizedModelNames;
-    record.model = (record.modelNames as Array<{ name: string }>)[0]?.name || record.model;
+    record.modelNames = sourceModelNames;
+    // Compatibility for v0.0.34: legacy records may still carry the released
+    // `apps` discriminator, which the strict current schema rejects.
     delete record.apps;
+    const parsed = ModelConfigSchema.parse(record);
+    const modelNames = normalizeModelNameEntries(parsed.modelNames, parsed.model);
+    record.modelNames = modelNames;
+    record.model = modelNames[0]?.name || parsed.model;
     return ModelConfigSchema.parse(record);
   }
   return ModelConfigSchema.parse(model);

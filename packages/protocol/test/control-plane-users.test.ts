@@ -12,6 +12,7 @@ import {
   ControlPlaneIdentityProviderSummarySchema,
   ControlPlanePermissionIdSchema,
   ControlPlanePublicCapabilitiesSchema,
+  ControlPlaneLoginIdentitySummarySchema,
   ControlPlaneUserDetailSchema,
   ControlPlaneUpdateUserInputSchema,
   controlPlaneAccessManagementCapabilities,
@@ -19,6 +20,7 @@ import {
   parseControlPlaneCliLoopbackRedirectUri,
   supportsControlPlaneCustomRoles,
   supportsControlPlaneCliSessions,
+  supportsControlPlaneLocalCliSessions,
   supportsControlPlaneExternalIdentityLogin,
   supportsControlPlaneUserManagement,
 } from "../src/control-plane-access.ts";
@@ -58,6 +60,29 @@ test("cli session capability normalizes through the same capability boundary", (
     ...baseCapabilities,
     cliSessions: true,
   });
+});
+
+test("local cli session capability stays additive and independent from cli sessions", () => {
+  assert.equal(supportsControlPlaneLocalCliSessions(baseCapabilities), false);
+  assert.equal(supportsControlPlaneLocalCliSessions({ ...baseCapabilities, localCliSessions: true }), true);
+  assert.equal(supportsControlPlaneLocalCliSessions({ ...baseCapabilities, localCliSessions: "true" }), false);
+  const disabled = { ...baseCapabilities, authentication: "disabled" as const, localCliSessions: true };
+  assert.equal(supportsControlPlaneCliSessions(disabled), false);
+  assert.deepEqual(normalizeControlPlanePublicCapabilities({ ...disabled, future: true }), disabled);
+});
+
+test("local trust identities project without login name or external provider", () => {
+  const identity = ControlPlaneLoginIdentitySummarySchema.parse({
+    id: "identity_local",
+    userId: "user_local",
+    kind: "local-trust",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+  });
+  assert.equal(identity.kind, "local-trust");
+  assert.equal(identity.providerId, undefined);
+  assert.equal(ControlPlaneLoginIdentitySummarySchema.safeParse({ ...identity, passwordHash: "must-not-survive" }).success, false);
+  assert.equal(ControlPlaneLoginIdentitySummarySchema.safeParse({ ...identity, kind: "oauth" }).success, false);
 });
 
 test("cli authorization requests separate the browser and device modes", () => {

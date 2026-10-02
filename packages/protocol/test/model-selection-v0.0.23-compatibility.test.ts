@@ -79,7 +79,13 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     future: true,
   });
   // stableModelIdentity is additive: peers that predate it normalize to false.
-  assert.deepEqual(node.managedModels, { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: false });
+  // modelRelay is additive too: absence keeps the relay feature domain closed.
+  assert.deepEqual(node.managedModels, {
+    multiEntityAssignment: true,
+    privateModelCatalog: true,
+    stableModelIdentity: false,
+    modelRelay: { protocols: [], streaming: false },
+  });
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { stableModelIdentity: true } }), true);
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { multiEntityAssignment: true } }), false);
 

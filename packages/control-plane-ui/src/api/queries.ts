@@ -14,94 +14,7 @@ import type { AgentOrchestrationCreateInput, AgentOrchestrationUpdateInput } fro
 import type { AgentRunManualCreateInput } from "@task-handoff/protocol/agent-runs";
 import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
-import type {
-  ControlPlaneStatusResponse,
-  ControlPlaneSettings,
-  ControlPlaneAppSessions,
-  AppSession,
-  AuthSession,
-  CreateNodeControlPlaneConnectionInput,
-  CreateControlledInstanceInput,
-  CreateControlledInstanceResult,
-  CreateImageInput,
-  CreateModelInput,
-  CopyModelInput,
-  CreateNodeInput,
-  NodePairingInvite,
-  CreateNodeLocalFolderInput,
-  CreateNodeRuntimeInput,
-  CreateProjectInput,
-  HealthResponse,
-  MarketCatalog,
-  ImageProfile,
-  SelectableImage,
-  ControlPlaneAiSessions,
-  ControlPlaneTriggers,
-  CreateControlPlaneTriggerInput,
-  ControlPlaneTriggerMutationResult,
-  InstanceTriggerIndex,
-  InstanceTriggerMutationResult,
-  ChatBridgeConfig,
-  ChatChannel,
-  AiSessionUploadedAttachment,
-  AiSessionAttachmentRef,
-  AiSessionHistoryList,
-  AiSessionHistoryDetail,
-  AiSessionMentionCatalog,
-  AiSessionMentionFileSearch,
-  AiSessionReference,
-  AiSessionResumeResult,
-  CreateChatBridgeInput,
-  ChatGatewayStatus,
-  InstanceBoardItem,
-  InstanceResourceMetrics,
-  InstanceBoardPayload,
-  LaunchAppSessionInput,
-  LocalDockerImage,
-  NodeImageAvailability,
-  ModelConfig,
-  ModelMergeResult,
-  ModelMutationResult,
-  ModelDiscoveryResult,
-  ModelEndpointDraft,
-  ModelTestResult,
-  FederatedModelRegistry,
-  Node,
-  NodeAgentExternalListener,
-  NodeFolderTreeEntry,
-  NodeJoinInvite,
-  NodeLocalFolder,
-  UpdateNodeLocalFolderInput,
-  NodeRuntimesPayload,
-  NodeControlPlaneConnection,
-  NodeControlPlanePairing,
-  NodeControlPlaneConnectionCreateResult,
-  NodeRuntime,
-  NodeStatus,
-  Project,
-  UpdateControlledInstanceInput,
-  UpdateChatBridgeInput,
-  UpdateModelInput,
-  UpdateProjectInput,
-  UpdateChannel,
-  ApplyUpdateRequest,
-  UpdateCheckResult,
-  UpdateJob,
-  UpdateNodeAgentExternalListener,
-  UpdateNodeInput,
-  AppManagementJobResponse,
-  AppManagementSnapshot,
-  ClaimProxyNodeResult,
-  CancelProxyClaimResult,
-  ControlPlaneProxyDiagnostic,
-  CreateProxyInviteResult,
-  DeleteNodeResult,
-  PublicPendingProxyClaim,
-  PublicProxyBinding,
-  PublicProxyInvite,
-  CloudConnectivity,
-  CloudBindingChallenge,
-} from "./types";
+import type { AiSessionAttachmentRef, AiSessionHistoryDetail, AiSessionHistoryList, AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult, AiSessionUploadedAttachment, AppManagementJobResponse, AppManagementSnapshot, AppSession, ApplyUpdateRequest, AuthSession, CancelProxyClaimResult, ChatBridgeConfig, ChatChannel, ChatGatewayStatus, ClaimProxyNodeResult, CloudBindingChallenge, CloudConnectivity, ControlPlaneAiSessions, ControlPlaneAppSessions, ControlPlaneProxyDiagnostic, ControlPlaneSettings, ControlPlaneStatusResponse, ControlPlaneTriggerMutationResult, ControlPlaneTriggers, CopyModelInput, CreateChatBridgeInput, CreateControlPlaneTriggerInput, CreateControlledInstanceInput, CreateControlledInstanceResult, CreateImageInput, CreateModelInput, CreateNodeControlPlaneConnectionInput, CreateNodeInput, CreateNodeLocalFolderInput, CreateNodeRuntimeInput, CreateProjectInput, CreateProxyInviteResult, DeleteNodeResult, FederatedModelRegistry, HealthResponse, ImageProfile, InstanceBoardItem, InstanceBoardPayload, InstanceResourceMetrics, InstanceTriggerIndex, InstanceTriggerMutationResult, LaunchAppSessionInput, LocalDockerImage, MarketCatalog, ModelConfig, ModelDiscoveryResult, ModelEndpointDraft, ModelMergeResult, ModelMutationResult, ModelTestResult, Node, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlaneConnectionCreateResult, NodeControlPlanePairing, NodeFolderTreeEntry, NodeImageAvailability, NodeJoinInvite, NodeLocalFolder, NodePairingInvite, NodeRuntime, NodeRuntimesPayload, NodeStatus, Project, PublicPendingProxyClaim, PublicProxyBinding, PublicProxyInvite, SelectableImage, UpdateChannel, UpdateChatBridgeInput, UpdateCheckResult, UpdateControlledInstanceInput, UpdateJob, UpdateModelInput, UpdateNodeAgentExternalListener, UpdateNodeAgentModelRelay, UpdateNodeInput, UpdateNodeLocalFolderInput, UpdateProjectInput } from "./types";
 
 export function useHealthQuery() {
   return useQuery({
@@ -870,6 +783,35 @@ export function stopAppSession(instanceId: string, sessionId: string) {
   return sharedControlPlaneClient.appSessions.stop(instanceId, sessionId);
 }
 
+export function useInstanceAppProfilesQuery(
+  instanceId: MaybeRefOrGetter<string>,
+  appId: MaybeRefOrGetter<string>,
+  enabled: MaybeRefOrGetter<boolean> = true,
+) {
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.instanceAppProfiles(toValue(instanceId), toValue(appId))),
+    queryFn: ({ signal }) => sharedControlPlaneClient.appProfiles.list(toValue(instanceId), toValue(appId), signal),
+    enabled: computed(() => toValue(enabled) && Boolean(toValue(instanceId)) && Boolean(toValue(appId))),
+    retry: false,
+  });
+}
+
+export function createInstanceAppProfile(instanceId: string, appId: string, name: string) {
+  return sharedControlPlaneClient.appProfiles.create(instanceId, appId, name);
+}
+
+export function renameInstanceAppProfile(instanceId: string, appId: string, profileId: string, name: string) {
+  return sharedControlPlaneClient.appProfiles.rename(instanceId, appId, profileId, name);
+}
+
+export function setDefaultInstanceAppProfile(instanceId: string, appId: string, profileId: string) {
+  return sharedControlPlaneClient.appProfiles.setDefault(instanceId, appId, profileId);
+}
+
+export function removeInstanceAppProfile(instanceId: string, appId: string, profileId: string) {
+  return sharedControlPlaneClient.appProfiles.remove(instanceId, appId, profileId);
+}
+
 export function renameAppSession(instanceId: string, sessionId: string, title: string) {
   return sharedControlPlaneClient.appSessions.rename(instanceId, sessionId, title);
 }
@@ -1136,6 +1078,14 @@ export function getNodeExternalListener(id: string) {
 
 export function updateNodeExternalListener(id: string, input: UpdateNodeAgentExternalListener) {
   return patchApiData<NodeAgentExternalListener>(`nodes/${id}/settings/external-listener`, input);
+}
+
+export function getNodeModelRelay(id: string) {
+  return getApiData<NodeAgentModelRelay>(`nodes/${id}/settings/model-relay`);
+}
+
+export function updateNodeModelRelay(id: string, input: UpdateNodeAgentModelRelay) {
+  return patchApiData<NodeAgentModelRelay>(`nodes/${id}/settings/model-relay`, input);
 }
 
 export function createNodePairingInvite(id: string) {

@@ -1,4 +1,4 @@
-import { ModelConfigSchema, type ModelConfig } from "@task-handoff/protocol/control-plane";
+import { ModelConfigSchema, normalizeModelNameEntries, projectModelNameEntries, sanitizeModelNameEntries, type ModelConfig } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneDatabase } from "../persistence/database/index.ts";
 import type { ModelRecord } from "../persistence/database/p0-records.ts";
 import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
@@ -62,15 +62,21 @@ export class ControlPlaneModelRepository {
     const { key, ...metadata } = model;
     return {
       ...metadata,
+      modelNames: projectModelNameEntries(model.modelNames),
       keyCiphertext: this.secrets.seal(key, secretContext(model.id)),
     };
   }
 
   private fromRecord(record: ModelRecord) {
     const { keyCiphertext, ...metadata } = record;
-    return ModelConfigSchema.parse({
+    const parsed = ModelConfigSchema.parse({
       ...metadata,
+      modelNames: sanitizeModelNameEntries(metadata.modelNames, (warning) => {
+        console.warn(JSON.stringify({ message: "unknown stored control plane model name entry field was ignored", modelId: record.id, field: warning.field }));
+      }),
       key: this.secrets.open(keyCiphertext, secretContext(record.id)),
     });
+    // Read path: normalize upstreamName without rewriting stored order values.
+    return { ...parsed, modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }) };
   }
 }

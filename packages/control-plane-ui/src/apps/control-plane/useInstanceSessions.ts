@@ -58,11 +58,16 @@ export type SessionWorkspaceGroup = {
 export type LaunchableApp = {
   id: string;
   label: string;
+  kind?: "tty" | "gui" | "web";
+  automation?: "cdp";
+  agent?: boolean;
   supportsCwdSelection?: boolean;
+  supportsProfiles?: boolean;
 };
 
-const CWD_SELECTABLE_APP_IDS = new Set(["codex", "claude", "terminal-tty", "gui-terminal", "terminal"]);
-const TERMINAL_APP_IDS = ["terminal-tty", "terminal", "gui-terminal"] as const;
+// Image catalog metadata and legacy image `optionalApps` lists still use these
+// opaque names for terminals instead of the current launcher ids.
+const LEGACY_TERMINAL_APP_IDS = ["terminal-tty", "terminal", "terminal-gui", "gui-terminal"] as const;
 
 function instanceWebBase(instance: InstanceBoardItem) {
   return `/instances/${encodeURIComponent(instance.id)}`;
@@ -215,11 +220,12 @@ export function sessionTerminalSocketUrl(instance: InstanceBoardItem, session: S
 export function appDisplayName(id: string, t: Translate) {
   const names: Record<string, string> = {
     "terminal-tty": t("sessions.tabs.terminal"),
+    "terminal-gui": `GUI ${t("sessions.tabs.terminal")}`,
     "gui-terminal": `GUI ${t("sessions.tabs.terminal")}`,
     chromium: "Chromium",
     browser: t("sessions.tabs.browser"),
     "vscode-web": "VS Code",
-    [EMBEDDED_BROWSER_APP_ID]: t("sessions.tabs.browser"),
+    [EMBEDDED_BROWSER_APP_ID]: t("sessions.tabs.embeddedBrowser"),
   };
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -239,31 +245,29 @@ export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback
 
 export function launchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
   return uniqueLaunchableApps(
-    availableInstanceApps(instance)
-      .map((app): LaunchableApp | undefined => {
-        return {
-          id: app.id,
-          label: app.name || appDisplayName(app.id, t),
-          supportsCwdSelection: app.capabilities.supportsCwdSelection,
-        };
-      })
-      .filter((app): app is LaunchableApp => Boolean(app)),
+    availableInstanceApps(instance).map((app) => {
+      const provider = directoryAiSessionProviderCapability(instance.capabilities?.features, app.id);
+      return {
+        id: app.id,
+        label: app.name || appDisplayName(app.id, t),
+        kind: app.kind,
+        ...(app.capabilities.automation ? { automation: app.capabilities.automation } : {}),
+        agent: provider ? provider.actions.create === true : app.id === "codex",
+        supportsCwdSelection: app.capabilities.supportsCwdSelection,
+        supportsProfiles: app.capabilities.supportsProfiles === true,
+      };
+    }),
   );
 }
 
 export function aiSessionLaunchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
-  return launchableAppsForInstance(instance, t).filter((app) => {
-    const capability = directoryAiSessionProviderCapability(instance.capabilities?.features, app.id);
-    return capability ? capability.actions.create === true : app.id === "codex";
-  });
+  return launchableAppsForInstance(instance, t).filter((app) => app.agent === true);
 }
 
-export function terminalAppIdForLaunchableApps(apps: readonly Pick<LaunchableApp, "id">[] | undefined) {
-  return TERMINAL_APP_IDS.find((appId) => apps?.some((app) => app.id === appId));
-}
-
-export function supportsAppCwdSelection(appId: string) {
-  return CWD_SELECTABLE_APP_IDS.has(appId);
+export function terminalAppIdForLaunchableApps(apps: readonly Pick<LaunchableApp, "id" | "kind" | "agent">[] | undefined) {
+  const terminal = apps?.find((app) => app.kind === "tty" && app.agent !== true);
+  if (terminal) return terminal.id;
+  return LEGACY_TERMINAL_APP_IDS.find((appId) => apps?.some((app) => app.id === appId));
 }
 
 export function uniqueLaunchableApps(apps: LaunchableApp[]) {

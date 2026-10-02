@@ -55,6 +55,17 @@ test("settings content reaches the bottom edge and fades beneath the section tab
   assert.match(layout, /mask-image: linear-gradient\(\s*to bottom,\s*transparent,\s*#000 var\(--settings-top-fade-height, 18px\)\s*\)/);
 });
 
+test("node detail scroll area reuses the settings scrollbar gutter and top fade", () => {
+  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const panel = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
+
+  assert.match(modal, /\.node-management-grid \{[^}]*width: calc\(100% \+ var\(--settings-scrollbar-outset, 16px\)\);[^}]*margin-right: calc\(-1 \* var\(--settings-scrollbar-outset, 16px\)\);[^}]*padding-right: var\(--settings-scrollbar-outset, 16px\);/);
+  assert.match(modal, /\.node-detail-panel \{[^}]*overflow: visible;/);
+  assert.match(panel, /\.node-detail-content \{[^}]*width: calc\(100% \+ var\(--settings-scrollbar-outset, 16px\)\);[^}]*margin-right: calc\(-1 \* var\(--settings-scrollbar-outset, 16px\)\);/);
+  assert.match(panel, /\.node-detail-content > :deep\(\[data-task-handoff-scroll-viewport\]\) \{[^}]*width: calc\(100% - var\(--settings-scrollbar-outset, 16px\)\);[^}]*mask-image: linear-gradient\(to bottom, transparent, #000 var\(--settings-top-fade-height, 18px\)\);/);
+  assert.match(panel, /\.node-detail-content-inner \{[^}]*padding: var\(--settings-top-fade-height, 18px\) 0 20px;/);
+});
+
 test("settings navigation replaces overflowing tabs with the current-section menu", () => {
   const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
   const radioItem = read("src/components/ui/dropdown-menu/DropdownMenuRadioItem.vue");

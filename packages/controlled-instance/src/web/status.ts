@@ -211,6 +211,12 @@ export function controlledInstanceCapabilities(
       aiSessionWorkspaceCheckout: true,
       aiSessionPersistenceSettings: true,
       privateModelCatalog: true,
+      // The v2 relay private catalog and node-derived routes are consumed for
+      // every supported wire protocol; the node agent owns upstream routing.
+      modelRelay: {
+        protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"],
+        streaming: true,
+      },
       codexManagedSettings: true,
       nodeAgentConnectionUpdate: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,

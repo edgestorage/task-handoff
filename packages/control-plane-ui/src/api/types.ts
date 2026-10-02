@@ -173,7 +173,8 @@ export type Project = {
 
 export type ModelApp = "codex" | "claude" | "opencode";
 export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
-export type ModelNameEntry = { name: string; order: number };
+/** `upstreamName` is omitted while it equals the external `name`. */
+export type ModelNameEntry = { name: string; upstreamName?: string; order: number };
 
 export type ModelConfig = {
   id: string;
@@ -556,6 +557,14 @@ export type NodeAgentExternalListener = {
 
 export type UpdateNodeAgentExternalListener = Pick<NodeAgentExternalListener, "bindScope" | "port">;
 
+export type NodeAgentModelRelay = {
+  enabled: boolean;
+  /** "default" means the switch was never persisted and relay stays off. */
+  source: "default" | "persisted";
+};
+
+export type UpdateNodeAgentModelRelay = Pick<NodeAgentModelRelay, "enabled">;
+
 export type NodeRuntime = {
   id: string;
   nodeId: string;
@@ -713,6 +722,7 @@ export type InstanceAppInventoryItem = {
   capabilities: {
     automation?: "cdp";
     supportsCwdSelection: boolean;
+    supportsProfiles: boolean;
   };
   diagnosticCode?: "APP_EXECUTABLE_NOT_FOUND";
 };

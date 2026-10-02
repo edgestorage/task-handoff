@@ -1,14 +1,10 @@
 import {
   ControlledInstanceSchema,
-  CodexInstanceSettingsSchema,
-  EnvironmentSourceSchema,
+  InstanceConfigInputSchema,
   ModelConfigSchema,
   NodeSchema,
-  ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
-import { GitCredentialRetentionSchema } from "@task-handoff/protocol/managed-git-credentials";
 
 export * from "../catalog/inputs.ts";
 export * from "../chat/bridges/inputs.ts";
@@ -25,40 +21,6 @@ const NodeAuthInputSchema = z.object({
     expiresAt: NodeSchema.shape.createdAt.optional(),
   }).strict().optional(),
 }).strict();
-
-export const InstanceConfigInputSchema = z.object({
-  autoImportAgentConfigs: z.boolean().optional(),
-  codexConfigEnabled: z.boolean().optional(),
-  codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
-  defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
-  codexSettings: CodexInstanceSettingsSchema.optional(),
-  aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
-  aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
-  aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
-}).strict();
-
-export const CreateInstanceInputSchema = z.object({
-  id: ControlledInstanceSchema.shape.id.optional(),
-  name: ControlledInstanceSchema.shape.name.optional(),
-  projectId: ControlledInstanceSchema.shape.projectId,
-  source: ProjectSourceSchema.optional(),
-  sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
-  nodeId: ControlledInstanceSchema.shape.nodeId.optional(),
-  runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
-  environmentSource: EnvironmentSourceSchema.optional(),
-  imageSelection: ControlledInstanceSchema.shape.imageSelection,
-  config: InstanceConfigInputSchema.optional(),
-  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
-  gitCredentialRetention: GitCredentialRetentionSchema.optional(),
-  start: z.boolean().default(false),
-}).strict().superRefine((input, context) => {
-  if (input.environmentSource && input.imageSelection) {
-    context.addIssue({ code: "custom", path: ["environmentSource"], message: "environmentSource and imageSelection are mutually exclusive." });
-  }
-  if (input.gitCredentialRetention && input.source?.type === "local-folder") {
-    context.addIssue({ code: "custom", path: ["gitCredentialRetention"], message: "Git credential retention requires a Git source." });
-  }
-});
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
@@ -152,5 +114,4 @@ export type ModelTestInput = z.infer<typeof ModelTestInputSchema>;
 export type CreateNodeInput = z.infer<typeof CreateNodeInputSchema>;
 export type UpdateNodeInput = z.infer<typeof UpdateNodeInputSchema>;
 export type CreateNodeControlPlaneConnectionInput = z.infer<typeof CreateNodeControlPlaneConnectionInputSchema>;
-export type CreateInstanceInput = z.infer<typeof CreateInstanceInputSchema>;
 export type UpdateInstanceInput = z.infer<typeof UpdateInstanceInputSchema>;

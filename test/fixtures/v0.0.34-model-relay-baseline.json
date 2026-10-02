@@ -1,0 +1,152 @@
+{
+  "protocolVersion": "2026-09-24",
+  "instance": {
+    "id": "inst_v034relay",
+    "name": "v034-relay",
+    "registrationToken": "v034-instance-credential",
+    "target": "0.0.34"
+  },
+  "modelSpecs": {
+    "codex": { "app": "codex", "endpoint": "https://upstream.example.test/v1", "key": "v034-codex-key", "model": "gpt-5.1" },
+    "claude": { "app": "claude", "endpoint": "https://anthropic.example.test", "key": "v034-claude-key", "model": "claude-opus-4-6" },
+    "opencode": { "app": "opencode", "endpoint": "https://opencode.example.test/v1", "key": "v034-opencode-key", "model": "gpt-5.1-codex" }
+  },
+  "entityIds": {
+    "codex": "mdl_2dd204a0b0e15b0b4834fab551c46af7c057eb95cc905d7df0e60c8766de3c77",
+    "claude": "mdl_1fd53b04fb04e9e4b1d96670808c502aeccf76adb5dcfc22677c3f4cadf24246",
+    "opencode": "mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9"
+  },
+  "nodeModels": [
+    {
+      "id": "mdl_2dd204a0b0e15b0b4834fab551c46af7c057eb95cc905d7df0e60c8766de3c77",
+      "name": "gpt-5.1",
+      "endpoint": "https://upstream.example.test/v1",
+      "key": "v034-codex-key",
+      "model": "gpt-5.1",
+      "modelNames": [{ "name": "gpt-5.1", "order": 100 }],
+      "protocols": ["openai-responses"],
+      "app": "codex",
+      "enabled": true,
+      "order": 100,
+      "labels": { "fixture": "v0.0.34" },
+      "createdAt": "2026-09-29T00:00:00.000Z",
+      "updatedAt": "2026-09-29T00:00:00.000Z"
+    },
+    {
+      "id": "mdl_1fd53b04fb04e9e4b1d96670808c502aeccf76adb5dcfc22677c3f4cadf24246",
+      "name": "claude-opus-4-6",
+      "endpoint": "https://anthropic.example.test",
+      "key": "v034-claude-key",
+      "model": "claude-opus-4-6",
+      "modelNames": [{ "name": "claude-opus-4-6", "order": 200 }],
+      "protocols": ["anthropic-messages"],
+      "app": "claude",
+      "enabled": true,
+      "order": 200,
+      "labels": { "fixture": "v0.0.34" },
+      "createdAt": "2026-09-29T00:00:00.000Z",
+      "updatedAt": "2026-09-29T00:00:00.000Z"
+    },
+    {
+      "id": "mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9",
+      "name": "gpt-5.1-codex",
+      "endpoint": "https://opencode.example.test/v1",
+      "key": "v034-opencode-key",
+      "model": "gpt-5.1-codex",
+      "modelNames": [{ "name": "gpt-5.1-codex", "order": 300 }],
+      "protocols": ["openai-chat-completions"],
+      "app": "opencode",
+      "enabled": true,
+      "order": 300,
+      "labels": { "fixture": "v0.0.34" },
+      "createdAt": "2026-09-29T00:00:00.000Z",
+      "updatedAt": "2026-09-29T00:00:00.000Z"
+    }
+  ],
+  "assignment": {
+    "instanceId": "inst_v034relay",
+    "modelEntityIds": [
+      "mdl_2dd204a0b0e15b0b4834fab551c46af7c057eb95cc905d7df0e60c8766de3c77",
+      "mdl_1fd53b04fb04e9e4b1d96670808c502aeccf76adb5dcfc22677c3f4cadf24246",
+      "mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9"
+    ],
+    "codexModelHash": "mdl_2dd204a0b0e15b0b4834fab551c46af7c057eb95cc905d7df0e60c8766de3c77",
+    "claudeModelHash": "mdl_1fd53b04fb04e9e4b1d96670808c502aeccf76adb5dcfc22677c3f4cadf24246",
+    "opencodeModelHash": "mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9",
+    "updatedAt": "2026-09-29T00:00:00.000Z"
+  },
+  "privateCatalog": {
+    "protocolVersion": "2026-08-27",
+    "instanceId": "inst_v034relay",
+    "entities": [
+      {
+        "id": "mdl_2dd204a0b0e15b0b4834fab551c46af7c057eb95cc905d7df0e60c8766de3c77",
+        "endpoint": "https://upstream.example.test/v1",
+        "key": "v034-codex-key",
+        "protocols": ["openai-responses"],
+        "modelNames": [{ "name": "gpt-5.1", "order": 100 }]
+      },
+      {
+        "id": "mdl_1fd53b04fb04e9e4b1d96670808c502aeccf76adb5dcfc22677c3f4cadf24246",
+        "endpoint": "https://anthropic.example.test",
+        "key": "v034-claude-key",
+        "protocols": ["anthropic-messages"],
+        "modelNames": [{ "name": "claude-opus-4-6", "order": 200 }]
+      },
+      {
+        "id": "mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9",
+        "endpoint": "https://opencode.example.test/v1",
+        "key": "v034-opencode-key",
+        "protocols": ["openai-chat-completions"],
+        "modelNames": [{ "name": "gpt-5.1-codex", "order": 300 }]
+      }
+    ],
+    "updatedAt": "2026-09-29T00:00:00.000Z"
+  },
+  "instanceEnvironment": {
+    "codex": {
+      "OPENAI_API_KEY": "v034-codex-key",
+      "OPENAI_BASE_URL": "https://upstream.example.test/v1",
+      "TASK_HANDOFF_CODEX_BASE_URL": "https://upstream.example.test/v1",
+      "TASK_HANDOFF_CODEX_MODEL": "gpt-5.1"
+    },
+    "claude": {
+      "ANTHROPIC_API_KEY": "v034-claude-key",
+      "ANTHROPIC_BASE_URL": "https://anthropic.example.test",
+      "TASK_HANDOFF_CLAUDE_MODEL": "claude-opus-4-6"
+    },
+    "opencode": {
+      "TASK_HANDOFF_OPENCODE_CONFIG_CONTENT": "{\"$schema\":\"https://opencode.ai/config.json\",\"model\":\"task-handoff-mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9/gpt-5.1-codex\",\"provider\":{\"task-handoff-mdl_7248dfb27b9aef55929865cb0d1598e795e24c7ca9a1a48879c841abffb815b9\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"gpt-5.1-codex\",\"options\":{\"baseURL\":\"https://opencode.example.test/v1\",\"apiKey\":\"v034-opencode-key\"},\"models\":{\"gpt-5.1-codex\":{\"name\":\"gpt-5.1-codex\",\"variants\":{\"none\":{\"reasoningEffort\":\"none\"},\"minimal\":{\"reasoningEffort\":\"minimal\"},\"low\":{\"reasoningEffort\":\"low\"},\"medium\":{\"reasoningEffort\":\"medium\"},\"high\":{\"reasoningEffort\":\"high\"},\"xhigh\":{\"reasoningEffort\":\"xhigh\"},\"max\":{\"reasoningEffort\":\"max\"},\"ultra\":{\"reasoningEffort\":\"ultra\"}}}}}}}}"
+    }
+  },
+  "upstreamRequests": {
+    "codex": { "url": "https://upstream.example.test/v1/responses", "authorization": "Bearer v034-codex-key", "model": "gpt-5.1" },
+    "claude": { "url": "https://anthropic.example.test/v1/messages", "x-api-key": "v034-claude-key", "model": "claude-opus-4-6" },
+    "opencode": { "url": "https://opencode.example.test/v1/chat/completions", "authorization": "Bearer v034-opencode-key", "model": "gpt-5.1-codex" }
+  },
+  "runtimeSettings": {
+    "version": 1,
+    "externalListener": { "bindScope": "loopback", "port": 8091 }
+  },
+  "nodeAgentCapabilities": {
+    "modelEndpointProbe": true,
+    "managedModels": { "multiEntityAssignment": true, "privateModelCatalog": true },
+    "codexManagedSettings": true
+  },
+  "controlledInstanceCapabilities": {
+    "features": {
+      "appRuntime": true,
+      "tty": true,
+      "browser": true,
+      "screenshots": true,
+      "logs": true,
+      "aiSessionWorkspaceSelection": true,
+      "aiSessionPersistenceSettings": true,
+      "privateModelCatalog": true,
+      "codexManagedSettings": true,
+      "nodeAgentConnectionUpdate": true,
+      "gitCliCredentialBroker": true,
+      "gitCredentialProxy": true
+    }
+  }
+}

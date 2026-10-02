@@ -79,9 +79,9 @@ export class ControlPlaneNodeAgentClient {
       throw error;
     }
 
-    let payload: { data?: unknown; error?: { message?: string; code?: string } };
+    let payload: { data?: unknown; error?: { message?: string; code?: string; details?: unknown } };
     try {
-      payload = (await response.json()) as { data?: unknown; error?: { message?: string; code?: string } };
+      payload = (await response.json()) as { data?: unknown; error?: { message?: string; code?: string; details?: unknown } };
     } catch (error) {
       this.logger?.warn?.({
         nodeId: node.id,
@@ -98,7 +98,17 @@ export class ControlPlaneNodeAgentClient {
 
     if (!response.ok) {
       const error = new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}`);
-      Object.assign(error, { statusCode: response.status, code: payload.error?.code || "NODE_AGENT_REQUEST_FAILED", nodeId: node.id, route });
+      const details = payload.error?.details;
+      // Structured node-agent details (for example the instances that block a
+      // relay disable) stay available to the management API so operators can
+      // act on them; scalars and arrays are never forwarded.
+      Object.assign(error, {
+        statusCode: response.status,
+        code: payload.error?.code || "NODE_AGENT_REQUEST_FAILED",
+        nodeId: node.id,
+        route,
+        ...(details && typeof details === "object" && !Array.isArray(details) ? { details } : {}),
+      });
       this.logger?.warn?.({
         nodeId: node.id,
         route,

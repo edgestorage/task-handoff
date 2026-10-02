@@ -1,8 +1,37 @@
 <template>
   <template v-for="app in apps" :key="app.id">
-    <DropdownMenuSub v-if="app.supportsCwdSelection && cwdSelection">
+    <DropdownMenuSub v-if="app.supportsProfiles">
+      <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching">
+        <AppLaunchIcon :app="app" />
+        <span>
+          <strong>{{ app.label }}</strong>
+          <small>{{ defaultProfile ? defaultProfileLabel(defaultProfile) : app.id }}</small>
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent class="app-launch-menu">
+        <DropdownMenuItem v-for="profile in orderedProfiles" :key="profile.id" class="app-launch-menu-item" :disabled="launching" @select="selectProfile(app.id, profile)">
+          <Globe2 :size="14" />
+          <span>
+            <strong>{{ profileLabel(profile) }}</strong>
+            <small>{{ profileMeta(profile) }}</small>
+          </span>
+          <Badge v-if="profile.isDefault && !usesDefaultProfileName(profile)" variant="secondary">{{ t("sessions.tabs.profileDefault") }}</Badge>
+        </DropdownMenuItem>
+        <p v-if="profilesQuery.isPending.value" class="app-launch-project-empty">{{ t("sessions.tabs.profileLoading") }}</p>
+        <p v-else-if="profilesQuery.isError.value" class="app-launch-project-empty">{{ t("sessions.tabs.profileLoadFailed") }}</p>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id)">
+          <Globe2 :size="14" />
+          <span>
+            <strong>{{ t("sessions.tabs.profileTemporary") }}</strong>
+            <small>{{ t("sessions.tabs.profileTemporaryDescription") }}</small>
+          </span>
+        </DropdownMenuItem>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+    <DropdownMenuSub v-else-if="app.supportsCwdSelection && cwdSelection">
       <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching" @click.prevent.stop="$emit('launch', app.id)">
-        <AppLaunchIcon :app-id="app.id" />
+        <AppLaunchIcon :app="app" />
         <span>
           <strong>{{ app.label }}</strong>
           <small>{{ app.id }}</small>
@@ -29,7 +58,7 @@
       </DropdownMenuSubContent>
     </DropdownMenuSub>
     <DropdownMenuItem v-else class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id)">
-      <AppLaunchIcon :app-id="app.id" />
+      <AppLaunchIcon :app="app" />
       <span>
         <strong>{{ app.label }}</strong>
         <small>{{ app.id }}</small>
@@ -41,8 +70,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Folder, FolderPlus, Search } from "@lucide/vue";
+import { Folder, FolderPlus, Globe2, Search } from "@lucide/vue";
+import type { AppProfile } from "@task-handoff/protocol/app-profiles";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
+import { Badge } from "../../../components/ui/badge";
 import { nodeLocalFolderDisplayName } from "../nodePath";
 import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "./instanceCwdFolders";
 import {
@@ -54,6 +85,9 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import type { LaunchableApp } from "../useInstanceSessions";
 import AppLaunchIcon from "./AppLaunchIcon.vue";
+import { useBrowserProfiles, usesDefaultProfileName } from "../useBrowserProfiles";
+import { formatBytes } from "../../../i18n/presentation";
+import { useControlPlaneLocale } from "../../../i18n/index";
 
 const props = withDefaults(defineProps<{
   apps: LaunchableApp[];
@@ -66,15 +100,54 @@ const props = withDefaults(defineProps<{
   cwdSelection: true,
 });
 const { t } = useI18n();
+const { locale } = useControlPlaneLocale();
 
-defineEmits<{
-  launch: [appId: string, cwdFolderId?: string];
+const emit = defineEmits<{
+  launch: [appId: string, cwdFolderId?: string, profileId?: string];
+  focusSession: [sessionId: string];
   "new-project": [];
 }>();
 
 const folderSearch = ref("");
 const cwdFolders = computed(() => selectableInstanceCwdFolders(props.instance, props.folders || []));
 const filteredCwdFolders = computed(() => filterInstanceCwdFolders(cwdFolders.value, folderSearch.value));
+
+const profileApps = computed(() => props.apps.filter((app) => app.supportsProfiles === true));
+const profilesEnabled = computed(() => profileApps.value.length > 0 && Boolean(props.instance?.id));
+const profileAppId = computed(() => profileApps.value[0]?.id || "chromium");
+// 菜单只在打开时挂载，Profile 列表因此按需加载并复用同一权威查询。
+const { query: profilesQuery, profiles, defaultProfile } = useBrowserProfiles({
+  instanceId: () => props.instance?.id || "",
+  appId: profileAppId,
+  enabled: profilesEnabled,
+});
+
+// 默认 Profile 排在最前，作为启动入口的预选目标。
+const orderedProfiles = computed(() => [...profiles.value].sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name)));
+
+// 运行中的 Profile 直接聚焦已有会话，不再发起必然失败的重复启动。
+function selectProfile(appId: string, profile: AppProfile) {
+  if (profile.runningSessionId) emit("focusSession", profile.runningSessionId);
+  else emit("launch", appId, undefined, profile.id);
+}
+
+// 副标题只展示用户关心的状态：运行中的会话优先，其次该 Profile 的磁盘占用。
+// 占用统计取自权威列表接口，失败或旧实例未上报时降级为明确的不可用提示，不暴露 brp_ 内部 ID。
+function profileMeta(profile: AppProfile) {
+  if (profile.runningSessionId) return t("sessions.tabs.profileRunning");
+  return profile.diskUsageBytes === undefined
+    ? t("sessions.tabs.profileDiskUnknown")
+    : t("sessions.tabs.profileDiskUsage", { size: formatBytes(profile.diskUsageBytes, locale.value) });
+}
+
+/** The untouched default profile shows the localized name instead of the placeholder. */
+function profileLabel(profile: AppProfile) {
+  return usesDefaultProfileName(profile) ? t("sessions.tabs.profileDefault") : profile.name;
+}
+
+function defaultProfileLabel(profile: AppProfile) {
+  return usesDefaultProfileName(profile) ? t("sessions.tabs.profileDefault") : t("sessions.tabs.profileDefaultHint", { name: profile.name });
+}
 
 </script>
 

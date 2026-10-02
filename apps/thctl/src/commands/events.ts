@@ -295,7 +295,7 @@ export async function streamControlPlaneEvents(context: CliContext, options: Eve
 export async function eventsCommand(context: CliContext, invocation: CliInvocation) {
   const topics = normalizeEventTopics((invocation.options.topic as string[] | undefined) ?? []);
   const instanceId = typeof invocation.options.instance === "string" ? invocation.options.instance.trim() : "";
-  const profile = resolveProfile(context);
+  const profile = await resolveProfile(context);
   const connection = await openConnection(context, { profile });
   const credential = context.store.secrets().read(connection.profile.label);
   if (!credential) {

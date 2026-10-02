@@ -20,6 +20,7 @@ export const ControlPlanePublicCapabilitiesSchema = z.object({
   triggers: z.boolean().optional(),
   stories: z.boolean().optional(),
   cliSessions: z.boolean().optional(),
+  localCliSessions: z.boolean().optional(),
   accessManagement: ControlPlaneAccessManagementCapabilitySchema.optional(),
 }).strict();
 
@@ -46,6 +47,14 @@ export function supportsControlPlaneCustomRoles(capabilities: unknown) {
 
 export function supportsControlPlaneCliSessions(capabilities: unknown) {
   return normalizeControlPlanePublicCapabilities(capabilities)?.cliSessions === true;
+}
+
+/**
+ * 本地信任会话只在 authentication disabled 且客户端位于同一台机器时可用；
+ * 该能力与 `cliSessions` 相互独立，缺失一律归一为不支持。
+ */
+export function supportsControlPlaneLocalCliSessions(capabilities: unknown) {
+  return normalizeControlPlanePublicCapabilities(capabilities)?.localCliSessions === true;
 }
 
 export const ControlPlanePublicIdentityPayloadSchema = z.object({
@@ -257,6 +266,13 @@ export const ControlPlaneCliTokenResponseSchema = z.object({
   }).strict(),
 }).strict();
 
+/**
+ * 本地信任会话请求：仅允许 loopback 来源调用，客户端必须声明自己的元数据以便审计。
+ */
+export const ControlPlaneCliLocalSessionRequestSchema = z.object({
+  client: ControlPlaneCliClientSchema,
+}).strict();
+
 export const ControlPlaneCliSessionsResponseSchema = z.object({ data: z.array(ControlPlaneCliSessionSchema) }).strict();
 export const ControlPlaneCliSessionRevocationResponseSchema = z.object({ data: z.object({ revoked: z.boolean() }).strict() }).strict();
 export const ControlPlaneCliSessionRenewalResponseSchema = z.object({
@@ -289,6 +305,7 @@ export type ControlPlaneCliAuthorization = z.infer<typeof ControlPlaneCliAuthori
 export type ControlPlaneCliAuthorizationStatus = z.infer<typeof ControlPlaneCliAuthorizationStatusSchema>;
 export type ControlPlaneCliAuthorizationRequestDetail = z.infer<typeof ControlPlaneCliAuthorizationRequestDetailSchema>;
 export type ControlPlaneCliTokenRequest = z.infer<typeof ControlPlaneCliTokenRequestSchema>;
+export type ControlPlaneCliLocalSessionRequest = z.infer<typeof ControlPlaneCliLocalSessionRequestSchema>;
 export type ControlPlaneCliTokenResponse = z.infer<typeof ControlPlaneCliTokenResponseSchema>;
 export type ControlPlaneCliSession = z.infer<typeof ControlPlaneCliSessionSchema>;
 export type ControlPlaneCliAuthorizationErrorCode = z.infer<typeof ControlPlaneCliAuthorizationErrorCodeSchema>;

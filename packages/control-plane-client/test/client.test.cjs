@@ -612,7 +612,7 @@ test("shared AI Session client owns revisioned queue edit and reorder routes", a
   assert.deepEqual(JSON.parse(requests[1].init.body), { expectedRevision: 4, queueIds: ["queue-2", "queue-1"] });
 });
 
-test("shared App Session client owns aggregate, launch, stop, rename, and delta routes", async () => {
+test("shared App Session client owns aggregate, launch, stop, restart, rename, access, and delta routes", async () => {
   const requests = [];
   const transport = {
     async request(path, schema, init) {
@@ -627,6 +627,7 @@ test("shared App Session client owns aggregate, launch, stop, rename, and delta 
   await api.appSessions.list();
   await api.appSessions.launch("instance/1", { appId: "terminal-tty", cwdFolderId: "folder/1" });
   await api.appSessions.stop("instance/1", "session/1");
+  await api.appSessions.restart("instance/1", "session/1");
   await api.appSessions.rename("instance/1", "session/1", "  Terminal  ");
   const access = await api.appSessions.access("instance/1", "session/1");
   await api.appSessions.revokeAccess("instance/1", "session/1", access.token);
@@ -635,6 +636,7 @@ test("shared App Session client owns aggregate, launch, stop, rename, and delta 
     "/api/app-sessions",
     "/api/controlled-instances/instance%2F1/apps/sessions",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/stop",
+    "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/restart",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/access",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/access",
@@ -644,12 +646,14 @@ test("shared App Session client owns aggregate, launch, stop, rename, and delta 
   assert.deepEqual(JSON.parse(requests[1].init.body), { appId: "terminal-tty", cwdFolderId: "folder/1" });
   assert.equal(requests[2].init.method, "POST");
   assert.deepEqual(JSON.parse(requests[2].init.body), {});
-  assert.equal(requests[3].init.method, "PATCH");
-  assert.deepEqual(JSON.parse(requests[3].init.body), { title: "Terminal" });
-  assert.equal(requests[4].init.method, "POST");
-  assert.deepEqual(JSON.parse(requests[4].init.body), {});
-  assert.equal(requests[5].init.method, "DELETE");
-  assert.deepEqual(JSON.parse(requests[5].init.body), { token: "lease" });
+  assert.equal(requests[3].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[3].init.body), {});
+  assert.equal(requests[4].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[4].init.body), { title: "Terminal" });
+  assert.equal(requests[5].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[5].init.body), {});
+  assert.equal(requests[6].init.method, "DELETE");
+  assert.deepEqual(JSON.parse(requests[6].init.body), { token: "lease" });
 });
 
 test("shared auth client owns Web and mobile authentication contracts", async () => {
@@ -906,6 +910,86 @@ test("shared resource client validates declared fields and drops unknown respons
     },
   });
   await assert.rejects(() => invalidApi.resources.nodes());
+});
+
+test("shared resource client creates and deletes controlled instances", async () => {
+  const requests = [];
+  const createdAt = "2026-10-02T00:00:00.000Z";
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (init?.method === "POST") {
+        return schema.parse({ data: {
+          id: "inst_created0001",
+          name: "Created Instance",
+          source: { type: "local-folder", path: "/workspace/demo" },
+          sourceSnapshot: {},
+          nodeId: "node-1",
+          runtimeId: "runtime_local_docker",
+          status: "starting",
+          access: {
+            strategy: "control-plane-proxy",
+            web: "/instances/inst_created0001/",
+            api: "/instances/inst_created0001/api",
+            ws: "/instances/inst_created0001/api",
+            status: "endpoint-unreachable",
+          },
+          createdAt,
+          updatedAt: createdAt,
+          registrationToken: "registration-secret",
+          startOutcome: { status: "started" },
+          futureField: true,
+        } });
+      }
+      return schema.parse({ data: {
+        instanceId: "inst_deleted0001",
+        containerDeleted: true,
+        completed: false,
+        deletedVolumes: [],
+        retainedVolumes: [{ role: "workspace", name: "fake-workspace", mountPath: "/workspace", status: "retained" }],
+        volumeResults: [{
+          role: "data",
+          name: "fake-data",
+          mountPath: "/data",
+          status: "failed",
+          error: { code: "INSTANCE_VOLUME_IDENTITY_MISMATCH", message: "volume identity mismatch" },
+        }],
+        futureField: true,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  const created = await api.resources.createInstance({
+    nodeId: "node-1",
+    source: { type: "local-folder", path: "/workspace/demo" },
+    start: true,
+  });
+  const deleted = await api.resources.deleteInstance("instance/1", { deleteVolumes: true });
+
+  assert.equal(created.id, "inst_created0001");
+  assert.equal(created.startOutcome.status, "started");
+  assert.equal("registrationToken" in created, false);
+  assert.equal(created.futureField, undefined);
+  assert.equal(deleted.completed, false);
+  assert.deepEqual(deleted.retainedVolumes.map((volume) => volume.role), ["workspace"]);
+  assert.equal(deleted.volumeResults[0].status, "failed");
+  assert.equal(deleted.futureField, undefined);
+
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/controlled-instances",
+    "/api/controlled-instances/instance%2F1",
+  ]);
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(requests[0].init.headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    nodeId: "node-1",
+    source: { type: "local-folder", path: "/workspace/demo" },
+    start: true,
+  });
+  assert.equal(requests[1].init.method, "DELETE");
+  assert.equal(requests[1].init.headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(requests[1].init.body), { deleteVolumes: true });
 });
 
 test("shared trigger client owns template, binding, and run routes", async () => {

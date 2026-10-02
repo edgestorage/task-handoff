@@ -37,6 +37,7 @@
             :instance="targetInstance"
             :launching="launching"
             @launch="launchTargetApp"
+            @focus-session="(sessionId) => $emit('focusAppSession', targetInstance?.id || '', sessionId)"
           />
           <DropdownMenuItem v-else class="app-launch-menu-item story-resource-menu-item" disabled>{{ targetInstance && supportsApps(targetInstance) ? t("stories.resources.noApps") : t("stories.resources.appsUnsupported") }}</DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -64,7 +65,7 @@
           size="sm"
           @click="runOpenOption(option)"
         >
-          <AppLaunchIcon v-if="option.kind === 'app'" :app-id="option.appId" :size="16" />
+          <AppLaunchIcon v-if="option.kind === 'app'" :app="option.app" :size="16" />
           <component :is="option.icon" v-else :size="14" aria-hidden="true" />
           <span>{{ option.label }}</span>
         </Button>
@@ -108,7 +109,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import SessionPaneContent from "../instance-detail/SessionPaneContent.vue";
 import AppLaunchIcon from "../shared/AppLaunchIcon.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
-import { buildAppSessionTabs, canRenameAppSession, EMBEDDED_BROWSER_APP_ID, launchableAppsForInstance, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { buildAppSessionTabs, canRenameAppSession, EMBEDDED_BROWSER_APP_ID, launchableAppsForInstance, type LaunchableApp, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { storyResourceKey, type StoryRepositoryPage, type StoryResourceRef } from "./storyResources";
 import StoryResourceTabStrip, { type StoryResourceTabItem } from "./StoryResourceTabStrip.vue";
 import type { StoryResourceDropPlacement } from "./storyResourceOrder.ts";
@@ -129,11 +130,12 @@ const emit = defineEmits<{
   close: [key: string];
   reorder: [sourceKey: string, targetKey: string, placement: StoryResourceDropPlacement];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
+  focusAppSession: [instanceId: string, sessionId: string];
   openRepository: [instanceId: string, sessionKind: RepositorySessionKind, sessionId: string, page: StoryRepositoryPage, filePath?: string, cwdFolderId?: string];
 }>();
 const { t } = useI18n();
 
-type StoryResourceAppOpenOption = { key: string; kind: "app"; appId: string; label: string };
+type StoryResourceAppOpenOption = { key: string; kind: "app"; app: LaunchableApp; label: string };
 type StoryResourceRepositoryOpenOption = { key: string; kind: "repository"; page: StoryRepositoryPage; label: string; icon: Component };
 type StoryResourceOpenOption = StoryResourceAppOpenOption | StoryResourceRepositoryOpenOption;
 
@@ -157,7 +159,7 @@ const repositoryOpenOptions = computed<StoryResourceRepositoryOpenOption[]>(() =
 const appOpenOptions = computed<StoryResourceAppOpenOption[]>(() => {
   const instance = props.targetInstance;
   return instance
-    ? launchableApps(instance).map((app) => ({ key: `app:${app.id}`, kind: "app", appId: app.id, label: app.label }))
+    ? launchableApps(instance).map((app) => ({ key: `app:${app.id}`, kind: "app", app, label: app.label }))
     : [];
 });
 const openOptions = computed<StoryResourceOpenOption[]>(() => [...appOpenOptions.value, ...repositoryOpenOptions.value]);
@@ -173,7 +175,7 @@ const activeSession = computed<SessionTab | undefined>(() => {
     key: storyResourceKey(resource),
     kind: "embedded-browser",
     label: EMBEDDED_BROWSER_APP_ID,
-    title: resource.title || t("sessions.tabs.browser"),
+    title: resource.title || t("sessions.tabs.embeddedBrowser"),
     status: resource.status || "running",
     source: {
       browserTabId: resource.browserTabId,
@@ -200,7 +202,7 @@ const tabItems = computed<StoryResourceTabItem[]>(() => props.resources.map((res
   const instance = props.instances.find((candidate) => candidate.id === resource.instanceId);
   const app = resource.kind === "app-session" ? buildAppSessionTabs(instance, t).find((session) => session.key === resource.sessionId) : undefined;
   const instanceLabel = instance?.name || resource.instanceId;
-  const browserLabel = resource.kind === "embedded-browser" ? resource.title || t("sessions.tabs.browser") : "";
+  const browserLabel = resource.kind === "embedded-browser" ? resource.title || t("sessions.tabs.embeddedBrowser") : "";
   return {
     key: storyResourceKey(resource),
     label: resource.kind === "repository" ? repositoryLabel(resource.page) : resource.kind === "embedded-browser" ? browserLabel : app?.title || app?.label || resource.sessionId,
@@ -230,7 +232,7 @@ function launchableApps(instance: InstanceWithAiSessions) {
   const apps = supportsApps(instance) ? launchableAppsForInstance(instance, t) : [];
   const browser = canUseDesktopBrowserContext()
     && (supportsBrowserTunnel(instance.capabilities) || supportsDirectoryBrowserTunnel(instance.capabilities))
-    ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.browser") }]
+    ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.embeddedBrowser") }]
     : [];
   return [...apps, ...browser];
 }
@@ -239,12 +241,12 @@ function optionDisabled(option: StoryResourceOpenOption) {
 }
 function runOpenOption(option: StoryResourceOpenOption) {
   if (optionDisabled(option)) return;
-  if (option.kind === "app") launchTargetApp(option.appId);
+  if (option.kind === "app") launchTargetApp(option.app.id);
   else openTargetRepository(option.page);
 }
-function launchTargetApp(appId: string) {
+function launchTargetApp(appId: string, _cwdFolderId?: string, profileId?: string) {
   if (!props.targetInstance || !targetAiSession.value?.cwd) return;
-  emit("launchApp", props.targetInstance, appId, undefined, { cwd: targetAiSession.value.cwd });
+  emit("launchApp", props.targetInstance, appId, undefined, { cwd: targetAiSession.value.cwd, ...(profileId ? { profileId } : {}) });
 }
 function openTargetRepository(page: StoryRepositoryPage) {
   if (!props.targetInstance || !props.targetAiSessionId) return;

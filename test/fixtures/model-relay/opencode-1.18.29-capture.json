@@ -1,0 +1,51 @@
+{
+  "artifact": {
+    "app": "opencode",
+    "version": "1.18.29",
+    "capturedAt": "2026-10-01",
+    "capture": "opencode run \"reply with the single word pong\" with OPENCODE_CONFIG_CONTENT declaring an openai-compatible provider pointing at a local recording endpoint",
+    "note": "Request headers and body summary only; no prompt content or credentials were persisted."
+  },
+  "operations": [
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "purpose": "session-title",
+      "requestHeaders": {
+        "content-type": "application/json",
+        "accept": "*/*"
+      },
+      "body": {
+        "model": "gpt-5.1",
+        "stream": true,
+        "stream_options": true,
+        "topLevelKeys": ["max_tokens", "messages", "model", "stream", "stream_options"],
+        "messageRoles": ["system", "user"],
+        "bytes": 2450
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "purpose": "main-turn",
+      "requestHeaders": {
+        "content-type": "application/json",
+        "accept": "*/*"
+      },
+      "body": {
+        "model": "gpt-5.1",
+        "stream": true,
+        "stream_options": true,
+        "topLevelKeys": ["max_tokens", "messages", "model", "reasoning_effort", "stream", "stream_options", "tool_choice", "tools"],
+        "messageRoles": ["system", "user"],
+        "tools": 22,
+        "bytes": 62115
+      }
+    }
+  ],
+  "modelsRequests": [],
+  "cancel": {
+    "observed": "not-captured",
+    "scenario": "OpenCode cancel is expected to close the SSE stream; covered by relay transport contract tests in section 4."
+  }
+}
