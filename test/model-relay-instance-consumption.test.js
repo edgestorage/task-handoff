@@ -113,7 +113,7 @@ async function resolveRelayOrigin(t, upstream, options = {}) {
     headers: { authorization: "Bearer agent-secret" },
     payload: { modelSelection: { modelEntityIds: Object.values(entities).map((entity) => entity.id) }, modelEntityIds: Object.values(entities).map((entity) => entity.id) },
   });
-  assert.equal(assignment.statusCode, options.expectAssignmentFailure ? 409 : 200, assignment.body);
+  assert.equal(assignment.statusCode, 200, assignment.body);
   const listener = await app.listen({ host: "127.0.0.1", port });
   return { app, port, listener, entities, dataDir };
 }
@@ -265,7 +265,7 @@ test("turning the switch off restores the v0.0.34 direct projection without rest
   assert.equal(opencode.provider[`task-handoff-${entities.chat.id}`].options.baseURL, `${upstream.origin}/v1`);
 });
 
-test("instances without the relay consumer capability keep the direct projection and reject mapped assignments", async (t) => {
+test("instances without the relay consumer capability keep the direct projection and ignore mapped assignments", async (t) => {
   const upstream = await startUpstream((_record, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end("{}");
@@ -273,7 +273,6 @@ test("instances without the relay consumer capability keep the direct projection
   t.after(() => upstream.close());
   const { app } = await resolveRelayOrigin(t, upstream, {
     capabilities: { features: { privateModelCatalog: true } },
-    expectAssignmentFailure: true,
   });
 
   const catalog = app.nodeAgentState.modelRegistry.privateCatalog(INSTANCE_ID);

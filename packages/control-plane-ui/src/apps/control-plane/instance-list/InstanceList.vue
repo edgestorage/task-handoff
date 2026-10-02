@@ -819,6 +819,12 @@ function openNewInstanceFromTemporaryList() {
   font-size: 11px;
 }
 
+/* Every row meta line shares one fixed line box (instead of the inherited 1.5 ratio) so swapping
+   the source label for a status line cannot change the row height. */
+.instance-row-main small {
+  line-height: 16px;
+}
+
 .instance-row-main .image-provisioning-status {
   color: var(--status-warning);
 }
@@ -835,8 +841,6 @@ function openNewInstanceFromTemporaryList() {
   gap: 4px;
   color: var(--text-muted);
   font-size: 12px;
-  /* Match the source label's line box so rows do not jump during transitions. */
-  line-height: 15px;
 }
 
 .instance-row-main .instance-row-status svg {

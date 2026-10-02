@@ -240,7 +240,7 @@
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.model") }}</h3><p>{{ t("settings.modelRegistry.manualModelHint") }}</p></header>
             <div class="model-name-list">
-              <div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div>
+              <div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => modelUpstreamName(entry) === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div>
               <ModelEntryList
                 :entries="settingsModel.modelNames"
                 :external-label="t('settings.modelRegistry.externalName')"
@@ -364,7 +364,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ModelEntryList from "./ModelEntryList.vue";
-import { useModelSettings } from "./useModelSettings";
+import { modelUpstreamName, useModelSettings } from "./useModelSettings";
 import { modelSupportsApp } from "../instance-settings/instanceSettingsState";
 
 type FilterValue = "all" | string;
@@ -391,8 +391,11 @@ const { addMapping, addModelName, applyMappingPreset, canDiscoverModels, canMove
 const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
 const mappingPresets = MODEL_REQUEST_MAPPING_PRESETS;
 const requestMappingLimit = 64;
-const mappingTargetPlaceholder = computed(() => settingsModel.modelNames[0]?.upstreamName?.trim() || settingsModel.modelNames[0]?.name.trim() || t("settings.modelRegistry.mappingUpstreamNamePlaceholder"));
-function modelNameUpstreamPlaceholder(entry: { name: string }) { return entry.name.trim() || t("settings.modelRegistry.upstreamNamePlaceholder"); }
+const mappingTargetPlaceholder = computed(() => {
+  const primary = settingsModel.modelNames[0];
+  return (primary ? modelUpstreamName(primary) : "") || t("settings.modelRegistry.mappingUpstreamNamePlaceholder");
+});
+function modelNameUpstreamPlaceholder(entry: { name: string; upstreamName?: string }) { return modelUpstreamName(entry) || t("settings.modelRegistry.upstreamNamePlaceholder"); }
 function mappingRowNote(entry: { name: string }) { return requestMappingInactive(entry) ? t("settings.modelRegistry.mappingInactive") : undefined; }
 const editingModelLocationCount = computed(() => (models.data.value || []).find((model) => model.id === editingModelId.value)?.locations?.length || 1);
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim() || appFilter.value !== "all" || locationFilter.value !== "all" || statusFilter.value !== "all"));
@@ -460,7 +463,8 @@ async function submitModel() { if (await saveModel()) closeEditor(); }
 function handleModelPickerOpen(open: boolean) { if (open && !discoveredModels.value.length && !discoveringModels.value) void fetchModelOptions(); }
 function selectDiscoveredModel(value: unknown) {
   if (typeof value !== "string") return;
-  const selectedIndex = settingsModel.modelNames.findIndex((entry) => entry.name === value);
+  // Discovered ids are upstream model ids; the external name is operator-owned.
+  const selectedIndex = settingsModel.modelNames.findIndex((entry) => modelUpstreamName(entry) === value);
   if (selectedIndex >= 0) {
     if (settingsModel.modelNames.length > 1) removeModelName(selectedIndex);
     else {
@@ -468,7 +472,7 @@ function selectDiscoveredModel(value: unknown) {
       settingsModel.modelNames[0].upstreamName = "";
     }
   } else {
-    const empty = settingsModel.modelNames.find((entry) => !entry.name.trim());
+    const empty = settingsModel.modelNames.find((entry) => !entry.name.trim() && !entry.upstreamName?.trim());
     // A discovered id is initialized into both fields so the upstream name is
     // explicit before the operator optionally edits the external name.
     if (empty) {
