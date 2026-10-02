@@ -47,6 +47,10 @@ export const LoginIdentityRecordSchema = StoredRecordSchema.extend({
     if (!identity.normalizedLoginName) context.addIssue({ code: "custom", path: ["normalizedLoginName"], message: "Local identity requires normalizedLoginName." });
     if (!identity.passwordHash) context.addIssue({ code: "custom", path: ["passwordHash"], message: "Local identity requires passwordHash." });
     if (identity.providerId || identity.subject) context.addIssue({ code: "custom", path: ["providerId"], message: "Local identity cannot reference a provider." });
+  } else if (identity.kind === "local-trust") {
+    // 本地信任身份是 disabled 模式的内置操作员，没有密码、外部提供方或登录名。
+    if (identity.passwordHash || identity.normalizedLoginName) context.addIssue({ code: "custom", path: ["passwordHash"], message: "Local trust identity cannot contain local credentials." });
+    if (identity.providerId || identity.subject || identity.verifiedEmail) context.addIssue({ code: "custom", path: ["providerId"], message: "Local trust identity cannot reference an external provider." });
   } else {
     if (!identity.providerId || !identity.subject) context.addIssue({ code: "custom", path: ["providerId"], message: "External identity requires providerId and subject." });
     if (identity.passwordHash || identity.normalizedLoginName) context.addIssue({ code: "custom", path: ["passwordHash"], message: "External identity cannot contain local credentials." });

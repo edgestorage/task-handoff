@@ -90,6 +90,15 @@ export function registerNodeRoutes({
     events.publish("node.external-listener.updated", { nodeId: id, bindScope: listener.bindScope, port: listener.port });
     return { data: listener };
   });
+  app.get("/api/nodes/:id/settings/model-relay", async (request) => ({
+    data: await service.getNodeModelRelay(IdParamsSchema.parse(request.params).id),
+  }));
+  app.patch("/api/nodes/:id/settings/model-relay", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const relay = await service.updateNodeModelRelay(id, request.body);
+    events.publish("node.model-relay.updated", { nodeId: id, enabled: relay.enabled, source: relay.source });
+    return { data: relay };
+  });
   app.post("/api/nodes/:id/updates/check", async (request) => {
     rejectRetiredInstanceUpdate(request.body);
     const id = IdParamsSchema.parse(request.params).id;

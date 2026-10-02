@@ -19,6 +19,7 @@ import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserDatabaseConfigInput } from "./database/index.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";
 import { hashControlPlanePassword, normalizeControlPlaneLoginName } from "./passwords.ts";
+import { LOCAL_TRUST_OPERATOR_DISPLAY_NAME } from "./local-trust.ts";
 import { ControlPlaneUserStore, SYSTEM_ROLE_IDS } from "./user-store.ts";
 import type { LoginIdentityRecord, RoleDefinitionRecord, UserAccountRecord } from "./user-records.ts";
 
@@ -106,6 +107,7 @@ export class ControlPlaneUserService {
   readonly store: ControlPlaneUserStore;
   private bootstrapInProgress = false;
   private initPromise: Promise<unknown> | undefined;
+  private localTrustOperatorPromise: Promise<{ userId: string; identityId: string }> | undefined;
 
   constructor(paths: ControlPlaneStorePaths, options: { database?: ControlPlaneUserDatabaseConfigInput; repository?: ControlPlaneUserRepository } = {}) {
     this.store = new ControlPlaneUserStore(paths, options);
@@ -203,6 +205,105 @@ export class ControlPlaneUserService {
     const parsed = CreateLocalUserInputSchema.parse(input);
     const created = await this.createLocalUserInternal(parsed);
     return this.detail(created.user.id);
+  }
+
+  /**
+   * 幂等获取（必要时创建）本地信任操作员：disabled 模式下 loopback CLI 会话的审计与授权归属。
+   * 该账号没有可登录身份，不参与 bootstrap 完成判定，也不计入"最后一个可登录管理员"。
+   */
+  ensureLocalTrustOperator(): Promise<{ userId: string; identityId: string }> {
+    if (!this.localTrustOperatorPromise) {
+      this.localTrustOperatorPromise = (async () => {
+        await this.init();
+        await this.store.ensureSystemRolesForLocalAccess();
+        return this.store.transaction(async (repository) => {
+          const existing = (await repository.identities.list()).find((identity) => identity.kind === "local-trust");
+          if (!existing) return this.createLocalTrustOperatorIn(repository);
+          const user = await repository.users.get(existing.userId);
+          if (!user) {
+            await repository.identities.delete(existing.id);
+            return this.createLocalTrustOperatorIn(repository);
+          }
+          await this.restoreLocalTrustOperatorIn(repository, existing.userId);
+          return { userId: existing.userId, identityId: existing.id };
+        });
+      })().catch((error) => {
+        this.localTrustOperatorPromise = undefined;
+        throw error;
+      });
+    }
+    return this.localTrustOperatorPromise;
+  }
+
+  private async createLocalTrustOperatorIn(repository: ControlPlaneUserRepository) {
+    const timestamp = now();
+    const user: UserAccountRecord = {
+      id: createId("user"),
+      displayName: LOCAL_TRUST_OPERATOR_DISPLAY_NAME,
+      status: "active",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const identity: LoginIdentityRecord = {
+      id: createId("identity"),
+      userId: user.id,
+      kind: "local-trust",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await repository.users.put(user);
+    await repository.identities.put(identity);
+    await repository.grants.put({
+      userId: user.id,
+      roleIds: [SYSTEM_ROLE_IDS.admin],
+      nodeScope: { kind: "all" },
+      instanceScope: { kind: "inherit-node-scope" },
+      authorizationRevision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await repository.audit.put({
+      id: createId("uaudit"),
+      action: "cli-local-session.operator-create",
+      actorUserId: user.id,
+      targetType: "user",
+      targetId: user.id,
+      details: { kind: "local-trust" },
+      createdAt: timestamp,
+    });
+    return { userId: user.id, identityId: identity.id };
+  }
+
+  /**
+   * 本地信任等价于 disabled 模式下匿名 system actor 的权限，因此每次签发前把账号收敛回
+   * Admin + 全范围；被归档/禁用时重新激活。恢复产生授权变更时同步吊销旧会话。
+   */
+  private async restoreLocalTrustOperatorIn(repository: ControlPlaneUserRepository, userId: string) {
+    const timestamp = now();
+    const grant = await repository.grants.get(userId);
+    const canonicalGrant = grant
+      && grant.roleIds.length === 1
+      && grant.roleIds[0] === SYSTEM_ROLE_IDS.admin
+      && grant.nodeScope.kind === "all"
+      && grant.instanceScope.kind === "inherit-node-scope";
+    let revision: number | undefined;
+    if (!canonicalGrant) {
+      revision = (grant?.authorizationRevision ?? 0) + 1;
+      await repository.grants.put({
+        userId,
+        roleIds: [SYSTEM_ROLE_IDS.admin],
+        nodeScope: { kind: "all" },
+        instanceScope: { kind: "inherit-node-scope" },
+        authorizationRevision: revision,
+        createdAt: grant?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      });
+    }
+    const user = await repository.users.get(userId);
+    if (user && user.status !== "active") {
+      await repository.users.put({ ...user, status: "active", archivedAt: undefined, updatedAt: timestamp });
+    }
+    if (revision !== undefined) await this.revokeSessionsIn(repository, userId);
   }
 
   async updateUser(userId: string, input: unknown) {
@@ -638,8 +739,11 @@ export class ControlPlaneUserService {
     for (const identity of await repository.identities.listByUser(userId)) {
       if (identity.id === projection.removedIdentityId) continue;
       if (identity.kind === "local-password") return true;
-      const provider = await repository.providers.get(identity.providerId || "");
-      const status = projection.providerStatus?.providerId === provider?.id ? projection.providerStatus.status : provider?.status;
+      // 本地信任身份没有外部提供方，也不是可登录身份。
+      if (identity.kind === "local-trust" || !identity.providerId) continue;
+      const provider = await repository.providers.get(identity.providerId);
+      if (!provider) continue;
+      const status = projection.providerStatus?.providerId === provider.id ? projection.providerStatus.status : provider.status;
       if (status === "enabled") return true;
     }
     return false;

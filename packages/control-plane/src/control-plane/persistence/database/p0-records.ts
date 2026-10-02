@@ -58,7 +58,13 @@ export const ModelRecordSchema = z.object({
   endpoint: z.string().trim().min(1).max(2048),
   keyCiphertext: SecretEnvelopeSchema,
   model: z.string().trim().min(1).max(240),
-  modelNames: z.array(z.object({ name: z.string().trim().min(1).max(240), order: z.number().int().nonnegative() }).strict()).max(256),
+  modelNames: z.array(z.object({
+    name: z.string().trim().min(1).max(240),
+    // Stored compactly: the upstream name is only persisted when it differs
+    // from the external name. Readers normalize a missing value to `name`.
+    upstreamName: z.string().trim().min(1).max(240).optional(),
+    order: z.number().int().nonnegative(),
+  }).strict()).max(256),
   protocols: z.array(z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"])).max(3),
   app: z.enum(["codex", "claude", "opencode"]),
   enabled: z.boolean(),

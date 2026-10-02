@@ -43,6 +43,7 @@ import {
   type AppManagementOperationRequest,
 } from "@task-handoff/protocol/control-plane";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
+import { AppProfileListSchema, AppProfileSchema } from "@task-handoff/protocol/app-profiles";
 import {
   ConfigSyncBatchResultSchema,
   ConfigSyncProgramSchema,
@@ -1040,6 +1041,18 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.updateExternalListener(this.requireLocalListenerNode(id), input);
   }
 
+  /**
+   * Node relay settings use the standard node management channel for every
+   * node, unlike the external listener which is bound to the local IPC node.
+   */
+  async getNodeModelRelay(id: string) {
+    return this.nodeAgentGateway.getModelRelay(this.requireNode(id));
+  }
+
+  async updateNodeModelRelay(id: string, input: unknown) {
+    return this.nodeAgentGateway.updateModelRelay(this.requireNode(id), input);
+  }
+
   async createNodePairingInvite(id: string, input: unknown = {}) {
     const node = this.requireNode(id);
     return this.nodeAgentGateway.createPairingInvite(node, input);
@@ -1324,7 +1337,7 @@ export class ControlPlaneService {
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
       : current;
     if (modelSelection) {
-      const preparedModels = await this.modelService.prepareAssignment(node, modelSelection);
+      const preparedModels = await this.modelService.prepareAssignment(node, modelSelection, current);
       instance = (await this.nodeAgentGateway.assignInstanceModels(node, id, preparedModels)).instance;
       await this.modelService.retireSupersededNodeModels(node, preparedModels);
     }
@@ -1821,12 +1834,7 @@ export class ControlPlaneService {
   }
 
   async launchAppSession(instanceId: string, appId = "terminal-tty", options: Record<string, unknown> = {}) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
-      const error = new Error(`Instance ${instance.name} is still starting. Wait for it to connect before launching apps.`);
-      Object.assign(error, { statusCode: 409, code: "INSTANCE_NOT_CONNECTED" });
-      throw error;
-    }
+    const instance = await this.requireOnlineControlledInstance(instanceId, "launching apps");
     const launchOptions = await this.resolveAppLaunchOptions(instance, options);
     const session = await this.instanceRequest(instance, "/apps/sessions", {
       method: "POST",
@@ -1836,9 +1844,66 @@ export class ControlPlaneService {
     return session;
   }
 
+  async listAppProfiles(instanceId: string, appId: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing browser profiles");
+    return parseResponse(AppProfileListSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/profiles`));
+  }
+
+  async createAppProfile(instanceId: string, appId: string, name: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing browser profiles");
+    return parseResponse(AppProfileSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }));
+  }
+
+  async renameAppProfile(instanceId: string, appId: string, profileId: string, name: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing browser profiles");
+    return parseResponse(AppProfileSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/profiles/${encodeURIComponent(profileId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }));
+  }
+
+  async setDefaultAppProfile(instanceId: string, appId: string, profileId: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing browser profiles");
+    return parseResponse(AppProfileSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/profiles/${encodeURIComponent(profileId)}/default`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
+  }
+
+  async deleteAppProfile(instanceId: string, appId: string, profileId: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing browser profiles");
+    await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/profiles/${encodeURIComponent(profileId)}`, { method: "DELETE" });
+  }
+
+  private async requireOnlineControlledInstance(instanceId: string, action: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
+      const error = new Error(`Instance ${instance.name} is still starting. Wait for it to connect before ${action}.`);
+      Object.assign(error, { statusCode: 409, code: "INSTANCE_NOT_CONNECTED" });
+      throw error;
+    }
+    return instance;
+  }
+
   async stopAppSession(instanceId: string, sessionId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const session = await this.instanceRequest(instance, `/apps/sessions/${encodeURIComponent(sessionId)}/stop`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }) as Record<string, unknown>;
+    return session;
+  }
+
+  async restartAppSession(instanceId: string, sessionId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const session = await this.instanceRequest(instance, `/apps/sessions/${encodeURIComponent(sessionId)}/restart`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),

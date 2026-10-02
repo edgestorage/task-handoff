@@ -45,7 +45,10 @@ test("control-plane model copies inherit secrets without overwriting an existing
     const savedLegacy = await service.update(legacyId, { name: "Legacy saved" });
     assert.deepEqual(savedLegacy.model.modelNames, [{ name: "legacy-model", order: 100 }]);
     const persistedLegacy = await repository.get(legacyId);
-    assert.deepEqual(persistedLegacy.modelNames, [{ name: "legacy-model", order: 100 }]);
+    // Repository reads always normalize to the canonical in-memory shape
+    // (upstreamName = name), while the stored record stays compact.
+    assert.deepEqual(persistedLegacy.modelNames, [{ name: "legacy-model", upstreamName: "legacy-model", order: 100 }]);
+    assert.deepEqual((await database.models.get(legacyId))?.modelNames, [{ name: "legacy-model", order: 100 }]);
     assert.deepEqual(persistedLegacy.protocols, ["openai-responses"]);
 
     const source = await service.create({ name: "Primary", endpoint: "https://api.example.test/v1", key: "secret-key", model: "model-a", app: "codex" });

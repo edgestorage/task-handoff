@@ -52,7 +52,7 @@ const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, la
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
-const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, modelContentRevision, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 const { CONTROL_PLANE_PERMISSION_IDS, ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
@@ -490,13 +490,13 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
       kind: app.kind || "tty",
       source: "builtin",
       availability: app.availability || "available",
-      capabilities: { supportsCwdSelection: ["terminal-tty", "codex", "claude"].includes(app.id) },
+      capabilities: { ...(app.automation ? { automation: app.automation } : {}), supportsCwdSelection: ["terminal-tty", "codex", "claude"].includes(app.id) },
     })),
   };
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-29");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-10-02");
   // Compatibility for v0.0.21: advancing the current protocol must not relax
   // the appInventory requirement of an already released wire version.
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
@@ -693,6 +693,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     repositoryPathSearch: false,
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no worktree-move capability.
     repositoryWorktreeMoveToMain: false,
+    modelRelay: { protocols: [], streaming: false },
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],
@@ -710,11 +711,15 @@ test("UI and chat launchers consume only the current authoritative app inventory
     sourceSnapshot: { apps: [{ id: "snapshot-app", name: "Snapshot" }] },
     appInventory: testAppInventory([
       { id: "codex", name: "Codex" },
+      { id: "chromium", name: "Browser", kind: "gui", automation: "cdp" },
       { id: "missing-app", name: "Missing App", availability: "missing-dependency" },
     ]),
   };
-  assert.deepEqual(uiLaunchableAppsForInstance(instance), [{ id: "codex", label: "Codex", supportsCwdSelection: true }]);
-  assert.deepEqual(chatLaunchableAppsForInstance(instance), [{ id: "codex", label: "Codex" }]);
+  assert.deepEqual(uiLaunchableAppsForInstance(instance), [
+    { id: "codex", label: "Codex", kind: "tty", agent: true, supportsCwdSelection: true, supportsProfiles: false },
+    { id: "chromium", label: "Browser", kind: "gui", automation: "cdp", agent: false, supportsCwdSelection: false, supportsProfiles: false },
+  ]);
+  assert.deepEqual(chatLaunchableAppsForInstance(instance), [{ id: "codex", label: "Codex" }, { id: "chromium", label: "Browser" }]);
   assert.deepEqual(uiLaunchableAppsForInstance({ ...instance, connectionStatus: "offline" }), []);
   assert.deepEqual(chatLaunchableAppsForInstance({ ...instance, connectionStatus: "offline" }), []);
   assert.deepEqual(uiLaunchableAppsForInstance({ ...instance, appInventory: undefined }), []);
@@ -1796,7 +1801,7 @@ function createMockNodeAgentFetch(options = {}) {
         keyPreview: "set",
         keySet: true,
         referenceCount: 0,
-        revision: modelConfigHash(body),
+        revision: modelContentRevision(body),
       };
       delete model.key;
       nodeModels.set(id, model);
@@ -1814,7 +1819,7 @@ function createMockNodeAgentFetch(options = {}) {
         keyPreview: "set",
         keySet: true,
         referenceCount: nodeModels.get(id)?.referenceCount || 0,
-        revision: modelConfigHash(body),
+        revision: modelContentRevision(body),
       };
       delete model.key;
       nodeModels.set(id, model);
@@ -1828,7 +1833,7 @@ function createMockNodeAgentFetch(options = {}) {
       if (!current) return errorResponse(`Model ${id} was not found.`, 404, "NODE_MODEL_NOT_FOUND");
       const candidate = { ...current, ...body, updatedAt: new Date().toISOString() };
       const nextKey = body.key || nodeModelKeys.get(id) || "mock-private-key";
-      const revision = modelConfigHash({ ...candidate, key: nextKey });
+      const revision = modelContentRevision({ ...candidate, key: nextKey });
       // Nodes that predate stable model identities fork the entity under the
       // new content hash instead of editing the record in place.
       const stableIdentity = options.health?.capabilities?.managedModels?.stableModelIdentity === true;
@@ -13791,6 +13796,30 @@ test("control plane launches app sessions through the controlled instance API", 
         appSessionRevision += 1;
         return jsonResponse(session);
       }
+      if (body.path === "/api/apps/chromium/profiles") {
+        const observedAt = new Date().toISOString();
+        if (body.method === "POST") {
+          const name = JSON.parse(body.body).name;
+          return jsonResponse({ id: "brp_work", name, isDefault: false, createdAt: observedAt, updatedAt: observedAt });
+        }
+        return jsonResponse({
+          appId: "chromium",
+          defaultProfileId: "brp_default",
+          profiles: [{ id: "brp_default", name: "默认", isDefault: true, createdAt: observedAt, updatedAt: observedAt }],
+          observedAt,
+        });
+      }
+      if (body.path === "/api/apps/chromium/profiles/brp_work" && body.method === "PATCH") {
+        const observedAt = new Date().toISOString();
+        return jsonResponse({ id: "brp_work", name: JSON.parse(body.body).name, isDefault: false, createdAt: observedAt, updatedAt: observedAt });
+      }
+      if (body.path === "/api/apps/chromium/profiles/brp_work/default") {
+        const observedAt = new Date().toISOString();
+        return jsonResponse({ id: "brp_work", name: "工作", isDefault: true, createdAt: observedAt, updatedAt: observedAt });
+      }
+      if (body.path === "/api/apps/chromium/profiles/brp_work" && body.method === "DELETE") {
+        return jsonResponse({ removed: true });
+      }
       if (body.path !== "/api/apps/sessions" && !body.path.endsWith("/stop")) {
         return jsonResponse({ accepted: true });
       }
@@ -14007,6 +14036,37 @@ test("control plane launches app sessions through the controlled instance API", 
       },
     });
   }
+
+  const instanceProfiles = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/apps/chromium/profiles`);
+  assert.equal(instanceProfiles.statusCode, 200);
+  assert.equal(instanceProfiles.body.data.appId, "chromium");
+  assert.equal(instanceProfiles.body.data.defaultProfileId, "brp_default");
+  assert.equal(instanceProfiles.body.data.profiles[0].isDefault, true);
+
+  const createdProfile = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/chromium/profiles`, { name: "工作" });
+  assert.equal(createdProfile.statusCode, 200);
+  assert.equal(createdProfile.body.data.id, "brp_work");
+  const createdProfileProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/chromium/profiles" && request.body?.method === "POST");
+  assert.deepEqual(createdProfileProxy.body, {
+    path: "/api/apps/chromium/profiles",
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ name: "工作" }),
+  });
+
+  const renamedProfile = await json(app, "PATCH", `/api/controlled-instances/${created.body.data.id}/apps/chromium/profiles/brp_work`, { name: "工作 2" });
+  assert.equal(renamedProfile.statusCode, 200);
+  assert.equal(renamedProfile.body.data.name, "工作 2");
+  const defaultProfile = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/chromium/profiles/brp_work/default`);
+  assert.equal(defaultProfile.statusCode, 200);
+  assert.equal(defaultProfile.body.data.isDefault, true);
+  const removedProfile = await json(app, "DELETE", `/api/controlled-instances/${created.body.data.id}/apps/chromium/profiles/brp_work`);
+  assert.equal(removedProfile.statusCode, 200);
+  assert.equal(removedProfile.body.data.removed, true);
+  const removedProfileProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/chromium/profiles/brp_work" && request.body?.method === "DELETE");
+  assert.equal(removedProfileProxy.body.body, undefined);
 
   const batchSynced = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync`, {
     direction: "export",

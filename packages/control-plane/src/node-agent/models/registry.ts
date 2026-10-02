@@ -11,16 +11,23 @@ import {
   createModelEntityId,
   isModelConfigHashId,
   modelConfigHash,
+  modelContentRevision,
+  normalizeModelNameEntries,
+  projectModelNameEntries,
+  supportsControlledInstanceModelRelay,
+  supportsControlledInstanceModelRelayProtocol,
   type ControlledInstance,
+  type NodeModelAssignment,
   type NodeModelConfig,
   type NodeModelPublicRecord,
 } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
+import { modelRelayRouteBaseUrl } from "./relay-routes.ts";
 import type { ModelAssignmentRepository, ModelRepository } from "../persistence/model-repository.ts";
 import { createNodeAgentRepository } from "../persistence/repository.ts";
 import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { InstancePrivateModelCatalogSchema } from "./private-catalog.ts";
+import { INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION, InstancePrivateModelCatalogSchema } from "./private-catalog.ts";
 
 type InstanceAccess = {
   has(id: string): boolean;
@@ -35,15 +42,18 @@ export class NodeModelRegistry {
   private readonly transaction: <T>(operation: () => T) => T;
   private readonly nodeId: string;
   private readonly instances: InstanceAccess;
+  private readonly modelRelay?: { enabled(): boolean; originFor(instance: ControlledInstance): string };
 
   constructor(
     paths: NodeAgentStorePaths,
     nodeId: string,
     instances: InstanceAccess,
     persistence?: { models: ModelRepository; assignments: ModelAssignmentRepository; transaction<T>(operation: () => T): T },
+    modelRelay?: { enabled(): boolean; originFor(instance: ControlledInstance): string },
   ) {
     this.nodeId = nodeId;
     this.instances = instances;
+    this.modelRelay = modelRelay;
     const repositories = persistence || createNodeAgentRepository(openNodeAgentDatabaseSync(paths)).model;
     this.models = repositories.models;
     this.assignments = repositories.assignments;
@@ -51,6 +61,61 @@ export class NodeModelRegistry {
   }
 
   init() {}
+
+  /** Live relay switch accessor; the resolver must never cache this value. */
+  modelRelayEnabled() {
+    return this.modelRelay?.enabled() === true;
+  }
+
+  instance(instanceId: string) {
+    return this.instances.require(instanceId);
+  }
+
+  assignment(instanceId: string) {
+    return this.assignments.get(instanceId);
+  }
+
+  /** Assigned entity ids including compatibility hash references, deduplicated. */
+  assignedModelIds(instanceId: string) {
+    const assignment = this.assignments.get(instanceId);
+    return assignment ? this.assignmentModelIds(assignment) : [];
+  }
+
+  getModel(id: string) {
+    return this.models.get(id);
+  }
+
+  /**
+   * A mapping is non-trivial when an external name differs from the upstream
+   * name it resolves to. Entities without such an entry stay direct-mode safe.
+   */
+  isMappedModel(model: Pick<NodeModelConfig, "modelNames" | "model">) {
+    return normalizeModelNames(model.modelNames, model.model).some((entry) => entry.upstreamName !== entry.name);
+  }
+
+  /** Instance ids with any model assignment, including legacy hash refs. */
+  assignedInstanceIds() {
+    return this.instances.list().flatMap((instance) => {
+      const assignment = this.assignments.get(instance.id);
+      return assignment && this.assignmentModelIds(assignment).length ? [instance.id] : [];
+    });
+  }
+
+  /**
+   * Instance ids whose assignment contains a non-same-name mapping. Disabling
+   * the relay switch must be rejected while this list is non-empty.
+   */
+  mappedAssignmentInstanceIds() {
+    return this.instances.list().flatMap((instance) => {
+      const assignment = this.assignments.get(instance.id);
+      if (!assignment) return [];
+      const mapped = this.assignmentModelIds(assignment).some((id) => {
+        const model = this.models.get(id);
+        return Boolean(model && this.isMappedModel(model));
+      });
+      return mapped ? [instance.id] : [];
+    });
+  }
 
   list(): NodeModelPublicRecord[] {
     const referenceCounts = new Map<string, number>();
@@ -74,8 +139,8 @@ export class NodeModelRegistry {
     const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
     // Entity identity is opaque and stable. Re-adding the same content still
     // converges on the existing entity, but a new record mints a short id.
-    const contentHash = modelConfigHash(normalizedInput);
-    const current = this.models.list().find((model) => modelConfigHash(model) === contentHash);
+    const contentRevision = modelContentRevision(normalizedInput);
+    const current = this.models.list().find((model) => modelContentRevision(model) === contentRevision);
     let id = current?.id;
     if (!id) {
       id = createModelEntityId();
@@ -105,6 +170,17 @@ export class NodeModelRegistry {
       // in-place revisions of entities this node already owns stay allowed.
       throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
     }
+    if (this.isMappedModel(normalizedInput)) {
+      // Mapping resolution needs a stable entity identity. The legacy hash
+      // projection cannot carry one, so it must never transport a mapping.
+      if (isModelConfigHashId(input.id)) {
+        throw Object.assign(new Error("Model name mappings require a stable model entity identity."), {
+          statusCode: 400,
+          code: "NODE_MODEL_RELAY_MAPPING_REQUIRES_STABLE_IDENTITY",
+        });
+      }
+      if (existing) this.assertReferencingInstancesAllowMapped(existing.id, normalizedInput);
+    }
     const stored = this.models.put(NodeModelConfigSchema.parse({
       ...normalizedInput,
       createdAt: existing?.createdAt || normalizedInput.createdAt,
@@ -132,6 +208,7 @@ export class NodeModelRegistry {
     });
     // The entity id is stable: editing content updates this record in place so
     // instance assignments and AI session selections keep resolving to it.
+    this.assertReferencingInstancesAllowMapped(id, candidate);
     const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id }));
     return this.toPublic(stored, this.referenceIds(id).length);
   }
@@ -157,7 +234,10 @@ export class NodeModelRegistry {
 
   assign(instanceId: string, input: z.infer<typeof UpdateNodeModelAssignmentSchema>) {
     const current = this.instances.require(instanceId);
-    for (const modelEntityId of input.modelEntityIds) this.validateEntityRef(modelEntityId);
+    for (const modelEntityId of input.modelEntityIds) {
+      this.validateEntityRef(modelEntityId);
+      this.assertMappedModelAssignmentAllowed(current, this.requireModel(modelEntityId));
+    }
     if (input.modelSelection.modelEntityIds !== undefined
       && JSON.stringify(input.modelSelection.modelEntityIds) !== JSON.stringify(input.modelEntityIds)) {
       throw Object.assign(new Error("Ordered model entity selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
@@ -165,6 +245,9 @@ export class NodeModelRegistry {
     this.validateRef("codex", input.codexModelHash);
     this.validateRef("claude", input.claudeModelHash);
     this.validateRef("opencode", input.opencodeModelHash);
+    for (const modelHash of [input.codexModelHash, input.claudeModelHash, input.opencodeModelHash]) {
+      if (modelHash) this.assertMappedModelAssignmentAllowed(current, this.requireModel(modelHash));
+    }
     if (input.modelSelection.codexModelHash !== undefined && (input.modelSelection.codexModelHash ?? undefined) !== input.codexModelHash) {
       throw Object.assign(new Error("Codex model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
@@ -187,8 +270,19 @@ export class NodeModelRegistry {
     if (!assignment) {
       return {};
     }
+    const instance = this.instances.has(instanceId) ? this.instances.require(instanceId) : undefined;
+    // Relay-capable instances receive relay routes and their own instance
+    // credential instead of any upstream endpoint or key.
+    if (instance && this.usesRelayProjection(instance)) {
+      return this.relayEnvironment(instance, assignment);
+    }
     const firstCompatible = (app: "codex" | "claude" | "opencode") => assignment.modelEntityIds
-      .find((id) => this.modelSupportsApp(this.requireModel(id), app));
+      .find((id) => {
+        const model = this.requireModel(id);
+        // Mapped entities resolve exclusively through relay routes; injecting
+        // their direct endpoint/key would send the external name upstream.
+        return !this.isMappedModel(model) && this.modelSupportsApp(model, app);
+      });
     return {
       ...this.environmentForRef("codex", firstCompatible("codex") || assignment.codexModelHash),
       ...this.environmentForRef("claude", firstCompatible("claude") || assignment.claudeModelHash),
@@ -196,28 +290,115 @@ export class NodeModelRegistry {
     };
   }
 
+  /** True when this instance consumes relay routes and the node switch is on. */
+  private usesRelayProjection(instance: ControlledInstance) {
+    return Boolean(this.modelRelay?.enabled() && supportsControlledInstanceModelRelay(instance.capabilities));
+  }
+
+  private relayEnvironment(instance: ControlledInstance, assignment: NodeModelAssignment) {
+    const origin = this.modelRelay?.originFor(instance) || "";
+    const credential = instance.registrationToken;
+    const entities = assignment.modelEntityIds.map((id) => {
+      const model = this.requireModel(id);
+      this.validateEntityRef(id);
+      return model;
+    });
+    const routeBaseUrl = (model: NodeModelConfig, protocol: "openai-responses" | "openai-chat-completions" | "anthropic-messages") => (
+      supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol) && origin
+        ? modelRelayRouteBaseUrl(origin, instance.id, model.id, protocol)
+        : undefined
+    );
+    const environment: Record<string, string> = {};
+    const claudeEntity = entities.find((model) => this.modelSupportsApp(model, "claude") && routeBaseUrl(model, "anthropic-messages"));
+    if (claudeEntity && credential) {
+      const baseUrl = routeBaseUrl(claudeEntity, "anthropic-messages")!;
+      const name = normalizeModelNames(claudeEntity.modelNames, claudeEntity.model)
+        .slice()
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0]?.name;
+      if (name) {
+        environment.ANTHROPIC_API_KEY = credential;
+        environment.ANTHROPIC_BASE_URL = baseUrl;
+        environment.TASK_HANDOFF_CLAUDE_MODEL = name;
+      }
+    }
+    const opencodeEntities = entities.filter((model) => this.modelSupportsApp(model, "opencode") && routeBaseUrl(model, "openai-chat-completions"));
+    if (opencodeEntities.length && credential) {
+      const firstEntity = opencodeEntities[0];
+      const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)
+        .slice()
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0]?.name;
+      const providers = Object.fromEntries(opencodeEntities.map((model) => [
+        `task-handoff-${model.id}`,
+        openCodeProvider(model, normalizeModelNames(model.modelNames, model.model).map((entry) => entry.name), {
+          baseUrl: routeBaseUrl(model, "openai-chat-completions")!,
+          apiKey: credential,
+        }),
+      ]));
+      environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT = JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        model: `task-handoff-${firstEntity.id}/${firstModelName}`,
+        provider: providers,
+      });
+    }
+    return environment;
+  }
+
   privateCatalog(instanceId: string) {
     const assignment = this.assignments.get(instanceId);
+    const updatedAt = assignment?.updatedAt || now();
+    const models = (assignment?.modelEntityIds || []).map((id) => {
+      const model = this.requireModel(id);
+      this.validateEntityRef(id);
+      return model;
+    });
+    const instance = this.instances.has(instanceId) ? this.instances.require(instanceId) : undefined;
+    if (instance && this.usesRelayProjection(instance)) {
+      const origin = this.modelRelay?.originFor(instance) || "";
+      return InstancePrivateModelCatalogSchema.parse({
+        protocolVersion: INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION,
+        instanceId,
+        entities: models.map((model) => {
+          const protocols = model.protocols?.length ? model.protocols : defaultProtocols(model.app);
+          return {
+            id: model.id,
+            protocols,
+            modelNames: normalizeModelNames(model.modelNames, model.model),
+            routes: protocols
+              .filter((protocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol))
+              .map((protocol) => ({ protocol, baseUrl: modelRelayRouteBaseUrl(origin, instanceId, model.id, protocol) })),
+          };
+        }).filter((entity) => entity.routes.length > 0),
+        updatedAt,
+      });
+    }
     return InstancePrivateModelCatalogSchema.parse({
       protocolVersion: "2026-08-27",
       instanceId,
-      entities: (assignment?.modelEntityIds || []).map((id) => {
-        const model = this.requireModel(id);
-        this.validateEntityRef(id);
-        return {
+      entities: models.flatMap((model) => {
+        // Mapped entities are only projected through the relay catalog, which
+        // is materialized separately. Direct catalogs must fail closed instead
+        // of leaking the upstream endpoint/key behind an external name.
+        if (this.isMappedModel(model)) return [];
+        return [{
           id: model.id,
           endpoint: model.endpoint,
           key: model.key,
           protocols: model.protocols?.length ? model.protocols : defaultProtocols(model.app),
           modelNames: normalizeModelNames(model.modelNames, model.model),
-        };
+        }];
       }),
-      updatedAt: assignment?.updatedAt || now(),
+      updatedAt,
     });
   }
 
   privateSecretValues(instanceId: string) {
-    return [...new Set(this.privateCatalog(instanceId).entities.map((entity) => entity.key))];
+    // Redaction must always cover the authoritative upstream keys, including
+    // relay projections that intentionally carry no key field.
+    const assignment = this.assignments.get(instanceId);
+    if (!assignment) return [];
+    return [...new Set(this.assignmentModelIds(assignment)
+      .map((id) => this.models.get(id)?.key)
+      .filter((key): key is string => Boolean(key)))];
   }
 
   deleteInstanceMetadata(instanceId: string) {
@@ -244,6 +425,12 @@ export class NodeModelRegistry {
       throw Object.assign(new Error("A model cannot be merged into itself."), { statusCode: 400, code: "NODE_MODEL_MERGE_SAME" });
     }
     this.validateEntityRef(target.id);
+    if (this.isMappedModel(target)) {
+      const referencing = [...new Set([...this.referenceIds(id), ...this.referenceIds(target.id)])];
+      for (const instanceId of referencing) {
+        this.assertMappedModelAssignmentAllowed(this.instances.require(instanceId), target);
+      }
+    }
     for (const app of ["codex", "claude", "opencode"] as const) {
       if (this.modelSupportsApp(ghost, app) && !this.modelSupportsApp(target, app)) {
         throw Object.assign(new Error(`Model ${target.id} does not support the ${app} runtime protocol required by ${ghost.id}.`), {
@@ -314,10 +501,53 @@ export class NodeModelRegistry {
     }
   }
 
+  private assignmentModelIds(assignment: NodeModelAssignment) {
+    return [...new Set([
+      ...(assignment.modelEntityIds || []),
+      assignment.codexModelHash,
+      assignment.claudeModelHash,
+      assignment.opencodeModelHash,
+    ].filter((id): id is string => Boolean(id)))];
+  }
+
+  /**
+   * Mapped entities may only be assigned to instances that can consume relay
+   * routes while the node switch is on. The relay switch is the sole enable
+   * authority, so both conditions are checked here on every write instead of
+   * being inferred from a previously projected catalog.
+   */
+  private assertMappedModelAssignmentAllowed(instance: ControlledInstance, model: Pick<NodeModelConfig, "id" | "app" | "protocols" | "model" | "modelNames">) {
+    if (!this.isMappedModel(model)) return;
+    const protocols = model.protocols?.length ? model.protocols : defaultProtocols(model.app);
+    if (!supportsControlledInstanceModelRelay(instance.capabilities)
+      || !protocols.some((protocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol))) {
+      throw Object.assign(new Error(`Instance ${instance.id} cannot consume a mapped model over the relay protocols declared by ${model.id}.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_RELAY_UNSUPPORTED",
+        details: { instanceIds: [instance.id] },
+      });
+    }
+    if (!this.modelRelayEnabled()) {
+      throw Object.assign(new Error(`Model ${model.id} uses a model name mapping and the node model relay is disabled.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_RELAY_DISABLED",
+        details: { instanceIds: [instance.id] },
+      });
+    }
+  }
+
+  private assertReferencingInstancesAllowMapped(modelId: string, model: Pick<NodeModelConfig, "id" | "app" | "protocols" | "model" | "modelNames">) {
+    if (!this.isMappedModel(model)) return;
+    for (const instanceId of this.referenceIds(modelId)) {
+      this.assertMappedModelAssignmentAllowed(this.instances.require(instanceId), model);
+    }
+  }
+
   private environmentForRef(app: "codex" | "claude", modelHash?: string) {
     if (!modelHash) return {};
     this.validateRef(app, modelHash);
     const model = this.requireModel(modelHash);
+    if (this.isMappedModel(model)) return {};
     if (app === "codex") return {
       OPENAI_API_KEY: model.key,
       OPENAI_BASE_URL: model.endpoint,
@@ -334,7 +564,7 @@ export class NodeModelRegistry {
   private environmentForOpenCode(assignment: z.infer<typeof NodeModelAssignmentSchema>) {
     const entities = assignment.modelEntityIds
       .map((id) => this.requireModel(id))
-      .filter((model) => this.modelSupportsApp(model, "opencode"));
+      .filter((model) => !this.isMappedModel(model) && this.modelSupportsApp(model, "opencode"));
     if (!entities.length) return {};
     const firstEntity = entities[0];
     const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)[0].name;
@@ -347,7 +577,9 @@ export class NodeModelRegistry {
     // while the ordered entity catalog remains authoritative for new choices.
     if (assignment.opencodeModelHash) {
       const legacyModel = this.requireModel(assignment.opencodeModelHash);
-      providers["task-handoff"] = openCodeProvider(legacyModel, [legacyModel.model]);
+      if (!this.isMappedModel(legacyModel)) {
+        providers["task-handoff"] = openCodeProvider(legacyModel, [legacyModel.model]);
+      }
     }
     return {
       TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
@@ -375,10 +607,11 @@ export class NodeModelRegistry {
     const { key, ...safe } = model;
     return NodeModelPublicRecordSchema.parse({
       ...safe,
+      modelNames: projectModelNameEntries(model.modelNames),
       keyPreview: key.length <= 8 ? "set" : `${key.slice(0, 4)}...${key.slice(-4)}`,
       keySet: true,
       referenceCount,
-      revision: modelConfigHash(model),
+      revision: modelContentRevision(model),
     });
   }
 
@@ -393,11 +626,15 @@ function openCodeReasoningVariants() {
     .map((effort) => [effort, { reasoningEffort: effort }]));
 }
 
-function openCodeProvider(model: NodeModelConfig, modelNames: string[]) {
+function openCodeProvider(
+  model: NodeModelConfig,
+  modelNames: string[],
+  options?: { baseUrl: string; apiKey: string },
+) {
   return {
     npm: "@ai-sdk/openai-compatible",
     name: model.name,
-    options: { baseURL: model.endpoint, apiKey: model.key },
+    options: options ? { baseURL: options.baseUrl, apiKey: options.apiKey } : { baseURL: model.endpoint, apiKey: model.key },
     models: Object.fromEntries(modelNames.map((name) => [name, {
       name: model.name,
       variants: openCodeReasoningVariants(),
@@ -410,15 +647,7 @@ function defaultProtocols(app: "codex" | "claude" | "opencode") {
 }
 
 function normalizeModelNames(entries: NodeModelConfig["modelNames"] | undefined, legacyModel: string) {
-  const source = entries?.length ? entries : [{ name: legacyModel, order: 100 }];
-  const names = new Set<string>();
-  return source
-    .map((entry) => ({ name: entry.name.trim(), order: entry.order }))
-    .filter((entry) => {
-      if (!entry.name || names.has(entry.name)) return false;
-      names.add(entry.name);
-      return true;
-    })
-    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-    .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
+  // Duplicate external names stay in the list so the strict schema refine
+  // rejects an ambiguous mapping instead of silently dropping an entry.
+  return normalizeModelNameEntries(entries, legacyModel);
 }

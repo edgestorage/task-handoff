@@ -6,9 +6,8 @@ import type {
   Project,
   SelectableImage,
 } from "@task-handoff/protocol/control-plane";
-import { ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
+import { InstanceCreateInputSchema, ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialRetention, type GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
-import { CreateInstanceInputSchema } from "../application/inputs.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { now } from "../application/helpers.ts";
 import { publicInstanceWithAccess } from "../public-records.ts";
@@ -40,7 +39,7 @@ export class ControlledInstanceCreator {
   }
 
   targetNodeId(input: unknown) {
-    const parsedInput = CreateInstanceInputSchema.parse(input);
+    const parsedInput = InstanceCreateInputSchema.parse(input);
     const project = parsedInput.projectId ? this.options.requireProject(parsedInput.projectId) : undefined;
     const nodeId = parsedInput.nodeId || project?.defaultNodeId || this.options.defaultNodeId();
     if (!nodeId) {
@@ -50,7 +49,7 @@ export class ControlledInstanceCreator {
   }
 
   async create(input: unknown) {
-    const parsedInput = CreateInstanceInputSchema.parse(input);
+    const parsedInput = InstanceCreateInputSchema.parse(input);
     const project = parsedInput.projectId ? this.options.requireProject(parsedInput.projectId) : undefined;
     const runtimeId = parsedInput.runtimeId || "runtime_local_docker";
     const nodeId = this.targetNodeId(parsedInput);
@@ -380,7 +379,9 @@ function publicOperationError(error: unknown, fallbackCode: string) {
   const source = error && typeof error === "object" ? error as { code?: unknown; message?: unknown } : {};
   return {
     code: typeof source.code === "string" && source.code.trim() ? source.code : fallbackCode,
-    message: typeof source.message === "string" && source.message.trim() ? source.message : String(error),
+    // 与协议 InstanceCreateStartOutcomeSchema.error.message 的 max(2048) 对齐，
+    // 保证服务端生成的 wire 始终能被客户端解析。
+    message: (typeof source.message === "string" && source.message.trim() ? source.message : String(error)).slice(0, 2048),
   };
 }
 

@@ -57,6 +57,13 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
       );
     },
+    restart(instanceId: string, sessionId: string) {
+      return requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/restart`,
+        AppSessionRecordSchema,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+      );
+    },
     rename(instanceId: string, sessionId: string, title: string) {
       const body = RenameAppSessionInputSchema.parse({ title });
       return requestData(

@@ -17,8 +17,11 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
+import { GitCredentialRetentionSchema } from "./managed-git-credentials.ts";
 import { NodeAgentCapabilitiesSchema } from "./node-agent-capabilities.ts";
 export * from "./node-agent-capabilities.ts";
+import { ModelProtocolSchema, type ModelProtocol } from "./model-protocol.ts";
+export * from "./model-protocol.ts";
 import {
   AiSessionProviderCapabilitiesSchema,
   type AiSessionProviderCapability,
@@ -29,14 +32,16 @@ export {
   type AiSessionProviderCapability,
 } from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-29";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-10-02";
 export const AI_SESSION_RENAME_PROTOCOL_VERSION = "2026-09-17";
+// Browser profile capability on the controlled-instance app inventory boundary.
+export const APP_PROFILES_PROTOCOL_VERSION = "2026-10-02";
 export const NODE_AGENT_PROTOCOL_VERSION_HEADER = "x-task-handoff-node-agent-protocol-version";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
 // and remains inside the N-1 support window as later additive features advance the boundary.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", "2026-09-24", CONTROL_PLANE_PROTOCOL_VERSION]);
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", "2026-09-24", "2026-09-29", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
@@ -116,6 +121,10 @@ function emptyAiSessionProviderCapabilities() {
   return [] as AiSessionProviderCapability[];
 }
 
+function emptyModelRelayCapabilities() {
+  return { protocols: [] as ModelProtocol[], streaming: false };
+}
+
 function defaultControlledInstanceFeatures() {
   return {
     appRuntime: false,
@@ -135,6 +144,7 @@ function defaultControlledInstanceFeatures() {
     gitCredentialProxy: false,
     repositoryPathSearch: false,
     repositoryWorktreeMoveToMain: false,
+    modelRelay: emptyModelRelayCapabilities(),
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -164,6 +174,16 @@ export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
   // additive maxFileAttachmentBytes internal settings field.
   fileSizeLimitSettings: z.boolean().default(false),
 }).passthrough();
+
+/**
+ * Additive consumer capability: the controlled instance can consume the v2
+ * relay private catalog and address model traffic through node-agent routes.
+ * Absence on v0.0.34 instances only disables the relay feature domain.
+ */
+export const ControlledInstanceModelRelayCapabilitiesSchema = z.object({
+  protocols: z.array(ModelProtocolSchema).max(3).default([]),
+  streaming: z.boolean().default(false),
+}).strip();
 
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   appRuntime: z.boolean().default(false),
@@ -198,6 +218,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
   // Compatibility for v0.0.21: provider capabilities are additive and absent on older instances.
   aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
+  // Additive capability: absent on v0.0.34 controlled instances.
+  modelRelay: ControlledInstanceModelRelayCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -221,6 +243,7 @@ export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapa
 export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
 export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
 export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
+export type ControlledInstanceModelRelayCapabilities = z.infer<typeof ControlledInstanceModelRelayCapabilitiesSchema>;
 export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
 type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
   features: ControlledInstanceCapabilities["features"] & {
@@ -234,6 +257,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     privateModelCatalog: boolean;
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
+    modelRelay: ControlledInstanceModelRelayCapabilities;
   };
 };
 
@@ -274,6 +298,8 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (conversationAttachments.success) normalizedFeatures.aiSessionConversationAttachments = conversationAttachments.data;
   const providers = AiSessionProviderCapabilitiesSchema.safeParse(features.aiSessionProviders);
   if (providers.success) normalizedFeatures.aiSessionProviders = providers.data;
+  const modelRelay = ControlledInstanceModelRelayCapabilitiesSchema.safeParse(features.modelRelay);
+  if (modelRelay.success) normalizedFeatures.modelRelay = modelRelay.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
@@ -294,6 +320,23 @@ export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
 
 export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.privateModelCatalog;
+}
+
+/** Single query for the relay consumer capability declared by this boundary. */
+export function controlledInstanceModelRelayCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.modelRelay;
+}
+
+export function supportsControlledInstanceModelRelay(capabilities: unknown) {
+  return controlledInstanceModelRelayCapabilities(capabilities).protocols.length > 0;
+}
+
+export function supportsControlledInstanceModelRelayProtocol(capabilities: unknown, protocol: ModelProtocol) {
+  return controlledInstanceModelRelayCapabilities(capabilities).protocols.includes(protocol);
+}
+
+export function supportsControlledInstanceModelRelayStreaming(capabilities: unknown) {
+  return controlledInstanceModelRelayCapabilities(capabilities).streaming;
 }
 
 export function supportsControlledInstanceCodexManagedSettings(capabilities: unknown) {
@@ -617,9 +660,10 @@ export const InstanceAppInventoryItemSchema = z
       .object({
         automation: z.enum(["cdp"]).optional(),
         supportsCwdSelection: z.boolean().default(false),
+        supportsProfiles: z.boolean().default(false),
       })
       .strict()
-      .default({ supportsCwdSelection: false }),
+      .default({ supportsCwdSelection: false, supportsProfiles: false }),
     diagnosticCode: z.enum(["APP_EXECUTABLE_NOT_FOUND"]).optional(),
   })
   .strict();
@@ -1035,12 +1079,38 @@ export const WorkspacePolicySchema = z
   .strict();
 
 export const ModelAppSchema = z.enum(["codex", "claude", "opencode"]);
-/** Wire protocols an upstream model endpoint may expose. Kept independent from the consuming app. */
-export const ModelProtocolSchema = z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]);
+export type ModelApp = z.infer<typeof ModelAppSchema>;
+
+/** Protocol defaults derived from the deprecated app discriminator. */
+export function defaultModelProtocols(app: ModelApp): ModelProtocol[] {
+  return app === "claude" ? ["anthropic-messages"] : app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
+}
+
 export const ModelNameEntrySchema = z.object({
   name: z.string().trim().min(1).max(240),
+  // Current writers include the upstream model name only when it differs from
+  // the external name; readers normalize a missing value to `name`. The field
+  // is additive, so v0.0.34 records stay readable without migration.
+  upstreamName: z.string().trim().min(1).max(240).optional(),
   order: z.number().int().min(0).max(1_000_000).default(0),
 }).strict();
+export type ModelNameEntry = z.infer<typeof ModelNameEntrySchema>;
+
+/**
+ * Name entries within one model entity must expose unique external names.
+ * Ambiguity is rejected on write; read paths sanitize historical records
+ * before parsing so a single bad entry cannot make the whole registry
+ * unreadable.
+ */
+export const ModelNameEntriesSchema = z.array(ModelNameEntrySchema).max(256).default([]).superRefine((entries, context) => {
+  const seen = new Set<string>();
+  for (const [index, entry] of entries.entries()) {
+    if (seen.has(entry.name)) {
+      context.addIssue({ code: "custom", path: [index, "name"], message: `Duplicate model name ${entry.name}.` });
+    }
+    seen.add(entry.name);
+  }
+});
 
 export const ProjectSchema = z
   .object({
@@ -1064,7 +1134,7 @@ export const ModelConfigSchema = z
     key: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240),
     // Ordered names served by this endpoint; legacy records are normalized from `model`.
-    modelNames: z.array(ModelNameEntrySchema).max(256).default([]),
+    modelNames: ModelNameEntriesSchema,
     // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
     protocols: z.array(ModelProtocolSchema).max(3).default([]),
     /** @deprecated Compatibility discriminator for pre-protocol model records. */
@@ -1224,10 +1294,120 @@ export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "
   return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
 }
 
+/**
+ * Read-side sanitize for stored or remote name entries: unknown keys are
+ * dropped (optionally reported), trimmed values are kept and duplicate
+ * external names are reduced to the first entry. Values that still have the
+ * wrong type pass through so the schema parse reports a structured error.
+ */
+export function sanitizeModelNameEntries(input: unknown, onWarning?: (warning: { field: string }) => void) {
+  if (!Array.isArray(input)) return input;
+  const names = new Set<string>();
+  return input.flatMap((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [raw];
+    const source = raw as Record<string, unknown>;
+    for (const key of Object.keys(source)) {
+      if (key !== "name" && key !== "upstreamName" && key !== "order") {
+        onWarning?.({ field: `modelNames[${index}].${key}` });
+      }
+    }
+    const name = typeof source.name === "string" ? source.name.trim() : undefined;
+    const upstreamName = typeof source.upstreamName === "string" ? source.upstreamName.trim() : undefined;
+    if (name) {
+      if (names.has(name)) {
+        onWarning?.({ field: `modelNames[${index}].name` });
+        return [];
+      }
+      names.add(name);
+    }
+    return [{
+      ...(name ? { name } : { name: source.name }),
+      ...(upstreamName ? { upstreamName } : {}),
+      order: source.order,
+    }];
+  });
+}
+
+/**
+ * Normalization for name entries: fill a missing upstreamName from the
+ * external name and sort by order then external name. Write paths renumber
+ * orders onto the persisted 100-step grid; read paths pass `renumber: false`
+ * so historical order values (for example v0.0.28 migrated `order: 0`
+ * records) survive a round trip instead of being rewritten on load.
+ * Duplicates are preserved so the {@link ModelNameEntriesSchema} refine
+ * rejects ambiguous mappings instead of silently dropping one of them.
+ */
+export function normalizeModelNameEntries(
+  entries: ModelNameEntry[] | undefined,
+  legacyModel?: string,
+  options: { renumber?: boolean } = {},
+): ModelNameEntry[] {
+  const source = entries?.length
+    ? entries
+    : legacyModel?.trim() ? [{ name: legacyModel.trim(), order: 100 }] : [];
+  const normalized = source
+    .map((entry) => ({
+      name: entry.name.trim(),
+      upstreamName: entry.upstreamName?.trim() || entry.name.trim(),
+      order: entry.order,
+    }))
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
+  return options.renumber === false
+    ? normalized
+    : normalized.map((entry, index) => ({ ...entry, order: (index + 1) * 100 }));
+}
+
+/**
+ * Wire projection of name entries: `upstreamName` is omitted while it equals
+ * the external name, which keeps v0.0.34 readers working and avoids
+ * persisting a derivable value. Mapped entries keep the explicit name.
+ */
+export function projectModelNameEntries(entries: ModelNameEntry[]): ModelNameEntry[] {
+  return entries.map((entry) => ({
+    name: entry.name,
+    ...(entry.upstreamName && entry.upstreamName !== entry.name ? { upstreamName: entry.upstreamName } : {}),
+    order: entry.order,
+  }));
+}
+
+/**
+ * Canonical content revision for current writers. Mapping, endpoint, key or
+ * model-name edits advance this revision while the entity id stays stable.
+ * Display-level metadata (entity name, labels, enabled, order, timestamps)
+ * stays out of the revision, matching the released copy/dedupe semantics.
+ * `modelConfigHash` remains the v0.0.34 legacy projection id and the two
+ * values must never substitute for each other.
+ */
+export function modelContentRevision(
+  input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & {
+    modelNames?: ModelNameEntry[];
+    protocols?: ModelProtocol[];
+  },
+) {
+  const app = ModelAppSchema.parse(input.app);
+  const modelNames = normalizeModelNameEntries(input.modelNames, input.model);
+  const protocols = input.protocols?.length ? input.protocols : defaultModelProtocols(app);
+  const canonical = {
+    algorithm: "model-content-revision-v1",
+    app,
+    endpoint: ModelConfigSchema.shape.endpoint.parse(input.endpoint),
+    key: ModelConfigSchema.shape.key.parse(input.key),
+    model: ModelConfigSchema.shape.model.parse(input.model),
+    modelNames: modelNames.map((entry) => ({ name: entry.name, upstreamName: entry.upstreamName, order: entry.order })),
+    protocols: [...new Set(protocols)].sort(),
+  };
+  return `mdlr_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+export function isModelContentRevision(value: string) {
+  return /^mdlr_[0-9a-f]{64}$/.test(value);
+}
+
 // Entity ids are opaque identities. New records mint a short time-ordered id
 // (41 bits of milliseconds since the epoch plus 23 random bits: one complete
-// 64-bit snowflake) while modelConfigHash stays the content revision and the
-// projection id used by nodes that predate stable model identities. The
+// 64-bit snowflake) while modelConfigHash stays the legacy projection id used
+// by nodes that predate stable model identities and modelContentRevision is
+// the current content revision. The
 // payload encodes the whole 64-bit value as 13 lower-case Crockford base32
 // symbols, ULID-style: Crockford never emits "=" padding, and the fixed width
 // keeps ids lexicographically ordered by their millisecond prefix. The
@@ -1902,6 +2082,37 @@ export const NodeAgentExternalListenerSchema = NodeAgentExternalListenerConfigSc
 
 export const UpdateNodeAgentExternalListenerSchema = NodeAgentExternalListenerConfigSchema;
 
+/**
+ * Node-level model relay switch persisted in runtime settings. Missing or
+ * malformed stored values normalize to disabled; only an explicit boolean
+ * enables the relay data plane.
+ */
+export const NodeAgentModelRelayConfigSchema = z.object({
+  enabled: z.boolean(),
+}).strict();
+
+/** Effective node-agent response consumed by the control panel. */
+export const NodeAgentModelRelaySchema = z.object({
+  enabled: z.boolean(),
+  // "default" means the switch was never persisted and relay stays off.
+  source: z.enum(["default", "persisted"]),
+}).strip();
+
+/** Strict write model for the settings PATCH route. */
+export const UpdateNodeAgentModelRelaySchema = NodeAgentModelRelayConfigSchema;
+
+export function normalizeNodeAgentModelRelaySettings(input: unknown): z.infer<typeof NodeAgentModelRelaySchema> {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  return {
+    enabled: source.enabled === true,
+    source: source.source === "persisted" ? "persisted" : "default",
+  };
+}
+
+export function parseNodeAgentModelRelaySettings(input: unknown) {
+  return NodeAgentModelRelaySchema.parse(normalizeNodeAgentModelRelaySettings(input));
+}
+
 export const NodeAgentPairingInviteResponseSchema = z
   .object({
     nodeId: IdSchema,
@@ -2176,6 +2387,55 @@ export const ControlledInstanceSchema = z
     updatedAt: TimestampSchema,
   })
   .strict();
+
+// 公开 API：POST /api/controlled-instances 请求体（control plane 边界）。
+export const InstanceConfigInputSchema = z.object({
+  autoImportAgentConfigs: z.boolean().optional(),
+  codexConfigEnabled: z.boolean().optional(),
+  codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
+  defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+  codexSettings: CodexInstanceSettingsSchema.optional(),
+  aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+  aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+  aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
+}).strict();
+
+export const InstanceCreateInputSchema = z.object({
+  id: ControlledInstanceSchema.shape.id.optional(),
+  name: ControlledInstanceSchema.shape.name.optional(),
+  projectId: ControlledInstanceSchema.shape.projectId,
+  source: ProjectSourceSchema.optional(),
+  sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
+  nodeId: ControlledInstanceSchema.shape.nodeId.optional(),
+  runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
+  environmentSource: EnvironmentSourceSchema.optional(),
+  imageSelection: ControlledInstanceSchema.shape.imageSelection,
+  config: InstanceConfigInputSchema.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
+  gitCredentialRetention: GitCredentialRetentionSchema.optional(),
+  start: z.boolean().default(false),
+}).strict().superRefine((input, context) => {
+  if (input.environmentSource && input.imageSelection) {
+    context.addIssue({ code: "custom", path: ["environmentSource"], message: "environmentSource and imageSelection are mutually exclusive." });
+  }
+  if (input.gitCredentialRetention && input.source?.type === "local-folder") {
+    context.addIssue({ code: "custom", path: ["gitCredentialRetention"], message: "Git credential retention requires a Git source." });
+  }
+});
+
+export const InstanceCreateStartOutcomeSchema = z.object({
+  status: z.enum(["not-requested", "started", "failed"]),
+  error: z.object({
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(2048),
+  }).strict().optional(),
+}).strict();
+
+// registrationToken 是实例向 node-agent 注册的凭证，只走服务端协作链路，不进公开客户端输出模型。
+export const InstanceCreateResultSchema = z.object({
+  ...ControlledInstanceSchema.omit({ registrationToken: true }).shape,
+  startOutcome: InstanceCreateStartOutcomeSchema,
+}).strict();
 
 const NodeAgentInstanceLifecycleResultWireSchema = z.union([
   ControlledInstanceSchema.transform((instance) => ({ instance, gitWorkspaceProvisioningOperationId: undefined })),
@@ -2590,7 +2850,7 @@ function sanitizeStoredAppInventory(input: unknown, onWarning?: (warning: { inst
           if (!picked || typeof picked !== "object" || Array.isArray(picked)) return picked;
           return {
             ...picked,
-            capabilities: pickObjectFields((item as Record<string, unknown>).capabilities, ["automation", "supportsCwdSelection"]),
+            capabilities: pickObjectFields((item as Record<string, unknown>).capabilities, ["automation", "supportsCwdSelection", "supportsProfiles"]),
           };
         })
       : source.items,
@@ -2701,15 +2961,49 @@ export function sanitizeCrossVersionControlledInstanceHeartbeat(
   return pickObjectFields(input, knownKeys);
 }
 
+function projectAppInventoryForNodeAgentProtocol(
+  input: Record<string, unknown>,
+  nodeAgentProtocolVersion?: string,
+) {
+  if (nodeAgentProtocolVersion && nodeAgentProtocolVersion >= APP_PROFILES_PROTOCOL_VERSION) return input;
+  const appInventory = input.appInventory;
+  if (!appInventory || typeof appInventory !== "object" || Array.isArray(appInventory)) return input;
+  const items = (appInventory as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return input;
+  let changed = false;
+  const compatibleItems = items.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const capabilities = (item as Record<string, unknown>).capabilities;
+    if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities) || !("supportsProfiles" in capabilities)) return item;
+    const { supportsProfiles: _supportsProfiles, ...compatibleCapabilities } = capabilities as Record<string, unknown>;
+    changed = true;
+    return { ...item, capabilities: compatibleCapabilities };
+  });
+  if (!changed) return input;
+  // Compatibility for v0.0.34 and earlier: their strict app inventory
+  // capability schema rejects the additive profiles capability, so newer
+  // controlled instances project the pre-profile wire model instead of
+  // blocking registration and heartbeats.
+  return { ...input, appInventory: { ...appInventory, items: compatibleItems } };
+}
+
+export function projectControlledInstanceRegisterForNodeAgentProtocol(
+  input: Record<string, unknown>,
+  nodeAgentProtocolVersion?: string,
+) {
+  return projectAppInventoryForNodeAgentProtocol(input, nodeAgentProtocolVersion);
+}
+
 export function projectControlledInstanceHeartbeatForNodeAgentProtocol(
   input: Record<string, unknown>,
   nodeAgentProtocolVersion?: string,
 ) {
-  if (nodeAgentProtocolVersion && nodeAgentProtocolVersion >= AI_SESSION_RENAME_PROTOCOL_VERSION) return input;
-  const aiSessions = input.aiSessions;
-  if (!aiSessions || typeof aiSessions !== "object" || Array.isArray(aiSessions)) return input;
+  const projected = projectAppInventoryForNodeAgentProtocol(input, nodeAgentProtocolVersion);
+  if (nodeAgentProtocolVersion && nodeAgentProtocolVersion >= AI_SESSION_RENAME_PROTOCOL_VERSION) return projected;
+  const aiSessions = projected.aiSessions;
+  if (!aiSessions || typeof aiSessions !== "object" || Array.isArray(aiSessions)) return projected;
   const sessions = (aiSessions as Record<string, unknown>).sessions;
-  if (!Array.isArray(sessions)) return input;
+  if (!Array.isArray(sessions)) return projected;
   let changed = false;
   const compatibleSessions = sessions.map((session) => {
     if (!session || typeof session !== "object" || Array.isArray(session)) return session;
@@ -2719,11 +3013,11 @@ export function projectControlledInstanceHeartbeatForNodeAgentProtocol(
     changed = true;
     return { ...session, actions: compatibleActions };
   });
-  if (!changed) return input;
+  if (!changed) return projected;
   // Compatibility for v0.0.31: its strict action schema rejects the additive
   // rename capability, so newer controlled instances project the N-1 wire model.
   return {
-    ...input,
+    ...projected,
     aiSessions: {
       ...aiSessions,
       sessions: compatibleSessions,
@@ -2847,6 +3141,9 @@ export type InstanceVolumeRole = z.infer<typeof InstanceVolumeRoleSchema>;
 export type InstanceVolumeDisposition = z.infer<typeof InstanceVolumeDispositionSchema>;
 export type InstanceDeleteInput = z.infer<typeof InstanceDeleteInputSchema>;
 export type InstanceDeleteResult = z.infer<typeof InstanceDeleteResultSchema>;
+export type InstanceCreateInput = z.infer<typeof InstanceCreateInputSchema>;
+export type InstanceCreateStartOutcome = z.infer<typeof InstanceCreateStartOutcomeSchema>;
+export type InstanceCreateResult = z.infer<typeof InstanceCreateResultSchema>;
 export type ImageCover = z.infer<typeof ImageCoverSchema>;
 export type MarketImagePlatformArtifact = z.infer<typeof MarketImagePlatformArtifactSchema>;
 export type MarketImageTag = z.infer<typeof MarketImageTagSchema>;
@@ -2872,6 +3169,9 @@ export type NodeAgentHealth = z.infer<typeof NodeAgentHealthSchema>;
 export type NodeAgentExternalListenerConfig = z.infer<typeof NodeAgentExternalListenerConfigSchema>;
 export type NodeAgentExternalListener = z.infer<typeof NodeAgentExternalListenerSchema>;
 export type UpdateNodeAgentExternalListener = z.infer<typeof UpdateNodeAgentExternalListenerSchema>;
+export type NodeAgentModelRelayConfig = z.infer<typeof NodeAgentModelRelayConfigSchema>;
+export type NodeAgentModelRelay = z.infer<typeof NodeAgentModelRelaySchema>;
+export type UpdateNodeAgentModelRelay = z.infer<typeof UpdateNodeAgentModelRelaySchema>;
 export type NodeAgentPairingInviteResponse = z.infer<typeof NodeAgentPairingInviteResponseSchema>;
 export type NodeAgentPairingCompleteResult = z.infer<typeof NodeAgentPairingCompleteResultSchema>;
 export type NodeAgentControlPlanePairing = z.infer<typeof NodeAgentControlPlanePairingSchema>;

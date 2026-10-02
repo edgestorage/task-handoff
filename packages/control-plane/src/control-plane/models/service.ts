@@ -4,14 +4,25 @@ import {
   ModelMergeResultSchema,
   ModelMutationResultSchema,
   ModelLocationSyncResultSchema,
+  CreateNodeModelSchema,
+  UpdateNodeModelSchema,
   createModelEntityId,
+  defaultModelProtocols,
   modelConfigHash,
+  modelContentRevision,
+  normalizeModelNameEntries,
+  projectModelNameEntries,
   NodeModelMergeSchema,
+  supportsControlledInstanceModelRelay,
+  supportsControlledInstanceModelRelayProtocol,
   supportsNodeMultiEntityModelAssignment,
+  supportsNodeModelRelay,
   supportsNodeStableModelIdentity,
   type ControlledInstance,
   type ModelLocationSyncResult,
   type ModelConfig,
+  type ModelNameEntry,
+  type ModelProtocol,
   type Node,
   type NodeModelPublicRecord,
   type PublicModelConfig,
@@ -32,6 +43,44 @@ function nodeAgentCapabilities(node: Node) {
 
 function nodeSupportsStableModelIdentity(node: Node) {
   return supportsNodeStableModelIdentity(nodeAgentCapabilities(node));
+}
+
+/**
+ * A record or write patch is mapped when any external name resolves to a
+ * different upstream name; patches without name entries never introduce one.
+ */
+function modelRecordHasMapping(model: { model?: string; modelNames?: ModelNameEntry[] }) {
+  return normalizeModelNameEntries(model.modelNames, model.model).some((entry) => entry.upstreamName !== entry.name);
+}
+
+function relayUnsupportedError(node: Node, mapping = false) {
+  return Object.assign(new Error(mapping
+    ? `Node ${node.id} does not support the model relay required to store or assign a model name mapping.`
+    : `Node ${node.id} does not support the model relay.`), {
+    statusCode: 409,
+    code: "NODE_MODEL_RELAY_UNSUPPORTED",
+    details: { nodeId: node.id },
+  });
+}
+
+function relayDisabledError(node: Node) {
+  return Object.assign(new Error(`Node ${node.id} has the model relay disabled; enable it before saving or assigning a model name mapping.`), {
+    statusCode: 409,
+    code: "NODE_MODEL_RELAY_DISABLED",
+    details: { nodeId: node.id },
+  });
+}
+
+/**
+ * Node wire projection for name entries. Relay-capable nodes receive the
+ * explicit mapping (upstreamName omitted while equal to the external name);
+ * older nodes only understand the v0.0.34 `{ name, order }` shape.
+ */
+function nodeWireModelNames(node: Node, model: { model?: string; modelNames?: ModelNameEntry[] }) {
+  const names = normalizeModelNameEntries(model.modelNames, model.model);
+  return supportsNodeModelRelay(nodeAgentCapabilities(node))
+    ? projectModelNameEntries(names)
+    : names.map(({ name, order }) => ({ name, order }));
 }
 
 type NodeOwnedWriteIntent = "edit" | "sync";
@@ -79,6 +128,20 @@ function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInpu
     app: model.app,
     enabled: model.enabled,
   };
+}
+
+/**
+ * Project one model write onto a node's wire model. Mapping entries stay
+ * explicit only towards relay-capable nodes; a mapped record targeted at an
+ * older node fails closed instead of silently degrading to a same-name model.
+ */
+function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[] }>(node: Node, patch: T): T {
+  if (!patch.modelNames?.length) return patch;
+  if (modelRecordHasMapping({ model: patch.model ?? "", modelNames: patch.modelNames })
+    && !supportsNodeModelRelay(nodeAgentCapabilities(node))) {
+    throw relayUnsupportedError(node, true);
+  }
+  return { ...patch, modelNames: nodeWireModelNames(node, patch) };
 }
 
 function nodeLocationFailure(nodeId: string, error: unknown): ModelLocationSyncResult {
@@ -168,7 +231,7 @@ export class ControlPlaneModelService {
       groups.set(model.id, {
         id: model.id,
         model: publicModel(model),
-        locations: [{ type: "control-plane", name: model.name, enabled: model.enabled, order: model.order, revision: modelConfigHash(model) }],
+        locations: [{ type: "control-plane", name: model.name, enabled: model.enabled, order: model.order, revision: modelContentRevision(model) }],
         referenceCount: 0,
       });
     }
@@ -217,18 +280,14 @@ export class ControlPlaneModelService {
 
   async create(input: unknown) {
     const parsedInput = CreateModelInputSchema.parse(input);
-    const protocols = parsedInput.protocols?.length
-      ? parsedInput.protocols
-      : parsedInput.app === "claude" ? ["anthropic-messages"]
-        : parsedInput.app === "opencode" ? ["openai-chat-completions"]
-          : ["openai-responses"];
+    const protocols = parsedInput.protocols?.length ? parsedInput.protocols : defaultModelProtocols(parsedInput.app);
     const modelNames = normalizeModelNames(parsedInput.modelNames, parsedInput.model);
     const normalizedInput = { ...parsedInput, modelNames, model: modelNames[0].name };
     const timestamp = now();
     // Entity identity is opaque and stable. Re-adding the same content still
     // converges on the existing entity, but a new record mints a short id.
-    const contentHash = modelConfigHash(normalizedInput);
-    const existing = this.findByContentHash(contentHash);
+    const contentRevision = modelContentRevision({ ...normalizedInput, protocols });
+    const existing = this.findByContentRevision(contentRevision);
     let id = existing?.id;
     if (!id) {
       id = createModelEntityId();
@@ -255,14 +314,14 @@ export class ControlPlaneModelService {
       key: parsedInput.key?.trim() || source.key,
     };
     const modelNames = normalizeModelNames(candidate.modelNames, candidate.model);
-    const nextContentHash = modelConfigHash({ ...candidate, model: modelNames[0].name });
-    if (nextContentHash === modelConfigHash(source)) {
+    const nextRevision = modelContentRevision({ ...candidate, model: modelNames[0].name });
+    if (nextRevision === modelContentRevision(source)) {
       throw Object.assign(new Error("Change the model, endpoint, app, or API key before creating a copy."), {
         statusCode: 409,
         code: "MODEL_COPY_UNCHANGED",
       });
     }
-    const conflict = this.findByContentHash(nextContentHash);
+    const conflict = this.findByContentRevision(nextRevision);
     if (conflict) {
       throw Object.assign(new Error(`Model ${conflict.id} already exists.`), {
         statusCode: 409,
@@ -365,7 +424,7 @@ export class ControlPlaneModelService {
       };
     }
     try {
-      const record = await this.options.gateway.updateModel(node, id, patch);
+      const record = await this.options.gateway.updateModel(node, id, nodeModelWirePatch(node, patch));
       if (record.id !== id) {
         // Compatibility for v0.0.34: a node without stable identities forks
         // the entity instead of editing it in place. Remove the fork and
@@ -475,7 +534,7 @@ export class ControlPlaneModelService {
       if (!holderIds.has(node.id)) continue;
       try {
         if (target && !targetHolderIds.has(node.id)) {
-          await this.options.gateway.deployModel(node, target.id, target);
+          await this.options.gateway.deployModel(node, target.id, nodeModelWirePatch(node, target));
         }
         const result = await this.options.gateway.mergeModel(node, id, targetModelId);
         locations.push({ nodeId: node.id, merged: true, reassignedInstances: result.reassignedInstances });
@@ -526,11 +585,45 @@ export class ControlPlaneModelService {
   }
 
   createOnNode(nodeId: string, input: unknown) {
-    return this.options.gateway.createModel(this.options.requireNode(nodeId), input);
+    const node = this.options.requireNode(nodeId);
+    return this.createNodeModelWrite(node, CreateNodeModelSchema.parse(input));
   }
 
   updateOnNode(nodeId: string, modelId: string, input: unknown) {
-    return this.options.gateway.updateModel(this.options.requireNode(nodeId), modelId, input);
+    const node = this.options.requireNode(nodeId);
+    return this.updateNodeModelWrite(node, modelId, UpdateNodeModelSchema.parse(input));
+  }
+
+  private async createNodeModelWrite(node: Node, input: ReturnType<typeof CreateNodeModelSchema.parse>) {
+    const target = await this.refreshModelWriteNode(node);
+    const payload = await this.projectNodeModelWrite(target, input);
+    return this.options.gateway.createModel(target, payload);
+  }
+
+  private async updateNodeModelWrite(node: Node, modelId: string, input: ReturnType<typeof UpdateNodeModelSchema.parse>) {
+    const target = await this.refreshModelWriteNode(node);
+    const payload = await this.projectNodeModelWrite(target, input);
+    return this.options.gateway.updateModel(target, modelId, payload);
+  }
+
+  /**
+   * Explicit node model saves revalidate the capability document, project the
+   * wire names and require the relay switch before a mapping is stored. The
+   * explicit probe keeps a recently updated node from being misclassified by
+   * a cached capability document.
+   */
+  private async refreshModelWriteNode(node: Node) {
+    const [resolved] = await this.withFreshNodeCapabilities([node], true);
+    return resolved || node;
+  }
+
+  private async projectNodeModelWrite<T extends { model?: string; modelNames?: ModelNameEntry[] }>(node: Node, patch: T): Promise<T> {
+    const projected = nodeModelWirePatch(node, patch);
+    if (modelRecordHasMapping(projected)) {
+      const relay = await this.options.gateway.getModelRelay(node);
+      if (!relay.enabled) throw relayDisabledError(node);
+    }
+    return projected;
   }
 
   deleteOnNode(nodeId: string, modelId: string) {
@@ -564,7 +657,11 @@ export class ControlPlaneModelService {
     return includeSecret ? model : publicModel(model);
   }
 
-  async prepareAssignment(node: Node, selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }): Promise<PreparedModelAssignment> {
+  async prepareAssignment(
+    node: Node,
+    selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
+    instance?: ControlledInstance,
+  ): Promise<PreparedModelAssignment> {
     const nodeModels = await this.options.gateway.listModels(node);
     const hasEntitySelection = selection.modelEntityIds !== undefined;
     const storedSelection: {
@@ -584,6 +681,7 @@ export class ControlPlaneModelService {
     };
     const entityIds = storedSelection.modelEntityIds || [];
     const controlPlaneModels = this.listAll();
+    await this.assertMappedAssignmentAllowed(node, storedSelection, nodeModels, instance);
     const resolvedEntities: ModelConfig[] = [];
     // Nodes without stable identities store the legacy content hash as the
     // entity id, so every reference this assignment sends must be projected
@@ -684,10 +782,77 @@ export class ControlPlaneModelService {
 
   async ensureInstanceAssignment(instance: ControlledInstance) {
     const node = this.options.requireNode(instance.nodeId);
-    const prepared = await this.prepareAssignment(node, instance.modelSelection);
+    const prepared = await this.prepareAssignment(node, instance.modelSelection, instance);
     const assigned = await this.options.gateway.assignInstanceModels(node, instance.id, prepared);
     await this.retireSupersededNodeModels(node, prepared);
     return assigned;
+  }
+
+  /**
+   * Fail closed before any node write when the selection contains mapped
+   * entities. Mapped models need the node relay capability, the node switch
+   * and, once the target instance has registered, the instance relay consumer
+   * capability for at least one protocol of each mapped entity. Running the
+   * check up front keeps a rejected assignment from leaving a half-deployed
+   * model or a changed assignment behind.
+   */
+  private async assertMappedAssignmentAllowed(
+    node: Node,
+    selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
+    nodeModels: NodeModelPublicRecord[],
+    instance?: ControlledInstance,
+  ) {
+    const ids = [...new Set([
+      ...(selection.modelEntityIds || []),
+      selection.codexModelHash,
+      selection.claudeModelHash,
+      selection.opencodeModelHash,
+    ].filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))];
+    if (!ids.length) return;
+    const projectionIndex = this.modelProjectionIndex();
+    const mapped = ids.flatMap((id) => {
+      const controlPlaneModel = this.modelGet(projectionIndex.get(id) ?? id);
+      if (controlPlaneModel) {
+        return modelRecordHasMapping(controlPlaneModel) ? [controlPlaneModel] : [];
+      }
+      const local = nodeModels.find((model) => model.id === id);
+      if (!local) return [];
+      const record = nodePublicModelToConfig(local);
+      return modelRecordHasMapping(record) ? [record] : [];
+    });
+    if (!mapped.length) return;
+    // A mapped assignment needs a controlled instance that has registered its
+    // relay consumer capability; an instance that has never registered (or a
+    // creation call without an instance yet) is unknown rather than capable,
+    // so it fails closed with the same upgrade-required error a v0.0.34
+    // instance produces.
+    const instanceIds = instance ? [instance.id] : [];
+    if (!instance || instance.protocolVersion === undefined) {
+      throw Object.assign(new Error(instance
+        ? `Instance ${instance.id} has not registered its relay capability yet; start it before assigning a mapped model.`
+        : "Model name mappings can only be assigned to a controlled instance that has registered its relay capability."), {
+        statusCode: 409,
+        code: "NODE_MODEL_RELAY_UNSUPPORTED",
+        details: { instanceIds },
+      });
+    }
+    const usable = supportsControlledInstanceModelRelay(instance.capabilities)
+      && mapped.every((model) => {
+        const protocols = model.protocols?.length ? model.protocols : defaultModelProtocols(model.app);
+        return protocols.some((protocol: ModelProtocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol));
+      });
+    if (!usable) {
+      throw Object.assign(new Error(`Instance ${instance.id} cannot consume a mapped model over the relay protocols declared by the selected model entities.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_RELAY_UNSUPPORTED",
+        details: { instanceIds },
+      });
+    }
+    if (!supportsNodeModelRelay(nodeAgentCapabilities(node))) {
+      throw relayUnsupportedError(node, true);
+    }
+    const relay = await this.options.gateway.getModelRelay(node);
+    if (!relay.enabled) throw relayDisabledError(node);
   }
 
   /**
@@ -769,8 +934,8 @@ export class ControlPlaneModelService {
     return this.databaseModels.get(id);
   }
 
-  private findByContentHash(contentHash: string) {
-    return this.modelList().find((model) => modelConfigHash(model) === contentHash);
+  private findByContentRevision(contentRevision: string) {
+    return this.modelList().find((model) => modelContentRevision(model) === contentRevision);
   }
 
   /**
@@ -878,12 +1043,13 @@ export class ControlPlaneModelService {
    */
   private async deployModelToNode(node: Node, model: ModelConfig) {
     const [resolved] = await this.withFreshNodeCapabilities([node], false);
+    const payload = nodeModelWirePatch(resolved, model);
     if (nodeSupportsStableModelIdentity(resolved)) {
-      await this.options.gateway.deployModel(resolved, model.id, model);
+      await this.options.gateway.deployModel(resolved, model.id, payload);
       return model.id;
     }
     const legacyId = modelConfigHash(model);
-    await this.options.gateway.deployModel(resolved, legacyId, ModelConfigSchema.parse({ ...model, id: legacyId }));
+    await this.options.gateway.deployModel(resolved, legacyId, ModelConfigSchema.parse({ ...payload, id: legacyId }));
     await this.recordLegacyProjection(legacyId, model.id);
     return legacyId;
   }
@@ -942,7 +1108,7 @@ export class ControlPlaneModelService {
         continue;
       }
       try {
-        await this.options.gateway.deployModel(resolved, model.id, model);
+        await this.options.gateway.deployModel(resolved, model.id, nodeModelWirePatch(resolved, model));
         results.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
       } catch (error) {
         const failure = nodeLocationFailure(node.id, error);
@@ -983,17 +1149,9 @@ export class ControlPlaneModelService {
 }
 
 function normalizeModelNames(entries: ModelConfig["modelNames"] | undefined, legacyModel: string) {
-  const source = entries?.length ? entries : [{ name: legacyModel, order: 100 }];
-  const seen = new Set<string>();
-  return source
-    .map((entry) => ({ name: entry.name.trim(), order: entry.order }))
-    .filter((entry) => {
-      if (!entry.name || seen.has(entry.name)) return false;
-      seen.add(entry.name);
-      return true;
-    })
-    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-    .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
+  // Duplicate external names stay in the list so the strict schema refine
+  // rejects an ambiguous mapping instead of silently dropping an entry.
+  return normalizeModelNameEntries(entries, legacyModel);
 }
 
 function defaultProtocols(app: ModelConfig["app"]): ModelConfig["protocols"] {

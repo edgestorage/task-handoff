@@ -187,6 +187,30 @@
               <code v-if="resources.externalListener" class="node-listener-endpoint">http://&lt;host-ip-or-dns&gt;:{{ resources.externalListener.port }}</code>
               <p v-if="resources.externalListener?.error || resources.externalListenerError" class="control-plane-error">{{ resources.externalListenerError || resources.externalListener?.error }}</p>
             </div>
+            <div class="node-detail-section">
+              <div class="section-head">
+                <span>{{ t("settings.nodeDetail.modelRelay") }}</span>
+                <Badge v-if="resources.modelRelaySupported && resources.modelRelay" :variant="resources.modelRelay.enabled ? 'default' : 'secondary'">
+                  {{ resources.modelRelay.enabled ? t("settings.nodeDetail.modelRelayOn") : t("settings.nodeDetail.modelRelayOff") }}
+                </Badge>
+              </div>
+              <p class="node-relay-description">{{ t("settings.nodeDetail.modelRelayDescription") }}</p>
+              <label v-if="resources.modelRelaySupported" class="node-relay-toggle">
+                <Checkbox
+                  :model-value="resources.modelRelay?.enabled === true"
+                  :disabled="busy.loadingModelRelay || busy.savingModelRelay || !resources.modelRelay"
+                  @update:model-value="(value) => actions.setModelRelayEnabled(value === true)"
+                />
+                <span>
+                  <strong>{{ t("settings.nodeDetail.modelRelayEnable") }}</strong>
+                  <small v-if="resources.modelRelay?.enabled">{{ t("settings.nodeDetail.modelRelayEnabledHint") }}</small>
+                  <small v-else-if="resources.modelRelay?.source === 'default'">{{ t("settings.nodeDetail.modelRelayDefaultHint") }}</small>
+                  <small v-else>{{ t("settings.nodeDetail.modelRelayDisabledHint") }}</small>
+                </span>
+              </label>
+              <p v-else class="node-relay-description node-relay-upgrade">{{ t("settings.nodeDetail.modelRelayUnsupported") }}</p>
+              <p v-if="resources.modelRelayError" class="control-plane-error">{{ resources.modelRelayError }}</p>
+            </div>
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="runtimes">
@@ -535,10 +559,11 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -602,6 +627,7 @@ type NodeDetailActions = {
   removeControlPlaneConnection: (nodeId: string, connectionId: string) => void | Promise<void>;
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
+  setModelRelayEnabled: (enabled: boolean) => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
@@ -625,8 +651,10 @@ type NodeDetailBusy = {
   loadingNodeImagesId: string;
   loadingRemoteKeysNodeId: string;
   loadingExternalListener: boolean;
+  loadingModelRelay: boolean;
   renamingNodeId: string;
   savingExternalListener: boolean;
+  savingModelRelay: boolean;
 };
 
 type NodeDetailResources = {
@@ -646,6 +674,9 @@ type NodeDetailResources = {
   externalListenerBindScope: NodeAgentExternalListener["bindScope"];
   externalListenerError: string;
   externalListenerPort: string;
+  modelRelay?: NodeAgentModelRelay;
+  modelRelayError: string;
+  modelRelaySupported: boolean;
   runtimes: NodeRuntime[];
   selectedImageNodeId: string;
   selectedNodeIsLocal: boolean;
@@ -798,7 +829,14 @@ watch(
 .node-detail-content {
   max-height: 100%;
   min-height: 0;
-  padding-right: 2px;
+  width: calc(100% + var(--settings-scrollbar-outset, 16px));
+  margin-right: calc(-1 * var(--settings-scrollbar-outset, 16px));
+}
+
+.node-detail-content > :deep([data-task-handoff-scroll-viewport]) {
+  width: calc(100% - var(--settings-scrollbar-outset, 16px));
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--settings-top-fade-height, 18px));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--settings-top-fade-height, 18px));
 }
 
 .node-detail-content :deep([data-reka-scroll-area-viewport] > div) {
@@ -810,7 +848,7 @@ watch(
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 100%;
-  padding-right: 2px;
+  padding: var(--settings-top-fade-height, 18px) 0 20px;
 }
 
 .node-detail-fixed-header {
@@ -1066,10 +1104,45 @@ watch(
   line-height: 1.5;
 }
 
+.node-relay-description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
+}
+
+.node-relay-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.node-relay-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.node-relay-toggle strong {
+  color: var(--text-strong);
+  font-size: var(--node-detail-body-size);
+  font-weight: 500;
+}
+
+.node-relay-toggle small {
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.node-relay-upgrade {
+  margin-top: 10px;
+}
+
 .node-detail-tabs {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
   min-height: 0;
   min-width: 0;
 }

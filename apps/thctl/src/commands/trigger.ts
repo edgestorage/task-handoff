@@ -1,7 +1,7 @@
-import { ControlPlaneTriggerTemplateInputSchema } from "@task-handoff/protocol/triggers";
+import { ControlPlaneTriggerTemplateInputSchema, type TriggerTarget } from "@task-handoff/protocol/triggers";
 import { ThctlError } from "../errors.ts";
 import { openConnection, performWrite, writeSteps, type CliContext, type CliInvocation } from "../runtime.ts";
-import { optionString, readJsonFile, requireArgument, requireOption } from "./support.ts";
+import { optionString, readJsonFile, repeatableOption, requireArgument, requireOption } from "./support.ts";
 
 const TRIGGER_COLUMNS = [
   { key: "configHash", header: "trigger" },
@@ -122,4 +122,70 @@ export async function triggerRun(context: CliContext, invocation: CliInvocation)
   );
   if (!result) return;
   return { data: result, message: `Trigger \`${configHash}\` run requested on instance \`${instanceId}\`.` };
+}
+
+export async function triggerBind(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const configHash = requireArgument(invocation, "configHash");
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "trigger bind",
+    () => ({
+      method: "POST",
+      path: `/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/triggers`,
+      body: { configHash },
+    }),
+    () => connection.client.triggers.bindSession(instanceId, sessionId, configHash),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    message: `Trigger \`${configHash}\` bound to AI session \`${sessionId}\` on instance \`${instanceId}\`.`,
+  };
+}
+
+export async function triggerUnbind(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireArgument(invocation, "instanceId");
+  const sessionId = requireArgument(invocation, "sessionId");
+  const configHash = requireArgument(invocation, "configHash");
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "trigger unbind",
+    () => ({
+      method: "DELETE",
+      path: `/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/triggers/${encodeURIComponent(configHash)}`,
+    }),
+    () => connection.client.triggers.unbindSession(instanceId, sessionId, configHash),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    message: `Trigger \`${configHash}\` unbound from AI session \`${sessionId}\` on instance \`${instanceId}\`.`,
+  };
+}
+
+export async function triggerApply(context: CliContext, invocation: CliInvocation) {
+  const configHash = requireArgument(invocation, "configHash");
+  const sessionId = requireOption(invocation, "session");
+  const instanceIds = [...new Set(repeatableOption(invocation, "instance"))];
+  if (!instanceIds.length) {
+    throw new ThctlError("CLI_OPTION_MISSING", "Pass at least one --instance <instanceId> to apply.", 2, { option: "instance" });
+  }
+  const target: TriggerTarget = { type: "ai-session", aiSessionId: sessionId };
+  const input = { instanceIds, target, enabled: invocation.options.disabled !== true };
+  const connection = await openConnection(context);
+  const result = await performWrite(
+    context,
+    "trigger apply",
+    () => ({ method: "POST", path: `/api/triggers/${encodeURIComponent(configHash)}/apply`, body: input }),
+    () => connection.client.triggers.apply(configHash, input),
+  );
+  if (!result) return;
+  return {
+    data: result,
+    message: `Trigger \`${configHash}\` applied to ${instanceIds.length} instance(s).`,
+  };
 }

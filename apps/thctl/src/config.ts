@@ -18,6 +18,8 @@ export const CliProfileSchema = z.object({
   protocolVersion: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   capabilities: z.unknown().optional(),
   loginMode: z.enum(["browser", "device"]).optional(),
+  /** `local-discovery` 表示由本机控制面板检测自动写入；缺省按手动 profile 处理。 */
+  source: z.enum(["manual", "local-discovery"]).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   trustedAt: z.string().datetime(),
@@ -39,6 +41,8 @@ const CredentialFileSchema = z.object({
     sessionToken: z.string().trim().min(32),
     sessionId: z.string().trim().min(1).optional(),
     expiresAt: z.string().datetime().optional(),
+    /** `local-trust` 凭证不支持续期端点，过期后由 CLI 重新签发。 */
+    mode: z.enum(["authorization", "local-trust"]).optional(),
     savedAt: z.string().datetime(),
   })).default({}),
 });
@@ -47,6 +51,7 @@ export type CliCredential = {
   sessionToken: string;
   sessionId?: string;
   expiresAt?: string;
+  mode?: "authorization" | "local-trust";
   savedAt: string;
 };
 

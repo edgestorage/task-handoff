@@ -3,7 +3,7 @@ import { CLI_EXIT_CODES, ThctlError } from "../errors.ts";
 import { openConnection, resolveProfile, type CliContext, type CliInvocation } from "../runtime.ts";
 
 export async function loginCommand(context: CliContext, invocation: CliInvocation) {
-  const profile = resolveProfile(context);
+  const profile = await resolveProfile(context);
   const mode = invocation.options.device ? "device" : "browser";
   const result = await loginToProfile({
     profileLabel: profile.label,
@@ -21,7 +21,7 @@ export async function loginCommand(context: CliContext, invocation: CliInvocatio
 }
 
 export async function logoutCommand(context: CliContext) {
-  const profile = resolveProfile(context);
+  const profile = await resolveProfile(context);
   const credential = context.store.secrets().read(profile.label);
   if (!credential) {
     return { data: { profile: profile.label, revoked: false }, message: `No stored CLI session for \`${profile.label}\`.` };
@@ -44,7 +44,7 @@ export async function logoutCommand(context: CliContext) {
 }
 
 export async function whoamiCommand(context: CliContext) {
-  const profile = resolveProfile(context);
+  const profile = await resolveProfile(context);
   const connection = await openConnection(context, { profile });
   const credential = context.store.secrets().read(profile.label);
   const session = await connection.client.auth.session();
@@ -58,9 +58,11 @@ export async function whoamiCommand(context: CliContext) {
     protocolVersion: connection.identity.payload.protocolVersion,
     user: session.user,
     authorization: session.authorization,
+    ...(credential?.mode ? { sessionMode: credential.mode } : {}),
     ...(credential?.sessionId ? { sessionId: credential.sessionId } : {}),
     ...(credential?.expiresAt ? { sessionExpiresAt: credential.expiresAt } : {}),
   };
+  const localTrust = credential?.mode === "local-trust";
   return {
     data,
     columns: [
@@ -69,6 +71,8 @@ export async function whoamiCommand(context: CliContext) {
       { key: "controlPlaneId", header: "controlPlaneId" },
       { key: "sessionExpiresAt", header: "expires" },
     ],
-    message: `Signed in to ${profile.origin} as ${session.user.primaryUsername || session.user.displayName}.`,
+    message: localTrust
+      ? `Connected to the local Control Plane at ${profile.origin} as ${session.user.displayName} (local trust session).`
+      : `Signed in to ${profile.origin} as ${session.user.primaryUsername || session.user.displayName}.`,
   };
 }

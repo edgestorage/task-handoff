@@ -17,6 +17,8 @@ thctl login --device
 thctl whoami
 thctl instance list
 thctl instance show <instanceId>
+thctl instance create --config ./instance.json --start
+thctl instance delete <instanceId> --volumes --yes
 thctl instance restart <instanceId> --yes
 thctl ai-session list --instance <instanceId> --json
 thctl ai-session show <instanceId> <sessionId>
@@ -42,7 +44,8 @@ thctl schema --format json
 - 配置目录默认 `~/.config/task-handoff/cli`（遵循 `XDG_CONFIG_HOME`），可用 `TASK_HANDOFF_CLI_CONFIG_DIR` 覆盖。
 - `profiles.json` 只保存 origin、`controlPlaneId`、指纹、协议版本与 capability 快照，不含任何密钥。
 - session token 保存在独立的 `credentials.json`（0600，目录 0700）；后续可替换为系统 keychain 而不影响上层。
-- profile 选择优先级：`--profile` > `TASK_HANDOFF_CLI_PROFILE` > `thctl profile use` 设置的默认 profile。
+- profile 选择优先级：`--profile` > `TASK_HANDOFF_CLI_PROFILE` > `thctl profile use` 设置的默认 profile；完全没有 profile 时会先尝试检测本机运行的控制面板。
+- 本机桌面 control-plane（`--auth-mode disabled`）无需先 `profile add`：CLI 读取用户级运行态锁验证进程与身份后自动写入受管的 `local` profile，并签发可审计的本地信任会话；远程或已启用用户管理的控制面板仍走 Web/device 授权。
 - 身份变化不会被自动接受，必须用 `thctl profile trust <label> --yes` 显式重新信任。
 
 ## 命令面
@@ -50,11 +53,13 @@ thctl schema --format json
 已实现：
 
 - `profile add|list|use|show|remove|trust`、`login [--device]`、`logout`、`whoami`、`schema`；
-- `instance list|show|start|stop|restart`；
-- `ai-session list|show|history|create|send|interrupt|approval|resume|read`、`ai-session queue list|steer|retry|remove`；
-- `app-session list|show|start|stop`、`node list|show|rename`；
-- `story list|show|create|update|archive|restore|remove`、`story document update|remove|reorder`、`story automation list|show|enable|disable|run|runs`；
-- `trigger list|show|create|update|remove|run`、`model list|show`、`user list|show|sessions|session-revoke`；
+- `instance list|show|create|delete|start|stop|restart|rename`；
+- `ai-session list|show|history|turns|turn|timeline|turn-timeline|create|send|interrupt|approval|resume|read|rename|fork|close|model|reasoning`、`ai-session queue list|steer|retry|remove|edit|reorder`；
+- `app-session list|show|start|stop|rename|access|restart`、`node list|show|rename`；
+- `story list|show|create|update|archive|restore|remove`、`story document update|remove|reorder`、`story automation list|show|create|update|remove|enable|disable|run|runs`；
+- `trigger list|show|create|update|remove|run|bind|unbind|apply`、`model list|show`、`user list|show|sessions|session-revoke`；
 - `events [--topic <topic>]... [--instance <instanceId>]`：订阅 `/api/events`，每个事件输出一行 JSON（JSON Lines）；断线按连接 epoch 重连并重新订阅，握手前不输出，重放事件按 id 去重，不退化为轮询。
 
 `instance logs`（阶段 C 预留）仍是未实现契约，调用会以未实现错误（退出码 3）退出，不会发送业务请求。`thctl schema` 是全部契约的唯一来源，`outputMode: json-lines` 标记流式命令。`story` 系列的 `--node` 在省略时按权威目录解析 ownerNodeId，不做本地缓存。
+
+`instance create --config` 直接提交 `POST /api/controlled-instances` 的 wire body（`InstanceCreateInputSchema`，见 `@task-handoff/protocol/control-plane`）；`--name`/`--node`/`--start` 只覆盖同名字段。服务端 `start` 默认 `false`，Docker 实例的镜像 provisioning 与容器启动是异步的，创建/启动请求返回后请用 `thctl instance show <instanceId>` 观察状态。`instance delete --volumes` 删除托管卷且不可恢复；不传 `--volumes` 时卷保留。

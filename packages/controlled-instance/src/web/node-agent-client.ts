@@ -3,6 +3,7 @@ import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import {
   NODE_AGENT_PROTOCOL_VERSION_HEADER,
   projectControlledInstanceHeartbeatForNodeAgentProtocol,
+  projectControlledInstanceRegisterForNodeAgentProtocol,
   ProtocolVersionSchema,
   UpdateControlledInstanceNodeAgentConnectionSchema,
   type ImageSelection,
@@ -342,7 +343,7 @@ export class NodeAgentRegistrationClient {
     const connectionRevision = this.connectionRevision;
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
-    const response = await this.registerRequest(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
+    const response = await this.registerRequest(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, projectControlledInstanceRegisterForNodeAgentProtocol({
       instanceId: this.config.instanceId,
       projectId: this.config.projectId,
       nodeId: this.config.nodeId,
@@ -356,7 +357,7 @@ export class NodeAgentRegistrationClient {
       appInventory: snapshot.appInventory,
       workspace: snapshot.workspace,
       processIncarnationId: this.processIncarnationId,
-    });
+    }, this.nodeAgentProtocolVersion));
     if (connectionRevision !== this.connectionRevision) return;
     this.registeredInstanceId = String(response.id || instanceId);
     await this.heartbeatOnce();

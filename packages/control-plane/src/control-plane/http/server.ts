@@ -284,9 +284,13 @@ function requestSessionCredential(
   };
 }
 
-async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessionCredential) {
+async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessionCredential): Promise<ControlPlaneActor | undefined> {
   if (!auth.enabled()) {
-    return disabledAuthActor();
+    // disabled 模式下只有 bearer 形式的本地信任 CLI 会话按真实用户归属；
+    // cookie 与匿名请求保持既有全权 system actor 语义，避免旧 Web 会话意外收窄权限。
+    return credential.source === "bearer"
+      ? auth.disabledModeAuthorization(credential.token, credential.clientTypes)
+      : undefined;
   }
   return auth.authorizationForSessionToken(credential.token, credential.clientTypes);
 }
@@ -1108,6 +1112,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   }));
   app.post("/api/auth/cli/token", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
     data: await auth.exchangeCliToken(request.body, { sourceId: request.ip }),
+  }));
+  // 本地信任会话：仅 authentication disabled 的桌面控制面板、且来源为 loopback 时可用。
+  app.post("/api/auth/cli/local", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
+    data: await auth.createLocalCliSession(request.body, {
+      remoteAddress: request.socket.remoteAddress,
+      sourceId: request.ip,
+    }),
   }));
   app.get("/api/auth/cli/requests/:requestId", { preHandler: cliDecisionGuard }, async (request) => (
     ControlPlaneCliAuthorizationRequestDetailResponseSchema.parse({

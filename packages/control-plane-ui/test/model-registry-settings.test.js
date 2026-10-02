@@ -194,7 +194,9 @@ test("model reference distribution expands node instances and opens their model 
   assert.match(settings, /@click="openInstanceModelSettings\(instance\)"/);
   assert.match(settings, /emit\("openInstanceSettings", instance\.id, "models"\)/);
   assert.match(settings, /function nodeReferenceInstances\(model: ModelConfig, location: NodeLocation\)/);
-  assert.match(settings, /\[model\.id, model\.revision, location\.revision\]/);
+  // Legacy replicas are keyed by the content-hash projection, which is only
+  // exposed as `replicaId`; the revision is a different (content) value now.
+  assert.match(settings, /\[model\.id, model\.revision, location\.revision, location\.replicaId\]/);
   assert.match(settings, /instanceSelectionIds\(instance\.modelSelection\)\.some\(\(id\) => candidateIds\.has\(id\)\)/);
   assert.match(settings, /instance\.nodeId === location\.nodeId/);
   assert.match(settings, /t\("settings\.modelRegistry\.unlistedReferences"/);

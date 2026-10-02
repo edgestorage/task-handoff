@@ -140,6 +140,8 @@ export const sessions = {
     stopping: "Stopping", launching: "Launching", connecting: "Connecting", offline: "Offline", launchApp: "Launch app",
     launchUnavailable: "Instance is still starting. Apps can be launched after it connects.", unknownWorkspace: "Unknown workspace",
     terminal: "Terminal", browser: "Browser", logs: "Logs", session: "Session", appFallback: "App {number}",
+    embeddedBrowser: "Embedded browser",
+    profileDefault: "Default", profileDefaultHint: "Default · {name}", profileRunning: "Running session", profileDiskUsage: "{size} on disk", profileDiskUnknown: "Disk usage unavailable", profileTemporary: "Temporary session", profileTemporaryDescription: "Starts with a fresh, disposable profile", profileLoading: "Loading profiles…", profileLoadFailed: "Could not load profiles.",
     appSessions: "{count} app sessions", noActiveApp: "No active app", readyAttach: "Ready to attach", waitingRegistration: "Waiting for registration",
     createdNotStarted: "Created, not started", lastHeartbeat: "Last heartbeat {time}", workbenchHint: "Create or register a controlled instance to make this workbench live.",
     searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project", addFolderFromNode: "Add a folder from this node",

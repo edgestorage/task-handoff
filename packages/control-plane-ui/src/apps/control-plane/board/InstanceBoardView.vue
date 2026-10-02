@@ -180,7 +180,7 @@
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="board-launch-menu" align="center" :side-offset="6">
-                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance, t)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" submenu-class="board-launch-menu" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
+                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance, t)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" submenu-class="board-launch-menu" @launch="(appId, cwdFolderId, profileId) => launchBoardApp(instance, appId, cwdFolderId, profileId)" @focus-session="(sessionId) => $emit('selectBoardSession', instance.id, sessionId)" @new-project="openProjectPicker(instance)" />
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <span v-else>{{ boardCardDetail(instance) }}</span>
@@ -303,7 +303,7 @@ const props = defineProps<{
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.visibleInstances.map((instance) => instance.id) })));
 
 const emit = defineEmits<{
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openWindow: [instance: InstanceWithAiSessions, session?: BoardSessionTab, aiSession?: AiSessionSummary];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectBoardSession: [instanceId: string, sessionKey: string];
@@ -328,9 +328,9 @@ function boardAiSessionIndex(instance: InstanceWithAiSessions) {
   return Math.max(0, props.boardAiSessions(instance).findIndex((session) => session.id === activeId));
 }
 
-function launchBoardApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {
+function launchBoardApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, profileId?: string) {
   boardLaunchMenuId.value = "";
-  emit("launchApp", instance, appId, cwdFolderId);
+  emit("launchApp", instance, appId, cwdFolderId, profileId ? { profileId } : undefined);
 }
 
 function openProjectPicker(instance: InstanceBoardItem) {

@@ -93,6 +93,12 @@ export type AppLaunchOptions = {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * App-provider-defined launch profile selection. Only providers that
+   * declare `supportsProfiles` may interpret it; the chromium provider maps
+   * it to a persistent browser profile directory.
+   */
+  profileId?: string;
   display?: {
     width?: number;
     height?: number;

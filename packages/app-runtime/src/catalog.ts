@@ -190,6 +190,9 @@ export class AppCatalogRepository {
             supportsCwdSelection: source === "builtin"
               ? this.registry.provider(app.id)?.capabilities?.supportsCwdSelection === true
               : false,
+            supportsProfiles: source === "builtin"
+              ? this.registry.provider(app.id)?.capabilities?.supportsProfiles === true
+              : this.registry.runtimeProvider(app)?.capabilities?.supportsProfiles === true,
           },
           diagnosticCode: executable ? undefined : "APP_EXECUTABLE_NOT_FOUND",
         })),

@@ -1,36 +1,52 @@
 <template>
   <Dialog :open="open" @update:open="handleOpenChange">
     <DialogContent class="instance-settings-dialog" aria-describedby="instance-settings-description">
-      <DialogHeader class="instance-settings-header">
-        <div class="instance-settings-heading">
-          <span>{{ t("instances.settings.eyebrow") }}</span>
-          <div class="instance-settings-title-row">
-            <DialogTitle>{{ instance?.name || t("instances.settings.unavailableTitle") }}</DialogTitle>
-            <Badge v-if="instance" :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">
-              {{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}
-            </Badge>
+      <DialogDescription id="instance-settings-description" class="sr-only">
+        {{ t("instances.settings.description") }}
+      </DialogDescription>
+      <button type="button" class="instance-settings-close" :aria-label="t('instances.settings.close')" @click="handleOpenChange(false)">
+        <X :size="16" />
+      </button>
+
+      <Tabs
+        v-model="section"
+        orientation="vertical"
+        class="instance-settings-tabs"
+        :class="{ 'instance-settings-tabs-unavailable': !instance }"
+      >
+        <div v-if="instance" class="instance-settings-sidebar">
+          <div class="instance-settings-identity">
+            <span class="instance-settings-identity-eyebrow">{{ t("instances.settings.eyebrow") }}</span>
+            <DialogTitle class="instance-settings-identity-name">{{ instance.name }}</DialogTitle>
           </div>
-          <DialogDescription id="instance-settings-description">
-            {{ t("instances.settings.description") }}
-          </DialogDescription>
+          <ScrollArea class="instance-settings-nav-scroll">
+            <TabsList class="instance-settings-nav" :aria-label="t('instances.settings.sections')">
+              <div class="instance-settings-nav-group">
+                <span class="instance-settings-nav-group-title">{{ t("instances.settings.sectionGroups.instance") }}</span>
+                <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
+              </div>
+              <div class="instance-settings-nav-group">
+                <span class="instance-settings-nav-group-title">{{ t("instances.settings.sectionGroups.agent") }}</span>
+                <TabsTrigger value="ai"><Bot :size="14" />{{ t("instances.settings.ai") }}</TabsTrigger>
+                <TabsTrigger value="browser"><Globe2 :size="14" />{{ t("instances.settings.browser") }}</TabsTrigger>
+                <TabsTrigger value="codex"><AiAgentIcon agent="codex" :size="14" />{{ t("instances.settings.codex") }}</TabsTrigger>
+                <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
+              </div>
+              <div class="instance-settings-nav-group">
+                <span class="instance-settings-nav-group-title">{{ t("instances.settings.sectionGroups.provisioning") }}</span>
+                <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
+                <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
+              </div>
+            </TabsList>
+          </ScrollArea>
         </div>
-        <button type="button" class="instance-settings-close" :aria-label="t('instances.settings.close')" @click="handleOpenChange(false)">
-          <X :size="16" />
-        </button>
-      </DialogHeader>
 
-      <div v-if="!instance" class="instance-settings-empty">{{ t("instances.settings.unavailable") }}</div>
-      <Tabs v-else v-model="section" class="instance-settings-tabs">
-        <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
-          <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
-          <TabsTrigger value="ai"><Bot :size="14" />{{ t("instances.settings.ai") }}</TabsTrigger>
-          <TabsTrigger value="codex"><AiAgentIcon agent="codex" :size="14" />{{ t("instances.settings.codex") }}</TabsTrigger>
-          <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
-          <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
-          <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
-        </TabsList>
-
-        <ScrollArea class="instance-settings-scroll">
+        <div v-if="!instance" class="instance-settings-empty">
+          <DialogTitle class="instance-settings-empty-title">{{ t("instances.settings.unavailableTitle") }}</DialogTitle>
+          <p>{{ t("instances.settings.unavailable") }}</p>
+        </div>
+        <ScrollArea v-else class="instance-settings-scroll">
+          <h2 class="instance-settings-content-title">{{ activeSectionLabel }}</h2>
           <TabsContent value="general" class="instance-settings-section">
             <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
@@ -98,7 +114,13 @@
                 <h3>{{ t("instances.settings.codexConfigurationTitle") }}</h3>
                 <p>{{ t("instances.settings.codexConfigurationPageDescription") }}</p>
               </div>
-              <div class="instance-settings-control-surface instance-settings-surface">
+              <div v-if="!codexInstalled" class="instance-settings-control-surface instance-settings-surface">
+                <div class="instance-settings-state instance-settings-app-missing">
+                  <p>{{ t("instances.settings.codexNotInstalled") }}</p>
+                  <Button size="sm" variant="outline" @click="section = 'apps'">{{ t("instances.settings.browserGoToApps") }}</Button>
+                </div>
+              </div>
+              <div v-else class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
                   <div v-if="!codexSettingsSupported" class="instance-settings-state">{{ t("instances.settings.codexSettingsUnsupported") }}</div>
                   <label class="instance-settings-checkbox"><Checkbox :model-value="codexConfigEnabled" :disabled="savingCodex" @update:model-value="codexConfigEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexConfiguration") }}</strong><small>{{ t("instances.settings.codexConfigurationDescription") }}</small></span></label>
@@ -113,6 +135,18 @@
                 </div>
                 <div class="instance-settings-general-actions"><Button size="sm" :disabled="savingCodex || !codexChanged || (codexSettingsSupported && !validCodexMaxThreads)" @click="saveCodex">{{ savingCodex ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}</Button></div>
               </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="browser" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <BrowserProfilesSection
+                v-if="instance"
+                :instance="instance"
+                :app-management="appManagement"
+                @open-apps="section = 'apps'"
+                @open-session="(sessionId) => emit('open-app-session', instance!.id, sessionId)"
+              />
             </section>
           </TabsContent>
 
@@ -337,13 +371,14 @@ import { Button } from "../../../components/ui/button";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import { Checkbox } from "../../../components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog";
 import { Progress } from "../../../components/ui/progress";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import BrowserProfilesSection from "./BrowserProfilesSection.vue";
 import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
@@ -357,7 +392,7 @@ const { locale } = useControlPlaneLocale();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "ai" | "codex" | "models" | "git-credentials" | "apps";
+type InstanceSettingsSection = "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -373,8 +408,21 @@ const props = defineProps<{
   updateInstance: (instance: InstanceBoardItem, input: UpdateControlledInstanceInput) => Promise<void>;
 }>();
 
-const emit = defineEmits<{ "update:open": [open: boolean] }>();
+const emit = defineEmits<{
+  "open-app-session": [instanceId: string, sessionId: string];
+  "update:open": [open: boolean];
+}>();
 const section = ref<InstanceSettingsSection>("general");
+const sectionLabelKeys: Record<InstanceSettingsSection, string> = {
+  general: "instances.settings.general",
+  ai: "instances.settings.ai",
+  browser: "instances.settings.browser",
+  codex: "instances.settings.codex",
+  models: "instances.settings.models",
+  "git-credentials": "instances.settings.gitCredentials",
+  apps: "instances.settings.apps",
+};
+const activeSectionLabel = computed(() => t(sectionLabelKeys[section.value]));
 const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
 const codexConfigEnabled = ref(true);
@@ -476,6 +524,11 @@ const codexSettingsSupported = computed(() => {
     : undefined;
   return supportsNodeCodexManagedSettings(nodeCapabilities)
     && supportsControlledInstanceCodexManagedSettings(props.instance?.capabilities);
+});
+// 未安装时展示安装引导而不是无效表单；没有权威快照时保持现有设置界面。
+const codexInstalled = computed(() => {
+  const app = props.appManagement?.apps.find((candidate) => candidate.id === "codex");
+  return !app || app.state === "installed";
 });
 const codexControlsDisabled = computed(() => savingCodex.value || !codexConfigEnabled.value || !codexSettingsSupported.value);
 function codexModelValue(modelEntityId: string, modelName: string) {
@@ -646,7 +699,7 @@ watch(() => props.instance, (instance) => {
 watch(
   [() => props.open, () => props.instance?.id, () => section.value],
   ([open, instanceId, activeSection]) => {
-    if (open && instanceId && activeSection === "apps") void props.refreshAppManagement(instanceId);
+    if (open && instanceId && (activeSection === "apps" || activeSection === "browser" || activeSection === "codex")) void props.refreshAppManagement(instanceId);
   },
   { immediate: true },
 );
@@ -873,61 +926,57 @@ async function confirmAppOperation() {
   max-width: 920px;
   height: 680px;
   max-height: calc(100vh - 36px);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
-  gap: 12px;
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-inset);
   box-shadow: var(--shadow-popover);
-  padding: 14px;
+  padding: 0;
 }
 
-.instance-settings-header {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  text-align: left;
-}
-
-.instance-settings-heading {
+.instance-settings-sidebar {
   display: grid;
-  min-width: 0;
-  gap: 3px;
+  grid-area: nav;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  border-right: 1px solid var(--line);
 }
 
-.instance-settings-heading > span {
+.instance-settings-identity {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.instance-settings-identity-eyebrow {
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.instance-settings-title-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
-.instance-settings-title-row :deep(h2) {
+.instance-settings-identity-name {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 19px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.instance-settings-heading :deep(p) {
-  color: var(--text-muted);
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .instance-settings-close {
   display: grid;
-  flex: 0 0 auto;
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
   width: 30px;
   height: 30px;
   place-items: center;
@@ -947,65 +996,103 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "nav content";
+  gap: 0;
   min-height: 0;
 }
 
-.instance-settings-tabs-list {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+.instance-settings-tabs-unavailable {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.instance-settings-nav-scroll {
+  height: 100%;
+  min-height: 0;
+}
+
+.instance-settings-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   width: 100%;
-  height: auto;
-  min-height: 36px;
-  gap: 1px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-inset);
-  padding: 2px;
+  padding: 12px 8px 14px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  gap: 16px;
 }
 
-.instance-settings-tabs-list :deep(button) {
-  height: 30px;
-  border-radius: 5px;
+.instance-settings-nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.instance-settings-nav-group-title {
+  padding: 0 10px 6px;
   color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 750;
-  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.instance-settings-tabs-list :deep(.truncate) {
+.instance-settings-nav :deep(button) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 32px;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.instance-settings-nav :deep(.truncate) {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   min-width: 0;
-  gap: 6px;
+  gap: 8px;
 }
 
-.instance-settings-tabs-list :deep(.truncate svg) {
+.instance-settings-nav :deep(.truncate svg) {
   flex: 0 0 auto;
 }
 
-.instance-settings-tabs-list :deep(button:not([data-state="active"]):hover) {
+.instance-settings-nav :deep(button:not([data-state="active"]):hover) {
   background: var(--surface-hover);
   color: var(--text-strong);
 }
 
-.instance-settings-tabs-list :deep(button[data-state="active"]) {
+.instance-settings-nav :deep(button[data-state="active"]) {
   background: var(--surface-active);
   color: var(--text-strong);
   box-shadow: none;
 }
 
 .instance-settings-scroll {
+  grid-area: content;
   height: 100%;
   min-height: 0;
+}
+
+.instance-settings-content-title {
+  margin: 16px 16px 14px;
+  color: var(--text-strong);
+  font-size: 19px;
+  font-weight: 600;
 }
 
 .instance-settings-section {
   display: grid;
   gap: 18px;
   margin: 0;
-  padding: 2px 10px 18px 2px;
+  padding: 0 16px 20px;
 }
 
 .instance-settings-section[hidden] {
@@ -1429,20 +1516,32 @@ async function confirmAppOperation() {
 
 .instance-settings-error {
   margin: 0;
+  padding: 0 16px 12px;
   color: var(--status-danger);
   font-size: 12px;
 }
 
 .instance-settings-success {
   margin: 0;
+  padding: 0 16px 12px;
   color: var(--status-success);
   font-size: 12px;
 }
 
 .instance-settings-empty {
+  display: grid;
+  grid-area: content;
+  align-content: start;
+  gap: 6px;
   color: var(--text-muted);
   font-size: 13px;
-  padding: 18px 0;
+  padding: 18px 16px;
+}
+
+.instance-settings-empty-title {
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .instance-settings-state {
@@ -1459,6 +1558,14 @@ async function confirmAppOperation() {
 
 .instance-settings-state-error {
   color: var(--status-danger);
+}
+
+.instance-settings-app-missing {
+  flex-direction: column;
+}
+
+.instance-settings-app-missing p {
+  margin: 0;
 }
 
 .instance-settings-empty-state {
@@ -1547,8 +1654,70 @@ async function confirmAppOperation() {
     grid-template-columns: 1fr;
   }
 
-  .instance-settings-tabs-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .instance-settings-tabs {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "nav"
+      "content";
+  }
+
+  .instance-settings-tabs-unavailable {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .instance-settings-sidebar {
+    grid-template-rows: auto auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .instance-settings-identity {
+    gap: 4px;
+    padding: 12px 48px 10px 14px;
+    border-bottom: 0;
+  }
+
+  .instance-settings-nav-scroll {
+    height: auto;
+  }
+
+  .instance-settings-nav {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    width: max-content;
+    min-width: 100%;
+    padding: 2px 14px 12px;
+  }
+
+  .instance-settings-nav-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .instance-settings-nav-group + .instance-settings-nav-group {
+    margin-left: 6px;
+    padding-left: 6px;
+    border-left: 1px solid var(--line);
+  }
+
+  .instance-settings-nav-group-title {
+    display: none;
+  }
+
+  .instance-settings-nav :deep(button) {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .instance-settings-content-title {
+    margin: 14px 14px 12px;
+  }
+
+  .instance-settings-section {
+    padding: 0 14px 18px;
   }
 
   .instance-settings-name-control,

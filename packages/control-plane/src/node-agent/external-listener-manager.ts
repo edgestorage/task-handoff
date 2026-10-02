@@ -10,7 +10,7 @@ import { JsonFile } from "../shared/persistence/store.ts";
 import {
   externalListenerHost,
   type NodeAgentRuntimeSettings,
-} from "./external-listener-settings.ts";
+} from "./runtime-settings.ts";
 
 type ListenerState = {
   runningInstanceCount(): number;
@@ -174,7 +174,9 @@ export class NodeAgentExternalListenerManager {
     }
 
     try {
-      this.settings.put({ version: 1, externalListener: candidate });
+      // Preserve sibling runtime setting domains (for example the model relay
+      // switch); a bare replace would silently drop them on a port change.
+      this.settings.put({ ...this.settings.get(), version: 1, externalListener: candidate });
     } catch (error) {
       await this.stop();
       await this.restore(previous);

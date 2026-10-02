@@ -12,6 +12,7 @@ export * from "./ai-session-agent-tools.ts";
 export * from "./story-agent-tools.ts";
 export * from "./story-agent-authorization.ts";
 export * from "./app-sessions.ts";
+export * from "./app-profiles.ts";
 export * from "./browser-tunnel.ts";
 export * from "./control-plane-access.ts";
 export * from "./control-plane-directory.ts";

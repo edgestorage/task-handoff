@@ -266,8 +266,15 @@
                       <DropdownMenuItem :disabled="index === settingsModel.modelNames.length - 1" @select="moveModelName(index, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveModelNameDown") }}</span></DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" />
-                  <Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button>
+                  <label class="model-name-field">
+                    <span>{{ t("settings.modelRegistry.externalName") }}</span>
+                    <ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" />
+                  </label>
+                  <label class="model-name-field">
+                    <span>{{ t("settings.modelRegistry.upstreamName") }}</span>
+                    <ControlPlaneInput v-model="entry.upstreamName" :placeholder="entry.name.trim() || t('settings.modelRegistry.upstreamNamePlaceholder')" />
+                  </label>
+                  <Button class="model-name-delete" type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button>
                 </div>
               </TransitionGroup>
             </div>
@@ -412,7 +419,10 @@ function instanceSelectionIds(selection: ModelSelection | undefined) {
     : [selection.codexModelHash, selection.claudeModelHash, selection.opencodeModelHash].filter((id): id is string => Boolean(id));
 }
 function nodeReferenceInstances(model: ModelConfig, location: NodeLocation) {
-  const candidateIds = new Set([model.id, model.revision, location.revision].filter((id): id is string => Boolean(id)));
+  // Nodes without stable model identities keep their replica under the
+  // content-hash projection, so the assignment id there is the replica id and
+  // not the content revision of the model record.
+  const candidateIds = new Set([model.id, model.revision, location.revision, location.replicaId].filter((id): id is string => Boolean(id)));
   return (props.instances || [])
     .filter((instance) => instance.nodeId === location.nodeId
       && instanceSelectionIds(instance.modelSelection).some((id) => candidateIds.has(id)))
@@ -437,11 +447,18 @@ function selectDiscoveredModel(value: unknown) {
   const selectedIndex = settingsModel.modelNames.findIndex((entry) => entry.name === value);
   if (selectedIndex >= 0) {
     if (settingsModel.modelNames.length > 1) removeModelName(selectedIndex);
-    else settingsModel.modelNames[0].name = "";
+    else {
+      settingsModel.modelNames[0].name = "";
+      settingsModel.modelNames[0].upstreamName = "";
+    }
   } else {
     const empty = settingsModel.modelNames.find((entry) => !entry.name.trim());
-    if (empty) empty.name = value;
-    else settingsModel.modelNames.push({ name: value, order: (settingsModel.modelNames.length + 1) * 100 });
+    // A discovered id is initialized into both fields so the upstream name is
+    // explicit before the operator optionally edits the external name.
+    if (empty) {
+      empty.name = value;
+      empty.upstreamName = value;
+    } else settingsModel.modelNames.push({ name: value, upstreamName: value, order: (settingsModel.modelNames.length + 1) * 100 });
   }
   settingsModel.model = settingsModel.modelNames[0]?.name || "";
 }
@@ -640,7 +657,17 @@ async function confirmMerge() {
 .model-name-list-head > div { align-items: center; display: flex; gap: 4px; }
 .model-name-list-head > span { color: var(--text-muted); font-size: 12px; }
 .model-name-items { display: grid; gap: 7px; }
-.model-name-row { align-items: center; border-radius: 6px; display: grid; gap: 4px; grid-template-columns: 32px minmax(0,1fr) auto; transition: transform 140ms cubic-bezier(.2,.8,.2,1), background-color 120ms ease, opacity 120ms ease; }
+.model-name-row { align-items: end; border-radius: 6px; display: grid; gap: 6px; grid-template-columns: 32px minmax(0,1fr) minmax(0,1fr) auto; transition: transform 140ms cubic-bezier(.2,.8,.2,1), background-color 120ms ease, opacity 120ms ease; }
+.model-name-field { display: grid; gap: 3px; min-width: 0; }
+.model-name-field > span { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+@media(max-width:560px) {
+  .model-name-row { grid-template-columns: 32px minmax(0,1fr) auto; }
+  .model-name-drag-handle { grid-column: 1; grid-row: 1 / span 2; }
+  .model-name-field { grid-column: 2; }
+  .model-name-field:first-of-type { grid-row: 1; }
+  .model-name-field:last-of-type { grid-row: 2; }
+  .model-name-delete { grid-column: 3; grid-row: 1; }
+}
 .model-name-row-move { transition: transform 180ms ease, background-color 120ms ease, opacity 120ms ease; }
 .model-name-items-dragging .model-name-row { will-change: transform; }
 .model-name-items-settling .model-name-row { transition: none; }

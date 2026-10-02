@@ -6,6 +6,7 @@ import {
   ControlPlaneCliAuthorizationRequestDetailResponseSchema,
   ControlPlaneCliAuthorizationRequestSchema,
   ControlPlaneCliAuthorizeResponseSchema,
+  ControlPlaneCliLocalSessionRequestSchema,
   ControlPlaneCliSessionRenewalResponseSchema,
   ControlPlaneCliSessionRevocationResponseSchema,
   ControlPlaneCliSessionsResponseSchema,
@@ -19,6 +20,7 @@ import {
   ControlPlaneMobileSessionsResponseSchema,
   ControlPlanePublicIdentityDocumentSchema,
   type ControlPlaneCliAuthorizationRequest,
+  type ControlPlaneCliLocalSessionRequest,
   type ControlPlaneCliTokenRequest,
   type ControlPlaneMobileLoginInput,
 } from "@task-handoff/protocol/control-plane-access";
@@ -102,6 +104,13 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
         "/api/auth/cli/token",
         ControlPlaneCliTokenResponseSchema,
         post(ControlPlaneCliTokenRequestSchema.parse(input)),
+      ).then((response) => response.data);
+    },
+    cliLocalSession(input: ControlPlaneCliLocalSessionRequest) {
+      return transport.request(
+        "/api/auth/cli/local",
+        ControlPlaneCliTokenResponseSchema,
+        post(ControlPlaneCliLocalSessionRequestSchema.parse(input)),
       ).then((response) => response.data);
     },
     cliAuthorizationRequest(requestId: string, signal?: AbortSignal) {

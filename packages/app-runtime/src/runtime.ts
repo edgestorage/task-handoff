@@ -9,10 +9,11 @@ import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
+import type { AppProfile } from "@task-handoff/protocol/app-profiles";
 import { AppCatalogRepository, executablePath } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
-import type { ManagedAppPreparedTtyLaunch, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
+import type { ManagedAppPreparedTtyLaunch, ManagedAppProfileRecord, ManagedAppProfilesRuntime, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
 import { ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
 import { enforceInstanceLogBudget, RotatingLogWriter } from "./log-retention";
@@ -129,6 +130,7 @@ export class AppRuntimeManager extends EventEmitter {
       waitForUnixSocket: (socketPath, timeoutMs, getError) => this.waitForUnixSocket(socketPath, timeoutMs, getError),
       waitForHttp: (url, headers, timeoutMs, getError) => this.waitForHttp(url, headers, timeoutMs, getError),
       patchSession: (sessionId, patch) => this.patchSessionMetadata(sessionId, patch),
+      activeAppSessions: () => Array.from(this.sessions.values()).map((session) => session.metadata),
     };
     for (const provider of registry.providers) {
       if (provider.createRuntime) this.appRuntimeExtensions.set(provider.id, provider.createRuntime(host));
@@ -148,6 +150,86 @@ export class AppRuntimeManager extends EventEmitter {
 
   appInventory(observedAt?: string) {
     return this.catalogRepository.inventory(observedAt);
+  }
+
+  appProfiles(appId: string): ManagedAppProfileRecord[] {
+    return this.appProfilesRuntime(appId).list();
+  }
+
+  async listAppProfiles(appId: string) {
+    const profilesRuntime = this.appProfilesRuntime(appId);
+    const defaultProfileId = profilesRuntime.defaultProfileId();
+    const profiles = await Promise.all(profilesRuntime.list().map(async (profile) => {
+      const diskUsageBytes = await profilesRuntime.usageBytes(profile.id).catch(() => undefined);
+      return this.appProfileView(appId, profile, { defaultProfileId, diskUsageBytes });
+    }));
+    return { appId, defaultProfileId, profiles, observedAt: now() };
+  }
+
+  createAppProfile(appId: string, name: string): AppProfile {
+    const profilesRuntime = this.appProfilesRuntime(appId);
+    return this.appProfileView(appId, profilesRuntime.create(name), { defaultProfileId: profilesRuntime.defaultProfileId() });
+  }
+
+  renameAppProfile(appId: string, profileId: string, name: string): AppProfile {
+    const profilesRuntime = this.appProfilesRuntime(appId);
+    return this.appProfileView(appId, profilesRuntime.rename(profileId, name), { defaultProfileId: profilesRuntime.defaultProfileId() });
+  }
+
+  removeAppProfile(appId: string, profileId: string): void {
+    this.assertAppProfileIdle(appId, profileId);
+    this.appProfilesRuntime(appId).remove(profileId);
+  }
+
+  setDefaultAppProfile(appId: string, profileId: string): AppProfile {
+    const profilesRuntime = this.appProfilesRuntime(appId);
+    const profile = profilesRuntime.setDefault(profileId);
+    return this.appProfileView(appId, profile, { defaultProfileId: profilesRuntime.defaultProfileId() });
+  }
+
+  assertAppProfileIdle(appId: string, profileId: string): void {
+    const runningSessionId = this.runningProfileSessionId(appId, profileId);
+    if (runningSessionId) {
+      throw Object.assign(new Error(`Browser profile ${profileId} is already running in session ${runningSessionId}.`), {
+        code: "BROWSER_PROFILE_BUSY",
+        details: { profileId, sessionId: runningSessionId },
+      });
+    }
+  }
+
+  private appProfilesRuntime(appId: string): ManagedAppProfilesRuntime {
+    const app = this.catalogRepository.find(appId);
+    if (!app) {
+      throw Object.assign(new Error(`Managed app ${appId} was not found.`), { code: "APP_NOT_FOUND" });
+    }
+    const profiles = this.appRuntimeExtension(app)?.profiles;
+    if (!profiles) {
+      throw Object.assign(new Error(`Managed app ${appId} does not support browser profiles.`), { code: "BROWSER_PROFILE_UNSUPPORTED" });
+    }
+    return profiles;
+  }
+
+  private runningProfileSessionId(appId: string, profileId: string): string | undefined {
+    for (const session of this.sessions.values()) {
+      const metadata = session.metadata;
+      if (metadata.appId === appId && metadata.status === "running" && metadata.launch?.profileId === profileId) {
+        return metadata.id;
+      }
+    }
+    return undefined;
+  }
+
+  private appProfileView(appId: string, profile: ManagedAppProfileRecord, options: { defaultProfileId: string; diskUsageBytes?: number }): AppProfile {
+    const runningSessionId = this.runningProfileSessionId(appId, profile.id);
+    return {
+      id: profile.id,
+      name: profile.name,
+      isDefault: profile.id === options.defaultProfileId,
+      ...(runningSessionId ? { runningSessionId } : {}),
+      ...(options.diskUsageBytes === undefined ? {} : { diskUsageBytes: options.diskUsageBytes }),
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    };
   }
 
   customCatalog() {
@@ -297,6 +379,10 @@ export class AppRuntimeManager extends EventEmitter {
     const app = this.catalogRepository.find(appId);
     if (!app) {
       throw Object.assign(new Error("App not found."), { code: "APP_NOT_FOUND" });
+    }
+    if (typeof options.profileId === "string" && options.profileId.trim() && !this.appRuntimeExtension(app)?.profiles) {
+      // provider 语义字段：只有声明支持 Profile 的 App 才能消费，其它 App 必须显式失败而不是静默忽略。
+      throw Object.assign(new Error(`Managed app ${app.id} does not support launch profiles.`), { code: "BROWSER_PROFILE_UNSUPPORTED" });
     }
     if (!this.hasCommand(app.command || app.id, { ...process.env, ...app.env }, options.cwd || app.cwd)) {
       throw Object.assign(new Error(`Missing required command: ${app.command || app.id}`), { code: "APP_DEPENDENCY_MISSING" });
@@ -502,7 +588,7 @@ export class AppRuntimeManager extends EventEmitter {
     const cwd = this.resolveLaunchCwd(launch.cwd, app.cwd);
     launch.cwd = cwd;
     const cdpPort = this.allocatePort("cdp");
-    const args = this.guiArgs(app, sessionDir, cdpPort, launch.args || []);
+    const args = this.guiArgs(app, sessionDir, cdpPort, launch);
 
     if (displayTarget.mode === "shared") {
       const sharedDisplay = this.ensureSharedDisplay(app, launch, backend, cwd);
@@ -1785,9 +1871,10 @@ export class AppRuntimeManager extends EventEmitter {
     });
   }
 
-  private guiArgs(app: AppCatalogItem, sessionDir: string, cdpPort: number, launchArgs: string[]) {
+  private guiArgs(app: AppCatalogItem, sessionDir: string, cdpPort: number, launch: AppLaunchOptions) {
+    const launchArgs = launch.args || [];
     const args = [...(app.args || []), ...launchArgs].map((arg) => arg.replaceAll("{sessionDir}", sessionDir).replaceAll("{cdpPort}", String(cdpPort)));
-    const extensionArgs = this.appRuntimeExtension(app)?.prepareGuiArgs?.({ app, sessionDir, automationPort: cdpPort, launchArgs, defaultArgs: args });
+    const extensionArgs = this.appRuntimeExtension(app)?.prepareGuiArgs?.({ app, sessionDir, automationPort: cdpPort, launch, launchArgs, defaultArgs: args });
     if (extensionArgs) return extensionArgs;
     if (app.automation?.portArg) {
       args.unshift(app.automation.portArg.replaceAll("{port}", String(cdpPort)));
@@ -1836,6 +1923,9 @@ export class AppRuntimeManager extends EventEmitter {
     }
     if (Array.isArray(options.args)) {
       launch.args = options.args.filter((arg): arg is string => typeof arg === "string");
+    }
+    if (typeof options.profileId === "string" && options.profileId.trim()) {
+      launch.profileId = options.profileId.trim().slice(0, 120);
     }
     if (typeof options.cwd === "string" && options.cwd.trim()) {
       launch.cwd = options.cwd.trim();

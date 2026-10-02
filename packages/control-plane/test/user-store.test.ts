@@ -24,7 +24,15 @@ function writeRecord(directory: string, record: { id: string } & Record<string, 
 
 test("database setup uses canonical ordered cp-prefixed migrations per dialect", () => {
   for (const migrations of [sqliteMigrations, postgresqlMigrations]) {
-    assert.deepEqual(migrations.map((migration) => migration.id), ["0001_user_access", "0002_p0_persistence", "0003_p0_pairing_revoke_phase", "0004_p0_chat_credential_metadata"]);
+    assert.deepEqual(migrations.map((migration) => migration.id), [
+      "0001_user_access",
+      "0002_p0_persistence",
+      "0003_p0_pairing_revoke_phase",
+      "0004_p0_chat_credential_metadata",
+      "0005_model_legacy_projections",
+      "0006_cli_sessions",
+      "0007_local_trust_identities",
+    ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_roles/);
@@ -34,6 +42,60 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_models/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_chat_bridges/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_git_credentials/);
+  }
+});
+
+test("local trust migration preserves published identities and sessions", async () => {
+  const dataDir = tempDataDir();
+  const paths = controlPlaneStorePaths(dataDir);
+  fs.mkdirSync(path.dirname(paths.databasePath), { recursive: true });
+  const previous = new DatabaseSync(paths.databasePath);
+  const timestamp = new Date().toISOString();
+  try {
+    previous.exec("PRAGMA foreign_keys = ON;");
+    previous.exec("CREATE TABLE cp_migration_ledger (id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL)");
+    const insertLedger = previous.prepare("INSERT INTO cp_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
+    for (const migration of sqliteMigrations.slice(0, 6)) {
+      previous.exec(migration.sql);
+      insertLedger.run(migration.id, migration.checksum, timestamp, JSON.stringify({ dialect: "sqlite" }));
+    }
+    previous.prepare("INSERT INTO cp_users (id, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .run("user_existing", "Existing Admin", "active", timestamp, timestamp);
+    previous.prepare("INSERT INTO cp_login_identities (id, user_id, kind, normalized_login_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("identity_existing", "user_existing", "local-password", "admin", "scrypt$salt$hash", timestamp, timestamp);
+    previous.prepare("INSERT INTO cp_user_sessions (id, identity_id, authorization_revision, token_hash, expires_at, client_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("sess_existing", "identity_existing", 1, "existing-token-hash", "2030-01-01T00:00:00.000Z", "web", timestamp, timestamp);
+  } finally {
+    previous.close();
+  }
+
+  const repository = await createControlPlaneUserRepository(paths);
+  try {
+    const identity = await repository.identities.get("identity_existing");
+    assert.equal(identity?.kind, "local-password");
+    assert.equal(identity?.normalizedLoginName, "admin");
+    const session = await repository.sessions.get("sess_existing");
+    assert.equal(session?.identityId, "identity_existing");
+    assert.equal(session?.clientType, "web");
+
+    await repository.identities.put({ id: "identity_local", userId: "user_existing", kind: "local-trust", createdAt: timestamp, updatedAt: timestamp });
+    const written = await repository.sessions.put({
+      id: "sess_local",
+      userId: "user_existing",
+      identityId: "identity_local",
+      authorizationRevision: 1,
+      tokenHash: "local-token-hash",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      clientType: "cli",
+      clientInfo: { name: "test-box", platform: "darwin" },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    assert.equal(written.identityId, "identity_local");
+    assert.equal((await repository.sessions.get("sess_local"))?.clientType, "cli");
+  } finally {
+    await repository.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
@@ -110,6 +172,7 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
         "cp_login_identities",
         "cp_metadata",
         "cp_migration_ledger",
+        "cp_model_legacy_projections",
         "cp_models",
         "cp_node_pairing_revocations",
         "cp_nodes",

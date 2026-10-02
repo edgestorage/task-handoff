@@ -206,7 +206,7 @@ test("managed AI providers own their resume arguments", () => {
 
 test("managed app providers own their program-specific runtime hooks", () => {
   const host = {
-    paths: {},
+    paths: { dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-runtime-paths-")) },
     allocatePort: () => 8101,
     hasCommand: () => true,
     spawnLogged: () => { throw new Error("not used"); },

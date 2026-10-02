@@ -1,0 +1,38 @@
+{
+  "artifact": {
+    "app": "claude",
+    "version": "2.1.286",
+    "capturedAt": "2026-10-01",
+    "capture": "claude --bare -p \"reply with the single word pong\" --output-format text --max-turns 1 against ANTHROPIC_BASE_URL pointing at a local recording endpoint",
+    "note": "Request headers and body summary only; no prompt content or credentials were persisted."
+  },
+  "operations": [
+    {
+      "method": "HEAD",
+      "path": "/api/hello",
+      "classification": "gateway-probe",
+      "observed": "Sent to the endpoint origin before the first model call; when it fails the artifact logs a compatibility notice and continues with the model request."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages?beta=true",
+      "requestHeaders": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude-opus-5-5",
+        "stream": true,
+        "topLevelKeys": ["context_management", "max_tokens", "messages", "metadata", "model", "output_config", "safeguards", "stream", "system", "thinking", "tools"],
+        "messageRoles": ["user", "system"],
+        "tools": 3,
+        "bytes": 5443
+      }
+    }
+  ],
+  "documentedOperations": ["POST /v1/messages/count_tokens"],
+  "modelsRequests": [],
+  "cancel": {
+    "observed": "not-captured",
+    "scenario": "Claude Code cancel is expected to close the SSE stream; covered by relay transport contract tests in section 4."
+  }
+}

@@ -154,7 +154,7 @@
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="app-launch-menu" align="start" :side-offset="6">
-                <AppLaunchMenuItems :apps="launchableApps" :folders="projectFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" @new-project="openProjectPicker" />
+                <AppLaunchMenuItems :apps="launchableApps" :folders="projectFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId, profileId) => launchApp(appId, cwdFolderId, profileId)" @focus-session="(sessionId) => $emit('selectSession', sessionId)" @new-project="openProjectPicker" />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
                   <Boxes :size="14" />
@@ -513,7 +513,7 @@ const emit = defineEmits<{
   setSessionSplitRatio: [ratio: number];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
-  openSettings: [instanceId: string, section?: "general" | "ai" | "models" | "apps"];
+  openSettings: [instanceId: string, section?: "general" | "ai" | "browser" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
@@ -828,9 +828,9 @@ async function commitSessionRename(session: SessionTab) {
   }
 }
 
-function launchApp(appId: string, cwdFolderId?: string) {
+function launchApp(appId: string, cwdFolderId?: string, profileId?: string) {
   emit("update:appLaunchMenuOpen", false);
-  emit("launchApp", props.instance, appId, cwdFolderId);
+  emit("launchApp", props.instance, appId, cwdFolderId, profileId ? { profileId } : undefined);
 }
 
 const sessionTabPointerOverlayStyle = computed(() => {

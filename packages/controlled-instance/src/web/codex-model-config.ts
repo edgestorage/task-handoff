@@ -4,6 +4,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import TOML from "@iarna/toml";
 import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
+import {
+  instancePrivateModelCatalogBaseUrl,
+  relayInstancePrivateModelCatalog,
+  type InstancePrivateModelCatalog,
+} from "@task-handoff/core/core/instance-private-model-catalog";
 import type { ControlledPrivateModelCatalog } from "./private-model-catalog";
 import type { CodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 
@@ -26,10 +31,37 @@ export function codexProviderId(modelEntityId: string) {
   return `${MANAGED_PROVIDER_PREFIX}${modelEntityId.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
 }
 
-export function codexProviderEnvironment(catalog: ControlledPrivateModelCatalog | undefined) {
-  return Object.fromEntries((catalog?.entities || [])
-    .filter((entity) => entity.protocols.includes("openai-responses"))
-    .map((entity) => [`TASK_HANDOFF_CODEX_PROVIDER_${codexProviderId(entity.id).toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`, entity.key]));
+function codexProviderApiKeyEnvName(modelEntityId: string) {
+  return `TASK_HANDOFF_CODEX_PROVIDER_${codexProviderId(modelEntityId).toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`;
+}
+
+function codexEntities(catalog: ControlledPrivateModelCatalog | undefined) {
+  return (catalog?.entities || []).filter((entity) => entity.protocols.includes("openai-responses"));
+}
+
+/**
+ * Provider credentials for Codex. Direct catalogs carry the upstream key;
+ * relay catalogs only receive the instance's own long-lived credential, which
+ * is already provisioned in the instance environment.
+ */
+export function codexProviderEnvironment(
+  catalog: ControlledPrivateModelCatalog | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const relayCredential = relayInstancePrivateModelCatalog(catalog)
+    ? (env.TASK_HANDOFF_REGISTRATION_TOKEN || "").trim()
+    : "";
+  return Object.fromEntries(codexEntities(catalog).flatMap((entity) => {
+    const key = relayInstancePrivateModelCatalog(catalog)
+      ? relayCredential
+      : (entity as { key?: string }).key;
+    return key ? [[codexProviderApiKeyEnvName(entity.id), key]] : [];
+  }));
+}
+
+/** Provider base URL for a Codex entity in either catalog version. */
+export function codexEntityBaseUrl(catalog: ControlledPrivateModelCatalog | undefined, entityId: string) {
+  return instancePrivateModelCatalogBaseUrl(catalog as InstancePrivateModelCatalog, entityId, "openai-responses");
 }
 
 function codexHome(env: NodeJS.ProcessEnv) {
@@ -77,8 +109,11 @@ export function applyManagedCodexModelConfig(
   if (env.TASK_HANDOFF_CONTROL_MODE !== "controlled") {
     return { applied: false };
   }
-  const codexEntities = (catalog?.entities || []).filter((entity) => entity.protocols.includes("openai-responses"));
-  const defaultEntity = codexEntities[0];
+  // Entities without a provider base URL (for example a relay catalog whose
+  // instance does not declare the Responses protocol) must not become the
+  // default provider.
+  const entities = codexEntities(catalog).filter((entity) => codexEntityBaseUrl(catalog, entity.id));
+  const defaultEntity = entities[0];
   const defaultName = defaultEntity?.modelNames.slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))[0]?.name;
   const model = defaultName || (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
   const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || "").trim();
@@ -109,16 +144,17 @@ export function applyManagedCodexModelConfig(
   }
 
   const current = readConfig(configPath);
-  const providerEnvironment = codexProviderEnvironment(catalog);
+  const providerEnvironment = codexProviderEnvironment(catalog, env);
   const modelProvider = defaultEntity ? codexProviderId(defaultEntity.id) : "openai";
   const existingProviders = asConfigObject(current.config.model_providers);
   const retainedProviders = Object.fromEntries(Object.entries(existingProviders).filter(([id]) => !id.startsWith(MANAGED_PROVIDER_PREFIX)));
-  const managedProviders = Object.fromEntries(codexEntities.map((entity) => {
+  const managedProviders = Object.fromEntries(entities.map((entity) => {
+    const baseUrl = codexEntityBaseUrl(catalog, entity.id) as string;
     const providerId = codexProviderId(entity.id);
-    const envKey = Object.keys(codexProviderEnvironment({ ...catalog!, entities: [entity] }))[0];
+    const envKey = codexProviderApiKeyEnvName(entity.id);
     return [providerId, {
       name: `TaskHandoff ${entity.id}`,
-      base_url: entity.endpoint,
+      base_url: baseUrl,
       env_key: envKey,
       wire_api: "responses",
     }];

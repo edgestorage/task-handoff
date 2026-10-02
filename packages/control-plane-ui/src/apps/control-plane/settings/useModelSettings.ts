@@ -35,7 +35,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     endpoint: "",
     key: "",
     model: "",
-    modelNames: [] as Array<{ name: string; order: number }>,
+    modelNames: [] as Array<{ name: string; upstreamName?: string; order: number }>,
     protocols: ["openai-responses"] as ModelProtocol[],
     app: "codex" as ModelApp,
     enabled: true,
@@ -87,7 +87,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   }
 
   function syncPrimaryModelName() { settingsModel.model = settingsModel.modelNames[0]?.name.trim() || ""; }
-  function addModelName() { settingsModel.modelNames.push({ name: "", order: (settingsModel.modelNames.length + 1) * 100 }); }
+  function addModelName() { settingsModel.modelNames.push({ name: "", upstreamName: "", order: (settingsModel.modelNames.length + 1) * 100 }); }
   function removeModelName(index: number) { if (settingsModel.modelNames.length > 1) { settingsModel.modelNames.splice(index, 1); syncPrimaryModelName(); } }
   function reorderModelName(source: number, target: number) {
     if (source < 0 || target < 0 || source >= settingsModel.modelNames.length || target >= settingsModel.modelNames.length || source === target) return;
@@ -154,9 +154,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     testingModel.value = true;
     const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.modelRegistry.testing"));
     try {
+      // Probes must address the upstream model, not the external name.
+      const probeModel = settingsModel.modelNames[0]?.upstreamName?.trim() || settingsModel.modelNames[0]?.name.trim() || "";
       const results = await Promise.all(settingsModel.protocols.map((protocol) => testModel({
         ...endpointDraft(),
-        model: settingsModel.modelNames[0]?.name.trim() || "",
+        model: probeModel,
         protocol,
       }, endpointNodeId())));
       const latencyMs = Math.max(...results.map((result) => result.latencyMs));
@@ -178,7 +180,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.endpoint = "";
     settingsModel.key = "";
     settingsModel.model = "";
-    settingsModel.modelNames = [{ name: "", order: 100 }];
+    settingsModel.modelNames = [{ name: "", upstreamName: "", order: 100 }];
     settingsModel.protocols = ["openai-responses"];
     settingsModel.app = "codex";
     settingsModel.enabled = true;
@@ -194,7 +196,13 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.endpoint = model.endpoint;
     settingsModel.key = "";
     settingsModel.model = model.model;
-    settingsModel.modelNames = model.modelNames?.length ? model.modelNames.map((entry) => ({ ...entry })) : [{ name: model.model, order: 100 }];
+    settingsModel.modelNames = model.modelNames?.length
+      ? model.modelNames.map((entry) => ({
+          name: entry.name,
+          upstreamName: entry.upstreamName || entry.name,
+          order: entry.order,
+        }))
+      : [{ name: model.model, upstreamName: model.model, order: 100 }];
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
@@ -211,7 +219,13 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.endpoint = model.endpoint;
     settingsModel.key = "";
     settingsModel.model = model.model;
-    settingsModel.modelNames = model.modelNames?.length ? model.modelNames.map((entry) => ({ ...entry })) : [{ name: model.model, order: 100 }];
+    settingsModel.modelNames = model.modelNames?.length
+      ? model.modelNames.map((entry) => ({
+          name: entry.name,
+          upstreamName: entry.upstreamName || entry.name,
+          order: entry.order,
+        }))
+      : [{ name: model.model, upstreamName: model.model, order: 100 }];
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
@@ -232,7 +246,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         name: settingsModel.name.trim(),
         endpoint: settingsModel.endpoint.trim(),
         model: settingsModel.modelNames[0]?.name.trim() || "",
-        modelNames: settingsModel.modelNames.map((entry, index) => ({ name: entry.name.trim(), order: (index + 1) * 100 })),
+        modelNames: settingsModel.modelNames.map((entry, index) => ({
+          name: entry.name.trim(),
+          upstreamName: entry.upstreamName?.trim() || entry.name.trim(),
+          order: (index + 1) * 100,
+        })),
         protocols: [...settingsModel.protocols],
         app: settingsModel.app,
         enabled: settingsModel.enabled,

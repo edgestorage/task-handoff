@@ -62,7 +62,7 @@ import {
 } from "@task-handoff/ai-session-runtime/ai-session-persistence-settings";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
-import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
+import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch, type ConfigSyncOptions } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
@@ -177,6 +177,7 @@ import {
   type AppSessionSnapshotEvent,
   type AppSessionsSnapshot,
 } from "@task-handoff/protocol/app-sessions";
+import { AppProfileCreateInputSchema, AppProfileListSchema, AppProfileRenameInputSchema, AppProfileSchema } from "@task-handoff/protocol/app-profiles";
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
 import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
@@ -399,6 +400,7 @@ const AppLaunchSchema = z
         autoCreate: z.boolean().optional(),
       })
       .optional(),
+    profileId: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
 
@@ -498,7 +500,40 @@ function appLaunchRequest(body: unknown = {}): { appId: string; options: AppLaun
   if (parsed.displayTarget) {
     options.displayTarget = parsed.displayTarget;
   }
+  if (parsed.profileId) {
+    options.profileId = parsed.profileId;
+  }
   return { appId: parsed.appId || "terminal-tty", options };
+}
+
+const APP_RUNTIME_ERROR_STATUS: Record<string, number> = {
+  APP_NOT_FOUND: 404,
+  BROWSER_PROFILE_UNSUPPORTED: 404,
+  BROWSER_PROFILE_NOT_FOUND: 404,
+  BROWSER_PROFILE_BUSY: 409,
+  BROWSER_PROFILE_NAME_CONFLICT: 409,
+  BROWSER_PROFILE_DEFAULT_PROTECTED: 409,
+};
+
+function appRuntimeErrorStatus(code: string) {
+  return APP_RUNTIME_ERROR_STATUS[code] ?? 400;
+}
+
+function appRuntimeErrorPayload(error: unknown, fallbackCode: string): { error: { code: string; message: string; details?: Record<string, unknown> } } {
+  if (error instanceof z.ZodError) {
+    return { error: { code: fallbackCode, message: appLaunchInvalidMessage(error) } };
+  }
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const details = record.details && typeof record.details === "object" && !Array.isArray(record.details)
+    ? record.details as Record<string, unknown>
+    : undefined;
+  return {
+    error: {
+      code: typeof record.code === "string" ? record.code : fallbackCode,
+      message: error instanceof Error ? error.message : String(error),
+      ...(details ? { details } : {}),
+    },
+  };
 }
 
 function appLaunchInvalidMessage(error: unknown) {
@@ -2795,8 +2830,26 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
 
+  const configSyncRuntimeOptions = (): ConfigSyncOptions => {
+    let browserProfiles: ConfigSyncOptions["browserProfiles"] = [];
+    try {
+      browserProfiles = appRuntime.appProfiles("chromium").map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        directory: profile.directory,
+        isDefault: profile.isDefault,
+      }));
+    } catch {
+      browserProfiles = [];
+    }
+    return {
+      browserProfiles,
+      assertProfileIdle: (profileId) => appRuntime.assertAppProfileIdle("chromium", profileId),
+    };
+  };
+
   app.get("/api/config-sync/presets", async () => ({
-    data: configSyncPresets(),
+    data: configSyncPresets(configSyncRuntimeOptions()),
   }));
 
   app.get("/api/config-sync/programs", async () => ({
@@ -2824,7 +2877,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Body: unknown }>("/api/config-sync", async (request, reply) => {
     try {
       const input = ConfigSyncRequestSchema.parse(request.body || {});
-      const result = runConfigSyncBatch(input);
+      const result = runConfigSyncBatch(input, configSyncRuntimeOptions());
       if (input.direction === "import") {
         if (input.programIds.includes("codex")) applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
         if (input.programIds.includes("claude")) applyManagedClaudeModelConfig(managedModelEnv);
@@ -2836,6 +2889,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         error: {
           code: typeof record.code === "string" ? record.code : "CONFIG_SYNC_FAILED",
           message: error instanceof Error ? error.message : String(error),
+          ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
         },
       });
     }
@@ -2848,7 +2902,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     try {
       const body = ConfigSyncLegacyRequestSchema.parse(request.body || {});
-      const result = runConfigSync(direction, request.params.preset, body.preset);
+      const result = runConfigSync(direction, request.params.preset, body.preset, configSyncRuntimeOptions());
       if (direction === "import" && request.params.preset === "codex") {
         applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
       }
@@ -2862,6 +2916,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         error: {
           code: typeof record.code === "string" ? record.code : "CONFIG_SYNC_FAILED",
           message: error instanceof Error ? error.message : String(error),
+          ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
         },
       });
     }
@@ -2914,11 +2969,56 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const launch = appLaunchRequest(request.body);
       return { data: appRuntime.start(launch.appId, launch.options) };
     } catch (error: unknown) {
-      if (error instanceof z.ZodError) {
-        return reply.code(400).send({ error: { code: "APP_LAUNCH_INVALID", message: appLaunchInvalidMessage(error) } });
-      }
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "APP_LAUNCH_FAILED";
-      return reply.code(code === "APP_NOT_FOUND" ? 404 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
+      return reply.code(appRuntimeErrorStatus(code)).send(appRuntimeErrorPayload(error, "APP_LAUNCH_INVALID"));
+    }
+  });
+
+  app.get<{ Params: { appId: string } }>("/api/apps/:appId/profiles", async (request, reply) => {
+    try {
+      return { data: AppProfileListSchema.parse(await appRuntime.listAppProfiles(request.params.appId)) };
+    } catch (error: unknown) {
+      return reply.code(appRuntimeErrorStatus(error && typeof error === "object" && "code" in error ? String(error.code) : "APP_PROFILES_FAILED"))
+        .send(appRuntimeErrorPayload(error, "APP_PROFILES_FAILED"));
+    }
+  });
+
+  app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/profiles", async (request, reply) => {
+    try {
+      const input = AppProfileCreateInputSchema.parse(request.body || {});
+      return { data: AppProfileSchema.parse(appRuntime.createAppProfile(request.params.appId, input.name)) };
+    } catch (error: unknown) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "APP_PROFILE_CREATE_FAILED";
+      return reply.code(appRuntimeErrorStatus(code)).send(appRuntimeErrorPayload(error, "APP_PROFILE_CREATE_FAILED"));
+    }
+  });
+
+  app.patch<{ Params: { appId: string; profileId: string }; Body: unknown }>("/api/apps/:appId/profiles/:profileId", async (request, reply) => {
+    try {
+      const input = AppProfileRenameInputSchema.parse(request.body || {});
+      return { data: AppProfileSchema.parse(appRuntime.renameAppProfile(request.params.appId, request.params.profileId, input.name)) };
+    } catch (error: unknown) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "APP_PROFILE_RENAME_FAILED";
+      return reply.code(appRuntimeErrorStatus(code)).send(appRuntimeErrorPayload(error, "APP_PROFILE_RENAME_FAILED"));
+    }
+  });
+
+  app.post<{ Params: { appId: string; profileId: string } }>("/api/apps/:appId/profiles/:profileId/default", async (request, reply) => {
+    try {
+      return { data: AppProfileSchema.parse(appRuntime.setDefaultAppProfile(request.params.appId, request.params.profileId)) };
+    } catch (error: unknown) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "APP_PROFILE_DEFAULT_FAILED";
+      return reply.code(appRuntimeErrorStatus(code)).send(appRuntimeErrorPayload(error, "APP_PROFILE_DEFAULT_FAILED"));
+    }
+  });
+
+  app.delete<{ Params: { appId: string; profileId: string } }>("/api/apps/:appId/profiles/:profileId", async (request, reply) => {
+    try {
+      appRuntime.removeAppProfile(request.params.appId, request.params.profileId);
+      return { data: { removed: true } };
+    } catch (error: unknown) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "APP_PROFILE_DELETE_FAILED";
+      return reply.code(appRuntimeErrorStatus(code)).send(appRuntimeErrorPayload(error, "APP_PROFILE_DELETE_FAILED"));
     }
   });
 

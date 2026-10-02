@@ -1,5 +1,11 @@
 import { z } from "zod";
-import type { ControlPlaneMobileDevice } from "@task-handoff/protocol/control-plane-access";
+import {
+  ControlPlaneCliLocalSessionRequestSchema,
+  ControlPlaneCliTokenResponseSchema,
+  type ControlPlaneMobileDevice,
+} from "@task-handoff/protocol/control-plane-access";
+import { nowIso as now } from "@task-handoff/core/core/time";
+import { createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserDatabaseConfigInput } from "./database/index.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";
@@ -7,6 +13,7 @@ import { assertCanAccessResolvedResource, type ControlPlaneUserAuthorizationCont
 import { ControlPlaneExternalAuthentication } from "./external-authentication.ts";
 import { ControlPlaneCliAuthorizationService, type ControlPlaneCliAuthorizationApprover } from "./cli-authorization.ts";
 import { ControlPlaneIdentityProviderService } from "./identity-provider-service.ts";
+import { isLoopbackRemoteAddress } from "./local-trust.ts";
 import { ControlPlaneUserAuthentication, type ControlPlaneSessionClientType } from "./user-authentication.ts";
 import { ControlPlaneUserService } from "./user-service.ts";
 import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
@@ -95,8 +102,42 @@ export class ControlPlaneAuth {
   }
 
   async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
-    const current = this.enabled() ? await this.sessions.currentSession(token, clientTypes) : { authenticated: true };
-    return { ...await this.state(), ...current };
+    if (!this.enabled()) {
+      // disabled 模式保持"匿名即已认证"的既有语义；但携带有效 CLI 会话时返回真实身份，
+      // 让 thctl 的 whoami 与请求审计归属本地操作员。
+      const local = token ? await this.resolveDisabledCredential(token, clientTypes) : undefined;
+      return {
+        ...await this.state(),
+        ...(local ? {
+          authenticated: true,
+          user: local.user,
+          authorization: local.authorization,
+          requiresPasswordChange: local.requiresPasswordChange,
+        } : { authenticated: true }),
+      };
+    }
+    return { ...await this.state(), ...await this.sessions.currentSession(token, clientTypes) };
+  }
+
+  /**
+   * disabled 模式下的请求归属：有效 CLI 会话按该用户执行 RBAC 与审计，其余请求保持既有
+   * 全权 system actor 语义（用户库尚未初始化时同样回退）。
+   */
+  async disabledModeAuthorization(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
+    if (this.enabled() || !token) return undefined;
+    const current = await this.resolveDisabledCredential(token, clientTypes);
+    if (!current) return undefined;
+    return {
+      type: "user",
+      userId: current.authorization.userId,
+      identityId: current.authorization.identityId,
+      roleIds: current.authorization.roleIds,
+      permissionIds: current.authorization.permissionIds,
+      nodeScope: current.authorization.nodeScope,
+      instanceScope: current.authorization.instanceScope,
+      authorizationRevision: current.authorization.authorizationRevision,
+      requiresPasswordChange: current.requiresPasswordChange,
+    } satisfies ControlPlaneUserAuthorizationContext;
   }
 
   async renewSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
@@ -133,7 +174,11 @@ export class ControlPlaneAuth {
   }
 
   async logoutSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
-    if (!this.enabled()) return { ok: true };
+    if (!this.enabled()) {
+      // disabled 模式下本地信任会话也能被显式注销；未知/已失效 token 保持幂等成功。
+      const local = token ? await this.resolveDisabledCredential(token, clientTypes) : undefined;
+      return local ? this.sessions.logout(token) : { ok: true };
+    }
     const current = await this.sessions.resolve(token, clientTypes);
     return this.sessions.logout(current ? token : undefined);
   }
@@ -143,7 +188,11 @@ export class ControlPlaneAuth {
   }
 
   async cliSessions(token: string | undefined, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
-    this.assertEnabled();
+    if (!this.enabled()) {
+      // disabled 模式下本地信任会话仍可被列出，保证本地 CLI 会话可审计、可撤销。
+      const current = await this.resolveDisabledCredential(token, credentialClientTypes);
+      return current ? this.sessions.listClientSessions(current.user.id, "cli") : undefined;
+    }
     return this.clientSessions(token, credentialClientTypes, "cli");
   }
 
@@ -162,7 +211,10 @@ export class ControlPlaneAuth {
   }
 
   async revokeCliSession(token: string | undefined, sessionId: string, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
-    this.assertEnabled();
+    if (!this.enabled()) {
+      const current = await this.resolveDisabledCredential(token, credentialClientTypes);
+      return current ? this.sessions.revokeSession(current.user.id, sessionId, ["cli"]) : undefined;
+    }
     return this.revokeClientSession(token, credentialClientTypes, ["cli"], sessionId);
   }
 
@@ -194,6 +246,56 @@ export class ControlPlaneAuth {
   async exchangeCliToken(input: unknown, context: { sourceId?: string } = {}) {
     this.assertEnabled();
     return this.cli.exchange(input, context);
+  }
+
+  /**
+   * 本地信任会话：仅 authentication disabled 且来源为 loopback 时可用，
+   * 以幂等创建的内置本地操作员身份签发可审计、可撤销的 cli 会话。
+   */
+  async createLocalCliSession(input: unknown, context: { remoteAddress?: string; sourceId?: string } = {}) {
+    if (this.enabled()) {
+      throw Object.assign(new Error("Local CLI sessions are unavailable while Control Plane authentication is enabled. Run `thctl login` instead."), {
+        code: "AUTH_LOCAL_SESSION_UNAVAILABLE",
+        statusCode: 403,
+      });
+    }
+    if (!isLoopbackRemoteAddress(context.remoteAddress)) {
+      throw Object.assign(new Error("Local CLI sessions are only available to clients on the same machine."), {
+        code: "AUTH_LOCAL_SESSION_NOT_LOCAL",
+        statusCode: 403,
+      });
+    }
+    const parsed = ControlPlaneCliLocalSessionRequestSchema.parse(input);
+    const operator = await this.users.ensureLocalTrustOperator();
+    const created = await this.sessions.createSessionForIdentity(operator.identityId, "cli", { client: parsed.client, loginAt: now() });
+    const user = await this.users.summary(operator.userId);
+    const timestamp = now();
+    await this.users.store.audit.put({
+      id: createId("uaudit"),
+      action: "cli-local-session.create",
+      actorUserId: operator.userId,
+      targetType: "cli-session",
+      targetId: created.session.id,
+      details: { source: "local-trust", client: parsed.client },
+      createdAt: timestamp,
+    });
+    return ControlPlaneCliTokenResponseSchema.parse({
+      data: {
+        sessionToken: created.sessionToken,
+        session: { ...created.session, client: parsed.client, user },
+        authorization: created.authorization,
+      },
+    }).data;
+  }
+
+  /** disabled 模式解析 bearer 会话；用户库尚未初始化或会话无效时返回 undefined。 */
+  private async resolveDisabledCredential(token: string, clientTypes: readonly ControlPlaneSessionClientType[]) {
+    try {
+      return await this.sessions.resolve(token, clientTypes);
+    } catch (error) {
+      if ((error as { code?: string } | undefined)?.code === "CONTROL_PLANE_DATABASE_NOT_INITIALIZED") return undefined;
+      throw error;
+    }
   }
 
   private async clientSessions(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[], clientType: "mobile" | "cli") {

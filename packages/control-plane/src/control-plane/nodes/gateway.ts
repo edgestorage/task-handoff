@@ -9,6 +9,8 @@ import {
   NodeAgentDeleteResponseSchema,
   NodeAgentHealthSchema,
   NodeAgentExternalListenerSchema,
+  NodeAgentModelRelaySchema,
+  UpdateNodeAgentModelRelaySchema,
   NodeAgentInstanceProxyRawResponseSchema,
   NodeAgentInstanceLifecycleResultSchema,
   NodeAgentPairingInviteResponseSchema,
@@ -24,6 +26,8 @@ import {
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
+  supportsNodeModelRelay,
+  nodeAgentCapabilitiesFromPublicNode,
   safeParseStoredControlledInstance,
   type ControlledInstance,
   type InstanceLifecycleSnapshot,
@@ -178,6 +182,35 @@ export class ControlPlaneNodeAgentGateway {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
+    });
+  }
+
+  getModelRelay(node: Node) {
+    this.requireModelRelayCapability(node);
+    return this.client.requestSchema(node, "/settings/model-relay", NodeAgentModelRelaySchema);
+  }
+
+  updateModelRelay(node: Node, input: unknown) {
+    this.requireModelRelayCapability(node);
+    const parsed = UpdateNodeAgentModelRelaySchema.parse(input);
+    return this.client.requestSchema(node, "/settings/model-relay", NodeAgentModelRelaySchema, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+  }
+
+  /**
+   * Capability gate for both relay settings routes. A node that predates the
+   * relay producer capability must keep working over its legacy settings
+   * surface, so the gateway returns a structured downgrade error instead of
+   * forwarding a request its strict schema cannot parse.
+   */
+  private requireModelRelayCapability(node: Node) {
+    if (supportsNodeModelRelay(nodeAgentCapabilitiesFromPublicNode(node.capabilities))) return;
+    throw Object.assign(new Error(`Node ${node.id} does not support the model relay settings.`), {
+      statusCode: 409,
+      code: "NODE_MODEL_RELAY_UNSUPPORTED",
     });
   }
 

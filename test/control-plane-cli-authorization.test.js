@@ -236,7 +236,8 @@ test("cli session migration keeps existing sessions and accepts cli rows", async
   database.exec("CREATE TABLE IF NOT EXISTS cp_migration_ledger (id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL)");
   database.exec("PRAGMA foreign_keys = ON");
   const insertLedger = database.prepare("INSERT INTO cp_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
-  for (const migration of sqliteMigrations.filter((entry) => entry.id !== "0006_cli_sessions")) {
+  // 0006 and 0007 are the migrations under test: reconstruct the pre-upgrade database and let app start apply them in order.
+  for (const migration of sqliteMigrations.filter((entry) => !["0006_cli_sessions", "0007_local_trust_identities"].includes(entry.id))) {
     database.exec(migration.sql);
     insertLedger.run(migration.id, migration.checksum, new Date().toISOString(), JSON.stringify({ dialect: "sqlite" }));
   }

@@ -55,6 +55,7 @@ export const controlPlaneQueryKeys = {
     cwdFolderId || null,
   ] as const,
   appSessions: (instanceId?: string) => ["control-plane-app-sessions", instanceId || "*"] as const,
+  instanceAppProfiles: (instanceId: string, appId: string) => ["control-plane-instance-app-profiles", instanceId, appId] as const,
   chatBridges: ["chat-gateway-bridges"] as const,
   chatStatus: ["chat-gateway-status"] as const,
 };

@@ -143,6 +143,8 @@ export const sessions = {
     stopping: "正在停止", launching: "正在启动", connecting: "正在连接", offline: "离线", launchApp: "启动应用",
     launchUnavailable: "实例仍在启动；连接后才能启动应用。", unknownWorkspace: "未知工作区",
     terminal: "终端", browser: "浏览器", logs: "日志", session: "会话", appFallback: "应用 {number}",
+    embeddedBrowser: "内嵌浏览器",
+    profileDefault: "默认", profileDefaultHint: "默认 · {name}", profileRunning: "运行中会话", profileDiskUsage: "占用 {size}", profileDiskUnknown: "占用统计不可用", profileTemporary: "临时会话", profileTemporaryDescription: "使用一次性 Profile 启动", profileLoading: "正在加载 Profile…", profileLoadFailed: "无法加载 Profile。",
     appSessions: "{count} 个应用会话", noActiveApp: "没有活跃应用", readyAttach: "可以连接", waitingRegistration: "等待注册",
     createdNotStarted: "已创建，尚未启动", lastHeartbeat: "上次心跳 {time}", workbenchHint: "创建或注册受控实例后，此工作台即可使用。",
     searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", addFolderFromNode: "从此节点添加文件夹",

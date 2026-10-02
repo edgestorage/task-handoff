@@ -446,9 +446,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, UpdateChannel } from "../../../api/types";
+import { nodeSupportsModelRelay } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
@@ -833,9 +834,65 @@ async function saveExternalListener() {
   }
 }
 
+const modelRelay = ref<NodeAgentModelRelay>();
+const modelRelayError = ref("");
+const loadingModelRelay = ref(false);
+const savingModelRelay = ref(false);
+const selectedNodeSupportsModelRelay = computed(() => nodeSupportsModelRelay(selectedNode.value));
+
+async function loadModelRelay() {
+  const node = selectedNode.value;
+  if (!node || !nodeSupportsModelRelay(node)) {
+    modelRelay.value = undefined;
+    modelRelayError.value = "";
+    return;
+  }
+  loadingModelRelay.value = true;
+  modelRelayError.value = "";
+  try {
+    modelRelay.value = await getNodeModelRelay(node.id);
+  } catch (error) {
+    modelRelay.value = undefined;
+    modelRelayError.value = errorText(error);
+  } finally {
+    loadingModelRelay.value = false;
+  }
+}
+
+async function setModelRelayEnabled(enabled: boolean) {
+  const node = selectedNode.value;
+  if (!node || !nodeSupportsModelRelay(node) || savingModelRelay.value || modelRelay.value?.enabled === enabled) return;
+  savingModelRelay.value = true;
+  modelRelayError.value = "";
+  try {
+    // The node-agent response is authoritative; the UI never keeps a local
+    // optimistic copy of the switch.
+    modelRelay.value = await updateNodeModelRelay(node.id, { enabled });
+    showControlPlaneToast(t(enabled ? "settings.nodeDetail.modelRelayEnabledToast" : "settings.nodeDetail.modelRelayDisabledToast"), "success");
+  } catch (error) {
+    // A blocked disable carries the affected instance ids; resolve them to
+    // names so the operator can act without leaving the node settings.
+    const details = error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
+    const blocked = details && typeof details === "object" && !Array.isArray(details) ? (details as { instanceIds?: unknown }).instanceIds : undefined;
+    const instanceIds = Array.isArray(blocked) ? blocked.filter((id): id is string => typeof id === "string") : [];
+    modelRelayError.value = instanceIds.length
+      ? `${errorText(error)} ${t("settings.nodeDetail.modelRelayInUseInstances", {
+          instances: instanceIds.map((id) => selectedNodeInstances.value.find((instance) => instance.id === id)?.name || id).join(", "),
+        })}`
+      : errorText(error);
+    showControlPlaneToast(modelRelayError.value);
+  } finally {
+    savingModelRelay.value = false;
+    await loadModelRelay();
+  }
+}
+
 watch(
   () => selectedNode.value?.id,
-  () => { void loadExternalListener(); },
+  () => {
+    void loadExternalListener();
+    void loadModelRelay();
+  },
   { immediate: true },
 );
 const hasLocalNode = computed(() => (nodes.data.value || []).some(isControlPlaneLocalNode));
@@ -1148,6 +1205,7 @@ const nodeDetailActions = computed(() => ({
   removeControlPlaneConnection,
   removeRuntime,
   saveExternalListener,
+  setModelRelayEnabled,
   submitNodeLocalFolder,
   setUpdateChannel,
   updateExternalListenerDraft,
@@ -1171,8 +1229,10 @@ const nodeDetailBusy = computed(() => ({
   loadingNodeImagesId: loadingNodeImagesId.value,
   loadingRemoteKeysNodeId: loadingRemoteKeysNodeId.value,
   loadingExternalListener: loadingExternalListener.value,
+  loadingModelRelay: loadingModelRelay.value,
   renamingNodeId: renamingNodeId.value,
   savingExternalListener: savingExternalListener.value,
+  savingModelRelay: savingModelRelay.value,
 }));
 
 const nodeDetailResources = computed(() => ({
@@ -1192,6 +1252,9 @@ const nodeDetailResources = computed(() => ({
   externalListenerBindScope: externalListenerBindScope.value,
   externalListenerError: externalListenerError.value,
   externalListenerPort: externalListenerPort.value,
+  modelRelay: modelRelay.value,
+  modelRelayError: modelRelayError.value,
+  modelRelaySupported: selectedNodeSupportsModelRelay.value,
   runtimes: selectedNodeRuntimes.value,
   selectedImageNodeId: selectedImageNodeId.value,
   selectedNodeIsLocal: selectedNodeIsLocal.value,
@@ -1550,7 +1613,10 @@ function errorText(error: unknown) {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  width: calc(100% + var(--settings-scrollbar-outset, 16px));
+  margin-right: calc(-1 * var(--settings-scrollbar-outset, 16px));
   padding-top: var(--settings-top-fade-height);
+  padding-right: var(--settings-scrollbar-outset, 16px);
 }
 
 .node-list-panel,
@@ -1565,6 +1631,10 @@ function errorText(error: unknown) {
   border-radius: 0;
   background: transparent;
   padding: 0;
+}
+
+.node-detail-panel {
+  overflow: visible;
 }
 
 .node-list-panel {

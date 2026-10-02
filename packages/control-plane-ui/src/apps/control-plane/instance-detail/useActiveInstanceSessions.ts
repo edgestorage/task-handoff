@@ -21,6 +21,7 @@ import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
 import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-plane-directory";
 import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { ApiError } from "../../../api/client";
 
 export type SessionPaneId = "left" | "right";
 
@@ -29,6 +30,7 @@ type UseActiveInstanceSessionsInput = {
   boardSessionKeys: Record<string, string>;
   closeFloatingLayers: (except?: "instance" | "session" | "app") => void;
   errorText: (error: unknown) => string;
+  focusAppSession?: (instance: InstanceBoardItem, sessionId: string) => void | Promise<void>;
   notifyError?: (message: string) => void;
   refresh: () => Promise<void>;
   appLaunchMenuOpen: Ref<boolean>;
@@ -42,6 +44,7 @@ export function useActiveInstanceSessions({
   boardSessionKeys,
   closeFloatingLayers,
   errorText,
+  focusAppSession,
   notifyError,
   refresh,
   sessionMenuOpen,
@@ -167,7 +170,7 @@ export function useActiveInstanceSessions({
     }
     const browser = canUseDesktopBrowserContext()
       && (supportsBrowserTunnel(activeInstance.value.capabilities) || supportsDirectoryBrowserTunnel(activeInstance.value.capabilities))
-      ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.browser") }]
+      ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.embeddedBrowser") }]
       : [];
     const catalogApps = launchableAppsForInstance(activeInstance.value, t);
     if (catalogApps.length) return [...catalogApps, ...browser];
@@ -416,11 +419,21 @@ export function useActiveInstanceSessions({
       rememberSessionKey(instance.id, session.id);
       boardSessionKeys[instance.id] = session.id;
     } catch (error) {
+      // 同一 Profile 只能有一个运行会话：实例返回 409 时直接聚焦已有会话。
+      if (await focusRunningProfileSession(instance, error)) return;
       notifyError?.(errorText(error));
       await refresh();
     } finally {
       launchingApp.value = false;
     }
+  }
+
+  async function focusRunningProfileSession(instance: InstanceBoardItem, error: unknown) {
+    if (!(error instanceof ApiError) || error.code !== "BROWSER_PROFILE_BUSY") return false;
+    const sessionId = typeof error.details?.sessionId === "string" ? error.details.sessionId : "";
+    if (!sessionId || !focusAppSession) return false;
+    await focusAppSession(instance, sessionId);
+    return true;
   }
 
   async function stopSelectedAppSession(instance: InstanceBoardItem, session: SessionTab) {
@@ -561,7 +574,7 @@ export function useActiveInstanceSessions({
       key,
       kind: "embedded-browser",
       label: EMBEDDED_BROWSER_APP_ID,
-      title: t("sessions.tabs.browser"),
+      title: t("sessions.tabs.embeddedBrowser"),
       status: initialUrl ? "loading" : "running",
       source: { browserTabId: key, ...(initialUrl ? { initialUrl } : {}) },
     });

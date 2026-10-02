@@ -6,7 +6,7 @@ const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
 
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
-const { modelConfigHash } = require("../packages/protocol/src/control-plane.ts");
+const { modelConfigHash, modelContentRevision } = require("../packages/protocol/src/control-plane.ts");
 
 const openCodeReasoningVariants = Object.fromEntries(
   ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
@@ -68,7 +68,11 @@ test("node model registry keeps entity ids stable across edits and protects refe
   assert.equal(created.statusCode, 201);
   const codexId = created.json().data.id;
   assert.match(codexId, /^mdl_[0-9abcdefghjkmnpqrstvwxyz]{13}$/);
-  assert.equal(created.json().data.revision, codexHash);
+  assert.equal(created.json().data.revision, modelContentRevision({
+    ...codexInput,
+    modelNames: [{ name: codexInput.model, order: 100 }],
+    protocols: ["openai-responses"],
+  }));
   assert.deepEqual(created.json().data.modelNames, [{ name: codexInput.model, order: 100 }]);
   assert.equal("key" in created.json().data, false);
 
@@ -104,7 +108,12 @@ test("node model registry keeps entity ids stable across edits and protects refe
   const revised = await request(app, "PUT", `/api/node-agent/models/${deployHash}/deploy`, { ...deployedPayload, key: "deployed-secret-2" });
   assert.equal(revised.statusCode, 200);
   assert.equal(revised.json().data.id, deployHash);
-  assert.equal(revised.json().data.revision, modelConfigHash({ ...deployInput, key: "deployed-secret-2" }));
+  assert.equal(revised.json().data.revision, modelContentRevision({
+    ...deployInput,
+    key: "deployed-secret-2",
+    modelNames: [{ name: deployInput.model, order: 100 }],
+    protocols: ["openai-responses"],
+  }));
   const unknownDeployId = `mdl_${"0".repeat(64)}`;
   const mismatch = await request(app, "PUT", `/api/node-agent/models/${unknownDeployId}/deploy`, { ...deployedPayload, id: unknownDeployId });
   assert.equal(mismatch.statusCode, 400);
@@ -159,7 +168,12 @@ test("node model registry keeps entity ids stable across edits and protects refe
   });
 
   const rotated = await request(app, "PATCH", `/api/node-agent/models/${codexId}`, { key: "rotated-secret" });
-  const rotatedHash = modelConfigHash({ ...codexInput, key: "rotated-secret" });
+  const rotatedHash = modelContentRevision({
+    ...codexInput,
+    key: "rotated-secret",
+    modelNames: [{ name: codexInput.model, order: 100 }],
+    protocols: ["openai-responses"],
+  });
   assert.equal(rotated.statusCode, 200);
   // The entity keeps its identity: only the content revision advances.
   assert.equal(rotated.json().data.id, codexId);

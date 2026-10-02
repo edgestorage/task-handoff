@@ -15,6 +15,8 @@ type ConfigSyncItem = {
   type: "file" | "dir";
   projectPath: string;
   containerPath: string;
+  /** Browser profile that owns this item, when the item points at one. */
+  profileId?: string;
 };
 
 type ConfigSyncPreset = {
@@ -25,6 +27,37 @@ type ConfigSyncPreset = {
 };
 
 type ConfigSyncDirection = "import" | "export";
+
+export type ConfigSyncBrowserProfile = {
+  id: string;
+  name: string;
+  directory: string;
+  isDefault: boolean;
+};
+
+export type ConfigSyncOptions = {
+  browserProfiles?: ConfigSyncBrowserProfile[];
+  assertProfileIdle?: (profileId: string) => void;
+};
+
+// Chromium rotates these entries while it runs; copying them produces
+// inconsistent profile databases and lock contention, so profile sync skips
+// them instead of trying to merge ephemeral state.
+const BROWSER_PROFILE_SKIPPED_ENTRIES = new Set([
+  "Cache",
+  "Code Cache",
+  "GPUCache",
+  "ShaderCache",
+  "GrShaderCache",
+  "GraphiteDawnCache",
+  "DawnCache",
+  "Crashpad",
+  "BrowserMetrics",
+]);
+
+function isSkippedBrowserProfileEntry(name: string) {
+  return name.startsWith("Singleton") || name.endsWith(".lock") || BROWSER_PROFILE_SKIPPED_ENTRIES.has(name);
+}
 
 function homeDir() {
   return process.env.HOME || os.homedir() || "/home/agent";
@@ -42,23 +75,44 @@ function claudeHomeDir() {
   return process.env.CLAUDE_HOME || path.join(homeDir(), ".claude");
 }
 
-function chromiumUserDataDirs() {
-  const dirs = [path.join(homeDir(), ".config", "chromium")];
-  const configured = process.env.TASK_HANDOFF_CHROMIUM_USER_DATA_DIR?.trim();
-  if (configured && !dirs.includes(configured)) {
-    dirs.push(configured);
-  }
-  return dirs;
+function browserProfileSlug(profile: ConfigSyncBrowserProfile) {
+  const slug = profile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return slug || "profile";
 }
 
-export function configSyncPresets(): ConfigSyncPreset[] {
+function browserPreset(profiles: ConfigSyncBrowserProfile[]): ConfigSyncPreset {
+  const items: ConfigSyncItem[] = [{
+    id: "chromium-profile",
+    type: "dir",
+    projectPath: "chromium",
+    containerPath: path.join(homeDir(), ".config", "chromium"),
+  }];
+  const usedPaths = new Set(items.map((item) => item.projectPath));
+  for (const profile of profiles) {
+    const base = profile.isDefault ? "chromium-default" : `chromium-${browserProfileSlug(profile)}`;
+    let projectPath = base;
+    for (let index = 2; usedPaths.has(projectPath); index += 1) {
+      projectPath = `${base}-${index}`;
+    }
+    usedPaths.add(projectPath);
+    items.push({
+      id: `chromium-profile-${profile.id}`,
+      type: "dir",
+      projectPath,
+      containerPath: profile.directory,
+      profileId: profile.id,
+    });
+  }
+  return {
+    id: "browser",
+    label: "Browser",
+    projectRoot: ".task-handoff/configs/browser",
+    items,
+  };
+}
+
+export function configSyncPresets(options: ConfigSyncOptions = {}): ConfigSyncPreset[] {
   const home = homeDir();
-  const browserItems = chromiumUserDataDirs().map((containerPath, index) => ({
-    id: index === 0 ? "chromium-profile" : `chromium-profile-${index + 1}`,
-    type: "dir" as const,
-    projectPath: index === 0 ? "chromium" : `chromium-${index + 1}`,
-    containerPath,
-  }));
   return [
     {
       id: "codex",
@@ -84,12 +138,7 @@ export function configSyncPresets(): ConfigSyncPreset[] {
         { id: "skills", type: "dir", projectPath: "skills", containerPath: path.join(home, ".claude", "skills") },
       ],
     },
-    {
-      id: "browser",
-      label: "Browser",
-      projectRoot: ".task-handoff/configs/browser",
-      items: browserItems,
-    },
+    browserPreset(options.browserProfiles || []),
   ];
 }
 
@@ -257,7 +306,7 @@ function copyFileWithoutSymlinks(source: string, target: string) {
   }
 }
 
-function copyDirectoryWithoutSymlinks(source: string, target: string) {
+function copyDirectoryWithoutSymlinks(source: string, target: string, skipEntry?: (name: string) => boolean) {
   const sourceStat = fs.lstatSync(source);
   if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
     const error = new Error(`Config sync directory source is not a regular directory: ${source}`);
@@ -275,6 +324,7 @@ function copyDirectoryWithoutSymlinks(source: string, target: string) {
     fs.mkdirSync(target, { recursive: false, mode: sourceStat.mode & 0o777 });
   }
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    if (skipEntry?.(entry.name)) continue;
     const sourceEntry = path.join(source, entry.name);
     const targetEntry = path.join(target, entry.name);
     if (entry.isSymbolicLink()) {
@@ -282,18 +332,18 @@ function copyDirectoryWithoutSymlinks(source: string, target: string) {
       Object.assign(error, { statusCode: 400, code: "CONFIG_SYNC_SYMLINK_NOT_ALLOWED" });
       throw error;
     }
-    if (entry.isDirectory()) copyDirectoryWithoutSymlinks(sourceEntry, targetEntry);
+    if (entry.isDirectory()) copyDirectoryWithoutSymlinks(sourceEntry, targetEntry, skipEntry);
     else if (entry.isFile()) copyFileWithoutSymlinks(sourceEntry, targetEntry);
   }
 }
 
-function copyItem(type: ConfigSyncItem["type"], source: string, target: string) {
+function copyItem(type: ConfigSyncItem["type"], source: string, target: string, options: { skipEntry?: (name: string) => boolean } = {}) {
   if (!fs.existsSync(source)) {
     return "skipped_missing_source" as const;
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (type === "dir") {
-    copyDirectoryWithoutSymlinks(source, target);
+    copyDirectoryWithoutSymlinks(source, target, options.skipEntry);
   } else {
     const sourceStat = fs.lstatSync(source);
     if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) {
@@ -306,8 +356,8 @@ function copyItem(type: ConfigSyncItem["type"], source: string, target: string) 
   return "copied" as const;
 }
 
-export function runConfigSync(direction: ConfigSyncDirection, presetId: string, presetOverride?: ConfigSyncPreset) {
-  const preset = presetOverride || configSyncPresets().find((item) => item.id === presetId);
+export function runConfigSync(direction: ConfigSyncDirection, presetId: string, presetOverride?: ConfigSyncPreset, options: ConfigSyncOptions = {}) {
+  const preset = presetOverride || configSyncPresets(options).find((item) => item.id === presetId);
   if (!preset) {
     const error = new Error(`Config sync preset ${presetId} was not found.`);
     Object.assign(error, { statusCode: 404, code: "CONFIG_SYNC_PRESET_NOT_FOUND" });
@@ -315,21 +365,40 @@ export function runConfigSync(direction: ConfigSyncDirection, presetId: string, 
   }
   const presetRoot = resolveWorkspaceFolder(preset.projectRoot);
   assertNoSymlinkSegments(presetRoot.workspace, presetRoot.resolved, "CONFIG_SYNC_FOLDER_INVALID");
-  const items = preset.items.map((item) => {
+  const profilesByDirectory = new Map((options.browserProfiles || []).map((profile) => [path.resolve(profile.directory), profile]));
+  const itemProfiles = preset.items.map((item) => (item.profileId
+    ? { id: item.profileId }
+    : profilesByDirectory.get(path.resolve(item.containerPath))));
+  // 运行中的 Profile 拒绝整次导入导出：Chromium 会持续写入 SQLite/LevelDB，
+  // 复制到写一半的数据库无法恢复，因此这里在复制任何文件前失败。
+  for (const profile of itemProfiles) {
+    if (!profile) continue;
+    try {
+      options.assertProfileIdle?.(profile.id);
+    } catch (error) {
+      if (error && typeof error === "object" && (error as Record<string, unknown>).code === "BROWSER_PROFILE_BUSY" && typeof (error as Record<string, unknown>).statusCode !== "number") {
+        Object.assign(error, { statusCode: 409 });
+      }
+      throw error;
+    }
+  }
+  const items = preset.items.map((item, index) => {
     const projectPath = resolveProjectPath(preset.projectRoot, item.projectPath);
     const containerPath = resolveContainerPath(item.containerPath);
     const source = direction === "import" ? projectPath : containerPath;
     const target = direction === "import" ? containerPath : projectPath;
+    const profile = itemProfiles[index];
+    const { profileId: _profileId, ...itemFields } = item;
     try {
       return {
-        ...item,
+        ...itemFields,
         source,
         target,
-        status: copyItem(item.type, source, target),
+        status: copyItem(item.type, source, target, profile ? { skipEntry: isSkippedBrowserProfileEntry } : {}),
       };
     } catch (error) {
       return {
-        ...item,
+        ...itemFields,
         source,
         target,
         status: "failed" as const,
@@ -348,11 +417,11 @@ export function runConfigSync(direction: ConfigSyncDirection, presetId: string, 
   };
 }
 
-export function runConfigSyncBatch(request: ConfigSyncRequest) {
+export function runConfigSyncBatch(request: ConfigSyncRequest, options: ConfigSyncOptions = {}) {
   const selectedFolder = resolveWorkspaceFolder(request.workspaceFolder);
   const workspaceFolder = relativeWorkspacePath(selectedFolder.workspace, selectedFolder.resolved);
   const presets = request.programIds.map((programId) => {
-    const preset = configSyncPresets().find((candidate) => candidate.id === programId);
+    const preset = configSyncPresets(options).find((candidate) => candidate.id === programId);
     if (!preset) {
       const error = new Error(`Config sync program ${programId} was not found.`);
       Object.assign(error, { statusCode: 404, code: "CONFIG_SYNC_PROGRAM_NOT_FOUND" });
@@ -363,6 +432,6 @@ export function runConfigSyncBatch(request: ConfigSyncRequest) {
   return ConfigSyncBatchResultSchema.parse({
     direction: request.direction,
     workspaceFolder,
-    programs: presets.map((preset) => runConfigSync(request.direction, preset.id, preset)),
+    programs: presets.map((preset) => runConfigSync(request.direction, preset.id, preset, options)),
   });
 }
