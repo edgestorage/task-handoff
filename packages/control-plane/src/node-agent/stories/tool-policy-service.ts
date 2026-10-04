@@ -38,6 +38,7 @@ export class StoryToolPolicyService {
         agentToolsActions: parsed.actions,
         agentToolsAutomations: parsed.automations,
         agentToolsAiSessions: parsed.aiSessions,
+        agentToolsDecisions: parsed.decisions,
         updatedAt: new Date().toISOString(),
       });
     });
@@ -112,6 +113,7 @@ export class StoryToolPolicyService {
       actions: story.agentToolsActions,
       automations: story.agentToolsAutomations,
       aiSessions: story.agentToolsAiSessions,
+      decisions: story.agentToolsDecisions,
     });
     const revision = crypto.createHash("sha256").update(storyAgentToolPolicyRevisionSource(policy)).digest("hex");
     return StoryAgentToolPolicySettingsSchema.parse({ policy, revision });

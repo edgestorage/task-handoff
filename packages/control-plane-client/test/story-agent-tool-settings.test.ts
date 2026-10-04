@@ -11,7 +11,7 @@ test("Stories client owns Agent Tool settings routes and sanitizes responses", a
       requests.push({ path, init });
       return schema.parse({
         data: {
-          policy: { content: true, actions: true, automations: false, aiSessions: false, future: true },
+          policy: { content: true, actions: true, automations: false, aiSessions: false, decisions: false, future: true },
           revision,
           future: "ignored",
         },
@@ -21,7 +21,7 @@ test("Stories client owns Agent Tool settings routes and sanitizes responses", a
   const stories = createControlPlaneStoriesApi(transport as never);
 
   assert.deepEqual(await stories.agentToolSettings("story/one", "node one"), {
-    policy: { content: true, actions: true, automations: false, aiSessions: false },
+    policy: { content: true, actions: true, automations: false, aiSessions: false, decisions: false },
     revision,
   });
   await stories.updateAgentToolSettings("story/one", "node one", {
@@ -29,6 +29,7 @@ test("Stories client owns Agent Tool settings routes and sanitizes responses", a
     actions: true,
     automations: true,
     aiSessions: false,
+    decisions: false,
   });
 
   assert.equal(requests[0]?.path, "/api/stories/story%2Fone/settings/agent-tools?nodeId=node%20one");
@@ -36,7 +37,7 @@ test("Stories client owns Agent Tool settings routes and sanitizes responses", a
   assert.equal(requests[1]?.init?.method, "PUT");
   assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), {
     nodeId: "node one",
-    input: { policy: { content: false, actions: true, automations: true, aiSessions: false } },
+    input: { policy: { content: false, actions: true, automations: true, aiSessions: false, decisions: false } },
   });
 });
 
@@ -68,4 +69,37 @@ test("Stories client runs a preset Action through its Story owner node", async (
     nodeId: "node one",
     input: { clientRequestId: "request one" },
   });
+});
+
+test("Stories client owns Story decision read and decision routes", async () => {
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  const decision = {
+    id: "decision_1",
+    storyId: "story_1",
+    sessionId: "session_1",
+    turnId: "turn_1",
+    question: "Ship or hold?",
+    options: [],
+    allowFreeText: true,
+    status: "pending",
+    revision: 1,
+    createdAt: "2026-09-28T00:00:00.000Z",
+    updatedAt: "2026-09-28T00:00:00.000Z",
+  };
+  const stories = createControlPlaneStoriesApi({
+    async request(path: string, schema: { parse(value: unknown): unknown }, init?: RequestInit) {
+      requests.push({ path, init });
+      return schema.parse({ data: path.endsWith("/decisions?nodeId=node_one") ? { decisions: [decision] } : { ...decision, status: "decided", revision: 2 } });
+    },
+  } as never);
+
+  assert.equal((await stories.listDecisions("story_1", "node_one")).decisions[0]?.id, "decision_1");
+  assert.equal((await stories.decideStory("story_1", "decision_1", "node_one", { response: "ship", expectedRevision: 1 })).status, "decided");
+  assert.equal((await stories.cancelDecision("story_1", "decision_1", "node_one", { expectedRevision: 1 })).status, "decided");
+
+  assert.equal(requests[0]?.path, "/api/stories/story_1/decisions?nodeId=node_one");
+  assert.equal(requests[1]?.path, "/api/stories/story_1/decisions/decision_1/decide");
+  assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), { nodeId: "node_one", input: { response: "ship", expectedRevision: 1 } });
+  assert.equal(requests[2]?.path, "/api/stories/story_1/decisions/decision_1/cancel");
+  assert.deepEqual(JSON.parse(String(requests[2]?.init?.body)), { nodeId: "node_one", input: { expectedRevision: 1 } });
 });

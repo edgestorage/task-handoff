@@ -1685,6 +1685,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/messages", nodeAgentProcessRoute, async (request, reply) => {
+    try {
+      const body = AiSessionMessageInputSchema.parse(request.body || {});
+      const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, body));
+      publishAiSessionSnapshot("control-action");
+      return { data: projectAiSessionActionResponse(result) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.post<{ Body: unknown }>("/api/internal/node-agent/story-automation/ai-sessions", nodeAgentProcessRoute, async (request, reply) => {
     try {
       const body = StoryAutomationInstanceCreateInputSchema.parse(request.body || {});

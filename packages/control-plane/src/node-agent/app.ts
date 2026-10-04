@@ -84,10 +84,11 @@ import { StoryToolPolicyInvalidationNotifier } from "./stories/tool-policy-inval
 import { StoryActionExecutionService } from "./stories/action-execution-service.ts";
 import { StoryAiSessionReadService } from "./stories/ai-session-read-service.ts";
 import { StoryAiSessionCloseService } from "./stories/ai-session-close-service.ts";
+import { StoryDecisionCommandService } from "./stories/decision-service.ts";
 import { openNodeAgentDatabase } from "./persistence/database.ts";
 import { createNodeAgentRepository } from "./persistence/repository.ts";
 import { InstanceIdleSessionRetentionCoordinator, StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
-import { StoryChangedEventType } from "@task-handoff/protocol/stories";
+import { StoryChangedEventType, StoryDecisionChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
@@ -1086,6 +1087,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const storyActionExecution = new StoryActionExecutionService(state, stories, fetchImpl, resolveInstanceWeb);
   const storyAiSessionRead = new StoryAiSessionReadService(state, fetchImpl, resolveInstanceWeb);
   const storyAiSessionCloser = new StoryAiSessionCloseService(fetchImpl, resolveInstanceWeb);
+  const storyDecisions = new StoryDecisionCommandService(
+    state,
+    storyRepository,
+    fetchImpl,
+    resolveInstanceWeb,
+    (event) => eventForwarder.publish(StoryDecisionChangedEventType, event, { nodeId: state.node.id }),
+  );
+  storyIdleRetention.setSessionClosedHandler(async (sessionId) => {
+    await storyDecisions.expireForSession(sessionId, {
+      code: "AI_SESSION_CLOSED",
+      message: "The AI Session that raised the decision was closed.",
+    });
+  });
   const storyScheduler = new StoryScheduler(
     state,
     stories,
@@ -1096,7 +1110,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     undefined,
     storyActionExecution,
   );
-  const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler, storyRepository, storyAiSessionCloser);
+  const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler, storyRepository, storyAiSessionCloser, storyDecisions);
   await storyCommands.init();
   await storyScheduler.start();
   stories.setOnChange((change, story) => {
@@ -1492,7 +1506,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         stories: {
           enabled: true,
           agentTools: true,
-          agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true },
+          agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true, decisions: true },
           sessionRetention: true,
           maxFileBytes: 32 * 1024 * 1024,
           maxBatchPaths: 20,
@@ -1608,6 +1622,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     toolPolicy: storyToolPolicy,
     actionExecution: storyActionExecution,
     aiSessionRead: storyAiSessionRead,
+    decisions: storyDecisions,
     agentRuns,
     onToolPolicyInvalidated: (event) => storyToolPolicyInvalidation.notify(event),
   });

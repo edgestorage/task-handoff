@@ -45,6 +45,8 @@ export const NodeAgentStoryAgentToolCapabilitiesSchema = z.object({
   actions: z.boolean().default(false),
   automations: z.boolean().default(false),
   aiSessionRead: z.boolean().default(false),
+  // Compatibility for v0.0.33: 缺失即不支持 decision 功能域，只关闭该域。
+  decisions: z.boolean().default(false),
 }).strip();
 
 export const NodeAgentStoryCapabilitiesSchema = z.object({
@@ -233,6 +235,11 @@ export function supportsNodeAgentExecutionPolicy(
 
 export function nodeStoryAgentToolCapabilities(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).stories.agentToolCapabilities;
+}
+
+/** 缺失即不支持 decision 功能域；只关闭该域，不影响 Story 与 AI Session。 */
+export function supportsNodeStoryDecisionTools(capabilities: unknown) {
+  return nodeStoryAgentToolCapabilities(capabilities).decisions;
 }
 
 export function nodeAgentCapabilitiesFromPublicNode(capabilities: unknown) {

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, foreignKey, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { StoryAutomationPolicy, StoryAutomationRun, StoryAutomationSchedule, StorySessionPreset } from "@task-handoff/protocol/stories";
+import type { StoryAutomationPolicy, StoryAutomationRun, StoryAutomationSchedule, StoryDecisionExpiredReason, StoryDecisionOption, StorySessionPreset } from "@task-handoff/protocol/stories";
 import type { StoryAutomationExecutionInput } from "./records.ts";
 
 export const migrationLedger = sqliteTable("na_migration_ledger", {
@@ -23,6 +23,7 @@ export const stories = sqliteTable("na_stories", {
   agentToolsActions: integer("agent_tools_actions", { mode: "boolean" }).notNull().default(false),
   agentToolsAutomations: integer("agent_tools_automations", { mode: "boolean" }).notNull().default(false),
   agentToolsAiSessions: integer("agent_tools_ai_sessions", { mode: "boolean" }).notNull().default(false),
+  agentToolsDecisions: integer("agent_tools_decisions", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
   check("na_stories_max_idle_check", sql`${table.maxIdleAiSessions} BETWEEN 1 AND 50`),
   check("na_stories_next_document_sequence_check", sql`${table.nextDocumentSequence} > 0`),
@@ -30,7 +31,37 @@ export const stories = sqliteTable("na_stories", {
   check("na_stories_agent_tools_actions_check", sql`${table.agentToolsActions} IN (0, 1)`),
   check("na_stories_agent_tools_automations_check", sql`${table.agentToolsAutomations} IN (0, 1)`),
   check("na_stories_agent_tools_ai_sessions_check", sql`${table.agentToolsAiSessions} IN (0, 1)`),
+  check("na_stories_agent_tools_decisions_check", sql`${table.agentToolsDecisions} IN (0, 1)`),
   index("na_stories_created_idx").on(table.createdAt),
+]);
+
+export const decisions = sqliteTable("na_story_decisions", {
+  id: text("id").primaryKey(),
+  storyId: text("story_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(),
+  turnId: text("turn_id"),
+  question: text("question").notNull(),
+  options: text("options_json", { mode: "json" }).$type<StoryDecisionOption[]>().notNull().default([]),
+  allowFreeText: integer("allow_free_text", { mode: "boolean" }).notNull().default(true),
+  context: text("context"),
+  status: text("status", { enum: ["pending", "decided", "cancelled", "expired"] }).notNull(),
+  revision: integer("revision").notNull(),
+  response: text("response"),
+  selectedOptionId: text("selected_option_id"),
+  decidedTurnId: text("decided_turn_id"),
+  expiredReason: text("expired_reason_json", { mode: "json" }).$type<StoryDecisionExpiredReason>(),
+  // node-agent 私有续接账本，不进入公共 StoryDecision 投影。
+  resumeState: text("resume_state", { enum: ["resuming"] }),
+  resumeAttemptedAt: text("resume_attempted_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  decidedAt: text("decided_at"),
+}, (table) => [
+  uniqueIndex("na_story_decisions_session_turn_uq").on(table.storyId, table.sessionId, table.turnId).where(sql`${table.turnId} IS NOT NULL`),
+  index("na_story_decisions_story_idx").on(table.storyId, table.createdAt),
+  index("na_story_decisions_session_idx").on(table.sessionId, table.status),
+  check("na_story_decisions_revision_check", sql`${table.revision} >= 1`),
+  check("na_story_decisions_allow_free_text_check", sql`${table.allowFreeText} IN (0, 1)`),
 ]);
 
 export const actions = sqliteTable("na_story_actions", {

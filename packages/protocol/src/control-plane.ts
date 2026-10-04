@@ -145,6 +145,7 @@ function defaultControlledInstanceFeatures() {
     repositoryPathSearch: false,
     repositoryWorktreeMoveToMain: false,
     modelRelay: emptyModelRelayCapabilities(),
+    aiSessionSendIdempotency: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -213,6 +214,10 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   repositoryPathSearch: z.boolean().optional(),
   // Compatibility for v0.0.33: absence disables moving a worktree into the main worktree.
   repositoryWorktreeMoveToMain: z.boolean().optional(),
+  // Compatibility for v0.0.33: absence means the internal AI Session send route
+  // does not accept `clientRequestId`, so node-agent degrades to its private
+  // `resuming` ledger instead of a blind resend.
+  aiSessionSendIdempotency: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
@@ -254,6 +259,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     gitCredentialProxy: boolean;
     repositoryPathSearch: boolean;
     repositoryWorktreeMoveToMain: boolean;
+    aiSessionSendIdempotency: boolean;
     privateModelCatalog: boolean;
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
@@ -288,6 +294,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "gitCredentialProxy",
     "repositoryPathSearch",
     "repositoryWorktreeMoveToMain",
+    "aiSessionSendIdempotency",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
@@ -366,6 +373,16 @@ export function supportsRepositoryPathSearch(capabilities: unknown) {
 
 export function supportsRepositoryWorktreeMoveToMain(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.repositoryWorktreeMoveToMain;
+}
+
+/**
+ * Compatibility for v0.0.33: older controlled instances do not declare this
+ * capability, so their internal AI Session send route may reject
+ * `clientRequestId`. The node-agent then uses its private `resuming` ledger for
+ * a decision reply instead of a blind resend.
+ */
+export function supportsAiSessionSendIdempotency(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionSendIdempotency;
 }
 
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {

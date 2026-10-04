@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AiSessionConversationAttachmentSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionActionResult,
@@ -26,6 +26,8 @@ import { aiSessionAttachmentMetas } from "./ai-session/persistence";
 export type AiSessionSendInput = {
   message: string;
   mode?: AiSessionSendMode;
+  /** Optional caller-supplied idempotency key; a retry with the same key reuses the first result. */
+  clientRequestId?: string;
   attachments?: AiSessionMessageAttachment[];
   references?: AiSessionReference[];
   permissionMode?: AiSessionPermissionMode;
@@ -192,6 +194,8 @@ export class AiSessionController {
   private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly providerTimelineSubscriptions = new Map<string, () => void>();
   private readonly pendingSettings = new Set<string>();
+  private readonly completedSendOperations = new Map<string, { fingerprint: string; result: AiSessionActionResult }>();
+  private readonly pendingSendOperations = new Map<string, { fingerprint: string; promise: Promise<AiSessionActionResult> }>();
 
   constructor(
     private readonly registry: AiSessionRegistry,
@@ -337,6 +341,34 @@ export class AiSessionController {
   }
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {
+    const clientRequestId = input.clientRequestId;
+    if (!clientRequestId) return this.sendMessageOnce(sessionId, input);
+    const fingerprint = sendOperationFingerprint(sessionId, input);
+    const completed = this.completedSendOperations.get(clientRequestId);
+    if (completed) {
+      if (completed.fingerprint !== fingerprint) {
+        throw aiSessionControlError("AI_SESSION_SEND_REQUEST_CONFLICT", "The clientRequestId was already used for a different message.", 409);
+      }
+      return completed.result;
+    }
+    const active = this.pendingSendOperations.get(clientRequestId);
+    if (active) {
+      if (active.fingerprint !== fingerprint) {
+        throw aiSessionControlError("AI_SESSION_SEND_REQUEST_CONFLICT", "The clientRequestId was already used for a different message.", 409);
+      }
+      return active.promise;
+    }
+    const promise = this.sendMessageOnce(sessionId, input).then((result) => {
+      this.completedSendOperations.set(clientRequestId, { fingerprint, result });
+      return result;
+    }).finally(() => {
+      if (this.pendingSendOperations.get(clientRequestId)?.promise === promise) this.pendingSendOperations.delete(clientRequestId);
+    });
+    this.pendingSendOperations.set(clientRequestId, { fingerprint, promise });
+    return promise;
+  }
+
+  private async sendMessageOnce(sessionId: string, input: AiSessionSendInput) {
     const session = this.requireSession(sessionId);
     this.assertNoSettingsUpdate(session.id);
     const message = input.message.trim();
@@ -639,6 +671,17 @@ export class AiSessionController {
 
 function isSessionBusy(session: AiSessionStatus) {
   return session.status === "running" || session.status === "waiting";
+}
+
+function sendOperationFingerprint(sessionId: string, input: AiSessionSendInput) {
+  return createHash("sha256").update(JSON.stringify([
+    sessionId,
+    input.message,
+    input.mode || "auto",
+    input.permissionMode || null,
+    input.references || [],
+    input.attachments?.map((attachment) => attachment.id) || [],
+  ])).digest("hex");
 }
 
 export function aiSessionControlError(code: string, message: string, statusCode = 400) {

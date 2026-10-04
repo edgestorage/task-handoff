@@ -441,6 +441,8 @@ const AiSessionMessageBaseSchema = z.object({
   message: z.string().trim().min(1).max(20000),
   mode: AiSessionSendModeSchema.optional(),
   permissionMode: AiSessionPermissionModeSchema.optional(),
+  // Compatibility for v0.0.33: 旧实例的 strict 入参不接受该增量字段，只有声明发送幂等能力的实例才据它去重。
+  clientRequestId: z.string().trim().min(1).max(160).optional(),
 });
 
 export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
@@ -512,7 +514,7 @@ export const AiSessionGitSelectionSchema = z.object({
   branch: z.string().trim().min(1).max(1024),
 }).strict();
 
-export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
+export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.safeExtend({
   agent: AiAgentKindSchema,
   cwd: AiSessionRuntimePathSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),

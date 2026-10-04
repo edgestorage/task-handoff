@@ -50,6 +50,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
         actions: enabledTools.includes("story_list_actions"),
         automations: false,
         aiSessions: false,
+        decisions: false,
       },
       revision: policyRevision,
       enabledTools,
@@ -111,6 +112,17 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   const openCodeCreate = events.find((event) => event.agent === "opencode" && event.phase === "create");
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "story_run_action").action, "allow");
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "agent_run").action, "allow");
+
+  // 决策续接幂等：同一 clientRequestId 重试复用首个 turn，不产生第二个 provider turn。
+  const codexTurnsBefore = events.filter((event) => event.kind === "provider" && event.phase === "turn" && event.agent === "codex").length;
+  const firstSend = await controller.sendMessage(codex.aiSessionId, { message: "Decision reply", clientRequestId: "decision_1" });
+  const repeatedSend = await controller.sendMessage(codex.aiSessionId, { message: "Decision reply", clientRequestId: "decision_1" });
+  assert.deepEqual(repeatedSend, firstSend);
+  assert.equal(events.filter((event) => event.kind === "provider" && event.phase === "turn" && event.agent === "codex").length, codexTurnsBefore + 1);
+  await assert.rejects(
+    () => controller.sendMessage(codex.aiSessionId, { message: "Different reply", clientRequestId: "decision_1" }),
+    (error) => error.code === "AI_SESSION_SEND_REQUEST_CONFLICT" && error.statusCode === 409,
+  );
 
   enabledTools = [];
   allowedTargets = [];

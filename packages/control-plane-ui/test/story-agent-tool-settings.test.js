@@ -4,11 +4,12 @@ import test from "node:test";
 
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 
-test("Story editor exposes only the four product-level Agent tool categories", () => {
-  for (const category of ["content", "actions", "automations", "aiSessions"]) {
+test("Story editor exposes only the product-level Agent tool categories", () => {
+  for (const category of ["content", "actions", "automations", "aiSessions", "decisions"]) {
     assert.match(storyView, new RegExp(`draftAgentToolPolicy\\.${category}`));
   }
-  assert.equal((storyView.match(/class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy\./g) || []).length, 4);
+  const policyOptionCount = (storyView.match(/class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy\./g) || []).length;
+  assert.equal(policyOptionCount, 5);
   assert.doesNotMatch(storyView, /story_delete_automation/);
   assert.doesNotMatch(storyView, /story_run_action/);
 });

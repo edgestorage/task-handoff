@@ -16,6 +16,10 @@ import {
   StoryContentPageInputSchema,
   StoryContentPageResultSchema,
   StoryCreateInputSchema,
+  StoryDecisionCancelInputSchema,
+  StoryDecisionDecideInputSchema,
+  StoryDecisionListSchema,
+  StoryDecisionSchema,
   StoryDocumentUpdateInputSchema,
   StoryIdSchema,
   StoryPathSchema,
@@ -42,6 +46,7 @@ import {
   StoryAgentAiSessionListResultSchema,
   StoryAgentAiSessionTurnInputSchema,
   StoryAgentAiSessionTurnResultSchema,
+  StoryAgentDecisionRequestResultSchema,
   StoryAgentDeleteResultSchema,
   StoryAgentToolPolicyUpdateInputSchema,
   StoryAgentToolResolutionSchema,
@@ -59,6 +64,7 @@ import type { StoryAiSessionReadService } from "./ai-session-read-service.ts";
 import { AgentInvocationRequestSchema } from "@task-handoff/protocol/agent-invocation-tools";
 import { AgentRunToolResultSchema } from "@task-handoff/protocol/agent-runs";
 import type { AgentRunService } from "../agents/run-service.ts";
+import type { StoryDecisionCommandService } from "./decision-service.ts";
 
 type NodeStoryRouteOptions = {
   fetchImpl?: typeof fetch;
@@ -71,6 +77,7 @@ type NodeStoryRouteOptions = {
   actionExecution?: StoryActionExecutionService;
   aiSessionRead?: StoryAiSessionReadService;
   agentRuns?: AgentRunService;
+  decisions?: StoryDecisionCommandService;
 };
 
 const StoryParamsSchema = z.object({ storyId: StoryIdSchema }).strict();
@@ -82,6 +89,7 @@ const InstanceSessionParamsSchema = z.object({
 }).strict();
 const InstanceSessionToolParamsSchema = InstanceSessionParamsSchema.extend({ tool: StoryAgentToolNameSchema }).strict();
 const StoryActionParamsSchema = StoryParamsSchema.extend({ actionId: z.string().trim().min(1).max(120) }).strict();
+const StoryDecisionParamsSchema = StoryParamsSchema.extend({ decisionId: z.string().trim().min(1).max(160) }).strict();
 const StoryPathQuerySchema = z.object({ storyPath: StoryPathSchema }).strict();
 const StoryWriteQuerySchema = StoryPathQuerySchema.extend({
   title: z.string().trim().min(1).max(240).optional(),
@@ -131,6 +139,16 @@ async function storyForSession(state: NodeAgentState, store: NodeStoryStore, ins
   if (!session) throw Object.assign(new Error("AI Session was not found in the authoritative instance snapshot."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
   if (!session.storyId) throw Object.assign(new Error("AI Session is not assigned to a Story."), { code: "STORY_CONTEXT_REQUIRED", statusCode: 409 });
   return await store.get(session.storyId) || (() => { throw Object.assign(new Error("Story was not found."), { code: "STORY_NOT_FOUND", statusCode: 404 }); })();
+}
+
+async function storySessionForTool(state: NodeAgentState, store: NodeStoryStore, instanceId: string, sessionId: string, token?: string) {
+  const instance = state.authenticateInstance(instanceId, token);
+  const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+  if (!session) throw Object.assign(new Error("AI Session was not found in the authoritative instance snapshot."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+  if (!session.storyId) throw Object.assign(new Error("AI Session is not assigned to a Story."), { code: "STORY_CONTEXT_REQUIRED", statusCode: 409 });
+  const story = await store.get(session.storyId);
+  if (!story) throw Object.assign(new Error("Story was not found."), { code: "STORY_NOT_FOUND", statusCode: 404 });
+  return { session, story };
 }
 
 function sendStoryFile(reply: FastifyReply, stream: NodeJS.ReadableStream, revision: string, size: number) {
@@ -195,6 +213,32 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     const resolution = await options.toolPolicy.resolve(storyId);
     await options.onToolPolicyInvalidated?.({ storyId, revision: resolution.revision });
     return { data: settings };
+  });
+
+  app.get("/api/node-agent/stories/:storyId/decisions", async (request) => {
+    const { storyId } = StoryParamsSchema.parse(request.params);
+    if (!options.decisions) throw Object.assign(new Error("Story decisions are unavailable."), { code: "STORY_DECISION_UNAVAILABLE", statusCode: 503 });
+    return { data: StoryDecisionListSchema.parse(await options.decisions.list(storyId)) };
+  });
+
+  app.get("/api/node-agent/stories/:storyId/decisions/:decisionId", async (request) => {
+    const { storyId, decisionId } = StoryDecisionParamsSchema.parse(request.params);
+    if (!options.decisions) throw Object.assign(new Error("Story decisions are unavailable."), { code: "STORY_DECISION_UNAVAILABLE", statusCode: 503 });
+    return { data: StoryDecisionSchema.parse(await options.decisions.get(storyId, decisionId)) };
+  });
+
+  app.post("/api/node-agent/stories/:storyId/decisions/:decisionId/decide", async (request) => {
+    const { storyId, decisionId } = StoryDecisionParamsSchema.parse(request.params);
+    if (!options.decisions) throw Object.assign(new Error("Story decisions are unavailable."), { code: "STORY_DECISION_UNAVAILABLE", statusCode: 503 });
+    const input = StoryDecisionDecideInputSchema.parse(request.body || {});
+    return { data: StoryDecisionSchema.parse(await options.decisions.decide(storyId, decisionId, input)) };
+  });
+
+  app.post("/api/node-agent/stories/:storyId/decisions/:decisionId/cancel", async (request) => {
+    const { storyId, decisionId } = StoryDecisionParamsSchema.parse(request.params);
+    if (!options.decisions) throw Object.assign(new Error("Story decisions are unavailable."), { code: "STORY_DECISION_UNAVAILABLE", statusCode: 503 });
+    const input = StoryDecisionCancelInputSchema.parse(request.body || {});
+    return { data: StoryDecisionSchema.parse(await options.decisions.cancel(storyId, decisionId, input)) };
   });
 
   app.post("/api/node-agent/stories/:storyId/archive", async (request) => ({
@@ -457,6 +501,15 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
       }) };
     }
     const caller = { instanceId: id, sessionId, storyId: story.id };
+    if (tool === "story_request_decision") {
+      if (!options.decisions) throw Object.assign(new Error("Story decisions are unavailable."), { code: "STORY_DECISION_UNAVAILABLE", statusCode: 503 });
+      const { session } = await storySessionForTool(state, store, id, sessionId, bearerToken(request.headers));
+      const decision = await options.decisions.register(
+        { storyId: story.id, sessionId, turnId: session.activeTurnId },
+        STORY_AGENT_TOOL_SCHEMAS[tool].input.parse(input),
+      );
+      return { data: StoryAgentDecisionRequestResultSchema.parse({ decisionId: decision.id, status: decision.status }) };
+    }
     if (tool === "story_list_ai_sessions") {
       if (!options.aiSessionRead) throw Object.assign(new Error("Story AI Session read is unavailable."), { code: "STORY_AI_SESSION_READ_UNAVAILABLE", statusCode: 503 });
       const { page, pageSize } = StoryAgentAiSessionListInputSchema.parse(input);
