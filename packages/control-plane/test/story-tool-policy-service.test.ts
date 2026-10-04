@@ -29,14 +29,14 @@ test("Story tool policy defaults, persists, resolves, and filters archived mutat
     });
     const service = new StoryToolPolicyService(fixture.repository);
     const initial = await service.settings("story_policy");
-    assert.deepEqual(initial.policy, { content: true, actions: false, automations: false, aiSessions: false });
+    assert.deepEqual(initial.policy, { content: true, actions: false, automations: false, aiSessions: false, decisions: false });
     assert.match(initial.revision, /^[a-f0-9]{64}$/);
     assert.deepEqual((await service.resolve("story_policy")).agentInvocation, {
       enabledTools: [],
       allowedAgentIds: [],
     });
 
-    const updated = await service.update("story_policy", { content: true, actions: true, automations: true, aiSessions: true });
+    const updated = await service.update("story_policy", { content: true, actions: true, automations: true, aiSessions: true, decisions: false });
     assert.notEqual(updated.revision, initial.revision);
     assert.deepEqual((await service.resolve("story_policy")).enabledTools, [
       "story_list_content", "story_get_content", "story_set_content",
@@ -146,7 +146,7 @@ test("Story tool policy fails closed for missing Stories and revocation is immed
     const service = new StoryToolPolicyService(fixture.repository);
 
     await service.assertEnabled("story_revoke", "story_get_content");
-    await service.update("story_revoke", { content: false, actions: false, automations: false, aiSessions: false });
+    await service.update("story_revoke", { content: false, actions: false, automations: false, aiSessions: false, decisions: false });
     await assert.rejects(
       () => service.assertEnabled("story_revoke", "story_get_content"),
       (error: any) => error.code === "STORY_AGENT_TOOL_DISABLED" && error.statusCode === 403,
@@ -175,7 +175,7 @@ test("multiple policy service consumers observe the same node-agent SQLite autho
     const first = new StoryToolPolicyService(fixture.repository);
     const second = new StoryToolPolicyService(fixture.repository);
 
-    const updated = await first.update("story_shared", { content: false, actions: true, automations: false, aiSessions: true });
+    const updated = await first.update("story_shared", { content: false, actions: true, automations: false, aiSessions: true, decisions: false });
     assert.deepEqual(await second.settings("story_shared"), updated);
     assert.deepEqual((await second.resolve("story_shared")).enabledTools, [
       "story_list_actions",

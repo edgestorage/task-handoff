@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { and, asc, count, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import type { NodeAgentDatabase } from "./database.ts";
 import * as schema from "../stories/database/schema.ts";
@@ -8,6 +8,7 @@ import { createModelRepositories } from "./model-repository.ts";
 import { createAgentRepositories } from "./agent-repository.ts";
 import { AccessRepository } from "./access-repository.ts";
 import { GitPersistenceRepository } from "./git-repository.ts";
+import type { StoryDecisionExpiredReason } from "@task-handoff/protocol/stories";
 
 export type StoryRecord = typeof schema.stories.$inferSelect;
 export type StoryActionRecord = typeof schema.actions.$inferSelect;
@@ -16,6 +17,7 @@ export type StoryAutomationRecord = typeof schema.automations.$inferSelect;
 export type StoryAutomationRunRecord = typeof schema.automationRuns.$inferSelect;
 export type StoryFileMutationRecord = typeof schema.fileMutations.$inferSelect;
 export type StoryDeletionIntentRecord = typeof schema.deletionIntents.$inferSelect;
+export type StoryDecisionRecord = typeof schema.decisions.$inferSelect;
 
 type NewStoryRecord = typeof schema.stories.$inferInsert;
 type NewStoryActionRecord = typeof schema.actions.$inferInsert;
@@ -24,6 +26,7 @@ type NewStoryAutomationRecord = typeof schema.automations.$inferInsert;
 type NewStoryAutomationRunRecord = typeof schema.automationRuns.$inferInsert;
 type NewStoryFileMutationRecord = typeof schema.fileMutations.$inferInsert;
 type NewStoryDeletionIntentRecord = typeof schema.deletionIntents.$inferInsert;
+type NewStoryDecisionRecord = typeof schema.decisions.$inferInsert;
 
 class MutationQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -72,6 +75,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     documents: ReturnType<typeof documentRepository>;
     automations: ReturnType<typeof automationRepository>;
     runs: ReturnType<typeof runRepository>;
+    decisions: ReturnType<typeof decisionRepository>;
     fileMutations: ReturnType<typeof fileMutationRepository>;
     deletionIntents: ReturnType<typeof deletionIntentRepository>;
     topology: ReturnType<typeof createTopologyRepositories>;
@@ -122,6 +126,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     documents: documentRepository(db, read, mutate),
     automations: automationRepository(db, read, mutate),
     runs: runRepository(db, read, mutate),
+    decisions: decisionRepository(db, read, mutate),
     fileMutations: fileMutationRepository(db, read, mutate),
     deletionIntents: deletionIntentRepository(db, read, mutate),
     topology: createTopologyRepositories(database.client),
@@ -311,6 +316,61 @@ function runRepository(db: NodeSQLiteDatabase, read: Read, mutate: Mutate) {
           .where(and(eq(schema.automationRuns.automationId, automationId), inArray(schema.automationRuns.status, ["completed", "failed", "skipped"])))
           .orderBy(desc(schema.automationRuns.queuedAt)).limit(2_147_483_647).offset(retain);
         if (terminal.length) await db.delete(schema.automationRuns).where(inArray(schema.automationRuns.id, terminal.map((row) => row.id)));
+      });
+    },
+  };
+}
+
+function decisionRepository(db: NodeSQLiteDatabase, read: Read, mutate: Mutate) {
+  return {
+    list: (storyId: string) => read(() => db.select().from(schema.decisions)
+      .where(eq(schema.decisions.storyId, storyId))
+      .orderBy(desc(schema.decisions.createdAt), asc(schema.decisions.id))),
+    listPendingBySession: (sessionId: string) => read(() => db.select().from(schema.decisions)
+      .where(and(eq(schema.decisions.sessionId, sessionId), eq(schema.decisions.status, "pending")))
+      .orderBy(asc(schema.decisions.createdAt), asc(schema.decisions.id))),
+    async get(id: string) {
+      return read(async () => (await db.select().from(schema.decisions).where(eq(schema.decisions.id, id)).limit(1))[0]);
+    },
+    async bySessionTurn(storyId: string, sessionId: string, turnId: string) {
+      return read(async () => (await db.select().from(schema.decisions).where(and(
+        eq(schema.decisions.storyId, storyId),
+        eq(schema.decisions.sessionId, sessionId),
+        eq(schema.decisions.turnId, turnId),
+      )).limit(1))[0]);
+    },
+    async insert(value: NewStoryDecisionRecord) {
+      return mutate(async () => { await db.insert(schema.decisions).values(value); return value as StoryDecisionRecord; });
+    },
+    async updateIfRevision(id: string, expectedRevision: number, patch: Partial<Omit<NewStoryDecisionRecord, "id" | "storyId" | "sessionId" | "turnId" | "createdAt">>) {
+      return mutate(async () => {
+        await db.update(schema.decisions).set(patch).where(and(
+          eq(schema.decisions.id, id),
+          eq(schema.decisions.revision, expectedRevision),
+        ));
+        const record = (await db.select().from(schema.decisions).where(eq(schema.decisions.id, id)).limit(1))[0];
+        return record && record.revision !== expectedRevision ? record : undefined;
+      });
+    },
+    async update(id: string, patch: Partial<Omit<NewStoryDecisionRecord, "id" | "storyId" | "sessionId" | "turnId" | "createdAt">>) {
+      return mutate(async () => {
+        await db.update(schema.decisions).set(patch).where(eq(schema.decisions.id, id));
+        return (await db.select().from(schema.decisions).where(eq(schema.decisions.id, id)).limit(1))[0];
+      });
+    },
+    async expirePendingForSession(sessionId: string, reason: NonNullable<StoryDecisionExpiredReason>, timestamp: string) {
+      return mutate(async () => {
+        await db.update(schema.decisions).set({
+          status: "expired",
+          revision: sql`${schema.decisions.revision} + 1`,
+          expiredReason: reason,
+          updatedAt: timestamp,
+        }).where(and(eq(schema.decisions.sessionId, sessionId), eq(schema.decisions.status, "pending")));
+        return db.select().from(schema.decisions).where(and(
+          eq(schema.decisions.sessionId, sessionId),
+          eq(schema.decisions.status, "expired"),
+          eq(schema.decisions.updatedAt, timestamp),
+        ));
       });
     },
   };

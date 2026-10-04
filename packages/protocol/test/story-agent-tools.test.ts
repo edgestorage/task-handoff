@@ -17,6 +17,7 @@ import {
   storyAgentToolPolicyRevisionSource,
 } from "../src/story-agent-tools.ts";
 import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities, normalizeNodeAgentCapabilities } from "../src/control-plane.ts";
+import { supportsNodeStoryDecisionTools } from "../src/node-agent-capabilities.ts";
 
 test("Story Agent Tool policy is strict on input and tolerant on consumer reads", () => {
   assert.equal(StoryAgentToolPolicySchema.safeParse({ ...DEFAULT_STORY_AGENT_TOOL_POLICY, unknown: true }).success, false);
@@ -26,12 +27,13 @@ test("Story Agent Tool policy is strict on input and tolerant on consumer reads"
     actions: true,
     automations: false,
     aiSessions: false,
+    decisions: false,
   });
   assert.deepEqual(normalizeStoryAgentToolPolicy(undefined), DEFAULT_STORY_AGENT_TOOL_POLICY);
 });
 
 test("Story Agent Tool categories resolve deterministically and archive removes mutations", () => {
-  const policy = { content: true, actions: true, automations: true, aiSessions: false };
+  const policy = { content: true, actions: true, automations: true, aiSessions: false, decisions: false };
   assert.deepEqual(resolveStoryAgentToolNames(policy), [
     "story_list_content", "story_get_content", "story_set_content",
     "story_list_actions", "story_run_action",
@@ -43,6 +45,17 @@ test("Story Agent Tool categories resolve deterministically and archive removes 
     "story_list_automations", "story_list_automation_runs",
   ]);
   assert.equal(storyAgentToolPolicyRevisionSource(policy), storyAgentToolPolicyRevisionSource({ ...policy }));
+  assert.deepEqual(resolveStoryAgentToolNames({ ...policy, decisions: true }), [
+    "story_list_content", "story_get_content", "story_set_content",
+    "story_list_actions", "story_run_action",
+    "story_list_automations", "story_create_automation", "story_update_automation",
+    "story_delete_automation", "story_run_automation", "story_list_automation_runs",
+    "story_request_decision",
+  ]);
+  assert.deepEqual(resolveStoryAgentToolNames({ ...policy, decisions: true }, { archived: true }), [
+    "story_list_content", "story_get_content", "story_list_actions",
+    "story_list_automations", "story_list_automation_runs",
+  ]);
 });
 
 test("Story Agent Tool resolution ignores unknown tool names", () => {
@@ -144,8 +157,22 @@ test("v0.0.32 capabilities normalize new Story tool domains to unsupported", () 
     actions: false,
     automations: false,
     aiSessionRead: false,
+    decisions: false,
   });
   assert.equal(normalizeNodeAgentCapabilities({ stories: { enabled: true, agentTools: true } }).stories.agentTools, true);
+});
+
+test("the decisions capability gates only the decision domain", () => {
+  const legacy = { stories: { enabled: true, agentTools: true, agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true } } };
+  assert.equal(supportsNodeStoryDecisionTools(legacy), false);
+  assert.equal(nodeStoryAgentToolCapabilities(legacy).policy, true);
+  assert.equal(nodeStoryAgentToolCapabilities(legacy).aiSessionRead, true);
+  assert.equal(nodeStoryAgentToolCapabilities(legacy).decisions, false);
+
+  const current = { stories: { agentToolCapabilities: { policy: true, decisions: true } } };
+  assert.equal(supportsNodeStoryDecisionTools(current), true);
+  // capability 缺失只关闭 decision 功能域，不影响 Story 与 AI Session 的既有能力。
+  assert.equal(nodeStoryAgentToolCapabilities({ stories: { enabled: true, agentTools: true } }).decisions, false);
 });
 
 test("public Node records expose only their nested node-agent capability document to feature queries", () => {

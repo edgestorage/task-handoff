@@ -21,7 +21,7 @@ test("registration client fetches, sanitizes, caches, and invalidates Story tool
     requests.push(String(url));
     return new Response(JSON.stringify({ data: {
       storyId: "story_one",
-      policy: { content: true, actions: true, automations: false, aiSessions: false, future: true },
+      policy: { content: true, actions: true, automations: false, aiSessions: false, decisions: false, future: true },
       revision,
       enabledTools: ["story_list_content", "story_list_actions", "future_tool"],
       agentInvocation: { enabledTools: ["agent_run"], allowedAgentIds: ["agent_one"] },

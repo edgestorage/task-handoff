@@ -166,7 +166,7 @@ test("new node-agent revokes Content calls from a v0.0.32 controlled instance wi
   const context = await fixture();
   try {
     const before = structuredClone(context.state.listInstances()[0]!.aiSessions.sessions[0]);
-    await context.policy.update("story_1", { content: false, actions: false, automations: false, aiSessions: false });
+    await context.policy.update("story_1", { content: false, actions: false, automations: false, aiSessions: false, decisions: false });
     const response = await context.app.inject({
       method: "GET",
       url: "/api/node-agent/instances/instance_1/ai-sessions/caller_1/story-content?page=1&pageSize=20",
@@ -249,7 +249,7 @@ test("Agent invocation is session-bound, reauthorized at call time, and rejects 
 test("node-agent serves policy, Action, Automation, and AI Session reads with no Control Plane dependency", async () => {
   const context = await fixture();
   try {
-    await context.policy.update("story_1", { content: true, actions: true, automations: true, aiSessions: true });
+    await context.policy.update("story_1", { content: true, actions: true, automations: true, aiSessions: true, decisions: true });
     const access = await context.registration.resolveStoryAgentToolsForStory("story_1");
     assert.equal(access.source, "node-agent");
 
