@@ -41,6 +41,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
   const [agentToolPolicy, setAgentToolPolicy] = useState<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
   const [savedAgentToolPolicy, setSavedAgentToolPolicy] = useState<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
   const [agentToolState, setAgentToolState] = useState<'hidden' | 'loading' | 'ready' | 'unsupported' | 'unavailable'>(storyId ? 'loading' : 'hidden');
+  const [decisionToolSupported, setDecisionToolSupported] = useState(false);
   const [busy, setBusy] = useState(Boolean(storyId));
   const [error, setError] = useState<string>();
   const selectedOwnerNodeId = resolveStoryOwnerNodeId(ownerNodeId, nodes);
@@ -79,6 +80,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
         setAgentToolState('unsupported');
         return;
       }
+      setDecisionToolSupported(nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNodeResult.value.capabilities)).decisions);
       const toolSettings = await api.stories.agentToolSettings(storyId, nodeId).catch(() => undefined);
       if (cancelled) return;
       if (toolSettings) {
@@ -171,6 +173,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
         <ToolSwitch label={t('stories.agentToolActions')} value={agentToolPolicy.actions} disabled={busy} onChange={(value) => setAgentTool('actions', value)} colors={colors} />
         <ToolSwitch label={t('stories.agentToolAutomations')} value={agentToolPolicy.automations} disabled={busy} onChange={(value) => setAgentTool('automations', value)} colors={colors} />
         <ToolSwitch label={t('stories.agentToolAiSessions')} value={agentToolPolicy.aiSessions} disabled={busy} onChange={(value) => setAgentTool('aiSessions', value)} colors={colors} />
+        {decisionToolSupported ? <ToolSwitch label={t('stories.agentToolDecisions')} value={agentToolPolicy.decisions} disabled={busy} onChange={(value) => setAgentTool('decisions', value)} colors={colors} /> : null}
       </> : null}
     </View> : null}
     {error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}

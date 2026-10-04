@@ -330,6 +330,36 @@ const modelRequestMappings = `
 ALTER TABLE na_models ADD COLUMN mappings_json TEXT NOT NULL DEFAULT '[]';
 `;
 
+const storyDecisionDomain = `
+ALTER TABLE na_stories ADD COLUMN agent_tools_decisions INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_decisions IN (0, 1));
+CREATE TABLE na_story_decisions (
+  id TEXT PRIMARY KEY NOT NULL,
+  story_id TEXT NOT NULL REFERENCES na_stories(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  turn_id TEXT,
+  question TEXT NOT NULL,
+  options_json TEXT NOT NULL DEFAULT '[]',
+  allow_free_text INTEGER NOT NULL DEFAULT 1 CHECK(allow_free_text IN (0, 1)),
+  context TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending','decided','cancelled','expired')),
+  revision INTEGER NOT NULL CHECK(revision >= 1),
+  response TEXT,
+  selected_option_id TEXT,
+  decided_turn_id TEXT,
+  expired_reason_json TEXT,
+  -- node-agent 私有续接账本：仅用于旧实例不支持发送幂等键时的显式重试判定，不进入公共决策模型或 UI。
+  resume_state TEXT CHECK(resume_state IS NULL OR resume_state = 'resuming'),
+  resume_attempted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE UNIQUE INDEX na_story_decisions_session_turn_uq ON na_story_decisions(story_id, session_id, turn_id)
+  WHERE turn_id IS NOT NULL;
+CREATE INDEX na_story_decisions_story_idx ON na_story_decisions(story_id, created_at);
+CREATE INDEX na_story_decisions_session_idx ON na_story_decisions(session_id, status);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -346,4 +376,5 @@ export const nodeAgentMigrations = [
   migration("0011_agent_run_member_request_identity", agentRunMemberRequestIdentity),
   migration("0012_agent_orchestration_domain", agentOrchestrationDomain),
   migration("0013_model_request_mappings", modelRequestMappings),
+  migration("0014_story_decision_domain", storyDecisionDomain),
 ] as const;

@@ -20,6 +20,7 @@ export class StoryIdleSessionRetentionCoordinator {
   private readonly fetchImpl: typeof fetch;
   private readonly resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>;
   private readonly warn: (data: Record<string, unknown>, message: string) => void;
+  private onSessionClosed?: (sessionId: string) => void | Promise<void>;
 
   constructor(
     state: NodeAgentState,
@@ -33,6 +34,11 @@ export class StoryIdleSessionRetentionCoordinator {
     this.fetchImpl = fetchImpl;
     this.resolveInstanceWeb = resolveInstanceWeb;
     this.warn = warn;
+  }
+
+  /** 权威侧在会话被关闭后收敛其 pending 决策。 */
+  setSessionClosedHandler(handler: (sessionId: string) => void | Promise<void>) {
+    this.onSessionClosed = handler;
   }
 
   reconcile() {
@@ -105,6 +111,7 @@ export class StoryIdleSessionRetentionCoordinator {
       if (response.status === 204) return;
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       this.closed.add(key);
+      await this.onSessionClosed?.(target.sessionId);
     } finally {
       this.pending.delete(key);
     }

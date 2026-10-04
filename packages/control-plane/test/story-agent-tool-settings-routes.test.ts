@@ -35,7 +35,7 @@ function fixture(ownerNodeId = "node_one") {
             } }), { headers: { "content-type": "application/json" } });
           }
           return new Response(JSON.stringify({ data: {
-            policy: { content: true, actions: false, automations: false, aiSessions: false, future: true },
+            policy: { content: true, actions: false, automations: false, aiSessions: false, decisions: false, future: true },
             revision,
             future: "ignored",
           } }), { headers: { "content-type": "application/json" } });
@@ -53,7 +53,7 @@ test("Control Plane verifies Story ownership and normalizes Agent Tool settings"
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), { data: {
-    policy: { content: true, actions: false, automations: false, aiSessions: false },
+    policy: { content: true, actions: false, automations: false, aiSessions: false, decisions: false },
     revision,
   } });
   assert.deepEqual(requests.map(({ route }) => route), [
@@ -74,7 +74,7 @@ test("Control Plane rejects mismatched Story node before forwarding settings", a
 
 test("Control Plane forwards strict Agent Tool policy updates", async () => {
   const { app, requests } = fixture();
-  const policy = { content: false, actions: true, automations: true, aiSessions: false };
+  const policy = { content: false, actions: true, automations: true, aiSessions: false, decisions: false };
   const response = await app.inject({
     method: "PUT",
     url: "/api/stories/story_one/settings/agent-tools",

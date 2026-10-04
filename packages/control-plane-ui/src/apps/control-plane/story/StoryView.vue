@@ -76,6 +76,19 @@
                 <div v-if="isStoryOpen(story)" class="story-tree-collapse">
                   <div class="story-tree-collapse-inner">
                     <div class="story-tree-children">
+                <button
+                  v-for="decision in pendingDecisionsFor(story)"
+                  :key="decision.id"
+                  type="button"
+                  class="story-tree-item story-decision-tree-item"
+                  :disabled="!storyIsOnline(story)"
+                  :title="decision.question"
+                  @click="openStoryDecision(story)"
+                >
+                  <CircleHelp :size="14" />
+                  <span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ decision.question }}</strong><small v-if="treeViewMode === 'detailed'">{{ t("stories.decisions.pending") }}</small></span>
+                  <small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ t("stories.decisions.pending") }}</small>
+                </button>
                 <ContextMenu v-for="document in treeDocumentsFor(story)" :key="document.storyPath">
                   <ContextMenuTrigger as-child :disabled="!storyIsOnline(story)">
                     <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" :disabled="!storyIsOnline(story)" @click="selectDocument(story, document.storyPath)">
@@ -240,6 +253,7 @@
                       <TabsTrigger value="documents"><span class="story-detail-tab-count">{{ selectedResource.story.documents.length }}</span>{{ t("stories.documents") }}</TabsTrigger>
                       <TabsTrigger value="sessions"><span class="story-detail-tab-count">{{ sessionCount(selectedResource.story) }}</span>{{ t("stories.aiSessions") }}</TabsTrigger>
                       <TabsTrigger value="automations"><span class="story-detail-tab-count">{{ storyAutomationEntries.length }}</span>{{ t("stories.automation.title") }}</TabsTrigger>
+                      <TabsTrigger v-if="decisionToolSupported" value="decisions">{{ t("stories.decisions.title") }}</TabsTrigger>
                     </TabsList>
                   </Tabs>
                   <div class="story-content-actions">
@@ -368,6 +382,12 @@
                   @open-session="(instanceId, sessionId) => openAutomationSession(selectedResource.story, instanceId, sessionId)"
                 />
               </section>
+              <section v-if="decisionToolSupported" ref="storyDecisionsSectionEl" class="story-directory story-decisions-section">
+                <StoryDecisionPanel :story="selectedResource.story" :disabled="Boolean(selectedResource.story.archivedAt)" />
+              </section>
+              <section v-else class="story-directory story-decisions-section">
+                <div class="story-decisions-unsupported" role="note">{{ t("stories.decisions.unavailable") }}</div>
+              </section>
             </div>
           </ScrollArea>
         </template>
@@ -402,6 +422,7 @@
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.actions" @update:model-value="draftAgentToolPolicy.actions = $event === true" /><span>{{ t("stories.editor.agentToolActions") }}</span></label>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.automations" @update:model-value="draftAgentToolPolicy.automations = $event === true" /><span>{{ t("stories.editor.agentToolAutomations") }}</span></label>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
+          <label v-if="decisionToolSupported" class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.decisions" @update:model-value="draftAgentToolPolicy.decisions = $event === true" /><span>{{ t("stories.editor.agentToolDecisions") }}</span></label>
         </template>
       </fieldset>
       <fieldset v-if="storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
@@ -490,8 +511,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { useQueries, useQueryClient } from "@tanstack/vue-query";
+import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -516,8 +537,9 @@ import { closeAiSessionBatch } from "../closeAiSessionBatch";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
+import StoryDecisionPanel from "./StoryDecisionPanel.vue";
 import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
-import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useAgentRunsQuery } from "../../../api/queries";
+import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, storyDecisionsQueryOptions, useAgentRunsQuery } from "../../../api/queries";
 import { useStoryCatalog } from "./useStoryCatalog";
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
@@ -526,7 +548,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { isFeatureEnabled } from "../../../lib/featureFlags";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
-import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StorySessionPreset } from "@task-handoff/protocol/stories";
+import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StoryDecision, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import { DEFAULT_STORY_AGENT_TOOL_POLICY, type StoryAgentToolPolicy } from "@task-handoff/protocol/story-agent-tools";
 import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from "@task-handoff/protocol/node-agent-capabilities";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
@@ -678,7 +700,7 @@ const storiesFetching = computed(() => storyCatalog.isFetching.value);
 const storyLoadingNodeIds = computed(() => storyCatalog.loadingNodeIds.value);
 const storyUnavailableNodeIds = computed(() => storyCatalog.unavailableNodeIds.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
-type StoryDetailSection = "actions" | "documents" | "sessions" | "automations";
+type StoryDetailSection = "actions" | "documents" | "sessions" | "automations" | "decisions";
 type StoryAutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
 const storyDetailSection = ref<StoryDetailSection>("actions");
 const storyDetailScrollInnerEl = ref<HTMLElement>();
@@ -687,6 +709,7 @@ const storyActionsSectionEl = ref<HTMLElement>();
 const storyDocumentsSectionEl = ref<HTMLElement>();
 const storySessionsSectionEl = ref<HTMLElement>();
 const storyAutomationsSectionEl = ref<HTMLElement>();
+const storyDecisionsSectionEl = ref<HTMLElement>();
 const storyAutomationsPanel = ref<InstanceType<typeof StoryActionAutomations>>();
 const storyAutomationEntries = ref<StoryAutomationView[]>([]);
 let storyDetailHeadResizeObserver: ResizeObserver | undefined;
@@ -914,6 +937,11 @@ const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_
 const savedAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 type StorySettingsState = "hidden" | "loading" | "ready" | "unsupported" | "unavailable";
 const agentToolSettingsState = ref<StorySettingsState>("hidden");
+const decisionToolSupported = computed(() => {
+  const story = selectedResource.value?.story;
+  const ownerNode = story ? props.nodes.find((node) => node.id === story.ownerNodeId) : undefined;
+  return Boolean(ownerNode && nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).decisions);
+});
 const agentToolSettingsError = ref("");
 const storyAgentEntriesState = ref<StorySettingsState>("hidden");
 const storyAgentEntriesError = ref("");
@@ -1243,6 +1271,30 @@ function showAllTreeDocuments(story: Story) { expandedDocumentStoryKeys.value = 
 function setStoryExpanded(story: Story, expanded: boolean) { const next = new Set(expandedStoryKeys.value); const key = storyKey(story); if (expanded) next.add(key); else next.delete(key); expandedStoryKeys.value = next; persistExpandedStoryKeys(next); }
 function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpen(story)); }
 function selectStory(story: Story) { if (storyIsOnline(story)) selectedResource.value = { kind: "story", story }; }
+function nodeSupportsStoryDecisions(nodeId: string) {
+  const node = props.nodes.find((candidate) => candidate.id === nodeId);
+  return Boolean(node && nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(node.capabilities)).decisions);
+}
+// 左树只对已展开且声明了 decisions 能力的 Story 拉取决策，并与详情面板共用同一查询键。
+const decisionTreeStories = computed(() => stories.value.filter((story) => isStoryOpen(story) && nodeSupportsStoryDecisions(story.ownerNodeId)));
+const decisionTreeQueries = useQueries({
+  queries: () => decisionTreeStories.value.map((story) => storyDecisionsQueryOptions(story.id, story.ownerNodeId)),
+});
+const pendingDecisionsByStoryKey = computed(() => {
+  const map: Record<string, StoryDecision[]> = {};
+  decisionTreeStories.value.forEach((story, index) => {
+    const decisions = decisionTreeQueries.value[index]?.data?.decisions || [];
+    const pending = decisions.filter((decision) => decision.status === "pending");
+    if (pending.length) map[storySortKey(story)] = pending;
+  });
+  return map;
+});
+function pendingDecisionsFor(story: Story) { return pendingDecisionsByStoryKey.value[storySortKey(story)] || []; }
+async function openStoryDecision(story: Story) {
+  selectStory(story);
+  await nextTick();
+  await scrollToStorySection("decisions");
+}
 function selectDocument(story: Story, path: string) { if (!storyIsOnline(story)) return; const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { if (!sessionIsOnline(story, entry)) return; setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
 function storyTreeRowElement(story: Story) {
@@ -1294,7 +1346,7 @@ watch(storyDetailHeadEl, (head) => {
   update();
 }, { immediate: true });
 function storySectionElement(section: StoryDetailSection) {
-  return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value }[section];
+  return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value, decisions: storyDecisionsSectionEl.value }[section];
 }
 function storyScrollBehavior(): ScrollBehavior { return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; }
 async function scrollToStorySection(section: StoryDetailSection) {
@@ -1915,6 +1967,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.story-decisions-unsupported { color:var(--text-muted); font-size:12px; padding:6px 0; }
 .story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; background:var(--workspace-bg); padding:12px 0; color:var(--text); }
 .story-content-header h2 { margin:0; color:var(--text-strong); font-size:18px; font-weight:500; }
 .story-title-name-field { display:grid; flex:0 1 auto; width:max-content; min-width:0; max-width:100%; vertical-align:top; }
@@ -2045,6 +2098,8 @@ onBeforeUnmount(() => {
 .story-tree-more-documents { width:max-content; min-height:32px; border:0; background:transparent; color:var(--brand-accent); cursor:pointer; font-size:12px; font-weight:400; padding:6px 8px; text-align:left; }
 .story-tree-more-documents:hover { text-decoration:underline; }
 .story-tree-more-documents:focus-visible { border-radius:4px; outline:2px solid var(--focus-ring); outline-offset:-2px; }
+.story-decision-tree-item > svg { color:var(--status-warning,var(--brand-accent)); }
+.story-decision-tree-item > .story-tree-item-copy strong { font-weight:500; }
 .story-tree-item-hint { position:absolute; top:50%; right:8px; z-index:1; max-width:64%; overflow:hidden; padding-left:18px; color:var(--text-muted); font-size:12px; white-space:nowrap; text-overflow:ellipsis; pointer-events:none; opacity:0; transform:translateY(-50%); background:linear-gradient(90deg, transparent, var(--surface-active) 18px); transition:opacity 140ms ease; }
 .story-tree-item:hover > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-hover-bg,var(--surface-active)) 18px); opacity:1; }
 .story-tree-item.active > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-selected-bg,var(--surface-active)) 18px); }
