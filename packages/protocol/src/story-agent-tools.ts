@@ -24,11 +24,13 @@ import {
   StoryDocumentSchema,
   StoryPathSchema,
   StoryRevisionSchema,
+  StoryDecisionCreateInputSchema,
+  StoryDecisionStatusSchema,
 } from "./stories.ts";
 
-export const STORY_AGENT_TOOL_POLICY_VERSION = "2026-09-19";
+export const STORY_AGENT_TOOL_POLICY_VERSION = "2026-09-28";
 
-export const StoryAgentToolCategorySchema = z.enum(["content", "actions", "automations", "aiSessions"]);
+export const StoryAgentToolCategorySchema = z.enum(["content", "actions", "automations", "aiSessions", "decisions"]);
 export type StoryAgentToolCategory = z.infer<typeof StoryAgentToolCategorySchema>;
 
 export const StoryAgentToolPolicySchema = z.object({
@@ -36,6 +38,7 @@ export const StoryAgentToolPolicySchema = z.object({
   actions: z.boolean(),
   automations: z.boolean(),
   aiSessions: z.boolean(),
+  decisions: z.boolean(),
 }).strict();
 export type StoryAgentToolPolicy = z.infer<typeof StoryAgentToolPolicySchema>;
 
@@ -44,6 +47,7 @@ export const DEFAULT_STORY_AGENT_TOOL_POLICY: StoryAgentToolPolicy = Object.free
   actions: false,
   automations: false,
   aiSessions: false,
+  decisions: false,
 });
 
 const StoryAgentToolPolicyConsumerSchema = StoryAgentToolPolicySchema.strip().partial();
@@ -58,7 +62,7 @@ export function normalizeStoryAgentToolPolicy(input: unknown): StoryAgentToolPol
 
 export function storyAgentToolPolicyRevisionSource(policy: StoryAgentToolPolicy) {
   const value = StoryAgentToolPolicySchema.parse(policy);
-  return `${STORY_AGENT_TOOL_POLICY_VERSION}:${Number(value.content)}${Number(value.actions)}${Number(value.automations)}${Number(value.aiSessions)}`;
+  return `${STORY_AGENT_TOOL_POLICY_VERSION}:${Number(value.content)}${Number(value.actions)}${Number(value.automations)}${Number(value.aiSessions)}${Number(value.decisions)}`;
 }
 
 export const STORY_AGENT_TOOL_NAMES = [
@@ -76,6 +80,7 @@ export const STORY_AGENT_TOOL_NAMES = [
   "story_list_ai_sessions",
   "story_get_ai_session",
   "story_get_ai_session_turn",
+  "story_request_decision",
 ] as const;
 
 export const StoryAgentToolNameSchema = z.enum(STORY_AGENT_TOOL_NAMES);
@@ -93,6 +98,7 @@ export const STORY_AGENT_TOOL_NAMES_BY_CATEGORY = Object.freeze({
     "story_list_automation_runs",
   ],
   aiSessions: ["story_list_ai_sessions", "story_get_ai_session", "story_get_ai_session_turn"],
+  decisions: ["story_request_decision"],
 } satisfies Record<StoryAgentToolCategory, readonly StoryAgentToolName[]>);
 
 export const STORY_AGENT_TOOL_DESCRIPTIONS: Record<StoryAgentToolName, string> = {
@@ -110,6 +116,7 @@ export const STORY_AGENT_TOOL_DESCRIPTIONS: Record<StoryAgentToolName, string> =
   story_list_ai_sessions: "List other active root AI Sessions assigned to the current Story.",
   story_get_ai_session: "Read compact session details and Turn summaries for another active root AI Session in the current Story.",
   story_get_ai_session_turn: "Read one Turn's conversation and tool items from another active root AI Session in the current Story.",
+  story_request_decision: "Register a Story decision that requires a human ruling. Calling this tool ends the current turn: it returns immediately with a decisionId and the human's response arrives later as a new turn in this same AI Session. Use it when a genuine human judgment is required, not for ordinary questions that can be answered by continuing work.",
 };
 
 export const STORY_AGENT_TOOL_QUERY_NAMES = new Set<StoryAgentToolName>([
@@ -424,6 +431,14 @@ export function sanitizeStoryAgentAiSessionInstanceTurnResult(input: unknown) {
   return StoryAgentAiSessionInstanceTurnResultSchema.parse(StoryAgentAiSessionInstanceTurnConsumerSchema.parse(input));
 }
 
+export const StoryAgentDecisionRequestInputSchema = StoryDecisionCreateInputSchema;
+export const StoryAgentDecisionRequestResultSchema = z.object({
+  decisionId: z.string().trim().min(1).max(160),
+  status: StoryDecisionStatusSchema,
+}).strict();
+export type StoryAgentDecisionRequestInput = z.infer<typeof StoryAgentDecisionRequestInputSchema>;
+export type StoryAgentDecisionRequestResult = z.infer<typeof StoryAgentDecisionRequestResultSchema>;
+
 export const STORY_AGENT_TOOL_SCHEMAS = {
   story_list_content: { input: StoryAgentContentListInputSchema, output: StoryAgentContentListResultSchema },
   story_get_content: { input: StoryContentGetInputSchema, output: StoryAgentContentGetResultSchema },
@@ -439,4 +454,5 @@ export const STORY_AGENT_TOOL_SCHEMAS = {
   story_list_ai_sessions: { input: StoryAgentAiSessionListInputSchema, output: StoryAgentAiSessionListResultSchema },
   story_get_ai_session: { input: StoryAgentAiSessionGetInputSchema, output: StoryAgentAiSessionGetResultSchema },
   story_get_ai_session_turn: { input: StoryAgentAiSessionTurnInputSchema, output: StoryAgentAiSessionTurnResultSchema },
+  story_request_decision: { input: StoryAgentDecisionRequestInputSchema, output: StoryAgentDecisionRequestResultSchema },
 } satisfies Record<StoryAgentToolName, { input: z.ZodType; output: z.ZodType }>;

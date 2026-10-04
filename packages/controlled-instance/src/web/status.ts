@@ -215,6 +215,7 @@ export function controlledInstanceCapabilities(
       gitCredentialProxy: gitCredentialBrokerInstalled,
       repositoryPathSearch: true,
       repositoryWorktreeMoveToMain: true,
+      aiSessionSendIdempotency: true,
       aiSessionTimeline,
       aiSessionProviders: availableProviders,
       aiSessionConversationAttachments: {

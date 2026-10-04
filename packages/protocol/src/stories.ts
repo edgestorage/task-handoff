@@ -12,7 +12,7 @@ import { StoryIdSchema } from "./story-id.ts";
 
 export { StoryIdSchema } from "./story-id.ts";
 
-export const STORY_PROTOCOL_VERSION = "2026-09-05";
+export const STORY_PROTOCOL_VERSION = "2026-09-28";
 export const STORY_DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
 export const STORY_DEFAULT_MAX_BATCH_PATHS = 20;
 export const STORY_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
@@ -179,6 +179,108 @@ export const StoryAutomationChangedEventSchema = z.object({
   run: StoryAutomationRunSchema.optional(),
 }).strict();
 
+export const STORY_DECISION_MAX_OPTIONS = 20;
+export const STORY_DECISION_QUESTION_MAX_CHARS = 32_000;
+export const STORY_DECISION_RESPONSE_MAX_CHARS = 20_000;
+
+export const StoryDecisionStatusSchema = z.enum(["pending", "decided", "cancelled", "expired"]);
+export type StoryDecisionStatus = z.infer<typeof StoryDecisionStatusSchema>;
+
+export const StoryDecisionOptionSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  label: z.string().trim().min(1).max(240),
+  description: z.string().trim().max(2000).optional(),
+}).strict();
+
+export const StoryDecisionExpiredReasonSchema = z.object({
+  code: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(2000),
+}).strict();
+
+// 权威模型只保存标识与业务内容，不物化会话状态、标题等可推导的投影数据。
+export const StoryDecisionSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  storyId: StoryIdSchema,
+  sessionId: z.string().trim().min(1).max(120),
+  turnId: z.string().trim().min(1).max(240).optional(),
+  question: z.string().trim().min(1).max(STORY_DECISION_QUESTION_MAX_CHARS),
+  options: z.array(StoryDecisionOptionSchema).max(STORY_DECISION_MAX_OPTIONS).default([]),
+  allowFreeText: z.boolean().default(true),
+  context: z.string().trim().max(8000).optional(),
+  status: StoryDecisionStatusSchema,
+  revision: z.number().int().min(1),
+  response: z.string().trim().max(STORY_DECISION_RESPONSE_MAX_CHARS).optional(),
+  selectedOptionId: z.string().trim().min(1).max(120).optional(),
+  decidedTurnId: z.string().trim().min(1).max(240).optional(),
+  expiredReason: StoryDecisionExpiredReasonSchema.optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  decidedAt: z.string().datetime().optional(),
+}).strict();
+
+// 登记入参：由调用上下文推导 storyId/sessionId/turnId，因此这里不接受这些字段。
+export const StoryDecisionCreateInputSchema = z.object({
+  question: z.string().trim().min(1).max(STORY_DECISION_QUESTION_MAX_CHARS),
+  options: z.array(StoryDecisionOptionSchema).max(STORY_DECISION_MAX_OPTIONS).optional(),
+  allowFreeText: z.boolean().optional(),
+  context: z.string().trim().max(8000).optional(),
+}).strict().superRefine((value, context) => {
+  const options = value.options || [];
+  if (new Set(options.map((option) => option.id)).size !== options.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["options"], message: "Decision option ids must be unique." });
+  }
+  if (value.allowFreeText === false && options.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["allowFreeText"], message: "A decision without free text requires at least one option." });
+  }
+});
+
+export const StoryDecisionDecideInputSchema = z.object({
+  optionId: z.string().trim().min(1).max(120).optional(),
+  response: z.string().trim().min(1).max(STORY_DECISION_RESPONSE_MAX_CHARS).optional(),
+  expectedRevision: z.number().int().min(1),
+  // 旧实例不支持发送幂等键时，处于 `resuming` 的决策必须由调用方显式确认后才能重发。
+  retry: z.boolean().optional(),
+}).strict().refine((value) => Boolean(value.optionId) || Boolean(value.response), {
+  message: "A decision requires a selected option or a free-text response.",
+  path: ["response"],
+});
+
+export const StoryDecisionCancelInputSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+}).strict();
+
+export const StoryDecisionListSchema = z.object({
+  decisions: z.array(StoryDecisionSchema).default([]),
+}).strict();
+
+const StoryDecisionConsumerSchema = StoryDecisionSchema.strip();
+export const StoryDecisionListConsumerSchema = z.object({
+  decisions: z.array(z.unknown()).default([]),
+}).strip();
+
+export function sanitizeStoryDecision(input: unknown) {
+  return StoryDecisionSchema.parse(StoryDecisionConsumerSchema.parse(input));
+}
+
+export function sanitizeStoryDecisionList(input: unknown) {
+  const parsed = StoryDecisionListConsumerSchema.parse(input);
+  return StoryDecisionListSchema.parse({
+    decisions: parsed.decisions
+      .map((decision) => StoryDecisionConsumerSchema.safeParse(decision))
+      .filter((result) => result.success)
+      .map((result) => StoryDecisionSchema.parse(result.data)),
+  });
+}
+
+export const StoryDecisionChangedEventType = "story.decision.changed";
+export const StoryDecisionChangedEventSchema = z.object({
+  storyId: StoryIdSchema,
+  decisionId: StoryDecisionSchema.shape.id,
+  revision: z.number().int().min(1),
+  change: z.enum(["created", "decided", "cancelled", "expired"]),
+  decision: StoryDecisionSchema.optional(),
+}).strict();
+
 export const StorySchema = z.object({
   id: StoryIdSchema,
   ownerNodeId: z.string().trim().min(1).max(120),
@@ -342,3 +444,10 @@ export type StoryContentPageResult = z.infer<typeof StoryContentPageResultSchema
 export type StoryUpdateInput = z.infer<typeof StoryUpdateInputSchema>;
 export type StoryChangedEvent = z.infer<typeof StoryChangedEventSchema>;
 export type StorySessionRetentionSettings = z.infer<typeof StorySessionRetentionSettingsSchema>;
+export type StoryDecision = z.infer<typeof StoryDecisionSchema>;
+export type StoryDecisionOption = z.infer<typeof StoryDecisionOptionSchema>;
+export type StoryDecisionExpiredReason = z.infer<typeof StoryDecisionExpiredReasonSchema>;
+export type StoryDecisionCreateInput = z.infer<typeof StoryDecisionCreateInputSchema>;
+export type StoryDecisionDecideInput = z.infer<typeof StoryDecisionDecideInputSchema>;
+export type StoryDecisionCancelInput = z.infer<typeof StoryDecisionCancelInputSchema>;
+export type StoryDecisionChangedEvent = z.infer<typeof StoryDecisionChangedEventSchema>;

@@ -56,17 +56,17 @@ describe('StoryEditor', () => {
     expect(update).toHaveBeenCalledWith('story-1', 'node-1', expect.objectContaining({ maxIdleAiSessions: 9 }));
   });
 
-  test('loads the four authoritative Agent tool categories and saves changed policy', async () => {
+  test('loads the authoritative Agent tool categories and saves changed policy', async () => {
     const story = StorySchema.parse({
       id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],
       createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
     });
     const updateAgentToolSettings = jest.fn().mockResolvedValue({
-      policy: { content: true, actions: false, automations: true, aiSessions: false },
+      policy: { content: true, actions: false, automations: true, aiSessions: false, decisions: false },
       revision: 'b'.repeat(64),
     });
     const agentToolSettings = jest.fn().mockResolvedValue({
-      policy: { content: true, actions: false, automations: false, aiSessions: false },
+      policy: { content: true, actions: false, automations: false, aiSessions: false, decisions: false },
       revision: 'a'.repeat(64),
     });
     mockDirectories.mockReturnValue({ state: { instances: [], nodes: [{
@@ -100,7 +100,7 @@ describe('StoryEditor', () => {
     expect(agentToolSettings).toHaveBeenCalledWith('story-1', 'node-1');
     expect(node).toHaveBeenCalledWith('node-1');
     expect(updateAgentToolSettings).toHaveBeenCalledWith('story-1', 'node-1', {
-      content: true, actions: false, automations: true, aiSessions: false,
+      content: true, actions: false, automations: true, aiSessions: false, decisions: false,
     });
   });
 
@@ -144,7 +144,7 @@ describe('StoryEditor', () => {
     }) }, stories: {
       get: jest.fn().mockResolvedValue(story),
       retentionSettings: jest.fn().mockResolvedValue({ maxIdleAiSessions: 5 }),
-      agentToolSettings: jest.fn().mockResolvedValue({ policy: { content: true, actions: false, automations: false, aiSessions: false }, revision: 'a'.repeat(64) }),
+      agentToolSettings: jest.fn().mockResolvedValue({ policy: { content: true, actions: false, automations: false, aiSessions: false, decisions: false }, revision: 'a'.repeat(64) }),
       update: jest.fn().mockResolvedValue(story),
       updateAgentToolSettings: jest.fn().mockRejectedValue(new Error('Story tool settings changed.')),
     } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);

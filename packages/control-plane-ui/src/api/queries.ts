@@ -8,7 +8,7 @@ import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
-import type { Story } from "@task-handoff/protocol/stories";
+import type { Story, StoryDecision, StoryDecisionDecideInput, StoryDecisionCancelInput } from "@task-handoff/protocol/stories";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput } from "@task-handoff/protocol/agent-definitions";
 import type { AgentRunManualCreateInput } from "@task-handoff/protocol/agent-runs";
 import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
@@ -951,6 +951,23 @@ export function storyAgentEntriesQueryOptions(storyId: string, nodeId: string, e
 
 export function getStoryRetentionSettings(storyId: string, nodeId: string) {
   return sharedControlPlaneClient.stories.retentionSettings(storyId, nodeId);
+}
+
+export function storyDecisionsQueryOptions(storyId: string, nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.storyDecisions(nodeId, storyId),
+    queryFn: () => sharedControlPlaneClient.stories.listDecisions(storyId, nodeId),
+    enabled: Boolean(storyId && nodeId) && toValue(enabled),
+    ...storySnapshotQueryOptions,
+  });
+}
+
+export function decideStoryDecision(storyId: string, decisionId: string, nodeId: string, input: StoryDecisionDecideInput): Promise<StoryDecision> {
+  return sharedControlPlaneClient.stories.decideStory(storyId, decisionId, nodeId, input);
+}
+
+export function cancelStoryDecision(storyId: string, decisionId: string, nodeId: string, input: StoryDecisionCancelInput): Promise<StoryDecision> {
+  return sharedControlPlaneClient.stories.cancelDecision(storyId, decisionId, nodeId, input);
 }
 
 export function assignAiSessionToStory(instanceId: string, sessionId: string, storyId: string | null) {

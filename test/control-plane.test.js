@@ -663,8 +663,11 @@ test("app inventory protocol is strict and stored legacy app capability is disca
       nodeAgentConnectionUpdate: false,
       gitCliCredentialBroker: false,
     gitCredentialProxy: false,
+    repositoryPathSearch: false,
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no worktree-move capability.
     repositoryWorktreeMoveToMain: false,
+    // Compatibility for v0.0.33: a stored pre-upgrade instance has no decision send idempotency.
+    aiSessionSendIdempotency: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],

@@ -15,6 +15,10 @@ import {
   StoryCreateInputSchema,
   StoryDocumentOrderInputSchema,
   StoryDocumentUpdateInputSchema,
+  StoryDecisionCancelInputSchema,
+  StoryDecisionDecideInputSchema,
+  StoryDecisionListSchema,
+  StoryDecisionSchema,
   StoryIdSchema,
   StoryListSchema,
   StoryPathSchema,
@@ -35,6 +39,7 @@ const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).opt
 const StoryRouteSchema = z.object({ storyId: StoryIdSchema }).strict();
 const StoryAutomationRouteSchema = StoryRouteSchema.extend({ automationId: z.string().trim().min(1).max(120) }).strict();
 const StoryActionRouteSchema = StoryRouteSchema.extend({ actionId: z.string().trim().min(1).max(120) }).strict();
+const StoryDecisionRouteSchema = StoryRouteSchema.extend({ decisionId: z.string().trim().min(1).max(160) }).strict();
 const StoryRouteQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
 
 async function requireStoryOnNode(service: ControlPlaneService, storyId: string, nodeId: string) {
@@ -112,6 +117,50 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
       body: JSON.stringify(body.input),
     });
     return { data: StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data)) };
+  });
+
+  app.get<{ Params: { storyId: string } }>("/api/stories/:storyId/decisions", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    await requireStoryOnNode(service, storyId, nodeId);
+    return { data: StoryDecisionListSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/decisions`)) };
+  });
+
+  app.get<{ Params: { storyId: string; decisionId: string } }>("/api/stories/:storyId/decisions/:decisionId", async (request) => {
+    const { storyId, decisionId } = StoryDecisionRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    await requireStoryOnNode(service, storyId, nodeId);
+    return { data: StoryDecisionSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}`)) };
+  });
+
+  app.post<{ Params: { storyId: string; decisionId: string } }>("/api/stories/:storyId/decisions/:decisionId/decide", async (request) => {
+    const { storyId, decisionId } = StoryDecisionRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: StoryDecisionDecideInputSchema,
+    }).strict().parse(request.body);
+    await requireStoryOnNode(service, storyId, body.nodeId);
+    return { data: StoryDecisionSchema.parse(await nodeJson(
+      service,
+      body.nodeId,
+      `/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}/decide`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) },
+    )) };
+  });
+
+  app.post<{ Params: { storyId: string; decisionId: string } }>("/api/stories/:storyId/decisions/:decisionId/cancel", async (request) => {
+    const { storyId, decisionId } = StoryDecisionRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: StoryDecisionCancelInputSchema,
+    }).strict().parse(request.body);
+    await requireStoryOnNode(service, storyId, body.nodeId);
+    return { data: StoryDecisionSchema.parse(await nodeJson(
+      service,
+      body.nodeId,
+      `/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}/cancel`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) },
+    )) };
   });
 
   app.post("/api/stories/:storyId/actions/:actionId/run", async (request) => {

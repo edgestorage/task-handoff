@@ -7,6 +7,7 @@ import type { NodeAgentRepository } from "../persistence/repository.ts";
 import type { StoryScheduler } from "./scheduler.ts";
 import type { NodeStoryStore } from "./store.ts";
 import type { StoryAiSessionCloser } from "./ai-session-close-service.ts";
+import type { StoryDecisionCommandService } from "./decision-service.ts";
 
 export class StoryCommandService {
   private readonly state: NodeAgentState;
@@ -15,6 +16,7 @@ export class StoryCommandService {
   private readonly scheduler: StoryScheduler;
   private readonly repository: NodeAgentRepository;
   private readonly aiSessionCloser?: StoryAiSessionCloser;
+  private readonly decisions?: StoryDecisionCommandService;
 
   constructor(
     state: NodeAgentState,
@@ -23,6 +25,7 @@ export class StoryCommandService {
     scheduler: StoryScheduler,
     repository: NodeAgentRepository,
     aiSessionCloser?: StoryAiSessionCloser,
+    decisions?: StoryDecisionCommandService,
   ) {
     this.state = state;
     this.stories = stories;
@@ -30,6 +33,7 @@ export class StoryCommandService {
     this.scheduler = scheduler;
     this.repository = repository;
     this.aiSessionCloser = aiSessionCloser;
+    this.decisions = decisions;
   }
 
   async init() {
@@ -119,6 +123,11 @@ export class StoryCommandService {
     if (!sessions.length) return;
     if (!this.aiSessionCloser) throw commandError("STORY_AI_SESSION_CLOSE_UNAVAILABLE", "AI Sessions cannot be closed for Story deletion.", 503);
     const results = await Promise.allSettled(sessions.map((target) => this.aiSessionCloser!.close(target)));
+    const reason = { code: "STORY_DELETED", message: "The Story owning the decision was deleted." };
+    await Promise.all(results.flatMap((result, index) => result.status === "fulfilled"
+      ? [this.decisions?.expireForSession(sessions[index]!.sessionId, reason)]
+      : []));
+    await this.decisions?.expireForStory(storyId, reason);
     const failures = results.flatMap((result, index) => result.status === "rejected" ? [{
       instanceId: sessions[index]!.instance.id,
       aiSessionId: sessions[index]!.sessionId,

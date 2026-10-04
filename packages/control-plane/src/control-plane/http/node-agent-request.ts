@@ -8,12 +8,13 @@ export async function nodeJson(service: ControlPlaneService, nodeId: string, rou
   const node = service.requireNode(nodeId);
   const transport = service.resolveNodeAgentTransport(node);
   const response = await transport.request(node, route, init);
-  const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+  const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { code?: string; message?: string; details?: Record<string, unknown>; retryable?: boolean } };
   if (!response.ok) {
     throw Object.assign(new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}.`), {
       statusCode: response.status,
       code: payload.error?.code || "NODE_AGENT_REQUEST_FAILED",
       ...(payload.error?.details ? { details: payload.error.details } : {}),
+      ...(payload.error?.retryable !== undefined ? { retryable: payload.error.retryable } : {}),
     });
   }
   return payload.data;

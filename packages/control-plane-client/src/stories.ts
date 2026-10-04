@@ -13,6 +13,10 @@ import {
   StoryContentPreviewSchema,
   StoryDocumentOrderInputSchema,
   StoryDocumentUpdateInputSchema,
+  StoryDecisionCancelInputSchema,
+  StoryDecisionDecideInputSchema,
+  StoryDecisionListSchema,
+  StoryDecisionSchema,
   StoryListSchema,
   StorySchema,
   StoryUpdateInputSchema,
@@ -23,6 +27,8 @@ import {
   type StoryAutomationUpdateInput,
   type StoryAutomationWithActionInput,
   type StoryUpdateInput,
+  type StoryDecisionCancelInput,
+  type StoryDecisionDecideInput,
 } from "@task-handoff/protocol/stories";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import {
@@ -54,6 +60,26 @@ export function createControlPlaneStoriesApi(transport: ControlPlaneClientTransp
       const input = StoryAgentToolPolicyUpdateInputSchema.parse({ policy });
       const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/agent-tools`, z.unknown(), json("PUT", { nodeId, input }));
       return StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data));
+    },
+    listDecisions(storyId: string, nodeId: string, signal?: AbortSignal) {
+      return requestData(`/api/stories/${encodeURIComponent(storyId)}/decisions?nodeId=${encodeURIComponent(nodeId)}`, StoryDecisionListSchema, { signal });
+    },
+    getDecision(storyId: string, decisionId: string, nodeId: string, signal?: AbortSignal) {
+      return requestData(`/api/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}?nodeId=${encodeURIComponent(nodeId)}`, StoryDecisionSchema, { signal });
+    },
+    decideStory(storyId: string, decisionId: string, nodeId: string, input: StoryDecisionDecideInput) {
+      return requestData(
+        `/api/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}/decide`,
+        StoryDecisionSchema,
+        json("POST", { nodeId, input: StoryDecisionDecideInputSchema.parse(input) }),
+      );
+    },
+    cancelDecision(storyId: string, decisionId: string, nodeId: string, input: StoryDecisionCancelInput) {
+      return requestData(
+        `/api/stories/${encodeURIComponent(storyId)}/decisions/${encodeURIComponent(decisionId)}/cancel`,
+        StoryDecisionSchema,
+        json("POST", { nodeId, input: StoryDecisionCancelInputSchema.parse(input) }),
+      );
     },
     runAction(storyId: string, actionId: string, nodeId: string, clientRequestId: string) {
       const input = StoryAgentActionRunInputSchema.omit({ actionId: true }).parse({ clientRequestId });
