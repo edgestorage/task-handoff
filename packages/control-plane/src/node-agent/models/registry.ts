@@ -9,8 +9,8 @@ import {
   UpdateNodeModelAssignmentSchema,
   UpdateNodeModelSchema,
   createModelEntityId,
-  isModelConfigHashId,
-  modelConfigHash,
+  isModelEntityId,
+  migratedModelEntityId,
   modelContentRevision,
   normalizeModelNameEntries,
   normalizeModelRequestMappings,
@@ -36,18 +36,6 @@ type InstanceAccess = {
   require(id: string): ControlledInstance;
   put(instance: ControlledInstance): ControlledInstance;
 };
-
-/**
- * Compatibility for v0.0.34: a legacy hash identity addresses a record by its
- * content, so it can never carry request mappings (two records with equal
- * content but different mappings would collide on one hash).
- */
-function legacyMappingIdentityError() {
-  return Object.assign(new Error("Model request mappings require a stable model entity identity."), {
-    statusCode: 400,
-    code: "NODE_MODEL_REQUEST_MAPPING_REQUIRES_STABLE_IDENTITY",
-  });
-}
 
 export class NodeModelRegistry {
   private readonly models: ModelRepository;
@@ -75,6 +63,65 @@ export class NodeModelRegistry {
 
   init() {}
 
+  /**
+   * Upgrade a persisted id that predates model entity identities. Every write
+   * path calls this before touching a record, so the legacy id never leaves
+   * the node: the rename cascades through the assignment foreign keys and
+   * returns the stable id the caller must continue with. The reverse direction
+   * resolves an entity id onto a replica this node still keeps under its legacy
+   * id, so callers holding the current identity reach the same record.
+   */
+  private upgradeModelIdentity(id: string): string {
+    const direct = this.models.get(id);
+    if (direct) return isModelEntityId(id) ? id : this.renameModel(id, migratedModelEntityId(id));
+    // No record under the caller's id: the write may target an identity the
+    // node already upgraded, or a replica it still keeps under the legacy id.
+    const entityId = isModelEntityId(id) ? id : migratedModelEntityId(id);
+    const legacy = this.legacyReplicaFor(entityId);
+    return legacy ? this.renameModel(legacy.id, entityId) : entityId;
+  }
+
+  /** The stored legacy replica whose derived identity is `entityId`, if any. */
+  private legacyReplicaFor(entityId: string) {
+    return this.models.list().find((model) => !isModelEntityId(model.id) && migratedModelEntityId(model.id) === entityId);
+  }
+
+  /**
+   * Rename one stored record onto another entity id. Assignment foreign keys
+   * cascade, and a pre-existing target (only reachable through a derived-id
+   * collision) absorbs the references before the source row is removed.
+   */
+  private renameModel(id: string, targetId: string) {
+    if (id === targetId) return targetId;
+    if (!this.models.get(targetId)) {
+      this.models.rename(id, targetId);
+      return targetId;
+    }
+    // A derived id can only collide with an existing record if a minted
+    // snowflake happens to equal the truncation, or when two legacy ids
+    // truncate together. Fold the references onto the existing record.
+    for (const instance of this.instances.list()) {
+      const assignment = this.assignments.get(instance.id);
+      if (!assignment || !this.assignmentModelIds(assignment).includes(id)) continue;
+      this.assignments.put(NodeModelAssignmentSchema.parse({
+        ...assignment,
+        modelEntityIds: [...new Set(assignment.modelEntityIds.map((modelId) => modelId === id ? targetId : modelId))],
+        codexModelHash: assignment.codexModelHash === id ? targetId : assignment.codexModelHash,
+        claudeModelHash: assignment.claudeModelHash === id ? targetId : assignment.claudeModelHash,
+        opencodeModelHash: assignment.opencodeModelHash === id ? targetId : assignment.opencodeModelHash,
+        updatedAt: now(),
+      }));
+    }
+    this.models.delete(id);
+    return targetId;
+  }
+
+  private mintModelEntityId() {
+    let id = createModelEntityId();
+    while (this.models.get(id)) id = createModelEntityId();
+    return id;
+  }
+
   /** Live relay switch accessor; the resolver must never cache this value. */
   modelRelayEnabled() {
     return this.modelRelay?.enabled() === true;
@@ -95,7 +142,13 @@ export class NodeModelRegistry {
   }
 
   getModel(id: string) {
-    return this.models.get(id);
+    const direct = this.models.get(id);
+    if (direct) return direct;
+    // Read-side resolution for both migration directions: a current entity id
+    // reaches a replica still stored under its legacy id, and a legacy id
+    // reaches a record already upgraded onto its entity identity. Reads never
+    // rename; the write paths own the upgrade.
+    return isModelEntityId(id) ? this.legacyReplicaFor(id) : this.models.get(migratedModelEntityId(id));
   }
 
   /**
@@ -159,30 +212,20 @@ export class NodeModelRegistry {
       mappings: normalizeModelRequestMappings(input.mappings),
       protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app),
     };
-    // Entity identity is opaque and stable. Re-adding the same content still
-    // converges on the existing entity, but a new record mints a short id.
-    const contentRevision = modelContentRevision(normalizedInput);
-    const current = this.models.list().find((model) => modelContentRevision(model) === contentRevision);
-    let id = current?.id;
-    if (!id) {
-      id = createModelEntityId();
-      while (this.models.get(id)) id = createModelEntityId();
-    }
+    const id = this.mintModelEntityId();
     const model = NodeModelConfigSchema.parse({
       ...normalizedInput,
       id,
       enabled: input.enabled ?? true,
       order: input.order ?? this.nextOrder(),
       labels: input.labels || {},
-      createdAt: current?.createdAt || timestamp,
+      createdAt: timestamp,
       updatedAt: timestamp,
     });
     return this.toPublic(this.models.put(model), this.referenceIds(id).length);
   }
 
   deploy(input: z.infer<typeof DeployNodeModelSchema>) {
-    const expectedHash = modelConfigHash(input);
-    const existing = this.models.get(input.id);
     const modelNames = normalizeModelNames(input.modelNames, input.model);
     const mappings = normalizeModelRequestMappings(input.mappings);
     const normalizedInput = {
@@ -192,37 +235,28 @@ export class NodeModelRegistry {
       mappings,
       protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app),
     };
-    if (input.id !== expectedHash && !existing && isModelConfigHashId(input.id)) {
-      // Compatibility for v0.0.34: released control planes deploy under the
-      // content hash, so a hash-shaped unknown id must still match its content.
-      // Current writers mint opaque entity ids, which are accepted as-is;
-      // in-place revisions of entities this node already owns stay allowed.
-      throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
-    }
-    if (this.isMappedModel(normalizedInput)) {
-      // Mapping resolution needs a stable entity identity. The legacy hash
-      // projection cannot carry one, so it must never transport a mapping.
-      if (isModelConfigHashId(input.id)) {
-        throw Object.assign(new Error("Model name mappings require a stable model entity identity."), {
-          statusCode: 400,
-          code: "NODE_MODEL_RELAY_MAPPING_REQUIRES_STABLE_IDENTITY",
-        });
-      }
-    }
-    if (mappings.length && isModelConfigHashId(input.id)) {
-      // Compatibility for v0.0.34: legacy hash ids cannot be edited in place,
-      // so request mappings must never be stored under one.
-      throw legacyMappingIdentityError();
-    }
+    // Compatibility for v0.0.35: a released control plane deploys under the
+    // legacy content-hash id, so the write upgrades onto the derived entity id
+    // instead of failing. New writers already send the entity id.
+    const modelId = isModelEntityId(input.id) ? input.id : migratedModelEntityId(input.id);
+    const upgraded = this.transaction(() => this.upgradeModelIdentity(modelId));
+    const existing = this.models.get(upgraded);
     const stored = this.models.put(NodeModelConfigSchema.parse({
       ...normalizedInput,
+      id: upgraded,
       createdAt: existing?.createdAt || normalizedInput.createdAt,
     }));
     return this.toPublic(stored, this.referenceIds(stored.id).length);
   }
 
   update(id: string, input: z.infer<typeof UpdateNodeModelSchema>) {
-    const current = this.requireModel(id);
+    // Saving a record persisted under a legacy id upgrades it to its entity
+    // identity first, so the write itself creates the stable shape.
+    // Compatibility for v0.0.35: the upgraded record answers under its new id,
+    // which that release's control plane reads as a legacy edit fork; control
+    // plane and node agent must be upgraded together instead of mixed.
+    const modelId = this.transaction(() => this.upgradeModelIdentity(id));
+    const current = this.requireModel(modelId);
     const modelNames = input.modelNames?.length
       ? normalizeModelNames(input.modelNames, input.model || current.model)
       : input.model ? normalizeModelNames(undefined, input.model) : normalizeModelNames(current.modelNames, current.model);
@@ -234,11 +268,6 @@ export class NodeModelRegistry {
     const mappings = input.mappings !== undefined
       ? normalizeModelRequestMappings(input.mappings)
       : normalizeModelRequestMappings(current.mappings);
-    // Only an explicit mapping edit trips this check, so untouched patches to a
-    // stored legacy record keep working; deploy() carries the same invariant.
-    if (input.mappings !== undefined && mappings.length && isModelConfigHashId(id)) {
-      throw legacyMappingIdentityError();
-    }
     const candidate = NodeModelConfigSchema.parse({
       ...current,
       ...input,
@@ -252,21 +281,21 @@ export class NodeModelRegistry {
     });
     // The entity id is stable: editing content updates this record in place so
     // instance assignments and AI session selections keep resolving to it.
-    const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id }));
-    return this.toPublic(stored, this.referenceIds(id).length);
+    const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id: modelId }));
+    return this.toPublic(stored, this.referenceIds(modelId).length);
   }
 
   delete(id: string) {
-    this.requireModel(id);
-    const instanceIds = this.referenceIds(id);
+    const model = this.requireModel(id);
+    const instanceIds = this.referenceIds(model.id);
     if (instanceIds.length) {
-      throw Object.assign(new Error(`Model ${id} is assigned to ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}.`), {
+      throw Object.assign(new Error(`Model ${model.id} is assigned to ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}.`), {
         statusCode: 409,
         code: "NODE_MODEL_IN_USE",
         instanceIds,
       });
     }
-    return this.models.delete(id);
+    return this.models.delete(model.id);
   }
 
   resolveProbeKey(existingModelId?: string, override?: string) {
@@ -472,15 +501,15 @@ export class NodeModelRegistry {
         });
       }
     }
-    const instanceIds = this.referenceIds(id);
+    const instanceIds = this.referenceIds(ghost.id);
     this.transaction(() => {
       for (const instanceId of instanceIds) {
         const instance = this.instances.require(instanceId);
         const assignment = this.assignments.get(instanceId);
         if (!assignment) continue;
-        const modelEntityIds = [...new Set(assignment.modelEntityIds.map((entityId) => entityId === id ? targetModelId : entityId))];
+        const modelEntityIds = [...new Set(assignment.modelEntityIds.map((entityId) => entityId === ghost.id ? target.id : entityId))];
         const resolveHash = (app: "codex" | "claude" | "opencode", currentHash?: string) => (
-          currentHash && currentHash !== id
+          currentHash && currentHash !== ghost.id
             ? currentHash
             : modelEntityIds.find((entityId) => this.modelSupportsApp(this.requireModel(entityId), app))
         );
@@ -507,7 +536,7 @@ export class NodeModelRegistry {
           updatedAt: now(),
         }));
       }
-      this.models.delete(id);
+      this.models.delete(ghost.id);
     });
     return { merged: true as const, reassignedInstances: instanceIds };
   }
@@ -591,7 +620,7 @@ export class NodeModelRegistry {
   }
 
   private requireModel(id: string) {
-    const model = this.models.get(id);
+    const model = this.getModel(id);
     if (!model) throw Object.assign(new Error(`Model ${id} was not found on node ${this.nodeId}.`), { statusCode: 404, code: "NODE_MODEL_NOT_FOUND" });
     return model;
   }

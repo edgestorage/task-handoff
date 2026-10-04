@@ -7,7 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
-const { ControlledInstanceSchema, modelConfigHash } = require("../packages/protocol/src/control-plane.ts");
+const { ControlledInstanceSchema, migratedModelEntityId } = require("../packages/protocol/src/control-plane.ts");
 const { NodeModelRelayResolver } = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
 
 const RELAY_INSTANCE_ID = "inst_request_mappings";
@@ -191,7 +191,7 @@ test("request mappings rewrite relay requests without changing catalogs, assignm
   assert.equal((await unknownRequest.json()).error.code, "MODEL_RELAY_UNKNOWN_MODEL_NAME");
 });
 
-test("declared model names win over request mappings and legacy hash ids reject mappings", async (t) => {
+test("declared model names win over request mappings and legacy hash ids upgrade on write", async (t) => {
   const upstream = await startUpstream((_record, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end("{}");
@@ -220,8 +220,9 @@ test("declared model names win over request mappings and legacy hash ids reject 
   const shadowedModel = app.nodeAgentState.modelRegistry.getModel(shadowed.json().data.id);
   assert.equal(resolver.resolveUpstreamModelName(shadowedModel, "same-name"), "via-names");
 
-  // Compatibility for v0.0.34: legacy hash identities cannot be edited in
-  // place, so they must never carry request mappings.
+  // Compatibility for v0.0.35: writes under a legacy content-hash identity
+  // upgrade the record onto its derived entity id instead of failing, and
+  // request mappings carry over to the upgraded record.
   const legacyPayload = {
     id: "0".repeat(64),
     name: "Legacy",
@@ -238,24 +239,25 @@ test("declared model names win over request mappings and legacy hash ids reject 
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  legacyPayload.id = modelConfigHash(legacyPayload);
-  const legacy = await agentRequest(app, "PUT", `/api/node-agent/models/${legacyPayload.id}/deploy`, legacyPayload);
-  assert.equal(legacy.statusCode, 400, legacy.body);
-  assert.equal(legacy.json().error.code, "NODE_MODEL_REQUEST_MAPPING_REQUIRES_STABLE_IDENTITY");
-
-  // The update route carries the same invariant: an explicit mapping edit on a
-  // stored legacy hash record fails closed instead of writing a mapping under
-  // an identity deploy() refuses to accept.
-  delete legacyPayload.mappings;
-  legacyPayload.id = modelConfigHash(legacyPayload);
-  const legacyStored = await agentRequest(app, "PUT", `/api/node-agent/models/${legacyPayload.id}/deploy`, legacyPayload);
-  assert.equal(legacyStored.statusCode, 200, legacyStored.body);
-  const legacyUpdate = await agentRequest(app, "PATCH", `/api/node-agent/models/${legacyPayload.id}`, {
-    mappings: [{ name: "legacy-hidden", upstreamName: "legacy-upstream", order: 100 }],
+  legacyPayload.id = `mdl_${"0".repeat(64)}`;
+  const legacyId = legacyPayload.id;
+  const upgradedId = migratedModelEntityId(legacyId);
+  const legacy = await agentRequest(app, "PUT", `/api/node-agent/models/${legacyId}/deploy`, legacyPayload);
+  assert.equal(legacy.statusCode, 200, legacy.body);
+  assert.equal(legacy.json().data.id, upgradedId);
+  assert.deepEqual(legacy.json().data.mappings, legacyPayload.mappings);
+  assert.equal(app.nodeAgentState.modelRegistry.getModel(legacyId).id, upgradedId);
+  assert.equal(resolver.resolveUpstreamModelName(app.nodeAgentState.modelRegistry.getModel(upgradedId), "legacy-hidden"), "legacy-upstream");
+  // The same invariant holds on the update route: an explicit mapping edit on
+  // a stored legacy record upgrades the record and persists the mapping.
+  const legacyUpdate = await agentRequest(app, "PATCH", `/api/node-agent/models/${legacyId}`, {
+    mappings: [{ name: "legacy-hidden-2", upstreamName: "legacy-upstream-2", order: 100 }],
   });
-  assert.equal(legacyUpdate.statusCode, 400, legacyUpdate.body);
-  assert.equal(legacyUpdate.json().error.code, "NODE_MODEL_REQUEST_MAPPING_REQUIRES_STABLE_IDENTITY");
-  // Untouched patches to the stored legacy record keep working.
-  const legacyRename = await agentRequest(app, "PATCH", `/api/node-agent/models/${legacyPayload.id}`, { name: "Legacy renamed" });
+  assert.equal(legacyUpdate.statusCode, 200, legacyUpdate.body);
+  assert.equal(legacyUpdate.json().data.id, upgradedId);
+  assert.deepEqual(legacyUpdate.json().data.mappings, [{ name: "legacy-hidden-2", upstreamName: "legacy-upstream-2", order: 100 }]);
+  // Untouched patches to the stored legacy id keep resolving to the entity.
+  const legacyRename = await agentRequest(app, "PATCH", `/api/node-agent/models/${legacyId}`, { name: "Legacy renamed" });
   assert.equal(legacyRename.statusCode, 200, legacyRename.body);
+  assert.equal(legacyRename.json().data.id, upgradedId);
 });

@@ -117,7 +117,7 @@ export const runtimePackages = {
     // CLI bundle; only the CLI runtime libraries stay external. Deriving the
     // external set from the whole workspace closure would declare unrelated core
     // libraries (cron parsing, chat rendering, atomic writes) as CLI dependencies.
-    dependencies: runtimeDependencies(["@task-handoff/control-plane-client"], ["commander", "ws"]),
+    dependencies: runtimeDependencies(["@task-handoff/control-plane-client"], ["commander", "semver", "ws"]),
   },
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",

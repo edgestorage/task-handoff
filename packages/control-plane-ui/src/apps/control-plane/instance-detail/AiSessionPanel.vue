@@ -1314,6 +1314,7 @@
 </template>
 
 <script setup lang="ts">
+import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
 import { useElementBounding, useMediaQuery } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
@@ -3627,10 +3628,7 @@ function canResolveApproval(session: AiSessionSummary) {
 }
 
 function approvalDecisions(session: AiSessionSummary): Array<"allow" | "deny" | "skip"> {
-  const capability = directoryAiSessionProviderCapability(props.instance.capabilities?.features, session.agent);
-  if (capability) return capability.actions.approvalDecisions;
-  // Compatibility for v0.0.21: provider capabilities were absent and the UI exposed all legacy decisions.
-  return session.agent === "codex" || session.agent === "claude" ? ["allow", "deny", "skip"] : [];
+  return aiSessionApprovalDecisions(session, props.instance.capabilities?.features);
 }
 
 function agentIcon(agent: string): "codex" | "claude" | "opencode" {

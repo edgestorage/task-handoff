@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { ApplyUpdateRequestSchema, NodeJoinInviteStatusSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
+import { ApplyUpdateRequestSchema, NodeJoinInviteStatusSchema, UpdateCheckRequestSchema, UpdateNodeAgentExternalListenerSchema } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneEventBus } from "../events/bus.ts";
+import type { OperationApprovals } from "../approvals/operation-approvals.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
+import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import {
   ControlPlaneNodeAgentTunnelTransport,
@@ -35,6 +38,8 @@ export type RegisterNodeRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
   events: ControlPlaneEventBus;
+  operationApprovals: OperationApprovals;
+  auth: ControlPlaneAuth;
   nodeAgentTunnel: ControlPlaneNodeAgentTunnelTransport;
   nodeEventSubscriber: ControlPlaneNodeEventSubscriber;
   errorPayload: ErrorPayload;
@@ -44,6 +49,8 @@ export function registerNodeRoutes({
   app,
   service,
   events,
+  operationApprovals,
+  auth,
   nodeAgentTunnel,
   nodeEventSubscriber,
   errorPayload,
@@ -84,11 +91,16 @@ export function registerNodeRoutes({
   app.get("/api/nodes/:id/settings/external-listener", async (request) => ({
     data: await service.getLocalNodeExternalListener(IdParamsSchema.parse(request.params).id),
   }));
-  app.patch("/api/nodes/:id/settings/external-listener", async (request) => {
+  app.patch("/api/nodes/:id/settings/external-listener", async (request, reply) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const listener = await service.updateLocalNodeExternalListener(id, request.body);
-    events.publish("node.external-listener.updated", { nodeId: id, bindScope: listener.bindScope, port: listener.port });
-    return { data: listener };
+    const input = UpdateNodeAgentExternalListenerSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "node.external-listener.set", id, input, [
+      { field: "bindScope", value: input.bindScope }, { field: "port", value: String(input.port) },
+    ], async () => {
+      const listener = await service.updateLocalNodeExternalListener(id, input);
+      events.publish("node.external-listener.updated", { nodeId: id, bindScope: listener.bindScope, port: listener.port });
+      return listener;
+    });
   });
   app.get("/api/nodes/:id/settings/model-relay", async (request) => ({
     data: await service.getNodeModelRelay(IdParamsSchema.parse(request.params).id),
@@ -109,9 +121,14 @@ export function registerNodeRoutes({
   app.post("/api/nodes/:id/updates/apply", async (request, reply) => {
     rejectRetiredInstanceUpdate(request.body);
     const id = IdParamsSchema.parse(request.params).id;
-    const job = await service.applyNodeUpdate(id, ApplyUpdateRequestSchema.parse(request.body));
-    events.publish("node.update.queued", { nodeId: id, updateJobId: job.id, desiredVersion: job.toVersion, impact: job.impact });
-    return reply.code(202).send({ data: job });
+    const input = ApplyUpdateRequestSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "node.update.apply", id, input, [
+      { field: "targetVersion", value: input.targetVersion }, { field: "channel", value: input.channel },
+    ], async () => {
+      const job = await service.applyNodeUpdate(id, input);
+      events.publish("node.update.queued", { nodeId: id, updateJobId: job.id, desiredVersion: job.toVersion, impact: job.impact });
+      return job;
+    }, 202);
   });
   app.post("/api/nodes/:id/pairing/invites", async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
@@ -228,13 +245,15 @@ export function registerNodeRoutes({
     events.publish("node.updated", { nodeId: node.id });
     return { data: service.requirePublicNode(node.id) };
   });
-  app.delete("/api/nodes/:id", async (request) => {
+  app.delete("/api/nodes/:id", async (request, reply) => {
     const id = IdParamsSchema.parse(request.params).id;
     const query = DeleteNodeQuerySchema.parse(request.query);
-    const result = await service.deleteNodeWithProxyLifecycle(id, query.force === "true");
-    nodeEventSubscriber.syncNow();
-    events.publish("node.deleted", { nodeId: id, deleted: result.deleted, revoke: result.revoke });
-    return { data: result };
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "node.remove", id, { force: query.force === "true" }, undefined, async () => {
+      const result = await service.deleteNodeWithProxyLifecycle(id, query.force === "true");
+      nodeEventSubscriber.syncNow();
+      events.publish("node.deleted", { nodeId: id, deleted: result.deleted, revoke: result.revoke });
+      return result;
+    });
   });
 
   app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {

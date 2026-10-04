@@ -2,8 +2,9 @@
 import type { ToasterProps } from "vue-sonner"
 import { reactiveOmit, useMutationObserver } from "@vueuse/core"
 import { CircleAlertIcon, CircleCheckIcon, InfoIcon, Loader2Icon, TriangleAlertIcon, XIcon } from "@lucide/vue"
-import { ref } from "vue"
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { Toaster as Sonner } from "vue-sonner"
+import { visibleToastBounds } from "./toastRegion"
 import "vue-sonner/style.css"
 
 const props = defineProps<ToasterProps>()
@@ -16,6 +17,47 @@ function syncTheme() {
 
 syncTheme()
 useMutationObserver(document.documentElement, syncTheme, { attributes: true, attributeFilter: ["class", "data-theme"] })
+
+let mutations: MutationObserver | undefined
+let sizes: ResizeObserver | undefined
+let frame = 0
+
+function measureToasts() {
+  frame = 0
+  visibleToastBounds.value = [...document.querySelectorAll<HTMLElement>('.toaster[data-sonner-toaster] [data-sonner-toast]')]
+    .map((toast) => toast.getBoundingClientRect())
+    .filter((bounds) => bounds.height > 0)
+    .map(({ top, bottom, left, right, height }) => ({ top, bottom, left, right, height }))
+}
+
+function scheduleMeasure() {
+  if (!frame) frame = requestAnimationFrame(measureToasts)
+}
+
+onMounted(async () => {
+  await nextTick()
+  const toaster = document.querySelector('.toaster[data-sonner-toaster]')
+  if (!toaster) return
+  sizes = new ResizeObserver(scheduleMeasure)
+  const observeToasts = () => {
+    sizes?.disconnect()
+    sizes?.observe(toaster)
+    toaster.querySelectorAll('[data-sonner-toast]').forEach((toast) => sizes?.observe(toast))
+    scheduleMeasure()
+  }
+  mutations = new MutationObserver(observeToasts)
+  mutations.observe(toaster, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-visible', 'data-state'] })
+  observeToasts()
+  window.addEventListener('resize', scheduleMeasure)
+})
+
+onBeforeUnmount(() => {
+  mutations?.disconnect()
+  sizes?.disconnect()
+  window.removeEventListener('resize', scheduleMeasure)
+  if (frame) cancelAnimationFrame(frame)
+  visibleToastBounds.value = []
+})
 </script>
 
 <template>

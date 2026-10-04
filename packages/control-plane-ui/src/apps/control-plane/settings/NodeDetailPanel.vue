@@ -163,6 +163,7 @@
                   {{ localizedStatus(externalListenerStatusKeys, resources.externalListener.status) }} · {{ localizedStatus(externalListenerSourceKeys, resources.externalListener.source) }}
                 </Badge>
               </div>
+              <div class="node-detail-section-body">
               <div class="node-listener-form">
                 <label>
                   <span>{{ t("settings.nodeDetail.listenOn") }}</span>
@@ -186,6 +187,7 @@
               <!-- i18n-audit-allow-next-line code-token: listener endpoint template -->
               <code v-if="resources.externalListener" class="node-listener-endpoint">http://&lt;host-ip-or-dns&gt;:{{ resources.externalListener.port }}</code>
               <p v-if="resources.externalListener?.error || resources.externalListenerError" class="control-plane-error">{{ resources.externalListenerError || resources.externalListener?.error }}</p>
+              </div>
             </div>
             <div class="node-detail-section">
               <div class="section-head">
@@ -194,6 +196,7 @@
                   {{ resources.modelRelay.enabled ? t("settings.nodeDetail.modelRelayOn") : t("settings.nodeDetail.modelRelayOff") }}
                 </Badge>
               </div>
+              <div class="node-detail-section-body">
               <p class="node-relay-description">{{ t("settings.nodeDetail.modelRelayDescription") }}</p>
               <label v-if="resources.modelRelaySupported" class="node-relay-toggle">
                 <Checkbox
@@ -210,11 +213,12 @@
               </label>
               <p v-else class="node-relay-description node-relay-upgrade">{{ t("settings.nodeDetail.modelRelayUnsupported") }}</p>
               <p v-if="resources.modelRelayError" class="control-plane-error">{{ resources.modelRelayError }}</p>
+              </div>
             </div>
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="runtimes">
-            <div class="node-detail-section flush-section">
+            <div class="node-detail-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.runtimes") }}</span>
               </div>
@@ -242,7 +246,7 @@
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="updates">
-            <div class="node-detail-section flush-section">
+            <div class="node-detail-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.managedUpdates") }}</span>
                 <div class="update-channel-select">
@@ -253,6 +257,7 @@
                   </ControlPlaneSelect>
                 </div>
               </div>
+              <div class="node-detail-section-body">
               <div class="managed-update-groups">
                 <section class="managed-update-group agent-update-group">
                   <div class="managed-update-group-head">
@@ -291,7 +296,7 @@
                       <span>{{ t("settings.nodeDetail.instanceConvergenceDescription") }}</span>
                     </div>
                   </div>
-                  <div class="node-resource-list compact-list">
+                  <div class="node-resource-list">
                     <div v-for="instance in resources.instances" :key="`update-${instance.id}`" class="node-resource-row">
                       <div>
                         <strong>{{ instance.name }}</strong>
@@ -306,6 +311,7 @@
                   </div>
                 </section>
               </div>
+              </div>
             </div>
             <div class="node-detail-section">
               <div class="section-head">
@@ -315,7 +321,7 @@
                   <span>{{ t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
-              <div class="node-resource-list compact-list">
+              <div class="node-resource-list">
                 <div v-for="job in resources.updateJobs" :key="job.id" class="node-resource-row">
                   <div>
                     <span class="update-job-title">
@@ -332,7 +338,7 @@
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content fill-tab-content" value="storage">
-            <div class="node-detail-section flush-section fill-section">
+            <div class="node-detail-section fill-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
                 <div class="node-folder-add-controls">
@@ -368,7 +374,7 @@
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="inventory">
-            <div class="node-detail-section flush-section">
+            <div class="node-detail-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
@@ -422,7 +428,7 @@
             />
             <template v-else>
             <div class="node-remote-panel">
-              <div class="section-head compact-head">
+              <div class="section-head">
                 <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.controlPlanePairings.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadControlPlaneAccess(selectedNode.id)">
                   <RefreshCw :size="14" />
@@ -449,7 +455,7 @@
             </div>
 
             <div class="node-remote-panel">
-              <div class="section-head compact-head">
+              <div class="section-head">
                 <span>{{ t("settings.nodeDetail.activeConnections", { count: resources.controlPlaneConnections.length }) }}</span>
                 <Button variant="outline" size="sm" @click="remoteConnectionDialogOpen = true">
                   <Plus :size="14" />
@@ -486,7 +492,9 @@
               </p>
             </div>
             <div class="node-remote-panel">
+              <div class="node-detail-section-body">
               <ControlPlaneProxyManagementPanel :node-id="selectedNode.id" :node-name="selectedNode.name" />
+              </div>
             </div>
             </template>
           </TabsContent>
@@ -1207,7 +1215,7 @@ watch(
 }
 
 .fill-section {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
@@ -1241,18 +1249,34 @@ watch(
 .node-detail-section,
 .node-remote-panel {
   display: grid;
-  gap: 10px;
+  gap: 0;
   min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
+  padding: 0;
+}
+
+.node-detail-section-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
   padding: 12px;
 }
 
-.flush-section,
-.node-detail-tab-content > .node-remote-panel:first-child {
-  border: 1px solid var(--line);
-  padding: 12px;
+.node-detail-section > .control-plane-error,
+.node-detail-section > .settings-empty,
+.node-detail-section > .settings-success,
+.node-remote-panel > .control-plane-error,
+.node-remote-panel > .settings-success {
+  margin: 0;
+  padding: 10px 12px 12px;
+}
+
+.node-resource-list + .control-plane-error,
+.node-resource-list + .settings-success {
+  border-top: 1px solid var(--line);
 }
 
 .node-resource-list {
@@ -1260,8 +1284,11 @@ watch(
   align-content: start;
   gap: 0;
   overflow: hidden;
-  border-top: 1px solid var(--line);
   min-height: 0;
+}
+
+.managed-update-group > .node-resource-list {
+  border-top: 1px solid var(--line);
 }
 
 .node-resource-list.compact-list {
@@ -1281,7 +1308,7 @@ watch(
 .settings-scroll-content {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 0;
   min-height: 100%;
   padding-right: 2px;
 }
@@ -1290,12 +1317,9 @@ watch(
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 16px;
   min-width: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 10px;
+  padding: 10px 12px;
 }
 
 .node-resource-row + .node-resource-row {
@@ -1322,13 +1346,16 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  min-height: 38px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 12px;
 }
 
 .section-head > span {
   overflow: hidden;
-  color: var(--text-muted);
+  color: var(--text-strong);
   font-size: var(--node-detail-section-title-size);
   font-weight: 500;
   line-height: 1.5;
@@ -1429,14 +1456,13 @@ watch(
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
-  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid span {
   display: grid;
   min-width: 0;
   gap: 3px;
-  padding: 9px 10px;
+  padding: 10px 12px;
 }
 
 .node-diagnostic-grid span:nth-child(even) {
@@ -1471,17 +1497,13 @@ watch(
   display: grid;
   gap: 0;
   overflow: hidden;
-  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-log-entry {
   display: grid;
   gap: 7px;
   min-width: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 9px;
+  padding: 10px 12px;
 }
 
 .node-diagnostic-log-entry + .node-diagnostic-log-entry {

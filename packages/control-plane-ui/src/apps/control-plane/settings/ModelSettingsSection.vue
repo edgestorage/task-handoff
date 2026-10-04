@@ -438,10 +438,7 @@ function instanceSelectionIds(selection: ModelSelection | undefined) {
     : [selection.codexModelHash, selection.claudeModelHash, selection.opencodeModelHash].filter((id): id is string => Boolean(id));
 }
 function nodeReferenceInstances(model: ModelConfig, location: NodeLocation) {
-  // Nodes without stable model identities keep their replica under the
-  // content-hash projection, so the assignment id there is the replica id and
-  // not the content revision of the model record.
-  const candidateIds = new Set([model.id, model.revision, location.revision, location.replicaId].filter((id): id is string => Boolean(id)));
+  const candidateIds = new Set([model.id, model.revision, location.revision].filter((id): id is string => Boolean(id)));
   return (props.instances || [])
     .filter((instance) => instance.nodeId === location.nodeId
       && instanceSelectionIds(instance.modelSelection).some((id) => candidateIds.has(id)))
@@ -495,7 +492,7 @@ async function confirmMerge() {
 <style scoped>
 .model-settings-scroll { height: 100%; min-height: 0; width: 100%; }
 .model-settings-page { display: grid; gap: 12px; }
-.model-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.model-page-head { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .model-page-head p, .model-form-section h3, .model-form-section p { margin: 0; }
 .model-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .model-toolbar { display: grid; gap: 8px; grid-template-columns: minmax(240px,1fr) 150px 180px 150px; }

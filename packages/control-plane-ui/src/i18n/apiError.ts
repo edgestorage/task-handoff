@@ -72,6 +72,7 @@ const knownApiErrors: Record<string, ErrorDescriptor> = {
   MODEL_IN_USE: { key: "errors.MODEL_IN_USE" },
   MODEL_UPDATE_SYNC_FAILED: { key: "errors.MODEL_UPDATE_SYNC_FAILED" },
   MODEL_MERGE_SAME: { key: "errors.MODEL_MERGE_SAME" },
+  MODEL_MERGE_NOTHING_TO_MERGE: { key: "errors.MODEL_MERGE_NOTHING_TO_MERGE" },
 
   AGENT_DEFINITION_INVALID_INPUT: { key: "errors.AGENT_DEFINITION_INVALID_INPUT" },
   AGENT_DEFINITION_NOT_FOUND: { key: "errors.AGENT_DEFINITION_NOT_FOUND" },

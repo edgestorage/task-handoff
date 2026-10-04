@@ -3,14 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { modelConfigHash } from "@task-handoff/protocol/control-plane";
+import { migratedModelEntityId } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneModelService } from "../src/control-plane/models/service.ts";
 import { ControlPlaneModelRepository } from "../src/control-plane/models/repository.ts";
 import { createControlPlaneDatabase } from "../src/control-plane/persistence/database/index.ts";
 import { controlPlaneStorePaths } from "../src/control-plane/persistence/paths.ts";
 import { SecretEnvelopeService } from "../src/control-plane/persistence/secret-envelope.ts";
 
-test("control-plane model copies inherit secrets without overwriting an existing identity", async () => {
+test("control-plane model copies inherit secrets and matching content retains separate identities", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-copy-"));
   const paths = controlPlaneStorePaths(directory);
   const database = await createControlPlaneDatabase(paths);
@@ -20,15 +20,19 @@ test("control-plane model copies inherit secrets without overwriting an existing
   try {
     const service = new ControlPlaneModelService({
       repository,
-      gateway: {} as never,
+      gateway: { listFleetModels: async () => ({ items: [], nodeErrors: [] }) } as never,
       listNodes: () => [],
       requireNode: () => { throw new Error("unused"); },
       fetchImpl: fetch,
     });
     await service.init();
 
+    // Compatibility for v0.0.35: a record persisted under the retired
+    // content-hash identity upgrades onto its derived entity id on the first
+    // save and answers under the stable id from then on.
     const legacySpec = { app: "codex" as const, endpoint: "https://legacy.example.test/v1", key: "legacy-secret", model: "legacy-model" };
-    const legacyId = modelConfigHash(legacySpec);
+    const legacyId = `mdl_${"a".repeat(64)}`;
+    const legacyEntityId = migratedModelEntityId(legacyId);
     await repository.put({
       id: legacyId,
       name: "Legacy",
@@ -43,12 +47,15 @@ test("control-plane model copies inherit secrets without overwriting an existing
     });
     await service.init();
     const savedLegacy = await service.update(legacyId, { name: "Legacy saved" });
+    assert.equal(savedLegacy.model.id, legacyEntityId);
     assert.deepEqual(savedLegacy.model.modelNames, [{ name: "legacy-model", order: 100 }]);
-    const persistedLegacy = await repository.get(legacyId);
+    assert.equal(await repository.get(legacyId), undefined);
+    const persistedLegacy = await repository.get(legacyEntityId);
+    assert.ok(persistedLegacy);
     // Repository reads always normalize to the canonical in-memory shape
     // (upstreamName = name), while the stored record stays compact.
     assert.deepEqual(persistedLegacy.modelNames, [{ name: "legacy-model", upstreamName: "legacy-model", order: 100 }]);
-    assert.deepEqual((await database.models.get(legacyId))?.modelNames, [{ name: "legacy-model", order: 100 }]);
+    assert.deepEqual((await database.models.get(legacyEntityId))?.modelNames, [{ name: "legacy-model", order: 100 }]);
     assert.deepEqual(persistedLegacy.protocols, ["openai-responses"]);
 
     const source = await service.create({ name: "Primary", endpoint: "https://api.example.test/v1", key: "secret-key", model: "model-a", app: "codex" });
@@ -79,14 +86,19 @@ test("control-plane model copies inherit secrets without overwriting an existing
     assert.equal((await repository.get(copy.id))?.key, "secret-key");
     assert.equal("key" in copy, false);
 
-    await assert.rejects(
-      () => service.copy(source.id, { name: "Renamed only", endpoint: source.endpoint, model: source.model, app: source.app, enabled: source.enabled }),
-      (error: unknown) => (error as { code?: string }).code === "MODEL_COPY_UNCHANGED",
-    );
-    await assert.rejects(
-      () => service.copy(source.id, { name: "Duplicate", endpoint: copy.endpoint, model: copy.model, app: copy.app, enabled: copy.enabled }),
-      (error: unknown) => (error as { code?: string }).code === "MODEL_COPY_CONFLICT",
-    );
+    const renamedOnly = await service.copy(source.id, { name: "Renamed only", endpoint: source.endpoint, model: source.model, app: source.app, enabled: source.enabled });
+    const sameName = await service.create({ name: source.name, endpoint: source.endpoint, key: "secret-key", model: source.model, app: source.app });
+    assert.equal(renamedOnly.revision, source.revision);
+    assert.equal(sameName.revision, source.revision);
+    assert.equal(new Set([source.id, renamedOnly.id, sameName.id]).size, 3);
+    assert.equal((await repository.get(renamedOnly.id))?.key, "secret-key");
+
+    const duplicate = await service.copy(source.id, { name: "Duplicate", endpoint: copy.endpoint, model: copy.model, app: copy.app, enabled: copy.enabled });
+    assert.equal(duplicate.revision, copy.revision);
+    assert.notEqual(duplicate.id, copy.id);
+    assert.equal((await repository.get(duplicate.id))?.key, "secret-key");
+    const matchingGroups = (await service.listFederated()).models.filter((group) => group.model.revision === source.revision);
+    assert.deepEqual(new Set(matchingGroups.map((group) => group.id)), new Set([source.id, renamedOnly.id, sameName.id]));
   } finally {
     await database.close();
     fs.rmSync(directory, { recursive: true, force: true });

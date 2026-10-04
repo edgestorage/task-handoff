@@ -258,6 +258,25 @@
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <TooltipProvider v-if="!standaloneMode && actionInboxCollapsed" :delay-duration="120">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button variant="ghost" size="icon" class="control-plane-icon-button action-inbox-trigger" :aria-label="actionInboxItems.length ? `${t('navigation.expandApprovals')} · ${actionInboxItems.length}` : t('navigation.expandApprovals')" :title="t('navigation.expandApprovals')" :class="{ 'action-inbox-trigger-empty': !actionInboxItems.length }" @click="expandActionInbox">
+                <ClipboardCheck :size="16" />
+                <span v-if="actionInboxItems.length" class="action-inbox-trigger-count" aria-hidden="true">{{ actionInboxItems.length }}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">
+              <template v-if="actionInboxItems.length">
+                <span v-for="item in actionInboxItems.slice(0, 2)" :key="item.key" class="action-inbox-preview-line">
+                  {{ item.type === 'ai-session-approval' ? `${item.instanceName} · ${item.session.title || item.session.id}` : `${t('navigation.operationApproval')} · ${item.request.targetId}` }}
+                </span>
+                <span v-if="actionInboxItems.length > 2">{{ t('navigation.moreApprovals', { count: actionInboxItems.length - 2 }) }}</span>
+              </template>
+              <span v-else>{{ t('navigation.noApprovals') }}</span>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <span class="story-resource-toggle-divider" aria-hidden="true" />
         <TooltipProvider :delay-duration="120">
           <Tooltip>
@@ -266,7 +285,7 @@
                 <Button
                   variant="ghost"
                   size="icon"
-                  class="story-resource-toggle"
+                  class="control-plane-icon-button story-resource-toggle"
                   :class="{ active: storyResourceSidebar.visible.value }"
                   :disabled="!storyResourceTargetAiSessionId"
                   :aria-label="t(storyResourceSidebar.visible.value ? 'stories.resources.collapse' : 'stories.resources.expand')"
@@ -292,6 +311,7 @@
         aria-hidden="true"
       />
     </header>
+    <ActionInbox v-if="!standaloneMode" :items="actionInboxItems" :collapsed="actionInboxCollapsed" :busy-key="aiApprovalBusyKey || operationApprovalBusyKey" :error="actionInboxError" @collapse="actionInboxCollapsed = true" @resolve="resolveActionInboxApproval" @decide="decideActionInboxOperation" />
       </ContextMenuTrigger>
       <WorkbenchLayoutContextMenu
         :instance-sidebar-visible="instancesSidebarVisible"
@@ -620,7 +640,7 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
+import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
@@ -637,6 +657,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import { isFeatureEnabled } from "../../lib/featureFlags";
 import { createBrowserUuid } from "../../lib/random-id";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
+import ActionInbox from "./action-inbox/ActionInbox.vue";
+import type { Item as ActionInboxItem } from "./action-inbox/ActionInbox.vue";
+import { aiSessionApprovalItems, type AiSessionApprovalDecision } from "./action-inbox/aiSessionApprovals";
+import { mergeActionInboxItems } from "./action-inbox/items";
+import { useOperationApprovalStore } from "./action-inbox/useOperationApprovalStore";
 import AgentView from "./agent/AgentView.vue";
 import { useAgentCatalog } from "./agent/useAgentCatalog";
 import StoryView from "./story/StoryView.vue";
@@ -1025,6 +1050,47 @@ const aiSessionStore = useAiSessionStore({
   queryKey: () => controlPlaneQueryKeys.aiSessions(sessionQueryInstanceId.value),
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
+const operationApprovalStore = useOperationApprovalStore();
+watch(() => authSession.data.value?.user?.id, (userId, previousId) => {
+  if (userId === previousId) return;
+  operationApprovalStore.reset();
+  if (userId && authSession.data.value?.enabled) void operationApprovalStore.recover().catch(() => undefined);
+});
+const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems(aiSessionApprovalItems(boardInstancesWithAiSessions.value), operationApprovalStore.snapshot.value.requests));
+const actionInboxCollapsed = ref(false);
+const actionInboxError = ref("");
+const operationApprovalBusyKey = ref("");
+
+function expandActionInbox() {
+  if (!actionInboxItems.value.length && !actionInboxError.value) return;
+  actionInboxCollapsed.value = false;
+}
+
+async function decideActionInboxOperation(item: Extract<ActionInboxItem, { type: "operation-approval" }>, decision: "approve" | "deny") {
+  if (operationApprovalBusyKey.value) return;
+  actionInboxError.value = "";
+  operationApprovalBusyKey.value = item.key;
+  try {
+    await sharedControlPlaneClient.approvals.decide(item.request.id, decision);
+    await operationApprovalStore.recover();
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+    await operationApprovalStore.recover().catch(() => undefined);
+  } finally {
+    operationApprovalBusyKey.value = "";
+  }
+}
+
+async function resolveActionInboxApproval(item: Extract<ActionInboxItem, { type: "ai-session-approval" }>, decision: AiSessionApprovalDecision) {
+  actionInboxError.value = "";
+  const instance = boardInstancesWithAiSessions.value.find((candidate) => candidate.id === item.instanceId);
+  if (!instance) return;
+  try {
+    await resolveAiSessionApprovalAction(instance, item.session, decision);
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+  }
+}
 const storyResourceTargetAiSessionId = computed(() => storyMode.value && !settingsMode.value && storySelection.value?.kind === "session" ? storySelection.value.sessionId : "");
 const storyResourceTargetInstanceId = computed(() => storyMode.value && !settingsMode.value && storySelection.value?.kind === "session" ? storySelection.value.instanceId : "");
 const storyResourceTargetInstance = computed(() => {
@@ -1321,6 +1387,10 @@ useControlPlaneEvents({
     joined(event) {
       lastNodeJoinedEvent.value = event;
     },
+  },
+  operationApprovals: {
+    applyEvent: (payload) => { if (authSession.data.value?.enabled && authSession.data.value?.user?.id) operationApprovalStore.applyEvent(payload); },
+    recoverOpen: () => authSession.data.value?.enabled ? operationApprovalStore.recover() : undefined,
   },
   onAuthoritativeState(authoritative) {
     instanceDirectoryEventsAuthoritative.value = authoritative;

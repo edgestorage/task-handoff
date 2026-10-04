@@ -44,6 +44,7 @@ export function exportContractDocument(target?: { group?: string; leaf?: CliLeaf
       { flags: "--yes", description: "Skip interactive confirmation for write commands" },
       { flags: "--dry-run", description: "Print the request a write command would send without sending it" },
       { flags: "--token-stdin", description: "Read a secret (token, join token, credential) from stdin instead of a flag" },
+      { flags: "--no-update-check", description: "Skip the background CLI and skill update check" },
     ],
     groups: groups.map((entry) => ({ ...entry, leaves: entry.leaves })),
     commands: leaves.map(leafDocument),

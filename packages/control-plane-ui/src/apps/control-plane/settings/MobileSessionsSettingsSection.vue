@@ -180,7 +180,7 @@ async function confirmRevoke() {
 <style scoped>
 .mobile-sessions-scroll { height: 100%; min-height: 0; width: 100%; }
 .mobile-sessions-page { display: grid; gap: 12px; }
-.mobile-sessions-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.mobile-sessions-page-head { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .mobile-sessions-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: 0; }
 .mobile-sessions-directory { background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .mobile-sessions-directory-head { align-items: center; border-bottom: 1px solid var(--line); display: flex; gap: 8px; min-height: 38px; padding: 0 12px; }

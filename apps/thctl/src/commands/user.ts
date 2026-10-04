@@ -1,5 +1,6 @@
 import { CONTROL_PLANE_CAPABILITIES, requireControlPlaneCapability } from "../capability.ts";
 import { ThctlError } from "../errors.ts";
+import { guardApprovalProtocol } from "../operation-approvals.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import { optionString, readRequestBody, readTokenFromStdin, requireArgument } from "./support.ts";
 
@@ -131,7 +132,7 @@ export async function userAccess(context: CliContext, invocation: CliInvocation)
     context,
     "user access",
     () => ({ method: "PUT", path: `/api/users/${encodeURIComponent(userId)}/access`, body }),
-    () => connection.client.users.setAccess(userId, body),
+    () => guardApprovalProtocol(connection, () => connection.client.users.setAccess(userId, body)),
   );
   if (!result) return;
   return { data: result, columns: USER_COLUMNS, message: `Access for \`${userId}\` updated.` };
@@ -185,7 +186,7 @@ export async function userRoleUpdate(context: CliContext, invocation: CliInvocat
     context,
     "user role update",
     () => ({ method: "PATCH", path: `/api/roles/${encodeURIComponent(roleId)}`, body }),
-    () => connection.client.users.updateRole(roleId, body),
+    () => guardApprovalProtocol(connection, () => connection.client.users.updateRole(roleId, body)),
   );
   if (!result) return;
   return { data: result, columns: ROLE_COLUMNS, message: `Role \`${roleId}\` updated.` };
@@ -198,7 +199,7 @@ export async function userRoleRemove(context: CliContext, invocation: CliInvocat
     context,
     "user role remove",
     () => ({ method: "DELETE", path: `/api/roles/${encodeURIComponent(roleId)}` }),
-    () => connection.client.users.archiveRole(roleId),
+    () => guardApprovalProtocol(connection, () => connection.client.users.archiveRole(roleId)),
   );
   if (!result) return;
   return { data: result, message: `Role \`${roleId}\` archived.` };
@@ -239,7 +240,7 @@ export async function userIdentityProviderUpdate(context: CliContext, invocation
     context,
     "user identity-provider update",
     () => ({ method: "PATCH", path: `/api/identity-providers/${encodeURIComponent(providerId)}`, body }),
-    () => connection.client.users.updateProvider(providerId, body),
+    () => guardApprovalProtocol(connection, () => connection.client.users.updateProvider(providerId, body)),
   );
   if (!result) return;
   return { data: result, columns: PROVIDER_COLUMNS, message: `Identity provider \`${providerId}\` updated.` };
@@ -252,7 +253,7 @@ export async function userIdentityProviderRemove(context: CliContext, invocation
     context,
     "user identity-provider remove",
     () => ({ method: "DELETE", path: `/api/identity-providers/${encodeURIComponent(providerId)}` }),
-    () => connection.client.users.removeProvider(providerId),
+    () => guardApprovalProtocol(connection, () => connection.client.users.removeProvider(providerId)),
   );
   if (!result) return;
   return { data: result, message: `Identity provider \`${providerId}\` removed.` };

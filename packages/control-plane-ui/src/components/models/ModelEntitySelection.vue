@@ -111,18 +111,7 @@ const { t } = useI18n();
 const eligibleModels = computed(() => props.models
   .filter((model) => model.enabled && model.locations?.some((location) => location.enabled && (location.type === "control-plane" || location.nodeId === props.nodeId)))
   .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
-// Nodes without stable model identities store the replica under its content-hash
-// projection, so instance selections can reference either that projection or the
-// canonical entity id.
-const modelById = computed(() => {
-  const index = new Map<string, ModelConfig>();
-  for (const model of props.models) {
-    if (!index.has(model.id)) index.set(model.id, model);
-    const replicaId = model.locations?.map((location) => location.type === "node" && location.nodeId === props.nodeId ? location.replicaId : undefined).find(Boolean);
-    if (replicaId && !index.has(replicaId)) index.set(replicaId, model);
-  }
-  return index;
-});
+const modelById = computed(() => new Map(props.models.map((model) => [model.id, model])));
 function canonicalModelId(id: string) {
   return modelById.value.get(id)?.id || id;
 }

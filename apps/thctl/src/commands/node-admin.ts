@@ -18,6 +18,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { NODE_CAPABILITIES, fetchNodeCapabilitySnapshot, requireNodeCapability } from "../capability.ts";
 import { registerSecret } from "../redact.ts";
+import { guardApprovalProtocol } from "../operation-approvals.ts";
 import { ThctlError } from "../errors.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import { optionString, readRequestBody, repeatableOption, requireArgument, requireOption } from "./support.ts";
@@ -112,7 +113,7 @@ export async function nodeRemove(context: CliContext, invocation: CliInvocation)
     context,
     "node remove",
     () => ({ method: "DELETE", path: `/api/nodes/${encodeURIComponent(nodeId)}${force ? "?force=true" : ""}` }),
-    () => connection.client.nodeAdmin.removeNode(nodeId, force ? { force: true } : {}),
+    () => guardApprovalProtocol(connection, () => connection.client.approvals.removeNode(nodeId, force)),
   );
   if (!result) return;
   return { data: result, message: `Node \`${nodeId}\` removed (revoke: ${result.revoke.mode}${result.revoke.orphanRisk ? ", orphan risk" : ""}).` };
@@ -294,7 +295,7 @@ export async function nodeExternalListenerSet(context: CliContext, invocation: C
     context,
     "node settings external-listener set",
     () => ({ method: "PATCH", path: `/api/nodes/${encodeURIComponent(nodeId)}/settings/external-listener`, body }),
-    () => connection.client.nodeAdmin.updateExternalListener(nodeId, body),
+    () => guardApprovalProtocol(connection, () => connection.client.nodeAdmin.updateExternalListener(nodeId, body)),
   );
   if (!result) return;
   return { data: result, message: `External listener for \`${nodeId}\` updated.` };
@@ -351,7 +352,7 @@ export async function nodeUpdatesApply(context: CliContext, invocation: CliInvoc
     context,
     "node updates apply",
     () => ({ method: "POST", path: `/api/nodes/${encodeURIComponent(nodeId)}/updates/apply`, body }),
-    () => connection.client.nodeAdmin.applyUpdate(nodeId, body),
+    () => guardApprovalProtocol(connection, () => connection.client.nodeAdmin.applyUpdate(nodeId, body)),
   );
   if (!job) return;
   if (!wait) return { data: job, columns: UPDATE_JOB_COLUMNS, message: `Update job \`${job.id}\` queued (status ${job.status}).` };

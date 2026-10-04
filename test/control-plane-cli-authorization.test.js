@@ -212,11 +212,19 @@ test("cli device authorization reports pending, slow down, denial and expiry", a
   assert.equal(deniedPoll.statusCode, 403, deniedPoll.body);
   assert.equal(deniedPoll.json().error.code, "CLI_AUTHORIZATION_DENIED");
 
+  const expiredApproved = await app.inject({ method: "POST", url: "/api/auth/cli/authorize", payload: { mode: "device", client } });
+  const approvedBeforeExpiry = await app.inject({
+    method: "POST",
+    url: `/api/auth/cli/requests/${expiredApproved.json().data.requestId}/approve`,
+    headers: decisionHeaders(cookie),
+    payload: {},
+  });
+  assert.equal(approvedBeforeExpiry.statusCode, 200, approvedBeforeExpiry.body);
   const expired = await app.inject({ method: "POST", url: "/api/auth/cli/authorize", payload: browserAuthorization().payload });
   t.mock.timers.tick(11 * 60 * 1000);
-  const expiredDetail = await app.inject({ method: "GET", url: `/api/auth/cli/requests/${expired.json().data.requestId}`, headers: { cookie, host: HOST } });
-  assert.equal(expiredDetail.statusCode, 200, expiredDetail.body);
-  assert.equal(expiredDetail.json().data.status, "expired");
+  const expiredApprovedPoll = await poll(expiredApproved.json().data.requestId);
+  assert.equal(expiredApprovedPoll.statusCode, 410, expiredApprovedPoll.body);
+  assert.equal(expiredApprovedPoll.json().error.code, "CLI_AUTHORIZATION_EXPIRED");
   const expiredExchange = await app.inject({
     method: "POST",
     url: "/api/auth/cli/token",
@@ -224,6 +232,9 @@ test("cli device authorization reports pending, slow down, denial and expiry", a
   });
   assert.equal(expiredExchange.statusCode, 410, expiredExchange.body);
   assert.equal(expiredExchange.json().error.code, "CLI_AUTHORIZATION_EXPIRED");
+  const expiredDetail = await app.inject({ method: "GET", url: `/api/auth/cli/requests/${expired.json().data.requestId}`, headers: { cookie, host: HOST } });
+  assert.equal(expiredDetail.statusCode, 200, expiredDetail.body);
+  assert.equal(expiredDetail.json().data.status, "expired");
   const unknownRequest = await app.inject({ method: "GET", url: "/api/auth/cli/requests/cliauth_missing", headers: { cookie, host: HOST } });
   assert.equal(unknownRequest.statusCode, 404, unknownRequest.body);
   assert.equal(unknownRequest.json().error.code, "CLI_AUTHORIZATION_REQUEST_UNKNOWN");

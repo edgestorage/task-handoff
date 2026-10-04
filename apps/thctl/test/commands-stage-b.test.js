@@ -17,9 +17,9 @@ function tempStore() {
   return new CliProfileStore(fs.mkdtempSync(path.join(os.tmpdir(), "thctl-stage-b-")));
 }
 
-async function signedIn() {
+async function signedIn(options = {}) {
   const store = tempStore();
-  const fake = createFakeControlPlane({ origin: "http://cp.test" });
+  const fake = createFakeControlPlane({ origin: "http://cp.test", ...options });
   const add = capture();
   assert.equal(await runCli(["node", "thctl", "profile", "add", "http://cp.test"], { store, streams: add.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0, add.stderr());
   const login = capture();
@@ -276,7 +276,7 @@ test("stage B writes keep the confirmation gate and dry-run stays local", async 
 });
 
 test("instance create and delete drive the shared client behind the write gate", async () => {
-  const { store, fake } = await signedIn();
+  const { store, fake } = await signedIn({ approvalAutoApprove: true });
   const configFile = path.join(path.dirname(store.file), "instance-create.json");
   fs.writeFileSync(configFile, JSON.stringify({
     nodeId: "node_fake0000001",
@@ -326,7 +326,11 @@ test("instance create and delete drive the shared client behind the write gate",
   const deleted = await run(fake, store, ["instance", "delete", "instance_fake001", "--yes", "--json"]);
   assert.equal(deleted.code, 0, deleted.stderr());
   assert.equal(JSON.parse(deleted.stdout()).completed, true);
-  const deleteCall = fake.state.calls.find((call) => call.method === "DELETE" && call.path === "/api/controlled-instances/instance_fake001");
+  const deleteCalls = fake.state.calls.filter((call) => call.method === "DELETE" && call.path === "/api/controlled-instances/instance_fake001");
+  assert.equal(deleteCalls.length, 2);
+  assert.equal(fake.state.calls.some((call) => call.path === "/api/operation-approvals/support"), true);
+  const deleteCall = deleteCalls[1];
+  assert.match(deleteCall.headers["x-task-handoff-approval-id"], /^approval_fake/);
   assert.deepEqual(deleteCall?.body, { deleteVolumes: false });
   assert.equal(deleteCall?.headers["content-type"], "application/json");
 

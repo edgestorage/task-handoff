@@ -17,6 +17,7 @@ import { createControlPlaneGitCredentialsApi } from "./git-credentials.ts";
 import { createControlPlaneEnvironmentTemplatesApi } from "./environment-templates.ts";
 import { createControlPlaneChatGatewayApi } from "./chat-gateway.ts";
 import { createControlPlaneAdminApi } from "./control-plane-admin.ts";
+import { createOperationApprovalsApi } from "./operation-approvals.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
@@ -28,6 +29,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
       : {}),
   };
   return {
+    approvals: createOperationApprovalsApi(compatibleTransport),
     auth: createControlPlaneAuthApi(compatibleTransport),
     users: createControlPlaneUsersApi(compatibleTransport),
     aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),

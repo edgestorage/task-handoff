@@ -33,6 +33,9 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
       "0006_cli_sessions",
       "0007_local_trust_identities",
       "0008_model_request_mappings",
+      // Retires the hash-projection bookkeeping: legacy model identities now
+      // upgrade onto stable entity ids on write.
+      "0009_drop_model_legacy_projections",
     ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);
@@ -43,6 +46,7 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_models/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_chat_bridges/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_git_credentials/);
+    assert.match(migrations.at(-1)!.sql, /DROP TABLE IF EXISTS cp_model_legacy_projections/);
   }
 });
 
@@ -173,7 +177,6 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
         "cp_login_identities",
         "cp_metadata",
         "cp_migration_ledger",
-        "cp_model_legacy_projections",
         "cp_models",
         "cp_node_pairing_revocations",
         "cp_nodes",

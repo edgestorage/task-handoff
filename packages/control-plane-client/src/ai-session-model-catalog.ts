@@ -12,7 +12,7 @@ export type AiSessionCatalogModelEntity = {
   app?: string;
   protocols?: string[];
   modelNames?: Array<{ name: string; order: number }>;
-  locations?: Array<{ type: "control-plane" | "node"; nodeId?: string; enabled: boolean; replicaId?: string }>;
+  locations?: Array<{ type: "control-plane" | "node"; nodeId?: string; enabled: boolean }>;
 };
 
 export type AiSessionCatalogAssignment = {
@@ -80,17 +80,7 @@ export function deriveAiSessionModelGroups(input: {
   capability?: Partial<AiSessionModelSelectionCapabilities>;
 }): AiSessionModelGroup[] {
   const ids = assignedModelEntityIds(input.assignment);
-  // Instances on nodes without stable model identities resolve the legacy
-  // content-hash projection, which the registry publishes per node location.
-  const entityById = new Map<string, AiSessionCatalogModelEntity>();
-  for (const entity of input.entities) {
-    if (!entityById.has(entity.id)) entityById.set(entity.id, entity);
-    for (const location of entity.locations || []) {
-      if (location.type === "node" && location.nodeId === input.nodeId && location.replicaId && !entityById.has(location.replicaId)) {
-        entityById.set(location.replicaId, entity);
-      }
-    }
-  }
+  const entityById = new Map(input.entities.map((entity) => [entity.id, entity]));
   const capability = input.capability || {};
   const providerSelectionAllowed = aiSessionProviderSelectionAllowed(capability, input.mode);
   const modelSelectionAllowed = aiSessionModelSelectionAllowed(capability, input.mode);
@@ -105,16 +95,11 @@ export function deriveAiSessionModelGroups(input: {
       .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     if (!names.length) return [];
     return [{
-      modelEntityId: nodeLocalModelEntityId(entity, input.nodeId),
+      modelEntityId: entity.id,
       providerName: entity.name,
-      models: names.map((entry) => ({ modelEntityId: nodeLocalModelEntityId(entity, input.nodeId), modelName: entry.name, providerName: entity.name })),
+      models: names.map((entry) => ({ modelEntityId: entity.id, modelName: entry.name, providerName: entity.name })),
     }];
   });
-}
-
-export function nodeLocalModelEntityId(entity: AiSessionCatalogModelEntity, nodeId: string) {
-  const location = entity.locations?.find((candidate) => candidate.type === "node" && candidate.nodeId === nodeId && candidate.replicaId);
-  return location?.replicaId || entity.id;
 }
 
 export function defaultAiSessionModelSelection(groups: AiSessionModelGroup[]): AiSessionModelSelection | undefined {

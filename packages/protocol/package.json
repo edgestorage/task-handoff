@@ -22,6 +22,10 @@
       "types": "./src/control-plane-access.ts",
       "default": "./src/control-plane-access.ts"
     },
+    "./operation-approvals": {
+      "types": "./src/operation-approvals.ts",
+      "default": "./src/operation-approvals.ts"
+    },
     "./control-plane-directory": {
       "types": "./src/control-plane-directory.ts",
       "default": "./src/control-plane-directory.ts"

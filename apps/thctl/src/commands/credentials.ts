@@ -1,5 +1,6 @@
 import { NODE_CAPABILITIES, requireInstanceNodeCapability } from "../capability.ts";
 import { registerSecret } from "../redact.ts";
+import { guardApprovalProtocol } from "../operation-approvals.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import { optionString, readRequestBody, readTokenFromStdin, requireArgument, requireOption } from "./support.ts";
 
@@ -161,7 +162,7 @@ export async function gitCredentialAssign(context: CliContext, invocation: CliIn
     context,
     "git-credential assignments assign",
     () => ({ method: "POST", path: `/api/controlled-instances/${encodeURIComponent(instanceId)}/git-credential-assignments`, body: { credentialId } }),
-    () => connection.client.gitCredentials.assignToInstance(instanceId, { credentialId }),
+    () => guardApprovalProtocol(connection, () => connection.client.gitCredentials.assignToInstance(instanceId, { credentialId })),
   );
   if (!result) return;
   return { data: result, columns: ASSIGNMENT_COLUMNS, message: `Credential \`${credentialId}\` assigned to \`${instanceId}\`.` };

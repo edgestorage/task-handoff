@@ -24,6 +24,7 @@ test("stable instance, node, and model errors have localized messages", () => {
     ["LOCAL_NODE_CANNOT_BE_DELETED", "The built-in local node cannot be deleted.", "无法删除内置本地节点。"],
     ["APP_CWD_OUTSIDE_WORKSPACE", "The app working directory must be inside the instance workspace.", "App 工作目录必须位于实例工作区内。"],
     ["MODEL_NOT_FOUND", "The selected model was not found.", "未找到所选模型。"],
+    ["MODEL_MERGE_NOTHING_TO_MERGE", "This model has no node copy that can be merged. Nothing was changed.", "该模型没有可合并的节点副本，未做任何改动。"],
     ["MODEL_DISABLED", "The selected model is disabled.", "所选模型已停用。"],
     ["MODEL_APP_MISMATCH", "The selected model is not compatible with this app.", "所选模型与此 App 不兼容。"],
     ["NODE_MODEL_NOT_FOUND", "The selected model was not found on the node.", "节点上不存在所选模型。"],

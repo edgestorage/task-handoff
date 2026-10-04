@@ -56,6 +56,9 @@ export class ControlPlaneAuth {
   async init() {
     if (!this.enabled()) return;
     await this.users.init();
+    // 启用认证即关闭本地信任边界：吊销 disabled 期间签发的操作员会话并归档账号，
+    // 否则旧凭证会在 password 模式下继续以 Admin 身份生效。
+    await this.users.retireLocalTrustAccess();
     this.identityProviders.init();
   }
 

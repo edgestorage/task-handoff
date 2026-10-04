@@ -15,8 +15,10 @@ test("OpenCode model selection is available for registry, creation, and instance
 test("OpenCode presentation consumes provider capability and exposes no skip special case", () => {
   const panel = read("src/apps/control-plane/instance-detail/AiSessionPanel.vue");
   assert.match(read("src/components/AiAgentIcon.vue"), /opencodeIcon/);
-  assert.match(panel, /directoryAiSessionProviderCapability\(props\.instance\.capabilities\?\.features, session\.agent\)/);
-  assert.match(panel, /capability\.actions\.approvalDecisions/);
+  const sharedApprovals = read("src/apps/control-plane/action-inbox/aiSessionApprovals.ts");
+  assert.match(panel, /aiSessionApprovalDecisions\(session, props\.instance\.capabilities\?\.features\)/);
+  assert.match(sharedApprovals, /directoryAiSessionProviderCapability\(capabilities, session\.agent\)/);
+  assert.match(sharedApprovals, /provider\.actions\.approvalDecisions/);
   assert.doesNotMatch(panel, /session\.agent === ["']opencode["'].*skip/);
   const mobile = fs.readFileSync(new URL("../../../apps/mobile/src/ai-sessions/SessionWorkspace.tsx", import.meta.url), "utf8");
   assert.match(mobile, /directoryAiSessionProviderCapability\(instanceCapabilities, session\.agent\)/);

@@ -157,7 +157,8 @@ export class ControlPlaneCliAuthorizationService {
     const requestId = this.userCodeIndex.get(this.normalizeUserCode(userCode));
     const record = requestId ? this.records.get(requestId) : undefined;
     if (!record) throw authorizationFailure("CLI_AUTHORIZATION_REQUEST_UNKNOWN", "The CLI authorization request was not found.", 404);
-    return this.project(record);
+    // 用户码查询是另一条读取路径，必须和 requireRecord 一样先落 TTL，不能只靠 requestId 查询。
+    return this.project(this.expireRecord(record));
   }
 
   async approve(requestId: string, approver: ControlPlaneCliAuthorizationApprover) {
@@ -201,6 +202,7 @@ export class ControlPlaneCliAuthorizationService {
     this.prune();
     const record = this.records.get(parsed.requestId);
     if (!record) throw invalidGrant();
+    this.expireRecord(record);
     if (record.status === "expired") return this.failExchange(record, "expired", authorizationFailure("CLI_AUTHORIZATION_EXPIRED", "The CLI authorization request expired. Start the sign-in again.", 410));
     if (record.status === "denied") return this.failExchange(record, "denied", authorizationFailure("CLI_AUTHORIZATION_DENIED", "The CLI authorization request was denied.", 403));
     if (record.status === "consumed") return this.failExchange(record, "already-used", authorizationFailure("CLI_AUTHORIZATION_ALREADY_USED", "This CLI authorization request was already exchanged.", 409));
@@ -247,6 +249,10 @@ export class ControlPlaneCliAuthorizationService {
   private requireRecord(requestId: string) {
     const record = this.records.get(requestId);
     if (!record) throw authorizationFailure("CLI_AUTHORIZATION_REQUEST_UNKNOWN", "The CLI authorization request was not found.", 404);
+    return this.expireRecord(record);
+  }
+
+  private expireRecord(record: CliAuthorizationRecord) {
     if ((record.status === "pending" || record.status === "approved") && record.expiresAt <= now()) record.status = "expired";
     return record;
   }

@@ -48,7 +48,7 @@ const CreateLocalUserInputSchema = BootstrapInputSchema.extend({
   requirePasswordChange: z.boolean().optional(),
 }).strict();
 
-const SetAccessInputSchema = z.object({
+export const SetAccessInputSchema = z.object({
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: NodeScopeInputSchema,
   instanceScope: InstanceScopeInputSchema.optional(),
@@ -61,7 +61,7 @@ const CreateRoleInputSchema = z.object({
   permissionIds: z.array(ControlPlanePermissionIdSchema).min(1),
 }).strict();
 
-const UpdateRoleInputSchema = z.object({
+export const UpdateRoleInputSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   description: z.string().trim().max(500).optional(),
   permissionIds: z.array(ControlPlanePermissionIdSchema).min(1).optional(),
@@ -304,6 +304,25 @@ export class ControlPlaneUserService {
       await repository.users.put({ ...user, status: "active", archivedAt: undefined, updatedAt: timestamp });
     }
     if (revision !== undefined) await this.revokeSessionsIn(repository, userId);
+  }
+
+  /**
+   * 本地信任是 disabled 模式专属的信任边界：一旦启用认证，内置操作员必须立即失效。
+   * 否则 disabled 期间从 loopback 拿到的 Admin 会话会跨模式继续可用，还能通过
+   * `/api/auth/cli/renew` 持续续期。这里吊销其全部会话并归档账号，让启用认证真正关闭
+   * 这条入口；再次回到 disabled 模式时 `ensureLocalTrustOperator` 会重新激活同一账号。
+   */
+  async retireLocalTrustAccess() {
+    return this.store.transaction(async (repository) => {
+      const identity = (await repository.identities.list()).find((entry) => entry.kind === "local-trust");
+      if (!identity) return { revoked: 0, archived: false };
+      const revoked = await this.revokeSessionsIn(repository, identity.userId);
+      const user = await repository.users.get(identity.userId);
+      if (!user || user.status === "archived") return { revoked, archived: false };
+      const timestamp = now();
+      await repository.users.put({ ...user, status: "archived", archivedAt: timestamp, updatedAt: timestamp });
+      return { revoked, archived: true };
+    });
   }
 
   async updateUser(userId: string, input: unknown) {

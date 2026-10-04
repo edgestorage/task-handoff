@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ControlPlaneService } from "../application/service.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
+import type { OperationApprovals } from "../approvals/operation-approvals.ts";
+import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 
@@ -13,7 +16,7 @@ function requireSecretManager(request: Parameters<typeof controlPlaneRequestActo
   assertCan(actor, "manage-secrets", { type: "secret" });
 }
 
-export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, service: ControlPlaneService) {
+export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, service: ControlPlaneService, auth: ControlPlaneAuth, operationApprovals: OperationApprovals) {
   app.get("/api/git-credentials", async () => ({ data: { items: service.gitCredentials.list() } }));
   app.post("/api/git-credentials", async (request, reply) => {
     const credential = await service.gitCredentials.create(request.body);
@@ -43,7 +46,9 @@ export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, se
     requireSecretManager(request);
     const instanceId = IdParamsSchema.parse(request.params).id;
     const input = z.object({ credentialId: z.string().trim().min(1).max(120) }).strict().parse(request.body);
-    return reply.code(201).send({ data: await service.authorizeInstanceGitCredential(instanceId, input.credentialId) });
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "git-credential.assign", instanceId, input, [
+      { field: "credentialId", value: input.credentialId },
+    ], () => service.authorizeInstanceGitCredential(instanceId, input.credentialId), 201);
   });
 
   app.delete("/api/controlled-instances/:id/git-credential-assignments/:credentialId", async (request) => {

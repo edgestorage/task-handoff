@@ -8,7 +8,6 @@ import {
   type GitAuditRecord,
   type GitCredentialRecord,
   type GitProvisioningIntentRecord,
-  type ModelLegacyProjectionRecord,
   type ModelRecord,
   type NodeConfigRecord,
   type PairingRevokeRecord,
@@ -85,7 +84,6 @@ export type ControlPlaneDatabaseRepository = {
   readonly nodes: ControlPlaneRecordCollection<NodeConfigRecord>;
   readonly pairingRevocations: ControlPlaneRecordCollection<PairingRevokeRecord>;
   readonly models: ControlPlaneRecordCollection<ModelRecord>;
-  readonly modelLegacyProjections: ControlPlaneRecordCollection<ModelLegacyProjectionRecord>;
   readonly chatBridges: ControlPlaneRecordCollection<ChatBridgeRecord>;
   readonly chatSessions: ControlPlaneRecordCollection<ChatSessionRecord>;
   readonly gitCredentials: ControlPlaneRecordCollection<GitCredentialRecord>;

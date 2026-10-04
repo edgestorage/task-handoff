@@ -11,12 +11,16 @@ const {
   NodeModelPublicRecordSchema,
   ProtocolVersionSchema,
   UpdateNodeModelAssignmentSchema,
-  modelConfigHash,
+  createModelEntityId,
+  isModelContentRevision,
+  isModelEntityId,
+  modelContentRevision,
 } = require("../packages/protocol/src/control-plane.ts");
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret", model: "gpt-test" };
-const id = modelConfigHash(spec);
+const id = createModelEntityId();
+const revision = modelContentRevision(spec);
 
 test("control plane emits and accepts only date-formatted protocol versions", () => {
   assert.match(CONTROL_PLANE_PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
@@ -32,10 +36,14 @@ test("v0.0.21 instance reports keep their released app inventory requirement", (
   }).success, true);
 });
 
-test("model content revision stays the canonical hash used by legacy node projections", () => {
-  assert.equal(modelConfigHash(spec), id);
-  assert.equal(modelConfigHash({ ...spec, key: "rotated" }) === id, false);
-  assert.match(id, /^mdl_[a-f0-9]{64}$/);
+test("model entity ids stay stable while content revisions advance", () => {
+  assert.equal(isModelEntityId(id), true);
+  assert.equal(isModelEntityId(`mdl_${"0".repeat(64)}`), false);
+  assert.equal(isModelEntityId(revision), false);
+  assert.equal(isModelContentRevision(revision), true);
+  assert.equal(isModelContentRevision(id), false);
+  assert.equal(modelContentRevision(spec), revision);
+  assert.equal(modelContentRevision({ ...spec, key: "rotated" }) === revision, false);
   assert.equal(ModelConfigSchema.parse({ id, name: "Codex", ...spec, labels: {}, createdAt: timestamp, updatedAt: timestamp }).id, id);
 });
 
@@ -43,24 +51,30 @@ test("node model public records are strict and never accept a key", () => {
   const record = {
     id, name: "Codex", endpoint: spec.endpoint, model: spec.model, app: spec.app,
     enabled: true, order: 100, labels: {}, createdAt: timestamp, updatedAt: timestamp,
-    keyPreview: "set", keySet: true, referenceCount: 1,
+    keyPreview: "set", keySet: true, referenceCount: 1, revision,
   };
   assert.equal(NodeModelPublicRecordSchema.safeParse(record).success, true);
   assert.equal(NodeModelPublicRecordSchema.safeParse({ ...record, key: "leaked" }).success, false);
   assert.equal(NodeModelPublicRecordSchema.safeParse({ ...record, unknown: true }).success, false);
 });
 
-test("node copy payload carries immutable hash-addressed content", () => {
+test("node copy payload carries the stable entity identity", () => {
   const deployed = DeployNodeModelSchema.parse({
     id, name: "Codex", ...spec, enabled: true, order: 100, labels: {}, createdAt: timestamp, updatedAt: timestamp,
   });
-  assert.equal(modelConfigHash(deployed), deployed.id);
+  assert.equal(deployed.id, id);
+  assert.equal(isModelEntityId(deployed.id), true);
 });
 
-test("model assignments contain only hashes and no credentials", () => {
-  const assignment = NodeModelAssignmentSchema.parse({ instanceId: "inst_1", codexModelHash: id, updatedAt: timestamp });
-  assert.equal(assignment.codexModelHash, id);
+test("model assignments contain only entity ids and no credentials", () => {
+  const assignment = NodeModelAssignmentSchema.parse({ instanceId: "inst_1", modelEntityIds: [id], updatedAt: timestamp });
   assert.deepEqual(assignment.modelEntityIds, [id]);
+  // Compatibility for v0.0.23: the per-agent hash fields still normalize into
+  // the ordered entity collection when read from legacy nodes.
+  assert.deepEqual(
+    NodeModelAssignmentSchema.parse({ instanceId: "inst_1", codexModelHash: id, updatedAt: timestamp }).modelEntityIds,
+    [id],
+  );
   assert.equal(NodeModelAssignmentSchema.safeParse({ ...assignment, key: "leaked" }).success, false);
   assert.equal(UpdateNodeModelAssignmentSchema.safeParse({
     modelSelection: { codexModelHash: id }, codexModelHash: id, env: { OPENAI_API_KEY: "leaked" },
@@ -70,18 +84,18 @@ test("model assignments contain only hashes and no credentials", () => {
   }).modelSelection, { codexModelHash: null });
 });
 
-test("federated registry groups equal hashes by location without exposing keys", () => {
+test("federated registry groups one entity by location without exposing keys", () => {
   const registry = FederatedModelRegistrySchema.parse({
     models: [{
       id,
       model: {
         id, name: "Codex", endpoint: spec.endpoint, model: spec.model, app: spec.app,
         enabled: true, order: 100, labels: {}, createdAt: timestamp, updatedAt: timestamp,
-        keyPreview: "set", keySet: true,
+        keyPreview: "set", keySet: true, revision,
       },
       locations: [
-        { type: "control-plane", name: "Codex", enabled: true, order: 100 },
-        { type: "node", nodeId: "node_a", name: "Codex", enabled: true, order: 100, referenceCount: 1 },
+        { type: "control-plane", name: "Codex", enabled: true, order: 100, revision },
+        { type: "node", nodeId: "node_a", name: "Codex", enabled: true, order: 100, referenceCount: 1, revision },
       ],
       referenceCount: 1,
     }],

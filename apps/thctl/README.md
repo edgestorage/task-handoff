@@ -31,10 +31,12 @@ thctl model list --json
 thctl user sessions <userId> --json
 thctl events --topic ai.sessions --topic instances
 thctl events --instance <instanceId> --json
+thctl skill status
+thctl skill update --yes
 thctl schema --format json
 ```
 
-- 全局参数：`--profile <label>`、`--json`、`--yes`、`--dry-run`、`--config <file>`、`--token-stdin`。
+- 全局参数：`--profile <label>`、`--json`、`--yes`、`--dry-run`、`--config <file>`、`--token-stdin`、`--no-update-check`。
 - 密钥只从 `--config <file>` 或 `--token-stdin` 进入，位置参数与普通选项不接受 secret；`--dry-run`、stderr 与错误详情中的 secret 统一脱敏为 `***`。
 - 写命令默认要求交互确认；非 TTY 环境必须显式 `--yes`，`--dry-run` 只打印将要发送的请求。
 - 数据写 stdout、诊断写 stderr；`--json` 输出与服务端 wire 模型的字段名一致。
@@ -65,9 +67,18 @@ thctl schema --format json
 - `git-credential list|show|create|update|remove`、`git-credential assignments list|assign|unassign`、`chat status`、`chat bridges list|create|update|start|stop|remove`、`chat sessions list|show`、`mobile-session list|revoke`；
 - `control-plane status|settings show|settings update|diagnostic-logs export`、`cloud show|challenge|remote-access|disconnect`、`proxy invites list|create|remove`、`proxy bindings list|remove`、`proxy diagnostics`、`proxy pending-claims list|resume|remove`；
 - `user list|show|sessions|session-revoke|create|update|access|password-reset`、`user role list|create|update|remove`、`user permission list`、`user identity-provider list|create|update|remove`、`user external-identity list|approve|reject`；
+- `skill status|install|update`：安装/升级唯一发布的 `taskhandoff` Agent Skill，属于软件本身，默认装到用户级 `~/.agents/skills`（`--scope project` 才装到项目 `.agents/skills`），`--dir` 指定自定义 skills 根目录；
 - `events [--topic <topic>]... [--instance <instanceId>]`：订阅 `/api/events`，每个事件输出一行 JSON（JSON Lines）；断线按连接 epoch 重连并重新订阅，握手前不输出，重放事件按 id 去重，不退化为轮询。
 
-命令面共 204 个叶子，`thctl schema` 导出的契约是唯一来源。
+命令面共 207 个叶子，`thctl schema` 导出的契约是唯一来源。
+
+### Skill 与升级检查
+
+- `thctl skill install|update` 从文档站索引（默认 `https://docs.thandoff.com/.well-known/skills/index.json`，可用 `TASK_HANDOFF_SKILLS_INDEX_URL` 覆盖）下载 skill，按索引里的 sha256 校验每个文件，原子替换目录，并写入 `.thandoff-skill.json` 记录版本、来源与每个文件的摘要；本地修改过的副本在 `skill update` 时报冲突（退出码 8），需要 `--force` 才替换。
+- 是否需要更新按**内容**判断：把索引 `integrity` 里的文件摘要与本机 provenance 的摘要比对，不同就更新（`status` 显示 `update-available`）。所以版本号只是标签，可以是 `<上次改动日期>-<内容哈希>` 这类任意样式，不需要单调递增或可比大小；缺少任一侧摘要时（老索引、手工安装且没有 provenance 的副本）退回版本比较。
+- 索引可声明所需的 `thctl` semver 范围；版本过旧时安装/更新直接以退出码 14 拒绝，`thctl skill status` 显示 `cli-too-old`。旧的 `task-handoff`/`task-handoff-nodes` 目录会被识别为 `legacy-name` 并提示迁移。
+- 每次 CLI 调用最多每 24 小时派生一次后台检查（`thctl __update-check`），把最新 dist-tag 版本与 skill 索引的内容指纹写进 CLI 配置目录的 `update-check.json`；下一次交互运行时在 stderr 提示 `thctl x → y is available: npm install -g @task-handoff/thctl@latest` 或 `skill taskhandoff x → y is available: thctl skill update`。
+- 提示只出现在交互式 TTY 且非 `--json` 的运行；`--no-update-check` 或 `TASK_HANDOFF_CLI_UPDATE_CHECK=0` 完全关闭，`TASK_HANDOFF_CLI_UPDATE_CHECK=1` 强制提示，`TASK_HANDOFF_CLI_UPDATE_CHECK_INTERVAL`（秒）覆盖 24 小时窗口，`TASK_HANDOFF_CLI_REGISTRY` 覆盖 npm registry。检查失败一小时后重试，绝不影响当前命令的输出与退出码。
 
 ### 能力门控
 

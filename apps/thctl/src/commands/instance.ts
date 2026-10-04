@@ -1,5 +1,6 @@
 import { InstanceCreateInputSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { CLI_EXIT_CODES, ThctlError } from "../errors.ts";
+import { guardApprovalProtocol } from "../operation-approvals.ts";
 import { openConnection, performWrite, type CliContext, type CliInvocation } from "../runtime.ts";
 import { optionString, readJsonFile, requireOption } from "./support.ts";
 
@@ -114,7 +115,7 @@ export async function instanceDelete(context: CliContext, invocation: CliInvocat
     context,
     `instance delete ${instanceId}`,
     () => ({ method: "DELETE", path: `/api/controlled-instances/${encodeURIComponent(instanceId)}`, body: input }),
-    () => connection.client.resources.deleteInstance(instanceId, input),
+    () => guardApprovalProtocol(connection, () => connection.client.approvals.deleteInstance(instanceId, input)),
   );
   if (!result) return;
   if (!result.completed) {

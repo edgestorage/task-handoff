@@ -29,6 +29,11 @@ export type ControlPlaneProxyStateSubscriberService = {
   applyProxyTargetEvent(nodeId: string, event: ProxyTargetEvent): Node;
   markProxyUnavailable(nodeId: string, error: ControlPlaneProxyError): Node;
   markProxyBindingRevoked(nodeId: string, error: ControlPlaneProxyError): Node;
+  /**
+   * 代理链路建立后刷新节点的能力文档。目标控制面的快照是低分辨率投影，
+   * 能力必须以 node-agent 自己的 /health 为准（旧目标控制面不携带 relay 能力）。
+   */
+  refreshNodeCapabilityDocument?(nodeId: string): Promise<Node | undefined>;
 };
 
 export type ControlPlaneProxyStateSubscriberOptions = {
@@ -153,6 +158,7 @@ export class ControlPlaneProxyStateSubscriber {
       this.validateIdentity(credential, snapshot.binding.id, snapshot.binding.targetNodeId);
       this.onStateChanged(this.service.applyProxyTargetSnapshot(nodeId, snapshot));
       this.cancelUnavailable(subscription);
+      void this.refreshNodeCapabilities(nodeId, generation);
       if (snapshot.binding.status === "revoked") {
         this.onStateChanged(this.service.markProxyBindingRevoked(nodeId, {
           code: ControlPlaneProxyErrorCode.BindingRevoked,
@@ -166,6 +172,21 @@ export class ControlPlaneProxyStateSubscriber {
       if (!this.current(nodeId, generation)) return;
       this.logger?.warn?.({ nodeId, error: proxyFailureLog(cause) }, "control-plane proxy state bootstrap failed");
       this.fail(nodeId, generation, unavailableError("Trusted control-plane proxy is unavailable."), true, { trigger: "snapshot-fetch" });
+    }
+  }
+
+  /**
+   * 代理链路恢复后让本地能力文档回到 node-agent 的权威结果。探测只更新
+   * capabilities.agent，在线状态仍由目标状态流负责；失败只记录日志。
+   */
+  private async refreshNodeCapabilities(nodeId: string, generation: number) {
+    const refresh = this.service.refreshNodeCapabilityDocument;
+    if (!refresh) return;
+    try {
+      const node = await refresh.call(this.service, nodeId);
+      if (node && this.current(nodeId, generation)) this.onStateChanged(node);
+    } catch (cause) {
+      this.logger?.warn?.({ nodeId, error: proxyFailureLog(cause) }, "control-plane proxy capability refresh failed");
     }
   }
 

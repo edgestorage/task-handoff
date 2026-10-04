@@ -67,6 +67,7 @@ export function createFakeControlPlane(options = {}) {
     localSessionRequests: 0,
     renewalCalls: 0,
     deleteIncomplete: false,
+    approvalRequests: new Map(),
     slowDownRemaining: options.slowDownRemaining ?? 0,
   };
 
@@ -352,6 +353,14 @@ export function createFakeControlPlane(options = {}) {
     if (state.sessionRevoked && knownToken && path !== "/api/auth/cli/logout") {
       return errorResponse(401, "CONTROL_PLANE_AUTH_REQUIRED", "Sign in with a Control Plane CLI session.");
     }
+    if (options.approvalAutoApprove && method === "GET" && path === "/api/operation-approvals/support") {
+      return json(200, { data: { supported: true } });
+    }
+    if (options.approvalAutoApprove && method === "GET" && /^\/api\/operation-approvals\/[^/]+\/status$/.test(path)) {
+      const approval = state.approvalRequests.get(path.split("/")[3]);
+      if (!approval) return errorResponse(404, "OPERATION_APPROVAL_NOT_FOUND", "Approval not found.");
+      return json(200, { data: { id: approval.id, status: "approved", expiresAt: approval.expiresAt } });
+    }
     if (method === "GET" && path === "/api/auth/session") {
       if (bearer === state.localSessionToken) {
         return json(200, { data: { mode: "password", enabled: true, requiresBootstrap: false, authenticated: true, user: localUser, authorization: { ...authorization, userId: localUser.id, identityId: "identity_fake_local" } } });
@@ -480,6 +489,15 @@ export function createFakeControlPlane(options = {}) {
     }
     if (method === "DELETE" && /^\/api\/controlled-instances\/[^/]+$/.test(path)) {
       const id = path.split("/").at(-1);
+      if (options.approvalAutoApprove) {
+        const approvalId = headers.get("x-task-handoff-approval-id");
+        if (!approvalId) {
+          const approval = { kind: "operation-approval", id: `approval_fake${state.approvalRequests.size + 1}`, status: "pending", expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
+          state.approvalRequests.set(approval.id, approval);
+          return json(202, { data: approval });
+        }
+        if (!state.approvalRequests.delete(approvalId)) return errorResponse(403, "OPERATION_APPROVAL_INVALID", "Approval not found.");
+      }
       const deleteVolumes = body?.deleteVolumes === true;
       const volume = { role: "workspace", name: `fake-${id}-workspace`, mountPath: "/workspace", status: deleteVolumes ? "deleted" : "retained" };
       if (state.deleteIncomplete) {

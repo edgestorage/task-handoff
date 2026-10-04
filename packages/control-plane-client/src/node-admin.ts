@@ -43,7 +43,7 @@ const NodeCheckResultSchema = z.object({
   error: z.string().optional(),
 }).passthrough();
 
-const DeleteNodeResultSchema = z.object({
+export const DeleteNodeResultSchema = z.object({
   deleted: z.boolean(),
   revoke: z.object({
     mode: z.enum(["not-proxied", "revoked", "forced"]),

@@ -48,11 +48,14 @@ const { controlPlaneStorePaths } = require("../packages/control-plane/src/contro
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { openNodeAgentDatabaseSync } = require("../packages/control-plane/src/node-agent/persistence/database.ts");
 const { createNodeAgentRepository } = require("../packages/control-plane/src/node-agent/persistence/repository.ts");
+const { createControlPlaneDatabase } = require("../packages/control-plane/src/control-plane/persistence/database/index.ts");
+const { SecretEnvelopeService } = require("../packages/control-plane/src/control-plane/persistence/secret-envelope.ts");
+const { ControlPlaneModelRepository } = require("../packages/control-plane/src/control-plane/models/repository.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
-const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, modelContentRevision, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, createModelEntityId, decodeNodeTunnelRequestBody, isModelEntityId, migratedModelEntityId, modelContentRevision, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 const { CONTROL_PLANE_PERMISSION_IDS, ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
@@ -1788,7 +1791,7 @@ function createMockNodeAgentFetch(options = {}) {
       return jsonResponse([...nodeModels.values()]);
     }
     if (path === "/models" && init.method === "POST") {
-      const id = modelConfigHash(body);
+      const id = createModelEntityId();
       const created = new Date().toISOString();
       const model = {
         ...body,
@@ -1812,6 +1815,14 @@ function createMockNodeAgentFetch(options = {}) {
     if (modelDeploy && init.method === "PUT") {
       if (options.deployModelError) throw options.deployModelError;
       const id = decodeURIComponent(modelDeploy[1]);
+      // A node upgrades a replica it still keeps under the legacy content hash
+      // onto the incoming entity identity.
+      for (const existingId of [...nodeModels.keys()]) {
+        if (existingId !== id && !isModelEntityId(existingId) && migratedModelEntityId(existingId) === id) {
+          nodeModels.delete(existingId);
+          nodeModelKeys.delete(existingId);
+        }
+      }
       const model = {
         ...body,
         id,
@@ -2082,7 +2093,7 @@ function createMockNodeAgentFetch(options = {}) {
     return errorResponse(`Unhandled node agent route ${path}`);
   }
 
-  return { fetchImpl, requests, instances, folders, runtimes, nodeModels };
+  return { fetchImpl, requests, instances, folders, runtimes, nodeModels, nodeModelKeys };
 }
 
 test("control plane auth is disabled by default", async () => {
@@ -11629,7 +11640,13 @@ test("node model edits keep the entity id and update the record in place", async
 
 test("control plane models deploy to the target node and instances store assignments", async (t) => {
   const mockOptions = {
-    health: { capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true } },
+    health: {
+      capabilities: {
+        modelEndpointProbe: true,
+        aiSessionHistoryLimit: true,
+        managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+      },
+    },
     instanceCapabilities: { features: { aiSessionPersistenceSettings: true } },
   };
   const mock = createMockNodeAgentFetch(mockOptions);
@@ -11731,22 +11748,18 @@ test("control plane models deploy to the target node and instances store assignm
   });
   assert.equal(instance.statusCode, 201);
   assert.deepEqual(instance.body.data.modelSelection, {
-    codexModelHash: modelConfigHash({ app: "codex", endpoint: "https://allowed.example/v1", key: "allowed-codex-key-secret", model: "allowed-codex-model" }),
-    claudeModelHash: modelConfigHash({ app: "claude", endpoint: "https://anthropic.example", key: "allowed-claude-key-secret", model: "allowed-claude-model" }),
+    codexModelHash: selectedCodex.body.data.id,
+    claudeModelHash: selectedClaude.body.data.id,
   });
   const createRequest = mock.requests.find((request) => request.path === "/instances" && request.method === "POST" && request.body.name === "scoped-1");
   assert.equal("modelEnv" in createRequest.body, false);
-  // The node predates stable model identities, so it stores the control-plane
-  // entity under the legacy content-hash projection.
-  const selectedCodexProjection = modelConfigHash({ app: "codex", endpoint: "https://allowed.example/v1", key: "allowed-codex-key-secret", model: "allowed-codex-model" });
-  const selectedClaudeProjection = modelConfigHash({ app: "claude", endpoint: "https://anthropic.example", key: "allowed-claude-key-secret", model: "allowed-claude-model" });
-  assert.notEqual(selectedCodexProjection, selectedCodex.body.data.id);
-  const codexDeploy = mock.requests.find((request) => request.path === `/models/${selectedCodexProjection}/deploy` && request.method === "PUT");
+  // A node with stable identities receives the entity id itself.
+  const codexDeploy = mock.requests.find((request) => request.path === `/models/${selectedCodex.body.data.id}/deploy` && request.method === "PUT");
   assert.equal(codexDeploy.body.key, "allowed-codex-key-secret");
-  assert.equal(modelConfigHash(codexDeploy.body), codexDeploy.body.id);
+  assert.equal(codexDeploy.body.id, selectedCodex.body.data.id);
   const assignmentRequest = mock.requests.find((request) => request.path === `/instances/${instance.body.data.id}/model-assignment` && request.method === "PUT");
-  assert.equal(assignmentRequest.body.codexModelHash, selectedCodexProjection);
-  assert.equal(assignmentRequest.body.claudeModelHash, selectedClaudeProjection);
+  assert.equal(assignmentRequest.body.codexModelHash, selectedCodex.body.data.id);
+  assert.equal(assignmentRequest.body.claudeModelHash, selectedClaude.body.data.id);
   assert.equal("key" in assignmentRequest.body, false);
 
   const noModelInstance = await json(app, "POST", "/api/controlled-instances", {
@@ -11796,17 +11809,10 @@ test("control plane models deploy to the target node and instances store assignm
     endpoint: "https://rotated.example/v1",
   });
   assert.equal(rotatedModel.statusCode, 200);
-  // The entity keeps its identity. A node that predates stable identities keeps
-  // its previous content and is reported as unsupported instead of forking a
-  // second entity that would show up as a duplicate model.
+  // The entity keeps its identity and the edit converges the replica in place.
   assert.equal(rotatedModel.body.data.model.id, selectedCodex.body.data.id);
-  assert.deepEqual(rotatedModel.body.data.locations, [{
-    nodeId: "node_mock",
-    state: "unsupported",
-    code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
-    message: "Node node_mock must be updated before model edits can converge there.",
-  }]);
-  assert.equal(mock.requests.filter((request) => request.path === `/models/${selectedCodexProjection}/deploy`).length, 1);
+  assert.deepEqual(rotatedModel.body.data.locations, [{ nodeId: "node_mock", state: "synced" }]);
+  assert.equal(mock.requests.filter((request) => request.path === `/models/${selectedCodex.body.data.id}/deploy`).length, 2);
   const registryAfterRotation = await json(app, "GET", "/api/models");
   assert.equal(registryAfterRotation.body.data.models.filter((group) => group.id === selectedCodex.body.data.id).length, 1);
 
@@ -11826,9 +11832,8 @@ test("control plane models deploy to the target node and instances store assignm
     modelSelection: { codexModelHash: first.body.data.id },
   });
   assert.equal(updated.statusCode, 200);
-  const firstProjection = modelConfigHash({ app: "codex", endpoint: "https://first.example/v1", key: "first-key-secret", model: "first-model" });
-  assert.deepEqual(updated.body.data.modelSelection, { codexModelHash: firstProjection });
-  assert.deepEqual(mock.instances.get(instance.body.data.id).modelSelection, { codexModelHash: firstProjection });
+  assert.deepEqual(updated.body.data.modelSelection, { codexModelHash: first.body.data.id });
+  assert.deepEqual(mock.instances.get(instance.body.data.id).modelSelection, { codexModelHash: first.body.data.id });
 
   const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
   assert.equal(started.statusCode, 200);
@@ -11861,12 +11866,12 @@ test("control plane models deploy to the target node and instances store assignm
   const restartRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/restart`);
   assert.deepEqual(restartRequest.body, {});
   const latestAssignmentRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/model-assignment`);
-  assert.deepEqual(latestAssignmentRequest.body.modelSelection, { codexModelHash: firstProjection });
+  assert.deepEqual(latestAssignmentRequest.body.modelSelection, { codexModelHash: first.body.data.id });
 
   const instancesBeforeDelete = await json(app, "GET", "/api/controlled-instances");
   assert.deepEqual(
     instancesBeforeDelete.body.data.find((candidate) => candidate.id === instance.body.data.id).modelSelection,
-    { codexModelHash: firstProjection },
+    { codexModelHash: first.body.data.id },
   );
   const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
   assert.equal(deleteBoundModel.statusCode, 409);
@@ -11971,7 +11976,7 @@ test("control plane edits converge one stable model entity onto node replicas an
   assert.equal(registryAfterMerge.body.data.models.some((candidate) => candidate.id === successor.body.data.id), true);
 });
 
-test("control plane assignments project stable ids onto nodes without stable identities", async (t) => {
+test("control plane refuses writes to nodes without stable model identities", async (t) => {
   const mockOptions = {
     health: {
       capabilities: {
@@ -12003,6 +12008,8 @@ test("control plane assignments project stable ids onto nodes without stable ide
     source: { type: "local-folder", path: "/tmp/legacy-identity" },
   });
   assert.equal(project.statusCode, 201);
+  // A node that explicitly denies stable identities cannot store the entity,
+  // so the assignment fails before any legacy projection is minted.
   const instance = await json(app, "POST", "/api/controlled-instances", {
     name: "legacy-identity-instance",
     projectId: project.body.data.id,
@@ -12010,61 +12017,12 @@ test("control plane assignments project stable ids onto nodes without stable ide
     imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: { modelEntityIds: [stableId] },
   });
-  assert.equal(instance.statusCode, 201, JSON.stringify(instance.body));
-  // The entity id is an opaque identity; the node stores the entity under its
-  // legacy content-hash projection and the registry folds the replica back
-  // onto the entity id.
-  const firstProjection = modelConfigHash({
-    app: "codex",
-    endpoint: "https://legacy-node.example/v1",
-    key: "legacy-node-secret",
-    model: "gpt-legacy-node",
-  });
-  assert.notEqual(firstProjection, stableId);
-  const firstAssignment = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/model-assignment` && request.method === "PUT");
-  assert.deepEqual(firstAssignment.body.modelEntityIds, [firstProjection]);
-  assert.equal(mock.nodeModels.has(firstProjection), true);
-  assert.equal(mock.nodeModels.has(stableId), false);
+  assert.equal(instance.statusCode, 409, JSON.stringify(instance.body));
+  assert.equal(instance.body.error.code, "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED");
+  assert.equal(mock.requests.some((request) => request.method === "PUT" && request.path.endsWith("/deploy")), false);
+  assert.equal(mock.requests.some((request) => request.path.endsWith("/model-assignment")), false);
 
-  const edited = await json(app, "PATCH", `/api/models/${stableId}`, {
-    endpoint: "https://legacy-node-v2.example/v1",
-    key: "legacy-node-rotated-secret",
-  });
-  assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
-  assert.equal(edited.body.data.model.id, stableId);
-  // The node predates stable identities: the edit cannot converge in place and
-  // is reported instead of forking a second entity behind the source record.
-  assert.deepEqual(edited.body.data.locations, [{
-    nodeId: "node_mock",
-    state: "unsupported",
-    code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
-    message: "Node node_mock must be updated before model edits can converge there.",
-  }]);
-
-  const projectedId = modelConfigHash({
-    app: "codex",
-    endpoint: "https://legacy-node-v2.example/v1",
-    key: "legacy-node-rotated-secret",
-    model: "gpt-legacy-node",
-  });
-  assert.notEqual(projectedId, stableId);
-
-  const reassigned = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
-    modelSelection: { modelEntityIds: [stableId] },
-  });
-  assert.equal(reassigned.statusCode, 200, JSON.stringify(reassigned.body));
-  // Every reference the assignment sends to this node uses the id the node
-  // actually stores the model under, not the control-plane identity.
-  const assignment = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/model-assignment` && request.method === "PUT");
-  assert.deepEqual(assignment.body.modelEntityIds, [projectedId]);
-  assert.deepEqual(assignment.body.modelSelection.modelEntityIds, [projectedId]);
-  assert.equal(assignment.body.codexModelHash, projectedId);
-  assert.deepEqual(reassigned.body.data.modelSelection.modelEntityIds, [projectedId]);
-  assert.equal(mock.requests.some((request) => request.path === `/models/${projectedId}/deploy` && request.method === "PUT"), true);
-  assert.equal(mock.nodeModels.has(projectedId), true);
-
-  // A node-local model edit on the same node cannot fork a second entity
-  // either: the fork is rolled back and the location reports the node needs an
+  // A node-local model edit on the same node reports that the node needs an
   // update before models can be edited in place.
   const nodeLocal = await json(app, "POST", "/api/nodes/node_mock/models", {
     name: "Legacy node local",
@@ -12087,12 +12045,111 @@ test("control plane assignments project stable ids onto nodes without stable ide
   }]);
   assert.equal(mock.nodeModels.has(nodeLocal.body.data.id), true);
   assert.equal([...mock.nodeModels.values()].some((candidate) => candidate.endpoint === "http://legacy-node-local-v2.test/v1"), false);
+});
 
-  // The source record stays reference protected through its content projection.
-  const blocked = await json(app, "DELETE", `/api/models/${stableId}`);
-  assert.equal(blocked.statusCode, 409);
-  assert.equal(blocked.body.error.code, "MODEL_IN_USE");
-  assert.deepEqual(blocked.body.error.details.references, [{ kind: "instance", instanceId: instance.body.data.id }]);
+test("control plane upgrades a legacy model identity on save and converges its node replica", async (t) => {
+  const dataDir = tempDataDir("control-plane-model-legacy-upgrade");
+  const legacyId = `mdl_${"a".repeat(64)}`;
+  const stableId = migratedModelEntityId(legacyId);
+  const timestamp = new Date().toISOString();
+  const paths = controlPlaneStorePaths(dataDir);
+  const database = await createControlPlaneDatabase(paths);
+  try {
+    const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+    secrets.init();
+    await new ControlPlaneModelRepository(database, secrets).put({
+      id: legacyId,
+      name: "Legacy upgrade",
+      endpoint: "https://legacy-upgrade.example/v1",
+      key: "legacy-upgrade-secret",
+      model: "gpt-legacy-upgrade",
+      modelNames: [{ name: "gpt-legacy-upgrade", order: 100 }],
+      mappings: [],
+      protocols: ["openai-responses"],
+      app: "codex",
+      enabled: true,
+      order: 100,
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    // Mark the v0.0.28 JSON import as completed so startup accepts the seeded
+    // database instead of treating the non-empty table as an interrupted import.
+    await database.putMigration({
+      id: "app_0001_import_v0.0.28_p0_json",
+      checksum: crypto.createHash("sha256").update("control-plane-p0-json-import:v1").digest("hex"),
+      appliedAt: timestamp,
+      details: { sourceVersion: "v0.0.28", sourceDigest: "", warningCount: 0 },
+    });
+  } finally {
+    await database.close();
+  }
+
+  const mockOptions = {
+    health: {
+      capabilities: {
+        managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+      },
+    },
+  };
+  const mock = createMockNodeAgentFetch(mockOptions);
+  // The node still keeps the entity under the legacy content hash.
+  mock.nodeModels.set(legacyId, {
+    id: legacyId,
+    name: "Legacy upgrade",
+    endpoint: "https://legacy-upgrade.example/v1",
+    model: "gpt-legacy-upgrade",
+    modelNames: [{ name: "gpt-legacy-upgrade", order: 100 }],
+    mappings: [],
+    protocols: ["openai-responses"],
+    app: "codex",
+    enabled: true,
+    order: 100,
+    labels: {},
+    keyPreview: "set",
+    keySet: true,
+    referenceCount: 0,
+    revision: modelContentRevision({
+      app: "codex",
+      endpoint: "https://legacy-upgrade.example/v1",
+      key: "legacy-upgrade-secret",
+      model: "gpt-legacy-upgrade",
+      modelNames: [{ name: "gpt-legacy-upgrade", order: 100 }],
+      protocols: ["openai-responses"],
+    }),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  mock.nodeModelKeys.set(legacyId, "legacy-upgrade-secret");
+
+  const app = await createControlPlaneApp({
+    dataDir,
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  // The registry folds the legacy replica onto the record it belongs to.
+  const registry = await json(app, "GET", "/api/models");
+  assert.equal(registry.statusCode, 200);
+  const group = registry.body.data.models.find((candidate) => candidate.id === legacyId);
+  assert.ok(group, JSON.stringify(registry.body));
+  assert.deepEqual(group.locations.map((location) => location.type), ["control-plane", "node"]);
+
+  // Saving through the legacy id upgrades the record and converges the replica.
+  const edited = await json(app, "PATCH", `/api/models/${legacyId}`, { name: "Legacy upgrade saved" });
+  assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.data.model.id, stableId);
+  assert.deepEqual(edited.body.data.locations, [{ nodeId: "node_mock", state: "synced" }]);
+  const deploy = mock.requests.findLast((request) => request.method === "PUT" && request.path === `/models/${stableId}/deploy`);
+  assert.equal(deploy.body.id, stableId);
+  assert.equal(mock.nodeModels.has(legacyId), false);
+  assert.equal(mock.nodeModels.has(stableId), true);
+  assert.equal(mock.nodeModels.get(stableId).name, "Legacy upgrade saved");
+  const upgradedRegistry = await json(app, "GET", "/api/models");
+  assert.equal(upgradedRegistry.body.data.models.some((candidate) => candidate.id === legacyId), false);
+  assert.equal(upgradedRegistry.body.data.models.some((candidate) => candidate.id === stableId), true);
 });
 
 test("control plane deletes an undeployed model without scanning an offline fleet", async (t) => {
@@ -12302,7 +12359,6 @@ test("control plane sync converges a node owned model onto its lagging replicas"
   });
   assert.equal(nodeTwo.statusCode, 201, JSON.stringify(nodeTwo.body));
 
-  // The same node owned entity exists on both nodes under one stable id.
   const spec = {
     name: "Node owned",
     endpoint: "https://node-owned.example/v1",
@@ -12311,11 +12367,11 @@ test("control plane sync converges a node owned model onto its lagging replicas"
     app: "codex",
   };
   const first = await json(app, "POST", "/api/nodes/node_one/models", spec);
-  const second = await json(app, "POST", "/api/nodes/node_two/models", spec);
   assert.equal(first.statusCode, 201, JSON.stringify(first.body));
-  assert.equal(second.statusCode, 201, JSON.stringify(second.body));
   const entityId = first.body.data.id;
-  assert.equal(second.body.data.id, entityId);
+  // Both nodes hold the same entity id; node_two keeps the lagging replica.
+  secondNode.nodeModels.set(entityId, { ...firstNode.nodeModels.get(entityId) });
+  secondNode.nodeModelKeys.set(entityId, spec.key);
 
   // node_one edits in place while node_two keeps the original content.
   const edited = await json(app, "PATCH", `/api/nodes/node_one/models/${entityId}`, { endpoint: "https://node-owned-v2.example/v1" });
@@ -12391,10 +12447,12 @@ test("control plane sync reports node owned replicas that must be updated first"
     app: "codex",
   };
   const first = await json(app, "POST", "/api/nodes/node_one/models", spec);
-  const second = await json(app, "POST", "/api/nodes/node_two/models", spec);
   assert.equal(first.statusCode, 201, JSON.stringify(first.body));
-  assert.equal(second.statusCode, 201, JSON.stringify(second.body));
   const entityId = first.body.data.id;
+  // Both nodes hold the same entity id; node_two cannot store a stable
+  // identity and must be updated before the replica can converge.
+  secondNode.nodeModels.set(entityId, { ...firstNode.nodeModels.get(entityId) });
+  secondNode.nodeModelKeys.set(entityId, spec.key);
   const edited = await json(app, "PATCH", `/api/nodes/node_one/models/${entityId}`, { endpoint: "https://node-owned-legacy-v2.example/v1" });
   assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
 
@@ -12496,8 +12554,14 @@ test("control plane revalidates stale node capabilities before converging models
   assert.equal(secondNode.nodeModels.get(stableId).endpoint, "https://revalidated-v3.example/v1");
 });
 
-test("failed assignment leaves an unreferenced hash entry without deployment state", async (t) => {
-  const mockOptions = {};
+test("failed assignment leaves an unreferenced entry without deployment state", async (t) => {
+  const mockOptions = {
+    health: {
+      capabilities: {
+        managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+      },
+    },
+  };
   const mock = createMockNodeAgentFetch(mockOptions);
   const dataDir = tempDataDir("control-plane-model-assignment-compensation");
   const app = await createControlPlaneApp({
@@ -12519,9 +12583,7 @@ test("failed assignment leaves an unreferenced hash entry without deployment sta
     name: "Compensation project",
     source: { type: "local-folder", path: "/tmp/compensation" },
   });
-  // The mock node predates stable model identities, so the assignment deploys
-  // the content-hash projection rather than the control-plane entity id.
-  const legacyId = modelConfigHash({ app: "codex", endpoint: "https://compensated.example/v1", key: "compensated-key", model: "compensated-model" });
+  const modelEntityId = model.body.data.id;
   mockOptions.assignmentError = new Error("assignment failed");
   const failed = await json(app, "POST", "/api/controlled-instances", {
     projectId: project.body.data.id,
@@ -12530,9 +12592,9 @@ test("failed assignment leaves an unreferenced hash entry without deployment sta
     modelSelection: { codexModelHash: model.body.data.id },
   });
   assert.notEqual(failed.statusCode, 201);
-  assert.equal(mock.requests.some((request) => request.path === `/models/${legacyId}/deploy` && request.method === "PUT"), true);
+  assert.equal(mock.requests.some((request) => request.path === `/models/${modelEntityId}/deploy` && request.method === "PUT"), true);
   assert.equal(mock.requests.some((request) => /^\/instances\/[^/]+\/delete$/.test(request.path) && request.method === "POST"), true);
-  assert.equal(mock.requests.some((request) => request.path === `/models/${legacyId}` && request.method === "DELETE"), false);
+  assert.equal(mock.requests.some((request) => request.path === `/models/${modelEntityId}` && request.method === "DELETE"), false);
   assert.equal(fs.existsSync(path.join(dataDir, "model-deployments")), false);
 
   mockOptions.assignmentError = undefined;

@@ -4,11 +4,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import {
+  isModelEntityId,
+  migratedModelEntityId,
   NodeLocalFolderSchema,
   NodeModelAssignmentSchema,
   NodeModelConfigSchema,
   NodeRuntimeSchema,
-  modelConfigHash,
   safeParseStoredControlledInstance,
   sanitizeStoredNodeLocalFolder,
   type ControlledInstance,
@@ -27,6 +28,22 @@ import { AccessRepository } from "./access-repository.ts";
 import { createTopologyRepositories } from "./topology-repository.ts";
 import { createModelRepositories } from "./model-repository.ts";
 import { GitPersistenceRepository, type GitAuthorizationRecord, type GitProvisioningRecord } from "./git-repository.ts";
+
+/**
+ * v0.0.28 persisted model records under their content hash, so reading that
+ * import format still needs the released derivation. The imported records are
+ * renamed onto their entity identity as they are written, so the node database
+ * only ever stores the current shape.
+ */
+function legacyModelConfigHash(input: { app: string; endpoint: string; key: string; model: string }) {
+  const canonical = {
+    app: NodeModelConfigSchema.shape.app.parse(input.app),
+    endpoint: NodeModelConfigSchema.shape.endpoint.parse(input.endpoint),
+    key: NodeModelConfigSchema.shape.key.parse(input.key),
+    model: NodeModelConfigSchema.shape.model.parse(input.model),
+  };
+  return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
 
 // Compatibility for v0.0.28: this immutable manifest owns the one-time P0 JSON import and archive contract.
 const LEGACY_P0_MIGRATION_ID = "1000_import_v0_0_28_p0";
@@ -96,7 +113,7 @@ export function migrateLegacyP0State(
       const parsed = parse(file, NodeModelConfigSchema, pick(source, [
         "id", "name", "endpoint", "key", "model", "modelNames", "mappings", "protocols", "app", "enabled", "order", "labels", "createdAt", "updatedAt",
       ]));
-      if (path.basename(file.filePath, ".json") !== parsed.id || modelConfigHash(parsed) !== parsed.id) {
+      if (path.basename(file.filePath, ".json") !== parsed.id || legacyModelConfigHash(parsed) !== parsed.id) {
         warnings.push({ source: file.filePath, field: "identity-or-content-hash" });
         return [];
       }
@@ -119,6 +136,36 @@ export function migrateLegacyP0State(
       models,
       assignments,
     );
+    // v0.0.28 counted a model's content hash as its identity; rewrite the
+    // imported records and every reference onto the entity identity they
+    // migrate to, so a fresh database never seeds the retired shape.
+    const entityIds = new Map<string, string>();
+    const entityIdOf = (id: string) => {
+      let entityId = entityIds.get(id);
+      if (!entityId) {
+        entityId = isModelEntityId(id) ? id : migratedModelEntityId(id);
+        entityIds.set(id, entityId);
+      }
+      return entityId;
+    };
+    const stableModels = models.map((record) => NodeModelConfigSchema.parse({ ...record, id: entityIdOf(record.id) }));
+    const stableAssignments = assignments.map((record) => NodeModelAssignmentSchema.parse({
+      ...record,
+      modelEntityIds: record.modelEntityIds.map(entityIdOf),
+      codexModelHash: record.codexModelHash ? entityIdOf(record.codexModelHash) : record.codexModelHash,
+      claudeModelHash: record.claudeModelHash ? entityIdOf(record.claudeModelHash) : record.claudeModelHash,
+      opencodeModelHash: record.opencodeModelHash ? entityIdOf(record.opencodeModelHash) : record.opencodeModelHash,
+    }));
+    const stableInstances = instances.map((record) => ({
+      ...record,
+      modelSelection: {
+        ...record.modelSelection,
+        modelEntityIds: record.modelSelection.modelEntityIds?.map(entityIdOf),
+        codexModelHash: record.modelSelection.codexModelHash ? entityIdOf(record.modelSelection.codexModelHash) : record.modelSelection.codexModelHash,
+        claudeModelHash: record.modelSelection.claudeModelHash ? entityIdOf(record.modelSelection.claudeModelHash) : record.modelSelection.claudeModelHash,
+        opencodeModelHash: record.modelSelection.opencodeModelHash ? entityIdOf(record.modelSelection.opencodeModelHash) : record.modelSelection.opencodeModelHash,
+      },
+    }));
     const payloads = inputs.gitPayloads.map((file) => {
       const source = object(file.value);
       warnUnknownFields(file, LEGACY_FIELDS.gitPayload, warnings);
@@ -148,8 +195,8 @@ export function migrateLegacyP0State(
       return parseProvisioning(file);
     });
     validateRelationships({
-      identity, folders, runtimes, instances, privateConfigInstanceIds: [...privateCredentials.keys()],
-      models, assignments, payloads, authorizations, provisioning,
+      identity, folders, runtimes, instances: stableInstances, privateConfigInstanceIds: [...privateCredentials.keys()],
+      models: stableModels, assignments: stableAssignments, payloads, authorizations, provisioning,
     });
 
     client.exec("BEGIN IMMEDIATE");
@@ -161,9 +208,9 @@ export function migrateLegacyP0State(
       if (identity) access.writeIdentity(identity);
       for (const folder of folders) topology.localFolders.put(folder);
       for (const runtime of runtimes) topology.runtimes.put(runtime);
-      for (const instance of instances) topology.instances.put(instance);
-      for (const item of models) model.models.put(item);
-      for (const assignment of assignments) model.assignments.put(assignment);
+      for (const instance of stableInstances) topology.instances.put(instance);
+      for (const item of stableModels) model.models.put(item);
+      for (const assignment of stableAssignments) model.assignments.put(assignment);
       for (const payload of payloads) git.putPayload(payload);
       for (const authorization of authorizations) git.putAuthorization(authorization);
       for (const record of provisioning) git.putProvisioning(record);
@@ -469,7 +516,7 @@ function migrateLegacyModelEnvironments(
         : environment.TASK_HANDOFF_CLAUDE_MODEL || environment.CLAUDE_MODEL;
       if (!key && !endpoint && !modelName) continue;
       if (!key || !endpoint || !modelName) throw migrationError(file.filePath, `Legacy ${app} model environment is incomplete.`);
-      const id = modelConfigHash({ app, endpoint, key, model: modelName });
+      const id = legacyModelConfigHash({ app, endpoint, key, model: modelName });
       if (!modelsById.has(id)) {
         const timestamp = instances.find((instance) => instance.id === instanceId)!.updatedAt;
         const model = NodeModelConfigSchema.parse({

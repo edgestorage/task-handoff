@@ -39,25 +39,6 @@ export class ControlPlaneModelRepository {
     return model;
   }
 
-  listLegacyProjections() {
-    return this.database.modelLegacyProjections.list();
-  }
-
-  async putLegacyProjection(projectionId: string, modelId: string) {
-    const existing = await this.database.modelLegacyProjections.get(projectionId);
-    const timestamp = new Date().toISOString();
-    await this.database.modelLegacyProjections.put({
-      id: projectionId,
-      modelId,
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    });
-  }
-
-  async deleteLegacyProjections(projectionIds: string[]) {
-    for (const projectionId of projectionIds) await this.database.modelLegacyProjections.delete(projectionId);
-  }
-
   delete(id: string) {
     return this.database.models.delete(id);
   }

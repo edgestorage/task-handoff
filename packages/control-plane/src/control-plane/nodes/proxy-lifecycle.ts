@@ -458,7 +458,7 @@ export class ControlPlaneProxyLifecycle {
       name: target.name,
       status: target.status,
       health: target.health,
-      capabilities: target.capabilities,
+      capabilities: proxyTargetCapabilities(node, target),
       lastSeenAt: target.lastSeenAt,
       proxyState: { ...proxyState, target, updatedAt: timestamp },
       updatedAt: timestamp,
@@ -607,4 +607,16 @@ export class ControlPlaneProxyLifecycle {
 
 function objectDetails(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/**
+ * Proxy 快照是目标控制面按自身协议版本归一后的投影；节点能力文档的权威来源是
+ * node-agent 自己的 /health。因此本地已探测到的 agent 能力文档优先于快照投影。
+ * Compatibility for v0.0.31: that relay-side control plane predates the relay
+ * capability, so its projections carry an empty capability document; adopting
+ * them verbatim would erase the document this control plane probed directly.
+ */
+function proxyTargetCapabilities(node: Node, target: ProxyTargetSnapshot["target"]): Node["capabilities"] {
+  const agent = node.capabilities.agent ?? target.capabilities.agent;
+  return agent ? { ...target.capabilities, agent } : target.capabilities;
 }

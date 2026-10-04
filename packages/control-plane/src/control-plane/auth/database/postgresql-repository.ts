@@ -264,7 +264,6 @@ function repositoryFor(db: any, close: () => Promise<void>, inTransaction = fals
     nodes: collection(db, schema.nodes, p0RecordSchemas.nodes),
     pairingRevocations: collection(db, schema.pairingRevocations, p0RecordSchemas.pairingRevocations),
     models: collection(db, schema.models, p0RecordSchemas.models),
-    modelLegacyProjections: collection(db, schema.modelLegacyProjections, p0RecordSchemas.modelLegacyProjections),
     chatBridges: collection(db, schema.chatBridges, p0RecordSchemas.chatBridges),
     chatSessions: collection(db, schema.chatSessions, p0RecordSchemas.chatSessions),
     gitCredentials: collection(db, schema.gitCredentials, p0RecordSchemas.gitCredentials),

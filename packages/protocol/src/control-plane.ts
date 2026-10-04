@@ -1248,10 +1248,6 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     order: ModelConfigSchema.shape.order,
     referenceCount: z.number().int().min(0),
     revision: z.string().trim().min(1).max(160).optional(),
-    // Compatibility for v0.0.34: nodes without stable model identities store a
-    // control-plane entity under its legacy content-hash projection. Absent
-    // means the replica uses the group id.
-    replicaId: IdSchema.optional(),
   }).strict(),
 ]);
 
@@ -1337,19 +1333,6 @@ export const UpdateNodeModelAssignmentSchema = z.object({
     || [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
       .filter((id): id is string => Boolean(id)))],
 }));
-
-export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & { protocols?: z.infer<typeof ModelProtocolSchema>[] }) {
-  const app = ModelAppSchema.parse(input.app);
-  const canonical = {
-    // Compatibility for v0.0.24: N-1 node agents validate this legacy identity shape.
-    // Protocol capabilities remain mutable metadata until the support window advances.
-    app,
-    endpoint: ModelConfigSchema.shape.endpoint.parse(input.endpoint),
-    key: ModelConfigSchema.shape.key.parse(input.key),
-    model: ModelConfigSchema.shape.model.parse(input.model),
-  };
-  return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
-}
 
 /**
  * Read-side sanitize for stored or remote name entries: unknown keys are
@@ -1469,9 +1452,7 @@ export function normalizeModelRequestMappings(
  * Canonical content revision for current writers. Mapping, endpoint, key or
  * model-name edits advance this revision while the entity id stays stable.
  * Display-level metadata (entity name, labels, enabled, order, timestamps)
- * stays out of the revision, matching the released copy/dedupe semantics.
- * `modelConfigHash` remains the v0.0.34 legacy projection id and the two
- * values must never substitute for each other.
+ * stays out of the revision; it is a content fingerprint, not an entity id.
  */
 export function modelContentRevision(
   input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & {
@@ -1505,11 +1486,9 @@ export function isModelContentRevision(value: string) {
   return /^mdlr_[0-9a-f]{64}$/.test(value);
 }
 
-// Entity ids are opaque identities. New records mint a short time-ordered id
+// Entity ids are opaque identities. Records mint a short time-ordered id
 // (41 bits of milliseconds since the epoch plus 23 random bits: one complete
-// 64-bit snowflake) while modelConfigHash stays the legacy projection id used
-// by nodes that predate stable model identities and modelContentRevision is
-// the current content revision. The
+// 64-bit snowflake) and modelContentRevision is the current content revision. The
 // payload encodes the whole 64-bit value as 13 lower-case Crockford base32
 // symbols, ULID-style: Crockford never emits "=" padding, and the fixed width
 // keeps ids lexicographically ordered by their millisecond prefix. The
@@ -1527,7 +1506,7 @@ const ENTITY_ID_RANDOM_BITS = 23n;
 const ENTITY_ID_PAYLOAD_LENGTH = 13;
 // Crockford base32 without the ambiguous i/l/o/u, lower case only.
 const ENTITY_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
-const MODEL_CONFIG_HASH_ID_PATTERN = /^mdl_[0-9a-f]{64}$/;
+const MODEL_ENTITY_ID_PATTERN = new RegExp(`^mdl_[${ENTITY_ID_ALPHABET}]{${ENTITY_ID_PAYLOAD_LENGTH}}$`);
 
 function encodeEntityIdPayload(value: bigint, length: number) {
   const digits: string[] = [];
@@ -1568,10 +1547,22 @@ export function createModelEntityId(now = Date.now()) {
   return createEntityId("mdl", now);
 }
 
-// Compatibility for v0.0.34: released writers deploy control-plane models under
-// their content hash, which is the only id shape those nodes accept.
-export function isModelConfigHashId(value: string) {
-  return MODEL_CONFIG_HASH_ID_PATTERN.test(value);
+/** True when an id is a minted model entity identity rather than a migrated legacy id. */
+export function isModelEntityId(value: string) {
+  return MODEL_ENTITY_ID_PATTERN.test(value);
+}
+
+/**
+ * One-time rename target for a persisted id that predates entity identities
+ * (a v0.0.34 content-hash id). The mapping is deterministic so the control
+ * plane and every node holding a replica of the same legacy id converge on the
+ * same entity id without coordinating, and stale references stay derivable
+ * during the migration. This is not a mint point: new records always use
+ * {@link createModelEntityId}, and nothing may derive fresh identities here.
+ */
+export function migratedModelEntityId(legacyId: string) {
+  const digest = crypto.createHash("sha256").update(`task-handoff:model-entity-migration:v1:${legacyId}`).digest();
+  return `mdl_${encodeEntityIdPayload(digest.readBigUInt64BE(0), ENTITY_ID_PAYLOAD_LENGTH)}`;
 }
 
 export const ImageOriginSchema = z.enum(["market", "custom"]);

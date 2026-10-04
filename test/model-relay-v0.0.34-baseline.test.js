@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -8,8 +9,8 @@ const {
   NodeAgentExternalListenerConfigSchema,
   NodeModelAssignmentSchema,
   NodeModelConfigSchema,
-  isModelConfigHashId,
-  modelConfigHash,
+  isModelEntityId,
+  migratedModelEntityId,
   normalizeControlledInstanceCapabilities,
 } = require("../packages/protocol/src/control-plane.ts");
 const {
@@ -20,12 +21,25 @@ const { parseInstancePrivateModelCatalog } = require("../packages/core/src/core/
 
 const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/v0.0.34-model-relay-baseline.json"), "utf8"));
 
-test("v0.0.34 baseline pins the legacy content-hash identity for every entity", () => {
+// The released v0.0.34 canonical content hash, reimplemented here because the
+// current protocol no longer ships a production writer for the retired shape.
+// The baseline fixture must keep proving the released ids stay readable and
+// derive the same entity identity through the migration.
+function releasedModelConfigHash(spec) {
+  return `mdl_${crypto.createHash("sha256").update(JSON.stringify({
+    app: spec.app, endpoint: spec.endpoint, key: spec.key, model: spec.model,
+  })).digest("hex")}`;
+}
+
+test("v0.0.34 baseline pins the legacy content-hash identity and its derived entity id for every entity", () => {
   for (const [app, spec] of Object.entries(fixture.modelSpecs)) {
-    const id = modelConfigHash(spec);
+    const id = releasedModelConfigHash(spec);
     assert.equal(id, fixture.entityIds[app]);
-    assert.equal(isModelConfigHashId(id), true);
-    assert.equal(modelConfigHash(fixture.nodeModels.find((model) => model.id === id)), id);
+    assert.equal(isModelEntityId(id), false);
+    const derived = migratedModelEntityId(id);
+    assert.equal(isModelEntityId(derived), true);
+    assert.equal(migratedModelEntityId(id), derived);
+    assert.equal(migratedModelEntityId(fixture.nodeModels.find((model) => model.id === id).id), derived);
   }
 });
 

@@ -112,6 +112,7 @@ import {
 } from "./commands/story.ts";
 import { triggerApply, triggerBind, triggerCreate, triggerList, triggerRemove, triggerRun, triggerShow, triggerUnbind, triggerUpdate } from "./commands/trigger.ts";
 import { userList, userSessionRevoke, userSessions, userShow } from "./commands/user.ts";
+import { skillInstall, skillStatus, skillUpdate } from "./commands/skill.ts";
 import { nodeExtraLeaves, nodeJoinGroup } from "./contracts/node-extra.ts";
 import { modelExtraLeaves, settingsGroups } from "./contracts/settings.ts";
 import { userAccessLeaves } from "./contracts/access.ts";
@@ -1068,6 +1069,68 @@ const userGroup = group("user", "Inspect users and their sessions", [
   },
   ...userAccessLeaves,
 ]);
+
+const skillScopeSchema = z.enum(["project", "user"]);
+const skillTargetOptions = [
+  { flags: "--scope <project|user>", description: "Skills scope: user (~/.agents/skills) or project (./.agents/skills), default user" },
+  { flags: "--dir <path>", description: "Explicit skills root directory, overrides --scope" },
+] as const;
+const skillTargetInput = { scope: skillScopeSchema.optional(), dir: z.string().optional() };
+const skillStatusRowSchema = z.looseObject({
+  scope: z.string(),
+  directory: z.string(),
+  status: z.string(),
+  version: z.string().optional(),
+  latestVersion: z.string().optional(),
+  managed: z.boolean().optional(),
+  modified: z.boolean().nullable().optional(),
+  command: z.string().optional(),
+});
+const skillChangeResultSchema = z.looseObject({
+  name: z.string(),
+  version: z.string(),
+  from: z.string().optional(),
+  scope: z.string().optional(),
+  directory: z.string(),
+  files: z.array(z.string()).optional(),
+  verified: z.boolean().optional(),
+  updated: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
+
+const skillGroup = group("skill", "Install and update the TaskHandoff Agent Skill", [
+  {
+    id: "skill status", group: "skill", name: "status", stage: "A",
+    summary: "Show installed skill versions and the published release",
+    options: [...skillTargetOptions],
+    input: inputOf(skillTargetInput),
+    output: z.array(skillStatusRowSchema),
+    examples: ["thctl skill status", "thctl skill status --scope project --json"],
+    handler: skillStatus,
+  },
+  {
+    id: "skill install", group: "skill", name: "install", stage: "A", write: true,
+    summary: "Install the TaskHandoff skill from the published index",
+    options: [...skillTargetOptions],
+    input: inputOf(skillTargetInput),
+    output: skillChangeResultSchema,
+    examples: ["thctl skill install", "thctl skill install --scope project --yes"],
+    handler: skillInstall,
+  },
+  {
+    id: "skill update", group: "skill", name: "update", stage: "A", write: true,
+    summary: "Update the installed TaskHandoff skill to the published release",
+    options: [
+      ...skillTargetOptions,
+      { flags: "--force", description: "Replace a locally modified installed copy" },
+    ],
+    input: inputOf({ ...skillTargetInput, force: z.boolean().optional() }),
+    output: skillChangeResultSchema,
+    examples: ["thctl skill update", "thctl skill update --force --yes"],
+    handler: skillUpdate,
+  },
+]);
+
 const eventsGroup = group("events", "Stream Control Plane events", [
   {
     id: "events", group: "events", name: "events", stage: "C",
@@ -1116,6 +1179,7 @@ export const CLI_GROUPS: readonly CliGroup[] = [
   modelGroup,
   ...settingsGroups,
   userGroup,
+  skillGroup,
   eventsGroup,
   schemaGroup,
 ];

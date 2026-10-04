@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
+import type { OperationApprovals } from "../approvals/operation-approvals.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
@@ -31,6 +33,8 @@ export type RegisterControlPlaneManagementRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
   events: ControlPlaneEventBus;
+  operationApprovals: OperationApprovals;
+  auth: ControlPlaneAuth;
   appSessionAggregator: ControlPlaneAppSessionAggregator;
   aiSessionAggregator: ControlPlaneAiSessionAggregator;
   chatGateway: ControlPlaneChatGatewayRuntime;
@@ -48,6 +52,8 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
     app,
     service,
     events,
+    operationApprovals,
+    auth,
     appSessionAggregator,
     aiSessionAggregator,
     chatGateway,
@@ -61,8 +67,8 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   } = options;
 
   registerCatalogRoutes({ app, service, events });
-  registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload });
-  registerInstanceRoutes({ app, service, events, onInstanceDeleted });
+  registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload, operationApprovals, auth });
+  registerInstanceRoutes({ app, service, events, onInstanceDeleted, operationApprovals, auth });
   registerEnvironmentTemplateRoutes(app, service, events);
   registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionAttachments, aiSessionAttachmentCache });
   registerTriggerRoutes({ app, service, events });
