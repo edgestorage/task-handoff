@@ -25,7 +25,7 @@ export type ModelRelayLimits = {
 };
 
 export const MODEL_RELAY_DEFAULT_LIMITS: ModelRelayLimits = {
-  responseHeadersTimeoutMs: 60_000,
+  responseHeadersTimeoutMs: 300_000,
   firstByteTimeoutMs: 120_000,
   idleTimeoutMs: 300_000,
   maxRequestPrologueBytes: 256 * 1024,

@@ -43,6 +43,14 @@ export class ModelRepository {
     return value;
   }
 
+  /**
+   * Rename a stored model entity. Assignment tables reference `na_models(id)`
+   * with ON UPDATE CASCADE, so one update re-points every instance reference.
+   */
+  rename(id: string, nextId: string) {
+    this.client.prepare("UPDATE na_models SET id = ? WHERE id = ?").run(nextId, id);
+  }
+
   delete(id: string) {
     try {
       return Number(this.client.prepare("DELETE FROM na_models WHERE id = ?").run(id).changes) > 0;

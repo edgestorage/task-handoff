@@ -85,7 +85,7 @@
     </div>
 
     <AiSessionToolActivity
-      v-if="promptIndex >= promptCount - 1 && !canResolveApproval(card.session)"
+      v-if="promptIndex >= promptCount - 1 && !approvalDecisions.length"
       class="ai-board-card-activity"
       :current-tool="card.session.currentTool"
       :phase="card.session.phase"
@@ -94,16 +94,16 @@
       :tool-calls-since-last-message="card.session.toolCallsSinceLastMessage"
       tone="board"
     />
-    <span v-if="canResolveApproval(card.session)" class="ai-board-approval-actions">
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" :title="t('sessions.actions.allow')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
+    <span v-if="approvalDecisions.length" class="ai-board-approval-actions">
+      <button v-if="approvalDecisions.includes('allow')" type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" :title="t('sessions.actions.allow')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
         <Check :size="13" />
         <span>{{ t("sessions.actions.allow") }}</span>
       </button>
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" :title="t('sessions.actions.skip')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
+      <button v-if="approvalDecisions.includes('skip')" type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" :title="t('sessions.actions.skip')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
         <Ban :size="13" />
         <span>{{ t("sessions.actions.skip") }}</span>
       </button>
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" :title="t('sessions.actions.deny')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
+      <button v-if="approvalDecisions.includes('deny')" type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" :title="t('sessions.actions.deny')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
         <X :size="13" />
         <span>{{ t("sessions.actions.deny") }}</span>
       </button>
@@ -148,6 +148,7 @@ import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCa
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
+import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -166,7 +167,6 @@ const { t } = useI18n();
 const props = withDefaults(defineProps<{
   approvalBusyKey?: string;
   boundTriggers: (card: AiBoardCard) => TriggerDeployment[];
-  canResolveApproval: (session: AiSessionSummary) => boolean;
   card: AiBoardCard;
   folderName?: string;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
@@ -187,6 +187,7 @@ const props = withDefaults(defineProps<{
   showAgent: true,
   showInstance: true,
 });
+const approvalDecisions = computed(() => aiSessionApprovalDecisions(props.card.session, props.card.instance.capabilities?.features));
 
 const emit = defineEmits<{
   nextPrompt: [card: AiBoardCard];

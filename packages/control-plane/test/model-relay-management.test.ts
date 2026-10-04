@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ModelConfigSchema, createModelEntityId, modelConfigHash, type ControlledInstance, type Node } from "@task-handoff/protocol/control-plane";
+import { ModelConfigSchema, createModelEntityId, migratedModelEntityId, type ControlledInstance, type Node } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneModelService } from "../src/control-plane/models/service.ts";
 import { ControlPlaneModelRepository } from "../src/control-plane/models/repository.ts";
 import { createControlPlaneDatabase } from "../src/control-plane/persistence/database/index.ts";
@@ -292,12 +292,20 @@ test("mapped assignments require only the node relay wire capability", async () 
       await disabled.close();
     }
 
-    // Same-name selections never query the relay capability or switch.
-    const same = await harness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
-    const sameAssigned = await harness.service.prepareAssignment(legacy, { modelEntityIds: [same.id] });
-    assert.equal(typeof sameAssigned.codexModelHash, "string");
-    assert.equal(sameAssigned.modelSelection.codexModelHash, sameAssigned.codexModelHash);
-    assert.equal(sameAssigned.modelSelection.modelEntityIds, undefined);
+    // Same-name selections never query the relay capability or switch. A node
+    // without the relay producer but with stable identities still receives the
+    // entity, because relay consumption is a separate capability domain.
+    const sameHarness = await createHarness({ nodes: [stableNodeWithoutRelay("node_same_name")], relayEnabled: { node_same_name: true } });
+    try {
+      const sameNode = sameHarness.nodes[0];
+      const same = await sameHarness.service.create({ name: "Same", endpoint: ENDPOINT, key: KEY, model: "same-model", app: "codex" });
+      const sameAssigned = await sameHarness.service.prepareAssignment(sameNode, { modelEntityIds: [same.id] });
+      assert.equal(typeof sameAssigned.codexModelHash, "string");
+      assert.equal(sameAssigned.modelSelection.codexModelHash, sameAssigned.codexModelHash);
+      assert.deepEqual(sameAssigned.modelSelection.modelEntityIds, [same.id]);
+    } finally {
+      await sameHarness.close();
+    }
   } finally {
     await harness.close();
   }
@@ -479,7 +487,10 @@ test("control-plane records persist request mappings across a database reopen", 
 });
 
 test("a legacy content-hash record upgrades to a stable id on its first request mapping write", async () => {
-  const legacyId = modelConfigHash({ app: "codex", endpoint: ENDPOINT, key: KEY, model: "public-model" });
+  // Compatibility for v0.0.35: the retired released identity shape, replaced
+  // by the deterministic derived entity id on the first write.
+  const legacyId = `mdl_${"a".repeat(64)}`;
+  const legacyEntityId = migratedModelEntityId(legacyId);
   const timestamp = new Date().toISOString();
   const legacyRecord = {
     id: legacyId,
@@ -516,7 +527,7 @@ test("a legacy content-hash record upgrades to a stable id on its first request 
 
     const updated = await harness.service.update(legacyId, { mappings: [requestMapping()] });
     const stableId = updated.model.id;
-    assert.notEqual(stableId, legacyId);
+    assert.equal(stableId, legacyEntityId);
     assert.equal(stableId, harness.service.require(legacyId).id);
     assert.deepEqual(updated.model.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
     assert.deepEqual(harness.service.require(stableId).mappings, updated.model.mappings);
@@ -525,7 +536,7 @@ test("a legacy content-hash record upgrades to a stable id on its first request 
     // instance assignment moves off the content-hash projection.
     const deploy = harness.calls.deploy.filter((call) => call.id === stableId).at(-1)!;
     assert.deepEqual(deploy.input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
-    await harness.service.convergeLegacyProjectionAssignments();
+    await harness.service.ensureInstanceAssignment(instance);
     const assigned = harness.calls.assign.at(-1)!;
     assert.deepEqual((assigned.input as { modelSelection: { modelEntityIds: string[] } }).modelSelection.modelEntityIds, [stableId]);
   } finally {

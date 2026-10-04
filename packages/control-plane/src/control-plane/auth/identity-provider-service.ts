@@ -22,7 +22,7 @@ const ProviderInputSchema = z.object({
   if (provider.kind === "oidc" && !provider.issuer) context.addIssue({ code: "custom", path: ["issuer"], message: "OIDC provider requires issuer." });
 });
 
-const ProviderUpdateInputSchema = z.object({
+export const ProviderUpdateInputSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   kind: z.enum(["oidc", "github"]).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),

@@ -50,6 +50,7 @@ export const errors = {
   MODEL_IN_USE: "该模型仍分配给实例，请先在实例的模型设置中移除后再删除。",
   MODEL_UPDATE_SYNC_FAILED: "本次编辑未能应用到任何节点，请先升级对应节点再重试。",
   MODEL_MERGE_SAME: "不能把模型合并到自身。",
+  MODEL_MERGE_NOTHING_TO_MERGE: "该模型没有可合并的节点副本，未做任何改动。",
   AGENT_DEFINITION_INVALID_INPUT: "提交的 Agent 定义不符合要求。",
   AGENT_DEFINITION_NOT_FOUND: "未找到该 Agent 定义。",
   AGENT_DEFINITION_REVISION_CONFLICT: "该 Agent 定义已被其他会话修改，请重新打开后再提交。",

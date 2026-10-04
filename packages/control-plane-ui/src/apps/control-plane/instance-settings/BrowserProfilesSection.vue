@@ -26,7 +26,6 @@
           <ControlPlaneInput v-model="newProfileName" maxlength="60" :placeholder="t('instances.settings.browserProfileNamePlaceholder')" :disabled="creating" @keydown.enter="createProfile" />
           <Button size="sm" :disabled="creating || !newProfileName.trim()" @click="createProfile">{{ creating ? t("instances.settings.creating") : t("instances.settings.browserProfileCreate") }}</Button>
         </div>
-        <p v-if="actionError" class="browser-profiles-error" role="alert">{{ actionError }}</p>
         <ul class="browser-profiles-list">
           <li v-for="profile in profiles" :key="profile.id" class="browser-profiles-row">
             <div class="browser-profiles-main">
@@ -84,6 +83,7 @@ import { formatBytes } from "../../../i18n/presentation";
 import { translateApiError } from "../../../i18n/apiError";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { BROWSER_PROFILE_APP_ID, browserProfileApp, supportsBrowserProfiles, useBrowserProfiles, usesDefaultProfileName } from "../useBrowserProfiles";
+import { showControlPlaneToast } from "../useControlPlaneToasts";
 
 const props = defineProps<{
   instance: InstanceBoardItem;
@@ -122,7 +122,6 @@ const newProfileName = ref("");
 const renameDraft = ref("");
 const renamingProfileId = ref("");
 const busyProfileId = ref("");
-const actionError = ref("");
 const creating = ref(false);
 const deleteTarget = ref<AppProfile>();
 
@@ -145,12 +144,12 @@ async function createProfile() {
   const name = newProfileName.value.trim();
   if (!name || creating.value) return;
   creating.value = true;
-  actionError.value = "";
   try {
     await createProfileRequest(name);
     newProfileName.value = "";
+    showControlPlaneToast(t("instances.settings.browserProfileCreated", { name }), "success");
   } catch (error) {
-    actionError.value = errorText(error);
+    showControlPlaneToast(errorText(error));
   } finally {
     creating.value = false;
   }
@@ -161,7 +160,6 @@ function startRename(profile: AppProfile) {
   // Seed with what the row shows, so renaming the untouched default starts
   // from the localized label instead of the placeholder value.
   renameDraft.value = profileLabel(profile);
-  actionError.value = "";
 }
 
 function cancelRename() {
@@ -173,12 +171,12 @@ async function rename(profile: AppProfile) {
   const name = renameDraft.value.trim();
   if (!name || busyProfileId.value) return;
   busyProfileId.value = profile.id;
-  actionError.value = "";
   try {
     await renameProfile(profile.id, name);
     cancelRename();
+    showControlPlaneToast(t("instances.settings.browserProfileRenamed", { name }), "success");
   } catch (error) {
-    actionError.value = errorText(error);
+    showControlPlaneToast(errorText(error));
   } finally {
     busyProfileId.value = "";
   }
@@ -187,11 +185,11 @@ async function rename(profile: AppProfile) {
 async function setDefault(profile: AppProfile) {
   if (busyProfileId.value) return;
   busyProfileId.value = profile.id;
-  actionError.value = "";
   try {
     await setDefaultProfile(profile.id);
+    showControlPlaneToast(t("instances.settings.browserProfileDefaultSet", { name: profile.name }), "success");
   } catch (error) {
-    actionError.value = errorText(error);
+    showControlPlaneToast(errorText(error));
   } finally {
     busyProfileId.value = "";
   }
@@ -201,12 +199,12 @@ async function confirmDelete() {
   const profile = deleteTarget.value;
   if (!profile || busyProfileId.value) return;
   busyProfileId.value = profile.id;
-  actionError.value = "";
   try {
     await removeProfile(profile.id);
     deleteTarget.value = undefined;
+    showControlPlaneToast(t("instances.settings.browserProfileDeleted", { name: profile.name }), "success");
   } catch (error) {
-    actionError.value = errorText(error);
+    showControlPlaneToast(errorText(error));
     deleteTarget.value = undefined;
   } finally {
     busyProfileId.value = "";
@@ -286,14 +284,6 @@ async function confirmDelete() {
 
 .browser-profiles-create :deep(input) {
   max-width: 280px;
-}
-
-.browser-profiles-error {
-  margin: 0;
-  border-bottom: 1px solid var(--line);
-  color: var(--status-danger);
-  font-size: 12px;
-  padding: 8px 12px;
 }
 
 .browser-profiles-list {

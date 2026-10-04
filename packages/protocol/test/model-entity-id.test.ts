@@ -4,8 +4,8 @@ import test from "node:test";
 import {
   createEntityId,
   createModelEntityId,
-  isModelConfigHashId,
-  modelConfigHash,
+  isModelEntityId,
+  migratedModelEntityId,
 } from "../src/control-plane.ts";
 
 const EPOCH = Date.UTC(2026, 0, 1);
@@ -42,11 +42,21 @@ test("the shared minter keeps the caller's domain prefix", () => {
   assert.match(createEntityId("story", EPOCH + 6_000), new RegExp(`^story_${PAYLOAD}$`));
 });
 
-test("legacy content-hash projections stay distinguishable from minted identities", () => {
-  const hash = modelConfigHash({ app: "codex", endpoint: "https://api.example.test/v1", key: "secret", model: "gpt-test" });
-  assert.equal(isModelConfigHashId(hash), true);
-  assert.equal(isModelConfigHashId(createModelEntityId()), false);
-  assert.equal(isModelConfigHashId(`mdl_${"0".repeat(64)}`), true);
-  assert.equal(isModelConfigHashId(`mdl_${"z".repeat(64)}`), false);
-  assert.equal(isModelConfigHashId("mdl_short"), false);
+test("migrated legacy ids become stable entity identities", () => {
+  const legacy = `mdl_${"a".repeat(64)}`;
+  const migrated = migratedModelEntityId(legacy);
+  assert.match(migrated, new RegExp(`^mdl_${PAYLOAD}$`));
+  assert.equal(isModelEntityId(migrated), true);
+  // The derivation is deterministic so the control plane and every node
+  // holding a replica of the same legacy id converge without coordinating.
+  assert.equal(migratedModelEntityId(legacy), migrated);
+  assert.notEqual(migratedModelEntityId(`mdl_${"b".repeat(64)}`), migrated);
+});
+
+test("stable identity detection rejects legacy and malformed ids", () => {
+  assert.equal(isModelEntityId(createModelEntityId()), true);
+  assert.equal(isModelEntityId(`mdl_${"0".repeat(64)}`), false);
+  assert.equal(isModelEntityId(`mdl_${"z".repeat(64)}`), false);
+  assert.equal(isModelEntityId("mdl_short"), false);
+  assert.equal(isModelEntityId("inst_0j9w2k4m6p8r0"), false);
 });

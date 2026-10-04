@@ -11,7 +11,7 @@ npm install -g @task-handoff/thctl
 thctl --help
 ```
 
-`@task-handoff/thctl` is published by the TaskHandoff runtime release pipeline, so the CLI version matches the server runtime packages (`@task-handoff/server`, `@task-handoff/control-plane`, `@task-handoff/node-agent`). Prereleases are available through the `alpha` and `beta` dist-tags.
+`@task-handoff/thctl` is published by the TaskHandoff runtime release pipeline, so the CLI version matches the server runtime packages (`@task-handoff/server`, `@task-handoff/control-plane`, `@task-handoff/node-agent`). Prereleases are available through the `alpha` and `beta` dist-tags. A throttled background check records newer CLI and skill releases, and the next interactive command prints the cached upgrade hint to stderr (see [Skill and update checks](#skill-and-update-checks)).
 
 From a repository checkout:
 
@@ -77,7 +77,7 @@ thctl whoami        # discovers the local Control Plane, writes the managed `loc
 
 ## Command surface
 
-Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <file>`, `--token-stdin`.
+Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <file>`, `--token-stdin`, `--no-update-check`.
 
 | group | commands |
 | --- | --- |
@@ -102,15 +102,45 @@ Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <
 | `cloud` | `show`, `challenge`, `remote-access`, `disconnect` |
 | `proxy` | `invites list`, `invites create`, `invites remove`, `bindings list`, `bindings remove`, `diagnostics`, `pending-claims list`, `pending-claims resume`, `pending-claims remove` |
 | `user` | `list`, `show`, `sessions`, `session-revoke`, `create`, `update`, `access`, `password-reset`, `role list`, `role create`, `role update`, `role remove`, `permission list`, `identity-provider list`, `identity-provider create`, `identity-provider update`, `identity-provider remove`, `external-identity list`, `external-identity approve`, `external-identity reject` |
+| `skill` | `status`, `install`, `update` |
 | stream | `events` |
 | contract | `schema` |
 
 - Data goes to stdout, diagnostics to stderr; `--json` keeps the server wire field names.
 - `--config <file>` carries a JSON request body for commands whose input is too large for flags (write inputs such as `instance create`, `node create`, `project create`, `image create`, `model create`, `chat bridges create`); the file must parse to a JSON object. `--token-stdin` reads a one-time token from stdin (for example `node-join complete`). Secrets are never accepted as positional arguments, so `--config` and `--token-stdin` are the only secret input channels.
 - Write commands require confirmation. Non-TTY callers must pass `--yes`; `--dry-run` prints the request (or the ordered requests of a multi-step write) without sending it.
+- The Control Plane decides which operations require Web approval. A CLI write that receives an approval request waits up to five minutes for the initiating user's Web decision, then submits the same request once with its approval ID. `--yes` skips only local confirmation. By default the server gates `instance delete`, `node remove`, `node updates apply`, `user access`, `user role update/remove`, `user identity-provider update/remove`, and `git-credential assignments assign`. `node settings external-listener set` can be gated through `TASK_HANDOFF_OPERATION_APPROVAL_POLICY` (disabled by default). These commands probe only the overall approval protocol before sending a write, protecting against older servers without approval support; the CLI does not decide whether any individual gate is enabled.
+- Server operators can configure `TASK_HANDOFF_OPERATION_APPROVAL_POLICY` as a JSON object with boolean keys `instance.delete` and `node.remove` (both default to `true` for CLI sessions). For example, `'{"instance.delete":true,"node.remove":false}'` keeps instance deletion gated and allows node removal without approval. The policy is read when the Control Plane starts; unknown keys or invalid values prevent startup. This is server configuration, not a CLI setting, and does not alter Web-initiated writes.
 - Exit codes: `0` ok, `2` usage, `3` not implemented, `4` confirmation required, `5` not authenticated, `6` forbidden, `7` not found, `8` conflict, `9` rate limited, `10` network, `11` protocol, `12` server, `13` identity, `14` capability missing, `15` cancelled.
 - `thctl schema [group [leaf]] [--format json|md] [--out <file>]` exports the contract; leaves marked `outputMode: json-lines` stream one JSON document per line.
 - `story automation create|update` read the automation payload from `--config <file>`: the file never carries `storyId` (it comes from the argument) — `create` takes `{ actionId, schedule, enabled?, policy? }`, `update` takes any non-empty subset of `{ actionId, schedule, enabled, policy }`.
+
+### Skill and update checks
+
+The product publishes exactly one Agent Skill named `taskhandoff`. Because it belongs to the software rather than one repository, `thctl` installs it into `~/.agents/skills/taskhandoff` (user scope) by default; `--scope project` pins a copy into `.agents/skills/taskhandoff` for one project. It writes a `.thandoff-skill.json` provenance file with the published version, index URL and per-file sha256 so local edits are detectable.
+
+```bash
+thctl skill status                     # project and user scope
+thctl skill install --yes
+thctl skill install --scope project --yes
+thctl skill update --yes
+thctl skill update --force --yes       # replace a locally modified copy
+```
+
+- `--scope user|project` selects the root and defaults to `user`; `--dir <path>` pins an explicit skills root (for example an alternate agent home). `skill install` conflicts with an existing copy (exit `8`), `skill update` conflicts with locally modified content unless `--force` is passed, and `--dry-run` prints the planned release without writing.
+- Every downloaded file is verified against the index `integrity` digests and swapped into place atomically; a mismatch is a protocol error (exit `11`) and leaves the previous copy untouched.
+- Update detection compares **content, not version order**: `skill status`, the background hint, and `skill update` all treat "the published file digests differ from the installed provenance" as the update signal, so an index can label releases with anything (the docs site publishes `<last-change-date>-<content-hash>`, e.g. `20261005-339d63f220cd`). When either side has no digests (an older index, or a hand-copied directory without provenance) the CLI falls back to comparing versions numerically or as semver.
+- An index entry may declare the `thctl` semver range it requires. Installing or updating from an older CLI exits `14` before writing, and `thctl skill status` reports `cli-too-old`; the compatible range is re-checked on every update.
+- `TASK_HANDOFF_SKILLS_INDEX_URL` overrides the published index (`https://docs.thandoff.com/.well-known/skills/index.json`).
+- Copies left under the legacy names (`task-handoff`, `task-handoff-nodes`) are reported as `legacy-name` by `thctl skill status`; install the current copy and remove them after verifying.
+
+Both the CLI and the skill share one throttled background check:
+
+- Any CLI invocation may spawn a detached `thctl __update-check` child at most once per 24 hours; it records the latest `@task-handoff/thctl` dist-tag version and skill index version in `<cli config dir>/update-check.json`.
+- The next interactive invocation prints the cached hint to stderr, for example `thctl 0.0.24 → 0.0.25 is available: npm install -g @task-handoff/thctl@latest` or `skill taskhandoff 5 → 6 is available: thctl skill update`. Nothing is printed under `--json` or on non-TTY streams, and the CLI hint stays quiet for local/dev builds (their source is not comparable to the registry); the skill hint still applies, and when the published skill needs a newer CLI it says `update the CLI first` instead.
+- `--no-update-check` and `TASK_HANDOFF_CLI_UPDATE_CHECK=0` disable the check and the hint; `TASK_HANDOFF_CLI_UPDATE_CHECK=1` forces the hint on non-interactive and `--json` runs, and `TASK_HANDOFF_CLI_UPDATE_CHECK_INTERVAL` (seconds) overrides the 24-hour window.
+- Prerelease builds compare against their own dist-tag (`alpha`, `beta`, else `latest`); `TASK_HANDOFF_CLI_REGISTRY`, `npm_config_registry` and `~/.npmrc` select the registry in that order.
+- A failed check retries after one hour. Checks and hints never change a command's output, exit code, or error handling.
 
 ### Capability gating
 

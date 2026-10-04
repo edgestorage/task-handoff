@@ -417,7 +417,6 @@ export class ControlPlaneService {
       requireLocalFolder: (node, folderId) => this.requireNodeLocalFolder(node, folderId),
       resolveImageSelection: (selection) => this.catalogService.resolveImageSelection(selection),
       prepareModels: (node, selection) => this.modelService.prepareAssignment(node, selection),
-      retireSupersededModels: (node, prepared) => this.modelService.retireSupersededNodeModels(node, prepared),
       gitCredentials: this.gitCredentials,
     });
     this.controlPlaneTriggerService = new ControlPlaneTriggerService({
@@ -1004,11 +1003,7 @@ export class ControlPlaneService {
    * fall back to the cached node so callers can still attempt the write.
    */
   async ensureNodeCapabilities(node: Node, options: { force?: boolean } = {}): Promise<Node> {
-    const checkedAt = this.nodeCapabilityCheckedAt.get(node.id) || 0;
-    const fresh = nodeAgentCapabilityDocument(node) !== undefined
-      && !options.force
-      && Date.now() - checkedAt < NODE_CAPABILITY_REFRESH_TTL_MS;
-    if (fresh) return node;
+    if (this.nodeCapabilityDocumentIsFresh(node, options.force === true)) return node;
     const pending = this.nodeCapabilityRefreshes.get(node.id);
     if (pending) return pending;
     const refresh = this.probeNodeCapabilities(node)
@@ -1019,6 +1014,47 @@ export class ControlPlaneService {
       });
     this.nodeCapabilityRefreshes.set(node.id, refresh);
     return refresh;
+  }
+
+  /**
+   * Refresh a node's capability document from its own /health response.
+   * Presence fields (status/health/lastSeenAt) belong to each connection
+   * channel, so this probe only replaces capabilities.agent; proxied nodes in
+   * particular keep the presence delivered by the proxy state stream. Returns
+   * undefined when the cached document is still fresh or the response carries
+   * no capability document.
+   */
+  async refreshNodeCapabilityDocument(id: string): Promise<Node | undefined> {
+    const node = this.requireNode(id);
+    if (this.nodeCapabilityDocumentIsFresh(node, false)) return undefined;
+    const data = await this.nodeAgentGateway.health(node);
+    const agent = publicNodeAgentCapabilities(data);
+    if (!agent) return undefined;
+    const current = this.requireNode(id);
+    const updated = NodeSchema.parse({
+      ...current,
+      capabilities: { ...current.capabilities, agent },
+    });
+    this.nodeCapabilityCheckedAt.set(id, Date.now());
+    return this.observeNode(updated);
+  }
+
+  /** Capability-gated reads: refresh when stale, fall back to the cache on probe failure. */
+  private async nodeWithFreshCapabilityDocument(id: string): Promise<Node> {
+    const node = this.requireNode(id);
+    if (this.nodeCapabilityDocumentIsFresh(node, false)) return node;
+    try {
+      return (await this.refreshNodeCapabilityDocument(id)) ?? node;
+    } catch {
+      return node;
+    }
+  }
+
+  private nodeCapabilityDocumentIsFresh(node: Node, force: boolean) {
+    const checkedAt = this.nodeCapabilityCheckedAt.get(node.id) || 0;
+    return nodeAgentCapabilityDocument(node) !== undefined
+      && !force
+      && Date.now() - checkedAt < NODE_CAPABILITY_REFRESH_TTL_MS;
   }
 
   async checkNodeUpdate(id: string, input: UpdateCheckRequest) {
@@ -1044,13 +1080,19 @@ export class ControlPlaneService {
   /**
    * Node relay settings use the standard node management channel for every
    * node, unlike the external listener which is bound to the local IPC node.
+   * Both routes revalidate the capability document first: a proxied node's
+   * cached document can be empty after the control plane restarts, and the
+   * switch must follow the node agent's own /health instead of a stale relay
+   * projection.
    */
   async getNodeModelRelay(id: string) {
-    return this.nodeAgentGateway.getModelRelay(this.requireNode(id));
+    const node = await this.nodeWithFreshCapabilityDocument(id);
+    return this.nodeAgentGateway.getModelRelay(node);
   }
 
   async updateNodeModelRelay(id: string, input: unknown) {
-    return this.nodeAgentGateway.updateModelRelay(this.requireNode(id), input);
+    const node = await this.nodeWithFreshCapabilityDocument(id);
+    return this.nodeAgentGateway.updateModelRelay(node, input);
   }
 
   async createNodePairingInvite(id: string, input: unknown = {}) {
@@ -1339,7 +1381,6 @@ export class ControlPlaneService {
     if (modelSelection) {
       const preparedModels = await this.modelService.prepareAssignment(node, modelSelection, current);
       instance = (await this.nodeAgentGateway.assignInstanceModels(node, id, preparedModels)).instance;
-      await this.modelService.retireSupersededNodeModels(node, preparedModels);
     }
     return publicInstanceWithAccess(instance);
   }

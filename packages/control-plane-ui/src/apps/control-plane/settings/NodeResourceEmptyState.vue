@@ -19,9 +19,9 @@ defineProps<{
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 7px;
-  min-height: 96px;
-  padding: 14px 16px;
+  gap: 8px;
+  min-height: 180px;
+  padding: 48px 20px;
   color: var(--text-muted);
   text-align: center;
 }

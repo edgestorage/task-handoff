@@ -222,7 +222,7 @@ async function confirmDelete(bridge?: ChatBridgeConfig) { if (!bridge) return; c
 <style scoped>
 .chat-settings-scroll { height: 100%; min-height: 0; width: 100%; }
 .chat-settings-page { display: grid; gap: 12px; }
-.chat-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.chat-page-head { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .chat-page-head p, .chat-form-section h3, .chat-form-section p { margin: 0; }
 .chat-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .chat-head-actions { display: flex; gap: 8px; }

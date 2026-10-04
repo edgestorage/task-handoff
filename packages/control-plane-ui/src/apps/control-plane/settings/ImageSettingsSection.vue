@@ -237,7 +237,7 @@ async function confirmDelete() { const target = deleteTarget.value?.profile; if 
 <style scoped>
 .image-settings-scroll { height: 100%; min-height: 0; width: 100%; }
 .image-settings-page { display: grid; gap: 12px; }
-.image-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.image-page-head { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .image-page-head p, .image-form-section h3, .image-form-section p { margin: 0; }
 .image-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .image-head-actions { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(180px, 230px) auto; }

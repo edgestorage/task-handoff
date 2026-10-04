@@ -17,7 +17,8 @@ test("node resource lists share a centered semantic empty state", () => {
   assert.match(panel, /:icon="History" :message="t\('settings\.nodeDetail\.noUpdateJobs'\)"/);
   assert.match(panel, /:icon="Container" :message="t\('settings\.nodeDetail\.noImages'\)"/);
   assert.match(emptyState, /role="status"/);
-  assert.match(emptyState, /min-height:\s*96px/);
+  assert.match(emptyState, /min-height:\s*180px/);
+  assert.match(emptyState, /padding:\s*48px 20px/);
   assert.match(emptyState, /justify-items:\s*center/);
   assert.match(emptyState, /text-align:\s*center/);
 });

@@ -255,6 +255,33 @@ test("anthropic messages rewrites message_start, forwards count_tokens and rejec
   assert.equal(countRequest.body.toString("utf8").includes('"upstream-claude"'), true);
 });
 
+test("anthropic relay accepts the version-prefixed path a real Claude Code client sends", async (t) => {
+  let messageRequest;
+  const upstream = await startUpstream((record, _request, response) => {
+    messageRequest = record;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      id: "msg_sdk", type: "message", role: "assistant", model: "upstream-claude",
+      content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+  });
+  t.after(() => upstream.close());
+  const { route } = await setupRelay(t, upstream);
+
+  // ANTHROPIC_BASE_URL is the relay base (which ends in `/v1`) and the Anthropic
+  // SDK appends `/v1/messages` on top of it, so the relay resolves a duplicated
+  // version segment instead of rejecting the request as an unknown operation.
+  const response = await fetch(route("claude", "/v1/messages"), {
+    method: "POST",
+    headers: { "x-api-key": INSTANCE_TOKEN, "content-type": "application/json" },
+    body: JSON.stringify({ model: "public-claude", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }),
+  });
+  assert.equal(response.status, 200, await response.text());
+  await waitFor(() => messageRequest?.completed);
+  assert.equal(messageRequest.url, "/v1/messages");
+  assert.equal(messageRequest.body.toString("utf8"), JSON.stringify({ model: "upstream-claude", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }));
+});
+
 test("anthropic SSE rewrites message_start.message.model without touching content", async (t) => {
   const upstream = await startUpstream((_record, _request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });

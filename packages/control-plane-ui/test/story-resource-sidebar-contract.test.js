@@ -33,11 +33,14 @@ test("resource toggle follows account controls and is separated as its own tool"
   assert.ok(accountControl >= 0 && divider > accountControl && toggle > divider);
   assert.doesNotMatch(workbench, /<template(?:\s[^>]*)?>\s*<span class="story-resource-toggle-divider"/);
   assert.match(workbenchStyles, /\.story-resource-toggle-divider\s*\{[\s\S]*width:\s*1px;[\s\S]*height:\s*18px;/);
-  assert.match(workbench, /<TooltipTrigger as-child>[\s\S]*class="story-resource-toggle-trigger"[\s\S]*class="story-resource-toggle"/);
+  assert.match(workbench, /<TooltipTrigger as-child>[\s\S]*class="story-resource-toggle-trigger"[\s\S]*class="control-plane-icon-button story-resource-toggle"/);
   assert.match(workbenchStyles, /\.story-resource-toggle-trigger\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*width:\s*30px;[\s\S]*height:\s*30px;/);
-  assert.match(workbenchStyles, /\.story-resource-toggle\s*\{[\s\S]*width:\s*30px;[\s\S]*border-radius:\s*6px;/);
+  assert.match(workbenchStyles, /\.control-plane-actions \.control-plane-icon-button\.inline-flex\s*\{[\s\S]*width:\s*30px;[\s\S]*border-radius:\s*6px;/);
   assert.doesNotMatch(workbench, /<template v-if="storyMode && !settingsMode">[\s\S]*story-resource-toggle/);
-  assert.match(workbench, /class="story-resource-toggle"[\s\S]*:disabled="!storyResourceTargetAiSessionId"/);
+  assert.match(workbench, /class="control-plane-icon-button story-resource-toggle"[\s\S]*:disabled="!storyResourceTargetAiSessionId"/);
+  assert.match(workbenchStyles, /\.control-plane-actions \.control-plane-icon-button\.inline-flex:not\(\.active\):hover \{[\s\S]*background: var\(--surface-hover\);/);
+  assert.match(workbenchStyles, /\.control-plane-actions \.story-resource-toggle\.active \{\s*background: var\(--surface-active\);\s*color: hsl\(var\(--primary\)\);\s*\}/);
+  assert.doesNotMatch(workbenchStyles, /\.control-plane-actions \.story-resource-toggle\.active \{[^}]*border-color/);
 });
 
 test("inline sidebar renders one divider while overlay retains its panel edge", () => {

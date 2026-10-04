@@ -80,3 +80,28 @@ test("settings navigation replaces overflowing tabs with the current-section men
   assert.match(modal, /var\(--reka-dropdown-menu-content-available-height\)/);
   assert.match(radioItem, /<Circle class="h-2 w-2 fill-current" \/>/);
 });
+
+test("settings tab page heads vertically center the description row against their actions", () => {
+  const pageHeads = [
+    ["ChatBridgeSettingsSection.vue", "chat-page-head"],
+    ["CloudConnectivitySettingsSection.vue", "cloud-page-head"],
+    ["GitCredentialsSettingsSection.vue", "git-credentials-page-head"],
+    ["ImageSettingsSection.vue", "image-page-head"],
+    ["MobileSessionsSettingsSection.vue", "mobile-sessions-page-head"],
+    ["ModelSettingsSection.vue", "model-page-head"],
+    ["ProjectSettingsSection.vue", "project-page-head"],
+    ["UserAccessSettingsSection.vue", "user-access-head"],
+  ];
+
+  for (const [file, pageHeadClass] of pageHeads) {
+    const component = read(`src/apps/control-plane/settings/${file}`);
+    assert.match(
+      component,
+      new RegExp(`\\.${pageHeadClass}\\s*\\{[^{}]*align-items:\\s*center`),
+      `${file} should vertically center ${pageHeadClass} content against its actions`,
+    );
+  }
+
+  const triggerStyles = read("src/apps/control-plane/triggers/ControlPlaneTriggersView.css");
+  assert.match(triggerStyles, /\.trigger-board-head \{[^}]*align-items: center;/, "trigger settings head should vertically center its description against its actions");
+});

@@ -50,7 +50,8 @@ const DECLARED_COMMANDS = [
   "user password-reset", "user role list", "user role create", "user role update", "user role remove",
   "user permission list", "user identity-provider list", "user identity-provider create",
   "user identity-provider update", "user identity-provider remove", "user external-identity list",
-  "user external-identity approve", "user external-identity reject", "events", "schema",
+  "user external-identity approve", "user external-identity reject", "skill status", "skill install",
+  "skill update", "events", "schema",
 ];
 
 function tempStore() {
@@ -85,7 +86,8 @@ test("stage A, B and C commands are implemented except the explicitly planned in
   assert.deepEqual(stageA, [
     "ai-session list", "ai-session show", "instance list", "instance restart", "instance show",
     "instance start", "instance stop", "login", "logout", "profile add", "profile list",
-    "profile remove", "profile show", "profile trust", "profile use", "schema", "whoami",
+    "profile remove", "profile show", "profile trust", "profile use", "schema", "skill install",
+    "skill status", "skill update", "whoami",
   ]);
   const stageB = CLI_LEAVES.filter((leaf) => leaf.stage === "B");
   assert.ok(stageB.length >= 30, `expected the declared stage B surface, saw ${stageB.length}`);

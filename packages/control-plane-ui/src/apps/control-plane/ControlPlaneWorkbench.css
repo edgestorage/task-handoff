@@ -16,6 +16,8 @@
   color: var(--text);
 }
 
+.action-inbox-preview-line { display: block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .control-plane-shell[data-header-density="normal"] {
   --control-plane-titlebar-height: 56px;
 }
@@ -945,18 +947,6 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.story-resource-toggle {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  box-shadow: none;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
 .story-resource-toggle-trigger {
   display: inline-flex;
   width: 30px;
@@ -964,37 +954,62 @@
   flex: 0 0 30px;
 }
 
-.control-plane-actions .story-resource-toggle.inline-flex {
+.control-plane-actions .control-plane-icon-button.inline-flex {
+  position: relative;
   width: 30px;
   height: 30px;
   flex: 0 0 30px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  box-shadow: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.story-resource-toggle:hover {
+.control-plane-actions .control-plane-icon-button.inline-flex:not(.active):hover {
   background: var(--surface-hover);
   color: hsl(var(--accent-foreground));
 }
 
-.story-resource-toggle.active {
-  border-color: color-mix(in srgb, var(--line) 82%, transparent);
-  background: var(--surface-active);
-  color: hsl(var(--primary));
+.control-plane-actions .control-plane-icon-button.inline-flex:focus-visible {
+  outline: 1px solid hsl(var(--ring));
+  outline-offset: 1px;
 }
 
-.story-resource-toggle:disabled,
-.story-resource-toggle:disabled:hover {
+.control-plane-actions .control-plane-icon-button.inline-flex:disabled,
+.control-plane-actions .control-plane-icon-button.inline-flex:disabled:hover {
   background: transparent;
   color: hsl(var(--muted-foreground));
   opacity: 0.42;
   cursor: default;
 }
 
-.story-resource-toggle:focus-visible {
-  outline: 1px solid hsl(var(--ring));
-  outline-offset: 1px;
+.control-plane-actions .story-resource-toggle.active {
+  background: var(--surface-active);
+  color: hsl(var(--primary));
+}
+
+.control-plane-actions .action-inbox-trigger-empty.inline-flex {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.action-inbox-trigger-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--status-warning-bg);
+  color: var(--text-strong);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+  text-align: center;
 }
 
 .story-resource-toggle-divider {

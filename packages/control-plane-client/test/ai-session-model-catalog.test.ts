@@ -28,26 +28,31 @@ test("derives resume choices independently from active-session switching", () =>
   assert.deepEqual(groups.map((group) => group.modelEntityId), ["one", "two"]);
 });
 
-test("resolves a node-local replica id back onto its control-plane entity", () => {
+test("resolves a node replica under the same stable entity id on every node", () => {
   const replicated = [{
     id: "mdl_stable", name: "Replicated", model: "replicated-model", enabled: true, order: 1,
     protocols: ["openai-responses"],
     modelNames: [{ name: "replicated-model", order: 100 }],
     locations: [
       { type: "control-plane" as const, enabled: true },
-      { type: "node" as const, nodeId: "node-1", enabled: true, replicaId: "mdl_projection" },
+      { type: "node" as const, nodeId: "node-1", enabled: true },
     ],
   }];
   const capability = { selectModelAtCreate: true, selectProviderAtCreate: true };
   const instanceGroups = deriveAiSessionModelGroups({
-    entities: replicated, assignment: { modelEntityIds: ["mdl_projection"] }, agent: "codex", nodeId: "node-1", mode: "create", capability,
+    entities: replicated, assignment: { modelEntityIds: ["mdl_stable"] }, agent: "codex", nodeId: "node-1", mode: "create", capability,
   });
-  assert.deepEqual(instanceGroups.map((group) => group.modelEntityId), ["mdl_projection"]);
-  assert.deepEqual(instanceGroups[0]?.models.map((model) => model.modelEntityId), ["mdl_projection"]);
+  assert.deepEqual(instanceGroups.map((group) => group.modelEntityId), ["mdl_stable"]);
+  assert.deepEqual(instanceGroups[0]?.models.map((model) => model.modelEntityId), ["mdl_stable"]);
   const otherNodeGroups = deriveAiSessionModelGroups({
     entities: replicated, assignment: { modelEntityIds: ["mdl_stable"] }, agent: "codex", nodeId: "node-2", mode: "create", capability,
   });
   assert.deepEqual(otherNodeGroups.map((group) => group.modelEntityId), ["mdl_stable"]);
+  // A retired content-hash id is not a resolvable entity id any more.
+  const legacyGroups = deriveAiSessionModelGroups({
+    entities: replicated, assignment: { modelEntityIds: ["mdl_projection"] }, agent: "codex", nodeId: "node-1", mode: "create", capability,
+  });
+  assert.deepEqual(legacyGroups, []);
 });
 
 test("gates model and provider selection per catalog mode", () => {

@@ -8,6 +8,12 @@ import { openInBrowser } from "./login.ts";
 import { CliOutput, defaultStreams, type CliStreams } from "./output.ts";
 import type { CliResult } from "./runtime.ts";
 import { promptConfirm, type CliContext } from "./runtime.ts";
+import {
+  UPDATE_CHECK_CHILD_ARG,
+  maybeScheduleUpdateCheck,
+  pendingUpdateNotice,
+  runUpdateCheckChild,
+} from "./update-check.ts";
 
 const GLOBAL_OPTIONS: readonly [string, string][] = [
   ["--profile <label>", "Profile to use (overrides TASK_HANDOFF_CLI_PROFILE)"],
@@ -15,6 +21,7 @@ const GLOBAL_OPTIONS: readonly [string, string][] = [
   ["--yes", "Skip interactive confirmation for write commands"],
   ["--dry-run", "Print the request a write command would send without sending it"],
   ["--token-stdin", "Read a secret (token, join token, credential) from stdin instead of a flag"],
+  ["--no-update-check", "Skip the background CLI and skill update check"],
 ];
 
 function addGlobalOptions(command: Command) {
@@ -136,6 +143,15 @@ export type RunCliOptions = {
   signal?: AbortSignal;
   now?: () => Date;
   createEventSocket?: CliEventSocketFactory;
+  /**
+   * 后台更新检查：打包后的 CLI 入口（bin.ts）显式开启；库调用和测试默认关闭。
+   * spawnDetached/now 供测试注入派生进程与时钟。
+   */
+  updateCheck?: {
+    enabled?: boolean;
+    spawnDetached?: (execPath: string, args: string[]) => void;
+    now?: () => number;
+  };
 };
 
 export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
@@ -159,6 +175,13 @@ export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
 
 export async function runCli(argv: string[], options: RunCliOptions = {}) {
   const context = createRuntimeContext(options);
+  // 隐藏子进程入口：只刷新更新检查状态，不解析命令、不产生输出。
+  if (argv[2] === UPDATE_CHECK_CHILD_ARG) {
+    await runUpdateCheckChild(context);
+    return CLI_EXIT_CODES.ok;
+  }
+  const updateCheck = options.updateCheck ?? {};
+  const updateCheckEnabled = updateCheck.enabled === true;
   const controller = new AbortController();
   const onSignal = () => {
     controller.abort();
@@ -174,6 +197,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
+    // 先派生后台检查（结果落盘），本次运行只用上一次的缓存状态提示。
+    if (updateCheckEnabled) {
+      maybeScheduleUpdateCheck(context, {
+        argv,
+        ...(updateCheck.spawnDetached ? { spawnDetached: updateCheck.spawnDetached } : {}),
+        ...(updateCheck.now ? { now: updateCheck.now() } : {}),
+      });
+    }
     const program = buildProgram({ ...context, signal: controller.signal });
     await program.parseAsync(argv);
     return CLI_EXIT_CODES.ok;
@@ -191,5 +222,12 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     externalSignal?.removeEventListener("abort", onExternalAbort);
+    if (updateCheckEnabled) {
+      const notice = pendingUpdateNotice(context, {
+        argv,
+        ...(updateCheck.now ? { now: updateCheck.now() } : {}),
+      });
+      if (notice) context.output.warn(notice);
+    }
   }
 }

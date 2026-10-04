@@ -302,6 +302,7 @@ CREATE INDEX cp_user_sessions_identity_idx ON cp_user_sessions(identity_id);
 CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
 `),
   migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings TEXT NOT NULL DEFAULT '[]';"),
+  migration("0009_drop_model_legacy_projections", "DROP TABLE IF EXISTS cp_model_legacy_projections;"),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -324,4 +325,5 @@ ALTER TABLE cp_login_identities DROP CONSTRAINT IF EXISTS cp_login_identities_ki
 ALTER TABLE cp_login_identities ADD CONSTRAINT cp_login_identities_kind_check CHECK (kind IN ('local-password','oidc','oauth','local-trust'));
 `),
   migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings JSONB NOT NULL DEFAULT '[]'::jsonb;"),
+  migration("0009_drop_model_legacy_projections", "DROP TABLE IF EXISTS cp_model_legacy_projections;"),
 ];

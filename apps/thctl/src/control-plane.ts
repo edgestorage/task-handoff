@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import { z } from "zod";
+import { ApprovalPendingSchema, ApprovalWaitSchema } from "@task-handoff/protocol/operation-approvals";
 import {
   controlPlaneIdentitySigningInput,
   supportsControlPlaneCliSessions,
@@ -11,6 +12,7 @@ import { createControlPlaneClient, type ControlPlaneClient, type ControlPlaneCli
 import { cliClientInfo } from "./client-info.ts";
 import type { CliCredential, CliProfile, CliProfileStore } from "./config.ts";
 import { ThctlError, CLI_EXIT_CODES, networkError, protocolError, routeMissingError, serverError } from "./errors.ts";
+import { waitForOperationApproval, type ApprovalWaitContext } from "./operation-approvals.ts";
 
 const CLOCK_SKEW_MS = 60_000;
 /** Ed25519 SPKI 前缀；Node 不能直接从裸公钥构造 KeyObject，这里补 DER 头。 */
@@ -71,16 +73,19 @@ export type ThctlTransportOptions = {
   onUnauthorized?: () => void;
   /** 受管本地信任凭证被服务端拒绝时重新签发；返回 true 时用新凭证把本次请求重试一次。 */
   refreshCredential?: () => Promise<boolean>;
+  approvalWait?: ApprovalWaitContext;
 };
 
 /** 所有网络访问都经过共享 client；这里只实现 transport 接口（凭证注入与错误归一）。 */
 export function createThctlTransport(options: ThctlTransportOptions): ControlPlaneClientTransport {
-  return {
+  const transport: ControlPlaneClientTransport = {
     async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}) {
       let refreshed = false;
+      let approvalId: string | undefined;
       for (;;) {
         const headers = new Headers(init.headers);
         headers.set("accept", "application/json");
+        if (approvalId) headers.set("x-task-handoff-approval-id", approvalId);
         const token = options.sessionToken?.();
         if (token) headers.set("authorization", `Bearer ${token}`);
         let response: Response;
@@ -120,6 +125,24 @@ export function createThctlTransport(options: ThctlTransportOptions): ControlPla
           const { code, message, details, retryable } = envelope.data.error;
           throw serverError(response.status, code, message, { ...details, ...(retryable === undefined ? {} : { retryable }), path });
         }
+        if (response.status === 202 && (init.method ?? "GET").toUpperCase() !== "GET") {
+          const pending = z.object({ data: ApprovalPendingSchema }).safeParse(body);
+          if (pending.success) {
+            if (approvalId || !options.approvalWait) {
+              throw protocolError("The Control Plane returned an unsupported or repeated approval request.", { path });
+            }
+            const wait = pending.data.data;
+            const approvalPath = `/api/operation-approvals/${encodeURIComponent(wait.id)}`;
+            await waitForOperationApproval(
+              wait,
+              options.approvalWait,
+              async () => (await transport.request(`${approvalPath}/status`, z.object({ data: ApprovalWaitSchema }))).data,
+              () => transport.request(approvalPath, z.object({ data: z.object({ cancelled: z.boolean() }) }), { method: "DELETE" }),
+            );
+            approvalId = wait.id;
+            continue;
+          }
+        }
         const parsed = schema.safeParse(body);
         if (!parsed.success) {
           throw protocolError("The Control Plane response does not match the expected protocol schema.", {
@@ -157,6 +180,7 @@ export function createThctlTransport(options: ThctlTransportOptions): ControlPla
       };
     },
   };
+  return transport;
 }
 
 export type VerifiedControlPlaneIdentity = {
@@ -270,6 +294,7 @@ export async function connectToControlPlane(options: {
   profile: CliProfile;
   fetchImpl: typeof fetch;
   withSession?: boolean;
+  approvalWait?: ApprovalWaitContext;
 }) {
   const { store, profile, fetchImpl } = options;
   const identity = await fetchControlPlaneIdentity(profile.origin, fetchImpl);
@@ -298,6 +323,7 @@ export async function connectToControlPlane(options: {
   const transport = createThctlTransport({
     origin: profile.origin,
     fetchImpl,
+    approvalWait: options.approvalWait,
     sessionToken: credential ? () => secrets.read(profile.label)?.sessionToken : undefined,
     onUnauthorized: credential ? () => secrets.remove(profile.label) : undefined,
     ...(localTrust

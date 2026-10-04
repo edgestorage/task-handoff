@@ -9,7 +9,13 @@ const test = require("node:test");
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
 const { deriveModelRelayRouteId } = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
+const { resolveModelRelayLimits } = require("../packages/control-plane/src/node-agent/models/relay/limits.ts");
 const { ModelRelayService } = require("../packages/control-plane/src/node-agent/models/relay/server.ts");
+
+test("relay waits five minutes for upstream response headers by default while allowing overrides", () => {
+  assert.equal(resolveModelRelayLimits({}).responseHeadersTimeoutMs, 300_000);
+  assert.equal(resolveModelRelayLimits({ TASK_HANDOFF_MODEL_RELAY_HEADER_TIMEOUT_MS: "200" }).responseHeadersTimeoutMs, 200);
+});
 
 function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-transport-"));
@@ -231,6 +237,70 @@ test("relay diagnostics never contain credentials, endpoints or request bodies",
   for (const secret of ["logs-upstream-secret", "logs-upstream.internal", "PROMPT_SECRET_MARKER", "instance-logs-token"]) {
     assert.equal(serialized.includes(secret), false, `${secret} must not be logged`);
   }
+});
+
+test("an upstream socket reset is logged as upstream-first with its transport error identity", async (t) => {
+  const logs = [];
+  const logger = {
+    info: (data, message) => logs.push({ level: "info", data, message }),
+    warn: (data, message) => logs.push({ level: "warn", data, message }),
+    debug: (data, message) => logs.push({ level: "debug", data, message }),
+  };
+  const instance = relayInstance("inst_reset", "instance-reset-token");
+  const model = {
+    id: "mdl_reset_entity", name: "Reset model", endpoint: "http://reset-upstream.internal:9999/v1",
+    key: "reset-upstream-secret", model: "public-reset",
+    modelNames: [{ name: "public-reset", upstreamName: "upstream-reset", order: 100 }],
+    protocols: ["openai-responses"], app: "codex", enabled: true, order: 100, labels: {},
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  const resetError = new TypeError("terminated", {
+    cause: Object.assign(new Error("other side closed"), { name: "SocketError", code: "UND_ERR_SOCKET" }),
+  });
+  const service = new ModelRelayService({
+    resolver: {
+      instance: () => instance,
+      relayEnabled: () => true,
+      resolveRoute: () => ({ instance, model, protocol: "openai-responses", routeId: "rly_reset" }),
+      resolveUpstreamModelName: () => "upstream-reset",
+    },
+    log: logger,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(Buffer.from("data: {\"model\":\"public-reset\"}\n\n", "utf8"));
+        setTimeout(() => controller.error(resetError), 20);
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+    adapters: [{
+      protocol: "openai-responses",
+      planOperation: () => ({ kind: "upstream", name: "responses.create", method: "POST", url: "http://reset-upstream.internal:9999/v1/responses", responseMode: "json" }),
+      prepareRequest: async ({ body }) => ({ body }),
+      prepareResponse: ({ body }) => body,
+    }],
+  });
+  const Fastify = require("fastify");
+  const app = Fastify({ logger: false });
+  service.registerRoutes(app);
+  t.after(async () => app.close());
+  await app.ready();
+
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/model-relay/instances/inst_reset/routes/rly_reset/v1/responses",
+    headers: { authorization: "Bearer instance-reset-token" },
+    payload: JSON.stringify({ model: "public-reset", prompt: "PROMPT_SECRET_MARKER" }),
+  }).catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const interrupted = logs.find((entry) => entry.message === "model relay stream interrupted");
+  assert.ok(interrupted, "the interrupted stream must be logged");
+  assert.equal(interrupted.data.reason, "upstream-stream-error");
+  assert.equal(interrupted.data.errorName, "TypeError");
+  assert.equal(interrupted.data.causeName, "SocketError");
+  assert.equal(interrupted.data.causeCode, "UND_ERR_SOCKET");
+  assert.ok(Number.isFinite(interrupted.data.msSinceLastChunk));
+  // The raw error message ("other side closed") must not leak into the log.
+  assert.equal(JSON.stringify(logs).includes("other side closed"), false);
 });
 
 test("disabling the relay switch drains briefly and then aborts in-flight streams", async (t) => {

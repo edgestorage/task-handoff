@@ -120,6 +120,7 @@
               :busy="busy"
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
+              :approval-decisions="approvalDecisions"
               :instance-id="card.instance.id"
               :detail-state="detailState"
               :mode="timelineMode"
@@ -233,6 +234,7 @@ const props = defineProps<{
   busy: boolean;
   canInterrupt: boolean;
   canResolveApproval: boolean;
+  approvalDecisions: Array<"allow" | "deny" | "skip">;
   card: AiBoardCard;
   conversationSession: AiSessionSummary;
   detailState: AiSessionDetailState;

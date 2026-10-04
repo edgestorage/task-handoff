@@ -38,9 +38,9 @@ test("model edits use one authoritative call and report per-location sync state"
   assert.match(settings, /function staleLocations\(model: ModelConfig\)/);
   assert.match(settings, /function mergeCandidates\(model: ModelConfig\)/);
   assert.match(settings, /createNodeModel\(settingsModel\.locationScope/);
-  // Legacy node replicas live under the content-hash projection id exposed as
-  // `replicaId`, so deleting a location must address that replica.
-  assert.match(settings, /deleteNodeModel\(location\.nodeId, location\.replicaId \|\| model\.id\)/);
+  // A stable entity id addresses the same replica on every node, so deleting a
+  // location uses the entity id directly.
+  assert.match(settings, /deleteNodeModel\(location\.nodeId, model\.id\)/);
   assert.match(settings, /removeModel\(model: ModelConfig, location: ModelLocation\)/);
   assert.match(settings, /settingsModel\.locationScope === "control-plane"/);
   assert.match(settings, /finally \{\s*savingModelId\.value = ""/);
@@ -51,9 +51,12 @@ test("model edits use one authoritative call and report per-location sync state"
 
 test("model settings surface pending node sync and merge actions", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   assert.match(settings, /staleLocations\(model\)\.length/);
   assert.match(settings, /@select="syncModelLocations\(model\)"/);
   assert.match(settings, /@select="requestMerge\(model, candidate\)"/);
+  assert.match(state, /candidate\.name === model\.name[\s\S]*candidate\.revision === model\.revision/);
+  assert.match(settings, /v-if="mergeCandidates\(model\)\.length"/);
   assert.match(settings, /class="model-location-stale"/);
   assert.match(settings, /pendingMerge/);
 });
@@ -181,7 +184,7 @@ test("only control-plane model locations expose secret-preserving copy", () => {
   assert.match(settings, /v-else-if="copyingModelId" class="model-scope-notice"/);
   assert.match(state, /function copyModelDraft\(model: ModelConfig\)/);
   assert.match(state, /saved = await copyModel\(copyingModelId\.value, payload\)/);
-  assert.match(state, /source\.endpoint === settingsModel\.endpoint\.trim\(\)[\s\S]*source\.model === settingsModel\.model\.trim\(\)/);
+  assert.doesNotMatch(state, /source\.endpoint === settingsModel\.endpoint\.trim\(\)/);
   assert.doesNotMatch(state, /sourceProtocols/);
   assert.match(queries, /postApiData<ModelConfig>\(`models\/\$\{id\}\/copy`, input\)/);
 });
@@ -221,9 +224,9 @@ test("model reference distribution expands node instances and opens their model 
   assert.match(settings, /@click="openInstanceModelSettings\(instance\)"/);
   assert.match(settings, /emit\("openInstanceSettings", instance\.id, "models"\)/);
   assert.match(settings, /function nodeReferenceInstances\(model: ModelConfig, location: NodeLocation\)/);
-  // Legacy replicas are keyed by the content-hash projection, which is only
-  // exposed as `replicaId`; the revision is a different (content) value now.
-  assert.match(settings, /\[model\.id, model\.revision, location\.revision, location\.replicaId\]/);
+  // References are keyed by the stable entity id; the revision stays a
+  // different (content) value.
+  assert.match(settings, /\[model\.id, model\.revision, location\.revision\]/);
   assert.match(settings, /instanceSelectionIds\(instance\.modelSelection\)\.some\(\(id\) => candidateIds\.has\(id\)\)/);
   assert.match(settings, /instance\.nodeId === location\.nodeId/);
   assert.match(settings, /t\("settings\.modelRegistry\.unlistedReferences"/);

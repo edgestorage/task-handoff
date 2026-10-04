@@ -27,7 +27,6 @@ type ControlledInstanceCreatorOptions = {
     node: Node,
     selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
   ) => Promise<PreparedModelAssignment>;
-  retireSupersededModels: (node: Node, assignment: PreparedModelAssignment) => Promise<void>;
   gitCredentials: ControlPlaneGitCredentialService;
 };
 
@@ -162,7 +161,6 @@ export class ControlledInstanceCreator {
         );
       }
       assigned = (await this.options.gateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
-      await this.options.retireSupersededModels(node, preparedModels);
       if (codexSettings !== undefined) {
         assigned = await this.options.gateway.updateInstance(node, instance.id, {
           config: { codexSettings },

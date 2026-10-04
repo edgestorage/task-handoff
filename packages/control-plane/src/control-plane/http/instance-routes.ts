@@ -2,6 +2,9 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
+import type { OperationApprovals } from "../approvals/operation-approvals.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
+import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { IdParamsSchema } from "./route-params.ts";
 import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { withRequestSignal } from "./request-signal.ts";
@@ -15,6 +18,8 @@ export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
   events: ControlPlaneEventBus;
+  operationApprovals: OperationApprovals;
+  auth: ControlPlaneAuth;
   onInstanceDeleted?: (instanceId: string) => Promise<void>;
 };
 
@@ -31,7 +36,7 @@ const InstanceBoardQuerySchema = z.object({
 }).strict();
 const RepositoryWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
 
-export function registerInstanceRoutes({ app, service, events, onInstanceDeleted }: RegisterInstanceRoutesOptions) {
+export function registerInstanceRoutes({ app, service, events, onInstanceDeleted, operationApprovals, auth }: RegisterInstanceRoutesOptions) {
   app.get("/api/controlled-instances", async (request) => ({
     data: filterRequestInstances(request, await service.listControlledInstances(), (instance) => instance),
   }));
@@ -100,14 +105,17 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     events.publish("instance.updated", { instanceId: instance.id });
     return { data: instance };
   });
-  app.delete("/api/controlled-instances/:id", async (request) => {
+  app.delete("/api/controlled-instances/:id", async (request, reply) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const result = await service.deleteControlledInstance(id, InstanceDeleteInputSchema.parse(request.body));
-    if (result.completed) {
-      await onInstanceDeleted?.(id);
-      events.publish("instance.deleted", { instanceId: id, result });
-    }
-    return { data: result };
+    const input = InstanceDeleteInputSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "instance.delete", id, input, undefined, async () => {
+      const result = await service.deleteControlledInstance(id, input);
+      if (result.completed) {
+        await onInstanceDeleted?.(id);
+        events.publish("instance.deleted", { instanceId: id, result });
+      }
+      return result;
+    });
   });
   app.post("/api/controlled-instances/:id/start", async (request) => {
     const instance = await service.startControlledInstance(IdParamsSchema.parse(request.params).id);

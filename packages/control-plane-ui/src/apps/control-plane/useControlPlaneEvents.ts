@@ -87,6 +87,10 @@ export function useControlPlaneEvents(input: {
   nodes?: {
     joined: (event: NodeJoinedEvent) => void;
   };
+  operationApprovals?: {
+    applyEvent: (payload: unknown) => void;
+    recoverOpen: () => void | Promise<void>;
+  };
   onAuthoritativeState?: (authoritative: boolean) => void;
 }) {
   const queryClient = useQueryClient();
@@ -209,6 +213,7 @@ export function useControlPlaneEvents(input: {
         // session-stream handshake succeeds.
         reconnectBackoff.reset();
         input.onAuthoritativeState?.(true);
+        void input.operationApprovals?.recoverOpen();
         for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
@@ -216,7 +221,7 @@ export function useControlPlaneEvents(input: {
         return;
       }
       const events = normalizedEvents(message).filter((event) => !instanceId || !eventInstanceId(event) || eventInstanceId(event) === instanceId);
-      const handled = events.some(applyToCache);
+      const handled = events.map(applyToCache).some(Boolean);
       if (!handled) scheduleTargetedInvalidation(events);
     } catch (error) {
       console.warn("CONTROL_PLANE_EVENT_INVALID", error);
@@ -224,6 +229,10 @@ export function useControlPlaneEvents(input: {
   }
 
   function applyToCache(event: EventMessage) {
+    if (event.type === "operation-approval.changed") {
+      input.operationApprovals?.applyEvent(event.payload);
+      return true;
+    }
     if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
       return true;
     }

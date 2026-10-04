@@ -70,6 +70,29 @@ function countedStream(source: Readable, onBytes: (count: number) => void) {
   return source.pipe(counter);
 }
 
+/**
+ * Machine-readable description of a transport failure. Only class names and
+ * short codes leave the relay: free-form error messages can echo endpoint
+ * hosts, addresses or credentials, so they are never logged.
+ */
+function relayErrorDiagnostics(error: unknown) {
+  const describe = (value: unknown) => {
+    if (!value || typeof value !== "object") return undefined;
+    const record = value as { name?: unknown; code?: unknown };
+    const name = typeof record.name === "string" && /^[A-Za-z][A-Za-z0-9]{0,31}$/.test(record.name) ? record.name : undefined;
+    const code = typeof record.code === "string" && /^[A-Za-z0-9_]{1,32}$/.test(record.code) ? record.code : undefined;
+    return name || code ? { name, code } : undefined;
+  };
+  const failure = describe(error);
+  const cause = describe((error as { cause?: unknown } | null | undefined)?.cause);
+  return {
+    ...(failure?.name ? { errorName: failure.name } : {}),
+    ...(failure?.code ? { code: failure.code } : {}),
+    ...(cause?.name ? { causeName: cause.name } : {}),
+    ...(cause?.code ? { causeCode: cause.code } : {}),
+  };
+}
+
 function waitForDrain(socket: Writable) {
   return new Promise<void>((resolve) => {
     const done = () => {
@@ -260,6 +283,7 @@ export class ModelRelayService {
         ...context,
         status,
         code,
+        ...relayErrorDiagnostics(error),
         latencyMs: Date.now() - startedAt,
         relayEnabled: this.resolver.relayEnabled(),
       }, "model relay request failed");
@@ -379,6 +403,8 @@ export class ModelRelayService {
     reply.raw.writeHead(upstream.status, responseHeaders);
     let responseBytes = 0;
     let firstChunk = true;
+    let firstChunkAt = 0;
+    let lastChunkAt = 0;
     let bodyTimer: NodeJS.Timeout | undefined;
     const armBodyTimer = () => {
       if (bodyTimer) clearTimeout(bodyTimer);
@@ -388,33 +414,52 @@ export class ModelRelayService {
       }, firstChunk ? this.limits.firstByteTimeoutMs : this.limits.idleTimeoutMs);
     };
     if (responseBody) armBodyTimer();
+    // Every terminating stream reports the same timing shape so a log reader
+    // can tell "who stopped first" without guessing: `reason` names the side,
+    // the error class/code names the failure, and the chunk timings separate a
+    // mid-stream reset from a silent idle gap.
+    const streamFields = () => ({
+      ...context,
+      status: upstream.status,
+      ...(firstChunkAt ? { firstChunkMs: firstChunkAt - startedAt } : {}),
+      ...(lastChunkAt ? { lastChunkMs: lastChunkAt - startedAt, msSinceLastChunk: Date.now() - lastChunkAt } : {}),
+      upstreamContentType: upstream.headers.get("content-type") || undefined,
+      upstreamContentEncoding: upstream.headers.get("content-encoding") || undefined,
+      requestBytes,
+      responseBytes,
+      relayEnabled: this.resolver.relayEnabled(),
+    });
+    let outcome: "completed" | AbortReason = "completed";
     try {
       if (responseBody) {
         for await (const chunk of responseBody) {
+          const chunkAt = Date.now();
           if (firstChunk) {
             firstChunk = false;
+            firstChunkAt = chunkAt;
             armBodyTimer();
           } else {
             armBodyTimer();
           }
+          lastChunkAt = chunkAt;
           responseBytes += chunk.length;
           if (abortReason === "client") break;
           if (!reply.raw.write(chunk)) await waitForDrain(reply.raw);
         }
       }
-      if (!abortReason) reply.raw.end();
+      outcome = abortReason || "completed";
+      if (outcome === "completed") reply.raw.end();
       else reply.raw.destroy();
     } catch (error) {
       reply.raw.destroy();
+      // `reason: "upstream-stream-error"` means the upstream socket failed
+      // before any relay timeout fired, i.e. the model endpoint dropped the
+      // connection first. `client` and the *-timeout reasons are relay-side.
       this.log?.warn({
-        ...context,
-        status: upstream.status,
+        ...streamFields(),
         reason: abortReason || "upstream-stream-error",
-        ...(error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string" ? { code: (error as { code: string }).code } : {}),
+        ...relayErrorDiagnostics(error),
         latencyMs: Date.now() - startedAt,
-        requestBytes,
-        responseBytes,
-        relayEnabled: this.resolver.relayEnabled(),
       }, "model relay stream interrupted");
       // The response has already started; the only safe diagnosis is the
       // stream close, never an injected error body.
@@ -424,12 +469,13 @@ export class ModelRelayService {
       reply.raw.off("close", onClientClose);
       this.activeControllers.delete(controller);
     }
-    this.logCompleted(startedAt, {
-      ...context,
-      status: upstream.status,
-      requestBytes,
-      responseBytes,
-    });
+    if (outcome === "completed") {
+      this.logCompleted(startedAt, { ...context, status: upstream.status, requestBytes, responseBytes });
+    } else {
+      // A client hang-up or a post-header abort must not masquerade as a
+      // completed request the way the old success-only path let it.
+      this.log?.debug({ ...streamFields(), reason: outcome, latencyMs: Date.now() - startedAt }, "model relay stream ended");
+    }
   }
 
   private allowedUpstreamUrl(plannedUrl: string, endpoint: string) {

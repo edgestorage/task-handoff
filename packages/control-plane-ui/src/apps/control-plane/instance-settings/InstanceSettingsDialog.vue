@@ -325,9 +325,6 @@
         </ScrollArea>
       </Tabs>
 
-      <p v-if="error" class="instance-settings-error" role="alert">{{ error }}</p>
-      <p v-if="success" class="instance-settings-success" role="status">{{ success }}</p>
-
       <AlertDialog :open="Boolean(appConfirmation)" @update:open="(value) => { if (!value && !operationSubmitting) appConfirmation = undefined; }">
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -385,6 +382,7 @@ import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
+import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { instanceModelEntityId, instanceModelIdMatches } from "./instanceSettingsState";
 
 const { t } = useI18n();
@@ -442,8 +440,6 @@ const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingCodex = ref(false);
 const savingModels = ref(false);
-const error = ref("");
-const success = ref("");
 const operationSubmitting = ref("");
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appFilter = ref<AppFilter>("all");
@@ -498,7 +494,7 @@ async function authorizeGitCredential() {
     await authorizeInstanceGitCredential(instance.id, selectedGitCredentialId.value);
     selectedGitCredentialId.value = noGitCredentialValue;
     await refreshGitCredentials();
-  } catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed")); }
+  } catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed"))); }
   finally { gitCredentialBusy.value = false; }
 }
 async function revokeGitCredential(credentialId: string) {
@@ -506,7 +502,7 @@ async function revokeGitCredential(credentialId: string) {
   if (!instance) return;
   gitCredentialBusy.value = true;
   try { await revokeInstanceGitCredential(instance.id, credentialId); await refreshGitCredentials(); }
-  catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed")); }
+  catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed"))); }
   finally { gitCredentialBusy.value = false; }
 }
 
@@ -538,11 +534,11 @@ const codexModelOptions = computed(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
   const nodeId = props.instance?.nodeId || "";
   return props.models
-    .filter((model) => [...assigned].some((id) => instanceModelIdMatches(model, nodeId, id)) && model.enabled && (model.protocols?.includes("openai-responses") || (!model.protocols?.length && model.app === "codex")))
+    .filter((model) => [...assigned].some((id) => instanceModelIdMatches(model, id)) && model.enabled && (model.protocols?.includes("openai-responses") || (!model.protocols?.length && model.app === "codex")))
     .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
       .slice()
       .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-      .map((entry) => ({ value: codexModelValue(instanceModelEntityId(model, nodeId), entry.name), label: `${model.name} · ${entry.name}` })));
+      .map((entry) => ({ value: codexModelValue(instanceModelEntityId(model), entry.name), label: `${model.name} · ${entry.name}` })));
 });
 function currentCodexSettings(): CodexInstanceSettings {
   const selectedModel = codexSubagentModel.value === "default"
@@ -685,8 +681,6 @@ watch(
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
-    error.value = "";
-    success.value = "";
     appFilter.value = "all";
   },
   { immediate: true },
@@ -707,8 +701,6 @@ watch(
 function handleOpenChange(open: boolean) {
   if (!open) {
     section.value = "general";
-    error.value = "";
-    success.value = "";
   }
   emit("update:open", open);
 }
@@ -717,8 +709,6 @@ const modelEntityIds = computed<string[]>({
   get: () => modelSelection.value.modelEntityIds || [],
   set: (value) => {
     modelSelection.value = { modelEntityIds: [...new Set(value)] };
-    error.value = "";
-    success.value = "";
   },
 });
 
@@ -737,8 +727,6 @@ function normalizedSelection(value: ModelSelection): ModelSelection {
 async function saveGeneral() {
   if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value || !validAttachmentRetention.value || !validFileAttachmentLimit.value) return;
   savingGeneral.value = true;
-  error.value = "";
-  success.value = "";
   try {
     const input: UpdateControlledInstanceInput = {
       config: {
@@ -751,14 +739,14 @@ async function saveGeneral() {
     if (generalChanged.value) input.name = instanceName.value.trim();
     await props.updateInstance(props.instance, input);
     instanceName.value = instanceName.value.trim();
-    success.value = t("instances.settings.generalSaved");
+    showControlPlaneToast(t("instances.settings.generalSaved"), "success");
   } catch (cause) {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
-    error.value = translateApiError(cause, t);
+    showControlPlaneToast(translateApiError(cause, t));
   } finally {
     savingGeneral.value = false;
   }
@@ -767,8 +755,6 @@ async function saveGeneral() {
 async function saveCodex() {
   if (!props.instance || savingCodex.value || (codexSettingsSupported.value && !validCodexMaxThreads.value)) return;
   savingCodex.value = true;
-  error.value = "";
-  success.value = "";
   try {
     await props.updateInstance(props.instance, {
       config: {
@@ -778,7 +764,7 @@ async function saveCodex() {
         ...(codexSettingsSupported.value ? { codexSettings: currentCodexSettings() } : {}),
       },
     });
-    success.value = t("instances.settings.codexSettingsSaved");
+    showControlPlaneToast(t("instances.settings.codexSettingsSaved"), "success");
   } catch (cause) {
     const settings = props.instance.config.codexSettings;
     codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
@@ -792,7 +778,7 @@ async function saveCodex() {
       ? codexModelValue(settings.multiAgent.defaultModel.modelEntityId, settings.multiAgent.defaultModel.modelName)
       : "default";
     codexSubagentReasoning.value = settings?.multiAgent.defaultReasoningEffort || "default";
-    error.value = translateApiError(cause, t);
+    showControlPlaneToast(translateApiError(cause, t));
   } finally {
     savingCodex.value = false;
   }
@@ -801,14 +787,12 @@ async function saveCodex() {
 async function saveModels() {
   if (!props.instance || savingModels.value) return;
   savingModels.value = true;
-  error.value = "";
-  success.value = "";
   try {
     await props.updateInstance(props.instance, { modelSelection: normalizedSelection(modelSelection.value) });
-    success.value = t("instances.settings.modelsSaved");
+    showControlPlaneToast(t("instances.settings.modelsSaved"), "success");
   } catch (cause) {
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
-    error.value = translateApiError(cause, t);
+    showControlPlaneToast(translateApiError(cause, t));
   } finally {
     savingModels.value = false;
   }
@@ -895,25 +879,21 @@ function appActionHint(app: ManagedAppProjection) {
 
 function openAppConfirmation(app: ManagedAppProjection, operation: AppManagementOperation) {
   appConfirmation.value = { app, operation };
-  error.value = "";
-  success.value = "";
 }
 
 async function confirmAppOperation() {
   if (!props.instance || !appConfirmation.value || operationSubmitting.value) return;
   const { app, operation } = appConfirmation.value;
   operationSubmitting.value = app.id;
-  error.value = "";
-  success.value = "";
   try {
     await props.manageApp(props.instance.id, app.id, operation);
-    success.value = t("instances.settings.operationQueued", {
+    showControlPlaneToast(t("instances.settings.operationQueued", {
       operation: operation === "install" ? t("instances.settings.installation") : t("instances.settings.uninstallation"),
       name: app.name,
-    });
+    }), "success");
     appConfirmation.value = undefined;
   } catch (cause) {
-    error.value = translateApiError(cause, t);
+    showControlPlaneToast(translateApiError(cause, t));
   } finally {
     operationSubmitting.value = "";
   }

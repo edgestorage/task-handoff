@@ -35,6 +35,7 @@ type EventSocket = {
 
 export type EventAuthorizationBinding = {
   userId: string;
+  webSession?: true;
   authorizationRevision: number;
   permissionIds: ControlPlanePermissionId[];
   allowedNodeIds?: Set<string>;
@@ -109,7 +110,7 @@ export class ControlPlaneEventBus {
     });
   }
 
-  publish<T>(type: string, payload: T, options: { scope?: EventScope; topic?: string; sourceEvent?: Pick<EventEnvelope, "id" | "createdAt" | "replay"> } = {}): ControlPlaneEvent<T> {
+  publish<T>(type: string, payload: T, options: { scope?: EventScope; topic?: string; sourceEvent?: Pick<EventEnvelope, "id" | "createdAt" | "replay">; audienceWebUserId?: string } = {}): ControlPlaneEvent<T> {
     const event = this.createEvent(type, payload, options);
     if (NODE_DERIVED_EVENT_TOPICS.has(event.topic) && !event.scope?.nodeId && !event.scope?.instanceId) {
       this.droppedUnscopedNodeEvents += 1;
@@ -119,7 +120,7 @@ export class ControlPlaneEventBus {
     const encoded = JSON.stringify(event);
     const encodedBytes = Buffer.byteLength(encoded, "utf8");
     let compactFrame: { encoded: string; bytes: number } | undefined;
-    for (const listener of this.listeners) {
+    for (const listener of options.audienceWebUserId ? [] : this.listeners) {
       try {
         listener(event);
       } catch {
@@ -127,7 +128,7 @@ export class ControlPlaneEventBus {
       }
     }
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
+      if (client.readyState === client.OPEN && (!options.audienceWebUserId || (client.authorization?.userId === options.audienceWebUserId && client.authorization.webSession === true)) && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
         const projected = projectAuthorityEvent(event, client.aiSessionHierarchy);
         const frame = projected === event
           ? client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? compactFrame ??= encodedCompactPublicEvent(event) : { encoded, bytes: encodedBytes }

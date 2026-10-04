@@ -30,6 +30,8 @@ import {
 } from "../catalog/remote-market.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
 import { ControlPlaneEventBus } from "../events/bus.ts";
+import { OperationApprovals, type OperationApprovalPolicy } from "../approvals/operation-approvals.ts";
+import { registerOperationApprovalRoutes } from "./operation-approval-routes.ts";
 import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
 import { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
 import { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } from "../nodes/tunnel.ts";
@@ -77,6 +79,7 @@ export type CreateControlPlaneAppOptions = {
   logger?: FastifyServerOptions["logger"];
   service?: ControlPlaneServiceOptions;
   auth?: ControlPlaneAuthOptions;
+  operationApprovalPolicy?: OperationApprovalPolicy;
   proxyOrigin?: string;
   cloudServiceOrigin?: string;
   allowNonProductionCloudOrigin?: boolean;
@@ -362,6 +365,7 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (ROUTES_WITHOUT_RBAC.has(path)) {
     return undefined;
   }
+  if (path.startsWith("/api/operation-approvals")) return undefined;
   const action = actionForHttpMethod(method);
   if (path === "/api/control-plane/diagnostic-logs/export") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
@@ -489,6 +493,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await migrateLegacyIdentityProviderSecrets(database, secrets, paths);
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
+  const configuredApprovalPolicy = options.operationApprovalPolicy ?? (process.env.TASK_HANDOFF_OPERATION_APPROVAL_POLICY
+    ? JSON.parse(process.env.TASK_HANDOFF_OPERATION_APPROVAL_POLICY) as unknown : {});
+  const operationApprovals = new OperationApprovals(events, configuredApprovalPolicy);
+  app.addHook("onClose", async () => operationApprovals.close());
   const authorizationConnections = new AuthorizationConnectionRegistry();
   const browserAccess = new BrowserAccessService();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
@@ -994,6 +1002,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       ...(actor?.type === "user" ? {
         authorization: {
           userId: actor.userId,
+          ...(requestSessionCredential(request).source === "cookie" ? { webSession: true as const } : {}),
           authorizationRevision: actor.authorizationRevision,
           permissionIds: actor.permissionIds,
           ...(actor.nodeScope.kind === "selected" ? {
@@ -1171,8 +1180,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
   });
 
-  registerControlPlaneUserRoutes(app, auth);
-  registerControlPlaneGitCredentialRoutes(app, service);
+  registerControlPlaneUserRoutes(app, auth, operationApprovals);
+  registerControlPlaneGitCredentialRoutes(app, service, auth, operationApprovals);
 
   app.get("/api/control-plane/status", async () => ({
     data: {
@@ -1215,6 +1224,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     app,
     service,
     events,
+    operationApprovals,
+    auth,
     appSessionAggregator,
     aiSessionAggregator,
     chatGateway,
@@ -1230,6 +1241,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       for (const userId of affectedUserIds) await auth.notifyAuthorizationChanged(userId);
     },
   });
+  registerOperationApprovalRoutes(app, auth, operationApprovals, cliAuthorizationDecisionGuard(service));
 
   registerNodeProxyRoutes({
     app,

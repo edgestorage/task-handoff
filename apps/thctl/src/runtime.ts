@@ -96,6 +96,11 @@ function connectProfile(context: CliContext, profile: CliProfile, withSession?: 
     store: context.store,
     profile,
     fetchImpl: context.fetchImpl,
+    approvalWait: {
+      signal: context.signal,
+      sleep: context.sleep,
+      notify: (id) => { if (!context.output.json) context.output.warn(`Waiting for your Web approval (${id}); expires in at most five minutes.`); },
+    },
     ...(withSession === undefined ? {} : { withSession }),
   });
 }

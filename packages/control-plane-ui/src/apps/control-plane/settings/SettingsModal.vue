@@ -891,6 +891,14 @@ watch(
   () => selectedNode.value?.id,
   () => {
     void loadExternalListener();
+  },
+  { immediate: true },
+);
+// 代理节点的能力文档可能在初始加载后（本地探测完成）才出现 relay 能力，
+// 开关必须跟随能力可用性重新拉取设置，否则会一直停留在禁用态。
+watch(
+  () => [selectedNode.value?.id, selectedNodeSupportsModelRelay.value] as const,
+  () => {
     void loadModelRelay();
   },
   { immediate: true },

@@ -47,6 +47,7 @@ export const errors = {
   MODEL_IN_USE: "This model is still assigned to instances. Remove it from their model settings before deleting it.",
   MODEL_UPDATE_SYNC_FAILED: "The edit could not be applied to any node. Update the node first, then try again.",
   MODEL_MERGE_SAME: "A model cannot be merged into itself.",
+  MODEL_MERGE_NOTHING_TO_MERGE: "This model has no node copy that can be merged. Nothing was changed.",
   AGENT_DEFINITION_INVALID_INPUT: "The submitted agent definition is not valid.",
   AGENT_DEFINITION_NOT_FOUND: "The agent definition was not found.",
   AGENT_DEFINITION_REVISION_CONFLICT: "The agent definition changed elsewhere. Reopen it before saving again.",

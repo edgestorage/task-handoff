@@ -96,10 +96,6 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     if (!editingModelId.value && !copyingModelId.value && !settingsModel.key.trim()) {
       return false;
     }
-    if (copyingModelId.value && !settingsModel.key.trim()) {
-      const source = models().find((model) => model.id === copyingModelId.value);
-      if (source && source.endpoint === settingsModel.endpoint.trim() && source.model === settingsModel.model.trim()) return false;
-    }
     if (!editingModelId.value && settingsModel.locationScope !== "control-plane" && !nodes().some((node) => node.id === settingsModel.locationScope)) {
       return false;
     }
@@ -392,10 +388,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     deletingModelId.value = model.id;
     clearModelFeedback();
     try {
-      // A legacy replica is stored under its content-hash projection id, which
-      // the federated registry exposes as `replicaId`; newer replicas use the
-      // entity id.
-      if (location.type === "node") await deleteNodeModel(location.nodeId, location.replicaId || model.id);
+      if (location.type === "node") await deleteNodeModel(location.nodeId, model.id);
       else await deleteModel(model.id);
       if (editingModelId.value === model.id && (model.locations?.length || 1) === 1) {
         resetModelForm();
@@ -438,13 +431,14 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   }
 
   /**
-   * Entities that look like a superseded copy of this one: same app and name.
-   * The endpoint may differ because editing it is a normal content change.
+   * Entities with identical content, or a matching app and display name that
+   * may be superseded by an edit with different content.
    */
   function mergeCandidates(model: ModelConfig) {
     return models().filter((candidate) => candidate.id !== model.id
       && candidate.app === model.app
-      && candidate.name === model.name);
+      && (candidate.name === model.name
+        || Boolean(model.revision && candidate.revision && candidate.revision === model.revision)));
   }
 
   async function syncModelLocations(model: ModelConfig): Promise<boolean> {

@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ControlPlaneAuth } from "../auth/service.ts";
+import type { OperationApprovals } from "../approvals/operation-approvals.ts";
+import { SetAccessInputSchema, UpdateRoleInputSchema } from "../auth/user-service.ts";
+import { ProviderUpdateInputSchema } from "../auth/identity-provider-service.ts";
+import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { CONTROL_PLANE_SESSION_COOKIE } from "../auth/service.ts";
@@ -14,7 +18,7 @@ function userActor(request: Parameters<typeof controlPlaneRequestActor>[0]) {
   return actor;
 }
 
-export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: ControlPlaneAuth) {
+export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: ControlPlaneAuth, operationApprovals: OperationApprovals) {
   app.get("/api/users", async (request) => {
     const query = z.object({ search: z.string().trim().max(160).optional(), includeArchived: z.coerce.boolean().optional() }).strict().parse(request.query);
     return { data: await auth.users.list(query) };
@@ -27,11 +31,18 @@ export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: Contr
     await auth.notifyAuthorizationChanged(userId);
     return { data: result };
   });
-  app.put("/api/users/:id/access", async (request) => {
+  app.put("/api/users/:id/access", async (request, reply) => {
     const userId = IdParamsSchema.parse(request.params).id;
-    const result = await auth.users.setAccess(userId, request.body);
-    await auth.notifyAuthorizationChanged(userId);
-    return { data: result };
+    const input = SetAccessInputSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "user.access.set", userId, input, [
+      { field: "roleIds", value: input.roleIds.join(", ") },
+      { field: "nodeScope", value: JSON.stringify(input.nodeScope) },
+      ...(input.instanceScope ? [{ field: "instanceScope", value: JSON.stringify(input.instanceScope) }] : []),
+    ], async () => {
+      const result = await auth.users.setAccess(userId, input);
+      await auth.notifyAuthorizationChanged(userId);
+      return result;
+    });
   });
   app.post("/api/users/:id/password-reset", async (request) => {
     const input = z.object({ password: z.string().min(8).max(4096), requirePasswordChange: z.boolean().optional() }).strict().parse(request.body);
@@ -63,19 +74,40 @@ export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: Contr
   app.get("/api/roles", async () => ({ data: await auth.users.roleSummaries() }));
   app.get("/api/permissions", async () => ({ data: CONTROL_PLANE_PERMISSION_CATALOG }));
   app.post("/api/roles", async (request, reply) => reply.code(201).send({ data: await auth.users.createRole(request.body) }));
-  app.patch("/api/roles/:id", async (request) => {
+  app.patch("/api/roles/:id", async (request, reply) => {
     const roleId = IdParamsSchema.parse(request.params).id;
-    const affected = (await auth.users.store.grants.listByRole(roleId)).map((grant) => grant.userId);
-    const role = await auth.users.updateRole(roleId, request.body);
-    for (const userId of affected) await auth.notifyAuthorizationChanged(userId);
-    return { data: role };
+    const input = UpdateRoleInputSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "user.role.update", roleId, input, [
+      { field: "changedFields", value: Object.keys(input).join(", ") },
+      ...(input.permissionIds ? [{ field: "permissionIds", value: input.permissionIds.join(", ") }] : []),
+    ], async () => {
+      const affected = (await auth.users.store.grants.listByRole(roleId)).map((grant) => grant.userId);
+      const role = await auth.users.updateRole(roleId, input);
+      for (const userId of affected) await auth.notifyAuthorizationChanged(userId);
+      return role;
+    });
   });
-  app.delete("/api/roles/:id", async (request) => ({ data: await auth.users.archiveRole(IdParamsSchema.parse(request.params).id) }));
+  app.delete("/api/roles/:id", async (request, reply) => {
+    const roleId = IdParamsSchema.parse(request.params).id;
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "user.role.remove", roleId, {}, undefined, () => auth.users.archiveRole(roleId));
+  });
 
   app.get("/api/identity-providers", async () => ({ data: await auth.identityProviders.list() }));
   app.post("/api/identity-providers", async (request, reply) => reply.code(201).send({ data: await auth.identityProviders.create(request.body) }));
-  app.patch("/api/identity-providers/:id", async (request) => ({ data: await auth.identityProviders.update(IdParamsSchema.parse(request.params).id, request.body) }));
-  app.delete("/api/identity-providers/:id", async (request) => ({ data: { deleted: await auth.identityProviders.remove(IdParamsSchema.parse(request.params).id) } }));
+  app.patch("/api/identity-providers/:id", async (request, reply) => {
+    const providerId = IdParamsSchema.parse(request.params).id;
+    const input = ProviderUpdateInputSchema.parse(request.body);
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "identity-provider.update", providerId, input, [
+      { field: "changedFields", value: Object.keys(input).join(", ") },
+      ...(input.status ? [{ field: "status", value: input.status }] : []),
+      ...(input.loginPolicy ? [{ field: "loginPolicy", value: input.loginPolicy }] : []),
+    ], () => auth.identityProviders.update(providerId, input));
+  });
+  app.delete("/api/identity-providers/:id", async (request, reply) => {
+    const providerId = IdParamsSchema.parse(request.params).id;
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "identity-provider.remove", providerId, {}, undefined,
+      async () => ({ deleted: await auth.identityProviders.remove(providerId) }));
+  });
 
   app.get("/api/external-identity-approvals", async () => ({ data: await auth.users.store.approvals.list() }));
   app.post("/api/external-identity-approvals/:id/approve", async (request) => {

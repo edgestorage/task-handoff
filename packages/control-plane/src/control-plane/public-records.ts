@@ -5,7 +5,6 @@ import {
   FinalComputerArchSchema,
   NodeAgentCapabilitiesSchema,
   ModelConfigSchema,
-  modelConfigHash,
   modelContentRevision,
   normalizeModelNameEntries,
   ProjectSchema,

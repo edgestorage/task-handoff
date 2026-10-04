@@ -17,9 +17,9 @@ const {
   UpdateNodeAgentModelRelaySchema,
   UpdateNodeModelSchema,
   createModelEntityId,
-  isModelConfigHashId,
+  isModelEntityId,
   isModelContentRevision,
-  modelConfigHash,
+  migratedModelEntityId,
   modelContentRevision,
   normalizeControlledInstanceCapabilities,
   normalizeModelNameEntries,
@@ -161,27 +161,29 @@ test("v0.0.34 name entries sanitize to upstreamName = name and warn on unknown f
   assert.deepEqual(duplicateWarnings, [{ field: "modelNames[1].name" }]);
 });
 
-test("mapping, endpoint and key edits advance the content revision while the legacy projection stays v0.0.34 canonical", () => {
+test("mapping, endpoint and key edits advance the content revision while the entity id stays stable", () => {
   const base = modelRecord();
   const baseRevision = modelContentRevision(base);
-  const legacyId = modelConfigHash(base);
 
   const mappingChange = modelRecord({ modelNames: [{ name: "coding-fast", upstreamName: "provider-model-2026-10", order: 100 }] });
   assert.notEqual(modelContentRevision(mappingChange), baseRevision);
-  // The legacy projection id only covers the released canonical content.
-  assert.equal(modelConfigHash(mappingChange), legacyId);
+  // The entity id identifies the record, not its content.
+  assert.equal(mappingChange.id, base.id);
+  assert.equal(isModelEntityId(base.id), true);
+  // Legacy ids stay derivable exactly once; the derivation is deterministic.
+  assert.equal(migratedModelEntityId(`mdl_${"0".repeat(64)}`), migratedModelEntityId(`mdl_${"0".repeat(64)}`));
+  assert.equal(isModelEntityId(migratedModelEntityId(`mdl_${"0".repeat(64)}`)), true);
 
   assert.notEqual(modelContentRevision(modelRecord({ endpoint: "https://provider-v2.example/v1" })), baseRevision);
   assert.notEqual(modelContentRevision(modelRecord({ key: "rotated-secret" })), baseRevision);
   // Display-level metadata stays out of the revision, so copy/convergence
   // semantics for a pure rename stay unchanged.
   assert.equal(modelContentRevision(modelRecord({ name: "Renamed display" })), baseRevision);
-  assert.equal(isModelConfigHashId(legacyId), true);
-  assert.equal(isModelConfigHashId(baseRevision), false);
+  assert.equal(isModelEntityId(baseRevision), false);
   assert.match(baseRevision, /^mdlr_[a-f0-9]{64}$/);
 });
 
-test("request mappings stay a separate strict list that never changes exposed names or the legacy hash", () => {
+test("request mappings stay a separate strict list that never changes exposed names or the entity id", () => {
   const base = modelRecord();
   const baseRevision = modelContentRevision(base);
   const mapping = { name: "gpt-5.6-luna", upstreamName: "provider-model-2026-09", order: 100 };
@@ -193,11 +195,11 @@ test("request mappings stay a separate strict list that never changes exposed na
   assert.equal(projectModelNameEntries(withMapping.modelNames).some((entry) => entry.name === "gpt-5.6-luna"), false);
 
   // The content revision tracks mapped requests; an empty list keeps the exact
-  // released canonical payload, and the legacy hash never changes.
+  // released canonical payload, and the entity id never changes.
   assert.equal(modelContentRevision(base), baseRevision);
   assert.equal(modelContentRevision(modelRecord({ mappings: [] })), baseRevision);
   assert.notEqual(modelContentRevision(withMapping), baseRevision);
-  assert.equal(modelConfigHash(withMapping), modelConfigHash(base));
+  assert.equal(withMapping.id, base.id);
 });
 
 test("request mapping writes are strict while patches keep absent and empty distinguishable", () => {
@@ -260,15 +262,14 @@ test("request mappings sanitize like name entries and presets stay read-only met
   assert.deepEqual(MODEL_REQUEST_MAPPING_PRESETS[0].names, ["codex-auto-review", "gpt-5.6-luna"]);
 });
 
-test("mixed deployments keep the v0.0.34 hash projection and allow cross-entity duplicate names", () => {
+test("deployed models carry stable entity identities and allow cross-entity duplicate names", () => {
   const base = modelRecord();
-  const legacyId = modelConfigHash(base);
   const deployed = DeployNodeModelSchema.parse({
     ...base,
-    id: legacyId,
     modelNames: projectModelNameEntries(base.modelNames),
   });
-  assert.equal(modelConfigHash(deployed), deployed.id);
+  assert.equal(deployed.id, base.id);
+  assert.equal(isModelEntityId(deployed.id), true);
 
   // Two entities may expose the same external name; the entity id, not the
   // name, is the routing identity.

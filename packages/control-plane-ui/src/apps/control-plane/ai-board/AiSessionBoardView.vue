@@ -79,7 +79,6 @@
                 :key="card.key"
                 :approval-busy-key="approvalBusyKey"
                 :bound-triggers="boundTriggers"
-                :can-resolve-approval="canResolveApproval"
                 :card="card"
                 :folder-name="aiBoardCardPath(card).folderName"
                 :instance-display-name="instanceDisplayName"
@@ -139,7 +138,6 @@
               :key="card.key"
               :approval-busy-key="approvalBusyKey"
               :bound-triggers="boundTriggers"
-              :can-resolve-approval="canResolveApproval"
               :card="card"
               :folder-name="aiBoardCardPath(card).folderName"
               :instance-display-name="instanceDisplayName"
@@ -184,7 +182,8 @@
           v-model:collapsed="detailCollapsed"
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedCard.session)"
-          :can-resolve-approval="canResolveApproval(selectedCard.session)"
+          :can-resolve-approval="canResolveApproval(selectedCard.session, selectedCard.instance)"
+          :approval-decisions="aiSessionApprovalDecisions(selectedCard.session, selectedCard.instance.capabilities?.features)"
           :card="selectedCard"
           :conversation-session="selectedCardConversationSession || selectedCard.session"
           :detail-state="selectedCardContentState"
@@ -262,7 +261,7 @@ import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiS
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import { isAiSessionApprovalPending } from "@task-handoff/control-plane-client";
+import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
@@ -831,8 +830,8 @@ function backToLatestPrompt(card: AiBoardCard) {
   void setPromptIndex(card, promptCount(card.session) - 1);
 }
 
-function canResolveApproval(session: AiSessionSummary) {
-  return isAiSessionApprovalPending(session);
+function canResolveApproval(session: AiSessionSummary, instance: InstanceWithAiSessions) {
+  return aiSessionApprovalDecisions(session, instance.capabilities?.features).length > 0;
 }
 
 function canInterrupt(session: AiSessionSummary) {
@@ -981,7 +980,7 @@ async function interruptSelectedSession() {
 
 async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
   const card = selectedCard.value;
-  if (!card || !canResolveApproval(card.session) || aiSessionActionBusy.value) {
+  if (!card || !aiSessionApprovalDecisions(card.session, card.instance.capabilities?.features).includes(decision) || aiSessionActionBusy.value) {
     return;
   }
   aiSessionActionBusy.value = true;
