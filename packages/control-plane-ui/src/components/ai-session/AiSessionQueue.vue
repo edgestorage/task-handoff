@@ -1,6 +1,22 @@
 <template>
   <section class="ai-session-detail-queue" :data-tone="tone" :data-placement="placement">
-    <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: queue.pendingCount }) }}</span>
+    <header class="ai-session-detail-queue-head">
+      <ListChecks :size="14" aria-hidden="true" />
+      <span class="ai-session-detail-queue-title">{{ t("sessions.activity.queue", { count: queue.pendingCount }) }}</span>
+      <button
+        v-if="canPause"
+        type="button"
+        class="ai-session-detail-queue-pause"
+        :data-paused="paused ? 'true' : undefined"
+        :disabled="busy"
+        :aria-label="paused ? t('sessions.activity.resumeQueue') : t('sessions.activity.pauseQueue')"
+        :title="paused ? t('sessions.activity.resumeQueue') : t('sessions.activity.pauseQueue')"
+        @click="toggleQueuePause"
+      >
+        <Play v-if="paused" :size="15" />
+        <Pause v-else :size="15" />
+      </button>
+    </header>
     <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
       <article
         v-for="item in displayedQueueItems"
@@ -53,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2 } from "@lucide/vue";
+import { CornerDownRight, GripVertical, ListChecks, Pause, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
 import type { AiSessionQueue } from "@task-handoff/protocol/ai-sessions";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -61,12 +77,14 @@ import { ScrollArea } from "../ui/scroll-area";
 
 const props = withDefaults(defineProps<{
   busy?: boolean;
+  canPause?: boolean;
   canInterrupt?: boolean;
   placement?: "detail" | "composer";
   queue: AiSessionQueue;
   tone?: "detail" | "board";
 }>(), {
   busy: false,
+  canPause: false,
   canInterrupt: false,
   placement: "detail",
   tone: "detail",
@@ -77,14 +95,21 @@ const emit = defineEmits<{
   removeQueuedMessage: [queueId: string];
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   retryQueuedMessage: [queueId: string];
+  setQueuePaused: [paused: boolean];
   steerQueuedMessage: [queueId: string];
 }>();
 
 const { t } = useI18n();
 const draggingQueueId = ref("");
 const queueOrderPreview = ref<string[]>([]);
+const paused = computed(() => props.queue.paused === true);
 const queuedItems = computed(() => props.queue.items.filter((item) => item.status === "queued"));
 const displayedQueueItems = computed(() => queueItemsWithQueuedOrder(props.queue.items, queueOrderPreview.value));
+
+function toggleQueuePause() {
+  if (props.busy || !props.canPause) return;
+  emit("setQueuePaused", !paused.value);
+}
 
 function moveQueuedMessage(queueId: string, offset: -1 | 1) {
   const queueIds = queuedItems.value.map((item) => item.id);
@@ -184,23 +209,57 @@ watch(() => props.queue.revision, cancelQueueDrag);
   --queue-danger: var(--ai-board-card-failed-border);
 }
 
-.ai-session-detail-queue-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  clip-path: inset(50%);
+.ai-session-detail-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--queue-border);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--queue-surface);
+  color: var(--queue-muted);
+  font-size: 12px;
+  padding: 4px 12px;
 }
+
+.ai-session-detail-queue-title {
+  color: var(--queue-strong);
+  font-weight: 500;
+}
+
+.ai-session-detail-queue-pause {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-inline-start: auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--queue-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.ai-session-detail-queue-pause:hover { background: var(--queue-hover); color: var(--queue-strong); }
+.ai-session-detail-queue-pause:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus-ring, var(--queue-strong)); }
+.ai-session-detail-queue-pause:disabled { cursor: not-allowed; opacity: 0.55; }
+.ai-session-detail-queue-pause[data-paused="true"] { color: var(--queue-strong); }
 
 .ai-session-detail-queue-list {
   border: 1px solid var(--queue-border);
-  border-radius: 10px;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
   background: var(--queue-surface);
 }
 
 .ai-session-detail-queue[data-placement="composer"] .ai-session-detail-queue-list {
+  border-radius: 0;
+}
+
+.ai-session-detail-queue[data-placement="composer"] .ai-session-detail-queue-head {
   border-radius: 18px 18px 0 0;
 }
 

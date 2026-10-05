@@ -166,6 +166,22 @@ export function createThctlTransport(options: ThctlTransportOptions): ControlPla
         throw networkError(`Could not reach ${options.origin}: ${error instanceof Error ? error.message : String(error)}`, { origin: options.origin });
       }
       if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        let envelope: unknown;
+        if (text) {
+          try {
+            envelope = JSON.parse(text);
+          } catch {
+            // 非 JSON 错误体只能按状态码归一。
+          }
+        }
+        if (response.status === 401) options.onUnauthorized?.();
+        // 有结构化错误信封时它才是权威错误；只有无信封的 404/405/501 才表示路由缺失。
+        const parsed = ErrorEnvelopeSchema.safeParse(envelope);
+        if (parsed.success) {
+          const { code, message, details, retryable } = parsed.data.error;
+          throw serverError(response.status, code, message, { ...details, ...(retryable === undefined ? {} : { retryable }), path });
+        }
         if (response.status === 404 || response.status === 405 || response.status === 501) {
           throw routeMissingError(response.status, (init.method ?? "GET").toUpperCase(), path);
         }

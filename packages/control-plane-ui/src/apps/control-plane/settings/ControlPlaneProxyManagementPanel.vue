@@ -29,7 +29,7 @@
         <span>{{ queryError(invites.error.value) }}</span>
         <Button size="sm" variant="outline" @click="invites.refetch()">{{ t("common.actions.retry") }}</Button>
       </div>
-      <ScrollArea v-else-if="nodeInvites.length" class="proxy-list" :horizontal="false">
+      <div v-else-if="nodeInvites.length" class="proxy-list">
         <div class="proxy-list-content">
           <div v-for="invite in nodeInvites" :key="invite.id" class="proxy-row">
             <div>
@@ -45,7 +45,7 @@
             </div>
           </div>
         </div>
-      </ScrollArea>
+      </div>
       <p v-else class="proxy-empty">{{ t("settings.controlPlaneProxy.noInvites") }}</p>
     </div>
 
@@ -56,7 +56,7 @@
         <span>{{ queryError(bindings.error.value) }}</span>
         <Button size="sm" variant="outline" @click="bindings.refetch()">{{ t("common.actions.retry") }}</Button>
       </div>
-      <ScrollArea v-else-if="nodeBindings.length" class="proxy-list" :horizontal="false">
+      <div v-else-if="nodeBindings.length" class="proxy-list">
         <div class="proxy-list-content">
           <div v-for="binding in nodeBindings" :key="binding.id" class="proxy-row binding-row">
             <div>
@@ -75,7 +75,7 @@
             </div>
           </div>
         </div>
-      </ScrollArea>
+      </div>
       <p v-else class="proxy-empty">{{ t("settings.controlPlaneProxy.noBindings") }}</p>
       <div v-if="diagnostics.error.value && !bindings.error.value" class="proxy-query-error" role="alert">
         <span>{{ queryError(diagnostics.error.value) }}</span>
@@ -125,7 +125,6 @@ import {
 import type { CreateProxyInviteResult } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { ScrollArea } from "../../../components/ui/scroll-area";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -153,7 +152,7 @@ async function createInvite() {
   try {
     generatedInvite.value = await createControlPlaneProxyInvite({ targetNodeId: props.nodeId });
     await invites.refetch();
-  } catch (error) { showControlPlaneToast(translateApiError(error, t)); }
+  } catch (error) { showControlPlaneToast(translateApiError(error, t), "error"); }
   finally { creating.value = false; }
 }
 function askRevoke(kind: "invite" | "binding", id: string) { revokeTarget.value = { kind, id }; }
@@ -165,7 +164,7 @@ async function confirmRevoke() {
     else await revokeControlPlaneProxyBinding(revokeTarget.value.id);
     revokeTarget.value = undefined;
     await refreshAll();
-  } catch (error) { showControlPlaneToast(translateApiError(error, t)); }
+  } catch (error) { showControlPlaneToast(translateApiError(error, t), "error"); }
   finally { revoking.value = false; }
 }
 </script>
@@ -232,12 +231,11 @@ async function confirmRevoke() {
 }
 
 .proxy-list {
-  max-height: min(260px, var(--reka-scroll-area-viewport-height, 260px));
+  display: grid;
 }
 
 .proxy-list-content {
   min-width: 0;
-  padding-right: 10px;
 }
 
 .proxy-row {

@@ -594,7 +594,7 @@ test("pre-session Git workspace selection persists folder identity and creates a
       payload: { ...payload, gitSelection: { mode: "worktree", branch: "main" } },
     });
     assert.equal(conflictingRetry.statusCode, 409);
-    assert.equal(conflictingRetry.json().error.code, "REPOSITORY_CONFLICT");
+    assert.equal(conflictingRetry.json().error.code, "AI_SESSION_CREATE_REQUEST_CONFLICT");
     assert.equal(fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length, worktreeCount);
 
     fixture.write("dirty.txt", "dirty\n");
@@ -835,4 +835,56 @@ test("controlled instance routes create, bind, and close one Direct AI session i
     aiSessions.all().map((session) => session.providerSessionId).sort(),
     ["thread-app-preserved-on-shutdown", "thread-route-2"],
   );
+});
+
+test("pre-session workspace creation preserves AI session error codes instead of reporting a repository failure", async () => {
+  const fixture = createGitFixture();
+  fixture.write("readme.txt", "root\n");
+  fixture.commit("initial");
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-pre-session-launch-error-"));
+  const paths = pathsFor(dataRoot);
+  const restore = setEnvironment(paths, fixture.base);
+  const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
+  const appRuntime = new AppRuntimeManager(paths);
+  appRuntime.ensureSharedResource = async () => undefined;
+  let failure = new Error("secret provider diagnostics");
+  const app = await createWebApp({
+    staticDir: path.join(dataRoot, "missing-static"),
+    logger: false,
+    appRuntime,
+    aiSessionRegistry: aiSessions,
+    codexAppServer: codexBridgeStub({ async createSession() { throw failure; } }),
+  });
+  try {
+    const payload = (clientRequestId) => ({
+      agent: "codex",
+      cwd: { type: "runtime-path", path: fixture.root },
+      gitSelection: { mode: "current-folder", branch: "main" },
+      message: "Start a session.",
+      attachments: [],
+      references: [],
+      clientRequestId,
+    });
+    const uncoded = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload: payload("launch-uncoded") });
+    assert.equal(uncoded.statusCode, 400);
+    // An uncoded provider failure is an AI session launch failure, not a
+    // repository failure, and must not leak the provider message.
+    assert.equal(uncoded.json().error.code, "AI_SESSION_CONTROL_FAILED");
+    assert.equal(uncoded.body.includes("secret provider diagnostics"), false);
+
+    failure = Object.assign(new Error("Codex app-server is not connected."), { code: "AI_SESSION_CONTROL_NOT_CONNECTED", statusCode: 503 });
+    const disconnected = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload: payload("launch-not-connected") });
+    assert.equal(disconnected.statusCode, 503);
+    assert.equal(disconnected.json().error.code, "AI_SESSION_CONTROL_NOT_CONNECTED");
+    assert.equal(disconnected.json().error.retryable, true);
+
+    failure = Object.assign(new Error("The selected model is unavailable."), { code: "AI_SESSION_MODEL_TARGET_UNAVAILABLE", statusCode: 409 });
+    const model = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload: payload("launch-model") });
+    assert.equal(model.statusCode, 409);
+    assert.equal(model.json().error.code, "AI_SESSION_MODEL_TARGET_UNAVAILABLE");
+    assert.equal(model.json().error.retryable, false);
+  } finally {
+    await app.close();
+    restore();
+  }
 });

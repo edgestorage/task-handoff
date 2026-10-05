@@ -10,6 +10,8 @@ export const agents = {
     loading: "Loading agents...",
     loadingNode: "Loading",
     unavailableNode: "Unavailable",
+    loadingNodes: "Loading agents from {count} nodes...",
+    unavailableNodes: "Agents from {count} nodes are unavailable",
     unavailable: "Agent definitions are temporarily unavailable.",
     unsupported: "No accessible node supports agent definitions.",
     retry: "Retry",

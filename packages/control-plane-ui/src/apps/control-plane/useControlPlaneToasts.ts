@@ -25,7 +25,7 @@ export function clearControlPlaneToasts() {
 
 export function showControlPlaneToast(
   message: string,
-  kind: ControlPlaneToastKind = "error",
+  kind: ControlPlaneToastKind,
   options: ControlPlaneToastOptions = {},
 ) {
   toast[kind](message, {

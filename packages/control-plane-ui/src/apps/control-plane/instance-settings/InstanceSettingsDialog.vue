@@ -494,7 +494,7 @@ async function authorizeGitCredential() {
     await authorizeInstanceGitCredential(instance.id, selectedGitCredentialId.value);
     selectedGitCredentialId.value = noGitCredentialValue;
     await refreshGitCredentials();
-  } catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed"))); }
+  } catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed")), "error"); }
   finally { gitCredentialBusy.value = false; }
 }
 async function revokeGitCredential(credentialId: string) {
@@ -502,7 +502,7 @@ async function revokeGitCredential(credentialId: string) {
   if (!instance) return;
   gitCredentialBusy.value = true;
   try { await revokeInstanceGitCredential(instance.id, credentialId); await refreshGitCredentials(); }
-  catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed"))); }
+  catch (cause) { showControlPlaneToast(translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed")), "error"); }
   finally { gitCredentialBusy.value = false; }
 }
 
@@ -746,7 +746,7 @@ async function saveGeneral() {
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
-    showControlPlaneToast(translateApiError(cause, t));
+    showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     savingGeneral.value = false;
   }
@@ -778,7 +778,7 @@ async function saveCodex() {
       ? codexModelValue(settings.multiAgent.defaultModel.modelEntityId, settings.multiAgent.defaultModel.modelName)
       : "default";
     codexSubagentReasoning.value = settings?.multiAgent.defaultReasoningEffort || "default";
-    showControlPlaneToast(translateApiError(cause, t));
+    showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     savingCodex.value = false;
   }
@@ -792,7 +792,7 @@ async function saveModels() {
     showControlPlaneToast(t("instances.settings.modelsSaved"), "success");
   } catch (cause) {
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
-    showControlPlaneToast(translateApiError(cause, t));
+    showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     savingModels.value = false;
   }
@@ -893,7 +893,7 @@ async function confirmAppOperation() {
     }), "success");
     appConfirmation.value = undefined;
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t));
+    showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     operationSubmitting.value = "";
   }

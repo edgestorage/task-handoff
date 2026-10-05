@@ -14,6 +14,7 @@ import {
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionQueuePauseInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
@@ -62,6 +63,7 @@ import {
 import {
   aiSessionProviderCapability,
   aiSessionTimelineCapabilityAgents,
+  supportsAiSessionQueuePause,
   supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
   type ControlledInstance,
@@ -513,6 +515,19 @@ export class AiSessionActionService {
     return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
   }
 
+  async setQueuePaused(instanceId: string, sessionId: string, paused: boolean) {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!supportsAiSessionQueuePause(instance.capabilities)) {
+      throw aiSessionQueuePauseUnsupported();
+    }
+    const body = AiSessionQueuePauseInputSchema.parse({ paused });
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.options.request(instance, sessionRoute(sessionId, "queue/pause"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+  }
+
   async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResponse> {
     return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
@@ -566,6 +581,12 @@ function aiSessionTurnTimelineUnsupported() {
 function aiSessionWorkspaceSelectionUnsupported() {
   const error = new Error("The controlled instance does not support AI session workspace selection.");
   Object.assign(error, { statusCode: 409, code: "AI_SESSION_WORKSPACE_SELECTION_UNSUPPORTED" });
+  return error;
+}
+
+function aiSessionQueuePauseUnsupported() {
+  const error = new Error("The controlled instance does not support pausing the AI session message queue.");
+  Object.assign(error, { statusCode: 409, code: "AI_SESSION_QUEUE_PAUSE_UNSUPPORTED" });
   return error;
 }
 

@@ -65,7 +65,7 @@ function marker(kind: "context" | "addition" | "deletion") {
 
 async function copyDiff(diff: string) {
   if (!navigator.clipboard?.writeText) {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
     return;
   }
   try {
@@ -75,7 +75,7 @@ async function copyDiff(diff: string) {
     if (copiedTimer) clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => { copiedDiff.value = ""; }, 1_500);
   } catch {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
   }
 }
 </script>

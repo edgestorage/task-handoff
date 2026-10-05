@@ -228,6 +228,11 @@ export class CodexAppServerClient extends EventEmitter {
       || this.socket?.readyState === WebSocket.OPEN);
   }
 
+  /** Mirrors request()'s writability guard so callers can detect a dead generation. */
+  isConnected() {
+    return Boolean(this.child?.stdin.writable || this.socket?.readyState === WebSocket.OPEN);
+  }
+
   async start() {
     if (this.connected) {
       return;

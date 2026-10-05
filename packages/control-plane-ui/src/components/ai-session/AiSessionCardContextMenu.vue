@@ -176,14 +176,14 @@ const availableStories = computed(() => stories.value.filter((story) => !story.a
 
 async function copyValue(value: string | undefined) {
   if (!value || !navigator.clipboard?.writeText) {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
     return;
   }
   try {
     await navigator.clipboard.writeText(value);
     showControlPlaneToast(t("sessions.actions.copied"), "success");
   } catch {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
   }
 }
 

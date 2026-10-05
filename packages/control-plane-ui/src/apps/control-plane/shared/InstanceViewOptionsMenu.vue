@@ -1,7 +1,7 @@
 <template>
   <DropdownMenu>
     <DropdownMenuTrigger as-child>
-      <Button variant="outline" size="sm" class="instance-view-options-trigger" :aria-label="label || t('instances.viewOptions.label')" :title="label || t('instances.viewOptions.label')">
+      <Button variant="ghost" size="sm" class="instance-view-options-trigger" :aria-label="label || t('instances.viewOptions.label')" :title="label || t('instances.viewOptions.label')">
         <SlidersHorizontal :size="16" />
       </Button>
     </DropdownMenuTrigger>
@@ -72,10 +72,8 @@ defineEmits<{
   width: 30px;
   height: 30px;
   min-height: 0;
-  border-color: var(--control-plane-icon-button-border);
   border-radius: 7px;
-  background: var(--control-plane-icon-button-bg);
-  color: var(--control-plane-icon-button-text);
+  color: var(--text-muted);
   padding: 0;
 }
 
@@ -87,9 +85,8 @@ defineEmits<{
 .instance-view-options-trigger:hover,
 .instance-view-options-trigger:focus-visible,
 .instance-view-options-trigger[data-state="open"] {
-  border-color: var(--control-plane-icon-button-hover-border);
-  background: var(--control-plane-icon-button-hover-bg);
-  color: var(--control-plane-icon-button-hover-text);
+  background: var(--surface-hover);
+  color: var(--text-strong);
 }
 
 .instance-view-options-menu {

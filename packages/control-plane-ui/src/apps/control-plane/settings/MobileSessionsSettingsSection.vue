@@ -170,7 +170,7 @@ async function confirmRevoke() {
     await (mobile ? sessions.refetch() : cliSessions.refetch());
     showControlPlaneToast(t(mobile ? "settings.mobileSessions.revoked" : "settings.cliSessions.revoked", { name: target.name }), "success");
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t(mobile ? "settings.mobileSessions.revokeFailed" : "settings.cliSessions.revokeFailed")));
+    showControlPlaneToast(translateApiError(error, t, t(mobile ? "settings.mobileSessions.revokeFailed" : "settings.cliSessions.revokeFailed")), "error");
   } finally {
     revokingId.value = "";
   }

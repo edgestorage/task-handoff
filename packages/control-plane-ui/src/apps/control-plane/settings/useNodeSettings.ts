@@ -94,7 +94,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       settingsNode.joinToken = "";
       await refreshNodeTopology();
     } catch (error) {
-      notify(translateError(error));
+      notify(translateError(error), "error");
     } finally {
       creatingNode.value = false;
     }
@@ -112,10 +112,10 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         await refreshNodeTopology();
         notify(t("settings.nodeDetail.nodeAdded", { name: node.name }), "success");
       } catch (error) {
-        notify(t("settings.nodeDetail.nodeAddedRefreshFailed", { name: node.name, error: translateError(error) }));
+        notify(t("settings.nodeDetail.nodeAddedRefreshFailed", { name: node.name, error: translateError(error) }), "error");
       }
     } catch (error) {
-      notify(translateError(error));
+      notify(translateError(error), "error");
     } finally {
       syncingLocalNode.value = false;
     }
@@ -134,7 +134,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         expiresAt: invite.expiresAt,
       };
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       creatingPairingInviteNodeId.value = "";
     }
@@ -156,7 +156,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       }
       return invite;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       creatingJoinInvite.value = false;
     }
@@ -182,7 +182,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       remoteConnect.joinToken = "";
       await loadControlPlaneAccess(id);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       connectingRemoteNodeId.value = "";
     }
@@ -196,7 +196,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       nodeStatusById[id] = await checkNode(id);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       checkingNodeId.value = "";
     }
@@ -246,7 +246,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       updateChecks[nodeId] = await checkNodeUpdate(nodeId, updateChannel());
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       checkingUpdateNodeId.value = "";
     }
@@ -281,7 +281,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         : "settings.nodeDetail.updateNodeAgentQueued", { name: nodeName }), "success");
       await loadManagedUpdateJobs(nodeId, true);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       applyingUpdateNodeId.value = "";
     }
@@ -308,7 +308,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         name: tracked.nodeName,
         version: job.toVersion,
         error: job.error?.message || t("settings.nodeDetail.unknown"),
-      }));
+      }), "error");
       return;
     }
 
@@ -351,7 +351,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         refreshTopology: refreshNodeTopology,
       });
     } catch (error) {
-      if (!silent) showControlPlaneToast(translateError(error));
+      if (!silent) showControlPlaneToast(translateError(error), "error");
     } finally {
       if (revision === updateJobsLoadRevision) scheduleManagedUpdateJobsRefresh(nodeId);
     }
@@ -370,7 +370,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       await deleteNodeControlPlanePairing(nodeId, keyId);
       await loadControlPlaneAccess(nodeId);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       deletingRemoteKeyId.value = "";
     }
@@ -383,7 +383,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       await deleteNodeControlPlaneConnection(nodeId, connectionId);
       await loadControlPlaneAccess(nodeId);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       deletingControlPlaneConnectionId.value = "";
     }
@@ -411,7 +411,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       }
       await refreshNodeTopology();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       deletingNodeId.value = "";
     }

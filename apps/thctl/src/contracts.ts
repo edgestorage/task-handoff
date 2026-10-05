@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AiSessionUploadedAttachmentSchema,
   ControlPlaneAiSessionsSchema,
   ControlPlaneAppSessionsSchema,
   PublicModelRegistryEntrySchema,
@@ -12,27 +13,42 @@ import {
   ControlPlaneNodeDirectoryEntrySchema,
   ControlPlaneNodeDirectorySchema,
 } from "@task-handoff/protocol/control-plane-directory";
-import { InstanceCreateResultSchema, InstanceDeleteResultSchema } from "@task-handoff/protocol/control-plane";
+import {
+  AppManagementJobSchema,
+  AppManagementSnapshotSchema,
+  ControlledInstanceSchema,
+  InstanceCreateResultSchema,
+  InstanceDeleteResultSchema,
+} from "@task-handoff/protocol/control-plane";
 import {
   AiSessionActionCompatibleResponseSchema,
   AiSessionCloseResultSchema,
+  AiSessionCommandResultSchema,
   AiSessionCreateResultSchema,
   AiSessionDetailReadSchema,
   AiSessionForkResultSchema,
   AiSessionHistoryListSchema,
+  AiSessionMentionCatalogSchema,
+  AiSessionMentionFileSearchSchema,
   AiSessionModelSelectionActionResponseSchema,
+  AiSessionOpenAppResultSchema,
   AiSessionQueueMutationResponseSchema,
   AiSessionQueueSchema,
   AiSessionReadResultSchema,
   AiSessionReasoningEffortActionResponseSchema,
   AiSessionRenameResultSchema,
   AiSessionResumeResultSchema,
+  AiSessionStoryActionResponseSchema,
+  AiSessionTranscriptSchema,
   AiSessionTimelineSchema,
   AiSessionTurnBodyReadSchema,
   AiSessionTurnIndexReadSchema,
   AiSessionTurnTimelineSchema,
 } from "@task-handoff/protocol/ai-sessions";
-import { AppSessionAccessLeaseSchema, AppSessionRecordSchema } from "@task-handoff/protocol/app-sessions";
+import { AppSessionAccessLeaseSchema, AppSessionAccessRevocationSchema, AppSessionLogsSchema, AppSessionRecordSchema } from "@task-handoff/protocol/app-sessions";
+import { AppProfileListSchema, AppProfileSchema } from "@task-handoff/protocol/app-profiles";
+import { CustomAppCatalogSchema, InstanceAppCatalogSchema } from "@task-handoff/protocol/app-catalog";
+import { RepositoryAiSessionWorkspaceSchema } from "@task-handoff/protocol/repository";
 import {
   ControlPlaneUserDetailSchema,
   ControlPlaneUserSessionSummarySchema,
@@ -43,6 +59,8 @@ import {
   StoryAutomationRunsSchema,
   StoryAutomationRunSchema,
   StoryAutomationStatusSchema,
+  StoryContentListSchema,
+  StoryContentPreviewSchema,
   StorySchema,
 } from "@task-handoff/protocol/stories";
 import { EventWireEnvelopeSchema } from "@task-handoff/protocol/events";
@@ -57,13 +75,19 @@ import { CliProfileSchema } from "./config.ts";
 import type { CliHandler } from "./runtime.ts";
 import {
   aiSessionApproval,
+  aiSessionAttachment,
   aiSessionClose,
+  aiSessionCommand,
   aiSessionCreate,
   aiSessionFork,
   aiSessionHistory,
   aiSessionInterrupt,
   aiSessionList,
+  aiSessionMentionFiles,
+  aiSessionMentions,
   aiSessionModel,
+  aiSessionOpenApp,
+  aiSessionOpenTerminal,
   aiSessionQueueEdit,
   aiSessionQueueList,
   aiSessionQueueRemove,
@@ -76,14 +100,22 @@ import {
   aiSessionResume,
   aiSessionSend,
   aiSessionShow,
+  aiSessionStory,
   aiSessionTimeline,
   aiSessionTurn,
   aiSessionTurnTimeline,
   aiSessionTurns,
+  aiSessionUpload,
+  aiSessionCheckout,
+  aiSessionStoryContent,
+  aiSessionStoryContentRead,
+  aiSessionTranscript,
+  aiSessionWorkspace,
 } from "./commands/ai-session.ts";
-import { appSessionAccess, appSessionList, appSessionRename, appSessionRestart, appSessionShow, appSessionStart, appSessionStop } from "./commands/app-session.ts";
+import { appSessionAccess, appSessionList, appSessionLogs, appSessionRename, appSessionRestart, appSessionRevokeAccess, appSessionScreenshot, appSessionShow, appSessionStart, appSessionStop } from "./commands/app-session.ts";
+import { appProfileCreate, appProfileList, appProfileRemove, appProfileRename, appProfileSetDefault } from "./commands/app-profile.ts";
 import { eventsCommand } from "./commands/events.ts";
-import { instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop } from "./commands/instance.ts";
+import { instanceAppCatalog, instanceAppCatalogCustom, instanceAppCatalogCustomUpdate, instanceAppInstall, instanceAppJob, instanceAppList, instanceAppUninstall, instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop, instanceUpdate } from "./commands/instance.ts";
 import { modelList, modelShow } from "./commands/model.ts";
 import { nodeList, nodeRename, nodeShow } from "./commands/node.ts";
 import { profileAdd, profileList, profileRemove, profileShow, profileTrust, profileUse } from "./commands/profile.ts";
@@ -292,6 +324,98 @@ const instanceGroup = group("instance", "Inspect and control instances", [
     output: z.object({ id: z.string(), name: z.string() }),
     handler: instanceRename,
   },
+  {
+    id: "instance update", group: "instance", name: "update", stage: "B", write: true,
+    summary: "Update instance settings from a JSON request body",
+    args: [instanceIdArg],
+    options: [{ flags: "--config <file>", description: "Instance update request JSON (Control Plane wire body)" }],
+    input: inputOf({ instanceId: z.string(), config: z.string() }),
+    output: ControlledInstanceSchema,
+    examples: ["thctl instance update <instanceId> --config ./instance-settings.json"],
+    handler: instanceUpdate,
+  },
+  {
+    id: "instance app list", group: "instance", name: "app list", stage: "B",
+    summary: "List managed apps and their install state on an instance",
+    args: [instanceIdArg],
+    input: inputOf({ instanceId: z.string() }),
+    output: AppManagementSnapshotSchema,
+    handler: instanceAppList,
+  },
+  {
+    id: "instance app install", group: "instance", name: "app install", stage: "B", write: true,
+    summary: "Install a managed app (asynchronous job)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    options: [
+      { flags: "--request-id <requestId>", description: "Client request ID for idempotency (defaults to a random UUID)" },
+      { flags: "--wait", description: "Poll the job until it reaches a terminal state" },
+      { flags: "--logs", description: "Append the job log tail to the output" },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), requestId: z.string().optional(), wait: z.boolean().optional(), logs: z.boolean().optional() }),
+    output: AppManagementJobSchema,
+    examples: ["thctl instance app install <instanceId> codex --wait", "thctl instance app install <instanceId> codex --json"],
+    handler: instanceAppInstall,
+  },
+  {
+    id: "instance app uninstall", group: "instance", name: "app uninstall", stage: "B", write: true,
+    summary: "Uninstall a managed app (asynchronous job)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    options: [
+      { flags: "--request-id <requestId>", description: "Client request ID for idempotency (defaults to a random UUID)" },
+      { flags: "--wait", description: "Poll the job until it reaches a terminal state" },
+      { flags: "--logs", description: "Append the job log tail to the output" },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), requestId: z.string().optional(), wait: z.boolean().optional(), logs: z.boolean().optional() }),
+    output: AppManagementJobSchema,
+    handler: instanceAppUninstall,
+  },
+  {
+    id: "instance app job", group: "instance", name: "app job", stage: "B",
+    summary: "Show an app install/uninstall job",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "jobId", description: "App management job ID", required: true },
+    ],
+    options: [
+      { flags: "--wait", description: "Poll the job until it reaches a terminal state" },
+      { flags: "--logs", description: "Append the job log tail to the output" },
+    ],
+    input: inputOf({ instanceId: z.string(), jobId: z.string(), wait: z.boolean().optional(), logs: z.boolean().optional() }),
+    output: AppManagementJobSchema,
+    handler: instanceAppJob,
+  },
+  {
+    id: "instance app catalog", group: "instance", name: "app catalog", stage: "B",
+    summary: "List launchable apps in the instance app catalog",
+    args: [instanceIdArg],
+    input: inputOf({ instanceId: z.string() }),
+    output: InstanceAppCatalogSchema,
+    handler: instanceAppCatalog,
+  },
+  {
+    id: "instance app catalog custom", group: "instance", name: "app catalog custom", stage: "B",
+    summary: "Show the instance custom app catalog",
+    args: [instanceIdArg],
+    input: inputOf({ instanceId: z.string() }),
+    output: CustomAppCatalogSchema,
+    handler: instanceAppCatalogCustom,
+  },
+  {
+    id: "instance app catalog custom update", group: "instance", name: "app catalog custom update", stage: "B", write: true,
+    summary: "Replace the instance custom app catalog from a JSON request body",
+    args: [instanceIdArg],
+    options: [{ flags: "--config <file>", description: "Custom app catalog JSON body: { \"items\": [...] }" }],
+    input: inputOf({ instanceId: z.string(), config: z.string() }),
+    output: CustomAppCatalogSchema,
+    examples: ["thctl instance app catalog custom update <instanceId> --config ./custom-apps.json"],
+    handler: instanceAppCatalogCustomUpdate,
+  },
 ]);
 
 const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
@@ -380,9 +504,13 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
       { flags: "--agent <agent>", description: "Agent kind (codex, claude, opencode)" },
       { flags: "--cwd-folder <cwdFolderId>", description: "Instance folder to run in" },
       { flags: "--story <storyId>", description: "Story to attach the session to" },
+      { flags: "--permission-mode <ask|auto-review|full-access>", description: "Permission mode for the initial message" },
+      { flags: "--reasoning <none|minimal|low|medium|high|xhigh|max|ultra>", description: "Reasoning effort for the session" },
+      { flags: "--model-entity <modelEntityId>", description: "Model entity to start the session on" },
+      { flags: "--model-name <modelName>", description: "Model name within the entity" },
       { flags: "--request-id <id>", description: "Client request ID for retry-safe creation" },
     ],
-    input: inputOf({ instanceId: z.string(), prompt: z.string(), agent: z.string(), cwdFolder: z.string().optional(), story: z.string().optional(), requestId: z.string().optional() }),
+    input: inputOf({ instanceId: z.string(), prompt: z.string(), agent: z.string(), cwdFolder: z.string().optional(), story: z.string().optional(), permissionMode: z.string().optional(), reasoning: z.string().optional(), modelEntity: z.string().optional(), modelName: z.string().optional(), requestId: z.string().optional() }),
     output: AiSessionCreateResultSchema,
     handler: aiSessionCreate,
   },
@@ -394,8 +522,21 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
       { name: "sessionId", description: "AI session ID", required: true },
       { name: "message", description: "Message text", required: true },
     ],
-    options: [{ flags: "--mode <auto|queue|steer|immediate>", description: "Delivery mode" }],
-    input: inputOf({ instanceId: z.string(), sessionId: z.string(), message: z.string(), mode: z.string().optional() }),
+    options: [
+      { flags: "--mode <auto|queue|steer|immediate>", description: "Delivery mode" },
+      { flags: "--permission-mode <ask|auto-review|full-access>", description: "Permission mode for this message" },
+      { flags: "--attachment <attachmentId>", description: "Uploaded attachment ID to include (repeatable)", repeatable: true },
+      { flags: "--reference <path>", description: "Skill, app or plugin reference to include (repeatable)", repeatable: true },
+    ],
+    input: inputOf({
+      instanceId: z.string(),
+      sessionId: z.string(),
+      message: z.string(),
+      mode: z.string().optional(),
+      permissionMode: z.string().optional(),
+      attachment: z.array(z.string()).optional(),
+      reference: z.array(z.string()).optional(),
+    }),
     output: AiSessionActionCompatibleResponseSchema,
     handler: aiSessionSend,
   },
@@ -486,6 +627,116 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     input: inputOf({ instanceId: z.string(), sessionId: z.string(), requestId: z.string().optional() }),
     output: AiSessionCloseResultSchema,
     handler: aiSessionClose,
+  },
+  {
+    id: "ai-session story", group: "ai-session", name: "story", stage: "B", write: true,
+    summary: "Attach an AI session to a Story or detach it",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [
+      { flags: "--story <storyId>", description: "Story to attach the session to" },
+      { flags: "--detach", description: "Remove the session from its Story" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), story: z.string().optional(), detach: z.boolean().optional() }),
+    output: AiSessionStoryActionResponseSchema,
+    handler: aiSessionStory,
+  },
+  {
+    id: "ai-session open-app", group: "ai-session", name: "open-app", stage: "B", write: true,
+    summary: "Open the app session of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--request-id <id>", description: "Client request ID for retry-safe open" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), requestId: z.string().optional() }),
+    output: AiSessionOpenAppResultSchema,
+    handler: aiSessionOpenApp,
+  },
+  {
+    id: "ai-session open-terminal", group: "ai-session", name: "open-terminal", stage: "B", write: true,
+    summary: "Open a terminal app session in the working directory of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--app <appId>", description: "Terminal app ID (defaults to terminal-tty)" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), app: z.string().optional() }),
+    output: AppSessionRecordSchema,
+    handler: aiSessionOpenTerminal,
+  },
+  {
+    id: "ai-session command", group: "ai-session", name: "command", stage: "B", write: true,
+    summary: "Run a provider command on an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "command", description: "Command name (review, rename, goal, compact)", required: true },
+    ],
+    options: [{ flags: "--argument <text>", description: "Command argument (thread name for rename, objective for goal)" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), command: z.string(), argument: z.string().optional() }),
+    output: AiSessionCommandResultSchema,
+    handler: aiSessionCommand,
+  },
+  {
+    id: "ai-session mentions", group: "ai-session", name: "mentions", stage: "B",
+    summary: "List mention candidates (skills, plugins, apps, files) of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--kind <plugin|skill|file|directory|app>", description: "Only show candidates of this kind" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), kind: z.string().optional() }),
+    output: AiSessionMentionCatalogSchema,
+    handler: aiSessionMentions,
+  },
+  {
+    id: "ai-session mentions files", group: "ai-session", name: "mentions files", stage: "B",
+    summary: "Search files and directories relative to the session working directory",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "query", description: "Search query (defaults to no filter)" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), query: z.string().optional() }),
+    output: AiSessionMentionFileSearchSchema,
+    handler: aiSessionMentionFiles,
+  },
+  {
+    id: "ai-session upload", group: "ai-session", name: "upload", stage: "B", write: true,
+    summary: "Upload a local file as a draft message attachment",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "file", description: "Local file to upload", required: true },
+    ],
+    options: [
+      { flags: "--name <name>", description: "Attachment name (defaults to the file name)" },
+      { flags: "--mime <mime>", description: "Attachment MIME type (defaults by extension)" },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), file: z.string(), name: z.string().optional(), mime: z.string().optional() }),
+    output: AiSessionUploadedAttachmentSchema,
+    handler: aiSessionUpload,
+  },
+  {
+    id: "ai-session attachment", group: "ai-session", name: "attachment", stage: "B",
+    summary: "Download the content of a message attachment",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+      { name: "messageId", description: "Message ID", required: true },
+      { name: "attachmentId", description: "Attachment ID", required: true },
+    ],
+    options: [{ flags: "--output <file>", description: "Write to this file or directory (defaults to the attachment name)" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), messageId: z.string(), attachmentId: z.string(), output: z.string().optional() }),
+    output: z.object({
+      path: z.string(),
+      size: z.number().int().nonnegative(),
+      contentType: z.string().optional(),
+    }),
+    handler: aiSessionAttachment,
   },
   {
     id: "ai-session model", group: "ai-session", name: "model", stage: "B", write: true,
@@ -596,6 +847,64 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     output: AiSessionQueueMutationResponseSchema,
     handler: aiSessionQueueReorder,
   },
+  {
+    id: "ai-session workspace", group: "ai-session", name: "workspace", stage: "B",
+    summary: "Show the repository workspace and branch state an AI session would start from",
+    args: [instanceIdArg],
+    options: [{ flags: "--cwd-folder <cwdFolderId>", description: "Instance folder to inspect" }],
+    input: inputOf({ instanceId: z.string(), cwdFolder: z.string().optional() }),
+    output: RepositoryAiSessionWorkspaceSchema,
+    handler: aiSessionWorkspace,
+  },
+  {
+    id: "ai-session checkout", group: "ai-session", name: "checkout", stage: "B", write: true,
+    summary: "Check out a branch in the repository workspace used by new AI sessions",
+    args: [instanceIdArg],
+    options: [
+      { flags: "--branch <branch>", description: "Branch to check out" },
+      { flags: "--cwd-folder <cwdFolderId>", description: "Instance folder that owns the workspace" },
+    ],
+    input: inputOf({ instanceId: z.string(), branch: z.string(), cwdFolder: z.string().optional() }),
+    output: RepositoryAiSessionWorkspaceSchema,
+    examples: ["thctl ai-session checkout <instanceId> --branch feature/demo"],
+    handler: aiSessionCheckout,
+  },
+  {
+    id: "ai-session transcript", group: "ai-session", name: "transcript", stage: "B",
+    summary: "Read the provider transcript tail of an AI session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--tail <lines>", description: "Number of trailing lines to return (1..1000, default 200)" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), tail: z.number().optional() }),
+    output: AiSessionTranscriptSchema,
+    handler: aiSessionTranscript,
+  },
+  {
+    id: "ai-session story-content", group: "ai-session", name: "story-content", stage: "B",
+    summary: "List the Story documents of an AI session (read-only)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string() }),
+    output: z.object({ storyId: z.string(), documents: StoryContentListSchema.shape.documents }),
+    handler: aiSessionStoryContent,
+  },
+  {
+    id: "ai-session story-content read", group: "ai-session", name: "story-content read", stage: "B",
+    summary: "Read one Story document of an AI session (read-only)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "sessionId", description: "AI session ID", required: true },
+    ],
+    options: [{ flags: "--path <storyPath>", description: "Story document path inside the Story" }],
+    input: inputOf({ instanceId: z.string(), sessionId: z.string(), path: z.string() }),
+    output: StoryContentPreviewSchema,
+    examples: ["thctl ai-session story-content read <instanceId> <sessionId> --path docs/design.md"],
+    handler: aiSessionStoryContentRead,
+  },
 ]);
 
 const appSessionGroup = group("app-session", "Inspect and control app sessions", [
@@ -665,6 +974,18 @@ const appSessionGroup = group("app-session", "Inspect and control app sessions",
     handler: appSessionAccess,
   },
   {
+    id: "app-session revoke-access", group: "app-session", name: "revoke-access", stage: "B", write: true,
+    summary: "Revoke an app session access lease (read the token from stdin)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string() }),
+    output: AppSessionAccessRevocationSchema,
+    examples: ["thctl app-session access <instanceId> <appSessionId> --json | jq -r .token | thctl app-session revoke-access <instanceId> <appSessionId> --token-stdin --yes"],
+    handler: appSessionRevokeAccess,
+  },
+  {
     id: "app-session restart", group: "app-session", name: "restart", stage: "B", write: true,
     summary: "Restart an app session",
     args: [
@@ -674,6 +995,94 @@ const appSessionGroup = group("app-session", "Inspect and control app sessions",
     input: inputOf({ instanceId: z.string(), appSessionId: z.string() }),
     output: AppSessionRecordSchema,
     handler: appSessionRestart,
+  },
+  {
+    id: "app-session logs", group: "app-session", name: "logs", stage: "B",
+    summary: "Read the log files of an app session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+    ],
+    options: [{ flags: "--max-bytes <bytes>", description: "Tail size per log file (1024..524288, default 65536)" }],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string(), maxBytes: z.number().optional() }),
+    output: AppSessionLogsSchema,
+    handler: appSessionLogs,
+  },
+  {
+    id: "app-session screenshot", group: "app-session", name: "screenshot", stage: "B",
+    summary: "Save a PNG screenshot of a GUI app session",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appSessionId", description: "App session ID", required: true },
+    ],
+    options: [{ flags: "--out <file>", description: "Target file or directory (default <appSessionId>.png)" }],
+    input: inputOf({ instanceId: z.string(), appSessionId: z.string(), out: z.string().optional() }),
+    output: z.object({ path: z.string(), size: z.number(), contentType: z.string().optional() }),
+    examples: ["thctl app-session screenshot <instanceId> <appSessionId> --out ./session.png"],
+    handler: appSessionScreenshot,
+  },
+]);
+
+const appProfileGroup = group("app-profile", "Manage browser profiles for instance apps", [
+  {
+    id: "app-profile list", group: "app-profile", name: "list", stage: "B",
+    summary: "List browser profiles of an instance app",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string() }),
+    output: AppProfileListSchema,
+    handler: appProfileList,
+  },
+  {
+    id: "app-profile create", group: "app-profile", name: "create", stage: "B", write: true,
+    summary: "Create a browser profile for an instance app",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    options: [{ flags: "--name <name>", description: "Profile name" }],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), name: z.string() }),
+    output: AppProfileSchema,
+    handler: appProfileCreate,
+  },
+  {
+    id: "app-profile rename", group: "app-profile", name: "rename", stage: "B", write: true,
+    summary: "Rename a browser profile",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+      { name: "profileId", description: "Browser profile ID", required: true },
+    ],
+    options: [{ flags: "--name <name>", description: "New profile name" }],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), profileId: z.string(), name: z.string() }),
+    output: AppProfileSchema,
+    handler: appProfileRename,
+  },
+  {
+    id: "app-profile set-default", group: "app-profile", name: "set-default", stage: "B", write: true,
+    summary: "Set a browser profile as the app default",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+      { name: "profileId", description: "Browser profile ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), profileId: z.string() }),
+    output: AppProfileSchema,
+    handler: appProfileSetDefault,
+  },
+  {
+    id: "app-profile remove", group: "app-profile", name: "remove", stage: "B", write: true,
+    summary: "Delete a browser profile and its browsing data",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+      { name: "profileId", description: "Browser profile ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), profileId: z.string() }),
+    output: z.object({ removed: z.boolean() }),
+    handler: appProfileRemove,
   },
 ]);
 
@@ -1172,6 +1581,7 @@ export const CLI_GROUPS: readonly CliGroup[] = [
   instanceGroup,
   aiSessionGroup,
   appSessionGroup,
+  appProfileGroup,
   nodeGroup,
   nodeJoinGroup,
   storyGroup,

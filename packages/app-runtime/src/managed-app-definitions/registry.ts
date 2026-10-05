@@ -7,6 +7,7 @@ import { codexProvider } from "./codex";
 import { opencodeProvider } from "./opencode";
 import { terminalGuiProvider } from "./terminal-gui";
 import { terminalTtyProvider } from "./terminal-tty";
+import { thctlProvider } from "./thctl";
 import type { ManagedAppProvider, ManagedAppRegistryOptions } from "./types";
 import { vscodeWebProvider } from "./vscode-web";
 
@@ -48,6 +49,10 @@ export class ManagedAppRegistry {
         return definition;
       });
   }
+
+  launchableDefinitions(options: ManagedAppRegistryOptions = {}): ManagedAppDefinition[] {
+    return this.definitions(options).filter((definition) => definition.launchable !== false);
+  }
 }
 
 export function createManagedAppRegistry(providers: readonly ManagedAppProvider[]) {
@@ -63,6 +68,7 @@ export const builtinManagedAppRegistry = createManagedAppRegistry([
   chromiumProvider,
   vscodeWebProvider,
   ccSwitchProvider,
+  thctlProvider,
 ]);
 
 export function builtinManagedAppDefinitions(options: ManagedAppRegistryOptions = {}) {
@@ -74,7 +80,7 @@ export function builtinManagedAppDefinition(appId: string, options: ManagedAppRe
 }
 
 export function builtinAppCatalog(options: ManagedAppRegistryOptions = {}) {
-  return builtinManagedAppDefinitions(options).map((definition) => definition.launcher);
+  return builtinManagedAppRegistry.launchableDefinitions(options).map((definition) => definition.launcher);
 }
 
 export function detectBuiltinManagedApps(options: ManagedAppRegistryOptions = {}) {

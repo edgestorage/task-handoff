@@ -539,7 +539,7 @@ onMounted(async () => {
     const result = await desktopWindowBridge?.getWindowAlwaysOnTop?.();
     if (result?.ok) windowAlwaysOnTop.value = result.alwaysOnTop;
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopReadFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopReadFailed")), "error");
   }
 });
 
@@ -551,7 +551,7 @@ async function setWindowAlwaysOnTop(enabled: boolean) {
     if (!result?.ok) throw new Error("Failed to update the window always-on-top state.");
     windowAlwaysOnTop.value = result.alwaysOnTop;
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopFailed")), "error");
   } finally {
     windowAlwaysOnTopBusy.value = false;
   }
@@ -822,7 +822,7 @@ async function commitSessionRename(session: SessionTab) {
     cancelSessionRename();
   } catch (error) {
     renamingSession.value = false;
-    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")), "error");
     await nextTick();
     renameInput.value?.focus();
   }

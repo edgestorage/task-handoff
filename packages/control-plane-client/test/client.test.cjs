@@ -593,21 +593,24 @@ test("shared AI Session client owns revisioned queue edit and reorder routes", a
       return schema.parse({ data: {
         sessionId: "session-1",
         queueRevision: 4,
-        action: path.endsWith("/reorder") ? "reorder" : "edit",
-        ...(path.endsWith("/reorder") ? {} : { queueId: "queue-1" }),
+        action: path.endsWith("/reorder") ? "reorder" : path.endsWith("/pause") ? "pause" : "edit",
+        ...(path.endsWith("/reorder") || path.endsWith("/pause") ? {} : { queueId: "queue-1" }),
       } });
     },
   };
   const api = createControlPlaneClient(transport);
   await api.aiSessions.editQueue("instance/1", "session/1", "queue/1", { expectedRevision: 3, message: "  revised  " });
   await api.aiSessions.reorderQueue("instance/1", "session/1", { expectedRevision: 4, queueIds: ["queue-2", "queue-1"] });
+  await api.aiSessions.pauseQueue("instance/1", "session/1", { paused: true });
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/queue/queue%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/queue/reorder",
+    "/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/queue/pause",
   ]);
-  assert.deepEqual(requests.map((request) => request.init.method), ["PATCH", "PATCH"]);
+  assert.deepEqual(requests.map((request) => request.init.method), ["PATCH", "PATCH", "POST"]);
   assert.deepEqual(JSON.parse(requests[0].init.body), { expectedRevision: 3, message: "revised" });
   assert.deepEqual(JSON.parse(requests[1].init.body), { expectedRevision: 4, queueIds: ["queue-2", "queue-1"] });
+  assert.deepEqual(JSON.parse(requests[2].init.body), { paused: true });
 });
 
 test("shared App Session client owns aggregate, launch, stop, restart, rename, access, and delta routes", async () => {

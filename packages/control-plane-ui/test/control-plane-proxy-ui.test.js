@@ -127,13 +127,12 @@ test("offline proxy state remains layered instead of overwriting the last target
   assert.equal(state.revision, 9);
 });
 
-test("proxy management lists own bounded themed overflow without truncating identifiers", () => {
+test("proxy management lists flow with the node detail scroll area without truncating identifiers", () => {
   const management = read("src/apps/control-plane/settings/ControlPlaneProxyManagementPanel.vue");
-  assert.match(management, /<ScrollArea v-else-if="nodeInvites\.length" class="proxy-list" :horizontal="false">/);
-  assert.match(management, /<ScrollArea v-else-if="nodeBindings\.length" class="proxy-list" :horizontal="false">/);
-  assert.match(management, /\.proxy-list\s*\{\s*max-height: min\(260px,/);
+  assert.match(management, /<div v-else-if="nodeInvites\.length" class="proxy-list">/);
+  assert.match(management, /<div v-else-if="nodeBindings\.length" class="proxy-list">/);
+  assert.doesNotMatch(management, /ScrollArea|max-height/);
   assert.match(management, /\.proxy-row strong,\s*\.proxy-row span,\s*\.proxy-row code\s*\{[\s\S]*?overflow-wrap: anywhere;/);
-  assert.doesNotMatch(management, /\.proxy-list[^}]*overflow:\s*auto/);
 });
 
 test("every remote-node dialog close path clears the proxy invite secret", () => {
@@ -174,7 +173,7 @@ test("pending claim recovery is outside the add-remote-node form and offers conf
   assert.match(settings, /cancelProxyClaim\(claim\.claimId\)/);
   assert.match(settings, /cancelControlPlaneProxyClaim\(id, true\)/);
   assert.match(settings, /if \(!result\.deleted && pendingProxyClaims\.data\.value\?\.some\(\(claim\) => claim\.claimId === id\)\)/);
-  assert.match(settings, /async function forceCancelProxyClaim\(\)[\s\S]*catch \(error\) \{\s*showControlPlaneToast\(translateApiError\(error, t\)\);/);
+  assert.match(settings, /async function forceCancelProxyClaim\(\)[\s\S]*catch \(error\) \{\s*showControlPlaneToast\(translateApiError\(error, t\), "error"\);/);
   assert.match(read("src/api/queries.ts"), /force \? "\?force=true"/);
 });
 

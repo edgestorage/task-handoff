@@ -89,7 +89,7 @@ const STDIN_SECRET_LIMIT_BYTES = 1024 * 1024;
  * 避免 secret 进入 shell history、进程列表或 dry-run 输出。
  */
 export async function readTokenFromStdin(invocation: CliInvocation) {
-  if (invocation.options.tokenStdin !== true) {
+  if (invocation.options["token-stdin"] !== true) {
     throw usageError("CLI_TOKEN_STDIN_REQUIRED", "Provide the secret on stdin and re-run with --token-stdin.");
   }
   const chunks: Buffer[] = [];

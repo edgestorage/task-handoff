@@ -91,10 +91,10 @@ test("story_request_decision is a strict terminal tool in the decisions category
   assert.equal(STORY_AGENT_TOOL_SCHEMAS.story_request_decision.input, StoryAgentDecisionRequestInputSchema);
 });
 
-test("Story decision schema is strict and Story tool policy defaults decisions off", () => {
+test("Story decision schema is strict and new Story tool policies default decisions on", () => {
   assert.equal(StoryDecisionSchema.safeParse({ ...baseDecision, extra: true }).success, false);
   assert.equal(StoryDecisionSchema.safeParse(baseDecision).success, true);
-  assert.equal(StoryAgentToolPolicySchema.parse(DEFAULT_STORY_AGENT_TOOL_POLICY).decisions, false);
+  assert.equal(StoryAgentToolPolicySchema.parse(DEFAULT_STORY_AGENT_TOOL_POLICY).decisions, true);
   assert.equal(StoryAgentToolPolicySchema.safeParse({ content: true, actions: false, automations: false, aiSessions: false }).success, false);
 });
 

@@ -1,7 +1,7 @@
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { ControlPlaneInstanceDirectoryEntrySchema } from '@task-handoff/protocol/control-plane-directory';
-import { StoryAutomationStatusSchema, StorySchema } from '@task-handoff/protocol/stories';
+import { StoryAutomationStatusSchema, StoryDecisionSchema, StorySchema } from '@task-handoff/protocol/stories';
 import { router } from 'expo-router';
 
 import { layoutFromEvent, StoryDetail } from '../src/stories/StoryDetail';
@@ -98,6 +98,59 @@ test('a preset action confirms before using the authoritative Story Action runne
 
   expect(onOpenSession).toHaveBeenCalledWith(instance.id, 'session-1');
   expect(runAction).toHaveBeenCalledWith(story.id, 'deploy', story.ownerNodeId, 'story-action-action-request-1');
+});
+
+test('lists Story decisions, answers them, and opens the linked AI Session', async () => {
+  const decision = StoryDecisionSchema.parse({
+    id: 'decision-1',
+    storyId: story.id,
+    sessionId: 'session-1',
+    question: 'Approve deployment?',
+    options: [{ id: 'approve', label: 'Approve' }],
+    allowFreeText: false,
+    status: 'pending',
+    revision: 2,
+    createdAt: '2026-09-05T00:00:00.000Z',
+    updatedAt: '2026-09-05T00:00:00.000Z',
+  });
+  const get = jest.fn().mockResolvedValue(story);
+  const listDecisions = jest.fn().mockResolvedValue({ decisions: [decision] });
+  const decideStory = jest.fn().mockResolvedValue({ ...decision, status: 'decided', selectedOptionId: 'approve', revision: 3 });
+  const onOpenSession = jest.fn();
+  mockRuntime.mockReturnValue({ api: {
+    resources: { node: jest.fn().mockResolvedValue({ capabilities: { agent: { capabilities: { stories: { enabled: true, agentTools: true, agentToolCapabilities: { decisions: true } } } } } }) },
+    stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }), listDecisions, decideStory, cancelDecision: jest.fn() },
+  } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [{ instanceId: instance.id, aiSessions: { sessions: [{ id: 'session-1', storyId: story.id }] } }] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={onOpenSession} storyId={story.id} />);
+  expect(await screen.findByText('Approve deployment?')).toBeTruthy();
+  screen.getByRole('tab', { name: 'Decisions' });
+
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Open in AI Session' })); });
+  expect(onOpenSession).toHaveBeenCalledWith(instance.id, 'session-1');
+
+  await act(async () => { fireEvent.press(screen.getByRole('radio', { name: 'Approve' })); });
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Submit decision' })); });
+  await waitFor(() => expect(decideStory).toHaveBeenCalledWith(story.id, 'decision-1', story.ownerNodeId, { expectedRevision: 2, optionId: 'approve' }));
+  await waitFor(() => expect(screen.getByText('Decided')).toBeTruthy());
+});
+
+test('hides the Story decision section when the owner node does not declare the capability', async () => {
+  const get = jest.fn().mockResolvedValue(story);
+  const listDecisions = jest.fn().mockResolvedValue({ decisions: [] });
+  mockRuntime.mockReturnValue({ api: {
+    resources: { node: jest.fn().mockResolvedValue({ capabilities: { agent: { capabilities: { stories: { enabled: true, agentTools: true, agentToolCapabilities: { decisions: false } } } } } }) },
+    stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }), listDecisions },
+  } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
+  await screen.findByText('Release');
+  await waitFor(() => expect(listDecisions).not.toHaveBeenCalled());
+  expect(screen.queryByRole('tab', { name: 'Decisions' })).toBeNull();
 });
 
 test('an archived Story cannot run a preset action', async () => {

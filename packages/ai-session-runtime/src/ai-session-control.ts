@@ -614,11 +614,20 @@ export class AiSessionController {
     return result.session;
   }
 
+  setQueuePaused(sessionId: string, paused: boolean) {
+    const session = this.requireSession(sessionId);
+    return this.registry.setQueuePaused(session.id, paused) || session;
+  }
+
   async interrupt(sessionId: string) {
     const session = this.requireSession(sessionId);
     this.assertNoSettingsUpdate(session.id);
     if (session.status !== "running" && session.status !== "waiting") {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 400);
+    }
+    // 用户按停止时队列里还有待发送内容，则先暂停队列，避免中断完成后排队消息继续自动发送。
+    if (session.queue.pendingCount > 0) {
+      this.registry.setQueuePaused(session.id, true);
     }
     return this.requireProvider(session).interrupt(session);
   }

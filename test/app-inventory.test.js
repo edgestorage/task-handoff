@@ -117,6 +117,29 @@ test("catalog and runtime consume the same injected managed app registry", () =>
   runtime.stopAll();
 });
 
+test("management-only managed apps stay installable but never enter the launch catalog", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-management-only-"));
+  const registry = createManagedAppRegistry([{
+    id: "helper-cli",
+    definition: () => ({
+      launcher: { id: "helper-cli", name: "Helper CLI", kind: "tty", command: "/bin/sh" },
+      launchable: false,
+      detection: [{ type: "launcher-executable" }],
+      distribution: { recipes: [] },
+    }),
+  }]);
+  const runtime = new AppRuntimeManager(storagePaths(root), registry);
+  try {
+    assert.equal(registry.definitions().length, 1);
+    assert.deepEqual(registry.launchableDefinitions(), []);
+    assert.deepEqual(runtime.catalog().map((app) => app.id), []);
+    assert.deepEqual(runtime.appInventory().items.map((app) => app.id), []);
+    assert.throws(() => runtime.start("helper-cli", { cwd: root }), /App not found/);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
 test("controlled app runtime stops complete process trees from the unified launcher", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX process-group ownership is exercised on macOS and Linux");

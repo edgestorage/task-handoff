@@ -182,6 +182,7 @@
           v-model:collapsed="detailCollapsed"
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedCard.session)"
+          :can-pause-queue="canPauseQueue(selectedCard.instance)"
           :can-resolve-approval="canResolveApproval(selectedCard.session, selectedCard.instance)"
           :approval-decisions="aiSessionApprovalDecisions(selectedCard.session, selectedCard.instance.capabilities?.features)"
           :card="selectedCard"
@@ -212,6 +213,7 @@
           @reorder-queued-messages="reorderSelectedQueuedMessages"
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
+          @set-queue-paused="setSelectedQueuePaused"
           @retry-detail="loadSelectedCardSessionDetail"
           @load-turn-timeline="loadTurnTimeline"
           @continue-from-turn="forkCardSession(selectedCard, 'current', $event)"
@@ -257,12 +259,13 @@ import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
 import { ArrowUpDown, Bot, Boxes, Columns3, Folder, LayoutGrid, Search, Server, SlidersHorizontal, Ungroup } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
+import { supportsAiSessionQueuePause } from "@task-handoff/protocol/control-plane";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -404,7 +407,7 @@ function onStoryAssigned(_card: AiBoardCard, _target: StoryTarget, moved: boolea
 }
 
 function onStoryAssignFailed(_card: AiBoardCard, _target: StoryTarget, error: unknown) {
-  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
+  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")), "error");
 }
 
 const allCards = computed<AiBoardCard[]>(() => {
@@ -838,6 +841,10 @@ function canInterrupt(session: AiSessionSummary) {
   return Boolean(session.actions?.interrupt);
 }
 
+function canPauseQueue(instance: InstanceWithAiSessions) {
+  return supportsAiSessionQueuePause(instance.capabilities);
+}
+
 function selectCard(key: string) {
   if (selectedCardKey.value === key && detailCollapsed.value) {
     detailCollapsed.value = false;
@@ -918,7 +925,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
     messageMentionBindings.value = [];
     messageAttachments.value = [];
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
     floatingDockEl.value?.focusComposer();
@@ -934,9 +941,9 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
-    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"), "info");
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -957,7 +964,7 @@ async function steerMessageDraft() {
     messageMentionBindings.value = [];
     messageAttachments.value = [];
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -972,7 +979,7 @@ async function interruptSelectedSession() {
   try {
     await interruptAiSession(card.instance.id, card.session.id);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -987,7 +994,7 @@ async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
   try {
     await resolveAiSessionApproval(card.instance.id, card.session.id, decision);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1075,7 +1082,7 @@ async function saveSelectedQueuedMessage() {
     await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, queueRevision, message, attachments);
     cancelQueueComposerEdit();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1083,6 +1090,10 @@ async function saveSelectedQueuedMessage() {
 
 async function reorderSelectedQueuedMessages(payload: { expectedRevision: number; queueIds: string[] }) {
   await runSelectedQueueAction((card) => reorderAiSessionQueuedMessages(card.instance.id, card.session.id, payload.expectedRevision, payload.queueIds), t("sessions.panel.reorderQueuedFailed"));
+}
+
+async function setSelectedQueuePaused(paused: boolean) {
+  await runSelectedQueueAction((card) => setAiSessionQueuePaused(card.instance.id, card.session.id, paused), t("sessions.panel.setQueuePausedFailed"));
 }
 
 async function stopCardAppSession(card: AiBoardCard) {
@@ -1096,7 +1107,7 @@ async function stopCardAppSession(card: AiBoardCard) {
     }
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")), "error");
     await refreshBoard();
   } finally {
     loadingToast.dismiss();
@@ -1137,7 +1148,7 @@ async function performCardFork(card: AiBoardCard, mode: "current" | "managed-wor
     forkRequestIds.delete(requestKey);
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")), "error");
   } finally {
     loadingToast.dismiss();
     forkingSessionKey.value = "";
@@ -1155,7 +1166,7 @@ async function openCardApp(instance: InstanceWithAiSessions, session?: AiSession
     const result = await openAiSessionApp(instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")), "error");
     await refreshBoard();
   }
 }
@@ -1169,7 +1180,7 @@ async function runSelectedQueueAction(action: (card: AiBoardCard) => Promise<unk
   try {
     await action(card);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, message));
+    showControlPlaneToast(translateApiError(error, t, message), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }

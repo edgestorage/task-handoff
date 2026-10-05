@@ -71,6 +71,7 @@
         v-else
         :busy="busy"
         :can-interrupt="canInterrupt"
+        :can-pause-queue="canPauseQueue"
         :can-resolve-approval="canResolveApproval"
         :approval-decisions="approvalDecisions"
         :instance-id="instanceId"
@@ -101,6 +102,7 @@
         @retry-queued-message="$emit('retryQueuedMessage', $event)"
         @remove-queued-message="$emit('removeQueuedMessage', $event)"
         @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
+        @set-queue-paused="$emit('setQueuePaused', $event)"
         @resolve-approval="$emit('resolveApproval', $event)"
       >
         <template #turn-footer>
@@ -150,6 +152,7 @@ const props = withDefaults(defineProps<{
   allowSavePreset?: boolean;
   busy?: boolean;
   canInterrupt?: boolean;
+  canPauseQueue?: boolean;
   canResolveApproval?: boolean;
   approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
@@ -167,6 +170,7 @@ const props = withDefaults(defineProps<{
   allowSavePreset: true,
   busy: false,
   canInterrupt: false,
+  canPauseQueue: false,
   canResolveApproval: false,
   approvalDecisions: () => ["allow", "deny", "skip"],
   fileLinks: false,
@@ -189,6 +193,7 @@ const emit = defineEmits<{
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
+  setQueuePaused: [paused: boolean];
   retryDetail: [];
   steerQueuedMessage: [queueId: string];
   stickyUserMessageChange: [message: { id: string; text: string } | undefined];

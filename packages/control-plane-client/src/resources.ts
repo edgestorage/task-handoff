@@ -7,11 +7,14 @@ import {
   type ControlPlaneInstanceDirectoryEntry,
 } from "@task-handoff/protocol/control-plane-directory";
 import {
+  ControlledInstanceSchema,
   InstanceCreateInputSchema,
   InstanceCreateResultSchema,
   InstanceDeleteInputSchema,
   InstanceDeleteResultSchema,
+  UpdateInstanceInputSchema,
   type InstanceCreateInput,
+  type UpdateInstanceInput,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionPermissionModeSchema, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -119,6 +122,19 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ name }),
+        },
+      );
+      return response.data;
+    },
+    async updateInstance(instanceId: string, input: UpdateInstanceInput) {
+      const body = UpdateInstanceInputSchema.parse(input);
+      const response = await transport.request(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}`,
+        DataSchema(ControlledInstanceSchema),
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
         },
       );
       return response.data;

@@ -219,7 +219,7 @@ defineEmits<{
   border-radius: 10px;
   background: var(--surface-hover) !important;
   color: var(--text-strong) !important;
-  box-shadow: 0 14px 38px rgb(0 0 0 / 38%);
+  box-shadow: 0 14px 28px var(--shadow-color);
   overflow: auto;
   padding: 13px 14px;
   pointer-events: auto;

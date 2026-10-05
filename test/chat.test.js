@@ -2443,6 +2443,82 @@ test("ai session controller queues busy messages and exposes queue state", async
   assert.deepEqual(calls, []);
 });
 
+test("pausing an AI session queue persists the flag without disturbing the content revision", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-pause-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    appSessionId: "app-pause",
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "codex",
+    async startMessage(current, input) {
+      return { session: current, provider: "codex", action: "send" };
+    },
+    async interrupt(current) {
+      return { session: current, provider: "codex", action: "interrupt" };
+    },
+  });
+
+  await controller.sendMessage(session.id, { message: "queued while running" });
+  const revisionBeforePause = registry.get(session.id).queue.revision;
+  const paused = controller.setQueuePaused(session.id, true);
+  assert.equal(paused.queue.paused, true);
+  assert.equal(registry.get(session.id).queue.paused, true);
+  // 暂停不改变队列内容，因此不递增 revision，避免打断并发的编辑/重排校验。
+  assert.equal(registry.get(session.id).queue.revision, revisionBeforePause);
+  assert.equal(controller.setQueuePaused(session.id, true).queue.paused, true);
+
+  // 后续入队/重排等队列变更必须保留暂停状态。
+  await controller.sendMessage(session.id, { message: "second queued message" });
+  assert.equal(registry.get(session.id).queue.paused, true);
+  assert.equal(registry.get(session.id).queue.pendingCount, 2);
+
+  const resumed = controller.setQueuePaused(session.id, false);
+  assert.equal(resumed.queue.paused, undefined);
+  assert.equal(registry.get(session.id).queue.paused, undefined);
+});
+
+test("interrupting an AI session pauses a non-empty queue and leaves empty queues untouched", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-interrupt-pause-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    appSessionId: "app-interrupt-pause",
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "codex",
+    async startMessage(current, input) {
+      return { session: current, provider: "codex", action: "send" };
+    },
+    async interrupt(current) {
+      return { session: current, provider: "codex", action: "interrupt" };
+    },
+  });
+
+  await controller.sendMessage(session.id, { message: "queued before stop" });
+  await controller.interrupt(session.id);
+  assert.equal(registry.get(session.id).queue.paused, true);
+
+  const empty = registry.start({
+    agent: "codex",
+    appSessionId: "app-interrupt-empty",
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  await controller.interrupt(empty.id);
+  assert.equal(registry.get(empty.id).queue.paused, undefined);
+});
+
 test("ai session controller starts idle messages without queuing", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-idle-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -7915,6 +7991,59 @@ test("Codex Direct Session switches models in place and reloads the thread for p
     (error) => error.code === "AI_SESSION_PROVIDER_SWITCH_HAS_ACTIVE_DESCENDANTS",
   );
   assert.equal(fake.calls.length, 3);
+});
+
+test("Codex model switching is not blocked by a stored selection the catalog dropped", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-stale-selection-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread_stale_selection",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_removed", modelName: "removed-model" },
+  });
+  class FakeCodexStaleSelectionClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async archiveThread(threadId) { this.calls.push(["archive", threadId]); }
+    async unarchiveThread(threadId) { this.calls.push(["unarchive", threadId]); }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", threadId, options]);
+      if (!options) return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexStaleSelectionClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    resolveModelSelection: (selection) => {
+      // The stored selection was removed from the catalog; only the switch
+      // target still resolves.
+      if (selection.modelEntityId === "mdl_removed") {
+        throw Object.assign(new Error("The model previously selected for this session is no longer available."), {
+          code: "AI_SESSION_MODEL_NAME_UNAVAILABLE",
+          statusCode: 409,
+        });
+      }
+      return { model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) };
+    },
+    projectModelSelection: (provider, model) => ({ modelEntityId: provider.slice("task-handoff-".length), modelName: model }),
+  });
+
+  await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_new", modelName: "new-model" });
+
+  assert.deepEqual(fake.calls, [
+    ["resume", "thread_stale_selection", undefined],
+    ["archive", "thread_stale_selection"],
+    ["unarchive", "thread_stale_selection"],
+    ["resume", "thread_stale_selection", { model: "new-model", modelProvider: codexProviderId("mdl_new"), reasoningEffort: "medium" }],
+  ]);
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_new", modelName: "new-model" });
 });
 
 test("Codex provider switching rolls back to the previous provider after resume failure", async () => {

@@ -23,7 +23,25 @@ thctl instance restart <instanceId> --yes
 thctl ai-session list --instance <instanceId> --json
 thctl ai-session show <instanceId> <sessionId>
 thctl ai-session send <instanceId> <sessionId> "继续" --yes
+thctl ai-session mentions <instanceId> <sessionId> --kind skill
+thctl ai-session send <instanceId> <sessionId> "看下附件" --attachment <attachmentId> --yes
+thctl ai-session attachment <instanceId> <sessionId> <messageId> <attachmentId> --output ./downloads
+thctl ai-session story <instanceId> <sessionId> --story <storyId> --yes
+thctl ai-session model <instanceId> <sessionId> --entity <modelEntityId> --name <modelName> --yes
+thctl ai-session workspace <instanceId>
+thctl ai-session checkout <instanceId> --branch feature/demo --yes
+thctl ai-session transcript <instanceId> <sessionId> --tail 200
+thctl ai-session story-content <instanceId> <sessionId> --json
+thctl ai-session story-content read <instanceId> <sessionId> --path docs/design.md
+thctl instance update <instanceId> --config ./instance-settings.json
+thctl instance app list <instanceId>
+thctl instance app install <instanceId> <appId> --wait
+thctl instance app catalog <instanceId> --json
+thctl app-profile list <instanceId> <appId>
 thctl app-session list --json
+thctl app-session logs <instanceId> <appSessionId> --json
+thctl app-session screenshot <instanceId> <appSessionId> --out ./session.png
+thctl app-session access <instanceId> <appSessionId> --json | jq -r .token | thctl app-session revoke-access <instanceId> <appSessionId> --token-stdin --yes
 thctl node list --json
 thctl story list --json
 thctl trigger list --json
@@ -56,9 +74,9 @@ thctl schema --format json
 已实现：
 
 - `profile add|list|use|show|remove|trust`、`login [--device]`、`logout`、`whoami`、`schema`；
-- `instance list|show|create|delete|start|stop|restart|rename`；
-- `ai-session list|show|history|turns|turn|timeline|turn-timeline|create|send|interrupt|approval|resume|read|rename|fork|close|model|reasoning`、`ai-session queue list|steer|retry|remove|edit|reorder`；
-- `app-session list|show|start|stop|rename|access|restart`；
+- `instance list|show|create|delete|start|stop|restart|rename|update`、`instance app list|install|uninstall|job|catalog|catalog custom|catalog custom update`；
+- `ai-session list|show|history|turns|turn|timeline|turn-timeline|create|send|interrupt|approval|resume|read|rename|fork|close|story|open-app|open-terminal|command|mentions|mentions files|upload|attachment|model|reasoning|workspace|checkout|transcript|story-content|story-content read`、`ai-session queue list|steer|retry|remove|edit|reorder`；
+- `app-session list|show|start|stop|rename|access|revoke-access|restart|logs|screenshot`、`app-profile list|create|rename|set-default|remove`；
 - `node list|show|rename|create|remove|check|sync-local`、`node folders list|tree|add|update|remove`、`node runtimes list|create|update|remove|check`、`node docker images`、`node image-options`、`node settings external-listener show|set`、`node settings model-relay show|set`、`node updates jobs|check|apply`、`node pairing invite`、`node pairings list|remove`、`node connections list|create|remove`、`node-join invite|status|complete`；
 - `story list|show|create|update|archive|restore|remove`、`story document update|remove|reorder`、`story automation list|show|create|update|remove|enable|disable|run|runs`；
 - `trigger list|show|create|update|remove|run|bind|unbind|apply`；
@@ -70,7 +88,7 @@ thctl schema --format json
 - `skill status|install|update`：安装/升级唯一发布的 `taskhandoff` Agent Skill，属于软件本身，默认装到用户级 `~/.agents/skills`（`--scope project` 才装到项目 `.agents/skills`），`--dir` 指定自定义 skills 根目录；
 - `events [--topic <topic>]... [--instance <instanceId>]`：订阅 `/api/events`，每个事件输出一行 JSON（JSON Lines）；断线按连接 epoch 重连并重新订阅，握手前不输出，重放事件按 id 去重，不退化为轮询。
 
-命令面共 207 个叶子，`thctl schema` 导出的契约是唯一来源。
+命令面共 236 个叶子，`thctl schema` 导出的契约是唯一来源。
 
 ### Skill 与升级检查
 

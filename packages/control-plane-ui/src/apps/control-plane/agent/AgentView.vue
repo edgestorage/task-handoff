@@ -9,6 +9,7 @@
     >
       <aside
         class="agent-sidebar"
+        :aria-busy="isFetching ? 'true' : undefined"
         :aria-hidden="paneCollapsed && !paneOverlayOpen ? 'true' : undefined"
         :aria-label="t('agents.region')"
         @pointerenter="openOverlay"
@@ -29,8 +30,6 @@
             <div v-for="group in groupedAgents" :key="group.nodeId" class="agent-list-group">
               <div class="agent-list-group-head">
                 <span class="agent-list-group-label">{{ group.nodeLabel }}</span>
-                <span v-if="loadingNodeIds.includes(group.nodeId)" class="agent-node-load" role="status">{{ t("agents.list.loadingNode") }}</span>
-                <span v-else-if="unavailableNodeIds.includes(group.nodeId)" class="agent-node-load" data-state="warning">{{ t("agents.list.unavailableNode") }}</span>
               </div>
               <ContextMenu v-for="agent in group.agents" :key="agent.key">
                 <ContextMenuTrigger as-child>
@@ -61,13 +60,21 @@
               </ContextMenu>
             </div>
             <div v-if="!groupedAgents.length" class="agent-list-empty">
-              <span v-if="isPending">{{ t("agents.list.loading") }}</span>
+              <span v-if="isPending && !loadingNodeIds.length">{{ t("agents.list.loading") }}</span>
               <template v-else-if="unavailableNodeIds.length">
                 <span>{{ t("agents.list.unavailable") }}</span>
                 <Button variant="ghost" size="sm" @click="refetch"><RefreshCw :size="14" />{{ t("agents.list.retry") }}</Button>
               </template>
               <span v-else-if="!catalog.nodes.length">{{ t("agents.list.unsupported") }}</span>
               <span v-else>{{ filter.trim() ? t("agents.list.empty") : t("agents.list.noAgents") }}</span>
+            </div>
+            <div v-if="loadingNodeIds.length" class="agent-node-load" role="status" aria-live="polite">
+              <LoaderCircle class="agent-loading-spin" :size="13" aria-hidden="true" />
+              <span>{{ t("agents.list.loadingNodes", { count: loadingNodeIds.length }) }}</span>
+            </div>
+            <div v-if="unavailableNodeIds.length" class="agent-node-load" data-state="warning">
+              <CircleAlert :size="13" aria-hidden="true" />
+              <span>{{ t("agents.list.unavailableNodes", { count: unavailableNodeIds.length }) }}</span>
             </div>
           </div>
         </ScrollArea>
@@ -398,7 +405,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput, AgentProcessSandbox, AgentWorkspaceMaterializer } from "@task-handoff/protocol/agent-definitions";
-import { Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
+import { CircleAlert, LoaderCircle, Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
 import AiAgentIcon from "@/components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -472,7 +479,7 @@ const board = useInstanceBoardQuery();
 const instances = computed(() => board.data.value || []);
 
 // 目录是视图的唯一数据入口：定义来自各 Node 的权威查询，provider 展示名在投影边界注入。
-const { catalog, nodes, loadingNodeIds, unavailableNodeIds, isPending, refetch } = useAgentCatalog({
+const { catalog, nodes, loadingNodeIds, unavailableNodeIds, isPending, isFetching, refetch } = useAgentCatalog({
   providerLabel: (instance, providerId) => (
     instance ? aiSessionLaunchableAppsForInstance(instance, t).find((app) => app.id === providerId)?.label || providerId : providerId
   ),
@@ -586,7 +593,7 @@ async function launchManualRun(prompt: string, orchestrationId: string) {
     manualRunOpen.value = false;
     showControlPlaneToast(t("agents.manualRun.started"), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.manualRun.startFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.manualRun.startFailed")), "error");
   } finally {
     launchingRun.value = false;
   }
@@ -601,7 +608,7 @@ async function cancelSelectedRun() {
     await invalidateControlPlaneDomains(queryClient, ["agents"]);
     showControlPlaneToast(t("agents.run.cancelledToast"), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.run.cancelFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.run.cancelFailed")), "error");
   } finally {
     cancellingRun.value = false;
   }
@@ -674,7 +681,7 @@ async function commitAgentNameEdit() {
     await invalidateControlPlaneDomains(queryClient, ["agents"]);
     showControlPlaneToast(t("agents.toast.updated", { name }), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.errors.updateFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.errors.updateFailed")), "error");
     await refetch();
   } finally {
     savingAgentName.value = false;
@@ -816,7 +823,7 @@ async function confirmCreateOrchestration() {
     orchestrationCreateOpen.value = false;
     showControlPlaneToast(t("agents.orchestration.created", { name }), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.createFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.createFailed")), "error");
   } finally {
     creatingOrchestration.value = false;
   }
@@ -864,7 +871,7 @@ async function confirmDeleteOrchestration() {
     pendingDeleteOrchestration.value = undefined;
     showControlPlaneToast(t("agents.orchestration.deleted", { name: orchestration.name }), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.deleteFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.deleteFailed")), "error");
   } finally {
     deleting.value = false;
   }
@@ -897,7 +904,7 @@ async function confirmDeleteAgent() {
     pendingDeleteAgent.value = undefined;
     showControlPlaneToast(t("agents.toast.deleted", { name: agent.name }), "success");
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("agents.errors.deleteFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("agents.errors.deleteFailed")), "error");
   } finally {
     deleting.value = false;
   }
@@ -928,8 +935,11 @@ async function confirmDeleteAgent() {
 .agent-list-group { display:grid; gap:2px; min-width:0; }
 .agent-list-group-head { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding:10px 8px 4px; }
 .agent-list-group-label { min-width:0; color:var(--text-muted); font-size:12px; font-weight:500; line-height:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.agent-node-load { flex:none; color:var(--text-muted); font-size:12px; font-weight:400; }
+.agent-node-load { display:flex; align-items:center; justify-content:center; gap:7px; padding:12px 10px 2px; color:var(--text-muted); font-size:12px; }
 .agent-node-load[data-state="warning"] { color:var(--status-warning); }
+.agent-loading-spin { color:var(--text-muted); animation:agent-loading-spin 0.9s linear infinite; }
+@keyframes agent-loading-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agent-loading-spin { animation:none; } }
 .agent-list-item { display:flex; align-items:center; gap:8px; width:100%; min-width:0; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
 .agent-list-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
 .agent-list-item.active,.agent-list-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }

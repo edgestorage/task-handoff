@@ -24,6 +24,7 @@ import {
   supportsGitCliCredentialBroker,
   supportsControlledInstancePrivateModelCatalog,
   supportsControlledInstanceCodexManagedSettings,
+  supportsControlledInstanceOpenCodeEnvironment,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   UpdateControlledInstanceNodeAgentConnectionSchema,
   type BuildInfo,
@@ -409,6 +410,11 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
   }
 }
 
+function withoutOpenCodeModelEnvironment(environment: Record<string, string>) {
+  const { TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: _openCodeConfig, ...flatEnvironment } = environment;
+  return flatEnvironment;
+}
+
 export async function syncAssignedModelEnvironment(
   fetchImpl: typeof fetch,
   state: NodeAgentState,
@@ -420,6 +426,14 @@ export async function syncAssignedModelEnvironment(
   const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
   const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
   state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog, instance.config.codexSettings);
+  // Compatibility for v0.0.35: its managed model environment route is strict and
+  // rejects the OpenCode config key, which would fail the whole environment sync
+  // and skip the catalog push. Older builds still receive the key through the
+  // materialized private config and launch environment; only the live push is
+  // narrowed to the flat key set until the instance declares the capability.
+  const liveModelEnvironment = supportsControlledInstanceOpenCodeEnvironment(instance.capabilities)
+    ? modelEnvironment
+    : withoutOpenCodeModelEnvironment(modelEnvironment);
   // Materializing the private config to disk is not enough: the running instance
   // keeps its own in-memory catalog, so a skipped live push leaves it resolving
   // models against a stale catalog while AI session resume/send reports those
@@ -442,7 +456,7 @@ export async function syncAssignedModelEnvironment(
         "content-type": "application/json",
         authorization: `Bearer ${instance.registrationToken}`,
       },
-      body: JSON.stringify(modelEnvironment),
+      body: JSON.stringify(liveModelEnvironment),
     }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
   } catch (error) {
     warn?.({

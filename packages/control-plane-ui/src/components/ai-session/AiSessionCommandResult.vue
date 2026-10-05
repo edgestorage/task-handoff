@@ -33,7 +33,7 @@ onBeforeUnmount(() => { if (copiedTimer) clearTimeout(copiedTimer); });
 
 async function copyOutput() {
   if (!content.value || !navigator.clipboard?.writeText) {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
     return;
   }
   try {
@@ -43,7 +43,7 @@ async function copyOutput() {
     if (copiedTimer) clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => { copied.value = false; }, 1_500);
   } catch {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
   }
 }
 </script>

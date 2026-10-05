@@ -890,6 +890,10 @@ export function reorderAiSessionQueuedMessages(instanceId: string, sessionId: st
   return sharedAiSessionsApi.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds });
 }
 
+export function setAiSessionQueuePaused(instanceId: string, sessionId: string, paused: boolean) {
+  return sharedAiSessionsApi.pauseQueue(instanceId, sessionId, { paused });
+}
+
 export function interruptAiSession(instanceId: string, sessionId: string) {
   return sharedAiSessionsApi.interrupt(instanceId, sessionId);
 }
@@ -948,11 +952,11 @@ export function getStoryRetentionSettings(storyId: string, nodeId: string) {
   return sharedControlPlaneClient.stories.retentionSettings(storyId, nodeId);
 }
 
-export function storyDecisionsQueryOptions(storyId: string, nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+export function storyDecisionsQueryOptions(storyId: MaybeRefOrGetter<string>, nodeId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
   return queryOptions({
-    queryKey: controlPlaneQueryKeys.storyDecisions(nodeId, storyId),
-    queryFn: () => sharedControlPlaneClient.stories.listDecisions(storyId, nodeId),
-    enabled: Boolean(storyId && nodeId) && toValue(enabled),
+    queryKey: computed(() => controlPlaneQueryKeys.storyDecisions(toValue(nodeId), toValue(storyId))),
+    queryFn: () => sharedControlPlaneClient.stories.listDecisions(toValue(storyId), toValue(nodeId)),
+    enabled: computed(() => Boolean(toValue(storyId) && toValue(nodeId)) && toValue(enabled)),
     ...storySnapshotQueryOptions,
   });
 }

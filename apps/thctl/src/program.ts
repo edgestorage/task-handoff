@@ -58,20 +58,32 @@ function resolveNestedParent(root: Command, leaf: CliLeaf) {
   return parent;
 }
 
+/**
+ * commander 会把长选项归一成 camelCase（`--request-id` → `requestId`），
+ * 而 CLI 契约、schema 与命令层统一按 kebab-case 读取；这里在解析边界统一键名。
+ */
+function normalizeParsedOptions(options: Record<string, unknown>) {
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(options)) {
+    normalized[key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)] = value;
+  }
+  return normalized;
+}
+
 async function executeLeaf(leaf: CliLeaf, context: CliContext, command: Command) {
   const args: Record<string, string | undefined> = {};
   (leaf.args ?? []).forEach((arg, index) => {
     const value = command.args[index];
     args[arg.name] = arg.variadic ? (command.args.slice(index).join(" ") || undefined) : value;
   });
-  const options = command.optsWithGlobals() as Record<string, unknown>;
+  const options = normalizeParsedOptions(command.optsWithGlobals() as Record<string, unknown>);
   // 错误渲染沿用同一个输出对象，`--json` 时顶层错误也要是结构化 JSON。
   context.output.json = options.json === true;
   const invocationContext: CliContext = {
     ...context,
     profile: typeof options.profile === "string" ? options.profile : context.profile,
     yes: options.yes === true,
-    dryRun: options.dryRun === true,
+    dryRun: options["dry-run"] === true,
   };
   if (!leaf.handler) throw notImplementedError(leaf.id, leaf.stage);
   let result: CliResult | void;

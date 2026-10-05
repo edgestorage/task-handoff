@@ -12,6 +12,7 @@ import {
   AgentInvocationToolGrantSchema,
   sanitizeAgentInvocationToolGrant,
 } from "./agent-invocation-tools.ts";
+import { supportsNodeStoryDecisionTools } from "./node-agent-capabilities.ts";
 import {
   StoryActionSchema,
   StoryAutomationEffectiveStatusSchema,
@@ -42,8 +43,21 @@ export const StoryAgentToolPolicySchema = z.object({
 }).strict();
 export type StoryAgentToolPolicy = z.infer<typeof StoryAgentToolPolicySchema>;
 
+/** 新建 Story 的默认策略：只默认开启 Content 与决策。 */
 export const DEFAULT_STORY_AGENT_TOOL_POLICY: StoryAgentToolPolicy = Object.freeze({
   content: true,
+  actions: false,
+  automations: false,
+  aiSessions: false,
+  decisions: true,
+});
+
+/**
+ * 读方归一基线：producer 缺失的类别表示其版本还没有这个功能域，只能按“不支持”关闭。
+ * 它与新建 Story 的默认策略语义不同，不能复用 DEFAULT_STORY_AGENT_TOOL_POLICY。
+ */
+const UNSUPPORTED_STORY_AGENT_TOOL_POLICY: StoryAgentToolPolicy = Object.freeze({
+  content: false,
   actions: false,
   automations: false,
   aiSessions: false,
@@ -55,7 +69,7 @@ const StoryAgentToolPolicyConsumerSchema = StoryAgentToolPolicySchema.strip().pa
 export function normalizeStoryAgentToolPolicy(input: unknown): StoryAgentToolPolicy {
   const parsed = StoryAgentToolPolicyConsumerSchema.safeParse(input);
   return StoryAgentToolPolicySchema.parse({
-    ...DEFAULT_STORY_AGENT_TOOL_POLICY,
+    ...UNSUPPORTED_STORY_AGENT_TOOL_POLICY,
     ...(parsed.success ? parsed.data : {}),
   });
 }
@@ -155,8 +169,10 @@ export const StoryAgentToolPolicyInvalidatedSchema = z.object({
 }).strict();
 export type StoryAgentToolPolicyInvalidated = z.infer<typeof StoryAgentToolPolicyInvalidatedSchema>;
 
+// Compatibility for v0.0.35: 旧 producer 的策略没有 decisions 类别，缺失即不支持；
+// 其余类别在 baseline 版本里已存在，仍按必填校验，避免半截 payload 静默关掉整个策略。
 const StoryAgentToolPolicySettingsConsumerSchema = z.object({
-  policy: StoryAgentToolPolicySchema.strip(),
+  policy: StoryAgentToolPolicySchema.extend({ decisions: z.boolean().default(false) }).strip(),
   revision: StoryAgentToolPolicySettingsSchema.shape.revision,
 }).strip();
 const StoryAgentToolResolutionConsumerSchema = StoryAgentToolPolicySettingsConsumerSchema.extend({
@@ -166,7 +182,7 @@ const StoryAgentToolResolutionConsumerSchema = StoryAgentToolPolicySettingsConsu
 }).strip();
 
 export function sanitizeStoryAgentToolPolicySettings(input: unknown) {
-  return StoryAgentToolPolicySettingsConsumerSchema.parse(input);
+  return StoryAgentToolPolicySettingsSchema.parse(StoryAgentToolPolicySettingsConsumerSchema.parse(input));
 }
 
 export function sanitizeStoryAgentToolResolution(input: unknown) {
@@ -176,6 +192,20 @@ export function sanitizeStoryAgentToolResolution(input: unknown) {
     enabledTools: parsed.enabledTools.filter((name): name is StoryAgentToolName => StoryAgentToolNameSchema.safeParse(name).success),
     agentInvocation: sanitizeAgentInvocationToolGrant(parsed.agentInvocation),
   });
+}
+
+/**
+ * 写方投影：v0.0.35 及更早的 node-agent 用 strict 请求模型校验策略更新，
+ * 不认识 decisions 字段；缺少该能力时按“不支持”剥离，避免整个策略更新被旧 schema 拒绝。
+ */
+export function projectStoryAgentToolPolicyForNodeAgent(
+  policy: StoryAgentToolPolicy,
+  capabilities: unknown,
+): StoryAgentToolPolicy | Omit<StoryAgentToolPolicy, "decisions"> {
+  const parsed = StoryAgentToolPolicySchema.parse(policy);
+  if (supportsNodeStoryDecisionTools(capabilities)) return parsed;
+  const { decisions: _decisions, ...legacy } = parsed;
+  return legacy;
 }
 
 export const StoryAgentPageInputSchema = z.object({

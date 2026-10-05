@@ -119,6 +119,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       aiSessionConversationAttachments: item.capabilities.features.aiSessionConversationAttachments,
       aiSessionProviders: item.capabilities.features.aiSessionProviders,
       browserTunnel: item.capabilities.features.browserTunnel,
+      aiSessionQueuePause: item.capabilities.features.aiSessionQueuePause,
     },
     config: {
       defaultCodexPermissionMode: item.config.defaultCodexPermissionMode,

@@ -119,6 +119,7 @@
               :allow-save-preset="false"
               :busy="busy"
               :can-interrupt="canInterrupt"
+              :can-pause-queue="canPauseQueue"
               :can-resolve-approval="canResolveApproval"
               :approval-decisions="approvalDecisions"
               :instance-id="card.instance.id"
@@ -135,6 +136,7 @@
               @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
               @steer-queued-message="$emit('steerQueuedMessage', $event)"
               @retry-queued-message="$emit('retryQueuedMessage', $event)"
+              @set-queue-paused="$emit('setQueuePaused', $event)"
               @retry-detail="$emit('retryDetail')"
               @remove-queued-message="$emit('removeQueuedMessage', $event)"
               @resolve-approval="$emit('resolveApproval', $event)"
@@ -157,6 +159,7 @@
         class="ai-board-floating-compose-queue"
         :busy="busy"
         :can-interrupt="canInterrupt"
+        :can-pause="canPauseQueue"
         placement="composer"
         :queue="conversationSession.queue"
         tone="board"
@@ -164,6 +167,7 @@
         @remove-queued-message="$emit('removeQueuedMessage', $event)"
         @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
         @retry-queued-message="$emit('retryQueuedMessage', $event)"
+        @set-queue-paused="$emit('setQueuePaused', $event)"
         @steer-queued-message="$emit('steerQueuedMessage', $event)"
       />
       <AiSessionComposer
@@ -233,6 +237,7 @@ type AiSessionDetailState = "loading" | "ready" | "error";
 const props = defineProps<{
   busy: boolean;
   canInterrupt: boolean;
+  canPauseQueue: boolean;
   canResolveApproval: boolean;
   approvalDecisions: Array<"allow" | "deny" | "skip">;
   card: AiBoardCard;
@@ -270,6 +275,7 @@ defineEmits<{
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
+  setQueuePaused: [paused: boolean];
   retryDetail: [];
   run: [permissionMode?: AiSessionPermissionMode];
   command: [input: AiSessionCommandInput];

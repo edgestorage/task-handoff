@@ -83,7 +83,7 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
       await refreshProjects();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       creatingSettingsProject.value = false;
@@ -102,7 +102,7 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
       showControlPlaneToast(t("settings.projectRegistry.deleted", { name: project.name }), "success");
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       deletingProjectId.value = "";
@@ -120,7 +120,7 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
       await refreshProjects();
       showControlPlaneToast(t("settings.projectRegistry.credentialUpdated"), "success");
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       updatingProjectCredentialId.value = "";
     }

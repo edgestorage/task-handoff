@@ -212,7 +212,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         : t("settings.modelRegistry.discoveredEmpty", { latency: result.latencyMs }), "success");
     } catch (error) {
       loadingToast.dismiss();
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       loadingToast.dismiss();
       discoveringModels.value = false;
@@ -237,7 +237,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       showControlPlaneToast(t("settings.modelRegistry.testSucceeded", { latency: latencyMs }), "success");
     } catch (error) {
       loadingToast.dismiss();
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       loadingToast.dismiss();
       testingModel.value = false;
@@ -374,7 +374,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       if (!refreshed) await refreshModels();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       savingModelId.value = "";
@@ -397,7 +397,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       await refreshModels();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       deletingModelId.value = "";
@@ -418,7 +418,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       await reorderModels(reordered.map((model) => model.id));
       await refreshModels();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       savingModelId.value = "";
     }
@@ -456,7 +456,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       showControlPlaneToast(t("settings.modelRegistry.synced"), "success");
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       syncingModelId.value = "";
@@ -479,7 +479,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       showControlPlaneToast(t("settings.modelRegistry.merged", { count: reassigned }), "success");
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       mergingModelId.value = "";

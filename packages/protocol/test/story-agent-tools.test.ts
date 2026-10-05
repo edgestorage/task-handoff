@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   DEFAULT_STORY_AGENT_TOOL_POLICY,
   normalizeStoryAgentToolPolicy,
+  projectStoryAgentToolPolicyForNodeAgent,
   resolveStoryAgentToolNames,
   sanitizeStoryAgentToolResolution,
+  sanitizeStoryAgentToolPolicySettings,
   storyAgentPagination,
   StoryAgentActionListResultSchema,
   StoryAgentAutomationCreateInputSchema,
@@ -29,7 +31,47 @@ test("Story Agent Tool policy is strict on input and tolerant on consumer reads"
     aiSessions: false,
     decisions: false,
   });
-  assert.deepEqual(normalizeStoryAgentToolPolicy(undefined), DEFAULT_STORY_AGENT_TOOL_POLICY);
+  // 读方缺失的类别只能归一为“不支持”，不能套用新建 Story 的默认策略。
+  assert.deepEqual(normalizeStoryAgentToolPolicy(undefined), {
+    content: false,
+    actions: false,
+    automations: false,
+    aiSessions: false,
+    decisions: false,
+  });
+  assert.equal(DEFAULT_STORY_AGENT_TOOL_POLICY.content, true);
+  assert.equal(DEFAULT_STORY_AGENT_TOOL_POLICY.decisions, true);
+  assert.equal(DEFAULT_STORY_AGENT_TOOL_POLICY.actions, false);
+});
+
+test("Story Agent Tool policy tolerates v0.0.35 payloads and writers drop unsupported decisions", () => {
+  const revision = "c".repeat(64);
+  // Compatibility for v0.0.35: 旧 node-agent 的策略响应没有 decisions 字段，读方按不支持归一。
+  assert.deepEqual(sanitizeStoryAgentToolPolicySettings({
+    policy: { content: true, actions: true, automations: false, aiSessions: false },
+    revision,
+    future: true,
+  }), {
+    policy: { content: true, actions: true, automations: false, aiSessions: false, decisions: false },
+    revision,
+  });
+  // baseline 类别仍然必填：缺失即视为 payload 不完整，不能静默关闭整个策略。
+  assert.throws(() => sanitizeStoryAgentToolPolicySettings({
+    policy: { content: true, actions: true, aiSessions: false },
+    revision,
+  }));
+
+  const policy = { content: true, actions: true, automations: false, aiSessions: false, decisions: true };
+  const legacyCapabilities = { stories: { enabled: true, agentTools: true, agentToolCapabilities: { policy: true } } };
+  const currentCapabilities = { stories: { enabled: true, agentTools: true, agentToolCapabilities: { policy: true, decisions: true } } };
+  // Compatibility for v0.0.35: 旧节点 strict 请求模型不认识 decisions，写方必须整体剥离。
+  assert.deepEqual(projectStoryAgentToolPolicyForNodeAgent(policy, legacyCapabilities), {
+    content: true,
+    actions: true,
+    automations: false,
+    aiSessions: false,
+  });
+  assert.deepEqual(projectStoryAgentToolPolicyForNodeAgent(policy, currentCapabilities), policy);
 });
 
 test("Story Agent Tool categories resolve deterministically and archive removes mutations", () => {

@@ -55,6 +55,15 @@ test("ai-session write commands drive the shared client behind the write gate", 
   const sendBody = fake.state.calls.find((call) => call.path.endsWith("/messages"))?.body;
   assert.deepEqual(sendBody, { message: "ping", attachments: [], references: [] });
 
+  const permissionSent = await run(fake, store, ["ai-session", "send", "instance_fake001", "ais_fake0000001", "ping", "--permission-mode", "full-access", "--yes", "--json"]);
+  assert.equal(permissionSent.code, 0, permissionSent.stderr());
+  assert.deepEqual(fake.state.calls.filter((call) => call.path.endsWith("/messages")).at(-1)?.body, {
+    message: "ping", attachments: [], references: [], permissionMode: "full-access",
+  });
+  const invalidPermission = await run(fake, store, ["ai-session", "send", "instance_fake001", "ais_fake0000001", "ping", "--permission-mode", "nope", "--yes"]);
+  assert.equal(invalidPermission.code, 2);
+  assert.match(invalidPermission.stderr(), /CLI_INVALID_OPTION/);
+
   const interrupt = await run(fake, store, ["ai-session", "interrupt", "instance_fake001", "ais_fake0000001", "--yes", "--json"]);
   assert.equal(interrupt.code, 0, interrupt.stderr());
   assert.equal(JSON.parse(interrupt.stdout()).action, "interrupt");
@@ -79,6 +88,127 @@ test("ai-session write commands drive the shared client behind the write gate", 
   assert.equal(history.code, 0, history.stderr());
   assert.equal(JSON.parse(history.stdout()).items[0].agent, "claude");
   assert.match(fake.state.calls.find((call) => call.path.endsWith("/ai-sessions/history"))?.search ?? "", /agents=claude%2Ccodex/);
+});
+
+test("ai-session create carries model selection, reasoning and permission mode", async () => {
+  const { store, fake } = await signedIn();
+  const created = await run(fake, store, [
+    "ai-session", "create", "instance_fake001", "--agent", "codex", "--prompt", "hello",
+    "--model-entity", "model_fake0001", "--model-name", "gpt-fake", "--reasoning", "high",
+    "--permission-mode", "auto-review", "--request-id", "req_fixed_0001", "--yes", "--json",
+  ]);
+  assert.equal(created.code, 0, created.stderr());
+  const body = fake.state.calls.filter((call) => call.path === "/api/controlled-instances/instance_fake001/ai-sessions").at(-1)?.body;
+  assert.deepEqual(body.modelSelection, { modelEntityId: "model_fake0001", modelName: "gpt-fake" });
+  assert.equal(body.reasoningEffort, "high");
+  assert.equal(body.permissionMode, "auto-review");
+  assert.equal(body.clientRequestId, "req_fixed_0001");
+
+  const partialModel = await run(fake, store, ["ai-session", "create", "instance_fake001", "--agent", "codex", "--prompt", "hello", "--model-entity", "model_fake0001", "--yes"]);
+  assert.equal(partialModel.code, 2);
+  assert.match(partialModel.stderr(), /CLI_OPTION_MISSING/);
+  const invalidReasoning = await run(fake, store, ["ai-session", "create", "instance_fake001", "--agent", "codex", "--prompt", "hello", "--reasoning", "turbo", "--yes"]);
+  assert.equal(invalidReasoning.code, 2);
+  assert.match(invalidReasoning.stderr(), /CLI_INVALID_OPTION/);
+});
+
+test("ai-session story, open-app, open-terminal and command drive the session surfaces", async () => {
+  const { store, fake } = await signedIn();
+  const assigned = await run(fake, store, ["ai-session", "story", "instance_fake001", "ais_fake0000001", "--story", "story_fake0001", "--yes", "--json"]);
+  assert.equal(assigned.code, 0, assigned.stderr());
+  assert.equal(JSON.parse(assigned.stdout()).storyId, "story_fake0001");
+  assert.deepEqual(fake.state.calls.find((call) => call.path.endsWith("/ais_fake0000001/story"))?.body, { storyId: "story_fake0001" });
+
+  const detached = await run(fake, store, ["ai-session", "story", "instance_fake001", "ais_fake0000001", "--detach", "--yes", "--json"]);
+  assert.equal(detached.code, 0, detached.stderr());
+  assert.deepEqual(fake.state.calls.filter((call) => call.path.endsWith("/ais_fake0000001/story")).at(-1)?.body, { storyId: null });
+
+  const missingStoryOption = await run(fake, store, ["ai-session", "story", "instance_fake001", "ais_fake0000001", "--yes"]);
+  assert.equal(missingStoryOption.code, 2);
+  assert.match(missingStoryOption.stderr(), /CLI_OPTION_MISSING/);
+
+  const opened = await run(fake, store, ["ai-session", "open-app", "instance_fake001", "ais_fake0000001", "--yes", "--json"]);
+  assert.equal(opened.code, 0, opened.stderr());
+  assert.equal(JSON.parse(opened.stdout()).appSessionId, "appsess_fake001");
+
+  const terminal = await run(fake, store, ["ai-session", "open-terminal", "instance_fake001", "ais_fake0000001", "--yes", "--json"]);
+  assert.equal(terminal.code, 0, terminal.stderr());
+  assert.deepEqual(fake.state.calls.find((call) => call.path === "/api/controlled-instances/instance_fake001/apps/sessions")?.body, {
+    appId: "terminal-tty", options: { cwd: "/workspace" },
+  });
+
+  const command = await run(fake, store, ["ai-session", "command", "instance_fake001", "ais_fake0000001", "goal", "--argument", "Ship it", "--yes", "--json"]);
+  assert.equal(command.code, 0, command.stderr());
+  assert.equal(JSON.parse(command.stdout()).value, "Ship it");
+
+  const missingArgument = await run(fake, store, ["ai-session", "command", "instance_fake001", "ais_fake0000001", "rename", "--yes"]);
+  assert.equal(missingArgument.code, 2);
+  assert.match(missingArgument.stderr(), /CLI_INVALID_INPUT/);
+});
+
+test("ai-session mentions, upload and attachment move files and mention candidates", async () => {
+  const { store, fake } = await signedIn();
+
+  const catalog = await run(fake, store, ["ai-session", "mentions", "instance_fake001", "ais_fake0000001", "--json"]);
+  assert.equal(catalog.code, 0, catalog.stderr());
+  assert.equal(JSON.parse(catalog.stdout()).candidates.length, 5);
+
+  const filtered = await run(fake, store, ["ai-session", "mentions", "instance_fake001", "ais_fake0000001", "--kind", "skill", "--json"]);
+  assert.equal(filtered.code, 0, filtered.stderr());
+  assert.deepEqual(JSON.parse(filtered.stdout()).candidates.map((candidate) => candidate.kind), ["skill"]);
+
+  const invalidKind = await run(fake, store, ["ai-session", "mentions", "instance_fake001", "ais_fake0000001", "--kind", "nope"]);
+  assert.equal(invalidKind.code, 2);
+  assert.match(invalidKind.stderr(), /CLI_INVALID_OPTION/);
+
+  const files = await run(fake, store, ["ai-session", "mentions", "files", "instance_fake001", "ais_fake0000001", "app", "--json"]);
+  assert.equal(files.code, 0, files.stderr());
+  assert.deepEqual(JSON.parse(files.stdout()).candidates.map((candidate) => candidate.path), ["src/app.ts", "src"]);
+  assert.deepEqual(fake.state.calls.find((call) => call.path.endsWith("/mentions/files"))?.body, { query: "app" });
+
+  const uploadFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "thctl-upload-")), "note.txt");
+  fs.writeFileSync(uploadFile, "hello attachment");
+  const uploaded = await run(fake, store, ["ai-session", "upload", "instance_fake001", "ais_fake0000001", uploadFile, "--yes", "--json"]);
+  assert.equal(uploaded.code, 0, uploaded.stderr());
+  assert.equal(JSON.parse(uploaded.stdout()).id, "cia_fake000000000000000000");
+  const uploadCall = fake.state.calls.find((call) => call.path.endsWith("/ai-session-attachments/drafts"));
+  assert.equal(uploadCall.search.includes("scopeType=session"), true);
+  assert.equal(uploadCall.search.includes("kind=file"), true);
+  assert.equal(uploadCall.search.includes("mime=text%2Fplain"), true);
+  assert.equal(uploadCall.bodyBytes.toString("utf8"), "hello attachment");
+
+  const missingFile = await run(fake, store, ["ai-session", "upload", "instance_fake001", "ais_fake0000001", path.join(os.tmpdir(), "thctl-missing-file.txt"), "--yes"]);
+  assert.equal(missingFile.code, 2);
+  assert.match(missingFile.stderr(), /CLI_FILE_UNREADABLE/);
+
+  const sent = await run(fake, store, [
+    "ai-session", "send", "instance_fake001", "ais_fake0000001", "see file",
+    "--attachment", "cia_fake000000000000000000", "--reference", "/skills/imagegen", "--yes", "--json",
+  ]);
+  assert.equal(sent.code, 0, sent.stderr());
+  assert.deepEqual(fake.state.calls.filter((call) => call.path.endsWith("/messages")).at(-1)?.body, {
+    message: "see file",
+    attachments: [{ id: "cia_fake000000000000000000", source: { type: "upload-ref" } }],
+    references: [{ kind: "skill", name: "imagegen", path: "/skills/imagegen" }],
+  });
+
+  const invalidReference = await run(fake, store, ["ai-session", "send", "instance_fake001", "ais_fake0000001", "x", "--reference", "relative/path", "--yes"]);
+  assert.equal(invalidReference.code, 2);
+  assert.match(invalidReference.stderr(), /CLI_INVALID_OPTION/);
+
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "thctl-attachment-"));
+  const downloaded = await run(fake, store, [
+    "ai-session", "attachment", "instance_fake001", "ais_fake0000001", "msg_fake01", "cia_fake000000000000000000", "--output", outDir, "--json",
+  ]);
+  assert.equal(downloaded.code, 0, downloaded.stderr());
+  const saved = JSON.parse(downloaded.stdout());
+  assert.equal(saved.path, path.join(outDir, "note.txt"));
+  assert.equal(saved.contentType, "text/plain");
+  assert.equal(fs.readFileSync(saved.path, "utf8"), "fake attachment body");
+
+  const missing = await run(fake, store, ["ai-session", "attachment", "instance_fake001", "ais_fake0000001", "msg_fake01", "cia_missing", "--output", path.join(outDir, "missing"), "--json"]);
+  assert.equal(missing.code, 7);
+  assert.match(missing.stderr(), /AI_SESSION_ATTACHMENT_NOT_FOUND/);
 });
 
 test("ai-session queue commands read the session projection and mutate through the gate", async () => {

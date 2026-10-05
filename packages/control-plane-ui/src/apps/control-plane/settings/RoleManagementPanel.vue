@@ -84,13 +84,13 @@ async function save() {
     formOpen.value = false;
     await roles.refetch();
     showControlPlaneToast(t("settings.userAccess.roles.saved"), "success");
-  } catch (error) { showControlPlaneToast(errorText(error)); } finally { saving.value = false; }
+  } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { saving.value = false; }
 }
 async function confirmArchive() {
   if (!archiveTarget.value) return;
   saving.value = true;
   try { await archiveControlPlaneRole(archiveTarget.value.id); archiveTarget.value = undefined; await roles.refetch(); showControlPlaneToast(t("settings.userAccess.roles.archived"), "success"); }
-  catch (error) { showControlPlaneToast(errorText(error)); } finally { saving.value = false; }
+  catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { saving.value = false; }
 }
 </script>
 

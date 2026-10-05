@@ -629,19 +629,18 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 1px solid var(--control-plane-icon-button-border);
+  border: 0;
   border-radius: 7px;
-  background: var(--control-plane-icon-button-bg);
-  color: var(--control-plane-icon-button-text);
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 0;
 }
 
 .preview-expand-button:hover,
 .preview-expand-button:focus-visible {
-  border-color: var(--control-plane-icon-button-hover-border);
-  background: var(--control-plane-icon-button-hover-bg);
-  color: var(--control-plane-icon-button-hover-text);
+  background: var(--surface-hover);
+  color: var(--text-strong);
   outline: none;
 }
 

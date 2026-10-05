@@ -114,7 +114,7 @@ async function submit() {
     showControlPlaneToast(t("settings.account.saved"), "success");
     emit("update:open", false);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("settings.account.saveFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("settings.account.saveFailed")), "error");
   } finally {
     saving.value = false;
   }

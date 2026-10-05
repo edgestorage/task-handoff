@@ -21,8 +21,10 @@ const {
   normalizeControlledInstanceCapabilities,
   supportsAiSessionPersistenceSettings,
   supportsAiSessionFileSizeLimitSettings,
+  supportsAiSessionQueuePause,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   supportsControlledInstanceModelRelay,
+  supportsControlledInstanceOpenCodeEnvironment,
   supportsRepositoryPathSearch,
   supportsRepositoryWorktreeMoveToMain,
   supportsAiSessionTimelineCapability,
@@ -109,12 +111,18 @@ test("instance capabilities are projected from available inventory items", () =>
     streaming: true,
   });
   assert.equal(supportsControlledInstanceModelRelay(capabilities), true);
+  assert.deepEqual(capabilities.features.managedModelEnvironment, { openCodeConfig: true });
+  assert.equal(supportsControlledInstanceOpenCodeEnvironment(capabilities), true);
   assert.equal(capabilities.features.repositoryPathSearch, true);
   assert.equal(capabilities.features.repositoryWorktreeMoveToMain, true);
   assert.equal(supportsControlledInstanceNodeAgentConnectionUpdate(capabilities), true);
   assert.equal(supportsRepositoryPathSearch(capabilities), true);
   assert.equal(supportsRepositoryWorktreeMoveToMain(capabilities), true);
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
+  assert.equal(capabilities.features.aiSessionQueuePause, true);
+  assert.equal(supportsAiSessionQueuePause(capabilities), true);
+  // Compatibility for v0.0.35: capabilities without the additive flag stay unsupported.
+  assert.equal(supportsAiSessionQueuePause({ features: { aiSessionWorkspaceSelection: true } }), false);
   assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);
   assert.deepEqual(capabilities.features.aiSessionTimeline, {
     sessionReadAgents: ["codex"],

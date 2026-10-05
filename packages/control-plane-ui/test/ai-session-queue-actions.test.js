@@ -81,6 +81,42 @@ test("queued messages use one browser-local placement across detail and board co
   assert.match(dock, /class="ai-board-floating-compose-stack"[\s\S]*timelineMode === 'full' \|\| queuePlacement === 'composer'[\s\S]*<AiSessionComposer/);
 });
 
+test("the queue card exposes a capability-gated pause toggle across both control-plane surfaces", () => {
+  const queue = read("components/ai-session/AiSessionQueue.vue");
+  const result = read("components/ai-session/AiSessionResult.vue");
+  const conversation = read("components/ai-session/AiSessionConversationContent.vue");
+  const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
+  const panelStyles = read("apps/control-plane/instance-detail/AiSessionPanel.css");
+  const dock = read("apps/control-plane/ai-board/AiSessionFloatingDock.vue");
+  const board = read("apps/control-plane/ai-board/AiSessionBoardView.vue");
+  const queries = read("api/queries.ts");
+  const zh = read("i18n/locales/zh-CN/sessions.ts");
+  const en = read("i18n/locales/en-US/sessions.ts");
+
+  assert.match(queue, /class="ai-session-detail-queue-head"/);
+  assert.match(queue, /props\.queue\.paused === true/);
+  assert.match(queue, /emit\("setQueuePaused", !paused\.value\)/);
+  assert.match(queue, /t\('sessions\.activity\.pauseQueue'\)/);
+  assert.match(queue, /t\('sessions\.activity\.resumeQueue'\)/);
+  assert.match(queue, /v-if="canPause"/);
+  assert.doesNotMatch(queue, /ai-session-detail-queue-label/);
+  assert.match(queue, /\.ai-session-detail-queue-pause \{/);
+  assert.match(result, /:can-pause="canPauseQueue"/);
+  assert.match(result, /@set-queue-paused="\$emit\('setQueuePaused', \$event\)"/);
+  assert.match(conversation, /:can-pause-queue="canPauseQueue"/);
+  assert.match(conversation, /@set-queue-paused="\$emit\('setQueuePaused', \$event\)"/);
+  assert.match(panel, /:can-pause="canPauseAiSessionQueue"/);
+  assert.match(panel, /supportsAiSessionQueuePause\(props\.instance\.capabilities\)/);
+  assert.match(panel, /setAiSessionQueuePaused\(props\.instance\.id, sessionId, paused\)/);
+  assert.match(dock, /:can-pause="canPauseQueue"/);
+  assert.match(board, /supportsAiSessionQueuePause\(instance\.capabilities\)/);
+  assert.match(board, /setAiSessionQueuePaused\(card\.instance\.id, card\.session\.id, paused\)/);
+  assert.match(queries, /sharedAiSessionsApi\.pauseQueue/);
+  assert.match(panelStyles, /\.session-ai-compose-decisions \+ \.session-ai-compose-queue :deep\(\.ai-session-detail-queue-head\)/);
+  assert.match(zh, /pauseQueue: "暂停排队"/);
+  assert.match(en, /resumeQueue: "Resume queue"/);
+});
+
 test("successful AI session actions consume only acknowledgements and wait for authoritative events", () => {
   const board = read("apps/control-plane/ai-board/AiSessionBoardView.vue");
   const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");

@@ -13,12 +13,14 @@
         v-if="showQueue && isLatest && session.queue?.items.length"
         :busy="busy"
         :can-interrupt="canInterrupt"
+        :can-pause="canPauseQueue"
         :queue="session.queue"
         :tone="tone"
         @edit-queued-message="$emit('editQueuedMessage', $event)"
         @remove-queued-message="$emit('removeQueuedMessage', $event)"
         @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
         @retry-queued-message="$emit('retryQueuedMessage', $event)"
+        @set-queue-paused="$emit('setQueuePaused', $event)"
         @steer-queued-message="$emit('steerQueuedMessage', $event)"
       />
 
@@ -126,6 +128,7 @@ const markdownCodeTools = computed(() => ({
 const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
+  canPauseQueue?: boolean;
   canResolveApproval?: boolean;
   approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
@@ -151,6 +154,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   busy: false,
   canInterrupt: false,
+  canPauseQueue: false,
   canResolveApproval: false,
   approvalDecisions: () => ["allow", "deny", "skip"],
   fileLinks: false,
@@ -177,6 +181,7 @@ const emit = defineEmits<{
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
+  setQueuePaused: [paused: boolean];
   steerQueuedMessage: [queueId: string];
   layoutWillChange: [element: HTMLElement];
   layoutCommitted: [element: HTMLElement];
@@ -416,7 +421,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   background: var(--surface-raised);
   color: var(--text-strong);
   padding: 5px;
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--shadow-color, #000) 24%, transparent);
+  box-shadow: 0 12px 28px var(--shadow-color);
 }
 
 :global(.ai-session-response-context-menu [role="menuitem"]) {

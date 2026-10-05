@@ -24,6 +24,7 @@ import {
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionQueuePauseInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
@@ -33,6 +34,7 @@ import {
   AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   AiSessionSummarySchema,
+  AiSessionTranscriptSchema,
   AiSessionDetailReadSchema,
   AiSessionTurnIndexReadSchema,
   AiSessionTurnBodyReadSchema,
@@ -55,7 +57,9 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { RepositoryAiSessionWorkspaceSchema } from "@task-handoff/protocol/repository";
+import { StoryContentListSchema, StoryContentPreviewSchema } from "@task-handoff/protocol/stories";
 import { jsonRequest } from "./json-request.ts";
+import { binaryUnsupported } from "./errors.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 
@@ -211,6 +215,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     reorderQueue(instanceId: string, sessionId: string, input: AiSessionQueueReorderInput) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionQueueMutationResponseSchema, jsonRequest("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
     },
+    pauseQueue(instanceId: string, sessionId: string, input: { paused: boolean }) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/pause`, AiSessionQueueMutationResponseSchema, jsonRequest("POST", AiSessionQueuePauseInputSchema.parse(input)));
+    },
     async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
       onProgress?.(0);
       const content = await fetch(input.data).then((response) => response.arrayBuffer());
@@ -254,8 +261,30 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     mentionCatalog(instanceId: string, sessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/mentions`, AiSessionMentionCatalogSchema, { signal });
     },
+    transcript(instanceId: string, sessionId: string, tail?: number, signal?: AbortSignal) {
+      const query = tail === undefined ? "" : `?tail=${encodeURIComponent(String(tail))}`;
+      return requestData(`${sessionRoute(instanceId, sessionId)}/transcript${query}`, AiSessionTranscriptSchema, { signal });
+    },
+    storyContent(instanceId: string, sessionId: string, signal?: AbortSignal) {
+      return requestData(
+        `${sessionRoute(instanceId, sessionId)}/story-content`,
+        z.object({ storyId: z.string().trim().min(1), documents: StoryContentListSchema.shape.documents }).strict(),
+        { signal },
+      );
+    },
+    storyContentPreview(instanceId: string, sessionId: string, storyPath: string, signal?: AbortSignal) {
+      return requestData(
+        `${sessionRoute(instanceId, sessionId)}/story-content/preview?storyPath=${encodeURIComponent(storyPath)}`,
+        StoryContentPreviewSchema,
+        { signal },
+      );
+    },
     searchMentionFiles(instanceId: string, sessionId: string, query: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/mentions/files`, AiSessionMentionFileSearchSchema, jsonRequest("POST", { query }, signal));
+    },
+    async attachmentContent(instanceId: string, sessionId: string, messageId: string, attachmentId: string) {
+      if (!transport.requestBinary) throw binaryUnsupported();
+      return transport.requestBinary(`${sessionRoute(instanceId, sessionId)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/content`);
     },
   };
 }

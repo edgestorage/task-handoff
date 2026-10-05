@@ -588,7 +588,7 @@ async function bindSelectedTrigger(instanceId: string, sessionId: string) {
     deployDialogOpen.value = false;
     await refresh();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   } finally {
     bindingBusyKey.value = "";
   }
@@ -601,7 +601,7 @@ async function unbind(configHash: string, instanceId: string, sessionId: string)
     await unbindAiSessionTrigger(instanceId, sessionId, configHash);
     await refresh();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   } finally {
     bindingBusyKey.value = "";
   }
@@ -612,7 +612,7 @@ async function run(instanceId: string, configHash: string, deploymentId?: string
     await runControlledInstanceTrigger(instanceId, configHash, { deploymentId });
     await refresh();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   }
 }
 
@@ -685,7 +685,7 @@ async function saveTemplate() {
     createDialogOpen.value = false;
     await refresh();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   } finally {
     saving.value = false;
   }
@@ -758,7 +758,7 @@ async function deleteTemplate(configHash: string) {
     await refresh();
     return true;
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
     return false;
   } finally {
     deletingHash.value = "";

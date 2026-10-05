@@ -15,6 +15,10 @@ function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+function binary(status, body, contentType) {
+  return new Response(body, { status, headers: { "content-type": contentType } });
+}
+
 function errorResponse(status, code, message, details) {
   return json(status, { error: { code, message, ...(details ? { details } : {}) } });
 }
@@ -54,6 +58,8 @@ export function createFakeControlPlane(options = {}) {
 
   const state = {
     calls: [],
+    jobs: new Map(),
+    jobPolls: new Map(),
     authorizeRequests: [],
     approved: false,
     denied: false,
@@ -176,6 +182,25 @@ export function createFakeControlPlane(options = {}) {
     createdAt: now,
     updatedAt: now,
   };
+  const appManagementSnapshot = {
+    streamId: "stream_fake01",
+    sequence: 3,
+    capabilities: { platform: "linux", arch: "x64", installers: ["apt"], privilege: "passwordless-sudo" },
+    apps: [
+      { id: "codex", name: "Codex", kind: "tty", state: "installed", managementSource: "recipe", version: "1.2.3", canInstall: false, canUninstall: true },
+      { id: "chromium", name: "Chromium", kind: "gui", state: "not-installed", managementSource: "recipe", canInstall: true, canUninstall: false },
+    ],
+    activeJobs: [],
+    recentJobs: [],
+    observedAt: now,
+  };
+  const appProfile = {
+    id: "appprof_fake001",
+    name: "Default",
+    isDefault: true,
+    createdAt: now,
+    updatedAt: now,
+  };
   const modelEntry = {
     id: "model_fake00001",
     model: { id: "model_fake00001", name: "Fake Model", model: "gpt-5.4", modelNames: [], protocols: ["openai"], enabled: true, order: 1 },
@@ -293,8 +318,14 @@ export function createFakeControlPlane(options = {}) {
     const path = parsed.pathname;
     const method = (init.method ?? "GET").toUpperCase();
     const headers = new Headers(init.headers);
-    const body = init.body ? JSON.parse(String(init.body)) : undefined;
-    state.calls.push({ method, path, search: parsed.search, headers: Object.fromEntries(headers.entries()), body });
+    const rawBody = init.body ?? undefined;
+    const bodyBytes = rawBody instanceof Uint8Array
+      ? Buffer.from(rawBody)
+      : rawBody instanceof ArrayBuffer
+        ? Buffer.from(rawBody)
+        : undefined;
+    const body = typeof rawBody === "string" && rawBody ? JSON.parse(rawBody) : undefined;
+    state.calls.push({ method, path, search: parsed.search, headers: Object.fromEntries(headers.entries()), body, bodyBytes });
     const bearer = (headers.get("authorization") ?? "").replace(/^Bearer /, "");
     const knownToken = bearer === state.sessionToken || bearer === state.localSessionToken;
 
@@ -376,14 +407,83 @@ export function createFakeControlPlane(options = {}) {
     if (method === "GET" && path === "/api/auth/cli/sessions") return json(200, { data: [cliSession] });
     if (method === "GET" && path === "/api/instance-board") return json(200, { data: [instanceEntry] });
     if (method === "PATCH" && /^\/api\/controlled-instances\/[^/]+$/.test(path)) {
+      const id = path.split("/").at(-1);
       instanceEntry.name = typeof body?.name === "string" ? body.name : instanceEntry.name;
-      return json(200, { data: { id: instanceEntry.id, name: instanceEntry.name } });
+      return json(200, {
+        data: {
+          ...createdInstance,
+          id,
+          name: instanceEntry.name,
+          status: "running",
+          health: "ok",
+          connectionStatus: "online",
+          ready: true,
+          ...(body?.config ? { config: { ...body.config } } : {}),
+          ...(body?.modelSelection ? { modelSelection: body.modelSelection } : {}),
+        },
+      });
     }
     if (method === "GET" && path === "/api/ai-sessions") {
       if (parsed.searchParams.get("instanceId") && parsed.searchParams.get("instanceId") !== instanceEntry.id) return json(200, { data: { updatedAt: now, instances: [] } });
       return json(200, { data: aiSessionsView });
     }
-    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/(?!history$)[^/]+$/.test(path)) {
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/mentions$/.test(path)) {
+      return json(200, {
+        data: {
+          sessionId: path.split("/")[5],
+          providerSessionId: "prov_fake01",
+          cwd: "/workspace",
+          candidates: [
+            { kind: "skill", name: "imagegen", path: "/skills/imagegen" },
+            { kind: "plugin", name: "docs", path: "plugin://docs" },
+            { kind: "app", name: "browser", path: "app://browser" },
+            { kind: "file", name: "src/app.ts", path: "src/app.ts" },
+            { kind: "directory", name: "src", path: "src" },
+          ],
+          diagnostics: [],
+        },
+      });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/mentions\/files$/.test(path)) {
+      return json(200, {
+        data: {
+          sessionId: path.split("/")[5],
+          cwd: "/workspace",
+          query: typeof body?.query === "string" ? body.query : "",
+          requestId: "mentions_fake01",
+          candidates: [
+            { kind: "file", name: "src/app.ts", path: "src/app.ts" },
+            { kind: "directory", name: "src", path: "src" },
+          ],
+          complete: true,
+        },
+      });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-session-attachments\/drafts$/.test(path)) {
+      return json(200, {
+        data: {
+          id: "cia_fake000000000000000000",
+          kind: parsed.searchParams.get("kind") ?? "file",
+          name: parsed.searchParams.get("name") ?? "attachment.bin",
+          mime: parsed.searchParams.get("mime") ?? "application/octet-stream",
+          size: Number(parsed.searchParams.get("size") ?? 0),
+          expiresAt: new Date(Date.now() + DAY).toISOString(),
+        },
+      });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/messages\/[^/]+\/attachments\/[^/]+\/content$/.test(path)) {
+      if (path.includes("/cia_missing")) return errorResponse(404, "AI_SESSION_ATTACHMENT_NOT_FOUND", "AI session attachment not found.");
+      const bytes = Buffer.from("fake attachment body");
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-type": "text/plain",
+          "content-length": String(bytes.byteLength),
+          "content-disposition": "attachment; filename*=UTF-8''note.txt",
+        },
+      });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/(?!(?:history|workspace)$)[^/]+$/.test(path)) {
       return json(200, {
         data: {
           kind: "updated",
@@ -555,8 +655,100 @@ export function createFakeControlPlane(options = {}) {
       if (session.kind !== "gui") return errorResponse(409, "APP_SESSION_ACCESS_UNAVAILABLE", "This app session does not expose a VNC view.");
       return json(200, { data: { mode: "vnc", url: "/apps/access/vnc?token=lease_fake", token: "lease_fake", expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() } });
     }
+    if (method === "DELETE" && /^\/api\/controlled-instances\/[^/]+\/apps\/sessions\/[^/]+\/access$/.test(path)) {
+      return json(200, { data: { revoked: body?.token === "lease_fake" } });
+    }
     if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/sessions\/[^/]+\/restart$/.test(path)) {
       return json(200, { data: { ...appSession, id: "appsess_restarted1", status: "running", updatedAt: now } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/sessions\/[^/]+\/logs$/.test(path)) {
+      const sessionId = path.split("/").at(-2);
+      const requested = Number(parsed.searchParams.get("maxBytes") || 65536);
+      return json(200, { data: {
+        sessionId,
+        logDir: `/data/instances/${instanceEntry.id}/apps/${sessionId}/logs`,
+        maxBytes: requested,
+        files: [
+          { name: "session.log", size: 4096, updatedAt: now, truncated: false, content: "fake log line 1\nfake log line 2\n" },
+        ],
+      } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/sessions\/[^/]+\/screenshot$/.test(path)) {
+      const sessionId = path.split("/").at(-2);
+      if (sessionId === appSession.id) return errorResponse(409, "APP_SCREENSHOT_UNAVAILABLE", "Screenshots are only available for GUI sessions.");
+      const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+      return binary(200, png, "image/png");
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/catalog$/.test(path)) {
+      return json(200, { data: { items: [
+        { id: "codex", name: "Codex", kind: "tty", description: "OpenAI Codex CLI in the task workspace." },
+        { id: "chromium", name: "Chromium", kind: "gui" },
+      ] } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/catalog\/custom$/.test(path)) {
+      return json(200, { data: { schemaVersion: 1, items: [{ id: "notepad", name: "Notepad", kind: "gui", command: "notepad" }] } });
+    }
+    if (method === "PATCH" && /^\/api\/controlled-instances\/[^/]+\/apps\/catalog\/custom$/.test(path)) {
+      return json(200, { data: { schemaVersion: 1, items: Array.isArray(body?.items) ? body.items : [] } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/management$/.test(path)) {
+      const activeJobs = [...state.jobs.values()].filter((job) => !["succeeded", "failed", "cancelled", "interrupted"].includes(job.state));
+      return json(200, { data: { ...appManagementSnapshot, activeJobs, recentJobs: [...state.jobs.values()] } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/(install|uninstall)$/.test(path)) {
+      const segments = path.split("/");
+      const appId = segments.at(-2);
+      const operation = segments.at(-1);
+      const job = { id: `appjob_${operation}_01`, appId, operation, state: "queued", phase: "queued", requestedAt: now, updatedAt: now, ...(body?.requestId ? { requestId: body.requestId } : {}) };
+      state.jobs.set(job.id, job);
+      return json(202, { data: { job } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/jobs\/[^/]+$/.test(path)) {
+      const jobId = path.split("/").at(-1);
+      const job = state.jobs.get(jobId);
+      if (!job) return errorResponse(404, "APP_MANAGEMENT_JOB_NOT_FOUND", "App management job was not found.");
+      const polls = (state.jobPolls.get(jobId) ?? 0) + 1;
+      state.jobPolls.set(jobId, polls);
+      if (polls >= 2) Object.assign(job, { state: "succeeded", phase: "done", progress: { current: 1, total: 1 }, logTail: `${job.operation} finished`, finishedAt: now, updatedAt: now });
+      else Object.assign(job, { state: "running", phase: job.operation === "install" ? "installing" : "uninstalling", updatedAt: now });
+      return json(200, { data: { job } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles$/.test(path)) {
+      const appId = path.split("/").at(-2);
+      return json(200, { data: { appId, defaultProfileId: appProfile.id, profiles: [appProfile], observedAt: now } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles$/.test(path)) {
+      return json(200, { data: { ...appProfile, id: "appprof_new001", name: body?.name ?? "New profile", isDefault: false } });
+    }
+    if (method === "PATCH" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles\/[^/]+$/.test(path)) {
+      return json(200, { data: { ...appProfile, id: path.split("/").at(-1), name: body?.name ?? appProfile.name, isDefault: false, updatedAt: now } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles\/[^/]+\/default$/.test(path)) {
+      return json(200, { data: { ...appProfile, id: path.split("/").at(-2), isDefault: true, updatedAt: now } });
+    }
+    if (method === "DELETE" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles\/[^/]+$/.test(path)) {
+      return json(200, { data: { removed: true } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/workspace$/.test(path)) {
+      return json(200, { data: { availability: "available", currentBranch: "main" } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/workspace\/checkout$/.test(path)) {
+      return json(200, { data: { availability: "available", currentBranch: body?.branch ?? "main" } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/transcript$/.test(path)) {
+      return json(200, { data: {
+        path: "/home/agent/.codex/sessions/2026/10/05/rollout-fake.jsonl",
+        lineCount: 42,
+        tail: "fake transcript line 1\nfake transcript line 2",
+      } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/story-content$/.test(path)) {
+      return json(200, { data: { storyId: story.id, documents: [storyDocument] } });
+    }
+    if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/story-content\/preview$/.test(path)) {
+      const storyPath = parsed.searchParams.get("storyPath") || "intro.md";
+      const content = "# Fake story\n\nBody text.\n";
+      return json(200, { data: { storyPath, revision: "b".repeat(64), content, size: content.length } });
     }
     if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/history$/.test(path)) {
       return json(200, { data: { items: [{
@@ -580,6 +772,16 @@ export function createFakeControlPlane(options = {}) {
     }
     if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/close$/.test(path)) {
       return json(200, { data: { disposition: "closed", aiSessionId: path.split("/")[5], providerSessionId: "prov_close01", creationSource: "ai-session" } });
+    }
+    if (method === "PUT" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/story$/.test(path)) {
+      const sessionId = path.split("/")[5];
+      return json(200, { data: { sessionId, ...(typeof body?.storyId === "string" ? { storyId: body.storyId } : {}) } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/open-app$/.test(path)) {
+      return json(200, { data: { disposition: "opened", aiSessionId: path.split("/")[5], providerSessionId: "prov_openapp1", appSessionId: "appsess_fake001", creationSource: "ai-session" } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/commands$/.test(path)) {
+      return json(200, { data: { command: body?.command ?? "review", ...(typeof body?.argument === "string" ? { value: body.argument } : {}), turnId: "turn_fake01" } });
     }
     if (method === "PUT" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/model-selection$/.test(path)) {
       return json(200, { data: { sessionId: path.split("/")[5], accepted: true } });

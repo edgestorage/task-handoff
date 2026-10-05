@@ -159,6 +159,7 @@ import {
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionQueuePauseInputSchema,
   AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   isAiSessionInlineImageMime,
@@ -405,6 +406,9 @@ const AppLaunchSchema = z
   })
   .strict();
 
+// Additive keys from a newer node-agent are stripped instead of rejected: an
+// instance that predates one environment key must still apply the rest of the
+// managed environment and accept the following private catalog push.
 const ManagedModelEnvironmentSchema = z.object({
   CODEX_HOME: z.string().max(4096).optional(),
   OPENAI_API_KEY: z.string().max(4096).optional(),
@@ -414,7 +418,8 @@ const ManagedModelEnvironmentSchema = z.object({
   ANTHROPIC_API_KEY: z.string().max(4096).optional(),
   ANTHROPIC_BASE_URL: z.string().max(4096).optional(),
   TASK_HANDOFF_CLAUDE_MODEL: z.string().max(4096).optional(),
-}).strict();
+  TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: z.string().max(1_048_576).optional(),
+});
 
 const MANAGED_MODEL_ENV_KEYS = Object.keys(ManagedModelEnvironmentSchema.shape);
 
@@ -1472,7 +1477,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       return;
     }
     const session = aiSessions.get(sessionId);
-    if (!session || session.status !== "idle" || !aiSessions.nextQueuedMessage(sessionId)) {
+    if (!session || session.queue.paused === true || session.status !== "idle" || !aiSessions.nextQueuedMessage(sessionId)) {
       return;
     }
     drainingAiSessionIds.add(sessionId);
@@ -2678,6 +2683,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const session = aiSessionController.reorderQueuedMessages(request.params.id, body.expectedRevision, body.queueIds);
       publishAiSessionSnapshot("control-action");
       return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "reorder" }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/queue/pause", async (request, reply) => {
+    try {
+      const body = AiSessionQueuePauseInputSchema.parse(request.body || {});
+      const session = aiSessionController.setQueuePaused(request.params.id, body.paused);
+      publishAiSessionSnapshot("control-action");
+      if (!body.paused) void drainAiSessionQueue(session.id);
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "pause" }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

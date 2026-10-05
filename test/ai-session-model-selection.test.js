@@ -178,6 +178,32 @@ test("a live catalog push heals a switch target the runtime had not loaded", asy
   }
 });
 
+test("the managed model environment carries the relay OpenCode config without rejecting additive keys", async () => {
+  const { app, restore } = await createRuntime();
+  try {
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/internal/model-environment",
+      headers: { authorization: `Bearer ${registrationToken}` },
+      payload: {
+        TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol",
+        TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({ $schema: "https://opencode.ai/config.json", model: "task-handoff-mdl_current/gpt-5.6-sol", provider: {} }),
+        TASK_HANDOFF_FUTURE_ENVIRONMENT_KEY: "additive",
+      },
+    });
+    assert.equal(response.statusCode, 200, JSON.stringify(response.json()));
+    assert.deepEqual(response.json().data, {
+      applied: true,
+      codexAuthConfigured: false,
+      claudeAuthConfigured: false,
+      configUpdated: false,
+    });
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
 function relayCatalogWith(entities) {
   return { protocolVersion: "2026-10-02", instanceId, entities, updatedAt: "2026-10-02T00:00:00.000Z" };
 }

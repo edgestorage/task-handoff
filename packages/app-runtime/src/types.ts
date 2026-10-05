@@ -76,6 +76,12 @@ export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | 
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;
+  /**
+   * Whether the app can be started as an app session. Management-only apps set
+   * this to `false`: they can be installed and uninstalled through App
+   * management, but never enter the launch catalog or accept launch requests.
+   */
+  launchable?: boolean;
   detection: ManagedAppDetectionRule[];
   distribution: {
     recipes: InstallRecipe[];

@@ -80,7 +80,9 @@ export function useAgentCatalog(options: {
     ...activeNodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "unavailable"),
     ...(runsQuery.data.value?.unavailableNodeIds ?? []),
   ])]);
-  const isPending = computed(() => nodesQuery.isPending.value || loadingNodeIds.value.length > 0 || (runsEnabled.value && runsQuery.isPending.value));
+  // 列表的 pending 只由目录自身的读取决定，与 Story 目录同语义：Run、编排等其它域的
+  // 读取不阻塞 Agent 列表进入就绪态，它们各自在消费位置表达加载状态。
+  const isPending = computed(() => nodesQuery.isPending.value || loadingNodeIds.value.length > 0);
   const isFetching = computed(() => nodesQuery.isFetching.value || runsQuery.isFetching.value
     || agentQueries.value.some((query) => query.isFetching)
     || orchestrationQueries.value.some((query) => query.isFetching));

@@ -149,7 +149,7 @@ async function createProfile() {
     newProfileName.value = "";
     showControlPlaneToast(t("instances.settings.browserProfileCreated", { name }), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     creating.value = false;
   }
@@ -176,7 +176,7 @@ async function rename(profile: AppProfile) {
     cancelRename();
     showControlPlaneToast(t("instances.settings.browserProfileRenamed", { name }), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     busyProfileId.value = "";
   }
@@ -189,7 +189,7 @@ async function setDefault(profile: AppProfile) {
     await setDefaultProfile(profile.id);
     showControlPlaneToast(t("instances.settings.browserProfileDefaultSet", { name: profile.name }), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     busyProfileId.value = "";
   }
@@ -204,7 +204,7 @@ async function confirmDelete() {
     deleteTarget.value = undefined;
     showControlPlaneToast(t("instances.settings.browserProfileDeleted", { name: profile.name }), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
     deleteTarget.value = undefined;
   } finally {
     busyProfileId.value = "";

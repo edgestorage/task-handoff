@@ -36,6 +36,21 @@ export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Failure identity for diagnostics. A timing log that only says "failed"
+ * forces a second investigation into the downstream provider, so record the
+ * structured code and message alongside the outcome.
+ */
+export function errorDiagnostic(error: unknown) {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const message = errorMessage(error);
+  return {
+    ...(typeof record.code === "string" && record.code ? { errorCode: record.code } : {}),
+    ...(message ? { errorMessage: message } : {}),
+    ...(typeof record.statusCode === "number" ? { errorStatusCode: record.statusCode } : {}),
+  };
+}
+
 export function throwNotFound(code: string, message: string): never {
   const error = new Error(message);
   Object.assign(error, { statusCode: 404, code });

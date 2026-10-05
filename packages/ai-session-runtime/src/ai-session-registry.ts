@@ -225,7 +225,12 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     toolCallsSinceLastMessage: session.toolCallsSinceLastMessage,
     subAgentCount: session.subAgents.length,
     subAgents: [],
-    queue: { revision: session.queue.revision, pendingCount: session.queue.pendingCount, items: [] },
+    queue: {
+      revision: session.queue.revision,
+      pendingCount: session.queue.pendingCount,
+      ...(session.queue.paused ? { paused: true } : {}),
+      items: [],
+    },
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
     error: session.error ? compact(session.error, 300) : undefined,
@@ -652,6 +657,13 @@ export class AiSessionRegistry {
     if (!current) return undefined;
     const result = this.queueService.reorderQueuedMessages(current, expectedRevision, queueIds);
     return result.kind === "updated" ? { ...result, session: this.put(result.session) } : result;
+  }
+
+  setQueuePaused(id: string, paused: boolean) {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const updated = this.queueService.setQueuePaused(current, paused);
+    return updated === current ? current : this.put(updated);
   }
 
   bindProviderSession(id: string, providerSessionId: string) {

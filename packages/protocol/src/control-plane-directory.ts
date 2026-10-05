@@ -33,11 +33,19 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   aiSessionConversationAttachments: ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema.optional(),
   aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
   browserTunnel: z.boolean().optional(),
+  // Compatibility for v0.0.35: older directory producers omit this additive
+  // projection, so the AI Session queue pause control normalizes to unsupported.
+  aiSessionQueuePause: z.boolean().optional(),
 }).passthrough();
 
 export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
   return parsed.success && parsed.data.browserTunnel === true;
+}
+
+export function supportsDirectoryAiSessionQueuePause(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && parsed.data.aiSessionQueuePause === true;
 }
 
 export function directoryAiSessionProviderCapability(capabilities: unknown, agent: string) {

@@ -67,6 +67,39 @@ test("model catalog is pushed to the instance even while it is not marked reacha
   assert.equal(state.materialized.length, 1);
 });
 
+test("the live model environment carries the OpenCode config only for instances that declare the capability", async () => {
+  for (const declared of [false, true]) {
+    const state = instanceState({
+      capabilities: {
+        features: {
+          privateModelCatalog: true,
+          ...(declared ? { managedModelEnvironment: { openCodeConfig: true } } : {}),
+        },
+      },
+    });
+    const openCodeConfig = JSON.stringify({ model: "task-handoff-mdl_fresh/gpt-5.6-sol", provider: {} });
+    state.resolvedAssignedModelEnvironment = () => ({
+      TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol",
+      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig,
+    });
+    const bodies = [];
+    const fetchImpl = async (url, init = {}) => {
+      if (new URL(String(url)).pathname === "/api/internal/model-environment") bodies.push(JSON.parse(String(init.body)));
+      return jsonResponse({ data: { applied: true } });
+    };
+
+    const synced = await syncAssignedModelEnvironment(fetchImpl, state, state.instance.id, undefined, resolveLocalInstance);
+
+    assert.equal(synced, true);
+    assert.deepEqual(bodies, [declared
+      ? { TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol", TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig }
+      : { TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol" }]);
+    // The materialized private config and launch environment keep the full
+    // environment; only the strict live route is narrowed for older builds.
+    assert.equal(state.materialized[0][2].TASK_HANDOFF_OPENCODE_CONFIG_CONTENT, openCodeConfig);
+  }
+});
+
 test("a failed catalog push reports the snapshot the instance actually holds", async () => {
   const state = instanceState();
   const warnings = [];

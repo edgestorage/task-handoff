@@ -275,7 +275,7 @@ async function toggleStatus(credential: GitCredentialPublic) {
   try {
     await updateGitCredential(credential.id, { status: credential.status === "enabled" ? "disabled" : "enabled" });
     await credentials.refetch();
-  } catch (error) { showControlPlaneToast(errorText(error, "saveFailed")); }
+  } catch (error) { showControlPlaneToast(errorText(error, "saveFailed"), "error"); }
   finally { busyId.value = ""; }
 }
 async function removeCredential() {
@@ -286,7 +286,7 @@ async function removeCredential() {
     await deleteGitCredential(credential.id);
     pendingDelete.value = undefined;
     await credentials.refetch();
-  } catch (error) { showControlPlaneToast(errorText(error, "deleteFailed")); }
+  } catch (error) { showControlPlaneToast(errorText(error, "deleteFailed"), "error"); }
   finally { busyId.value = ""; }
 }
 </script>

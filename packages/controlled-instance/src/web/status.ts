@@ -217,6 +217,9 @@ export function controlledInstanceCapabilities(
         protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"],
         streaming: true,
       },
+      // The running instance accepts the structured OpenCode provider config on
+      // the managed model environment route; see status.ts capability tests.
+      managedModelEnvironment: { openCodeConfig: true },
       codexManagedSettings: true,
       nodeAgentConnectionUpdate: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
@@ -224,6 +227,7 @@ export function controlledInstanceCapabilities(
       repositoryPathSearch: true,
       repositoryWorktreeMoveToMain: true,
       aiSessionSendIdempotency: true,
+      aiSessionQueuePause: true,
       aiSessionTimeline,
       aiSessionProviders: availableProviders,
       aiSessionConversationAttachments: {

@@ -88,6 +88,12 @@ export type CodexThreadForkCapabilities = {
 export type CodexAppServerClientLike = EventEmitter & {
   start: () => Promise<void>;
   stop: () => void;
+  /**
+   * Mirrors the writability guard `request()` uses. A generation cached as
+   * "ready" can lose its transport without the close event arriving first, so
+   * the connection manager probes this before handing the client to a caller.
+   */
+  isConnected?: () => boolean;
   listLoadedThreadIds: () => Promise<string[]>;
   resolveAppServerVersion?: () => Promise<string>;
   threadForkCapabilities?: () => CodexThreadForkCapabilities;

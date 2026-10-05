@@ -125,6 +125,10 @@ function emptyModelRelayCapabilities() {
   return { protocols: [] as ModelProtocol[], streaming: false };
 }
 
+function emptyManagedModelEnvironmentCapabilities() {
+  return { openCodeConfig: false };
+}
+
 function defaultControlledInstanceFeatures() {
   return {
     appRuntime: false,
@@ -145,7 +149,9 @@ function defaultControlledInstanceFeatures() {
     repositoryPathSearch: false,
     repositoryWorktreeMoveToMain: false,
     modelRelay: emptyModelRelayCapabilities(),
+    managedModelEnvironment: emptyManagedModelEnvironmentCapabilities(),
     aiSessionSendIdempotency: false,
+    aiSessionQueuePause: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -186,6 +192,17 @@ export const ControlledInstanceModelRelayCapabilitiesSchema = z.object({
   streaming: z.boolean().default(false),
 }).strip();
 
+/**
+ * Additive consumer capability: the controlled instance accepts structured
+ * managed model environment keys beyond the flat legacy set (today the OpenCode
+ * provider config content) on the live model-environment route. Compatibility
+ * for v0.0.35: absence keeps the node agent on the flat key set so a strict
+ * older route cannot fail the whole environment and catalog sync.
+ */
+export const ControlledInstanceManagedModelEnvironmentCapabilitiesSchema = z.object({
+  openCodeConfig: z.boolean().default(false),
+}).strip();
+
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   appRuntime: z.boolean().default(false),
   tty: z.boolean().default(false),
@@ -218,6 +235,9 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   // does not accept `clientRequestId`, so node-agent degrades to its private
   // `resuming` ledger instead of a blind resend.
   aiSessionSendIdempotency: z.boolean().optional(),
+  // Compatibility for v0.0.35: absence means the AI Session queue route does
+  // not expose the pause/resume control.
+  aiSessionQueuePause: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
@@ -225,6 +245,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
   // Additive capability: absent on v0.0.34 controlled instances.
   modelRelay: ControlledInstanceModelRelayCapabilitiesSchema.optional(),
+  // Additive capability: absent on v0.0.35 controlled instances.
+  managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -249,6 +271,7 @@ export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-i
 export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
 export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
 export type ControlledInstanceModelRelayCapabilities = z.infer<typeof ControlledInstanceModelRelayCapabilitiesSchema>;
+export type ControlledInstanceManagedModelEnvironmentCapabilities = z.infer<typeof ControlledInstanceManagedModelEnvironmentCapabilitiesSchema>;
 export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
 type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
   features: ControlledInstanceCapabilities["features"] & {
@@ -264,6 +287,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
     modelRelay: ControlledInstanceModelRelayCapabilities;
+    managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilities;
   };
 };
 
@@ -295,6 +319,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "repositoryPathSearch",
     "repositoryWorktreeMoveToMain",
     "aiSessionSendIdempotency",
+    "aiSessionQueuePause",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
@@ -307,6 +332,8 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (providers.success) normalizedFeatures.aiSessionProviders = providers.data;
   const modelRelay = ControlledInstanceModelRelayCapabilitiesSchema.safeParse(features.modelRelay);
   if (modelRelay.success) normalizedFeatures.modelRelay = modelRelay.data;
+  const managedModelEnvironment = ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.safeParse(features.managedModelEnvironment);
+  if (managedModelEnvironment.success) normalizedFeatures.managedModelEnvironment = managedModelEnvironment.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
@@ -346,6 +373,15 @@ export function supportsControlledInstanceModelRelayStreaming(capabilities: unkn
   return controlledInstanceModelRelayCapabilities(capabilities).streaming;
 }
 
+/** Single query for the structured managed-environment capability declared by this boundary. */
+export function controlledInstanceManagedModelEnvironmentCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.managedModelEnvironment;
+}
+
+export function supportsControlledInstanceOpenCodeEnvironment(capabilities: unknown) {
+  return controlledInstanceManagedModelEnvironmentCapabilities(capabilities).openCodeConfig;
+}
+
 export function supportsControlledInstanceCodexManagedSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.codexManagedSettings;
 }
@@ -383,6 +419,10 @@ export function supportsRepositoryWorktreeMoveToMain(capabilities: unknown) {
  */
 export function supportsAiSessionSendIdempotency(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionSendIdempotency;
+}
+
+export function supportsAiSessionQueuePause(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionQueuePause === true;
 }
 
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {
@@ -2510,6 +2550,13 @@ export const InstanceConfigInputSchema = z.object({
   aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
 }).strict();
 
+// 公开 API：PATCH /api/controlled-instances/:id 请求体（control plane 边界）。
+export const UpdateInstanceInputSchema = z.object({
+  name: ControlledInstanceSchema.shape.name.optional(),
+  config: InstanceConfigInputSchema.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.unwrap().optional(),
+}).strict();
+
 export const InstanceCreateInputSchema = z.object({
   id: ControlledInstanceSchema.shape.id.optional(),
   name: ControlledInstanceSchema.shape.name.optional(),
@@ -3252,6 +3299,7 @@ export type InstanceVolumeDisposition = z.infer<typeof InstanceVolumeDisposition
 export type InstanceDeleteInput = z.infer<typeof InstanceDeleteInputSchema>;
 export type InstanceDeleteResult = z.infer<typeof InstanceDeleteResultSchema>;
 export type InstanceCreateInput = z.infer<typeof InstanceCreateInputSchema>;
+export type UpdateInstanceInput = z.infer<typeof UpdateInstanceInputSchema>;
 export type InstanceCreateStartOutcome = z.infer<typeof InstanceCreateStartOutcomeSchema>;
 export type InstanceCreateResult = z.infer<typeof InstanceCreateResultSchema>;
 export type ImageCover = z.infer<typeof ImageCoverSchema>;
