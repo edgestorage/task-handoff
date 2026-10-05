@@ -512,7 +512,7 @@ async function commitNameEdit() {
     await props.renameInstance(props.instance, nextName);
     cancelNameEdit();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("instances.detail.renameFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("instances.detail.renameFailed")), "error");
     await nextTick();
     nameInput.value?.focus();
   } finally {
@@ -543,7 +543,7 @@ async function openInstanceSourceFolder() {
   const instance = props.instance;
   if (!instance || !canOpenInstanceSourceFolder.value) return;
   const result = await openDesktopLocalPath(instanceSourceLocation(instance));
-  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"), "error");
 }
 
 function instanceImageLabel(instance: InstanceBoardItem) {

@@ -5,7 +5,7 @@ import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder' | 'queue-pause';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -114,6 +114,9 @@ export class MobileAiSessionActionCoordinator {
   }
   reorderQueue(instanceId: string, sessionId: string, expectedRevision: number, queueIds: string[]) {
     return this.run(instanceId, sessionId, 'queue-reorder', undefined, () => this.client.aiSessions.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds }));
+  }
+  pauseQueue(instanceId: string, sessionId: string, paused: boolean) {
+    return this.run(instanceId, sessionId, 'queue-pause', undefined, () => this.client.aiSessions.pauseQueue(instanceId, sessionId, { paused }));
   }
 
   private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>, fingerprint?: () => string, allowResultUnknownRetry = false): Promise<MobileActionResult<T>> {

@@ -429,6 +429,8 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   }
   if (path.startsWith("/api/controlled-instances")) {
     if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
+    // 自定义应用目录可能携带启动环境变量；读取与写入都要求实例 update 权限，不能按普通 read 放开。
+    if (/\/apps\/catalog\/custom$/.test(path)) return { action: "update", resource: { type: "instance" } };
     if (path.includes("/ai-sessions")) {
       if (path.includes("/triggers")) return { action, resource: { type: "trigger-deployment" } };
       if (/\/messages\/[^/]+\/attachments\/[^/]+\/content$/.test(path)) return { action: "read-file-content", resource: { type: "attachment" } };

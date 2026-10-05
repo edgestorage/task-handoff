@@ -61,6 +61,29 @@ test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /value="automations"><span class="story-detail-tab-count">\{\{ storyAutomationEntries\.length \}\}<\/span>\{\{ t\("stories\.automation\.title"\) \}\}<\/TabsTrigger>/);
 });
 
+test("Story detail header keeps content flush under the divider without an extra gap", () => {
+  assert.match(storyView, /\.story-detail-head \{[^}]*position:sticky; top:0;/);
+  assert.match(storyView, /\.story-detail-head \{[^}]*background:var\(--workspace-bg\);/);
+  assert.doesNotMatch(storyView, /\.story-detail-head \{[^}]*padding-bottom:/);
+  assert.doesNotMatch(storyView, /\.story-detail-head \{[^}]*backdrop-filter:/);
+});
+
+test("Story detail header wraps its tabs on the story pane width instead of the window width", () => {
+  assert.match(storyView, /\.story-detail-scroll-inner \{[^}]*container:story-detail \/ inline-size;/);
+  assert.match(
+    storyView,
+    /@container story-detail \(max-width:780px\) \{ \.story-content-header \{ flex-wrap:wrap; padding:0 0 14px; \} \.story-detail-header-tabs \{ order:3; width:100%; margin-left:0; \} \.story-detail-tabs \{ width:100%; \} \.story-detail-tabs :deep\(button\) \{ flex:1; min-width:0; padding:0 5px; \} \}/,
+  );
+  assert.doesNotMatch(storyView, /@media \(max-width:(?:800|560)px\)[^\n]*\.story-detail(?:-header)?-tabs/);
+});
+
+test("Story detail header never pushes its actions out of the pane", () => {
+  assert.match(storyView, /\.story-detail-header-tabs \{ flex:0 1 auto; margin-left:auto; min-width:0; \}/);
+  assert.match(storyView, /\.story-detail-tabs \{ display:inline-flex; align-items:center; width:fit-content; max-width:100%;/);
+  assert.match(storyView, /\.story-detail-tabs :deep\(button\) \{ min-width:0;/);
+  assert.match(storyView, /\.story-content-actions \{ display:flex; align-items:center; gap:8px; flex:0 0 auto; \}/);
+});
+
 test("Story tabs distinguish selection without the default active shadow", () => {
   assert.match(storyView, /\.story-detail-tabs :deep\(button\) \{[^}]*color:var\(--text-muted\);/);
   assert.match(storyView, /\.story-session-tabs :deep\(button\) \{[^}]*color:var\(--text-muted\);/);

@@ -170,10 +170,10 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
       {agentToolState === 'unavailable' ? <Text style={[styles.stateText, { color: colors.error }]}>{t('stories.agentToolsUnavailable')}</Text> : null}
       {agentToolState === 'ready' ? <>
         <ToolSwitch label={t('stories.agentToolContent')} value={agentToolPolicy.content} disabled={busy} onChange={(value) => setAgentTool('content', value)} colors={colors} />
+        {decisionToolSupported ? <ToolSwitch label={t('stories.agentToolDecisions')} value={agentToolPolicy.decisions} disabled={busy} onChange={(value) => setAgentTool('decisions', value)} colors={colors} /> : null}
         <ToolSwitch label={t('stories.agentToolActions')} value={agentToolPolicy.actions} disabled={busy} onChange={(value) => setAgentTool('actions', value)} colors={colors} />
         <ToolSwitch label={t('stories.agentToolAutomations')} value={agentToolPolicy.automations} disabled={busy} onChange={(value) => setAgentTool('automations', value)} colors={colors} />
         <ToolSwitch label={t('stories.agentToolAiSessions')} value={agentToolPolicy.aiSessions} disabled={busy} onChange={(value) => setAgentTool('aiSessions', value)} colors={colors} />
-        {decisionToolSupported ? <ToolSwitch label={t('stories.agentToolDecisions')} value={agentToolPolicy.decisions} disabled={busy} onChange={(value) => setAgentTool('decisions', value)} colors={colors} /> : null}
       </> : null}
     </View> : null}
     {error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}

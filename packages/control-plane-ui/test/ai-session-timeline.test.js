@@ -618,6 +618,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(panel, /@sticky-user-message-change="timelineStickyUserMessage = \$event"/);
   assert.match(panel, /effectiveTimelineViewMode === 'full' && timelineStickyUserMessage[\s\S]*session-ai-timeline-sticky-prompt[\s\S]*timelineStickyUserMessage\.text/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt \{[\s\S]*position: absolute;[\s\S]*z-index: 5;[\s\S]*height: calc\([\s\S]*background: var\(--workspace-bg\);/);
+  const stickyPromptRule = styles.match(/\.session-ai-timeline-sticky-prompt \{([^}]*)\}/);
+  assert.ok(stickyPromptRule);
+  assert.doesNotMatch(stickyPromptRule[1], /pointer-events/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content\) \{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content \*\) \{[\s\S]*display: inline;[\s\S]*white-space: nowrap;/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content > \* \+ \*::before\) \{[\s\S]*content: " ";/);

@@ -163,6 +163,7 @@ export default function SessionDetailRoute() {
     instanceId={params.instanceId}
     instanceCapabilities={instance?.capabilities}
     messages={messages}
+    nodeId={instance?.nodeId}
     onVisible={markVisible}
     onOpenSession={(sessionId) => router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: params.instanceId, sessionId } })}
     onDetailModeChange={setDetailMode}

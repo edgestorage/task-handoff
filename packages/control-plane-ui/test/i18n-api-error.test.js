@@ -46,6 +46,24 @@ test("stable instance, node, and model errors have localized messages", () => {
   }
 });
 
+test("AI session launch failures keep their own code instead of a repository message", () => {
+  const cases = [
+    ["AI_SESSION_CONTROL_NOT_CONNECTED", "The instance's AI service is not connected. Try again in a moment, or restart the instance.", "实例的 AI 服务未连接，请稍后重试，或重启实例。"],
+    ["AI_SESSION_CONTROL_FAILED", "The AI session action failed. Try again.", "AI 会话操作失败，请重试。"],
+    ["AI_SESSION_CREATE_UNSUPPORTED", "This agent does not support starting an AI session directly.", "此 agent 不支持直接创建 AI 会话。"],
+    ["AI_SESSION_CREATE_INVALID_RESPONSE", "The AI provider returned an invalid session identity. Try again.", "AI provider 返回了无效的会话标识，请重试。"],
+    ["AI_SESSION_MATERIALIZATION_FAILED", "The AI session was created but its first message failed. Try again.", "AI 会话已创建，但首条消息发送失败，请重试。"],
+    ["AI_SESSION_MODEL_SELECTION_INVALID", "The selected model is unavailable. Select another model to continue.", "所选模型不可用，请切换其他模型后继续。"],
+    ["AI_SESSION_CREATE_REQUEST_CONFLICT", "This request ID was already used with different session settings. Start the session again to get a new request ID.", "此请求 ID 已用于不同的会话设置，请重新发起会话以获取新的请求 ID。"],
+  ];
+
+  for (const [code, englishMessage, chineseMessage] of cases) {
+    const error = { code, message: `raw server diagnostic for ${code}` };
+    assert.equal(translateApiError(error, english), englishMessage);
+    assert.equal(translateApiError(error, chinese), chineseMessage);
+  }
+});
+
 test("validation errors preserve the server field path and reason", () => {
   const message = "name: Invalid input: expected string, received number";
   const error = new ApiError(message, "VALIDATION_ERROR", 400);

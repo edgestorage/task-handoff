@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { StoryToolPolicyService } from "../src/node-agent/stories/tool-policy-service.ts";
+import { NodeStoryStore } from "../src/node-agent/stories/store.ts";
 import { AgentOrchestrationService } from "../src/node-agent/agents/orchestration-service.ts";
 import { defaultAgentOrchestrationId, agentOrchestrationHasEdge } from "@task-handoff/protocol/agent-orchestrations";
 import { createStoryDatabaseFixture } from "./story-database-fixture.ts";
@@ -30,27 +31,24 @@ function seedAgent(
 test("Story tool policy defaults, persists, resolves, and filters archived mutations", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-tool-policy-");
   try {
-    const timestamp = "2026-09-19T00:00:00.000Z";
-    await fixture.repository.stories.insert({
-      id: "story_policy",
-      title: "Policy",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      maxIdleAiSessions: 5,
-      nextDocumentSequence: 1,
-    });
+    const stories = new NodeStoryStore(fixture.paths, "node-test", fixture.repository);
+    await stories.init();
+    const story = await stories.create({ title: "Policy", actions: [] });
     const service = new StoryToolPolicyService(fixture.repository);
-    const initial = await service.settings("story_policy");
-    assert.deepEqual(initial.policy, { content: true, actions: false, automations: false, aiSessions: false, decisions: false });
+    const initial = await service.settings(story.id);
+    assert.deepEqual(initial.policy, { content: true, actions: false, automations: false, aiSessions: false, decisions: true });
     assert.match(initial.revision, /^[a-f0-9]{64}$/);
-    assert.deepEqual((await service.resolve("story_policy")).agentInvocation, {
+    assert.deepEqual((await service.resolve(story.id)).enabledTools, [
+      "story_list_content", "story_get_content", "story_set_content", "story_request_decision",
+    ]);
+    assert.deepEqual((await service.resolve(story.id)).agentInvocation, {
       enabledTools: [],
       allowedTargets: [],
     });
 
-    const updated = await service.update("story_policy", { content: true, actions: true, automations: true, aiSessions: true, decisions: false });
+    const updated = await service.update(story.id, { content: true, actions: true, automations: true, aiSessions: true, decisions: false });
     assert.notEqual(updated.revision, initial.revision);
-    assert.deepEqual((await service.resolve("story_policy")).enabledTools, [
+    assert.deepEqual((await service.resolve(story.id)).enabledTools, [
       "story_list_content", "story_get_content", "story_set_content",
       "story_list_actions", "story_run_action",
       "story_list_automations", "story_create_automation", "story_update_automation",
@@ -58,13 +56,13 @@ test("Story tool policy defaults, persists, resolves, and filters archived mutat
       "story_list_ai_sessions", "story_get_ai_session", "story_get_ai_session_turn",
     ]);
 
-    await fixture.repository.stories.update("story_policy", { archivedAt: timestamp });
-    assert.deepEqual((await service.resolve("story_policy")).enabledTools, [
+    await fixture.repository.stories.update(story.id, { archivedAt: "2026-09-19T00:00:00.000Z" });
+    assert.deepEqual((await service.resolve(story.id)).enabledTools, [
       "story_list_content", "story_get_content", "story_list_actions", "story_list_automations",
       "story_list_automation_runs", "story_list_ai_sessions", "story_get_ai_session", "story_get_ai_session_turn",
     ]);
     await assert.rejects(
-      () => service.assertEnabled("story_policy", "story_run_action"),
+      () => service.assertEnabled(story.id, "story_run_action"),
       (error: any) => error.code === "STORY_AGENT_TOOL_DISABLED" && error.statusCode === 403,
     );
   } finally {

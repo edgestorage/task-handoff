@@ -47,6 +47,25 @@ export const AppSessionAccessRevocationSchema = z
   .object({ revoked: z.boolean() })
   .strict();
 
+export const AppSessionLogFileSchema = z
+  .object({
+    name: z.string().trim().min(1).max(240),
+    size: z.number().int().nonnegative(),
+    updatedAt: z.string().datetime(),
+    truncated: z.boolean(),
+    content: z.string(),
+  })
+  .strict();
+
+export const AppSessionLogsSchema = z
+  .object({
+    sessionId: z.string().trim().min(1).max(160),
+    logDir: z.string().trim().min(1).max(1024),
+    maxBytes: z.number().int().positive(),
+    files: z.array(AppSessionLogFileSchema).max(256),
+  })
+  .strict();
+
 const HIDDEN_APP_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "failed", "exited", "closed", "terminated"]);
 
 export const AppSessionBindingSchema = z
@@ -378,6 +397,8 @@ export type AppSessionRecord = z.infer<typeof AppSessionRecordSchema>;
 export type AppSessionStatus = z.infer<typeof AppSessionStatusSchema>;
 export type AppSessionAccessMode = z.infer<typeof AppSessionAccessModeSchema>;
 export type AppSessionAccessLease = z.infer<typeof AppSessionAccessLeaseSchema>;
+export type AppSessionLogFile = z.infer<typeof AppSessionLogFileSchema>;
+export type AppSessionLogs = z.infer<typeof AppSessionLogsSchema>;
 export type AppSessionBinding = z.infer<typeof AppSessionBindingSchema>;
 export type AppSessionsSnapshot = z.infer<typeof AppSessionsSnapshotSchema>;
 export type AppSessionsState = z.infer<typeof AppSessionsStateSchema>;

@@ -31,7 +31,7 @@ function rows(value: readonly unknown[]) {
 
 async function bridgeBody(invocation: CliInvocation, label: string) {
   const body = readRequestBody(invocation, label);
-  if (invocation.options.tokenStdin === true) {
+  if (invocation.options["token-stdin"] === true) {
     const token = await readTokenFromStdin(invocation);
     body.token = token;
     registerSecret(token);

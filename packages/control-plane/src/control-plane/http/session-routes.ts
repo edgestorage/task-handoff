@@ -1,9 +1,10 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
+import { PROXY_HOP_BY_HOP_HEADERS } from "@task-handoff/core/core/http-proxy";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
@@ -21,9 +22,31 @@ import {
 } from "./route-params.ts";
 import { assertRequestInstanceVisible, requestVisibleInstanceIds } from "./access-projection.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
+import { nodeJson } from "./node-agent-request.ts";
+import { errorDiagnostic } from "../common/helpers.ts";
+import { parseResponse } from "@task-handoff/protocol/response-validation";
+import { STORY_TEXT_PREVIEW_MAX_BYTES, StoryContentListSchema, StoryContentPreviewSchema } from "@task-handoff/protocol/stories";
 
 const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
 const AiSessionProjectionQuerySchema = z.object({ revision: z.string().trim().min(1).max(64).optional() }).strict();
+const AiSessionTranscriptQuerySchema = z.object({ tail: z.coerce.number().int().min(1).max(1000).optional() }).strict();
+const AppSessionLogsQuerySchema = z.object({ maxBytes: z.coerce.number().int().min(1024).max(512 * 1024).optional() }).strict();
+const StoryContentFileQuerySchema = z.object({ storyPath: z.string().trim().min(1).max(1024) }).strict();
+
+type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
+
+/** 二进制/流式实例响应原样透传；错误状态仍是实例的 JSON 错误信封。 */
+function replyInstanceStream(reply: FastifyReply, response: StreamingProxyResponse) {
+  for (const [key, value] of Object.entries(response.headers)) {
+    const lower = key.toLowerCase();
+    if (PROXY_HOP_BY_HOP_HEADERS.has(lower) || lower === "content-encoding") continue;
+    reply.header(key, value);
+  }
+  if (!response.body) return reply.code(response.status).send();
+  const readable = Readable.fromWeb(response.body as never);
+  reply.raw.once("close", () => readable.destroy());
+  return reply.code(response.status).send(readable);
+}
 
 export type RegisterSessionRoutesOptions = {
   app: FastifyInstance;
@@ -197,6 +220,15 @@ export function registerSessionRoutes({
     const session = await service.renameAppSession(params.id, params.sessionId, parsed.title);
     events.publish("instance.app-session.renamed", { instanceId: params.id, sessionId: params.sessionId, title: parsed.title });
     return { data: session };
+  });
+  app.get("/api/controlled-instances/:id/apps/sessions/:sessionId/logs", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const query = AppSessionLogsQuerySchema.parse(request.query || {});
+    return { data: await service.appSessionLogs(params.id, params.sessionId, query.maxBytes) };
+  });
+  app.get("/api/controlled-instances/:id/apps/sessions/:sessionId/screenshot", async (request, reply) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return replyInstanceStream(reply, await service.appSessionScreenshot(params.id, params.sessionId));
   });
   app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
@@ -473,7 +505,7 @@ export function registerSessionRoutes({
       : resolvedById.get(attachment.id)!).filter(Boolean);
     reply.header(TRACE_ID_HEADER, clientRequestTraceId(parsed.clientRequestId));
     const result = await service.createAiSession(params.id, { ...parsed, attachments }).catch((error: unknown) => {
-      request.log.info({ traceId: clientRequestTraceId(parsed.clientRequestId), clientRequestId: parsed.clientRequestId, instanceId: params.id, outcome: "failed", durationMs: performance.now() - startedAt }, "ai-session.create.request");
+      request.log.info({ traceId: clientRequestTraceId(parsed.clientRequestId), clientRequestId: parsed.clientRequestId, instanceId: params.id, outcome: "failed", durationMs: performance.now() - startedAt, ...errorDiagnostic(error) }, "ai-session.create.request");
       throw error;
     });
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
@@ -658,6 +690,11 @@ export function registerSessionRoutes({
     const input = AiSessionQueueReorderInputSchema.parse(request.body || {});
     return { data: await service.reorderAiSessionQueuedMessages(params.id, params.sessionId, input) };
   });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/pause", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionQueuePauseInputSchema.parse(request.body || {});
+    return { data: await service.setAiSessionQueuePaused(params.id, params.sessionId, input.paused) };
+  });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/interrupt", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const result = await service.interruptAiSession(params.id, params.sessionId);
@@ -710,4 +747,80 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     return { data: await service.readAiSession(params.id, params.sessionId) };
   });
+
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/transcript", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const query = AiSessionTranscriptQuerySchema.parse(request.query || {});
+    return { data: await service.aiSessionTranscript(params.id, params.sessionId, query.tail) };
+  });
+
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/story-content", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const { instance, storyId } = await resolveAiSessionStory(service, aiSessionAggregator, params.id, params.sessionId);
+    const content = await nodeJson(service, instance.nodeId, `/stories/${encodeURIComponent(storyId)}/content`);
+    return { data: { storyId, documents: parseResponse(StoryContentListSchema, content).documents } };
+  });
+
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/story-content/preview", async (request, reply) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const query = StoryContentFileQuerySchema.parse(request.query || {});
+    const { instance, storyId } = await resolveAiSessionStory(service, aiSessionAggregator, params.id, params.sessionId);
+    const node = service.requireNode(instance.nodeId);
+    const response = await service.resolveNodeAgentTransport(node).requestStream(
+      node,
+      `/stories/${encodeURIComponent(storyId)}/content/file?storyPath=${encodeURIComponent(query.storyPath)}`,
+    );
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ error: { code: "STORY_CONTENT_READ_FAILED", message: `Story content request failed with HTTP ${response.status}.` } }));
+      return reply.code(response.status).send(payload);
+    }
+    const declaredSize = Number(response.headers.get("content-length") || 0);
+    if (declaredSize > STORY_TEXT_PREVIEW_MAX_BYTES) {
+      return reply.code(413).send({ error: { code: "STORY_PREVIEW_TOO_LARGE", message: "Story document exceeds the text preview limit." } });
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > STORY_TEXT_PREVIEW_MAX_BYTES) {
+      return reply.code(413).send({ error: { code: "STORY_PREVIEW_TOO_LARGE", message: "Story document exceeds the text preview limit." } });
+    }
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      return reply.code(415).send({ error: { code: "STORY_PREVIEW_NOT_TEXT", message: "Story document is not valid UTF-8 text." } });
+    }
+    return { data: StoryContentPreviewSchema.parse({ storyPath: query.storyPath, revision: response.headers.get("x-story-revision"), content, size: bytes.byteLength }) };
+  });
+}
+
+/**
+ * AI 会话的 Story 关联以 CP 聚合快照为权威；缓存未命中时刷新一次再判定 404，
+ * 避免刚绑定的会话在快照收敛前被误报为未关联。
+ */
+async function resolveAiSessionStory(
+  service: ControlPlaneService,
+  aggregator: ControlPlaneAiSessionAggregator,
+  instanceId: string,
+  sessionId: string,
+) {
+  const findSession = async (refresh: boolean) => {
+    const view = await aggregator.list({ refresh, instanceId });
+    return view.instances
+      .find((entry) => entry.instanceId === instanceId)
+      ?.aiSessions.sessions.find((session) => session.id === sessionId);
+  };
+  const session = await findSession(false) ?? await findSession(true);
+  if (!session) {
+    throw Object.assign(new Error(`AI session ${sessionId} was not found on instance ${instanceId}.`), {
+      statusCode: 404,
+      code: "AI_SESSION_NOT_FOUND",
+    });
+  }
+  if (!session.storyId) {
+    throw Object.assign(new Error("AI session is not assigned to a Story."), {
+      statusCode: 409,
+      code: "STORY_CONTEXT_REQUIRED",
+    });
+  }
+  const instance = await service.requireControlledInstance(instanceId, true);
+  return { instance, storyId: session.storyId };
 }

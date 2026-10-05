@@ -66,9 +66,10 @@ test("the agent catalog follows each node answer and stays inert while the view 
 });
 
 test("the agent view exposes progressive, unavailable, and offline read-only states", () => {
-  assert.match(view, /const \{ catalog, nodes, loadingNodeIds, unavailableNodeIds, isPending, refetch \} = useAgentCatalog/);
-  assert.match(view, /loadingNodeIds\.includes\(group\.nodeId\)/);
-  assert.match(view, /unavailableNodeIds\.includes\(group\.nodeId\)/);
+  assert.match(view, /const \{ catalog, nodes, loadingNodeIds, unavailableNodeIds, isPending, isFetching, refetch \} = useAgentCatalog/);
+  assert.match(view, /v-if="loadingNodeIds\.length" class="agent-node-load" role="status" aria-live="polite"[\s\S]*agents\.list\.loadingNodes/);
+  assert.match(view, /v-if="unavailableNodeIds\.length" class="agent-node-load" data-state="warning"[\s\S]*agents\.list\.unavailableNodes/);
+  assert.match(view, /:aria-busy="isFetching \? 'true' : undefined"/);
   assert.match(view, /!selectedAgent\.nodeOnline/);
   assert.match(types, /nodeOnline: boolean;/);
   assert.match(graph, /connectable: member\.online && !member\.missing/);

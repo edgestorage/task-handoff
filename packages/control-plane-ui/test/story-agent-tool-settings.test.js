@@ -10,8 +10,16 @@ test("Story editor exposes only the product-level Agent tool categories", () => 
   }
   const policyOptionCount = (storyView.match(/class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy\./g) || []).length;
   assert.equal(policyOptionCount, 5);
+  // 新建默认开启的两项（Content、决策）排在最上方，其余类别保持既有顺序。
+  const optionOrder = [...storyView.matchAll(/<Checkbox :model-value="draftAgentToolPolicy\.(\w+)"/g)].map((match) => match[1]);
+  assert.deepEqual(optionOrder, ["content", "decisions", "actions", "automations", "aiSessions"]);
   assert.doesNotMatch(storyView, /story_delete_automation/);
   assert.doesNotMatch(storyView, /story_run_action/);
+});
+
+test("Story editor gates the decisions option on the draft node capability", () => {
+  assert.match(storyView, /const draftDecisionToolSupported = computed\(\(\) => nodeSupportsStoryDecisions\(draftNodeId\.value\)\)/);
+  assert.match(storyView, /<label v-if="draftDecisionToolSupported"/);
 });
 
 test("Story editor gates policy reads on the normalized node capability", () => {

@@ -65,6 +65,8 @@ test("parameterized query factories expose domain prefixes when no id is provide
   assert.deepEqual(controlPlaneQueryKeys.nodeLocalFolders("node-1"), ["control-plane-node-local-folders", "node-1"]);
   assert.deepEqual(controlPlaneQueryKeys.nodeImageCatalog("node-1"), ["node-image-catalog", "node-1"]);
   assert.deepEqual(controlPlaneQueryKeys.storyAgentEntries("node-1", "story-1").slice(0, 1), controlPlaneQueryKeys.agents());
+  // story.decision.changed events invalidate the stories domain prefix, which must cover the shared decisions snapshot.
+  assert.deepEqual(controlPlaneQueryKeys.storyDecisions("node-1", "story-1").slice(0, 1), controlPlaneQueryKeys.stories());
 });
 
 test("manual refresh covers every domain and manual-only query exactly once", () => {

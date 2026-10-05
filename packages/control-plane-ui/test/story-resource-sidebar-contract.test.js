@@ -102,7 +102,7 @@ test("Story tab context menu keeps rename and close on the shared instance actio
   assert.match(tabStrip, /async function beginRename\(item: StoryResourceTabItem\) \{\s*if \(item\.rename !== "enabled" \|\| !props\.renameResource \|\| item\.closing\) return;[\s\S]*await focusResourceTabTitleInput\(renameInput\);/);
   assert.match(tabStrip, /function holdRenameFocus\(event: Event\) \{\s*if \(editingKey\.value\) event\.preventDefault\(\);/);
   assert.match(tabStrip, /await props\.renameResource\?\.\(item\.key, title\)/);
-  assert.match(tabStrip, /showControlPlaneToast\(translateApiError\(error, t, t\("sessions\.tabs\.renameFailed"\)\)\)/);
+  assert.match(tabStrip, /showControlPlaneToast\(translateApiError\(error, t, t\("sessions\.tabs\.renameFailed"\)\), "error"\)/);
   assert.match(sidebar, /:rename-resource="renameAppSessionResource"/);
   assert.match(sidebar, /function storyResourceRenameState[\s\S]*canRenameAppSession\(instance, resource\.sessionId\) \? "enabled" : "unavailable"/);
   assert.match(sidebar, /async function renameAppSessionResource\(key: string, title: string\) \{\s*const resource = props\.resources\.find\(\(candidate\) => storyResourceKey\(candidate\) === key\);\s*if \(resource\?\.kind !== "app-session" \|\| !props\.renameResource\) return;\s*await props\.renameResource\(resource\.instanceId, resource\.sessionId, title\);/);

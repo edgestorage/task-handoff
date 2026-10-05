@@ -3,15 +3,19 @@ import {
   AppSessionDeltaResponseSchema,
   AppSessionAccessLeaseSchema,
   AppSessionAccessRevocationSchema,
+  AppSessionLogsSchema,
   AppSessionRecordSchema,
   AppSessionsSnapshotSchema,
 } from "@task-handoff/protocol/app-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
+import { binaryUnsupported } from "./errors.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 const LaunchAppSessionInputSchema = z.object({
   appId: z.string().trim().min(1).max(120),
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  /** 目标实例内的绝对工作目录；与 cwdFolderId 二选一。 */
+  cwd: z.string().trim().min(1).max(512).optional(),
 }).strict();
 const RenameAppSessionInputSchema = z.object({
   title: z.string().trim().min(1).max(120),
@@ -43,7 +47,8 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
       return requestData(`/api/app-sessions?${query}`, ControlPlaneAppSessionsSchema, { signal });
     },
     launch(instanceId: string, input: LaunchAppSessionInput) {
-      const body = LaunchAppSessionInputSchema.parse(input);
+      const { cwd, ...launch } = LaunchAppSessionInputSchema.parse(input);
+      const body = { ...launch, ...(cwd ? { options: { cwd } } : {}) };
       return requestData(
         `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions`,
         AppSessionRecordSchema,
@@ -84,6 +89,21 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
         `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/access`,
         AppSessionAccessRevocationSchema,
         { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) },
+      );
+    },
+    logs(instanceId: string, sessionId: string, maxBytes?: number, signal?: AbortSignal) {
+      const query = maxBytes === undefined ? "" : `?maxBytes=${encodeURIComponent(String(maxBytes))}`;
+      return requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/logs${query}`,
+        AppSessionLogsSchema,
+        { signal },
+      );
+    },
+    async screenshot(instanceId: string, sessionId: string, signal?: AbortSignal) {
+      if (!transport.requestBinary) throw binaryUnsupported();
+      return transport.requestBinary(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/screenshot`,
+        { signal },
       );
     },
     delta(instanceId: string, streamId: string, sinceRevision: number, signal?: AbortSignal) {

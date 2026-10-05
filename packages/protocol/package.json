@@ -78,6 +78,10 @@
       "types": "./src/app-profiles.ts",
       "default": "./src/app-profiles.ts"
     },
+    "./app-catalog": {
+      "types": "./src/app-catalog.ts",
+      "default": "./src/app-catalog.ts"
+    },
     "./browser-tunnel": {
       "types": "./src/browser-tunnel.ts",
       "default": "./src/browser-tunnel.ts"

@@ -827,7 +827,7 @@ async function saveExternalListener() {
     showControlPlaneToast(t("settings.nodeDetail.listenerUpdated"), "success");
   } catch (error) {
     externalListenerError.value = errorText(error);
-    showControlPlaneToast(externalListenerError.value);
+    showControlPlaneToast(externalListenerError.value, "error");
   } finally {
     savingExternalListener.value = false;
     await loadExternalListener();
@@ -880,7 +880,7 @@ async function setModelRelayEnabled(enabled: boolean) {
           instances: instanceIds.map((id) => selectedNodeInstances.value.find((instance) => instance.id === id)?.name || id).join(", "),
         })}`
       : errorText(error);
-    showControlPlaneToast(modelRelayError.value);
+    showControlPlaneToast(modelRelayError.value, "error");
   } finally {
     savingModelRelay.value = false;
     await loadModelRelay();
@@ -1105,7 +1105,7 @@ async function forceCancelProxyClaim() {
     }
     pendingClaimForceId.value = "";
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   } finally {
     pendingClaimBusyId.value = "";
     pendingClaimAction.value = undefined;
@@ -1119,7 +1119,7 @@ async function setUpdateChannel(value: string) {
     queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
     for (const key of Object.keys(updateChecks)) delete updateChecks[key];
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   }
 }
 
@@ -1131,7 +1131,7 @@ async function setDiagnosticLogs(enabled: boolean) {
     queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
     showControlPlaneToast(t(enabled ? "settings.diagnosticLogs.enabledMessage" : "settings.diagnosticLogs.disabledMessage"), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     savingDiagnosticLogs.value = false;
   }
@@ -1150,7 +1150,7 @@ async function exportDiagnosticLogs() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
     showControlPlaneToast(t("settings.diagnosticLogs.exported"), "success");
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     exportingDiagnosticLogs.value = false;
   }
@@ -1185,7 +1185,7 @@ async function runDesktopUpdateAction(action: () => Promise<void>) {
   try {
     await action();
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   }
 }
 
@@ -1333,7 +1333,7 @@ async function savePublicBaseUrl() {
     publicBaseUrlMessage.value = t("settings.publicAccess.saved");
     await queryClient.invalidateQueries({ queryKey: ["control-plane-settings"] });
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     savingPublicBaseUrl.value = false;
   }
@@ -1367,7 +1367,7 @@ async function saveTriggerSettings() {
   } catch (error) {
     triggerSettingsMessage.value = errorText(error);
     triggerSettingsMessageError.value = true;
-    showControlPlaneToast(triggerSettingsMessage.value);
+    showControlPlaneToast(triggerSettingsMessage.value, "error");
   } finally {
     savingTriggerSettings.value = false;
   }

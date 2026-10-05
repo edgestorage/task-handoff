@@ -158,7 +158,7 @@ test("every launcher surface focuses the running profile session instead of rela
   assert.match(workbench, /@open-app-session="focusAppSessionById"/);
   assert.match(workbench, /function focusAppSession\(instance: InstanceBoardItem, sessionId: string\)[\s\S]*boardSessionKeys\[instance\.id\] = sessionId/);
   assert.match(workbench, /closeFloatingLayers\(\);[\s\S]*void refresh\(\);/);
-  assert.match(workbench, /focusAppSession,\n  notifyError: showToast,/);
+  assert.match(workbench, /focusAppSession,\n  notifyError: \(message: string\) => showToast\(message, "error"\),/);
   assert.match(sessionHook, /error\.code !== "BROWSER_PROFILE_BUSY"/);
   assert.match(sessionHook, /typeof error\.details\?\.sessionId === "string" \? error\.details\.sessionId : ""/);
   assert.match(sessionHook, /await focusAppSession\(instance, sessionId\)/);

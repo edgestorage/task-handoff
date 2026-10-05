@@ -172,6 +172,15 @@ test('edits and reorders queued messages with the authoritative queue revision',
   expect(api.aiSessions.reorderQueue).toHaveBeenCalledWith('instance', 'session', { expectedRevision: 8, queueIds: ['queue-2', 'queue-1'] });
 });
 
+test('pauses and resumes the queue through the shared client', async () => {
+  const pauseQueue = jest.fn().mockResolvedValue({});
+  const coordinator = new MobileAiSessionActionCoordinator('cp', client({ pauseQueue }), new MobileAiSessionStore());
+  expect((await coordinator.pauseQueue('instance', 'session', true)).disposition).toBe('accepted');
+  expect((await coordinator.pauseQueue('instance', 'session', false)).disposition).toBe('accepted');
+  expect(pauseQueue).toHaveBeenNthCalledWith(1, 'instance', 'session', { paused: true });
+  expect(pauseQueue).toHaveBeenNthCalledWith(2, 'instance', 'session', { paused: false });
+});
+
 test('drafts are versioned and isolated by complete session identity', async () => {
   const values = new Map<string, string>();
   const storage: SecureValueStore = {

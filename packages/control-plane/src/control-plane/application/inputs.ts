@@ -1,16 +1,15 @@
 import {
-  ControlledInstanceSchema,
   CopyModelInputSchema,
   CreateModelInputSchema,
   CreateNodeControlPlaneConnectionInputSchema,
   CreateNodeInputSchema,
   CreateNodeJoinInviteInputSchema,
-  InstanceConfigInputSchema,
   ModelDiscoveryInputSchema,
   ModelTestInputSchema,
   NodeAuthInputSchema,
   UpdateModelInputSchema,
   UpdateNodeInputSchema,
+  UpdateInstanceInputSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
 
@@ -31,13 +30,8 @@ export {
   NodeAuthInputSchema,
   UpdateModelInputSchema,
   UpdateNodeInputSchema,
+  UpdateInstanceInputSchema,
 };
-
-export const UpdateInstanceInputSchema = z.object({
-  name: ControlledInstanceSchema.shape.name.optional(),
-  config: InstanceConfigInputSchema.optional(),
-  modelSelection: ControlledInstanceSchema.shape.modelSelection.unwrap().optional(),
-}).strict();
 
 export type CreateModelInput = z.infer<typeof CreateModelInputSchema>;
 export type UpdateModelInput = z.infer<typeof UpdateModelInputSchema>;

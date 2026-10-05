@@ -135,7 +135,7 @@ export function emptyAiSessionQueue(): AiSessionStatus["queue"] {
   return { revision: 0, pendingCount: 0, items: [] };
 }
 
-export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[], revision: unknown = 0): AiSessionStatus["queue"] {
+export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[], revision: unknown = 0, paused = false): AiSessionStatus["queue"] {
   const normalizedItems = items
     .map(normalizeQueuedMessage)
     .filter((item): item is AiSessionQueuedMessage => Boolean(item))
@@ -144,15 +144,17 @@ export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[], re
   return {
     revision: normalizeNonNegativeInteger(revision),
     pendingCount: normalizedItems.filter((item) => item.status === "queued" || item.status === "sending").length,
+    ...(paused ? { paused: true } : {}),
     items: normalizedItems,
   };
 }
 
 export function normalizeAiSessionQueue(value: unknown): AiSessionStatus["queue"] {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { revision?: unknown; items?: unknown } : {};
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { revision?: unknown; paused?: unknown; items?: unknown } : {};
   return normalizeAiSessionQueueItems(
     Array.isArray(record.items) ? record.items as AiSessionQueuedMessage[] : [],
     record.revision,
+    record.paused === true,
   );
 }
 

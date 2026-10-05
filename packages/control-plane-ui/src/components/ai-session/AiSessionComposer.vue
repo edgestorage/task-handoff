@@ -292,15 +292,15 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
     const mime = file.type || (kind === "image" ? "image/png" : "application/octet-stream");
     const usesRuntimePath = runtimePathFiles.has(file);
     if (kind === "image" && !SUPPORTED_IMAGE_MIME.has(mime)) {
-      showControlPlaneToast(t("sessions.composer.supportedImages"));
+      showControlPlaneToast(t("sessions.composer.supportedImages"), "error");
       continue;
     }
     if (file.size <= 0) {
-      showControlPlaneToast(t("sessions.composer.emptyFile"));
+      showControlPlaneToast(t("sessions.composer.emptyFile"), "error");
       continue;
     }
     if (!usesRuntimePath && kind === "image" && file.size > MAX_ATTACHMENT_BYTES) {
-      showControlPlaneToast(t("sessions.composer.imageTooLarge"));
+      showControlPlaneToast(t("sessions.composer.imageTooLarge"), "error");
       continue;
     }
     if (!usesRuntimePath && kind === "file" && file.size >= (props.maxFileAttachmentBytes || AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES)) {
@@ -308,15 +308,15 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
         ? t("sessions.composer.runtimePathOutside")
         : props.mentionContext?.runtimeType === "local"
           ? t("sessions.composer.browserPathUnavailable")
-        : t("sessions.composer.fileTooLarge"));
+        : t("sessions.composer.fileTooLarge"), "error");
       continue;
     }
     if (attachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
-      showControlPlaneToast(t("sessions.composer.tooManyAttachments"));
+      showControlPlaneToast(t("sessions.composer.tooManyAttachments"), "error");
       continue;
     }
     if (!usesRuntimePath && nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
-      showControlPlaneToast(t("sessions.composer.totalTooLarge"));
+      showControlPlaneToast(t("sessions.composer.totalTooLarge"), "error");
       continue;
     }
     if (!usesRuntimePath) nextBytes += file.size;
@@ -432,7 +432,7 @@ function attachmentProgressLabel(attachment: AiSessionComposerAttachment) {
 async function copyAttachmentImage(attachment: AiSessionComposerAttachment) {
   const source = attachment.previewUrl || attachment.dataUrl;
   if (!source || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"), "error");
     return;
   }
   try {
@@ -441,7 +441,7 @@ async function copyAttachmentImage(attachment: AiSessionComposerAttachment) {
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     showControlPlaneToast(t("sessions.composer.imageCopied"), "success");
   } catch {
-    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"), "error");
   }
 }
 
@@ -479,7 +479,7 @@ function handlePaste(event: ClipboardEvent) {
   if (decision.disposition === "inline") return;
   event.preventDefault();
   if (decision.disposition === "rejected") {
-    showControlPlaneToast(t("sessions.composer.fileTooLarge"));
+    showControlPlaneToast(t("sessions.composer.fileTooLarge"), "error");
     return;
   }
   pastedTextSequence.value += 1;

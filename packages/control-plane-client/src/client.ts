@@ -1,6 +1,7 @@
 import { createControlPlaneAiSessionsApi } from "./ai-sessions.ts";
 import { createControlPlaneAppSessionsApi } from "./app-sessions.ts";
 import { createControlPlaneAppProfilesApi } from "./app-profiles.ts";
+import { createControlPlaneAppManagementApi } from "./app-management.ts";
 import { createControlPlaneAuthApi } from "./auth.ts";
 import { responseSchema } from "@task-handoff/protocol/response-validation";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -35,6 +36,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
     aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),
     appSessions: createControlPlaneAppSessionsApi(compatibleTransport),
     appProfiles: createControlPlaneAppProfilesApi(compatibleTransport),
+    apps: createControlPlaneAppManagementApi(compatibleTransport),
     browser: createControlPlaneBrowserApi(compatibleTransport),
     resources: createControlPlaneResourcesApi(compatibleTransport),
     triggers: createControlPlaneTriggersApi(compatibleTransport),

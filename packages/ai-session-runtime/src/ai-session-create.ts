@@ -39,6 +39,22 @@ export type AiSessionCreateCoordinatorInput = {
   agentTools?: AiSessionAgentToolName[];
 };
 
+export type AiSessionCreateTiming = {
+  clientRequestId: string;
+  agent: string;
+  stage: string;
+  durationMs: number;
+  outcome: "completed" | "failed";
+  /**
+   * Failure identity for the stage. Only present when the stage failed, so a
+   * "provider-create failed" timing line explains itself instead of forcing a
+   * second investigation into the app-server logs.
+   */
+  errorCode?: string;
+  errorMessage?: string;
+  errorStatusCode?: number;
+};
+
 export type AiSessionCreateCoordinatorOptions = {
   registry: AiSessionRegistry;
   controller: AiSessionController;
@@ -48,7 +64,7 @@ export type AiSessionCreateCoordinatorOptions = {
   materializationTimeoutMs?: number;
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
-  onTiming?: (timing: { clientRequestId: string; agent: string; stage: string; durationMs: number; outcome: "completed" | "failed" }) => void;
+  onTiming?: (timing: AiSessionCreateTiming) => void;
   resolveStoryAgentTools?: (storyId?: Story["id"]) => Promise<AiSessionAgentToolName[]>;
 };
 
@@ -185,13 +201,24 @@ export class AiSessionCreateCoordinator {
   private async measure<T>(input: AiSessionCreateCoordinatorInput, stage: string, operation: () => T | Promise<T>): Promise<T> {
     const startedAt = performance.now();
     let outcome: "completed" | "failed" = "failed";
+    let failure: unknown;
     try {
       const result = await operation();
       outcome = "completed";
       return result;
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
       try {
-        this.options.onTiming?.({ clientRequestId: input.clientRequestId, agent: input.agent, stage, durationMs: performance.now() - startedAt, outcome });
+        this.options.onTiming?.({
+          clientRequestId: input.clientRequestId,
+          agent: input.agent,
+          stage,
+          durationMs: performance.now() - startedAt,
+          outcome,
+          ...(outcome === "failed" ? aiSessionCreateFailureTiming(failure) : {}),
+        });
       } catch {}
     }
   }
@@ -281,6 +308,17 @@ export function assertAiSessionCreateRequestFingerprint(expected: string | undef
 function createFingerprintInput(input: AiSessionCreateCoordinatorInput) {
   const { clientRequestId: _clientRequestId, idempotencyFingerprint: _idempotencyFingerprint, ...value } = input;
   return value;
+}
+
+function aiSessionCreateFailureTiming(error: unknown) {
+  if (!error || typeof error !== "object") return {};
+  const record = error as { code?: unknown; statusCode?: unknown };
+  const message = error instanceof Error ? error.message : undefined;
+  return {
+    ...(typeof record.code === "string" && record.code ? { errorCode: record.code } : {}),
+    ...(message ? { errorMessage: message } : {}),
+    ...(typeof record.statusCode === "number" ? { errorStatusCode: record.statusCode } : {}),
+  };
 }
 
 function canonicalJson(value: unknown): string {

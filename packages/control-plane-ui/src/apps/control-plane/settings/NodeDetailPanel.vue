@@ -247,7 +247,7 @@
 
           <TabsContent class="node-detail-tab-content" value="updates">
             <div class="node-detail-section">
-              <div class="section-head">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.managedUpdates") }}</span>
                 <div class="update-channel-select">
                   <ControlPlaneSelect :model-value="resources.updateChannel" @update:model-value="actions.setUpdateChannel">
@@ -314,7 +314,7 @@
               </div>
             </div>
             <div class="node-detail-section">
-              <div class="section-head">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.updateJobs", { count: resources.updateJobs.length }) }}</span>
                 <Button variant="outline" size="sm" @click="actions.loadManagedUpdateJobs(selectedNode.id)">
                   <RefreshCw :size="14" />
@@ -337,9 +337,9 @@
             </div>
           </TabsContent>
 
-          <TabsContent class="node-detail-tab-content fill-tab-content" value="storage">
-            <div class="node-detail-section fill-section">
-              <div class="section-head">
+          <TabsContent class="node-detail-tab-content" value="storage">
+            <div class="node-detail-section">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
                 <div class="node-folder-add-controls">
                   <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
@@ -348,51 +348,47 @@
                   </Button>
                 </div>
               </div>
-              <ScrollArea class="node-resource-list compact-list">
-                <div class="settings-scroll-content">
-                  <div v-for="folder in resources.localFolders" :key="folder.id" class="node-resource-row">
-                    <div>
-                      <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
-                      <code>{{ folder.path }}</code>
-                    </div>
-                    <div class="node-resource-actions">
-                      <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
-                        <Pencil :size="14" />
-                        <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
-                      </Button>
-                      <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
-                        <Trash2 :size="14" />
-                        <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
-                      </Button>
-                    </div>
+              <div class="node-resource-list">
+                <div v-for="folder in resources.localFolders" :key="folder.id" class="node-resource-row">
+                  <div>
+                    <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
+                    <code>{{ folder.path }}</code>
                   </div>
-                  <NodeResourceEmptyState v-if="!resources.localFolders.length" :icon="FolderOpen" :message="t('settings.nodeDetail.noLocalFolders')" />
+                  <div class="node-resource-actions">
+                    <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
+                      <Pencil :size="14" />
+                      <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
+                    </Button>
+                    <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
+                      <Trash2 :size="14" />
+                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                    </Button>
+                  </div>
                 </div>
-              </ScrollArea>
+                <NodeResourceEmptyState v-if="!resources.localFolders.length" :icon="FolderOpen" :message="t('settings.nodeDetail.noLocalFolders')" />
+              </div>
               <p v-if="resources.localFoldersError" class="control-plane-error">{{ resources.localFoldersError }}</p>
             </div>
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="inventory">
             <div class="node-detail-section">
-              <div class="section-head">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
                   <Monitor :size="14" />
                   <span>{{ busy.loadingNodeImagesId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
-              <ScrollArea class="node-resource-list image-inventory-list">
-                <div class="settings-scroll-content">
-                  <div v-for="image in resources.images" :key="`${selectedNode.id}-${image.reference}-${image.id}`" class="node-resource-row">
-                    <div>
-                      <strong>{{ image.reference }}</strong>
-                      <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
-                    </div>
+              <div class="node-resource-list">
+                <div v-for="image in resources.images" :key="`${selectedNode.id}-${image.reference}-${image.id}`" class="node-resource-row">
+                  <div>
+                    <strong>{{ image.reference }}</strong>
+                    <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
                   </div>
-                  <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
                 </div>
-              </ScrollArea>
+                <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
+              </div>
               <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
             </div>
 
@@ -400,24 +396,22 @@
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.instanceCount", { count: resources.instances.length }) }}</span>
               </div>
-              <ScrollArea class="node-resource-list compact-list">
-                <div class="settings-scroll-content">
-                  <div v-for="instance in resources.instances" :key="instance.id" class="node-resource-row">
-                    <div>
-                      <strong>{{ instance.name }}</strong>
-                      <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageSelection?.imageId }}</code>
-                    </div>
-                    <div class="node-resource-row-actions">
-                      <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ localizedStatus(instanceStatusKeys, instance.status) }}</Badge>
-                      <Button variant="outline" size="sm" :aria-label="t('settings.nodeDetail.instanceSettings', { name: instance.name })" @click="actions.openInstanceSettings(instance.id)">
-                        <Settings :size="14" />
-                        <span>{{ t("settings.nodeDetail.settings") }}</span>
-                      </Button>
-                    </div>
+              <div class="node-resource-list">
+                <div v-for="instance in resources.instances" :key="instance.id" class="node-resource-row">
+                  <div>
+                    <strong>{{ instance.name }}</strong>
+                    <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageSelection?.imageId }}</code>
                   </div>
-                  <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noInstances')" />
+                  <div class="node-resource-row-actions">
+                    <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ localizedStatus(instanceStatusKeys, instance.status) }}</Badge>
+                    <Button variant="outline" size="sm" :aria-label="t('settings.nodeDetail.instanceSettings', { name: instance.name })" @click="actions.openInstanceSettings(instance.id)">
+                      <Settings :size="14" />
+                      <span>{{ t("settings.nodeDetail.settings") }}</span>
+                    </Button>
+                  </div>
                 </div>
-              </ScrollArea>
+                <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noInstances')" />
+              </div>
             </div>
           </TabsContent>
 
@@ -428,7 +422,7 @@
             />
             <template v-else>
             <div class="node-remote-panel">
-              <div class="section-head">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.controlPlanePairings.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadControlPlaneAccess(selectedNode.id)">
                   <RefreshCw :size="14" />
@@ -455,7 +449,7 @@
             </div>
 
             <div class="node-remote-panel">
-              <div class="section-head">
+              <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.activeConnections", { count: resources.controlPlaneConnections.length }) }}</span>
                 <Button variant="outline" size="sm" @click="remoteConnectionDialogOpen = true">
                   <Plus :size="14" />
@@ -1210,16 +1204,6 @@ watch(
   display: none;
 }
 
-.fill-tab-content {
-  align-content: stretch;
-}
-
-.fill-section {
-  grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-}
-
 .node-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1291,28 +1275,6 @@ watch(
   border-top: 1px solid var(--line);
 }
 
-.node-resource-list.compact-list {
-  max-height: 220px;
-}
-
-.fill-section > .node-resource-list.compact-list {
-  display: block;
-  height: 100%;
-  max-height: none;
-}
-
-.image-inventory-list {
-  max-height: 220px;
-}
-
-.settings-scroll-content {
-  display: grid;
-  align-content: start;
-  gap: 0;
-  min-height: 100%;
-  padding-right: 2px;
-}
-
 .node-resource-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1351,6 +1313,10 @@ watch(
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   padding: 0 12px;
+}
+
+.section-head.has-actions {
+  padding: 8px 12px;
 }
 
 .section-head > span {

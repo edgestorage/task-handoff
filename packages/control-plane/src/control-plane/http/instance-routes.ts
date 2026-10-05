@@ -7,6 +7,7 @@ import type { ControlPlaneAuth } from "../auth/service.ts";
 import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { IdParamsSchema } from "./route-params.ts";
 import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
+import { CustomAppCatalogUpdateInputSchema } from "@task-handoff/protocol/app-catalog";
 import { withRequestSignal } from "./request-signal.ts";
 import { publicInstanceDirectory } from "../public-records.ts";
 import { filterRequestInstances, filterRequestNodes } from "./access-projection.ts";
@@ -86,6 +87,13 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     return { data: await service.listRepositoryWorkspaceBranches(params.id, query.cwdFolderId) };
   });
   app.get("/api/controlled-instances/:id/apps/management", async (request) => ({ data: await service.instanceAppManagement(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id/apps/catalog", async (request) => ({ data: await service.instanceAppCatalog(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id/apps/catalog/custom", async (request) => ({ data: await service.instanceCustomAppCatalog(IdParamsSchema.parse(request.params).id) }));
+  app.patch("/api/controlled-instances/:id/apps/catalog/custom", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const input = CustomAppCatalogUpdateInputSchema.parse(request.body || {});
+    return { data: await service.updateInstanceCustomAppCatalog(id, input) };
+  });
   app.post("/api/controlled-instances/:id/apps/:appId/install", async (request) => {
     const params = InstanceAppParamsSchema.parse(request.params);
     const input = AppManagementOperationRequestSchema.parse(request.body || {});

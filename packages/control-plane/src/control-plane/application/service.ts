@@ -44,6 +44,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
 import { AppProfileListSchema, AppProfileSchema } from "@task-handoff/protocol/app-profiles";
+import { CustomAppCatalogSchema, projectInstanceAppCatalog, type CustomAppCatalogUpdateInput } from "@task-handoff/protocol/app-catalog";
 import {
   ConfigSyncBatchResultSchema,
   ConfigSyncProgramSchema,
@@ -54,6 +55,7 @@ import {
 import {
   AiSessionDeltaResponseSchema,
   AiSessionsStateSchema,
+  AiSessionTranscriptSchema,
   type AiSessionCommandInput,
   type AiSessionDeltaResponse,
   type AiSessionCreateInput,
@@ -67,7 +69,7 @@ import {
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
-import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
+import { AppSessionDeltaResponseSchema, AppSessionLogsSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
 import {
   RepositoryBranchesSchema,
@@ -130,7 +132,7 @@ import {
 } from "../instances/config-sync.ts";
 import { relativeNodePathSegments, resolveNodePath } from "../nodes/path.ts";
 import { publicInstance, publicInstanceWithAccess, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
-import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, throwNotFound } from "./helpers.ts";
+import { controlPlaneDiagnosticLogsEnabled, errorDiagnostic, errorMessage, now, throwNotFound } from "./helpers.ts";
 import {
   CreateNodeControlPlaneConnectionInputSchema,
   ControlPlaneTriggerRecordSchema,
@@ -170,6 +172,15 @@ export function parseInstanceAppManagementSnapshot(value: unknown) {
     }
     throw error;
   }
+}
+
+/** 实例自定义目录的公开投影只保留 schemaVersion 与 items，实例文件路径留在实例边界内。 */
+function parseCustomAppCatalog(value: unknown) {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return CustomAppCatalogSchema.parse({
+    schemaVersion: record.schemaVersion ?? 1,
+    items: record.items ?? [],
+  });
 }
 
 type FetchImpl = typeof fetch;
@@ -1758,12 +1769,16 @@ export class ControlPlaneService {
     const measure = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
       const startedAt = performance.now();
       let outcome = "failed";
+      let failure: unknown;
       try {
         const result = await operation();
         outcome = "completed";
         return result;
+      } catch (error) {
+        failure = error;
+        throw error;
       } finally {
-        this.logInfo({ traceId: clientRequestTraceId(input.clientRequestId), clientRequestId: input.clientRequestId, instanceId, stage, outcome, durationMs: performance.now() - startedAt }, "ai-session.create.stage");
+        this.logInfo({ traceId: clientRequestTraceId(input.clientRequestId), clientRequestId: input.clientRequestId, instanceId, stage, outcome, durationMs: performance.now() - startedAt, ...(outcome === "failed" ? errorDiagnostic(failure) : {}) }, "ai-session.create.stage");
       }
     };
     const instance = await measure("require-instance", () => this.requireControlledInstance(instanceId, true)) as ControlledInstance;
@@ -1985,6 +2000,25 @@ export class ControlPlaneService {
     return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
   }
 
+  async instanceAppCatalog(instanceId: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "reading the app catalog");
+    return projectInstanceAppCatalog(await this.instanceRequest(instance, "/apps/catalog"));
+  }
+
+  async instanceCustomAppCatalog(instanceId: string) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing custom apps");
+    return parseCustomAppCatalog(await this.instanceRequest(instance, "/apps/catalog/custom"));
+  }
+
+  async updateInstanceCustomAppCatalog(instanceId: string, input: CustomAppCatalogUpdateInput) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "managing custom apps");
+    return parseCustomAppCatalog(await this.instanceRequest(instance, "/apps/catalog/custom", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }));
+  }
+
   async renameAppSession(instanceId: string, sessionId: string, title: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const session = await this.instanceRequest(instance, `/apps/sessions/${encodeURIComponent(sessionId)}`, {
@@ -1993,6 +2027,23 @@ export class ControlPlaneService {
       body: JSON.stringify({ title }),
     }) as Record<string, unknown>;
     return session;
+  }
+
+  async appSessionLogs(instanceId: string, sessionId: string, maxBytes?: number) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "reading app session logs");
+    const query = maxBytes === undefined ? "" : `?maxBytes=${encodeURIComponent(String(maxBytes))}`;
+    return parseResponse(AppSessionLogsSchema, await this.instanceRequest(instance, `/apps/sessions/${encodeURIComponent(sessionId)}/logs${query}`));
+  }
+
+  /** 截图是 PNG 二进制，必须走流式实例代理而不是 JSON 请求通道。 */
+  appSessionScreenshot(instanceId: string, sessionId: string) {
+    return this.proxyInstanceHttp(instanceId, `/api/apps/sessions/${encodeURIComponent(sessionId)}/screenshot`, { method: "GET" });
+  }
+
+  async aiSessionTranscript(instanceId: string, sessionId: string, tail?: number) {
+    const instance = await this.requireOnlineControlledInstance(instanceId, "reading AI session transcripts");
+    const query = tail === undefined ? "" : `?tail=${encodeURIComponent(String(tail))}`;
+    return parseResponse(AiSessionTranscriptSchema, await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/transcript${query}`));
   }
 
   sendAiSessionMessage(
@@ -2063,6 +2114,10 @@ export class ControlPlaneService {
 
   reorderAiSessionQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
     return this.aiSessionActionService.reorderQueuedMessages(instanceId, sessionId, input);
+  }
+
+  setAiSessionQueuePaused(instanceId: string, sessionId: string, paused: boolean) {
+    return this.aiSessionActionService.setQueuePaused(instanceId, sessionId, paused);
   }
 
   interruptAiSession(instanceId: string, sessionId: string) {

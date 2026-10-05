@@ -18,6 +18,7 @@ import {
   type StorySessionRetentionSettings,
   type StoryUpdateInput,
 } from "@task-handoff/protocol/stories";
+import { DEFAULT_STORY_AGENT_TOOL_POLICY } from "@task-handoff/protocol/story-agent-tools";
 import { createId } from "../../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import type { NodeAgentRepository, StoryDocumentRecord, StoryRecord } from "../persistence/repository.ts";
@@ -110,6 +111,12 @@ export class NodeStoryStore {
         createdAt: timestamp, updatedAt: timestamp,
         maxIdleAiSessions: parsed.maxIdleAiSessions ?? STORY_DEFAULT_MAX_IDLE_AI_SESSIONS,
         nextDocumentSequence: 1,
+        // 新建 Story 的 Agent 工具默认策略由协议定义，落库时物化，保证与客户端草稿一致。
+        agentToolsContent: DEFAULT_STORY_AGENT_TOOL_POLICY.content,
+        agentToolsActions: DEFAULT_STORY_AGENT_TOOL_POLICY.actions,
+        agentToolsAutomations: DEFAULT_STORY_AGENT_TOOL_POLICY.automations,
+        agentToolsAiSessions: DEFAULT_STORY_AGENT_TOOL_POLICY.aiSessions,
+        agentToolsDecisions: DEFAULT_STORY_AGENT_TOOL_POLICY.decisions,
       });
       const actions = (parsed.actions || []).map((action, displayOrder) => ({
         storyId: record.id, id: createId("story_action"), title: action.title,

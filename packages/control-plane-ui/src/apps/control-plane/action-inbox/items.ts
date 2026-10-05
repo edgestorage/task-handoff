@@ -1,18 +1,29 @@
 import type { ApprovalRequest } from "@task-handoff/protocol/operation-approvals";
 import type { aiSessionApprovalItems } from "./aiSessionApprovals";
+import type { storyDecisionInboxItems } from "./storyDecisionItems";
 
-export type ActionInboxItem = ReturnType<typeof aiSessionApprovalItems>[number] | {
+export type ActionInboxItem = ReturnType<typeof aiSessionApprovalItems>[number] | ReturnType<typeof storyDecisionInboxItems>[number] | {
   type: "operation-approval";
   key: string;
   request: ApprovalRequest;
 };
 
-export function mergeActionInboxItems(aiItems: ReturnType<typeof aiSessionApprovalItems>, requests: ApprovalRequest[]): ActionInboxItem[] {
+function itemTimestamp(item: ActionInboxItem) {
+  if (item.type === "operation-approval") return item.request.createdAt;
+  if (item.type === "story-decision") return item.decision.createdAt;
+  return item.session.updatedAt;
+}
+
+export function mergeActionInboxItems(
+  aiItems: ReturnType<typeof aiSessionApprovalItems>,
+  requests: ApprovalRequest[],
+  storyItems: ReturnType<typeof storyDecisionInboxItems>,
+): ActionInboxItem[] {
   return [
     ...aiItems,
+    ...storyItems,
     ...requests.map((request) => ({ type: "operation-approval" as const, key: `operation-approval:${request.id}`, request })),
-  ].sort((left, right) => (right.type === "operation-approval" ? right.request.createdAt : right.session.updatedAt)
-    .localeCompare(left.type === "operation-approval" ? left.request.createdAt : left.session.updatedAt) || left.key.localeCompare(right.key));
+  ].sort((left, right) => itemTimestamp(right).localeCompare(itemTimestamp(left)) || left.key.localeCompare(right.key));
 }
 
 export function visibleActionInboxCount(availableHeight: number) {

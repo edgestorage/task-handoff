@@ -4,7 +4,7 @@ import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-app-server/client/client";
-import type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
+import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./codex-app-server/client/contract";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexDynamicToolSpec, CodexThreadStartOptions } from "./codex-app-server/client/contract";
 import { CodexAppServerConnectionManager } from "./codex-app-server/client/connection-manager";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus } from "./codex-app-server/protocol/types";
@@ -342,7 +342,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     this.pendingThreadSettings.add(session.id);
     try {
-      const client = await this.requireReadyThreadClient(threadId);
+      // A switch replaces the stored selection, so loading the thread must not
+      // resolve it: the catalog may have dropped the previous model, and that
+      // resume/send scoped error must not block switching to an available one.
+      // The resumed thread is verified against the requested selection below.
+      const client = await this.requireReadyThreadClient(threadId, null);
       if (selection.modelEntityId !== session.modelSelection.modelEntityId) {
         if (session.lineage?.kind === "subagent" || this.registry.all().some((candidate) => (
           candidate.lineage?.kind === "subagent"
@@ -830,13 +834,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     throw aiSessionControlError("AI_SESSION_CONTROL_NOT_CONNECTED", "Codex app-server is not connected.", 503);
   }
 
-  private async requireReadyThreadClient(threadId: string) {
+  private async requireReadyThreadClient(threadId: string, resumeOptions?: CodexThreadResumeOptions | null) {
     try {
       const ready = await this.readyConnection();
       if (!ready) {
         throw new Error("Codex app-server is not connected.");
       }
-      return await this.connection.ensureThreadReady(ready, threadId);
+      return await this.connection.ensureThreadReady(ready, threadId, resumeOptions);
     } catch (error) {
       if (error && typeof error === "object" && "code" in error) throw error;
       throw aiSessionControlError(

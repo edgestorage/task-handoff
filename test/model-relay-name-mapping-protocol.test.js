@@ -30,6 +30,7 @@ const {
   sanitizeModelRequestMappings,
   supportsControlledInstanceModelRelay,
   supportsControlledInstanceModelRelayProtocol,
+  supportsControlledInstanceOpenCodeEnvironment,
   supportsControlledInstanceModelRelayStreaming,
 } = require("../packages/protocol/src/control-plane.ts");
 const {
@@ -399,6 +400,18 @@ test("relay capability documents normalize to unsupported when absent", () => {
   assert.equal(supportsControlledInstanceModelRelay(instanceCapabilities), true);
   assert.equal(supportsControlledInstanceModelRelayProtocol(instanceCapabilities, "anthropic-messages"), true);
   assert.equal(supportsControlledInstanceModelRelayStreaming(instanceCapabilities), true);
+});
+
+test("structured managed model environment capability normalizes to unsupported when absent", () => {
+  // Compatibility for v0.0.35: absent capability keeps the OpenCode config key
+  // off the live model environment push.
+  assert.equal(supportsControlledInstanceOpenCodeEnvironment(baselineFixture.controlledInstanceCapabilities), false);
+  assert.equal(ControlledInstanceCapabilitiesSchema.parse({}).features.managedModelEnvironment.openCodeConfig, false);
+  assert.equal(supportsControlledInstanceOpenCodeEnvironment({ features: { managedModelEnvironment: { openCodeConfig: true } } }), true);
+  assert.deepEqual(
+    normalizeControlledInstanceCapabilities({ features: { managedModelEnvironment: { openCodeConfig: true, future: 1 } } }).features.managedModelEnvironment,
+    { openCodeConfig: true },
+  );
 });
 
 test("private catalog v1/v2 union keeps relay projections free of upstream secrets", () => {

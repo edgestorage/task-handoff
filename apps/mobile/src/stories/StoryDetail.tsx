@@ -3,8 +3,9 @@ import * as Crypto from 'expo-crypto';
 import { router, Stack, type NativeStackHeaderItem } from 'expo-router';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
-import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus } from '@task-handoff/protocol/stories';
+import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus, StoryDecision } from '@task-handoff/protocol/stories';
 import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';
+import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from '@task-handoff/protocol/node-agent-capabilities';
 
 import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
@@ -18,10 +19,12 @@ import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
 import { useStoryEvents } from './use-story-events';
 import { groupStoryTreeSessions, storyTreeKey, unassignedStoryRootInstanceIds } from './story-tree-model';
+import { StoryDecisionAnswer } from './StoryDecisionAnswer';
+import { isStoryDecisionResumePending, splitStoryDecisions, storyDecisionInstanceId, storyDecisionMeta, type StoryDecisionAnswerInput } from './story-decision';
 
 type AutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
-type StorySection = 'actions' | 'documents' | 'sessions' | 'automations';
-const storySections: StorySection[] = ['actions', 'documents', 'sessions', 'automations'];
+type StorySection = 'actions' | 'documents' | 'sessions' | 'automations' | 'decisions';
+const storySections: StorySection[] = ['actions', 'documents', 'sessions', 'automations', 'decisions'];
 
 export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: string; nodeId?: string; onOpenSession(instanceId: string, sessionId: string): void }) {
   const { colors } = useMobileTheme();
@@ -32,6 +35,12 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   const sessions = useActiveAiSessionsSnapshot();
   const [story, setStory] = useState<Story>();
   const [automations, setAutomations] = useState<AutomationView[]>([]);
+  const [decisions, setDecisions] = useState<readonly StoryDecision[]>([]);
+  const [decisionSupported, setDecisionSupported] = useState(false);
+  const [decisionBusyId, setDecisionBusyId] = useState('');
+  const [decisionError, setDecisionError] = useState<{ decisionId: string; message: string }>();
+  const [decisionResume, setDecisionResume] = useState<{ decisionId: string; input: StoryDecisionAnswerInput }>();
+  const [decisionHistoryExpanded, setDecisionHistoryExpanded] = useState(false);
   const [error, setError] = useState<string>();
   const [automationError, setAutomationError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -54,6 +63,28 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     setAutomations(values);
   }, [nodeId, runtime.api, storyId]);
 
+  // 决策只在声明责任的节点上存在：能力缺失即该节点不出决策区，拉取失败按不可用处理。
+  const loadDecisions = useCallback(async (story: Story, signal?: AbortSignal) => {
+    if (!runtime.api) return;
+    try {
+      const ownerNode = await runtime.api.resources.node(story.ownerNodeId, signal);
+      if (signal?.aborted) return;
+      const supported = nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).decisions;
+      setDecisionSupported(supported);
+      if (!supported) {
+        setDecisions([]);
+        return;
+      }
+      const list = await runtime.api.stories.listDecisions(story.id, story.ownerNodeId, signal);
+      if (!signal?.aborted) setDecisions(list.decisions);
+    } catch {
+      if (!signal?.aborted) {
+        setDecisionSupported(false);
+        setDecisions([]);
+      }
+    }
+  }, [runtime.api]);
+
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!runtime.api || !storyId || !nodeId) return;
     setLoading(true);
@@ -68,13 +99,14 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       if (signal?.aborted) return;
       setStory(storyValue);
       setAutomations(values);
+      void loadDecisions(storyValue, signal);
     } catch (cause) {
       if (signal?.aborted) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [nodeId, runtime.api, storyId]);
+  }, [loadDecisions, nodeId, runtime.api, storyId]);
   useStoryEvents(refresh, storyId);
 
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
@@ -91,6 +123,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       : []
   )) : [], [sessions, story, storyInstanceIds]);
   const hasUnassignedSessions = useMemo(() => [...unassignedStoryRootInstanceIds(sessions)].some((instanceId) => storyInstanceIds.has(instanceId)), [sessions, storyInstanceIds]);
+  const decisionSplits = useMemo(() => splitStoryDecisions(decisions), [decisions]);
   const newSessionDefaults = useMemo(() => storyAiSessionCreationDefaults(directory.instances, sessions, storyId || '', storyNodeId), [directory.instances, sessions, storyId, storyNodeId]);
   const automationCount = (actionId: string) => automations.filter((entry) => entry.automation.actionId === actionId).length;
   const automationPath = (automationId: string) => ({ pathname: `/stories/${story!.id}/automations/${automationId}` as never, params: { storyId: story!.id, automationId, nodeId: story!.ownerNodeId } });
@@ -116,6 +149,50 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   };
   const confirmRunAutomation = (entry: AutomationView) => Alert.alert(t('stories.automationRunTitle'), t('stories.automationRunDescription'), [{ text: t('common.cancel'), style: 'cancel' }, { text: t('stories.automationRun'), onPress: () => { if (runtime.api && story) void mutateAutomation(entry.automation.id, () => runtime.api!.stories.runAutomation(story.id, entry.automation.id, story.ownerNodeId, { clientRequestId: `story-automation-${Crypto.randomUUID()}` })); } }]);
   const confirmDeleteAutomation = (entry: AutomationView) => Alert.alert(t('stories.automationDeleteTitle'), t('stories.automationDeleteDescription'), [{ text: t('common.cancel'), style: 'cancel' }, { text: t('common.remove'), style: 'destructive', onPress: () => { if (runtime.api && story) void mutateAutomation(entry.automation.id, () => runtime.api!.stories.removeAutomation(story.id, entry.automation.id, story.ownerNodeId)); } }]);
+  // 决策答复只有一套提交/重试状态机，提交后统一把权威响应写回决策列表。
+  const submitDecision = async (decision: StoryDecision, input: StoryDecisionAnswerInput, retry = false) => {
+    if (!runtime.api || !story) return;
+    const target = { storyId: story.id, nodeId: story.ownerNodeId };
+    setDecisionBusyId(decision.id);
+    setDecisionError(undefined);
+    try {
+      const updated = await runtime.api.stories.decideStory(target.storyId, decision.id, target.nodeId, {
+        expectedRevision: decision.revision,
+        ...input,
+        ...(retry ? { retry: true } : {}),
+      });
+      setDecisions((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
+      setDecisionResume(undefined);
+    } catch (cause) {
+      setDecisionError({ decisionId: decision.id, message: cause instanceof Error ? cause.message : String(cause) });
+      setDecisionResume(isStoryDecisionResumePending(cause) ? { decisionId: decision.id, input } : undefined);
+    } finally {
+      setDecisionBusyId('');
+    }
+  };
+  const cancelDecision = async (decision: StoryDecision) => {
+    if (!runtime.api || !story) return;
+    setDecisionBusyId(decision.id);
+    setDecisionError(undefined);
+    try {
+      const updated = await runtime.api.stories.cancelDecision(story.id, decision.id, story.ownerNodeId, { expectedRevision: decision.revision });
+      setDecisions((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
+      setDecisionResume(undefined);
+    } catch (cause) {
+      setDecisionError({ decisionId: decision.id, message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setDecisionBusyId('');
+    }
+  };
+  const retryDecision = (decision: StoryDecision) => {
+    const pending = decisionResume;
+    if (pending?.decisionId === decision.id) void submitDecision(decision, pending.input, true);
+  };
+  const openDecisionSession = (decision: StoryDecision) => {
+    const instanceId = storyDecisionInstanceId(sessions?.instances ?? [], decision);
+    if (instanceId) onOpenSession(instanceId, decision.sessionId);
+    else Alert.alert(t('stories.decisions'), t('stories.decisionSessionUnavailable'));
+  };
   const recordSectionOffset = useCallback((section: StorySection, event: LayoutChangeEvent) => {
     const layout = layoutFromEvent(event);
     if (!layout) return;
@@ -214,6 +291,44 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     { id: 'archive', image: archived ? 'arrow.uturn.backward' : 'archivebox', title: t(archived ? 'stories.restore' : 'stories.archive'), attributes: { disabled: menuDisabled } },
     { id: 'delete', image: 'trash', title: t('common.delete'), attributes: { destructive: true, disabled: menuDisabled } },
   ] satisfies MenuAction[];
+  const decisionStatusPresentation = (decision: StoryDecision) => {
+    if (decision.status === 'pending') return { background: colors.sessionWaitingSoft, color: colors.sessionWaiting, label: t('stories.decisionPending') };
+    if (decision.status === 'decided') return { background: colors.sessionActiveSoft, color: colors.sessionActive, label: t('stories.decisionDecided') };
+    return { background: colors.surfaceMuted, color: colors.textMuted, label: t(decision.status === 'cancelled' ? 'stories.decisionCancelled' : 'stories.decisionExpired') };
+  };
+  const storyDecisionRow = (decision: StoryDecision) => {
+    const status = decisionStatusPresentation(decision);
+    const meta = storyDecisionMeta(decision, t);
+    return <View key={decision.id} style={[styles.decision, { backgroundColor: colors.surface, borderColor: colors.border }]} testID={`story-decision-${decision.id}`}>
+      <View style={styles.decisionHeader}>
+        <View style={[styles.statusBadge, { backgroundColor: status.background }]}><Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text></View>
+        <Pressable accessibilityLabel={t('stories.decisionOpenSession')} accessibilityRole="button" hitSlop={6} onPress={() => openDecisionSession(decision)} style={({ pressed }) => [styles.decisionOpen, pressed && styles.pressed]}>
+          <SystemIcon android="open_in_new" color={colors.primary} ios="arrow.up.right.square" size={17} />
+        </Pressable>
+      </View>
+      <Text style={[styles.itemTitle, { color: colors.text }]}>{decision.question}</Text>
+      {decision.context ? <Text style={[styles.meta, { color: colors.textMuted }]}>{t('stories.decisionContext')}: {decision.context}</Text> : null}
+      {decision.status === 'pending'
+        ? <StoryDecisionAnswer
+          busy={decisionBusyId === decision.id}
+          decision={decision}
+          disabled={archived}
+          key={decision.id}
+          onCancel={() => { void cancelDecision(decision); }}
+          onSubmit={(input) => { void submitDecision(decision, input); }}
+        />
+        : meta ? <Text style={[styles.meta, { color: colors.textMuted }]}>{meta}</Text> : null}
+      {decisionError?.decisionId === decision.id ? <Text accessibilityLiveRegion="polite" style={[styles.meta, { color: colors.error }]}>{decisionError.message}</Text> : null}
+      {decisionResume?.decisionId === decision.id ? (
+        <View style={styles.decisionResume}>
+          <Text style={[styles.meta, { color: colors.textMuted }]}>{t('stories.decisionResumePending')}</Text>
+          <Pressable accessibilityRole="button" onPress={() => retryDecision(decision)} style={({ pressed }) => [styles.decisionRetry, pressed && styles.pressed]}>
+            <Text style={[styles.decisionRetryText, { color: colors.primary }]}>{t('stories.decisionRetry')}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>;
+  };
   const nativeHeaderRightItems = () => [{
     accessibilityLabel: t('stories.moreActions'),
     icon: { name: 'ellipsis' as const, type: 'sfSymbol' as const },
@@ -251,7 +366,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     }} />
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={[styles.content, { backgroundColor: colors.background }]} onScroll={updateActiveSection} ref={scrollRef} scrollEventThrottle={16} stickyHeaderIndices={[1]}>
     <View style={styles.header}><View style={styles.titleRow}><Text style={[styles.title, { color: colors.text }]}>{story.title}</Text><Pressable accessibilityLabel={t('stories.edit')} onPress={() => router.push({ pathname: `/stories/${story.id}/edit` as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}><SystemIcon android="edit" color={colors.primary} ios="pencil" size={20} /></Pressable></View><Text style={[styles.meta, { color: colors.textMuted }]}>{nodeNames.get(story.ownerNodeId) || story.ownerNodeId} · {new Date(story.updatedAt).toLocaleString()}</Text>{story.description ? <Text style={[styles.description, { color: colors.textMuted }]}>{story.description}</Text> : null}<Pressable accessibilityRole="button" accessibilityLabel={t('sessions.new')} disabled={archived || !newSessionDefaults.instanceId} onPress={openNewSession} style={[styles.newSession, { backgroundColor: colors.primary, opacity: archived || !newSessionDefaults.instanceId ? 0.5 : 1 }]}><SystemIcon android="add_comment" color="#fff" ios="plus.bubble" size={18} /><Text style={styles.newSessionText}>{t('sessions.new')}</Text></Pressable></View>
-    <View onLayout={(event) => { const layout = layoutFromEvent(event); if (layout) setSectionNavHeight(layout.height); }} style={[styles.sectionNav, { backgroundColor: colors.background, borderBottomColor: colors.border }]}><ScrollView contentContainerStyle={styles.sectionNavContent} horizontal showsHorizontalScrollIndicator={false}>{storySections.map((section) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeSection === section }} key={section} onPress={() => scrollToSection(section)} style={({ pressed }) => [styles.sectionTab, activeSection === section && { borderBottomColor: colors.primary }, pressed && styles.pressed]}><Text style={[styles.sectionTabText, { color: activeSection === section ? colors.primary : colors.textMuted }]}>{t(`stories.${section}Tab` as Parameters<Translate>[0])}</Text></Pressable>)}</ScrollView></View>
+    <View onLayout={(event) => { const layout = layoutFromEvent(event); if (layout) setSectionNavHeight(layout.height); }} style={[styles.sectionNav, { backgroundColor: colors.background, borderBottomColor: colors.border }]}><ScrollView contentContainerStyle={styles.sectionNavContent} horizontal showsHorizontalScrollIndicator={false}>{storySections.filter((section) => section !== 'decisions' || decisionSupported).map((section) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeSection === section }} key={section} onPress={() => scrollToSection(section)} style={({ pressed }) => [styles.sectionTab, activeSection === section && { borderBottomColor: colors.primary }, pressed && styles.pressed]}><Text style={[styles.sectionTabText, { color: activeSection === section ? colors.primary : colors.textMuted }]}>{t(`stories.${section}Tab` as Parameters<Translate>[0])}</Text></Pressable>)}</ScrollView></View>
     <Section onLayout={(event) => recordSectionOffset('actions', event)} title={t('stories.actions')}>{story.actions.length ? story.actions.map((action) => <View key={action.id} style={[styles.action, { backgroundColor: colors.surface, borderColor: colors.border }]}><Pressable accessibilityRole="button" accessibilityState={{ busy: runningActionId === action.id, disabled: archived || Boolean(runningActionId) }} disabled={archived || Boolean(runningActionId)} onPress={() => confirmAction(action)} style={[styles.actionMain, archived && styles.disabled]}>{runningActionId === action.id ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="play_arrow" color={colors.primary} ios="play.fill" size={18} />}<Text style={[styles.itemTitle, { color: colors.text }]}>{action.title}</Text></Pressable><View style={[styles.countBadge, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="schedule" color={colors.textMuted} ios="calendar" size={13} /><Text style={[styles.countText, { color: colors.textMuted }]}>{automationCount(action.id)}</Text></View></View>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noActions')}</Text>}</Section>
     <Section onLayout={(event) => recordSectionOffset('documents', event)} title={`${story.documents.length} ${t('stories.documents')}`}>{story.documents.length ? story.documents.map((document) => <Pressable accessibilityRole="button" key={document.storyPath} onPress={() => router.push({ pathname: `/stories/${story.id}/documents/preview` as never, params: { storyId: story.id, nodeId: story.ownerNodeId, storyPath: document.storyPath, title: document.title } })} style={[styles.item, { backgroundColor: colors.surface, borderColor: colors.border }]}><SystemIcon android="description" color={colors.primary} ios="doc.text" size={19} /><View style={styles.itemCopy}><Text style={[styles.itemTitle, { color: colors.text }]}>{document.title}</Text><Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{document.storyPath}</Text></View><SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={17} /></Pressable>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noDocuments')}</Text>}</Section>
     <Section onLayout={(event) => recordSectionOffset('sessions', event)} title={`${linkedSessionRootCount} ${t('stories.sessions')}`}>{linkedSessions.length ? linkedSessions.map((entry) => { const session = entry.session; const statusGroup = aiSessionStatusGroup(session); const statusLabel = mobileAiSessionStatusLabel(session, t); const expanded = expandedSessionIds.has(session.id); return <Pressable key={`${entry.instanceId}:${session.id}`} accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, session.id)} style={[styles.item, entry.depth ? { marginLeft: entry.depth * 14 } : null, { backgroundColor: colors.surface, borderColor: colors.border }]}>{entry.hasChildren ? <Pressable accessibilityLabel={t(expanded ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')} accessibilityRole="button" accessibilityState={{ expanded }} hitSlop={8} onPress={(event) => { event.stopPropagation(); setExpandedSessionIds((current) => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; }); }} style={styles.sessionLeading} testID="story-detail-session-disclosure"><SystemIcon android={expanded ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expanded ? 'chevron.down' : 'chevron.right'} size={19} /></Pressable> : session.status === 'running' ? <View style={styles.sessionLeading}><SessionStatusIndicator group={statusGroup} label={statusLabel} size={20} /></View> : <View style={[styles.sessionIcon, styles.sessionLeading]}><SystemIcon android="chat_bubble_outline" color={colors.textMuted} ios="bubble.left" size={18} /><View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View></View>}<View style={styles.itemCopy}><Text ellipsizeMode="tail" numberOfLines={2} style={[styles.itemTitle, { color: colors.text }]}>{session.title || session.userPrompt || session.summary || session.lastMessage || t('sessions.untitled')}</Text><Text style={[styles.meta, { color: colors.textMuted }]}>{instanceNames.get(entry.instanceId) || entry.instanceId}</Text></View><SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={17} /></Pressable>; }) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text>}</Section>
@@ -274,6 +389,17 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
         </View>;
       })}
     </Section>
+    {decisionSupported ? <Section onLayout={(event) => recordSectionOffset('decisions', event)} title={`${decisionSplits.visible.length} ${t('stories.decisions')}`}>
+      {decisionError && !decisionSplits.visible.some((decision) => decision.id === decisionError.decisionId) && !decisionSplits.history.some((decision) => decision.id === decisionError.decisionId) ? <Text style={[styles.muted, { color: colors.error }]}>{decisionError.message}</Text> : null}
+      {!decisions.length ? <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noDecisions')}</Text> : <>
+        {decisionSplits.visible.map(storyDecisionRow)}
+        {decisionSplits.history.length ? <Pressable accessibilityRole="button" onPress={() => setDecisionHistoryExpanded((current) => !current)} style={({ pressed }) => [styles.decisionHistoryToggle, pressed && styles.pressed]}>
+          <SystemIcon android={decisionHistoryExpanded ? 'expand_less' : 'expand_more'} color={colors.textMuted} ios={decisionHistoryExpanded ? 'chevron.up' : 'chevron.down'} size={17} />
+          <Text style={[styles.meta, { color: colors.textMuted }]}>{t(decisionHistoryExpanded ? 'stories.decisionHideHistory' : 'stories.decisionShowHistory')} · {t('stories.decisionHistoryCount', { count: decisionSplits.history.length })}</Text>
+        </Pressable> : null}
+        {decisionHistoryExpanded ? decisionSplits.history.map(storyDecisionRow) : null}
+      </>}
+    </Section> : null}
     </ScrollView>
   </>;
 }
@@ -308,5 +434,6 @@ const styles = StyleSheet.create({
   action: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, paddingRight: 10 }, actionMain: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 10, minHeight: 48, paddingHorizontal: 14 }, countBadge: { alignItems: 'center', borderRadius: 9, flexDirection: 'row', gap: 4, minHeight: 30, paddingHorizontal: 8 }, countText: { fontSize: 12, fontWeight: '600' },
   automation: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 8, overflow: 'hidden', paddingHorizontal: 14, paddingTop: 13 }, automationHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 10 }, statusBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5 }, statusText: { fontSize: 12, fontWeight: '600' }, runRow: { alignItems: 'center', flexDirection: 'row', gap: 6, justifyContent: 'space-between' }, automationActions: { borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'flex-end', marginTop: 3, minHeight: 48 }, iconAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, width: 44 },
   muted: { fontSize: 14 }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.62 },
+  decision: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, decisionHeader: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, decisionOpen: { alignItems: 'center', justifyContent: 'center', minHeight: 32, width: 32 }, decisionHistoryToggle: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 40, paddingHorizontal: 4 }, decisionResume: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, decisionRetry: { alignItems: 'center', borderRadius: 8, justifyContent: 'center', minHeight: 34, paddingHorizontal: 10 }, decisionRetryText: { fontSize: 14, fontWeight: '500' },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
 });

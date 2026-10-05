@@ -63,7 +63,7 @@ export const sessions = {
     defaultPermissionFailed: "Failed to update the default Codex permission mode.", starting: "The new AI session is still starting. Please try again in a moment.",
     startFailed: "Failed to start AI session.", presetSaved: "Preset action saved.", modelSwitchFailed: "Failed to switch model.", reasoningEffortFailed: "Failed to change reasoning effort.", sendFailed: "Failed to send message.", noGoal: "No active goal", commandFailed: "Failed to run command.", steerFailed: "Failed to steer message.",
     steerQueuedFailed: "Failed to steer queued message.", retryQueuedFailed: "Failed to retry queued message.", removeQueuedFailed: "Failed to remove queued message.", editQueuedFailed: "Failed to edit queued message.", reorderQueuedFailed: "Failed to reorder queued messages.",
-    stopFailed: "Failed to stop AI session.", forkFailed: "Failed to continue the chat.", forkProjectionPending: "The new chat was created, but its session state is not confirmed yet. Retry shortly.", approvalFailed: "Failed to resolve approval.", closeAppFailed: "Failed to close app session.", closeSessionFailed: "Failed to close AI session.", openAppFailed: "Failed to open an app for the AI session.",
+    stopFailed: "Failed to stop AI session.", forkFailed: "Failed to continue the chat.", forkProjectionPending: "The new chat was created, but its session state is not confirmed yet. Retry shortly.", approvalFailed: "Failed to resolve approval.", closeAppFailed: "Failed to close app session.", closeSessionFailed: "Failed to close AI session.", openAppFailed: "Failed to open an app for the AI session.", setQueuePausedFailed: "Failed to update the queue state.",
     loadingHistory: "Loading previous conversations…", retry: "Retry", noHistory: "No previous conversations", viewHistory: "View previous conversations",
     selectHistory: "Select a previous conversation to view details", loadingHistoryDetail: "Loading conversation details…", noHistoryDetail: "This conversation has no details to display",
     continue: "Continue conversation", continueConversation: "Send a message to continue this conversation",
@@ -88,7 +88,7 @@ export const sessions = {
   },
   activity: {
     waitingApproval: "Waiting for approval...", waitingApprovalSummary: "Waiting for approval · {summary}", responding: "Responding...", respondingTools: "Responding... · {count} tool completed | Responding... · {count} tools completed", editing: "Editing...", waiting: "Waiting...",
-    thinking: "Thinking...", thinkingTools: "Thinking... · {count} tool completed | Thinking... · {count} tools completed", queue: "Queue · {count}", steer: "Steer", retry: "Retry", remove: "Remove", edit: "Edit", save: "Save", cancel: "Cancel", reorder: "Drag to reorder queued message", moveUp: "Move up", moveDown: "Move down",
+    thinking: "Thinking...", thinkingTools: "Thinking... · {count} tool completed | Thinking... · {count} tools completed", queue: "Queue · {count}", steer: "Steer", retry: "Retry", remove: "Remove", edit: "Edit", save: "Save", cancel: "Cancel", reorder: "Drag to reorder queued message", moveUp: "Move up", moveDown: "Move down", pauseQueue: "Pause queue", resumeQueue: "Resume queue",
     noRecent: "No recent AI activity", runningTool: "Running {tool}", running: "Running...",
   },
   timeline: {

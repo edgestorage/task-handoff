@@ -104,7 +104,13 @@ export class CodexAppServerConnectionManager {
       throw new Error("Codex app-server is not configured.");
     }
     if (this.state === "ready") {
-      return connection;
+      if (this.generationWritable(connection)) return connection;
+      // The cached generation lost its transport without emitting disconnect
+      // (e.g. a half-closed socket). Drop it so the caller reconnects instead of
+      // handing out a client whose requests fail immediately with
+      // "Codex app-server is not connected.".
+      this.markUnhealthy(connection);
+      throw new Error("Codex app-server is not connected.");
     }
     if (options.respectRetry && !this.canRetry()) {
       return undefined;
@@ -149,6 +155,11 @@ export class CodexAppServerConnectionManager {
     connection.client.stop();
   }
 
+  private generationWritable(connection: CodexAppServerConnection) {
+    const probe = connection.client.isConnected;
+    return typeof probe !== "function" || probe.call(connection.client);
+  }
+
   ensureThreadSubscribed(connection: CodexAppServerConnection, threadId: string) {
     const { client, epoch } = connection;
     if (!this.isCurrent(connection) || !client.resumeThread || this.subscribedThreadIds.has(threadId)) {
@@ -172,8 +183,14 @@ export class CodexAppServerConnectionManager {
     return attempt;
   }
 
-  /** Ensures an existing thread is loaded in this exact connection generation. */
-  async ensureThreadReady(connection: CodexAppServerConnection, threadId: string) {
+  /**
+   * Ensures an existing thread is loaded in this exact connection generation.
+   * `resumeOptions` overrides the stored-selection resume options; pass `null`
+   * to load the thread with its own persisted settings. Callers that are about
+   * to replace the selection (model switching) use `null` so a stored selection
+   * the catalog has dropped cannot block the replacement.
+   */
+  async ensureThreadReady(connection: CodexAppServerConnection, threadId: string, resumeOptions?: CodexThreadResumeOptions | null) {
     if (!this.isCurrent(connection)) {
       throw new Error("Codex app-server connection changed before the thread could be resumed.");
     }
@@ -197,7 +214,7 @@ export class CodexAppServerConnectionManager {
         if (!connection.client.resumeThread) {
           throw new Error("Codex app-server does not support resuming an unloaded thread.");
         }
-        await connection.client.resumeThread(threadId, this.options.threadResumeOptions?.(threadId));
+        await connection.client.resumeThread(threadId, this.resumeOptionsFor(threadId, resumeOptions));
       }
       if (!this.isCurrent(connection)) {
         throw new Error("Codex app-server connection changed while resuming the thread.");
@@ -219,6 +236,11 @@ export class CodexAppServerConnectionManager {
     for (const threadId of this.subscribedThreadIds) {
       if (!loaded.has(threadId)) this.subscribedThreadIds.delete(threadId);
     }
+  }
+
+  private resumeOptionsFor(threadId: string, override: CodexThreadResumeOptions | null | undefined) {
+    if (override !== undefined) return override ?? undefined;
+    return this.options.threadResumeOptions?.(threadId);
   }
 
   stop() {

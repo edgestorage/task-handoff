@@ -7,10 +7,12 @@ const toastSurface = fs.readFileSync(new URL("../src/components/ui/sonner/Sonner
 const sessionPanel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const sessionBoard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
+const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 
 test("control-plane toast semantics include informational outcomes", () => {
   assert.match(toasts, /ControlPlaneToastKind = "error" \| "info" \| "success"/);
   assert.match(toasts, /toast\[kind\]\(message/);
+  assert.doesNotMatch(toasts, /kind: ControlPlaneToastKind\s*=/);
 });
 
 test("control-plane toasts support persistent user actions", () => {
@@ -38,4 +40,15 @@ test("Story deletion failures use the global toast instead of the page error sur
   const deleteStory = storyView.match(/async function deleteStory[\s\S]*?(?=\nasync function renameDocument)/)?.[0] || "";
   assert.match(deleteStory, /showControlPlaneToast\(translateApiError\(/);
   assert.doesNotMatch(deleteStory, /error\.value\s*=/);
+});
+
+test("saved-outcome toasts use the success variant", () => {
+  assert.match(storyView, /showControlPlaneToast\(t\("stories\.editor\.agentToolsSaved"\), "success"\)/);
+  assert.match(storyView, /showControlPlaneToast\(t\("stories\.editor\.entryAgentsSaved"\), "success"\)/);
+  assert.match(workbench, /showToast\(t\("instances\.environmentTemplateDialog\.saved", \{ name \}\), "success"\)/);
+});
+
+test("goal command output is informational", () => {
+  assert.match(sessionPanel, /showControlPlaneToast\(result\.value \|\| t\("sessions\.panel\.noGoal"\), "info"\)/);
+  assert.match(sessionBoard, /showControlPlaneToast\(result\.value \|\| t\("sessions\.panel\.noGoal"\), "info"\)/);
 });

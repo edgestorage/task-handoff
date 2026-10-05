@@ -61,6 +61,7 @@
     --shadow-panel: 0 18px 44px rgb(10 20 24 / 18%);
     --shadow-popover: 0 14px 34px rgb(10 20 24 / 18%);
     --shadow-soft: 0 1px 3px rgb(23 35 42 / 12%);
+    --shadow-color: rgb(10 20 24 / 18%);
     --overlay-backdrop: rgb(2 8 10 / 72%);
     --focus-ring: rgb(49 198 182 / 42%);
     --scrollbar-thumb: rgb(143 165 173 / 42%);
@@ -319,6 +320,7 @@
     --shadow-panel: 0 20px 60px rgb(0 0 0 / 28%);
     --shadow-popover: 0 14px 34px rgb(0 0 0 / 34%);
     --shadow-soft: 0 6px 18px rgb(0 0 0 / 18%);
+    --shadow-color: rgb(0 0 0 / 38%);
     --overlay-backdrop: rgb(2 8 10 / 72%);
     --focus-ring: rgb(49 198 182 / 42%);
     --scrollbar-thumb: rgb(143 165 173 / 42%);

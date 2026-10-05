@@ -18,6 +18,7 @@ export const navigation = {
   noApprovals: "No pending approvals",
   aiSessionApproval: "AI session approval",
   operationApproval: "Operation approval",
+  storyDecision: "Story decision",
   instanceDeleteApproval: "Delete instance",
   nodeRemoveApproval: "Remove node",
   nodeUpdateApproval: "Apply node update",

@@ -43,8 +43,11 @@ test("Story mutations refetch only the node that owns the Story", async () => {
 test("Story node menu surfaces per-node loading and unavailability", () => {
   assert.match(workbench, /import \{ useStoryCatalog \} from "\.\/story\/useStoryCatalog";/);
   assert.match(workbench, /const storyCatalog = useStoryCatalog\(storyMode\);/);
-  assert.match(workbench, /v-if="storyMode && storyCatalog\.nodeLoadState\(node\.id\) === 'loading'" class="control-plane-node-filter-menu-load"[\s\S]*stories\.nodeLoad\.loading/);
-  assert.match(workbench, /v-else-if="storyMode && storyCatalog\.nodeLoadState\(node\.id\) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning"[\s\S]*stories\.nodeLoad\.unavailable/);
+  assert.match(workbench, /function visibleNodeLoadState\(nodeId: string\): "loading" \| "ready" \| "unavailable" \{[\s\S]*?agentCatalog\.nodeLoadState\(nodeId\);[\s\S]*?storyCatalog\.nodeLoadState\(nodeId\);/);
+  assert.match(workbench, /v-if="visibleNodeLoadState\(node\.id\) === 'loading'" class="control-plane-node-filter-menu-load"[\s\S]*nodeLoadLabel\.loading/);
+  assert.match(workbench, /v-else-if="visibleNodeLoadState\(node\.id\) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning"[\s\S]*nodeLoadLabel\.unavailable/);
+  assert.match(workbench, /t\("stories\.nodeLoad\.loading"\), unavailable: t\("stories\.nodeLoad\.unavailable"\)/);
+  assert.match(workbench, /t\("agents\.list\.loadingNode"\), unavailable: t\("agents\.list\.unavailableNode"\)/);
   assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-main\) \{\n  display: grid;\n  grid-template-columns: 8px minmax\(0, 1fr\) auto;/);
   assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-load\) \{[\s\S]*font-size: 12px;/);
   assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-load\[data-state="warning"\]\) \{\n  color: var\(--status-warning\);/);

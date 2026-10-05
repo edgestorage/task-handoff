@@ -21,6 +21,7 @@ export const navigation = {
   noApprovals: "暂无待审批内容",
   aiSessionApproval: "AI 会话审批",
   operationApproval: "操作审批",
+  storyDecision: "Story 决策",
   instanceDeleteApproval: "删除实例",
   nodeRemoveApproval: "移除节点",
   nodeUpdateApproval: "应用节点更新",

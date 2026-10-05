@@ -671,7 +671,7 @@ async function refreshAfterMutation(description: string) {
   try {
     await refresh();
   } catch (error) {
-    showControlPlaneToast(t("instances.create.feedback.refreshFailed", { description, error: errorText(error) }));
+    showControlPlaneToast(t("instances.create.feedback.refreshFailed", { description, error: errorText(error) }), "error");
   }
 }
 
@@ -723,7 +723,7 @@ async function createInstance() {
     instanceDraft.modelEntityIds = [];
     instanceDraft.retainGitCredential = false;
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
     return;
   } finally {
     creating.value = false;
@@ -732,7 +732,7 @@ async function createInstance() {
   emit("close");
   await refreshAfterMutation(t("instances.create.feedback.instanceCreated"));
   if (created.startOutcome.status === "failed") {
-    showControlPlaneToast(t("instances.create.feedback.createdButStartFailed", { error: created.startOutcome.error?.message || t("common.status.unknown") }));
+    showControlPlaneToast(t("instances.create.feedback.createdButStartFailed", { error: created.startOutcome.error?.message || t("common.status.unknown") }), "error");
   }
 }
 
@@ -769,7 +769,7 @@ async function createQuickProject() {
     runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId);
     createdProjectName = t("instances.create.feedback.namedCreated", { name: project.name });
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
     return;
   } finally {
     creatingProject.value = false;
@@ -801,7 +801,7 @@ async function chooseProjectFolderPath() {
     sourceDraft.localFolderId = "";
     sourceDraft.localPath = path;
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
   } finally {
     creatingLocalFolder.value = false;
   }
@@ -845,7 +845,7 @@ async function createQuickImage() {
     runtimeDraft.imageId = image.id;
     createdImageName = t("instances.create.feedback.namedCreated", { name: image.name });
   } catch (error) {
-    showControlPlaneToast(errorText(error));
+    showControlPlaneToast(errorText(error), "error");
     return;
   } finally {
     creatingImage.value = false;

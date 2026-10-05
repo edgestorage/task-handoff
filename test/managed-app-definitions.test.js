@@ -368,7 +368,14 @@ test("archive ownership requires a validated controlled-instance manifest", asyn
 test("builtin definitions are the single launcher source and custom launchers are not managed", () => {
   const definitions = builtinManagedAppDefinitions({ includeOptional: true });
   const catalog = builtinAppCatalog({ includeOptional: true });
-  assert.deepEqual(catalog, definitions.map((entry) => entry.launcher));
+  assert.deepEqual(catalog, definitions.filter((entry) => entry.launchable !== false).map((entry) => entry.launcher));
+  const thctl = definitions.find((entry) => entry.launcher.id === "thctl");
+  assert.equal(thctl.launchable, false);
+  assert.equal(thctl.launcher.kind, "tty");
+  assert.equal(catalog.some((entry) => entry.id === "thctl"), false);
+  assert.equal(thctl.distribution.recipes[0].type, "node-package");
+  assert.equal(thctl.distribution.recipes[0].installer, "npm");
+  assert.deepEqual(thctl.distribution.recipes[0].packages, ["@task-handoff/thctl"]);
   assert.equal(definitions.find((entry) => entry.launcher.id === "chromium").distribution.recipes[0].type, "system-package");
   const codex = definitions.find((entry) => entry.launcher.id === "codex");
   assert.equal(codex.distribution.recipes[0].type, "node-package");
@@ -409,8 +416,8 @@ test("builtin definitions are the single launcher source and custom launchers ar
   assert.equal(readOnlyCodexProjection.installReason.code, "INSTALLER_NOT_WRITABLE");
   const publicDefinitions = publicManagedAppDefinitions({ includeOptional: true });
   assert.equal(publicDefinitions.some((entry) => entry.id === "custom-tool"), false);
-  assert.equal(JSON.stringify(publicDefinitions).includes("command"), false);
-  assert.equal(JSON.stringify(publicDefinitions).includes("packages"), false);
+  assert.equal(publicDefinitions.some((entry) => Object.hasOwn(entry, "command") || Object.hasOwn(entry, "args")), false);
+  assert.equal(publicDefinitions.some((entry) => Object.hasOwn(entry, "distribution") || Object.hasOwn(entry, "packages")), false);
 });
 
 test("managed app providers isolate program definitions behind an extensible registry", () => {

@@ -32,7 +32,7 @@ function rows(value: readonly unknown[]) {
 
 /** `--token-stdin` 只补写 secret 字段，不允许主题字段走明文选项。 */
 async function withOptionalToken(invocation: CliInvocation, body: Record<string, unknown>, apply: (body: Record<string, unknown>, token: string) => void) {
-  if (invocation.options.tokenStdin !== true) return body;
+  if (invocation.options["token-stdin"] !== true) return body;
   const token = await readTokenFromStdin(invocation);
   apply(body, token);
   return body;

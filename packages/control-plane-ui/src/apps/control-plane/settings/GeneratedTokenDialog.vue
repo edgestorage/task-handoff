@@ -75,7 +75,7 @@ async function copyToken() {
     await navigator.clipboard.writeText(props.token);
     copied.value = true;
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyTokenFailed"));
+    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyTokenFailed"), "error");
   }
 }
 </script>

@@ -576,6 +576,12 @@ export const AiSessionReadResultSchema = z.object({
   unread: z.boolean(),
 }).strict();
 
+export const AiSessionTranscriptSchema = z.object({
+  path: z.string().trim().min(1).max(4096),
+  lineCount: z.number().int().nonnegative(),
+  tail: z.string(),
+}).strict();
+
 export const AiSessionCreateResultSchema = z.object({
   disposition: z.enum(["created", "already-created"]),
   aiSessionId: z.string().trim().min(1).max(120),
@@ -655,6 +661,10 @@ export const AiSessionQueueReorderInputSchema = z.object({
   queueIds: z.array(z.string().trim().min(1).max(120)).max(100),
 }).strict();
 
+export const AiSessionQueuePauseInputSchema = z.object({
+  paused: z.boolean(),
+}).strict();
+
 export const AiSessionQueueEditInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
   message: z.string().trim().min(1).max(20000),
@@ -694,6 +704,9 @@ export const AiSessionQueueSchema = z
   .object({
     revision: z.number().int().min(0).default(0),
     pendingCount: z.number().int().min(0).default(0),
+    // Compatibility for v0.0.35: pause is additive and absent on older
+    // controlled instances; absence normalizes to "not paused".
+    paused: z.boolean().optional(),
     items: z.array(AiSessionQueuedMessageSchema).max(100).default([]),
   })
   .strict()
@@ -892,7 +905,7 @@ export const AiSessionActionResponseSchema = AiSessionActionResultSchema.omit({ 
 export const AiSessionQueueMutationResponseSchema = z.object({
   sessionId: z.string().trim().min(1).max(120),
   queueRevision: z.number().int().min(0),
-  action: z.enum(["retry", "remove", "edit", "reorder"]),
+  action: z.enum(["retry", "remove", "edit", "reorder", "pause"]),
   queueId: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
@@ -1563,6 +1576,7 @@ export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionMode
 export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
 export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
 export type AiSessionReadResult = z.infer<typeof AiSessionReadResultSchema>;
+export type AiSessionTranscript = z.infer<typeof AiSessionTranscriptSchema>;
 export type AiSessionResumeInput = z.infer<typeof AiSessionResumeInputSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateWorkspaceSelection = z.infer<typeof AiSessionCreateWorkspaceSelectionSchema>;

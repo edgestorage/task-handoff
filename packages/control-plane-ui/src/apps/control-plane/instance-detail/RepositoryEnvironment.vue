@@ -407,6 +407,7 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   font-size: 13px;
   line-height: 20px;
   padding: 6px 8px;
+  text-align: left;
 }
 
 .repository-environment-trigger-menu span {

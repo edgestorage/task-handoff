@@ -109,13 +109,13 @@
                       <span class="control-plane-node-filter-menu-copy">
                         <strong>{{ node.name }}</strong>
                       </span>
-                      <span v-if="storyMode && storyCatalog.nodeLoadState(node.id) === 'loading'" class="control-plane-node-filter-menu-load">
+                      <span v-if="visibleNodeLoadState(node.id) === 'loading'" class="control-plane-node-filter-menu-load">
                         <LoaderCircle class="control-plane-node-filter-menu-spin" :size="13" aria-hidden="true" />
-                        <span>{{ t("stories.nodeLoad.loading") }}</span>
+                        <span>{{ nodeLoadLabel.loading }}</span>
                       </span>
-                      <span v-else-if="storyMode && storyCatalog.nodeLoadState(node.id) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning">
+                      <span v-else-if="visibleNodeLoadState(node.id) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning">
                         <CircleAlert :size="13" aria-hidden="true" />
-                        <span>{{ t("stories.nodeLoad.unavailable") }}</span>
+                        <span>{{ nodeLoadLabel.unavailable }}</span>
                       </span>
                     </button>
                     <Checkbox
@@ -258,25 +258,30 @@
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <TooltipProvider v-if="!standaloneMode && actionInboxCollapsed" :delay-duration="120">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon" class="control-plane-icon-button action-inbox-trigger" :aria-label="actionInboxItems.length ? `${t('navigation.expandApprovals')} · ${actionInboxItems.length}` : t('navigation.expandApprovals')" :title="t('navigation.expandApprovals')" :class="{ 'action-inbox-trigger-empty': !actionInboxItems.length }" @click="expandActionInbox">
-                <ClipboardCheck :size="16" />
-                <span v-if="actionInboxItems.length" class="action-inbox-trigger-count" aria-hidden="true">{{ actionInboxItems.length }}</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" :side-offset="8">
-              <template v-if="actionInboxItems.length">
-                <span v-for="item in actionInboxItems.slice(0, 2)" :key="item.key" class="action-inbox-preview-line">
-                  {{ item.type === 'ai-session-approval' ? `${item.instanceName} · ${item.session.title || item.session.id}` : `${t('navigation.operationApproval')} · ${item.request.targetId}` }}
-                </span>
-                <span v-if="actionInboxItems.length > 2">{{ t('navigation.moreApprovals', { count: actionInboxItems.length - 2 }) }}</span>
-              </template>
-              <span v-else>{{ t('navigation.noApprovals') }}</span>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Transition name="action-inbox-slot">
+          <div v-if="!standaloneMode && actionInboxCollapsed" class="action-inbox-slot">
+            <span class="story-resource-toggle-divider" aria-hidden="true" />
+            <TooltipProvider :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon" class="control-plane-icon-button action-inbox-trigger" :aria-label="actionInboxItems.length ? `${t('navigation.expandApprovals')} · ${actionInboxItems.length}` : t('navigation.expandApprovals')" :title="t('navigation.expandApprovals')" :class="{ 'action-inbox-trigger-empty': !actionInboxItems.length }" @click="expandActionInbox">
+                    <ClipboardCheck :size="16" />
+                    <span v-if="actionInboxItems.length" class="action-inbox-trigger-count" aria-hidden="true">{{ actionInboxItems.length }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8">
+                  <template v-if="actionInboxItems.length">
+                    <span v-for="item in actionInboxItems.slice(0, 2)" :key="item.key" class="action-inbox-preview-line">
+                      {{ actionInboxPreview(item) }}
+                    </span>
+                    <span v-if="actionInboxItems.length > 2">{{ t('navigation.moreApprovals', { count: actionInboxItems.length - 2 }) }}</span>
+                  </template>
+                  <span v-else>{{ t('navigation.noApprovals') }}</span>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        </Transition>
         <span class="story-resource-toggle-divider" aria-hidden="true" />
         <TooltipProvider :delay-duration="120">
           <Tooltip>
@@ -311,7 +316,20 @@
         aria-hidden="true"
       />
     </header>
-    <ActionInbox v-if="!standaloneMode" :items="actionInboxItems" :collapsed="actionInboxCollapsed" :busy-key="aiApprovalBusyKey || operationApprovalBusyKey" :error="actionInboxError" @collapse="actionInboxCollapsed = true" @resolve="resolveActionInboxApproval" @decide="decideActionInboxOperation" />
+    <ActionInbox
+      v-if="!standaloneMode"
+      :items="actionInboxItems"
+      :collapsed="actionInboxCollapsed"
+      :busy-key="aiApprovalBusyKey || operationApprovalBusyKey || storyDecisionBusyKey"
+      :error="actionInboxError"
+      @collapse="actionInboxCollapsed = true"
+      @resolve="resolveActionInboxApproval"
+      @decide="decideActionInboxOperation"
+      @decide-story="decideActionInboxStoryDecision"
+      @cancel-story="cancelActionInboxStoryDecision"
+      @open-story="openActionInboxStory"
+      @open-story-session="openActionInboxStoryDecisionSession"
+    />
       </ContextMenuTrigger>
       <WorkbenchLayoutContextMenu
         :instance-sidebar-visible="instancesSidebarVisible"
@@ -642,7 +660,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { cancelStoryDecision, controlPlaneQueryKeys, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -661,18 +679,22 @@ import ActionInbox from "./action-inbox/ActionInbox.vue";
 import type { Item as ActionInboxItem } from "./action-inbox/ActionInbox.vue";
 import { aiSessionApprovalItems, type AiSessionApprovalDecision } from "./action-inbox/aiSessionApprovals";
 import { mergeActionInboxItems } from "./action-inbox/items";
+import { applyStoryDecisionUpdate, isStoryDecisionResumePending, storyDecisionItemsOutsideSessionDisplay, type StoryDecisionList } from "./action-inbox/storyDecisionItems";
 import { useOperationApprovalStore } from "./action-inbox/useOperationApprovalStore";
+import { useStoryDecisionInbox } from "./action-inbox/useStoryDecisionInbox";
 import AgentView from "./agent/AgentView.vue";
 import { useAgentCatalog } from "./agent/useAgentCatalog";
 import StoryView from "./story/StoryView.vue";
 import type { StorySelection } from "./story/storySelection";
+import { storyDecisionSessionInstance } from "./story/storyDecisionSession";
+import { inSessionDisplayedDecisionIds } from "./story/sessionDecisionDisplay";
 import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
 import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import { loadNodeVisibilityFilter, persistNodeVisibilityFilter } from "./shared/nodeVisibilityPreference";
 import { useStoryCatalog } from "./story/useStoryCatalog";
-import { allNodesVisible, nodeIsSelected, normalizeNodeVisibilityFilter, selectOnlyNode, toggleNodeVisibility, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibilityFilter, selectOnlyNode, toggleNodeVisibility, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
@@ -688,7 +710,7 @@ import SettingsModal from "./settings/SettingsModal.vue";
 import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
 import { type NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
-import type { Story, StoryAction } from "@task-handoff/protocol/stories";
+import type { Story, StoryAction, StoryDecision } from "@task-handoff/protocol/stories";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
@@ -891,6 +913,17 @@ const agentMode = computed(() => workbenchView.value === "agent");
 const storyCatalog = useStoryCatalog(storyMode);
 // Agent 视图的节点作用域取自它自己的权威目录；视图未打开时不发请求。
 const agentCatalog = useAgentCatalog({ enabled: agentMode });
+// 顶部节点菜单展示当前视图目录的按节点加载态：Story 与 Agent 都按节点独立应答，
+// 先应答的节点先进入列表，尚未应答的节点在菜单里保持可见的加载/不可用提示。
+function visibleNodeLoadState(nodeId: string): "loading" | "ready" | "unavailable" {
+  if (agentMode.value) return agentCatalog.nodeLoadState(nodeId);
+  if (storyMode.value) return storyCatalog.nodeLoadState(nodeId);
+  return "ready";
+}
+// 加载态文案随视图切换：两种目录各用自己的本地化文案，不互相复用。
+const nodeLoadLabel = computed(() => (agentMode.value
+  ? { loading: t("agents.list.loadingNode"), unavailable: t("agents.list.unavailableNode") }
+  : { loading: t("stories.nodeLoad.loading"), unavailable: t("stories.nodeLoad.unavailable") }));
 const storySelection = ref<StorySelection>();
 const nodeFilter = ref<NodeVisibilityFilter>(loadNodeVisibilityFilter());
 const nodeFilterOpen = ref(false);
@@ -1056,10 +1089,23 @@ watch(() => authSession.data.value?.user?.id, (userId, previousId) => {
   operationApprovalStore.reset();
   if (userId && authSession.data.value?.enabled) void operationApprovalStore.recover().catch(() => undefined);
 });
-const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems(aiSessionApprovalItems(boardInstancesWithAiSessions.value), operationApprovalStore.snapshot.value.requests));
+const storyDecisionInbox = useStoryDecisionInbox(() => !standaloneMode.value);
+// 会话内提示正在展示的决策不再进入右上角浮层，避免同一决策在会话和审批中心重复出现。
+const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems(
+  aiSessionApprovalItems(boardInstancesWithAiSessions.value),
+  operationApprovalStore.snapshot.value.requests,
+  storyDecisionItemsOutsideSessionDisplay(storyDecisionInbox.items.value, inSessionDisplayedDecisionIds().value),
+));
 const actionInboxCollapsed = ref(false);
 const actionInboxError = ref("");
 const operationApprovalBusyKey = ref("");
+const storyDecisionBusyKey = ref("");
+
+function actionInboxPreview(item: ActionInboxItem) {
+  if (item.type === "ai-session-approval") return `${item.instanceName} · ${item.session.title || item.session.id}`;
+  if (item.type === "story-decision") return `${t("navigation.storyDecision")} · ${item.story.title}`;
+  return `${t("navigation.operationApproval")} · ${item.request.targetId}`;
+}
 
 function expandActionInbox() {
   if (!actionInboxItems.value.length && !actionInboxError.value) return;
@@ -1079,6 +1125,70 @@ async function decideActionInboxOperation(item: Extract<ActionInboxItem, { type:
   } finally {
     operationApprovalBusyKey.value = "";
   }
+}
+
+async function decideActionInboxStoryDecision(item: Extract<ActionInboxItem, { type: "story-decision" }>, input: { optionId?: string; response?: string }) {
+  if (storyDecisionBusyKey.value) return;
+  actionInboxError.value = "";
+  storyDecisionBusyKey.value = item.key;
+  const key = controlPlaneQueryKeys.storyDecisions(item.story.ownerNodeId, item.story.id);
+  try {
+    let updated: StoryDecision;
+    try {
+      updated = await decideStoryDecision(item.story.id, item.decision.id, item.story.ownerNodeId, { expectedRevision: item.decision.revision, ...input });
+    } catch (error) {
+      if (!isStoryDecisionResumePending(error) || !window.confirm(t("stories.decisions.resumePending"))) throw error;
+      updated = await decideStoryDecision(item.story.id, item.decision.id, item.story.ownerNodeId, { expectedRevision: item.decision.revision, ...input, retry: true });
+    }
+    queryClient.setQueryData(key, (current: StoryDecisionList | undefined) => applyStoryDecisionUpdate(current, updated));
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories() });
+  } finally {
+    storyDecisionBusyKey.value = "";
+  }
+}
+
+async function cancelActionInboxStoryDecision(item: Extract<ActionInboxItem, { type: "story-decision" }>) {
+  if (storyDecisionBusyKey.value) return;
+  actionInboxError.value = "";
+  storyDecisionBusyKey.value = item.key;
+  const key = controlPlaneQueryKeys.storyDecisions(item.story.ownerNodeId, item.story.id);
+  try {
+    const updated = await cancelStoryDecision(item.story.id, item.decision.id, item.story.ownerNodeId, { expectedRevision: item.decision.revision });
+    queryClient.setQueryData(key, (current: StoryDecisionList | undefined) => applyStoryDecisionUpdate(current, updated));
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories() });
+  } finally {
+    storyDecisionBusyKey.value = "";
+  }
+}
+
+// Story 名字是进入 Story 详情的入口，与左树选择同源：先放开节点作用域，否则目标 Story 会被当前过滤掉。
+function openActionInboxStory(item: Extract<ActionInboxItem, { type: "story-decision" }>) {
+  actionInboxError.value = "";
+  if (!nodeIsVisible(nodeFilter.value, item.story.ownerNodeId)) {
+    nodeFilter.value = toggleNodeVisibility(nodeFilter.value, item.story.ownerNodeId, true, nodeFilterOptions.value.map((node) => node.id));
+  }
+  storySelection.value = { kind: "story", ownerNodeId: item.story.ownerNodeId, storyId: item.story.id };
+  setWorkbenchView("story");
+}
+
+// 决策条目可以在审批中心就地答复；这里额外提供进入其发起会话的入口，并把 Story 视图的节点作用域带过去，
+// 否则目标 Story 会被当前过滤掉，点击只会落到其它 Story 上。
+function openActionInboxStoryDecisionSession(item: Extract<ActionInboxItem, { type: "story-decision" }>) {
+  const instance = storyDecisionSessionInstance(boardInstancesWithAiSessions.value, item.decision);
+  if (!instance) {
+    actionInboxError.value = t("stories.decisions.sessionUnavailable");
+    return;
+  }
+  actionInboxError.value = "";
+  if (!nodeIsVisible(nodeFilter.value, item.story.ownerNodeId)) {
+    nodeFilter.value = toggleNodeVisibility(nodeFilter.value, item.story.ownerNodeId, true, nodeFilterOptions.value.map((node) => node.id));
+  }
+  storySelection.value = { kind: "session", ownerNodeId: item.story.ownerNodeId, storyId: item.story.id, instanceId: instance.id, sessionId: item.decision.sessionId };
+  setWorkbenchView("story");
 }
 
 async function resolveActionInboxApproval(item: Extract<ActionInboxItem, { type: "ai-session-approval" }>, decision: AiSessionApprovalDecision) {
@@ -1464,7 +1574,7 @@ const {
   closeFloatingLayers,
   errorText,
   focusAppSession,
-  notifyError: showToast,
+  notifyError: (message: string) => showToast(message, "error"),
   refresh,
   sessionMenuOpen,
   t,
@@ -1852,7 +1962,7 @@ const {
     openInstanceMenuId.value = "";
   },
   errorText,
-  notifyError: showToast,
+  notifyError: (message: string) => showToast(message, "error"),
   refresh,
   translate: t,
 });
@@ -1877,7 +1987,7 @@ async function confirmSaveEnvironmentTemplate(name: string) {
   try {
     await saveEnvironmentTemplate(instance.id, name);
     await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.environmentTemplates(instance.nodeId) });
-    showToast(t("instances.environmentTemplateDialog.saved", { name }));
+    showToast(t("instances.environmentTemplateDialog.saved", { name }), "success");
     saveTemplateInstance.value = undefined;
   } catch (error) {
     saveTemplateError.value = errorText(error);
@@ -2001,7 +2111,7 @@ async function openInstanceWindow(instance: InstanceBoardItem, session?: BoardSe
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
+    showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"), "error");
   }
   // i18n-audit-allow-next-line code-token: toast presentation variant
   else if (result.action === "focused") showToast(t("instances.window.focusedExisting"), "info");
@@ -2036,7 +2146,7 @@ async function selectInstance(id: string) {
   }
   if (desktopResult && desktopResult.action !== "switched") {
     finishInstanceSwitch(switchSequence);
-    showToast(t("instances.window.switchFailed"));
+    showToast(t("instances.window.switchFailed"), "error");
     closeFloatingLayers();
     return;
   }

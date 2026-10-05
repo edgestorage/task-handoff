@@ -74,7 +74,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       await checkNodeRuntime(selectedNode.value.id, runtime.id);
       await refreshRuntimeState();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       checkingRuntimeId.value = "";
     }
@@ -89,7 +89,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       await deleteNodeRuntime(selectedNode.value.id, runtime.id);
       await refreshRuntimeState();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       deletingRuntimeId.value = "";
     }
@@ -117,7 +117,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       const result = nativeNodeFolderSelectionResult(selected, node.id);
       if (result.status === "cancelled") return;
       if (result.status === "invalid-owner") {
-        showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"));
+        showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"), "error");
         return;
       }
       const folderPath = result.path;
@@ -127,7 +127,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       });
       await refreshFolders();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       creatingNodeLocalFolder.value = false;
     }
@@ -142,7 +142,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       await deleteNodeLocalFolder(selectedNode.value.id, folderId);
       await refreshFolders();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       deletingNodeLocalFolderId.value = "";
     }
@@ -156,7 +156,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
       await refreshFolders();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       renamingNodeLocalFolderId.value = "";

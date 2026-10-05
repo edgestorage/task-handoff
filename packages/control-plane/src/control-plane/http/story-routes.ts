@@ -27,11 +27,13 @@ import {
   StorySessionRetentionSettingsSchema,
 } from "@task-handoff/protocol/stories";
 import {
+  projectStoryAgentToolPolicyForNodeAgent,
   StoryAgentToolPolicySettingsSchema,
   StoryAgentToolPolicyUpdateInputSchema,
   StoryAgentActionRunInputSchema,
   sanitizeStoryAgentToolPolicySettings,
 } from "@task-handoff/protocol/story-agent-tools";
+import { nodeAgentCapabilitiesFromPublicNode } from "@task-handoff/protocol/node-agent-capabilities";
 import type { ControlPlaneService } from "../application/service.ts";
 import { nodeJson } from "./node-agent-request.ts";
 
@@ -111,10 +113,14 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
       input: StoryAgentToolPolicyUpdateInputSchema,
     }).strict().parse(request.body);
     await requireStoryOnNode(service, storyId, body.nodeId);
+    const node = service.requireNode(body.nodeId);
+    const input = {
+      policy: projectStoryAgentToolPolicyForNodeAgent(body.input.policy, nodeAgentCapabilitiesFromPublicNode(node.capabilities)),
+    };
     const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/settings/agent-tools`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body.input),
+      body: JSON.stringify(input),
     });
     return { data: StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data)) };
   });

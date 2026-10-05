@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
-import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
-import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { CircleHelp, CornerDownRight, GripVertical, Pause, Pencil, Play, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
+import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
-import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
+import type { StoryDecision } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
@@ -24,10 +25,13 @@ import type { MobileAiSessionPermissionStore } from './permission-store';
 import { useMobileToast } from '../components/MobileToast';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
+import { StoryDecisionAnswer } from '../stories/StoryDecisionAnswer';
+import { isStoryDecisionResumePending, pendingStoryDecisionsForSession, type StoryDecisionAnswerInput } from '../stories/story-decision';
 
 export function SessionWorkspace({
   controlPlaneId,
   instanceId,
+  nodeId,
   session,
   messages,
   timelines = {},
@@ -48,6 +52,7 @@ export function SessionWorkspace({
 }: {
   controlPlaneId: string;
   instanceId: string;
+  nodeId?: string;
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
   timelines?: Readonly<Record<string, MobileTurnTimelineState>>;
@@ -112,6 +117,10 @@ export function SessionWorkspace({
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
   const [queueDragOffsetY, setQueueDragOffsetY] = useState(0);
+  const [storyDecisions, setStoryDecisions] = useState<readonly StoryDecision[]>([]);
+  const [decisionBusyId, setDecisionBusyId] = useState('');
+  const [decisionError, setDecisionError] = useState<{ decisionId: string; message: string }>();
+  const [decisionResume, setDecisionResume] = useState<{ decisionId: string; input: StoryDecisionAnswerInput }>();
   const queueOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const queueRowHeights = useRef(new Map<string, number>());
   const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
@@ -332,6 +341,23 @@ export function SessionWorkspace({
     setQueueDragOffsetY(0);
     queueDrag.current = undefined;
   }, [session?.queue.revision, sessionId]);
+  // 决策的权威归属是 sessionId：只拉取当前会话自己的待决策，随会话快照更新重新对齐。
+  const decisionsSessionId = session?.id;
+  const decisionsStoryId = session?.storyId;
+  const decisionsRevision = `${session?.updatedAt || ''}:${session?.turnCount ?? 0}`;
+  useEffect(() => {
+    if (!client || !nodeId || !decisionsStoryId || !decisionsSessionId) {
+      setStoryDecisions([]);
+      return;
+    }
+    const abort = new AbortController();
+    void client.stories.listDecisions(decisionsStoryId, nodeId, abort.signal).then((list) => {
+      if (!abort.signal.aborted) setStoryDecisions(pendingStoryDecisionsForSession(list.decisions, decisionsSessionId));
+    }).catch(() => {
+      if (!abort.signal.aborted) setStoryDecisions([]);
+    });
+    return () => abort.abort();
+  }, [client, decisionsRevision, decisionsSessionId, decisionsStoryId, nodeId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
@@ -354,6 +380,8 @@ export function SessionWorkspace({
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
+  const canPauseQueue = supportsDirectoryAiSessionQueuePause(instanceCapabilities);
+  const queuePaused = session.queue.paused === true;
   const approvalPending = isAiSessionApprovalPending(session);
   const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
   // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
@@ -368,6 +396,50 @@ export function SessionWorkspace({
       toast.show({ detail: result.error, title: t('toast.actionFailed', { action: label }), tone: 'error' });
     }
     return result;
+  };
+  const setQueuePaused = async (paused: boolean) => {
+    if (!actions || !authoritativeActionsEnabled) return;
+    await performAction(t(paused ? 'workspace.resumeQueue' : 'workspace.pauseQueue'), () => actions.pauseQueue(instanceId, session.id, paused));
+  };
+  // 决策答复只有一套提交/重试状态机：提交后把权威响应写回会话内的待决策列表。
+  const submitStoryDecision = async (decision: StoryDecision, input: StoryDecisionAnswerInput, retry = false) => {
+    if (!client || !session.storyId || !nodeId) return;
+    setDecisionBusyId(decision.id);
+    setDecisionError(undefined);
+    try {
+      const updated = await client.stories.decideStory(session.storyId, decision.id, nodeId, {
+        expectedRevision: decision.revision,
+        ...input,
+        ...(retry ? { retry: true } : {}),
+      });
+      setStoryDecisions((current) => current
+        .map((candidate) => (candidate.id === updated.id ? updated : candidate))
+        .filter((candidate) => candidate.status === 'pending'));
+      setDecisionResume(undefined);
+    } catch (cause) {
+      setDecisionError({ decisionId: decision.id, message: cause instanceof Error ? cause.message : String(cause) });
+      setDecisionResume(isStoryDecisionResumePending(cause) ? { decisionId: decision.id, input } : undefined);
+    } finally {
+      setDecisionBusyId('');
+    }
+  };
+  const cancelStoryDecision = async (decision: StoryDecision) => {
+    if (!client || !session.storyId || !nodeId) return;
+    setDecisionBusyId(decision.id);
+    setDecisionError(undefined);
+    try {
+      const updated = await client.stories.cancelDecision(session.storyId, decision.id, nodeId, { expectedRevision: decision.revision });
+      setStoryDecisions((current) => current.filter((candidate) => candidate.id !== updated.id));
+      setDecisionResume(undefined);
+    } catch (cause) {
+      setDecisionError({ decisionId: decision.id, message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setDecisionBusyId('');
+    }
+  };
+  const retryStoryDecision = (decision: StoryDecision) => {
+    const pending = decisionResume;
+    if (pending?.decisionId === decision.id) void submitStoryDecision(decision, pending.input, true);
   };
   const continueFromTurn = async (turn: { id: string }) => {
     if (!actions || !authoritativeActionsEnabled) return;
@@ -718,7 +790,49 @@ export function SessionWorkspace({
             </View>
           </View>
         ) : null}
-        {isLatestTurn && session.queue.items.length ? <View style={[styles.queueListFrame, { backgroundColor: colors.surface, borderColor: colors.border }]}><FlatList
+        {storyDecisions.length ? <View style={[styles.decisionsFrame, { backgroundColor: colors.surface, borderColor: colors.border }]} testID="session-decisions">
+          <View style={[styles.decisionsHeader, { borderBottomColor: colors.border }]}>
+            <CircleHelp color={colors.textMuted} size={mobileWebMetric(14)} />
+            <Text style={[styles.decisionsTitle, { color: colors.text }]}>{t('stories.decisions')}</Text>
+            <Text style={[styles.decisionsCount, { color: colors.textMuted }]}>{storyDecisions.length}</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.decisionsContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled style={styles.decisionsList}>
+          {storyDecisions.map((decision, index) => (
+            <View key={decision.id} style={[styles.decision, index ? { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth } : null]} testID={`session-decision-${decision.id}`}>
+              <Text style={[styles.decisionQuestion, { color: colors.text }]}>{decision.question}</Text>
+              {decision.context ? <Text style={[styles.decisionContext, { color: colors.textMuted }]}>{t('stories.decisionContext')}: {decision.context}</Text> : null}
+              <StoryDecisionAnswer
+                busy={decisionBusyId === decision.id}
+                decision={decision}
+                disabled={!authoritativeActionsEnabled}
+                key={decision.id}
+                onCancel={() => { void cancelStoryDecision(decision); }}
+                onSubmit={(input) => { void submitStoryDecision(decision, input); }}
+              />
+              {decisionError?.decisionId === decision.id ? <Text accessibilityLiveRegion="polite" style={[styles.decisionError, { color: colors.error }]}>{decisionError.message}</Text> : null}
+              {decisionResume?.decisionId === decision.id ? (
+                <View style={styles.decisionResume}>
+                  <Text style={[styles.decisionResumeText, { color: colors.textMuted }]}>{t('stories.decisionResumePending')}</Text>
+                  <Pressable accessibilityRole="button" onPress={() => retryStoryDecision(decision)} style={({ pressed }) => [styles.decisionRetry, pressed && styles.pressed]}>
+                    <Text style={[styles.decisionRetryText, { color: colors.primary }]}>{t('stories.decisionRetry')}</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ))}
+          </ScrollView>
+        </View> : null}
+        {isLatestTurn && session.queue.items.length ? <View style={[styles.queueListFrame, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={[styles.queueHeader, { borderBottomColor: colors.border }]}>
+            <Text style={[styles.queueHeaderTitle, { color: colors.textMuted }]}>{t('workspace.queuedMessages')}</Text>
+            {canPauseQueue ? <QueueActionButton
+              disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-pause')?.phase || '')}
+              icon={queuePauseIcon(queuePaused)}
+              label={t(queuePaused ? 'workspace.resumeQueue' : 'workspace.pauseQueue')}
+              onPress={() => { void setQueuePaused(!queuePaused); }}
+            /> : null}
+          </View>
+          <FlatList
           accessibilityLabel={t('workspace.queuedMessages')}
           data={displayedQueueItems}
           keyExtractor={(item) => item.id}
@@ -887,6 +1001,11 @@ export function queueActionIcon(action: 'edit' | 'steer' | 'retry' | 'remove'): 
   return Trash2;
 }
 
+/** 暂停态显示“继续”图标，运行态显示“暂停”图标；图标表达点击后的动作。 */
+export function queuePauseIcon(paused: boolean): LucideIcon {
+  return paused ? Play : Pause;
+}
+
 export function moveQueueId(queueIds: readonly string[], source: number, target: number) {
   if (source < 0 || target < 0 || source >= queueIds.length || target >= queueIds.length || source === target) return [...queueIds];
   const reordered = [...queueIds];
@@ -948,6 +1067,8 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   queueListFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   queueList: { maxHeight: 224 },
+  queueHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 7, justifyContent: 'space-between', minHeight: 38, paddingLeft: 12, paddingRight: 4 },
+  queueHeaderTitle: { flex: 1, fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 30 },
   queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 7, paddingVertical: 8 },
   queueRowDragging: { opacity: 0.72 },
@@ -959,6 +1080,20 @@ const styles = StyleSheet.create({
   queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
   queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
   queueActionText: { fontSize: mobileWebType.small, fontWeight: '700', lineHeight: mobileWebType.smallLine },
+  decisionsFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  decisionsHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 12 },
+  decisionsList: { maxHeight: 260 },
+  decisionsContent: { flexGrow: 0 },
+  decisionsTitle: { flex: 1, fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
+  decisionsCount: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  decision: { gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
+  decisionQuestion: { fontSize: mobileWebType.meta, fontWeight: '500', lineHeight: mobileWebType.metaLine },
+  decisionContext: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  decisionError: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  decisionResume: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between' },
+  decisionResumeText: { flex: 1, fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  decisionRetry: { alignItems: 'center', borderRadius: 8, justifyContent: 'center', minHeight: 34, paddingHorizontal: 10 },
+  decisionRetryText: { fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 12 },
   noticeText: { flex: 1, fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
   error: { color: '#b91c1c', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },

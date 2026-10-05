@@ -58,7 +58,7 @@
         </div>
         <div class="list-head-actions">
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             class="icon-button"
             :aria-label="embedded ? t('instances.list.expand') : t('instances.list.collapse')"
@@ -69,7 +69,7 @@
             <PanelLeftClose v-else :size="16" />
           </Button>
           <InstanceViewOptionsMenu :group-by-node="groupByNode" :label="t('instances.list.options')" :sort-mode="sortMode" @update:group-by-node="$emit('update:groupByNode', $event)" @update:sort-mode="$emit('update:sortMode', $event)" />
-          <Button size="sm" class="icon-button" :aria-label="t('instances.list.new')" @click="$emit('newInstance')">
+          <Button variant="ghost" size="sm" class="icon-button" :aria-label="t('instances.list.new')" @click="$emit('newInstance')">
             <Plus :size="16" />
           </Button>
         </div>
@@ -99,9 +99,10 @@
               {{ group.connectionLabel }}
             </span>
             <ChevronRight class="instance-group-chevron" :class="{ open: !collapsedGroups[group.key] }" :size="15" />
-            <strong>{{ group.instances.length }}</strong>
           </button>
-          <template v-if="!groupByNode || !collapsedGroups[group.key]">
+          <Transition name="instance-group-collapse">
+          <div v-if="!collapsedGroups[group.key]" class="instance-group-collapse">
+          <div class="instance-group-collapse-inner">
           <ContextMenu
             v-for="instance in group.instances"
             :key="instance.id"
@@ -155,7 +156,9 @@
               <InstanceActionMenuItems :instance="instance" variant="context" :active-action-label="activeActionLabel" :ai-session-count="aiSessionCount" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" :is-closing-all-sessions="isClosingAllSessions" @close-all-sessions="$emit('closeAllSessions', instance)" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
             </ContextMenuContent>
           </ContextMenu>
-          </template>
+          </div>
+          </div>
+          </Transition>
         </template>
         <div v-if="!instances.length && !loading" class="list-empty">{{ t("instances.list.noMatches") }}</div>
         <div v-if="hasPendingNodes && !groupByNode" class="instance-list-pending">
@@ -428,21 +431,22 @@ function openNewInstanceFromTemporaryList() {
 }
 
 .icon-button {
-  width: 32px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  color: var(--text-muted);
   padding: 0;
 }
 
-.list-head-actions :deep(.icon-button:not(.bg-primary)) {
-  border-color: var(--control-plane-icon-button-border);
-  background: var(--control-plane-icon-button-bg);
-  color: var(--control-plane-icon-button-text);
+.icon-button :deep(svg) {
+  width: 15px;
+  height: 15px;
 }
 
-.list-head-actions :deep(.icon-button:not(.bg-primary):hover),
-.list-head-actions :deep(.icon-button:not(.bg-primary):focus-visible) {
-  border-color: var(--control-plane-icon-button-hover-border);
-  background: var(--control-plane-icon-button-hover-bg);
-  color: var(--control-plane-icon-button-hover-text);
+.icon-button:hover,
+.icon-button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-strong);
 }
 
 .instances-expand-rail {
@@ -581,6 +585,11 @@ function openNewInstanceFromTemporaryList() {
   .instance-list-pending svg {
     animation: none;
   }
+
+  .instance-group-chevron,
+  .instance-group-collapse {
+    transition: none;
+  }
 }
 
 .instance-row {
@@ -677,7 +686,7 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-group-label {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto 16px auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto 16px;
   align-items: center;
   width: 100%;
   min-height: 28px;
@@ -736,11 +745,24 @@ function openNewInstanceFromTemporaryList() {
   transform: rotate(90deg);
 }
 
-.instance-group-label strong {
-  grid-column: 5;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
+.instance-group-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 180ms ease,
+    opacity 140ms ease;
+}
+
+.instance-group-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.instance-group-collapse-enter-from,
+.instance-group-collapse-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 .instance-action-submenu {

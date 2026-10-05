@@ -44,6 +44,12 @@ function luminance(rgb) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+function shadowAlpha(value, label) {
+  const match = value.match(/^rgb\(\s*[\d.]+\s+[\d.]+\s+[\d.]+\s*\/\s*([\d.]+)%\s*\)$/);
+  assert.ok(match, `${label} must be an rgb() shadow color with a percentage alpha, got ${value}`);
+  return Number(match[1]);
+}
+
 function contrast(foreground, background) {
   const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
   return (high + 0.05) / (low + 0.05);
@@ -57,6 +63,20 @@ const themeBlocks = [
   ["light", /:root,\s*\[data-theme="light"\]\s*\{/],
   ["dark", /\.dark,\s*\[data-theme="dark"\]\s*\{/],
 ];
+
+// Light surfaces show shadow contrast much more strongly, so the shared shadow color carries a per-theme alpha.
+test("light theme keeps the shared shadow color softer than the dark theme", () => {
+  const light = themeBlock(themeBlocks[0][1]).get("shadow-color");
+  const dark = themeBlock(themeBlocks[1][1]).get("shadow-color");
+  assert.ok(light, "light theme must declare --shadow-color");
+  assert.ok(dark, "dark theme must declare --shadow-color");
+  const lightAlpha = shadowAlpha(light, "light --shadow-color");
+  const darkAlpha = shadowAlpha(dark, "dark --shadow-color");
+  assert.ok(
+    lightAlpha < darkAlpha,
+    `light --shadow-color (${light}) must stay softer than dark (${dark})`,
+  );
+});
 
 for (const [themeName, selector] of themeBlocks) {
   test(`${themeName} theme keeps the muted brand accent readable on every surface`, () => {

@@ -102,7 +102,7 @@ async function copyCommand() {
     await navigator.clipboard.writeText(installCommand.value);
     copied.value = true;
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyCommandFailed"));
+    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyCommandFailed"), "error");
   }
 }
 </script>

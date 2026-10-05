@@ -48,9 +48,9 @@ const { locale, t } = useI18n(); const query = useCloudConnectivityQuery(); cons
 const state = computed(() => query.data.value); const statusLabel = computed(() => state.value ? t(`settings.cloud.status.${state.value.status}`) : "");
 const errorText = (error: unknown) => translateApiError(error, t, t("settings.cloud.loadFailed"));
 const formatExpiry = (value: string) => new Intl.DateTimeFormat(locale.value, { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-async function beginBinding(){busy.value=true;try{challenge.value=await createCloudBindingChallenge();window.open(challenge.value.authorizationUrl,"_blank","noopener,noreferrer");await navigator.clipboard?.writeText(challenge.value.challengeCode);await query.refetch()}catch(error){showControlPlaneToast(errorText(error))}finally{busy.value=false}}
-async function setRemoteAccess(enabled:boolean){busy.value=true;try{await updateCloudRemoteAccess(enabled);await query.refetch()}catch(error){showControlPlaneToast(errorText(error))}finally{busy.value=false}}
-async function disconnect(){if(!window.confirm(t("settings.cloud.disconnectConfirm")))return;busy.value=true;try{await disconnectCloudAccount();challenge.value=undefined;await query.refetch()}catch(error){showControlPlaneToast(errorText(error))}finally{busy.value=false}}
+async function beginBinding(){busy.value=true;try{challenge.value=await createCloudBindingChallenge();window.open(challenge.value.authorizationUrl,"_blank","noopener,noreferrer");await navigator.clipboard?.writeText(challenge.value.challengeCode);await query.refetch()}catch(error){showControlPlaneToast(errorText(error), "error")}finally{busy.value=false}}
+async function setRemoteAccess(enabled:boolean){busy.value=true;try{await updateCloudRemoteAccess(enabled);await query.refetch()}catch(error){showControlPlaneToast(errorText(error), "error")}finally{busy.value=false}}
+async function disconnect(){if(!window.confirm(t("settings.cloud.disconnectConfirm")))return;busy.value=true;try{await disconnectCloudAccount();challenge.value=undefined;await query.refetch()}catch(error){showControlPlaneToast(errorText(error), "error")}finally{busy.value=false}}
 </script>
 
 <style scoped>

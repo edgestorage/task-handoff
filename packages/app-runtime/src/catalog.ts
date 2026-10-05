@@ -136,7 +136,7 @@ export class AppCatalogRepository {
 
   list() {
     const merged = new Map<string, AppCatalogItem>();
-    for (const { launcher: app } of this.registry.definitions()) {
+    for (const { launcher: app } of this.registry.launchableDefinitions()) {
       merged.set(app.id, resolveAppExecutable(app));
     }
     const custom = this.safeCustom();
@@ -153,7 +153,7 @@ export class AppCatalogRepository {
   }
 
   inventory(observedAt = new Date().toISOString()): InstanceAppInventory {
-    const builtin = this.registry.definitions().map(({ launcher: app }) => ({ app, source: "builtin" as const }));
+    const builtin = this.registry.launchableDefinitions().map(({ launcher: app }) => ({ app, source: "builtin" as const }));
     const custom = this.safeCustom();
     const merged = new Map<string, { app: AppCatalogItem; source: "builtin" | "custom" }>();
     for (const entry of builtin) merged.set(entry.app.id, entry);

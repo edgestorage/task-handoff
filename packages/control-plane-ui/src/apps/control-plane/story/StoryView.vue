@@ -83,7 +83,7 @@
                   class="story-tree-item story-decision-tree-item"
                   :disabled="!storyIsOnline(story)"
                   :title="decision.question"
-                  @click="openStoryDecision(story)"
+                  @click="openStoryDecisionSession(story, decision)"
                 >
                   <CircleHelp :size="14" />
                   <span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ decision.question }}</strong><small v-if="treeViewMode === 'detailed'">{{ t("stories.decisions.pending") }}</small></span>
@@ -379,11 +379,11 @@
                   :instances="storyInstances"
                   :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
                   @loaded="setStoryAutomationEntries"
-                  @open-session="(instanceId, sessionId) => openAutomationSession(selectedResource.story, instanceId, sessionId)"
+                  @open-session="(instanceId, sessionId) => openStorySessionById(selectedResource.story, instanceId, sessionId)"
                 />
               </section>
               <section v-if="decisionToolSupported" ref="storyDecisionsSectionEl" class="story-directory story-decisions-section">
-                <StoryDecisionPanel :story="selectedResource.story" :disabled="Boolean(selectedResource.story.archivedAt)" />
+                <StoryDecisionPanel :story="selectedResource.story" :disabled="Boolean(selectedResource.story.archivedAt)" :instances="storyInstances" @open-session="(instanceId, sessionId) => openStorySessionById(selectedResource.story, instanceId, sessionId)" />
               </section>
               <section v-else class="story-directory story-decisions-section">
                 <div class="story-decisions-unsupported" role="note">{{ t("stories.decisions.unavailable") }}</div>
@@ -419,10 +419,10 @@
         <div v-else-if="agentToolSettingsState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ agentToolSettingsError || t("stories.editor.agentToolsUnavailable") }}</div>
         <template v-else>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.content" @update:model-value="draftAgentToolPolicy.content = $event === true" /><span>{{ t("stories.editor.agentToolContent") }}</span></label>
+          <label v-if="draftDecisionToolSupported" class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.decisions" @update:model-value="draftAgentToolPolicy.decisions = $event === true" /><span>{{ t("stories.editor.agentToolDecisions") }}</span></label>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.actions" @update:model-value="draftAgentToolPolicy.actions = $event === true" /><span>{{ t("stories.editor.agentToolActions") }}</span></label>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.automations" @update:model-value="draftAgentToolPolicy.automations = $event === true" /><span>{{ t("stories.editor.agentToolAutomations") }}</span></label>
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
-          <label v-if="decisionToolSupported" class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.decisions" @update:model-value="draftAgentToolPolicy.decisions = $event === true" /><span>{{ t("stories.editor.agentToolDecisions") }}</span></label>
         </template>
       </fieldset>
       <fieldset v-if="storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
@@ -571,6 +571,7 @@ import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
 import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
 import { storySelectionKey, type StorySelection } from "./storySelection";
+import { storyDecisionSessionInstance } from "./storyDecisionSession";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
 const props = withDefaults(defineProps<{
@@ -939,9 +940,10 @@ type StorySettingsState = "hidden" | "loading" | "ready" | "unsupported" | "unav
 const agentToolSettingsState = ref<StorySettingsState>("hidden");
 const decisionToolSupported = computed(() => {
   const story = selectedResource.value?.story;
-  const ownerNode = story ? props.nodes.find((node) => node.id === story.ownerNodeId) : undefined;
-  return Boolean(ownerNode && nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).decisions);
+  return Boolean(story && nodeSupportsStoryDecisions(story.ownerNodeId));
 });
+/** 编辑器内的 决策 选项跟随草稿所属节点：新建时是所选节点，编辑时是 Story 所属节点。 */
+const draftDecisionToolSupported = computed(() => nodeSupportsStoryDecisions(draftNodeId.value));
 const agentToolSettingsError = ref("");
 const storyAgentEntriesState = ref<StorySettingsState>("hidden");
 const storyAgentEntriesError = ref("");
@@ -1178,7 +1180,7 @@ async function closeSession(entry: SessionEntry) {
     showControlPlaneToast(t("sessions.actions.closeSession"), "success");
     await refreshStorySessions();
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("sessions.panel.closeSessionFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("sessions.panel.closeSessionFailed")), "error");
   } finally {
     loadingToast.dismiss();
     closingSessionKey.value = "";
@@ -1195,7 +1197,7 @@ async function closeAllStorySessions(story: Story, entries: SessionEntry[]) {
   const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.closingAllSessions"));
   try {
     const { failed, total } = await closeAiSessionBatch(entries.map((entry) => ({ instanceId: entry.instance.id, sessionId: entry.session.id })));
-    if (failed) showControlPlaneToast(t("stories.closeAllSessionsPartial", { failed, total }));
+    if (failed) showControlPlaneToast(t("stories.closeAllSessionsPartial", { failed, total }), "error");
     else showControlPlaneToast(t("stories.closeAllSessionsSuccess", { count: total }), "success");
     await refreshStorySessions();
   } finally {
@@ -1208,7 +1210,7 @@ async function onStoryAssigned(_target: AiSessionStoryTarget, moved: boolean) {
   await refreshStorySessions();
 }
 function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
-  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
+  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")), "error");
 }
 const latestSessionFor = (story: Story) => {
   const root = storySessionRootsFor(story)[0];
@@ -1321,7 +1323,17 @@ function toggleStorySessionExpanded(sessionId: string) {
   if (next.has(sessionId)) next.delete(sessionId); else next.add(sessionId);
   expandedStorySessionIds.value = next;
 }
-function openAutomationSession(story: Story, instanceId: string, sessionId: string) { const instance = props.instances.find((candidate) => candidate.id === instanceId); const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === sessionId); if (instance && session) selectSession(story, { instance, session }); }
+function openStorySessionById(story: Story, instanceId: string, sessionId: string) { const instance = props.instances.find((candidate) => candidate.id === instanceId); const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === sessionId); if (instance && session) selectSession(story, { instance, session }); }
+// 决策条目直接进入发起它的会话；会话还没进入快照或实例离线时，退回 Story 的决策列表，避免点击成为死路。
+function openStoryDecisionSession(story: Story, decision: StoryDecision) {
+  const instance = storyDecisionSessionInstance(props.instances, decision);
+  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === decision.sessionId);
+  if (instance && session && isStorySessionOnline(story, props.nodes, instance)) {
+    selectSession(story, { instance, session });
+    return;
+  }
+  void openStoryDecision(story);
+}
 function setStoryAutomationEntries(entries: StoryAutomationView[]) { storyAutomationEntries.value = entries; }
 function actionAutomations(actionId: string) { return storyAutomationEntries.value.filter((entry) => entry.automation.actionId === actionId); }
 function automationScheduleLabel(schedule: StoryAutomationSchedule) {
@@ -1398,7 +1410,10 @@ function refreshResource(resource: Resource): Resource | undefined {
 watch(() => resourceKey(selectedResource.value), cancelStoryTitleEdit);
 watch(() => storySelectionKey(props.selection), () => {
   if (storySelectionKey(props.selection) === storySelectionKey(selectionForResource(selectedResource.value))) return;
-  selectedResource.value = resolveSelection(props.selection);
+  const resource = resolveSelection(props.selection);
+  // 外部入口（审批中心跳转、恢复的深链）选中会话或文档时展开左树，让目标在树里可见。
+  if (resource && resource.kind !== "story") setStoryExpanded(resource.story, true);
+  selectedResource.value = resource;
 }, { immediate: true });
 // 用户选择只由用户操作与权威目录变化驱动：目标暂时解析不出来（节点离线、目录尚未返回）时
 // 保留 workbench 里的选择，不回写空值，节点恢复后回到原 session。
@@ -1732,7 +1747,7 @@ async function commitStoryTitleEdit() {
     if (refreshed) selectStory(refreshed);
     cancelStoryTitleEdit();
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.renameFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.renameFailed")), "error");
     await nextTick();
     storyTitleInput.value?.focus();
   } finally {
@@ -1882,7 +1897,7 @@ async function saveStory() {
       const settings = await sharedControlPlaneClient.stories.updateAgentToolSettings(story.id, story.ownerNodeId, draftAgentToolPolicy.value);
       draftAgentToolPolicy.value = { ...settings.policy };
       savedAgentToolPolicy.value = { ...settings.policy };
-      showControlPlaneToast(t("stories.editor.agentToolsSaved"));
+      showControlPlaneToast(t("stories.editor.agentToolsSaved"), "success");
     }
     const storyAgentEntriesChanged = storyAgentEntriesState.value === "ready"
       && JSON.stringify(entryPairsFor(draftStoryAgentEntries.value)) !== JSON.stringify(entryPairsFor(savedStoryAgentEntries.value));
@@ -1901,7 +1916,7 @@ async function saveStory() {
       savedStoryAgentEntries.value = entries;
       missingStoryAgentIds.value = entrySet.entries.filter((entry) => entry.status === "missing-reference").map((entry) => entry.agentId);
       queryClient.setQueryData(controlPlaneQueryKeys.storyAgentEntries(story.ownerNodeId, story.id), entrySet);
-      showControlPlaneToast(t("stories.editor.entryAgentsSaved"));
+      showControlPlaneToast(t("stories.editor.entryAgentsSaved"), "success");
     }
     editorOpen.value = false;
     await load(story.ownerNodeId);
@@ -1954,7 +1969,7 @@ async function deleteStory(story: Story) {
     const resource = selectedResource.value;
     if (resource && resource.story.id === story.id && resource.story.ownerNodeId === story.ownerNodeId) selectedResource.value = undefined;
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.deleteFailed")));
+    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.deleteFailed")), "error");
   }
 }
 async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
@@ -1967,7 +1982,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.story-decisions-unsupported { color:var(--text-muted); font-size:12px; padding:6px 0; }
+.story-decisions-unsupported { display:flex; min-height:38px; align-items:center; color:var(--text-muted); font-size:12px; padding:11px 12px; }
 .story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; background:var(--workspace-bg); padding:12px 0; color:var(--text); }
 .story-content-header h2 { margin:0; color:var(--text-strong); font-size:18px; font-weight:500; }
 .story-title-name-field { display:grid; flex:0 1 auto; width:max-content; min-width:0; max-width:100%; vertical-align:top; }
@@ -2119,8 +2134,8 @@ onBeforeUnmount(() => {
 .story-detail-scroll { flex:1; min-height:0; margin-right:-16px; }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport]) { width:calc(100% - 16px); }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-detail-scroll-inner { --story-detail-head-height:140px; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 0 32px; }
-.story-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:12px; min-width:0; padding-bottom:10px; background:var(--workspace-bg); }
+.story-detail-scroll-inner { --story-detail-head-height:140px; container:story-detail / inline-size; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 0 32px; }
+.story-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:12px; min-width:0; background:var(--workspace-bg); }
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
 .story-content-header .story-content-title { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }
@@ -2136,9 +2151,9 @@ onBeforeUnmount(() => {
 :global(.story-detail-action-menu-item.danger) { color:var(--status-danger); }
 :global(.story-detail-action-menu-item.danger:hover),:global(.story-detail-action-menu-item.danger:focus-visible),:global(.story-detail-action-menu-item.danger[data-highlighted]) { background:var(--status-danger-bg); color:var(--status-danger); }
 .story-session-creator { flex:1; min-height:0; }
-.story-detail-header-tabs { flex:0 0 auto; margin-left:auto; min-width:0; }
-.story-detail-tabs { display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); padding:2px; }
-.story-detail-tabs :deep(button) { height:26px; min-height:26px; border-radius:5px; color:var(--text-muted); font-size:12px; font-weight:500; padding:0 10px; }
+.story-detail-header-tabs { flex:0 1 auto; margin-left:auto; min-width:0; }
+.story-detail-tabs { display:inline-flex; align-items:center; width:fit-content; max-width:100%; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); padding:2px; }
+.story-detail-tabs :deep(button) { min-width:0; height:26px; min-height:26px; border-radius:5px; color:var(--text-muted); font-size:12px; font-weight:500; padding:0 10px; }
 .story-detail-tabs :deep(button:not([data-state="active"]):hover),.story-session-tabs :deep(button:not([data-state="active"]):hover) { background:var(--surface-hover); color:var(--text-strong); }
 .story-detail-tabs :deep(button[data-state="active"]),.story-session-tabs :deep(button[data-state="active"]) { background:var(--surface-active); color:var(--text-strong); box-shadow:none; }
 .story-detail-tab-count { margin-right:4px; color:inherit; font-weight:500; }
@@ -2230,7 +2245,8 @@ onBeforeUnmount(() => {
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
-@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { flex-wrap:wrap; padding:0 0 14px; } .story-detail-header-tabs { order:3; width:100%; margin-left:0; } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { flex:1; min-width:0; padding:0 5px; } }
+@container story-detail (max-width:780px) { .story-content-header { flex-wrap:wrap; padding:0 0 14px; } .story-detail-header-tabs { order:3; width:100%; margin-left:0; } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { flex:1; min-width:0; padding:0 5px; } }
+@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { flex-wrap:wrap; padding:0 0 14px; } }
 @media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
-@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { min-width:0; flex:1; padding:0 5px; } }
+@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } }
 </style>

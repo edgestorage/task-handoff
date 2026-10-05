@@ -13,6 +13,8 @@ export const agents = {
     loading: "正在加载 Agent...",
     loadingNode: "加载中",
     unavailableNode: "暂不可用",
+    loadingNodes: "正在加载 {count} 个节点的 Agent...",
+    unavailableNodes: "{count} 个节点的 Agent 暂时无法读取",
     unavailable: "Agent 定义暂时无法读取。",
     unsupported: "没有可访问节点支持 Agent 定义。",
     retry: "重试",

@@ -181,6 +181,19 @@ export class AiSessionQueueService {
     return { kind: "updated", session: this.withQueue(current, [...nonQueued, ...ordered], this.now()) };
   }
 
+  /**
+   * 暂停/恢复自动发送。暂停是队列的权威状态，但不改变队列内容，因此不递增
+   * revision，避免打断并发的编辑/重排乐观并发校验。
+   */
+  setQueuePaused(current: AiSessionStatus, paused: boolean): AiSessionStatus {
+    if ((current.queue.paused === true) === paused) return current;
+    return {
+      ...current,
+      updatedAt: this.now(),
+      queue: normalizeAiSessionQueueItems(this.queuedMessages(current).items, current.queue.revision, paused),
+    };
+  }
+
   private patchQueuedMessage(current: AiSessionStatus, queueId: string, patch: QueueItemPatch) {
     const timestamp = this.now();
     let found = false;
@@ -194,11 +207,11 @@ export class AiSessionQueueService {
     return found ? this.withQueue(current, items, timestamp) : undefined;
   }
 
-  private withQueue(current: AiSessionStatus, items: AiSessionQueuedMessage[], updatedAt: string): AiSessionStatus {
+  private withQueue(current: AiSessionStatus, items: AiSessionQueuedMessage[], updatedAt: string, paused = current.queue.paused === true): AiSessionStatus {
     return {
       ...current,
       updatedAt,
-      queue: normalizeAiSessionQueueItems(items, current.queue.revision + 1),
+      queue: normalizeAiSessionQueueItems(items, current.queue.revision + 1, paused),
     };
   }
 }

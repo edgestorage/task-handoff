@@ -680,22 +680,45 @@ async function compensateFailedWorktreeLaunch(worktrees: RepositoryWorktreeServi
 
 function sanitizeAiSessionLaunchError(error: unknown) {
   if (error instanceof z.ZodError || error instanceof RepositoryOperationError || error instanceof RepositoryFileError) return error;
-  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
-  if (code === "AI_SESSION_CREATE_REQUEST_CONFLICT") {
-    return new RepositoryOperationError("REPOSITORY_CONFLICT", error instanceof Error ? error.message : "The request ID conflicts with an earlier session creation.");
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message = error instanceof Error && error.message ? error.message : undefined;
+  // AI session control owns its error taxonomy. Accept the whole family instead
+  // of enumerating codes here: the control plane forwards the code opaquely and
+  // the UI falls back to a generic message for codes it cannot translate yet.
+  if (code.startsWith("AI_SESSION_")) {
+    return new AiSessionLaunchError(code, message || "AI session could not be started.", aiSessionLaunchStatusCode(record.statusCode), AI_SESSION_RETRYABLE_CODES.has(code));
   }
-  if (AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES.has(code)) {
-    return new RepositoryOperationError(code, error instanceof Error ? error.message : "The model selected for this AI session is unavailable. Select another model to continue.");
-  }
-  return new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "AI session could not be started.");
+  // Uncoded provider failures are launch failures, not repository failures.
+  return new AiSessionLaunchError("AI_SESSION_CONTROL_FAILED", "AI session could not be started.", 400, false);
 }
 
-const AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES = new Set([
-  "AI_SESSION_MODEL_CATALOG_UNAVAILABLE",
-  "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
-  "AI_SESSION_MODEL_ENTITY_UNAVAILABLE",
-  "AI_SESSION_MODEL_NAME_UNAVAILABLE",
+const AI_SESSION_RETRYABLE_CODES = new Set([
+  "AI_SESSION_CONTROL_NOT_CONNECTED",
+  "AI_SESSION_MATERIALIZATION_FAILED",
 ]);
+
+function aiSessionLaunchStatusCode(statusCode: unknown) {
+  return typeof statusCode === "number" && statusCode >= 400 && statusCode < 600 ? statusCode : 400;
+}
+
+/**
+ * An AI session launch failed inside the instance session runtime. This route
+ * lives under the repository workspace boundary, but the failure belongs to AI
+ * session control, so its own code travels to the caller unchanged instead of
+ * being flattened into a repository failure the caller cannot act on.
+ */
+class AiSessionLaunchError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly statusCode: number,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "AiSessionLaunchError";
+  }
+}
 
 async function fileMutation<T>(resolve: () => Promise<ResolvedRepository>, queue: RepositoryMutationQueue, workspaceRoots: string[], expectedSnapshotId: string, operation: (files: RepositoryFileService) => T) {
   const initial = await requireWorkspace(resolve);
@@ -776,6 +799,9 @@ function sendRepositoryError(reply: FastifyReply, error: unknown) {
   if (error instanceof z.ZodError) {
     return reply.code(400).send({ error: { code: "REPOSITORY_REQUEST_INVALID", message: error.issues.map((issue) => issue.message).join("; "), retryable: false } });
   }
+  if (error instanceof AiSessionLaunchError) {
+    return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, retryable: error.retryable } });
+  }
   const code = error instanceof RepositoryOperationError || error instanceof RepositoryFileError ? error.code : "REPOSITORY_OPERATION_FAILED";
   const message = error instanceof RepositoryOperationError || error instanceof RepositoryFileError ? error.message : "Repository operation failed.";
   const current = error instanceof RepositoryOperationError ? error.current : undefined;
@@ -791,7 +817,6 @@ function repositoryHttpStatus(code: string) {
   if (code === "REPOSITORY_SESSION_NOT_FOUND" || code === "REPOSITORY_FILE_NOT_FOUND" || code === "REPOSITORY_WORKTREE_NOT_FOUND") return 404;
   if (code === "REPOSITORY_GIT_UNAVAILABLE") return 503;
   if (code === "REPOSITORY_FILE_TOO_LARGE" || code === "REPOSITORY_OUTPUT_LIMIT") return 413;
-  if (AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES.has(code)) return 409;
   if (code.includes("STALE") || code.includes("CONFLICT") || code.includes("DIRTY") || code.includes("OCCUPIED") || code.includes("UNSAFE")) return 409;
   return 400;
 }

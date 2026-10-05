@@ -217,7 +217,7 @@ async function commitRename(item: StoryResourceTabItem) {
     cancelRename();
   } catch (error) {
     renaming.value = false;
-    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")), "error");
     await nextTick();
     renameInput.value?.focus();
   }

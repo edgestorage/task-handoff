@@ -136,6 +136,7 @@ test("AI session creation timings correlate stages without logging prompt or cre
   assert.equal(created.disposition, "created");
   assert.deepEqual(timings.map((entry) => entry.stage), ["ensure-provider", "story-agent-tools", "provider-create", "first-turn", "persist-operation", "total"]);
   assert.ok(timings.every((entry) => entry.clientRequestId === input.clientRequestId && entry.outcome === "completed" && Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
+  assert.ok(timings.every((entry) => !Object.hasOwn(entry, "errorCode") && !Object.hasOwn(entry, "errorMessage")));
   assert.doesNotMatch(JSON.stringify(timings), /private/);
   const count = timings.length;
   assert.equal((await coordinator.create(input)).disposition, "already-created");
@@ -145,7 +146,7 @@ test("AI session creation timings correlate stages without logging prompt or cre
 test("creation timing records failures and a broken timing sink cannot replace the original error", async () => {
   const { registry, controller } = runtime();
   const timings = [];
-  const failure = new Error("provider unavailable");
+  const failure = Object.assign(new Error("provider unavailable"), { code: "AI_SESSION_CONTROL_NOT_CONNECTED", statusCode: 503 });
   const coordinator = new AiSessionCreateCoordinator({
     registry,
     controller,
@@ -154,6 +155,12 @@ test("creation timing records failures and a broken timing sink cannot replace t
   });
   await assert.rejects(coordinator.create({ agent: "codex", cwd: "/workspace", message: "test", clientRequestId: "timed-failure" }), (error) => error === failure);
   assert.deepEqual(timings.map((entry) => [entry.stage, entry.outcome]), [["ensure-provider", "failed"], ["total", "failed"]]);
+  // A failed stage carries the failure identity so the timing line is diagnosable
+  // without a second investigation into the provider logs.
+  assert.equal(timings[0].errorCode, "AI_SESSION_CONTROL_NOT_CONNECTED");
+  assert.equal(timings[0].errorMessage, "provider unavailable");
+  assert.equal(timings[0].errorStatusCode, 503);
+  assert.equal(timings[1].errorCode, "AI_SESSION_CONTROL_NOT_CONNECTED");
 });
 
 test("AI session create coordinator restores committed request identity after restart", async () => {
@@ -1606,4 +1613,55 @@ test("an observed provider parent delete permanently clears descendants without 
   assert.deepEqual(deleted, ["child"]);
   assert.deepEqual(registry.all(), []);
   assert.deepEqual(released, [child.id, parent.id]);
+});
+
+test("connection manager drops a ready generation whose transport died without a disconnect event", async () => {
+  const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
+  class ReconnectingClient extends EventEmitter {
+    constructor() { super(); this.connectedState = false; this.starts = 0; this.stops = 0; }
+    async start() { this.starts += 1; this.connectedState = true; }
+    stop() { this.stops += 1; this.connectedState = false; }
+    isConnected() { return this.connectedState; }
+    async listLoadedThreadIds() { return []; }
+  }
+  const client = new ReconnectingClient();
+  const invalidated = [];
+  const manager = new CodexAppServerConnectionManager({
+    createClient: () => client,
+    onEvent: () => {},
+    onInvalidate: (connection) => invalidated.push(connection),
+  });
+  manager.configure("/tmp/app-server.sock", "codex");
+  await manager.ready();
+  assert.equal(client.starts, 1);
+
+  // The socket died without emitting disconnect, so the manager still cached the
+  // generation as ready. It must not hand back a client whose requests fail
+  // immediately with "Codex app-server is not connected.".
+  client.connectedState = false;
+  await assert.rejects(manager.ready(), /Codex app-server is not connected/);
+  assert.equal(client.stops, 1);
+  assert.equal(invalidated.length, 1);
+
+  // The next ready() reconnects instead of returning the dead generation.
+  const reconnected = await manager.ready();
+  assert.equal(reconnected.client, client);
+  assert.equal(client.starts, 2);
+  assert.equal(client.connectedState, true);
+});
+
+test("connection manager keeps a ready generation when the client has no liveness probe", async () => {
+  const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
+  class LegacyClient extends EventEmitter {
+    constructor() { super(); this.starts = 0; }
+    async start() { this.starts += 1; }
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+  }
+  const client = new LegacyClient();
+  const manager = new CodexAppServerConnectionManager({ createClient: () => client, onEvent: () => {} });
+  manager.configure("/tmp/app-server.sock", "codex");
+  await manager.ready();
+  await manager.ready();
+  assert.equal(client.starts, 1);
 });

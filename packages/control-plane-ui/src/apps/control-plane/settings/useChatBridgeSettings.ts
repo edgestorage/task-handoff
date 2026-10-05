@@ -104,7 +104,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       showControlPlaneToast(t("settings.chatBridge.created", { name: bridge.name }), "success");
       return bridge;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return undefined;
     } finally {
       loadingToast.dismiss();
@@ -148,7 +148,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       showControlPlaneToast(t("settings.chatBridge.saved", { name: updated.name }), "success");
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       loadingToast.dismiss();
@@ -183,7 +183,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       }
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       loadingToast.dismiss();
@@ -209,7 +209,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       showControlPlaneToast(t("settings.chatBridge.deleted", { name: bridge.name }), "success");
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       loadingToast.dismiss();

@@ -37,12 +37,17 @@ const forbiddenSourcePatterns = [
   [/\bnodeCredential\b/, 'Node credential'],
   [/\brelayEndpoint\b/, 'relay endpoint'],
   [/\baccessTicket\b/, 'access ticket'],
-  [/from\s+['"][^'"]*node-agent[^'"]*['"]/, 'forbidden transport import'],
 ];
+// `@task-handoff/protocol/node-agent-capabilities` is the shared protocol helper for the public
+// node capability document, not the node-agent runtime; only the runtime/transport itself is forbidden.
+const allowedNodeAgentModules = new Set(['@task-handoff/protocol/node-agent-capabilities']);
 for (const file of productionFiles) {
   const source = fs.readFileSync(file, 'utf8');
   for (const [pattern, label] of forbiddenSourcePatterns) {
     if (pattern.test(source)) failures.push(`${relative(file)} contains ${label}`);
+  }
+  for (const [, modulePath] of source.matchAll(/from\s+['"]([^'"]*node-agent[^'"]*)['"]/gu)) {
+    if (!allowedNodeAgentModules.has(modulePath)) failures.push(`${relative(file)} imports forbidden node-agent transport ${modulePath}`);
   }
   if (!networkOwners.has(file) && /\bfetch\s*\(|\bnew\s+WebSocket\s*\(/.test(source)) {
     failures.push(`${relative(file)} creates a network connection outside the Direct transport boundary`);

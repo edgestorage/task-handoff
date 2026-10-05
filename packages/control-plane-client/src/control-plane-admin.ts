@@ -12,6 +12,7 @@ import {
 } from "@task-handoff/protocol/control-plane-proxy";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { jsonRequest } from "./json-request.ts";
+import { binaryUnsupported } from "./errors.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
 
@@ -61,12 +62,6 @@ const ProxyDiagnosticSchema = z.object({
 }).strict();
 
 const ClaimMutationResultSchema = z.record(z.string(), z.unknown());
-
-function binaryUnsupported(): Error {
-  const error = new Error("This client transport cannot download binary responses.");
-  Object.assign(error, { code: "CLIENT_BINARY_UNSUPPORTED" });
-  return error;
-}
 
 export function createControlPlaneAdminApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (

@@ -1007,6 +1007,7 @@
             :class="{ 'session-ai-timeline-state': effectiveTimelineViewMode === 'full' }"
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
+            :can-pause-queue="canPauseAiSessionQueue"
             :can-resolve-approval="canResolveApproval(selectedSession)"
             :approval-decisions="approvalDecisions(selectedSession)"
             :instance-id="instance.id"
@@ -1031,6 +1032,7 @@
             @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
             @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
+            @set-queue-paused="setSelectedQueuePaused(selectedSession.id, $event)"
             @resolve-approval="resolveSelectedApproval"
             @sticky-user-message-change="timelineStickyUserMessage = $event"
             @transitioning-change="setDetailConversationTransitioning"
@@ -1101,10 +1103,19 @@
         </Button>
         <div class="session-ai-compose-gradient" aria-hidden="true" />
         <div ref="composerStackEl" class="session-ai-compose-stack">
+          <AiSessionDecisionPrompt
+            v-if="selectedSession?.storyId"
+            class="session-ai-compose-decisions"
+            :disabled="instance.connectionStatus !== 'online'"
+            :node-id="instance.nodeId"
+            :session-id="selectedSession.id"
+            :story-id="selectedSession.storyId"
+          />
           <AiSessionQueue
             v-if="(effectiveTimelineViewMode === 'full' || queuePlacement === 'composer') && selectedConversationSession?.queue.items.length"
             class="session-ai-compose-queue"
             :busy="aiSessionActionBusy"
+            :can-pause="canPauseAiSessionQueue"
             :can-interrupt="canInterrupt(selectedSession)"
             placement="composer"
             :queue="selectedConversationSession.queue"
@@ -1112,6 +1123,7 @@
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
             @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
             @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
+            @set-queue-paused="setSelectedQueuePaused(selectedSession.id, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
           />
           <AiSessionComposer
@@ -1335,7 +1347,7 @@ import AiSessionStickyContext from "../../../components/ai-session/AiSessionStic
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
 import { createRepositoryWorkspaceWorktree } from "../../../api/repository";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
@@ -1351,13 +1363,14 @@ import type { StorySessionPreset } from "@task-handoff/protocol/stories";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch, RepositoryWorktree } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
-import { supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
+import { supportsAiSessionQueuePause, supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import { supportedAiSessionReasoningEfforts } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionDecisionPrompt from "../../../components/ai-session/AiSessionDecisionPrompt.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
@@ -1815,21 +1828,21 @@ const canOpenSelectedSessionFolder = computed(() => Boolean(
 
 async function copyRuntimePathToClipboard(path: string) {
   if (!path || !navigator.clipboard?.writeText) {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
     return;
   }
   try {
     await navigator.clipboard.writeText(path);
     showControlPlaneToast(t("sessions.actions.copied"), "success");
   } catch {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
   }
 }
 
 async function openSelectedSessionFolder() {
   if (!canOpenSelectedSessionFolder.value) return;
   const result = await openDesktopLocalPath(selectedSessionRuntimePath.value);
-  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"), "error");
 }
 
 async function copySelectedSessionFolderPath() {
@@ -2083,7 +2096,7 @@ function canRenamePathGroup(group: AiSessionPathGroup | AiSessionHistoryPathGrou
 
 async function copyPathGroupPath(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
   if (group.kind !== "path") {
-    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    showControlPlaneToast(t("sessions.actions.copyFailed"), "error");
     return;
   }
   await copyRuntimePathToClipboard(group.path);
@@ -2092,7 +2105,7 @@ async function copyPathGroupPath(group: AiSessionPathGroup | AiSessionHistoryPat
 async function openPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
   if (group.kind !== "path") return;
   const result = await openDesktopLocalPath(group.path);
-  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"), "error");
 }
 
 function openPathGroupRename(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
@@ -2120,7 +2133,7 @@ async function submitPathGroupRename() {
     await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeLocalFolders(folder.nodeId) });
     succeeded = true;
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.renameProjectFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.renameProjectFailed")), "error");
   } finally {
     renamingPathGroup.value = false;
     if (succeeded) setPathGroupRenameOpen(false);
@@ -3045,7 +3058,7 @@ async function continueHistoryConversation() {
     await leaveHistoryMode();
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")), "error");
   } finally {
     loadingToast.dismiss();
     resumingHistoryId.value = "";
@@ -3080,7 +3093,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     await leaveHistoryMode();
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")), "error");
   } finally {
     loadingToast.dismiss();
     resumingHistoryId.value = "";
@@ -3133,7 +3146,7 @@ function newSessionFolderIdForPath(sessionPath: string) {
 async function openNewSessionForPath(sessionPath: string) {
   const folderId = newSessionFolderIdForPath(sessionPath);
   if (!folderId) {
-    showControlPlaneToast(t("sessions.panel.projectUnavailable"));
+    showControlPlaneToast(t("sessions.panel.projectUnavailable"), "error");
     return;
   }
   if (historyMode.value) {
@@ -3308,7 +3321,7 @@ async function checkoutNewSessionBranch(branch: RepositoryAiSessionWorkspaceBran
     newSessionWorkspace.value = workspace;
     syncNewSessionBranchFromWorkspace(workspace);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.switchBranchFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.switchBranchFailed")), "error");
   } finally {
     newSessionWorkspaceLoading.value = false;
     switchingNewSessionBranch.value = false;
@@ -3390,7 +3403,7 @@ async function confirmNewSessionWorktree(selection: NewWorktreeSelection) {
       newSessionWorktreeDialogOpen.value = false;
       return;
     }
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")), "error");
   } finally {
     newSessionWorktreeCreating.value = false;
   }
@@ -3435,7 +3448,7 @@ async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissio
     await updateControlledInstance(props.instance.id, { config: { defaultCodexPermissionMode: permissionMode } });
   } catch (error) {
     newSessionPermissionMode.value = previousPermissionMode;
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.defaultPermissionFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.defaultPermissionFailed")), "error");
   } finally {
     savingNewSessionPermission.value = false;
   }
@@ -3452,7 +3465,7 @@ async function openNewProject() {
     const result = nativeNodeFolderSelectionResult(await props.chooseProjectFolder(), props.instance.nodeId);
     if (result.status === "cancelled") return;
     if (result.status === "invalid-owner") {
-      showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"));
+      showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"), "error");
       return;
     }
     await registerNewSessionFolder(props.instance.nodeId, {
@@ -3461,7 +3474,7 @@ async function openNewProject() {
     });
     await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t));
+    showControlPlaneToast(translateApiError(error, t), "error");
   } finally {
     choosingNewSessionFolder.value = false;
   }
@@ -3576,7 +3589,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     newSessionCreateAttempt.value = undefined;
     newSessionOpen.value = false;
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")), "error");
   } finally {
     launchingNewSession.value = false;
   }
@@ -3600,7 +3613,7 @@ async function selectExistingSessionModel(modelSelection: AiSessionModelSelectio
     await updateAiSessionModelSelection(props.instance.id, session.id, createBrowserUuid(), modelSelection);
     persistAiSessionCreationPreferences(session.agent, { modelSelection });
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")), "error");
   } finally {
     if (modelSelectionPendingSessionId.value === session.id) modelSelectionPendingSessionId.value = "";
   }
@@ -3615,13 +3628,15 @@ async function selectExistingSessionReasoningEffort(reasoningEffort: AiSessionRe
     persistAiSessionCreationPreferences(session.agent, { reasoningEffort });
   } catch (error) {
     if (reasoningEffortPending.value?.sessionId === session.id) reasoningEffortPending.value = undefined;
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")), "error");
   }
 }
 
 function canInterrupt(session: AiSessionSummary) {
   return canInterruptAiSession(session);
 }
+
+const canPauseAiSessionQueue = computed(() => supportsAiSessionQueuePause(props.instance.capabilities));
 
 function canResolveApproval(session: AiSessionSummary) {
   return isAiSessionApprovalPending(session) && approvalDecisions(session).length > 0;
@@ -3707,7 +3722,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
       scrollFollow?.notifyContentResize();
     }
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
     composerEl.value?.focus();
@@ -3723,9 +3738,9 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
-    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"), "info");
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3746,7 +3761,7 @@ async function steerMessageDraft() {
     messageMentionBindings.value = [];
     messageAttachments.value = [];
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3823,7 +3838,7 @@ async function saveQueuedMessageEdit() {
     await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, queueRevision, message, attachments);
     cancelQueueComposerEdit();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3831,6 +3846,10 @@ async function saveQueuedMessageEdit() {
 
 async function reorderQueuedMessages(sessionId: string, payload: { expectedRevision: number; queueIds: string[] }) {
   await runQueueAction(() => reorderAiSessionQueuedMessages(props.instance.id, sessionId, payload.expectedRevision, payload.queueIds), t("sessions.panel.reorderQueuedFailed"));
+}
+
+async function setSelectedQueuePaused(sessionId: string, paused: boolean) {
+  await runQueueAction(() => setAiSessionQueuePaused(props.instance.id, sessionId, paused), t("sessions.panel.setQueuePausedFailed"));
 }
 
 async function runQueueAction(action: () => Promise<unknown>, message: string) {
@@ -3841,7 +3860,7 @@ async function runQueueAction(action: () => Promise<unknown>, message: string) {
   try {
     await action();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, message));
+    showControlPlaneToast(translateApiError(error, t, message), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3856,7 +3875,7 @@ async function interruptSelectedSession() {
   try {
     await interruptAiSession(props.instance.id, session.id);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3877,7 +3896,7 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
   try {
     await resolveAiSessionApproval(props.instance.id, session.id, decision);
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -3896,7 +3915,7 @@ async function openSessionApp(session: AiSessionSummary) {
     const result = await openAiSessionApp(props.instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", props.instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")), "error");
     await refreshBoard();
   } finally {
     openingAiSessionId.value = "";
@@ -3917,7 +3936,7 @@ async function closeSession(session: AiSessionSummary) {
     await closeAiSession(props.instance.id, session.id, createBrowserUuid());
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")), "error");
     await refreshBoard();
   } finally {
     loadingToast.dismiss();
@@ -3935,7 +3954,7 @@ function onStoryAssigned(_target: AiSessionStoryTarget, moved: boolean) {
 }
 
 function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
-  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
+  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")), "error");
 }
 
 async function forkSession(session: AiSessionSummary, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
@@ -3969,7 +3988,7 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
     forkRequestIds.delete(requestKey);
   } catch (error) {
     loadingToast.dismiss();
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")), "error");
   } finally {
     loadingToast.dismiss();
     forkingAiSessionId.value = "";

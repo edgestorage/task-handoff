@@ -697,8 +697,12 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no worktree-move capability.
     repositoryWorktreeMoveToMain: false,
     modelRelay: { protocols: [], streaming: false },
+    // Compatibility for v0.0.35: a stored pre-upgrade instance gets the flat managed model environment only.
+    managedModelEnvironment: { openCodeConfig: false },
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no decision send idempotency.
     aiSessionSendIdempotency: false,
+    // Compatibility for v0.0.35: a stored pre-upgrade instance has no queue pause capability.
+    aiSessionQueuePause: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],
@@ -7002,7 +7006,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
     targetStatus: "reachable",
     uiAccessStatus: "reachable",
     controlMode: "controlled",
-    capabilities: {},
+    capabilities: { features: { aiSessionQueuePause: true } },
     config: { autoImportAgentConfigs: true },
     workspace: { status: "ready", path: "/workspace/good" },
     target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:19001" },
@@ -7133,6 +7137,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
     turnReadAgents: [],
     liveItemAgents: [],
   });
+  assert.equal(goodDirectoryInstance.capabilities.aiSessionQueuePause, true);
   const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");
   assert.equal(oldDirectoryInstance.protocol.compatible, false);
   assert.match(oldDirectoryInstance.protocol.warning, /Instance protocol 2026-06-23/);

@@ -1280,7 +1280,7 @@
   position: fixed;
   z-index: 9999;
   width: min(340px, calc(100vw - 24px));
-  box-shadow: 0 14px 38px rgb(0 0 0 / 38%);
+  box-shadow: 0 14px 28px var(--shadow-color);
   -webkit-backdrop-filter: blur(16px) saturate(1.18);
   backdrop-filter: blur(16px) saturate(1.18);
   transition:
@@ -1998,7 +1998,6 @@
   color: var(--text);
   font-size: 14px;
   line-height: var(--session-ai-sticky-prompt-height);
-  pointer-events: none;
 }
 
 .session-ai-timeline-sticky-message {
@@ -2217,21 +2216,20 @@
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
-  height: 24px;
+  height: 28px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
-  line-height: 24px;
+  line-height: 28px;
   padding: 0 8px;
 }
 
 :global(.session-ai-detail-actions-view-mode button[data-state="on"]) {
   background: var(--surface-hover);
   color: var(--text-strong);
-  box-shadow: var(--shadow-soft);
 }
 
 :global(.session-ai-detail-actions-menu-item.danger) {
@@ -2320,6 +2318,17 @@
 .session-ai-compose-queue {
   z-index: 0;
   margin: 0 28px -1px;
+}
+
+/* 决策比排队信息优先：决策卡贴在输入框上方，排队信息接在决策卡下面组成同一张上浮卡片。 */
+.session-ai-compose-decisions {
+  z-index: 0;
+  margin: 0 28px -1px;
+}
+
+.session-ai-compose-decisions + .session-ai-compose-queue :deep(.ai-session-detail-queue-head) {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .session-ai-compose {

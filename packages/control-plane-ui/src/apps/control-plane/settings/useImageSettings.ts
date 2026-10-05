@@ -44,7 +44,7 @@ export function useImageSettings({ errorText, images, onImageDeleted, refreshIma
       imageCreateSuccess.value = t("settings.imageRegistry.added", { name: image.name });
       await refreshImages();
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
     } finally {
       savingImage.value = false;
     }
@@ -59,7 +59,7 @@ export function useImageSettings({ errorText, images, onImageDeleted, refreshIma
       await refreshImages();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      showControlPlaneToast(translateError(error), "error");
       return false;
     } finally {
       deletingImageId.value = "";
