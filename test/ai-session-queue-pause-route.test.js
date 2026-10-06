@@ -102,7 +102,7 @@ async function createRuntime() {
 test("paused controlled-instance queues do not auto-send and resume drains the queue", async () => {
   const { aiSessions, app, sent, restore } = await createRuntime();
   try {
-    const session = aiSessions.start({ agent: "codex", status: "running", phase: "thinking", activeTurnId: "turn_1" }, { timestamp: "2026-10-06T00:00:00.000Z" });
+    const session = aiSessions.start({ agent: "codex", creationSource: "ai-session", status: "running", phase: "thinking", activeTurnId: "turn_1" }, { timestamp: "2026-10-06T00:00:00.000Z" });
     aiSessions.enqueueMessage(session.id, "queued while stopped");
 
     const pauseResponse = await app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/queue/pause`, payload: { paused: true } });

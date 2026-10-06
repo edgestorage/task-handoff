@@ -8819,7 +8819,10 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
   assert.equal(fs.statSync(nodeAgentStorePaths(dataDir).databasePath).mode & 0o777, 0o600);
 });
 
-test("node agent restores active localhost runtime processes after unclean shutdown state", async (t) => {
+// The local runtime adapter budgets up to 30s for process readiness plus a 10s
+// graceful shutdown before its own recovery retries start, so the test must
+// outwait that convergence instead of racing it on a slower CI runner.
+test("node agent restores active localhost runtime processes after unclean shutdown state", { timeout: 90_000 }, async (t) => {
   const dataDir = tempDataDir("node-agent-localhost-restore-unclean");
   const webStub = path.join(dataDir, "controlled-web-stub.js");
   const envLog = path.join(dataDir, "controlled-web-env.jsonl");
@@ -8972,7 +8975,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       }
     })(),
     "localhost runtime restore",
-    20_000,
+    60_000,
   );
   assert.equal(restored.statusCode, 200);
   const instance = restored.json().data.find((item) => item.id === "inst_local_restore_unclean");

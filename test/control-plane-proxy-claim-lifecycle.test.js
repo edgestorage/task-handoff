@@ -467,12 +467,17 @@ test("node delete API forwards explicit force and returns orphan risk without cl
       },
     },
     events: { publish(type, payload) { published.push({ type, payload }); } },
+    auth: { enabled: () => false },
+    operationApprovals: {},
     nodeAgentTunnel: {},
     nodeEventSubscriber: { syncNow() {} },
     errorPayload(error) { return { code: error.code, message: error.message }; },
   });
 
-  const response = await handlers.get("delete:/api/nodes/:id")({ params: { id: "node_b" }, query: { force: "true" } });
+  const response = await handlers.get("delete:/api/nodes/:id")(
+    { params: { id: "node_b" }, query: { force: "true" }, headers: {} },
+    { code: () => ({ send: (payload) => payload }) },
+  );
   assert.deepEqual(response.data, { deleted: true, revoke: { mode: "forced", orphanRisk: true } });
   assert.deepEqual(published, [{
     type: "node.deleted",

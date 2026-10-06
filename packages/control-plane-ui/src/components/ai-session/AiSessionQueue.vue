@@ -215,7 +215,7 @@ watch(() => props.queue.revision, cancelQueueDrag);
   gap: 7px;
   min-height: 34px;
   border: 1px solid var(--queue-border);
-  border-bottom: 0;
+  border-bottom: 1px solid var(--line);
   border-radius: 10px 10px 0 0;
   background: var(--queue-surface);
   color: var(--queue-muted);
