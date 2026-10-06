@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import type { CliProfileStore } from "./config.ts";
-import { cliClientInfo, THCTL_VERSION } from "./client-info.ts";
+import { cliClientInfo } from "./client-info.ts";
 import { ThctlError, CLI_EXIT_CODES, protocolError } from "./errors.ts";
 import { connectToControlPlane, type ThctlConnection } from "./control-plane.ts";
 import type { CliOutput } from "./output.ts";
