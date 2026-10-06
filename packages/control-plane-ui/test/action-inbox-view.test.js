@@ -32,10 +32,12 @@ test("collapsed entry animates its own divider slot so the left controls slide l
   assert.match(workbenchStyles, /transition:[^;]*margin-left 180ms/);
 });
 
-test("expanded inbox renders only with content and keeps one group-level collapse button", () => {
+test("expanded inbox renders one panel with the collapse tab jutting out of its top border", () => {
   assert.match(inbox, /<aside v-if="!collapsed && \(items\.length \|\| error\)" class="action-inbox"/);
   assert.doesNotMatch(inbox, /action-inbox-empty/);
-  assert.match(inbox, /class="action-inbox-collapse"/);
+  // The collapse control is a capsule handle on the panel edge, rendered ahead of the panel surface.
+  assert.match(inbox, /<Button variant="outline" size="sm" class="action-inbox-collapse"[\s\S]*?\{\{ t\('navigation\.collapseApprovals'\) \}\}[\s\S]*?<div class="action-inbox-panel">/);
+  assert.doesNotMatch(inbox, /action-inbox-panel-head/);
   assert.match(inbox, /v-for="item in visibleItems"/);
   assert.match(inbox, /v-if="items.length > visibleCount"[^>]*:aria-label=/);
   assert.match(inbox, /\.action-inbox \{[^}]*position: fixed;/);
@@ -43,7 +45,9 @@ test("expanded inbox renders only with content and keeps one group-level collaps
 
 test("the expanded inbox sizes its scroll stack to the rendered cards", () => {
   assert.match(inbox, /<div ref="itemsElement" class="action-inbox-items">/);
-  assert.match(inbox, /const stackHeight = computed\(\(\) => Math\.min\(itemsHeight\.value, Math\.max\(0, availableHeight\.value - 44\)\)\)/);
+  // The stack keeps the whole panel inside the available height once the protruding handle is accounted for.
+  assert.match(inbox, /const panelHandleHeight = 31;/);
+  assert.match(inbox, /const stackHeight = computed\(\(\) => Math\.min\(itemsHeight\.value, Math\.max\(0, availableHeight\.value - panelHandleHeight\)\)\)/);
   assert.match(inbox, /itemsResizeObserver = new ResizeObserver\(\(\) => \{ itemsHeight\.value = element\.offsetHeight; \}\)/);
   assert.doesNotMatch(inbox, /visibleCount \* 200/);
 });
@@ -93,23 +97,30 @@ test("every card leads with one header row that carries its source", () => {
 test("the question stays grouped with its answer block and separated from the header", () => {
   assert.match(inbox, /\.action-inbox-card \{ display: grid; align-content: start; gap: 4px;/);
   assert.match(inbox, /\.action-inbox-head \{[^}]*margin-bottom: 6px; \}/);
-  assert.match(inbox, /\.action-inbox-card \{[^}]*padding: 10px;/);
+  assert.match(inbox, /\.action-inbox-card \{[^}]*padding: 12px;/);
   assert.match(inbox, /\.action-inbox-title \{ font-size: 14px; margin: 0;/);
   assert.match(inbox, /\.action-inbox-actions \{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; \}/);
   assert.doesNotMatch(inbox, /\.action-inbox-answer \{/);
 });
 
-test("card shadows stay inside the scroll viewport clip and use the shared shadow color", () => {
-  // The scroll viewport clips at its own box, so the items inset their border box by the card shadow reach:
-  // blur 28 <= 28px side inset, blur - offset 24 <= 24px top padding, blur + offset 32 <= 32px bottom padding.
-  assert.match(inbox, /\.action-inbox \{ --action-inbox-inset: 28px;/);
-  assert.match(inbox, /\.action-inbox-items \{ display: grid; gap: 8px; padding: 24px var\(--action-inbox-inset\) 32px; \}/);
-  // Border colors must not double as shadow colors; the shared shadow color keeps the shadow neutral in every theme.
-  assert.match(inbox, /\.action-inbox-card \{[^}]*box-shadow: 0 4px 28px var\(--shadow-color\);/);
+test("the single panel owns the shadow and splits its rows with shared dividers", () => {
+  // The whole surface is one element, so the shared shadow color stays neutral without clipping inside the scroll viewport.
+  assert.match(inbox, /\.action-inbox-panel \{ width: 100%; display: grid;[^}]*border-radius: 12px 0 12px 12px;[^}]*box-shadow: 0 4px 28px var\(--shadow-color\);[^}]*overflow: hidden; \}/);
+  assert.doesNotMatch(inbox, /\.action-inbox-card \{[^}]*box-shadow/);
   assert.doesNotMatch(inbox, /box-shadow: [^;]*var\(--line\)/);
+  // The collapse head and the decision content share one divider; stacked decisions split the same way.
+  assert.match(inbox, /\.action-inbox-panel > \* \+ \* \{ border-top: 1px solid var\(--line\); \}/);
+  assert.match(inbox, /\.action-inbox-items \{ display: grid; \}/);
+  assert.match(inbox, /\.action-inbox-items > \* \+ \* \{ border-top: 1px solid var\(--line\); \}/);
 });
 
-test("the collapse control and the error surface line up with the card edges", () => {
-  assert.match(inbox, /\.action-inbox-collapse \{ margin-right: var\(--action-inbox-inset\);/);
-  assert.match(inbox, /\.action-inbox-error \{ justify-self: stretch; margin: 0 var\(--action-inbox-inset\);/);
+test("the collapse tab merges into the panel top border and the error surface rides the panel edges", () => {
+  assert.match(inbox, /\.action-inbox-collapse \{ position: relative; z-index: 1; margin: 0 0 -1px 0; border: 1px solid var\(--line-strong\); border-bottom: 0; border-radius: 10px 10px 0 0; background: var\(--surface-overlay\); color: var\(--text-strong\); box-shadow: none; \}/);
+  // A concave fillet rounds the junction where the tab base meets the panel's top border: the arc stroke and the fill under it are the crescent outside the quarter circle, so the flare bends inward.
+  assert.match(inbox, /\.action-inbox-collapse::before \{ content: ""; position: absolute; left: -12px; bottom: 0; width: 12px; height: 12px; background: var\(--line-strong\); -webkit-mask: radial-gradient\(circle at 0 0, transparent 11px, #000 11px, #000 12px, transparent 12px\); mask: radial-gradient\(circle at 0 0, transparent 11px, #000 11px, #000 12px, transparent 12px\); \}/);
+  assert.match(inbox, /\.action-inbox-collapse::after \{ content: ""; position: absolute; left: -12px; bottom: 0; width: 12px; height: 12px; background: var\(--surface-overlay\); -webkit-mask: radial-gradient\(circle at 0 0, transparent 12px, #000 12px\); mask: radial-gradient\(circle at 0 0, transparent 12px, #000 12px\); \}/);
+  assert.match(inbox, /\.action-inbox-collapse:not\(:disabled\):hover \{ background: var\(--surface-hover\); \}/);
+  assert.match(inbox, /\.action-inbox-collapse:not\(:disabled\):hover::before \{ background: var\(--surface-hover\); \}/);
+  assert.match(inbox, /\.action-inbox-collapse:not\(:disabled\):hover::after \{ background: var\(--surface-hover\); \}/);
+  assert.match(inbox, /\.action-inbox-error \{ padding: 10px 12px;/);
 });

@@ -4,67 +4,69 @@
       <Button variant="outline" size="sm" class="action-inbox-collapse" :aria-label="t('navigation.collapseApprovals')" @click="emit('collapse')">
         <ChevronUp :size="16" /> {{ t('navigation.collapseApprovals') }}
       </Button>
-      <div v-if="error" role="alert" class="action-inbox-error">{{ error }}</div>
-      <ScrollArea v-if="items.length" :horizontal="false" class="action-inbox-stack" :style="{ height: `${stackHeight}px` }">
-        <div ref="itemsElement" class="action-inbox-items">
-          <article v-for="item in visibleItems" :key="item.key" class="action-inbox-card">
-            <template v-if="item.type === 'ai-session-approval'">
-              <header class="action-inbox-head">
-                <span class="action-inbox-kind">
-                  <ShieldQuestion :size="13" aria-hidden="true" />
-                  {{ t('navigation.aiSessionApproval') }}
-                </span>
-                <span class="action-inbox-source" :title="`${item.instanceName} · ${item.session.agent}`">{{ item.instanceName }} · {{ item.session.agent }}</span>
-              </header>
-              <div class="action-inbox-title">{{ item.session.title || item.session.userPrompt || item.session.id }}</div>
-              <div class="action-inbox-actions">
-                <Button v-for="decision in item.decisions" :key="decision" size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('resolve', item, decision)">
-                  {{ t(`sessions.actions.${decision}`) }}
-                </Button>
-              </div>
-            </template>
-            <template v-else-if="item.type === 'story-decision'">
-              <header class="action-inbox-head">
-                <span class="action-inbox-kind action-inbox-kind-label-only">{{ t('navigation.storyDecision') }}</span>
-                <button type="button" class="action-inbox-source action-inbox-story-link" :title="item.story.title" @click="emit('open-story', item)">
-                  <BookOpen class="action-inbox-story-icon" :size="13" aria-hidden="true" />
-                  <span class="action-inbox-story-title">{{ item.story.title }}</span>
-                </button>
-                <Button variant="ghost" size="icon-sm" class="action-inbox-open-session" :aria-label="t('stories.decisions.openSession')" :title="t('stories.decisions.openSession')" @click="emit('open-story-session', item)"><ExternalLink :size="12" /></Button>
-              </header>
-              <div class="action-inbox-title" :title="item.decision.question">{{ item.decision.question }}</div>
-              <div v-if="item.decision.context" class="action-inbox-context action-inbox-detail" :title="item.decision.context">{{ t('stories.decisions.context') }}: {{ item.decision.context }}</div>
-              <StoryDecisionAnswer
-                :key="item.decision.id"
-                class="action-inbox-answer"
-                :decision="item.decision"
-                :disabled="Boolean(busyKey)"
-                :busy="busyKey === item.key"
-                @submit="(input) => emit('decide-story', item, input)"
-                @cancel="emit('cancel-story', item)"
-              />
-            </template>
-            <template v-else>
-              <header class="action-inbox-head">
-                <span class="action-inbox-kind">
-                  <ShieldCheck :size="13" aria-hidden="true" />
-                  {{ t('navigation.operationApproval') }}
-                </span>
-                <span class="action-inbox-source" :title="item.request.targetId">{{ item.request.targetId }}</span>
-              </header>
-              <div class="action-inbox-title">{{ t(operationLabels[item.request.operation]) }}</div>
-              <div v-for="detail in item.request.details" :key="detail.field" class="action-inbox-context action-inbox-detail" :title="detail.value">{{ t(`navigation.approvalFields.${detail.field}`) }}: {{ detail.value }}</div>
-              <div class="action-inbox-actions">
-                <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide', item, 'approve')">{{ t('navigation.approveOperation') }}</Button>
-                <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide', item, 'deny')">{{ t('navigation.denyOperation') }}</Button>
-              </div>
-            </template>
-          </article>
-          <Button v-if="items.length > visibleCount" size="sm" variant="outline" class="action-inbox-more" :aria-label="t('navigation.moreApprovals', { count: items.length - visibleCount })" @click="offset = (offset + visibleCount) % items.length">
-            {{ t('navigation.moreApprovals', { count: items.length - visibleCount }) }}
-          </Button>
-        </div>
-      </ScrollArea>
+      <div class="action-inbox-panel">
+        <div v-if="error" role="alert" class="action-inbox-error">{{ error }}</div>
+        <ScrollArea v-if="items.length" :horizontal="false" class="action-inbox-stack" :style="{ height: `${stackHeight}px` }">
+          <div ref="itemsElement" class="action-inbox-items">
+            <article v-for="item in visibleItems" :key="item.key" class="action-inbox-card">
+              <template v-if="item.type === 'ai-session-approval'">
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind">
+                    <ShieldQuestion :size="13" aria-hidden="true" />
+                    {{ t('navigation.aiSessionApproval') }}
+                  </span>
+                  <span class="action-inbox-source" :title="`${item.instanceName} · ${item.session.agent}`">{{ item.instanceName }} · {{ item.session.agent }}</span>
+                </header>
+                <div class="action-inbox-title">{{ item.session.title || item.session.userPrompt || item.session.id }}</div>
+                <div class="action-inbox-actions">
+                  <Button v-for="decision in item.decisions" :key="decision" size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('resolve', item, decision)">
+                    {{ t(`sessions.actions.${decision}`) }}
+                  </Button>
+                </div>
+              </template>
+              <template v-else-if="item.type === 'story-decision'">
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind action-inbox-kind-label-only">{{ t('navigation.storyDecision') }}</span>
+                  <button type="button" class="action-inbox-source action-inbox-story-link" :title="item.story.title" @click="emit('open-story', item)">
+                    <BookOpen class="action-inbox-story-icon" :size="13" aria-hidden="true" />
+                    <span class="action-inbox-story-title">{{ item.story.title }}</span>
+                  </button>
+                  <Button variant="ghost" size="icon-sm" class="action-inbox-open-session" :aria-label="t('stories.decisions.openSession')" :title="t('stories.decisions.openSession')" @click="emit('open-story-session', item)"><ExternalLink :size="12" /></Button>
+                </header>
+                <div class="action-inbox-title" :title="item.decision.question">{{ item.decision.question }}</div>
+                <div v-if="item.decision.context" class="action-inbox-context action-inbox-detail" :title="item.decision.context">{{ t('stories.decisions.context') }}: {{ item.decision.context }}</div>
+                <StoryDecisionAnswer
+                  :key="item.decision.id"
+                  class="action-inbox-answer"
+                  :decision="item.decision"
+                  :disabled="Boolean(busyKey)"
+                  :busy="busyKey === item.key"
+                  @submit="(input) => emit('decide-story', item, input)"
+                  @cancel="emit('cancel-story', item)"
+                />
+              </template>
+              <template v-else>
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind">
+                    <ShieldCheck :size="13" aria-hidden="true" />
+                    {{ t('navigation.operationApproval') }}
+                  </span>
+                  <span class="action-inbox-source" :title="item.request.targetId">{{ item.request.targetId }}</span>
+                </header>
+                <div class="action-inbox-title">{{ t(operationLabels[item.request.operation]) }}</div>
+                <div v-for="detail in item.request.details" :key="detail.field" class="action-inbox-context action-inbox-detail" :title="detail.value">{{ t(`navigation.approvalFields.${detail.field}`) }}: {{ detail.value }}</div>
+                <div class="action-inbox-actions">
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide', item, 'approve')">{{ t('navigation.approveOperation') }}</Button>
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide', item, 'deny')">{{ t('navigation.denyOperation') }}</Button>
+                </div>
+              </template>
+            </article>
+            <Button v-if="items.length > visibleCount" size="sm" variant="outline" class="action-inbox-more" :aria-label="t('navigation.moreApprovals', { count: items.length - visibleCount })" @click="offset = (offset + visibleCount) % items.length">
+              {{ t('navigation.moreApprovals', { count: items.length - visibleCount }) }}
+            </Button>
+          </div>
+        </ScrollArea>
+      </div>
     </aside>
   </Transition>
 </template>
@@ -107,6 +109,8 @@ const operationLabels: Record<ApprovalOperation, string> = {
   "identity-provider.remove": "navigation.identityProviderRemoveApproval",
   "git-credential.assign": "navigation.gitCredentialAssignApproval",
 };
+/* The tab merges into the panel's top border, so only the part sticking out above the edge is charged against the available height. */
+const panelHandleHeight = 31;
 const offset = ref(0);
 const top = ref(76);
 const right = ref(18);
@@ -116,8 +120,7 @@ const visibleItems = computed(() => visibleActionInboxItems(props.items, offset.
 const itemsElement = ref<HTMLElement | null>(null);
 const itemsHeight = ref(0);
 let itemsResizeObserver: ResizeObserver | undefined;
-/* The hit area follows the rendered cards, so the empty room of a taller scroll box cannot swallow clicks meant for the page below. */
-const stackHeight = computed(() => Math.min(itemsHeight.value, Math.max(0, availableHeight.value - 44)));
+const stackHeight = computed(() => Math.min(itemsHeight.value, Math.max(0, availableHeight.value - panelHandleHeight)));
 watch(() => props.items.map((item) => item.key).join("|"), () => { offset.value = 0; });
 
 function observeItemsHeight() {
@@ -159,7 +162,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.action-inbox { --action-inbox-inset: 28px; position: fixed; right: 18px; width: min(380px, calc(100vw - 36px)); z-index: 40; pointer-events: none; display: grid; justify-items: end; gap: 8px; transform-origin: top right; }
+.action-inbox { position: fixed; right: 18px; width: min(380px, calc(100vw - 36px)); z-index: 40; pointer-events: none; display: grid; justify-items: end; transform-origin: top right; }
 .action-inbox > * { pointer-events: auto; }
 .action-inbox-panel-enter-active,
 .action-inbox-panel-leave-active {
@@ -181,12 +184,23 @@ onBeforeUnmount(() => {
     transition-duration: 0.01ms;
   }
 }
-.action-inbox-collapse { margin-right: var(--action-inbox-inset); border-radius: 999px; box-shadow: 0 3px 28px var(--shadow-color); }
+/* Every visible decision shares one surface; the rows split on shared dividers instead of stacking separate cards. */
+/* The top-right corner stays square so the tab's right edge and the panel's right edge read as one straight line down. */
+.action-inbox-panel { width: 100%; display: grid; border: 1px solid var(--line-strong); border-radius: 12px 0 12px 12px; background: var(--surface-overlay); color: var(--text-strong); box-shadow: 0 4px 28px var(--shadow-color); overflow: hidden; }
+.action-inbox-panel > * + * { border-top: 1px solid var(--line); }
+/* The collapse control is a tab pinned to the panel's top-right: rounded top corners and an open, borderless bottom that merges into the panel surface, so it reads as one piece with the panel instead of a floating capsule. */
+.action-inbox-collapse { position: relative; z-index: 1; margin: 0 0 -1px 0; border: 1px solid var(--line-strong); border-bottom: 0; border-radius: 10px 10px 0 0; background: var(--surface-overlay); color: var(--text-strong); box-shadow: none; }
+/* The tab base flares into the panel with a concave fillet: a quarter circle centred on the junction curves the tab border into the panel's top border. The crescent outside the arc is all that stays opaque, so the flare bends inward instead of kicking out a convex step. */
+.action-inbox-collapse::before { content: ""; position: absolute; left: -12px; bottom: 0; width: 12px; height: 12px; background: var(--line-strong); -webkit-mask: radial-gradient(circle at 0 0, transparent 11px, #000 11px, #000 12px, transparent 12px); mask: radial-gradient(circle at 0 0, transparent 11px, #000 11px, #000 12px, transparent 12px); }
+.action-inbox-collapse::after { content: ""; position: absolute; left: -12px; bottom: 0; width: 12px; height: 12px; background: var(--surface-overlay); -webkit-mask: radial-gradient(circle at 0 0, transparent 12px, #000 12px); mask: radial-gradient(circle at 0 0, transparent 12px, #000 12px); }
+.action-inbox-collapse:not(:disabled):hover { background: var(--surface-hover); }
+.action-inbox-collapse:not(:disabled):hover::before { background: var(--surface-hover); }
+.action-inbox-collapse:not(:disabled):hover::after { background: var(--surface-hover); }
 .action-inbox-stack { width: 100%; }
-/* The scroll viewport clips card shadows, so the items inset the border box by the 28px blur reach: 24px above and 32px below for the 4px y-offset, 28px on the sides. */
-.action-inbox-items { display: grid; gap: 8px; padding: 24px var(--action-inbox-inset) 32px; }
-.action-inbox-card { display: grid; align-content: start; gap: 4px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-overlay); color: var(--text-strong); box-shadow: 0 4px 28px var(--shadow-color); padding: 10px; width: 100%; pointer-events: auto; }
-.action-inbox-error { justify-self: stretch; margin: 0 var(--action-inbox-inset); padding: 10px; border-radius: 8px; background: var(--surface-overlay); color: var(--status-danger); font-size: 12px; }
+.action-inbox-items { display: grid; }
+.action-inbox-items > * + * { border-top: 1px solid var(--line); }
+.action-inbox-card { display: grid; align-content: start; gap: 4px; padding: 12px; width: 100%; }
+.action-inbox-error { padding: 10px 12px; color: var(--status-danger); font-size: 12px; }
 .action-inbox-head { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 6px; }
 .action-inbox-kind { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 12px; font-weight: 500; line-height: 16px; padding: 2px 8px 2px 6px; }
 .action-inbox-kind-label-only { padding: 2px 8px; }
@@ -202,5 +216,5 @@ onBeforeUnmount(() => {
 .action-inbox-detail { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-title { font-size: 14px; margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-.action-inbox-more { width: calc(100% - 8px); margin: 0 4px; background: var(--surface-overlay); pointer-events: auto; box-shadow: 0 5px 0 -1px var(--surface-overlay), 0 5px 0 0 var(--line-strong), 0 10px 0 -1px var(--surface-overlay), 0 10px 0 0 var(--line-strong); }
+.action-inbox-more { width: 100%; height: auto; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 </style>
