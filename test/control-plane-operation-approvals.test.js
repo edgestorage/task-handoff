@@ -12,6 +12,38 @@ const { guardApprovalProtocol } = require("../apps/thctl/src/operation-approvals
 const origin = "http://control-plane.test";
 const headers = (cookie) => ({ cookie, host: "control-plane.test", origin, "sec-fetch-site": "same-origin" });
 
+// The events route registers its subscription only after an async visibility
+// lookup, so a client that publishes immediately after connecting can miss the
+// event. The bus only answers the keepalive ping once that subscription exists,
+// so probe it until a pong confirms the socket will observe later events.
+async function waitForEventSubscription(socket, frames, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const sentAt = new Date().toISOString();
+    socket.send(JSON.stringify({ v: 1, type: "ping", sentAt }));
+    const pingDeadline = Date.now() + 100;
+    while (Date.now() < pingDeadline) {
+      if (frames.some((frame) => frame.type === "pong" && frame.sentAt === sentAt)) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  assert.fail(`${label} did not acknowledge the event subscription`);
+}
+
+// WebSocket fan-out is asynchronous: wait for the expected frame instead of
+// assuming it is delivered within a fixed short window on a loaded CI runner.
+async function settleApprovalFrames(framesPerSocket, predicate, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !framesPerSocket.every((frames) => predicate(frames))) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  // Give duplicate deliveries a chance to surface before asserting exactly-once.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  for (const frames of framesPerSocket) {
+    assert.ok(predicate(frames), `${label} was not delivered to every subscribed socket`);
+  }
+}
+
 async function cliSession(app, cookie) {
   const verifier = crypto.randomBytes(32).toString("base64url");
   const auth = await app.inject({ method: "POST", url: "/api/auth/cli/authorize", payload: {
@@ -50,13 +82,12 @@ test("CLI node removal waits for a same-user Web decision and executes exactly o
   sockets.push(...webSockets);
   const webFrames = webSockets.map(() => []);
   webSockets.forEach((socket, index) => socket.on("message", (frame) => webFrames[index].push(JSON.parse(String(frame)))));
+  await Promise.all(webSockets.map((socket, index) => waitForEventSubscription(socket, webFrames[index], `operator event socket ${index}`)));
   const first = await app.inject({ method: "DELETE", url: "/api/nodes/approval-test-node", headers: cliHeaders });
   assert.equal(first.statusCode, 202, first.body);
   const approvalId = first.json().data.id;
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  for (const frames of webFrames) {
-    assert.equal(frames.filter((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "pending" && frame.payload.request.id === approvalId).length, 1);
-  }
+  const pendingFrames = (frames) => frames.filter((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "pending" && frame.payload.request.id === approvalId).length;
+  await settleApprovalFrames(webFrames, (frames) => pendingFrames(frames) === 1, "pending approval broadcast");
   const nodeStillExists = await app.inject({ method: "GET", url: "/api/nodes/approval-test-node", headers: cliHeaders });
   assert.equal(nodeStillExists.statusCode, 200, nodeStillExists.body);
   const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { cookie } });
@@ -73,6 +104,7 @@ test("CLI node removal waits for a same-user Web decision and executes exactly o
   sockets.push(otherSocket);
   const otherFrames = [];
   otherSocket.on("message", (frame) => otherFrames.push(JSON.parse(String(frame))));
+  await waitForEventSubscription(otherSocket, otherFrames, "viewer event socket");
   const otherSnapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { cookie: viewerCookie } });
   assert.equal(otherSnapshot.statusCode, 200, otherSnapshot.body);
   assert.deepEqual(otherSnapshot.json().data.requests, []);
@@ -82,9 +114,10 @@ test("CLI node removal waits for a same-user Web decision and executes exactly o
   assert.equal(badOrigin.statusCode, 403, badOrigin.body);
   const approved = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: headers(cookie), payload: { decision: "approve" } });
   assert.equal(approved.statusCode, 200, approved.body);
+  const approvedFrames = (frames) => frames.filter((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "approved" && frame.payload.request.id === approvalId).length;
+  await settleApprovalFrames(webFrames, (frames) => approvedFrames(frames) === 1, "approved approval broadcast");
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(otherFrames.some((frame) => frame.type === "operation-approval.changed"), false);
-  for (const frames of webFrames) assert.equal(frames.filter((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "approved" && frame.payload.request.id === approvalId).length, 1);
   const status = await app.inject({ method: "GET", url: `/api/operation-approvals/${approvalId}/status`, headers: cliHeaders });
   assert.equal(status.json().data.status, "approved");
   const execute = await app.inject({ method: "DELETE", url: "/api/nodes/approval-test-node", headers: { ...cliHeaders, "x-task-handoff-approval-id": approvalId } });

@@ -59,12 +59,12 @@ test("instance switcher menu exposes each instance's node in a portal-safe layou
   assert.match(workbench, /<span class="control-plane-instance-menu-copy">[\s\S]*?<strong>\{\{ switcherInstanceName\(instance\) \}\}<\/strong>[\s\S]*?<small>\{\{ switcherNodeName\(instance\) \}\}<\/small>/);
   assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name[\s\S]*?nodes\.data\.value\?\.find\(\(node\) => node\.id === instance\.nodeId\)\?\.name \|\| instance\.nodeId/);
   assert.match(workbench, /--instance-menu-items': String\(Math\.max\(switcherInstances\.length, 1\)\)/);
-  assert.match(styles, /control-plane-instance-menu-scroll\) \{\s*height: min\(\s*calc\(var\(--instance-menu-items, 1\) \* var\(--instance-menu-row-height\) \+ \(var\(--instance-menu-items, 1\) - 1\) \* var\(--instance-menu-row-gap\)\)/);
+  assert.match(styles, /control-plane-instance-menu-scroll\) \{[^}]*?height: min\([\s\S]*?calc\(var\(--instance-menu-items, 1\) \* var\(--instance-menu-row-height\) \+ \(var\(--instance-menu-items, 1\) - 1\) \* var\(--instance-menu-row-gap\)\)/);
   assert.match(workbench, /:class="\{ selected: instance\.id === selectedInstanceId \}"[\s\S]*?:aria-current="instance\.id === selectedInstanceId \? 'true' : undefined"/);
   assert.match(styles, /:global\(\.control-plane-instance-menu\.control-plane-instance-menu\) \{[\s\S]*?width: max\(var\(--reka-dropdown-menu-trigger-width\), 260px\);[\s\S]*?var\(--reka-dropdown-menu-content-available-width\)[\s\S]*?border-radius: 12px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-copy small\) \{[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 12px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-list\) \{[\s\S]*?padding-right: 0;/);
-  assert.match(styles, /:global\(\.control-plane-instance-menu-scroll:has\(\[data-orientation="vertical"\]\[data-state="visible"\]\) \.control-plane-instance-menu-list\) \{[\s\S]*?padding-right: 8px;/);
+  assert.match(styles, /:global\(\.control-plane-instance-menu-scroll:has\(\[data-orientation="vertical"\]\[data-state="visible"\]\) \.control-plane-instance-menu-list\) \{[\s\S]*?padding-right: 10px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-item\) \{[\s\S]*?align-items: start;[\s\S]*?padding: 8px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-item\.selected\) \{[\s\S]*?background: var\(--surface-active\);/);
 });

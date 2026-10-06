@@ -101,6 +101,9 @@ test("the queue card exposes a capability-gated pause toggle across both control
   assert.match(queue, /v-if="canPause"/);
   assert.doesNotMatch(queue, /ai-session-detail-queue-label/);
   assert.match(queue, /\.ai-session-detail-queue-pause \{/);
+  // 头部底边框作为与首条排队项的分割线：用 --line 与条目间更浅的 --queue-border 区分，和决策块头部一致。
+  assert.match(queue, /\.ai-session-detail-queue-head \{[^}]*border-bottom: 1px solid var\(--line\);/s);
+  assert.doesNotMatch(queue, /\.ai-session-detail-queue-head \{[^}]*border-bottom: 0;/s);
   assert.match(result, /:can-pause="canPauseQueue"/);
   assert.match(result, /@set-queue-paused="\$emit\('setQueuePaused', \$event\)"/);
   assert.match(conversation, /:can-pause-queue="canPauseQueue"/);
