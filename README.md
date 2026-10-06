@@ -16,7 +16,7 @@
 
 TaskHandoff brings Codex and other AI development work into one control plane. It connects AI sessions spread across machines, workspaces, and chat platforms while managing node enrollment, instance lifecycles, sessions, applications, and message routing.
 
-> Task Handoff is the open-source, self-hosted control plane for AI workspaces. The official cloud platform adds accounts and encrypted relay; see `ee/cloud-platform/README.md`.
+> **Beta:** Task Handoff is under active development. Breaking changes may land between releases.
 
 ## Interface
 

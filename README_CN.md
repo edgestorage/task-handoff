@@ -16,7 +16,7 @@
 
 TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散在不同机器、工作空间和聊天入口中的 AI 会话统一到一个控制面板中，并负责节点接入、实例生命周期、会话管理、应用运行和消息路由。
 
-> Task Handoff 是开源、自托管的 AI 工作空间控制平面。官方云平台补充账号与加密中转能力，见 `ee/cloud-platform/README.md`。
+> **Beta 阶段**：Task Handoff 仍在积极开发中，版本之间可能存在破坏性变更（breaking changes）。
 
 ## 产品界面
 
