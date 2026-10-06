@@ -7195,6 +7195,7 @@ test("node agent connects itself to another control plane with a join token", as
   assert.equal(listed.statusCode, 200);
   const joined = listed.body.data.find((node) => node.id === "node_remote_connect");
   assert.ok(joined);
+  assert.equal(joined.name, os.hostname().trim());
   assert.equal(joined.connectionMode, "reverse-wss");
   assert.equal(joined.auth.mode, "paired-hmac");
   assert.ok(joined.auth.keyId);
@@ -7206,6 +7207,62 @@ test("node agent connects itself to another control plane with a join token", as
   assert.equal(connection.enabled, true);
   const pairing = identity.listControlPlanePairings().find((item) => item.keyId === connection.pairingKeyId);
   assert.equal(pairing.keyId, joined.auth.keyId);
+});
+
+test("direct node creation prefers a typed name and falls back to the node agent hostname", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-hostname-name"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: createMockNodeAgentFetch({ health: { hostname: "derived-host.local" } }).fetchImpl },
+  });
+  t.after(() => app.close());
+
+  // A name typed on the control plane always wins, even when the agent
+  // reports a hostname.
+  const created = await json(app, "POST", "/api/nodes", {
+    connectionMode: "direct-http",
+    endpoint: "http://derived-host.example:8091",
+    name: "Typed On Control Plane",
+    auth: { mode: "paired-hmac", keyId: "key_derived", secret: "derived-secret" },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  assert.equal(created.body.data.name, "Typed On Control Plane");
+
+  // Leaving the name out uses the hostname the agent reports for its machine.
+  const unnamed = await json(app, "POST", "/api/nodes", {
+    connectionMode: "direct-http",
+    endpoint: "http://derived-host.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_derived_unnamed", secret: "derived-unnamed-secret" },
+  });
+  assert.equal(unnamed.statusCode, 201, JSON.stringify(unnamed.body));
+  assert.equal(unnamed.body.data.name, "derived-host.local");
+
+  // Node agents before v0.0.38 report no hostname: the typed name still wins,
+  // and without one the node id is the last resort.
+  const legacyApp = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-legacy-name"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: createMockNodeAgentFetch().fetchImpl },
+  });
+  t.after(() => legacyApp.close());
+  const legacy = await json(legacyApp, "POST", "/api/nodes", {
+    connectionMode: "direct-http",
+    endpoint: "http://legacy-host.example:8091",
+    name: "Typed Legacy Name",
+    auth: { mode: "paired-hmac", keyId: "key_legacy", secret: "legacy-secret" },
+  });
+  assert.equal(legacy.statusCode, 201, JSON.stringify(legacy.body));
+  assert.equal(legacy.body.data.name, "Typed Legacy Name");
+
+  const legacyBare = await json(legacyApp, "POST", "/api/nodes", {
+    connectionMode: "direct-http",
+    endpoint: "http://legacy-bare.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_legacy_bare", secret: "legacy-bare-secret" },
+  });
+  assert.equal(legacyBare.statusCode, 201, JSON.stringify(legacyBare.body));
+  assert.equal(legacyBare.body.data.name, legacyBare.body.data.id);
 });
 
 test("node agent persists control-plane credentials before completing the remote join", async (t) => {
@@ -7388,6 +7445,66 @@ test("control plane rejects node join when node id already exists", async (t) =>
   });
   assert.equal(duplicate.statusCode, 409);
   assert.equal(duplicate.body.error.code, "NODE_JOIN_NODE_ALREADY_EXISTS");
+});
+
+test("names typed on the control plane win and the node machine hostname is the default", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-join-name"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  // A name typed into the join invite is the operator's choice and wins over
+  // the hostname the agent reports for its own machine.
+  const namedInvite = await json(app, "POST", "/api/node-join/invites", { nodeName: "Named By User" });
+  assert.equal(namedInvite.statusCode, 201);
+  const namedJoin = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: namedInvite.body.data.joinToken,
+    nodeId: "node_join_named",
+    nodeName: "agent-host.local",
+    keyId: "key_join_named",
+    secret: "secret-join-named",
+  });
+  assert.equal(namedJoin.statusCode, 201, JSON.stringify(namedJoin.body));
+  assert.equal(namedJoin.body.data.name, "Named By User");
+
+  // Without a typed name the node machine hostname reported by the agent is used.
+  const openInvite = await json(app, "POST", "/api/node-join/invites", {});
+  assert.equal(openInvite.statusCode, 201);
+  const hostnameJoin = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: openInvite.body.data.joinToken,
+    nodeId: "node_join_hostname",
+    nodeName: "agent-host.local",
+    keyId: "key_join_hostname",
+    secret: "secret-join-hostname",
+  });
+  assert.equal(hostnameJoin.statusCode, 201, JSON.stringify(hostnameJoin.body));
+  assert.equal(hostnameJoin.body.data.name, "agent-host.local");
+
+  // Older agents report no name: the typed invite name stays the fallback,
+  // then the node id.
+  const legacyInvite = await json(app, "POST", "/api/node-join/invites", { nodeName: "Legacy Typed" });
+  assert.equal(legacyInvite.statusCode, 201);
+  const legacyJoin = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: legacyInvite.body.data.joinToken,
+    nodeId: "node_join_legacy",
+    keyId: "key_join_legacy",
+    secret: "secret-join-legacy",
+  });
+  assert.equal(legacyJoin.statusCode, 201, JSON.stringify(legacyJoin.body));
+  assert.equal(legacyJoin.body.data.name, "Legacy Typed");
+
+  const bareInvite = await json(app, "POST", "/api/node-join/invites", {});
+  assert.equal(bareInvite.statusCode, 201);
+  const bareJoin = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: bareInvite.body.data.joinToken,
+    nodeId: "node_join_bare",
+    keyId: "key_join_bare",
+    secret: "secret-join-bare",
+  });
+  assert.equal(bareJoin.statusCode, 201, JSON.stringify(bareJoin.body));
+  assert.equal(bareJoin.body.data.name, "node_join_bare");
 });
 
 test("node joined events carry the consumed invite identity without secret material", async (t) => {
@@ -12620,6 +12737,34 @@ test("failed assignment leaves an unreferenced entry without deployment state", 
   assert.equal(mock.requests.slice(requestCount).some((request) => request.path === "/instances" && request.method === "POST"), false);
 });
 
+test("local node name follows the node agent hostname until the user renames it", async (t) => {
+  const mockOptions = { health: { hostname: "stub-host.local" } };
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-local-node-name"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const nodes = await json(app, "GET", "/api/nodes");
+  assert.equal(nodes.statusCode, 200);
+  assert.equal(nodes.body.data.length, 1);
+  const localNodeId = nodes.body.data[0].id;
+  assert.equal(nodes.body.data[0].name, "stub-host.local");
+
+  const renamed = await json(app, "PATCH", `/api/nodes/${localNodeId}`, { name: "Desk Mac" });
+  assert.equal(renamed.statusCode, 200, JSON.stringify(renamed.body));
+  assert.equal(renamed.body.data.name, "Desk Mac");
+
+  // A later sync keeps the user rename even after the machine hostname changed.
+  mockOptions.health = { hostname: "stub-host-renamed.local" };
+  const synced = await json(app, "POST", "/api/nodes/local/sync");
+  assert.equal(synced.statusCode, 200, JSON.stringify(synced.body));
+  assert.equal(synced.body.data.name, "Desk Mac");
+});
+
 test("control plane manages projects, instances, register, heartbeat, and board state", async (t) => {
   const mock = createMockNodeAgentFetch({
     proxy: ({ body, jsonResponse }) => {
@@ -12681,6 +12826,8 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   assert.equal(nodes.statusCode, 200);
   const localNodeId = nodes.body.data[0].id;
   assert.equal(localNodeId, "node_mock");
+  // Node agents before v0.0.38 do not report a hostname, so the legacy default name stays.
+  assert.equal(nodes.body.data[0].name, "Local Node");
   assert.equal(nodes.body.data[0].labels["task-handoff.control-plane.local"], "true");
   assert.equal(nodes.body.data[0].labels["task-handoff.control-plane.builtin"], "true");
 

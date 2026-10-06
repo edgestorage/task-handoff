@@ -67,7 +67,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     controlPlaneName: "",
   });
 
-  const canCreateNode = computed(() => Boolean(settingsNode.name.trim() && settingsNode.endpoint.trim()));
+  const canCreateNode = computed(() => Boolean(settingsNode.endpoint.trim()));
   const canConnectRemote = computed(() => Boolean(remoteConnect.controlPlaneUrl.trim() && remoteConnect.joinToken.trim()));
   const nodeRename = useNodeRename({ errorText, nodes, notify, onNodeRenamed, translate: t, updateNode: updateNodeAction });
 
@@ -83,7 +83,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     clearNodeFeedback();
     try {
       const node = await createNode({
-        name: settingsNode.name.trim(),
+        name: settingsNode.name.trim() || undefined,
         connectionMode: "direct-http",
         endpoint: settingsNode.endpoint.trim(),
         joinToken: settingsNode.joinToken.trim(),

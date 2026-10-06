@@ -425,7 +425,7 @@ export const settings = {
     remoteDisabled: "Disabled", remoteSaved: "Saved", remoteConnecting: "Connecting", remoteConnected: "Connected", remoteReconnecting: "Reconnecting", remoteFailed: "Failed",
     connectionLocalIpc: "Local IPC", connectionLocalLoopback: "Local loopback", connectionDirectHttp: "Direct HTTP", connectionReverseWss: "Reverse WebSocket", connectionControlPlaneProxy: "Control-plane proxy", runtimeDocker: "Docker", runtimeKubernetes: "Kubernetes", runtimeLocal: "Local",
     accessNodeProxy: "Node proxy", accessDirectPort: "Direct port", accessKubernetesIngress: "Kubernetes ingress", accessKubernetesPortForward: "Kubernetes port forward",
-    remoteNamePlaceholder: "Remote build host", pairingTokenPlaceholder: "node-agent pairing token",
+    hostnameNamePlaceholder: "Defaults to the machine hostname", pairingTokenPlaceholder: "node-agent pairing token",
   },
   nodeDialogs: {
     installTitle: "Install a remote node", installDescription: "Run the generated command on the remote host. The node-agent will install as a systemd service and connect back to this control plane.",

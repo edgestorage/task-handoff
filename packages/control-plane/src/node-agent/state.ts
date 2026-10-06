@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AI_SESSION_HISTORY_DEFAULT_LIMIT } from "@task-handoff/protocol/ai-sessions";
@@ -237,7 +238,10 @@ export class NodeAgentState {
     const timestamp = now();
     this.node = NodeSchema.parse({
       id: nodeId,
-      name: nodeId,
+      // The machine hostname is the node's default display name; control planes
+      // that already named this node (join invite or explicit user input) win
+      // in their own records.
+      name: NodeSchema.shape.name.safeParse(os.hostname()).data || nodeId,
       connectionMode: "direct-http",
       endpoint,
       controlEndpoint: endpoint,
