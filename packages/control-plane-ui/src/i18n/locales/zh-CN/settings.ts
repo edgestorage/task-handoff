@@ -427,7 +427,7 @@ export const settings = {
     remoteDisabled: "已禁用", remoteSaved: "已保存", remoteConnecting: "正在连接", remoteConnected: "已连接", remoteReconnecting: "正在重连", remoteFailed: "失败",
     connectionLocalIpc: "本地 IPC", connectionLocalLoopback: "本地回环", connectionDirectHttp: "直接 HTTP", connectionReverseWss: "反向 WebSocket", connectionControlPlaneProxy: "控制面代理", runtimeDocker: "Docker", runtimeKubernetes: "Kubernetes", runtimeLocal: "本地",
     accessNodeProxy: "节点代理", accessDirectPort: "直接端口", accessKubernetesIngress: "Kubernetes Ingress", accessKubernetesPortForward: "Kubernetes 端口转发",
-    remoteNamePlaceholder: "远程构建主机", pairingTokenPlaceholder: "node-agent 配对 token",
+    hostnameNamePlaceholder: "留空则使用主机名", pairingTokenPlaceholder: "node-agent 配对 token",
   },
   nodeDialogs: {
     installTitle: "安装远程节点", installDescription: "在远程主机上运行生成的命令。node-agent 将作为 systemd 服务安装并连接回此控制面板。",

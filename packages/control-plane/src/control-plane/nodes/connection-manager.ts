@@ -86,7 +86,7 @@ export class NodeConnectionManager {
     const candidate = NodeSchema.parse({
       ...(current || {}),
       id: inspected.nodeId,
-      name: current?.name || "Local Node",
+      name: current?.name || nodeNameFromHostname(inspected.data.hostname) || "Local Node",
       connectionMode,
       auth: { mode: "local-static-key", secret: localStaticSecret },
       endpoint,
@@ -159,7 +159,7 @@ export class NodeConnectionManager {
       const provisionalId = parsedInput.id || pairing?.nodeId || createId("node");
       const probeNode = NodeSchema.parse({
         id: provisionalId,
-        name: parsedInput.name,
+        name: parsedInput.name || provisionalId,
         connectionMode,
         auth,
         labels: parsedInput.labels || {},
@@ -193,6 +193,7 @@ export class NodeConnectionManager {
       const candidate = NodeSchema.parse({
         ...nodeInput,
         id,
+        name: parsedInput.name || nodeNameFromHostname(inspected?.data.hostname) || id,
         connectionMode,
         auth,
         endpoint: controlEndpoint,
@@ -340,7 +341,7 @@ export class NodeConnectionManager {
       : {};
     const response = await fetchDirectNodeAgentEndpoint(this.options.fetchImpl, endpoint, route, { headers });
     const payload = await response.json().catch(() => ({})) as {
-      data?: { nodeId?: unknown; protocolVersion?: unknown; build?: unknown };
+      data?: { nodeId?: unknown; hostname?: unknown; protocolVersion?: unknown; build?: unknown };
       error?: { message?: string };
     };
     if (!response.ok) {
@@ -503,6 +504,14 @@ function defaultLocalNodeEndpoint() {
   return process.env.TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT
     || process.env.TASK_HANDOFF_NODE_AGENT_ENDPOINT
     || "http://127.0.0.1:8091";
+}
+
+// Without a typed name, nodes default to the hostname the node agent reports
+// for its own machine. The stored name wins afterwards, so a later sync never
+// overwrites a user rename.
+function nodeNameFromHostname(value: unknown) {
+  const parsed = NodeSchema.shape.name.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function localConnectionModeForEndpoint(endpoint: string): Node["connectionMode"] {

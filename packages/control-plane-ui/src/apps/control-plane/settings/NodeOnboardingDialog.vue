@@ -89,7 +89,7 @@
               </div>
               <label class="node-onboarding-field" for="node-onboarding-join-name">
                 <span>{{ t("settings.nodeOnboarding.target.optionalName") }}</span>
-                <ControlPlaneInput id="node-onboarding-join-name" v-model="nodeName" :maxlength="160" />
+                <ControlPlaneInput id="node-onboarding-join-name" v-model="nodeName" :maxlength="160" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
               </label>
             </template>
 
@@ -175,7 +175,7 @@
             </label>
             <label class="node-onboarding-field" for="node-onboarding-direct-name">
               <span>{{ t("settings.nodeOnboarding.target.optionalName") }}</span>
-              <ControlPlaneInput id="node-onboarding-direct-name" v-model="directDraft.name" :maxlength="160" />
+              <ControlPlaneInput id="node-onboarding-direct-name" v-model="directDraft.name" :maxlength="160" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
             </label>
             <p v-if="operationError" id="node-onboarding-direct-error" class="node-onboarding-error" role="alert">{{ operationError }}</p>
           </section>
@@ -503,7 +503,7 @@ async function submitDirect() {
   busy.value = true;
   try {
     const node = await createNode({
-      name: directDraft.name.trim() || directDraft.endpoint.trim(),
+      name: directDraft.name.trim() || undefined,
       endpoint: directDraft.endpoint.trim(),
       joinToken: directDraft.joinToken.trim(),
       connectionMode: "direct-http",

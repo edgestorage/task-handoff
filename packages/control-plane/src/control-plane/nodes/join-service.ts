@@ -83,7 +83,10 @@ export class NodeJoinService {
     }
     const node = await this.options.nodes.put(NodeSchema.parse({
       id: parsedInput.nodeId,
-      name: parsedInput.nodeName || invite.nodeName || parsedInput.nodeId,
+      // A name typed on the control plane (join invite) is the operator's
+      // explicit choice and wins. Without one, the node agent names its own
+      // machine (hostname since v0.0.38); node id is the last resort.
+      name: invite.nodeName || parsedInput.nodeName || parsedInput.nodeId,
       connectionMode: "reverse-wss",
       auth: {
         mode: "paired-hmac",

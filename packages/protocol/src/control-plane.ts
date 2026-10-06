@@ -2187,6 +2187,10 @@ export const NodeAgentHealthSchema = z
     ok: z.boolean().optional(),
     role: z.string().optional(),
     nodeId: IdSchema.optional(),
+    // Additive health field: absent on node-agents before v0.0.38. The control
+    // plane uses it only as the node's default display name when no name was
+    // entered; a stored name (typed or renamed) always wins over it.
+    hostname: z.string().trim().min(1).max(255).optional(),
     platform: FinalComputerPlatformSchema.optional(),
     arch: FinalComputerArchSchema.optional(),
     protocolVersion: ProtocolVersionSchema.optional(),
@@ -3530,7 +3534,9 @@ export const NodeAuthInputSchema = z.object({
 
 export const CreateNodeInputSchema = z.object({
   id: NodeSchema.shape.id.optional(),
-  name: NodeSchema.shape.name,
+  // Optional since v0.0.38: a typed name wins, and leaving it out falls back to
+  // the hostname the node agent reports for its own machine.
+  name: NodeSchema.shape.name.optional(),
   connectionMode: NodeSchema.shape.connectionMode.optional(),
   connectionPath: NodeSchema.shape.connectionPath.optional(),
   connectionEnabled: NodeSchema.shape.connectionEnabled.optional(),

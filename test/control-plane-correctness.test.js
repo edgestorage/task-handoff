@@ -391,6 +391,7 @@ test("direct node creation failure self-revokes the pairing on a real node-agent
     remoteAddress: "127.0.0.1",
   });
   assert.equal(localHealth.statusCode, 200, localHealth.body);
+  assert.equal(localHealth.json().data.hostname, os.hostname().trim());
 });
 
 test("AI session resume returns the committed result without refreshing the shared projection", async () => {

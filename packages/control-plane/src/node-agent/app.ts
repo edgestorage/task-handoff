@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
@@ -1480,73 +1481,77 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentStartRecoverySupervisor", () => recoverySupervisor.start());
   app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
 
-  app.get("/api/node-agent/health", async () => ({
-    data: {
-      ok: true,
-      role: "node-agent",
-      process: {
-        pid: process.pid,
-        ...(NODE_AGENT_PROCESS_START_IDENTITY ? { startIdentity: NODE_AGENT_PROCESS_START_IDENTITY } : {}),
-      },
-      listener: {
-        host: "127.0.0.1",
-        port: state.currentListenerPort,
-      },
-      nodeId,
-      platform: finalComputerPlatform(platform),
-      arch: process.arch,
-      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-      capabilities: {
-        modelEndpointProbe: true,
-        managedModels: {
-          multiEntityAssignment: true,
-          privateModelCatalog: true,
-          stableModelIdentity: true,
-          requestMappings: true,
-          // Protocol capabilities follow the registered adapters: the switch is
-          // node configuration and deliberately not part of this document.
-          modelRelay: (() => {
-            const protocols = modelRelay.protocolCapabilities();
-            return { protocols, streaming: protocols.length > 0 };
+  app.get("/api/node-agent/health", async () => {
+    const hostname = os.hostname().trim();
+    return {
+      data: {
+        ok: true,
+        role: "node-agent",
+        ...(hostname ? { hostname } : {}),
+        process: {
+          pid: process.pid,
+          ...(NODE_AGENT_PROCESS_START_IDENTITY ? { startIdentity: NODE_AGENT_PROCESS_START_IDENTITY } : {}),
+        },
+        listener: {
+          host: "127.0.0.1",
+          port: state.currentListenerPort,
+        },
+        nodeId,
+        platform: finalComputerPlatform(platform),
+        arch: process.arch,
+        protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+        capabilities: {
+          modelEndpointProbe: true,
+          managedModels: {
+            multiEntityAssignment: true,
+            privateModelCatalog: true,
+            stableModelIdentity: true,
+            requestMappings: true,
+            // Protocol capabilities follow the registered adapters: the switch is
+            // node configuration and deliberately not part of this document.
+            modelRelay: (() => {
+              const protocols = modelRelay.protocolCapabilities();
+              return { protocols, streaming: protocols.length > 0 };
+            })(),
+          },
+          aiSessionHistoryLimit: true,
+          aiSessionAttachmentRetention: true,
+          aiSessionFileAttachmentLimit: true,
+          codexManagedSettings: true,
+          folderPlaces: true,
+          localFolderNameUpdate: true,
+          managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
+          stories: {
+            enabled: true,
+            agentTools: true,
+            agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true, decisions: true },
+            sessionRetention: true,
+            maxFileBytes: 32 * 1024 * 1024,
+            maxBatchPaths: 20,
+          },
+          agentExecution: (() => {
+            const combinations = [agentRunExecutionCombination];
+            return {
+              definitions: true,
+              runs: true,
+              orchestration: {
+                storyEntryAuthorization: true,
+                orchestrations: true,
+                runMembers: true,
+                manualRuns: true,
+              },
+              sharedSpace: { enabled: true, runtimes: ["docker" as const] },
+              combinations,
+            };
           })(),
         },
-        aiSessionHistoryLimit: true,
-        aiSessionAttachmentRetention: true,
-        aiSessionFileAttachmentLimit: true,
-        codexManagedSettings: true,
-        folderPlaces: true,
-        localFolderNameUpdate: true,
-        managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
-        stories: {
-          enabled: true,
-          agentTools: true,
-          agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true, decisions: true },
-          sessionRetention: true,
-          maxFileBytes: 32 * 1024 * 1024,
-          maxBatchPaths: 20,
-        },
-        agentExecution: (() => {
-          const combinations = [agentRunExecutionCombination];
-          return {
-            definitions: true,
-            runs: true,
-            orchestration: {
-              storyEntryAuthorization: true,
-              orchestrations: true,
-              runMembers: true,
-              manualRuns: true,
-            },
-            sharedSpace: { enabled: true, runtimes: ["docker" as const] },
-            combinations,
-          };
-        })(),
+        build: buildInfo("node-agent"),
+        instanceProxy: { ...instanceProxyMetrics },
+        eventTransport: eventForwarder.eventTransportHealth(),
+        serverTime: new Date().toISOString(),
       },
-      build: buildInfo("node-agent"),
-      instanceProxy: { ...instanceProxyMetrics },
-      eventTransport: eventForwarder.eventTransportHealth(),
-      serverTime: new Date().toISOString(),
-    },
-  }));
+    };
+  });
 
   const requireListenerManager = (request: { ip?: string; socket: { remoteAddress?: string; remoteFamily?: string } }) => {
     if (!isUnixSocketRequest(request)) {

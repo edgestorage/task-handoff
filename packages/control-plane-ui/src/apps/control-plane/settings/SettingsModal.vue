@@ -331,7 +331,7 @@
               <TabsContent value="direct" class="remote-node-mode-content">
                 <label>
                   <span>{{ t("settings.fields.name") }}</span>
-                  <ControlPlaneInput v-model="settingsNode.name" :placeholder="t('settings.nodeDetail.remoteNamePlaceholder')" />
+                  <ControlPlaneInput v-model="settingsNode.name" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
                 </label>
                 <label>
                   <span>{{ t("settings.fields.endpoint") }}</span>
