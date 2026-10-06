@@ -138,6 +138,8 @@ jobs:
             target: linux
             arch_args: --x64
     runs-on: ${{ matrix.os }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
