@@ -1,6 +1,7 @@
 export const protocolPackage = "@task-handoff/protocol";
 
 export * from "./ai-sessions.ts";
+export * from "./client-request-id.ts";
 export * from "./ai-session-hierarchy.ts";
 export * from "./ai-session-provider-capabilities.ts";
 export * from "./agent-definitions.ts";

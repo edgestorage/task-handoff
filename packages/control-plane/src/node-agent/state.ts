@@ -577,6 +577,7 @@ export class NodeAgentState {
         })
       : input.image ? InstanceImageSnapshotSchema.parse(input.image) : undefined;
     const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
+    const workspacePolicy = workspacePolicyForSource(source);
     const instance = ControlledInstanceSchema.parse({
       id,
       name: input.name || `instance-${id.replace(/^inst_?/, "").slice(0, 6)}`,
@@ -624,7 +625,24 @@ export class NodeAgentState {
         aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
         aiSessionMaxFileAttachmentBytes: input.config?.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
       },
-      workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
+      // Git workspaces on Docker are materialized by the asynchronous
+      // provisioning controller, so the record starts in the pending phase.
+      workspace: runtime.type === "local"
+        ? { mode: "local-bind", status: "unknown", path: workspacePath }
+        : source.type === "local-folder"
+          ? { status: "unknown" }
+          : {
+              mode: "git-clone",
+              status: "pending",
+              path: workspacePolicy.path,
+              gitProvisioning: {
+                phase: "pending",
+                remoteUrl: source.url,
+                generation: 0,
+                startedAt: timestamp,
+                updatedAt: timestamp,
+              },
+            },
       target: { strategy: "node-proxy", status: "unknown" },
       runtime: runtime.type === "local"
         ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" } }
@@ -758,7 +776,12 @@ export class NodeAgentState {
       processIncarnationId: parsed.processIncarnationId || existing.processIncarnationId,
       capabilities: parsed.capabilities,
       appInventory: parsed.appInventory,
-      workspace: parsed.workspace,
+      // The node agent owns Git workspace materialization; the controlled
+      // instance only reports its own view of the materialized workspace.
+      workspace: {
+        ...parsed.workspace,
+        ...(existing.workspace.gitProvisioning ? { gitProvisioning: existing.workspace.gitProvisioning } : {}),
+      },
       target: existing.target,
       registrationToken: existing.registrationToken || parsed.registrationToken,
       lastHeartbeatAt: timestamp,
@@ -789,6 +812,10 @@ export class NodeAgentState {
     const updated = ControlledInstanceSchema.parse({
       ...current,
       ...parsed,
+      // Node-agent-owned Git provisioning state survives instance heartbeats.
+      ...(parsed.workspace && current.workspace.gitProvisioning
+        ? { workspace: { ...parsed.workspace, gitProvisioning: current.workspace.gitProvisioning } }
+        : {}),
       target,
       ready: authoritativeReady,
       health: reportedHealth,

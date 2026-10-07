@@ -1,5 +1,6 @@
 import { spawn as spawnPty } from "node-pty";
 import type { CommandResult } from "./command-runner.ts";
+import { defaultCommandRunner, type CommandRunner } from "./command-runner.ts";
 
 export type TerminalCommandRunOptions = {
   cols?: number;
@@ -91,4 +92,19 @@ function plainTerminalError(value: string) {
     .map((line) => line.trim())
     .filter(Boolean)
     .at(-1);
+}
+
+/**
+ * Adapts a plain command runner into a streaming terminal runner. Real PTYs are
+ * only used for the default process runner; injected runners (tests, custom
+ * transports) replay their buffered output once instead of streaming live.
+ */
+export function terminalRunnerFromCommandRunner(runCommand: CommandRunner): TerminalCommandRunner {
+  if (runCommand === defaultCommandRunner) return defaultTerminalCommandRunner;
+  return async (command, args, options = {}) => {
+    const result = await runCommand(command, args, { timeoutMs: options.timeoutMs, signal: options.signal });
+    if (result.stdout) options.onData?.(result.stdout);
+    if (result.stderr) options.onData?.(result.stderr);
+    return result;
+  };
 }

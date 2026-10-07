@@ -132,6 +132,9 @@
                     <small v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
                       {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
                     </small>
+                    <small v-else-if="instance.workspace.gitProvisioning && instance.workspace.gitProvisioning.phase !== 'ready'" class="image-provisioning-status">
+                      {{ gitProvisioningLabel(instance, t) }}<template v-if="instance.workspace.gitProvisioning.error"> · {{ instance.workspace.gitProvisioning.error }}</template>
+                    </small>
                     <small v-if="isInstanceRuntimeUnavailable(instance)" class="runtime-unavailable-status">
                       {{ instanceRuntimeUnavailableLabel(instance, t) }}
                     </small>
@@ -184,7 +187,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../..
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, imageProvisioningLabel, instancePendingStatusLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instancePendingStatusLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";

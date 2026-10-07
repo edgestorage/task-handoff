@@ -77,11 +77,14 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
   const runtimeError = item.runtimeVersion?.error;
   const imageError = item.imageProvisioning?.error;
   const workspaceError = item.workspace.error;
+  const gitProvisioningError = item.workspace.gitProvisioning?.error;
   const error = runtimeError
     ? { code: runtimeError.code, message: "Instance runtime convergence failed. Use the desktop Control Plane for diagnostics." }
     : imageError
       ? { code: "IMAGE_PROVISIONING_FAILED", message: "Instance image provisioning failed. Use the desktop Control Plane for diagnostics." }
-      : workspaceError
+      : gitProvisioningError
+        ? { code: "GIT_WORKSPACE_PROVISIONING_FAILED", message: "Instance Git workspace provisioning failed. Use the desktop Control Plane for diagnostics." }
+        : workspaceError
         ? { code: "WORKSPACE_FAILED", message: "Instance workspace preparation failed. Use the desktop Control Plane for diagnostics." }
         : undefined;
   const nodeAgent = item.node?.capabilities.agent;
@@ -105,7 +108,8 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     !["failed", "stopped", "stopping", "unhealthy"].includes(item.status) && (running || connecting) ? "stop" as const : undefined,
     running ? "restart" as const : undefined,
     item.status === "failed" && item.imageProvisioning?.phase === "failed" ? "retry-image" as const : undefined,
-  ].filter((action): action is "start" | "stop" | "restart" | "retry-image" => Boolean(action));
+    item.status === "failed" && item.workspace.gitProvisioning?.phase === "failed" ? "retry-git" as const : undefined,
+  ].filter((action): action is "start" | "stop" | "restart" | "retry-image" | "retry-git" => Boolean(action));
   return ControlPlaneInstanceDirectoryEntrySchema.parse({
     id: item.id,
     name: item.name,

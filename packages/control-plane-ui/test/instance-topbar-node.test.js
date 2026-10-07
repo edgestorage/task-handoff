@@ -66,6 +66,9 @@ test("instance switcher menu exposes each instance's node in a portal-safe layou
   assert.match(styles, /:global\(\.control-plane-instance-menu-list\) \{[\s\S]*?padding-right: 0;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-scroll:has\(\[data-orientation="vertical"\]\[data-state="visible"\]\) \.control-plane-instance-menu-list\) \{[\s\S]*?padding-right: 10px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-item\) \{[\s\S]*?align-items: start;[\s\S]*?padding: 8px;/);
+  assert.match(workbench, /<DropdownMenuLabel v-if="!switcherInstances\.length" class="control-plane-instance-menu-empty">\s*\{\{ t\("instances\.list\.noMatches"\) \}\}\s*<\/DropdownMenuLabel>/);
+  assert.doesNotMatch(workbench, /control-plane-instance-menu-item" disabled/);
+  assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-empty\) \{[\s\S]*?display: flex;[\s\S]*?min-height: var\(--instance-menu-row-height\);[\s\S]*?color: var\(--text-muted\);/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-item\.selected\) \{[\s\S]*?background: var\(--surface-active\);/);
 });
 

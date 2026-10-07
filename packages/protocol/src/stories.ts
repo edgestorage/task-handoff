@@ -9,6 +9,7 @@ import {
   AiSessionSendModeSchema,
 } from "./ai-sessions.ts";
 import { StoryIdSchema } from "./story-id.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 
 export { StoryIdSchema } from "./story-id.ts";
 
@@ -167,7 +168,7 @@ export const StoryAutomationRunsSchema = z.object({
 }).strict();
 
 export const StoryAutomationManualRunInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 
 export const StoryAutomationChangedEventType = "story.automation.changed";

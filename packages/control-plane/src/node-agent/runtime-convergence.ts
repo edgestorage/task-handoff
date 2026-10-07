@@ -369,6 +369,16 @@ export function instanceImagePreparationPending(instance: Pick<ControlledInstanc
   return Boolean(instance.imageProvisioning && instance.imageProvisioning.phase !== "ready");
 }
 
+/**
+ * Git workspace materialization is preparation, not a runtime lifecycle step:
+ * the instance cannot start, converge, or count as restored until the clone
+ * reaches a terminal phase.
+ */
+export function instanceGitPreparationPending(instance: Pick<ControlledInstance, "workspace">) {
+  const provisioning = instance.workspace?.gitProvisioning;
+  return Boolean(provisioning && provisioning.phase !== "ready");
+}
+
 function isStopped(instance: ControlledInstance) {
   return ["created", "stopped", "failed"].includes(instance.status);
 }

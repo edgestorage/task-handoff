@@ -91,7 +91,9 @@ test("settings mutations use domain refresh callbacks instead of a global refres
 
 test("instance update controls are replaced by authoritative convergence state", () => {
   const panel = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
-  const instanceGroup = panel.match(/<section class="managed-update-group instance-update-group">[\s\S]*?<\/section>/)?.[0] || "";
+  const instanceGroup = panel
+    .split('<div class="node-detail-section">')
+    .find((section) => section.includes("settings.nodeDetail.controlledInstances")) || "";
 
   assert.match(instanceGroup, /instance\.runtimeVersion/);
   assert.match(instanceGroup, /runtimeVersionSummary\(instance\)/);

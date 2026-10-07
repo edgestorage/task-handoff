@@ -7,6 +7,7 @@ import {
 } from "./ai-sessions.ts";
 import { AgentRunErrorSchema, AgentRunIdSchema, AgentRunMemberIdSchema, AgentRunResultSchema } from "./agent-runs.ts";
 import { AiSessionAgentToolNameSchema } from "./ai-session-agent-tools.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 
 const RuntimeRootSchema = z.object({
   type: z.literal("runtime-path"),
@@ -17,7 +18,7 @@ const RuntimeRootSchema = z.object({
 export const AgentRunMemberInstanceCreateInputSchema = z.object({
   runId: AgentRunIdSchema,
   memberId: AgentRunMemberIdSchema,
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   providerId: AiAgentKindSchema,
   cwd: RuntimeRootSchema,
   writableRoots: z.object({ workspace: RuntimeRootSchema, shared: RuntimeRootSchema }).strict(),

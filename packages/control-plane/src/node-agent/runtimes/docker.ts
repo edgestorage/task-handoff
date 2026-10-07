@@ -5,6 +5,7 @@ import path from "node:path";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
+import { terminalRunnerFromCommandRunner, type TerminalCommandRunner } from "../../shared/process/terminal-command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { LEGACY_WORKSPACE_GIT_ENV, WORKSPACE_GIT_ENV } from "@task-handoff/protocol/workspace-git";
@@ -51,6 +52,7 @@ export type NodeRuntimeExecutor = {
 export type DockerExecutorOptions = {
   publishHost?: string;
   imageService?: DockerImageService;
+  terminalCommandRunner?: TerminalCommandRunner;
   launcherAssetsDir?: string;
   nodeAgentContainerIpcPath?: string;
   portResolutionRetryDelaysMs?: readonly number[];
@@ -228,6 +230,7 @@ export function assertDockerConfigHasNoSecrets(
 
 export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly runCommand: CommandRunner;
+  private readonly runTerminalCommand: TerminalCommandRunner;
   private readonly publishHost: string;
   private readonly images: DockerImageService;
   private readonly launcherAssetsDir: string;
@@ -236,6 +239,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
+    this.runTerminalCommand = options.terminalCommandRunner || terminalRunnerFromCommandRunner(runCommand);
     this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
     this.launcherAssetsDir = options.launcherAssetsDir || packagedDockerBootstrapAssetsDir();
@@ -284,7 +288,22 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
     await this.createPersistentVolumes(context);
     if (context.project.source.type !== "local-folder") {
-      await this.provisionGitWorkspace(context);
+      const gitPhase = context.instance.workspace.gitProvisioning?.phase;
+      if (gitPhase === "ready") {
+        // The asynchronous Git provisioning controller already materialized the
+        // workspace and consumed its grant; completing again is idempotent and
+        // covers older grants applied to an already-materialized workspace.
+        context.completeGitWorkspaceProvisioning?.();
+      } else if (gitPhase === undefined) {
+        // Compatibility for v0.0.37 and earlier: instances created before the
+        // asynchronous Git provisioning controller still clone inline.
+        await this.provisionGitWorkspace(context);
+      } else {
+        throw runtimeExecutorError(
+          GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
+          `Git workspace provisioning is ${gitPhase} for ${context.instance.id}.`,
+        );
+      }
     }
     let runResult;
     try {
@@ -296,14 +315,27 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } catch (cause) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
     }
-    context.completeGitWorkspaceProvisioning?.();
     return this.bootstrapResult(context, containerName, runResult.stdout || undefined);
   }
 
-  private async provisionGitWorkspace(context: ExecutorContext) {
+  /**
+   * Materializes the Git workspace and streams the provisioning terminal output
+   * to the caller so progress can be published while the clone is running.
+   * `onOutput` receives raw chunks (stdout and stderr merged by the PTY).
+   */
+  async provisionGitWorkspaceStreaming(
+    context: ExecutorContext,
+    options: { onOutput?: (data: string) => void; signal?: AbortSignal; timeoutMs?: number } = {},
+  ) {
     const input = context.gitWorkspaceProvisioning;
     if (!input) throw runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_MISSING", `Git workspace provisioning input is missing for ${context.instance.id}.`);
     const containerName = `${containerNameForInstance(context.instance.id)}-git-provision`;
+    // The provisioning container mounts the managed workspace volume, and Docker
+    // silently auto-creates an unlabeled volume for any missing mount source.
+    // Volume labels are immutable after creation, so materializing the labeled
+    // volumes first is what keeps the workspace owned by this instance instead
+    // of failing volume validation on the next start.
+    await this.createPersistentVolumes(context);
     const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-auth-"));
     fs.chmodSync(authDirectory, 0o700);
     try {
@@ -312,13 +344,25 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       const args = dockerGitProvisionArgs(context, containerName, authDirectory, {
         launcherAssetsDir: this.launcherAssetsDir,
       });
-      await this.runCommand("docker", args, { timeoutMs: 15 * 60_000, signal: context.signal });
+      const result = await this.runTerminalCommand("docker", args, {
+        cols: 120,
+        rows: 40,
+        timeoutMs: options.timeoutMs ?? 15 * 60_000,
+        signal: options.signal ?? context.signal,
+        onData: options.onOutput,
+      });
+      context.completeGitWorkspaceProvisioning?.();
+      return result;
     } catch (cause) {
       throw gitWorkspaceProvisioningError(context.instance.id, cause);
     } finally {
       await this.runCommand("docker", ["rm", "-f", containerName], { timeoutMs: 30_000 }).catch(() => ({ stdout: "", stderr: "" }));
       fs.rmSync(authDirectory, { recursive: true, force: true });
     }
+  }
+
+  private provisionGitWorkspace(context: ExecutorContext) {
+    return this.provisionGitWorkspaceStreaming(context);
   }
 
   private materializeGitProvisioningAuth(directory: string, input: NonNullable<ExecutorContext["gitWorkspaceProvisioning"]>) {
@@ -1198,19 +1242,30 @@ const GIT_PROVISIONING_ERROR_CODES = new Set([
   "WORKSPACE_OWNERSHIP_MISMATCH",
 ]);
 
-function gitWorkspaceProvisioningError(instanceId: string, cause: unknown) {
+/** Raised by the Docker executor when a start arrives before the asynchronous
+ * Git workspace provisioning controller has materialized the workspace. */
+export const GIT_WORKSPACE_PROVISIONING_PENDING_CODE = "GIT_WORKSPACE_PROVISIONING_PENDING";
+
+export function gitWorkspaceProvisioningErrorCode(cause: unknown) {
   const candidate = cause && typeof cause === "object" ? cause as { code?: unknown } : undefined;
   const causeCode = typeof candidate?.code === "string" ? candidate.code : "";
-  if (causeCode === "RUNTIME_COMMAND_TIMEOUT") {
-    return runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_TIMEOUT", `Git workspace provisioning timed out for ${instanceId}.`);
-  }
-  if (causeCode === "RUNTIME_COMMAND_ABORTED") {
-    return runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_CANCELLED", `Git workspace provisioning was cancelled for ${instanceId}.`);
-  }
+  if (causeCode === "RUNTIME_COMMAND_TIMEOUT") return "GIT_WORKSPACE_PROVISIONING_TIMEOUT";
+  if (causeCode === "RUNTIME_COMMAND_ABORTED") return "GIT_WORKSPACE_PROVISIONING_CANCELLED";
   const detail = commandFailureDetail(cause) || "";
   const marker = detail.match(/TASK_HANDOFF_GIT_PROVISIONING_ERROR=([A-Z_]+)/)?.[1];
   const reason = marker && GIT_PROVISIONING_ERROR_CODES.has(marker) ? marker : "FAILED";
-  return runtimeExecutorError(`GIT_WORKSPACE_PROVISIONING_${reason}`, `Could not provision Git workspace for ${instanceId}.`);
+  return `GIT_WORKSPACE_PROVISIONING_${reason}`;
+}
+
+function gitWorkspaceProvisioningError(instanceId: string, cause: unknown) {
+  const code = gitWorkspaceProvisioningErrorCode(cause);
+  if (code === "GIT_WORKSPACE_PROVISIONING_TIMEOUT") {
+    return runtimeExecutorError(code, `Git workspace provisioning timed out for ${instanceId}.`);
+  }
+  if (code === "GIT_WORKSPACE_PROVISIONING_CANCELLED") {
+    return runtimeExecutorError(code, `Git workspace provisioning was cancelled for ${instanceId}.`);
+  }
+  return runtimeExecutorError(code, `Could not provision Git workspace for ${instanceId}.`);
 }
 
 function commandFailureDetail(cause: unknown) {

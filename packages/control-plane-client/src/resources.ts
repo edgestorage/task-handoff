@@ -193,7 +193,9 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceAction(instanceId: string, action: z.infer<typeof ControlPlaneInstanceActionSchema>) {
       const parsedAction = ControlPlaneInstanceActionSchema.parse(action);
-      const suffix = parsedAction === "retry-image" ? "image-provisioning/retry" : parsedAction;
+      const suffix = parsedAction === "retry-image" ? "image-provisioning/retry"
+        : parsedAction === "retry-git" ? "git-provisioning/retry"
+          : parsedAction;
       return transport.request(
         `/api/controlled-instances/${encodeURIComponent(instanceId)}/${suffix}`,
         DataSchema(InstanceActionResultSchema),

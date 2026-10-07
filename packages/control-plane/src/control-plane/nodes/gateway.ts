@@ -636,6 +636,14 @@ export class ControlPlaneNodeAgentGateway {
     return instance;
   }
 
+  async retryInstanceGitProvisioning(node: Node, instanceId: string) {
+    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/git-provisioning/retry`, ControlledInstanceSchema, {
+      method: "POST",
+    });
+    this.upsertInstanceSnapshot(node, instance);
+    return instance;
+  }
+
   async stopInstance(node: Node, instanceId: string) {
     const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/stop`, ControlledInstanceSchema, {
       method: "POST",

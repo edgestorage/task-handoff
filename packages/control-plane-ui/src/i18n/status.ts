@@ -44,6 +44,17 @@ export const imagePullStatusKeys: Record<string, string> = {
   failed: "instances.imagePull.failed",
 };
 
+export const gitProvisioningStatusKeys: Record<string, string> = {
+  connecting: "instances.gitProvisioning.connecting",
+  cloning: "instances.gitProvisioning.cloning",
+  "checking-out": "instances.gitProvisioning.checking-out",
+  submodules: "instances.gitProvisioning.submodules",
+  lfs: "instances.gitProvisioning.lfs",
+  finalizing: "instances.gitProvisioning.finalizing",
+  complete: "instances.gitProvisioning.complete",
+  failed: "instances.gitProvisioning.failed",
+};
+
 export const nodeRuntimeStatusKeys: Record<string, string> = {
   unknown: "settings.nodeDetail.statusUnknown",
   online: "settings.nodeDetail.statusOnline",

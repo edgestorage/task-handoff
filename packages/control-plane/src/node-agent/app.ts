@@ -54,7 +54,7 @@ import type { TerminalCommandRunner } from "../shared/process/terminal-command-r
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
 import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
 import { resolvePublishedRuntimeArtifact, type PublishedRuntimeArtifact } from "./runtime-release-source.ts";
-import { RuntimeConvergenceCoordinator, reportedVersion } from "./runtime-convergence.ts";
+import { RuntimeConvergenceCoordinator, instanceGitPreparationPending, instanceImagePreparationPending, reportedVersion } from "./runtime-convergence.ts";
 import {
   NodeAgentState,
   runtimeUsesManagedArtifacts,
@@ -95,6 +95,7 @@ import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
 import { InstanceImageProvisioningController } from "./instances/image-provisioning.ts";
+import { InstanceGitWorkspaceProvisioningController } from "./instances/git-provisioning.ts";
 import { InstanceOperationGate } from "./instances/instance-operation-gate.ts";
 import { EnvironmentTemplateService } from "./environment-templates/service.ts";
 import { registerEnvironmentTemplateRoutes } from "./environment-templates/routes.ts";
@@ -427,6 +428,22 @@ export async function syncAssignedModelEnvironment(
   const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
   const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
   state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog, instance.config.codexSettings);
+  // Materializing the private config is what applies a model change on the next
+  // instance start. The live push instead makes the instance rebuild its shared
+  // codex/opencode app-server, so it is withheld while sessions are bound to that
+  // process: a model change on a busy instance is answered with an instance
+  // restart, never by tearing down sessions someone else is running.
+  const boundSessionCount = instance.aiSessions?.sessions?.length ?? 0;
+  const runningSessionCount = instance.aiSessions?.runningCount ?? 0;
+  if (boundSessionCount > 0 || runningSessionCount > 0) {
+    warn?.({
+      instanceId,
+      reason: "sessions-bound",
+      boundSessionCount,
+      runningSessionCount,
+    }, "node instance model environment live sync deferred");
+    return false;
+  }
   // Compatibility for v0.0.35: its managed model environment route is strict and
   // rejects the OpenCode config key, which would fail the whole environment sync
   // and skip the catalog push. Older builds still receive the key through the
@@ -476,8 +493,11 @@ export async function syncAssignedModelEnvironment(
     return false;
   }
   if (!supportsControlledInstancePrivateModelCatalog(instance.capabilities)) return true;
-  await pushInstancePrivateModelCatalog(fetchImpl, instanceBase, instance, modelCatalog, warn);
-  return true;
+  // The environment push alone is not convergence for instances that resolve
+  // models from the private catalog: a rejected catalog push leaves the running
+  // process on the snapshot it started with, so report it as unsynced and let
+  // the caller retry instead of claiming the instance was updated.
+  return await pushInstancePrivateModelCatalog(fetchImpl, instanceBase, instance, modelCatalog, warn);
 }
 
 async function readInstanceModelCatalogDiagnostic(
@@ -528,8 +548,10 @@ async function pushInstancePrivateModelCatalog(
     return false;
   }
   if (response.ok) return true;
-  // Compatibility for controlled instances without the private catalog route.
-  if (response.status === 404) return false;
+  // Compatibility for controlled instances without the private catalog route:
+  // they consume assigned models through the environment push only, so there is
+  // no catalog convergence left to wait for.
+  if (response.status === 404) return true;
   const diagnostic = await readInstanceModelCatalogDiagnostic(fetchImpl, instanceBase, instance.registrationToken);
   warn?.({
     instanceId: instance.id,
@@ -540,6 +562,72 @@ async function pushInstancePrivateModelCatalog(
     instanceModelCatalogLoadedAt: diagnostic?.loadedAt,
   }, "node instance model catalog live sync deferred");
   return false;
+}
+
+/**
+ * A running instance resolves models against the catalog its process loaded at
+ * startup, and that startup snapshot is materialized before the instance
+ * declares the capabilities the relay projection needs. A first start can
+ * therefore freeze a catalog the assignment has already outgrown, and writing
+ * the private config again cannot heal it.
+ *
+ * Healing it means pushing a new model environment, and a controlled instance
+ * answers a changed environment by tearing down its shared codex/opencode
+ * app-server, which every bound AI session runs inside. Convergence is therefore
+ * restricted to the window where that cannot disturb anyone: a process this node
+ * agent started itself, before the instance reports anything bound to it. Model
+ * changes outside that window keep following the product rule that they apply on
+ * an instance restart.
+ */
+export function createAssignedModelEnvironmentConvergence(
+  syncAssignedModelEnvironment: (instanceId: string) => Promise<boolean>,
+  warn: (data: Record<string, unknown>, message: string) => void,
+) {
+  // instanceId -> the process incarnation that was live before this start. Only a
+  // replacement process still has a startup snapshot worth correcting.
+  const pendingStarts = new Map<string, string>();
+  const boundSessions = (instance: ControlledInstance) => instance.aiSessions?.sessions?.length ?? 0;
+  const runningSessions = (instance: ControlledInstance) => instance.aiSessions?.runningCount ?? 0;
+  return {
+    /** Arms convergence for the process this start or restart is about to create. */
+    arm(instance: Pick<ControlledInstance, "id" | "processIncarnationId">) {
+      pendingStarts.set(instance.id, instance.processIncarnationId || "");
+    },
+    /**
+     * Converges an armed instance. A registration carries no session snapshot of
+     * its own, so the idle check runs on the heartbeat that follows it, and a
+     * process that already has sessions bound is left for an instance restart
+     * instead of being torn down underneath them.
+     */
+    async converge(instance: ControlledInstance, report: "register" | "heartbeat") {
+      const startedFrom = pendingStarts.get(instance.id);
+      if (startedFrom === undefined) return;
+      if ((instance.processIncarnationId || "") === startedFrom) {
+        // The instance kept its process, so no startup snapshot needs correcting.
+        pendingStarts.delete(instance.id);
+        return;
+      }
+      if (report !== "heartbeat") return;
+      if (boundSessions(instance) > 0 || runningSessions(instance) > 0) {
+        pendingStarts.delete(instance.id);
+        warn({
+          instanceId: instance.id,
+          reason: "sessions-bound",
+          boundSessionCount: boundSessions(instance),
+          runningSessionCount: runningSessions(instance),
+        }, "node instance model environment convergence abandoned");
+        return;
+      }
+      try {
+        if (await syncAssignedModelEnvironment(instance.id)) pendingStarts.delete(instance.id);
+      } catch (error) {
+        warn({
+          instanceId: instance.id,
+          error: error instanceof Error ? error.message : String(error),
+        }, "node instance model environment convergence deferred");
+      }
+    },
+  };
 }
 
 function appSessionsFromCrossVersionSnapshot(payload: unknown) {
@@ -617,12 +705,20 @@ async function startNodeInstance(
   id: string,
   loggers: NodeAgentLifecycleLoggers,
   resolveInstanceWeb: ResolveInstanceWeb,
-  reason: "request" | "restore" | "update" | "image-ready" = "request",
+  reason: "request" | "restore" | "update" | "image-ready" | "git-ready" = "request",
   signal?: AbortSignal,
 ) {
   const current = state.requireInstance(id);
   if (current.imageProvisioning && current.imageProvisioning.phase !== "ready" && state.requireRuntime(current.runtimeId).type === "docker") {
     loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId, imagePhase: current.imageProvisioning.phase }, "node instance start queued until image provisioning completes");
+    return state.controlledInstances.put(ControlledInstanceSchema.parse({
+      ...current,
+      status: "starting",
+      updatedAt: now(),
+    }));
+  }
+  if (current.source.type !== "local-folder" && instanceGitPreparationPending(current) && state.requireRuntime(current.runtimeId).type === "docker") {
+    loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, gitPhase: current.workspace.gitProvisioning?.phase }, "node instance start queued until git workspace provisioning completes");
     return state.controlledInstances.put(ControlledInstanceSchema.parse({
       ...current,
       status: "starting",
@@ -704,6 +800,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
+    terminalCommandRunner: options.dockerTerminalCommandRunner,
     launcherAssetsDir: dockerBootstrapDir,
     nodeAgentContainerIpcPath: options.containerIpcPath,
   });
@@ -853,6 +950,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       return false;
     }
   };
+  const convergeAssignedModelEnvironment = createAssignedModelEnvironmentConvergence(
+    (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb),
+    (data, message) => lifecycleLoggers.warn(data, message),
+  );
   const artifactResolver = new RuntimeArtifactResolver({ cacheDir: path.join(paths.dataDir, "runtime-artifacts"), fetchImpl });
   const releaseResolver = options.resolveRuntimeArtifactRelease
     || ((version: string, targetPlatform: string, targetArch: string) => resolvePublishedRuntimeArtifact(version, targetPlatform, targetArch, fetchImpl));
@@ -1185,15 +1286,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       : sanitizeCrossVersionControlledInstanceHeartbeat(input, onWarning);
   };
 
+  const needsGitWorkspaceProvisioning = (instance: ControlledInstance) =>
+    instance.source.type !== "local-folder" && instanceGitPreparationPending(instance);
+
   const startInstanceWithFailureState = async (
     id: string,
-    reason: "request" | "image-ready",
+    reason: "request" | "image-ready" | "git-ready",
     shouldContinue: () => boolean = () => true,
     signal?: AbortSignal,
   ) => {
     try {
       if (!shouldContinue()) return state.requireInstance(id);
       let current = state.requireInstance(id);
+      convergeAssignedModelEnvironment.arm(current);
       if (current.runtimeVersion?.phase === "failed" && usesManagedArtifact(current)) {
         current = state.controlledInstances.put(ControlledInstanceSchema.parse({
           ...current,
@@ -1203,9 +1308,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }));
       }
       const runtime = state.requireRuntime(current.runtimeId);
+      // The provisioning container runs the instance image, so Git materialization
+      // must wait until image provisioning has resolved the reference. The
+      // image-ready continuation re-enters this function once the image is ready.
+      if (needsGitWorkspaceProvisioning(current) && runtime.type === "docker" && !instanceImagePreparationPending(current)) {
+        provisionInstanceGit(current);
+      }
       await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb, reason, signal);
       const started = state.requireInstance(id);
       if (runtime.type === "docker" && started.imageProvisioning && started.imageProvisioning.phase !== "ready") {
+        eventForwarder.syncNow();
+        return started;
+      }
+      if (runtime.type === "docker" && needsGitWorkspaceProvisioning(started)) {
         eventForwarder.syncNow();
         return started;
       }
@@ -1273,6 +1388,31 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   };
 
+  const gitProvisioning = new InstanceGitWorkspaceProvisioningController(state.controlledInstances, {
+    context: (instance) => state.context(instance),
+    run: (context, options) => dockerExecutor.provisionGitWorkspaceStreaming(context, {
+      onOutput: options.onOutput,
+      signal: options.signal,
+    }),
+    sync: () => eventForwarder.syncNow(),
+    diagnostic: lifecycleLoggers.diagnostic,
+    warn: lifecycleLoggers.warn,
+    publish: (type, payload, instanceId) => eventForwarder.publish(type, payload, { instanceId }),
+    runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
+  });
+
+  const provisionInstanceGit = (instance: ControlledInstance) => {
+    const intent = instanceOperations.intent(instance.id);
+    void gitProvisioning.provision(instance, async () => {
+      await startInstanceWithFailureState(
+        instance.id,
+        "git-ready",
+        () => instanceOperations.isIntentCurrent(instance.id, intent),
+        instanceOperations.signal(instance.id, intent),
+      ).catch(() => undefined);
+    });
+  };
+
   recoverySupervisor = new NodeAgentRecoverySupervisor({
     state,
     runtimeAdapters,
@@ -1280,7 +1420,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     restoreInstance: (id) => startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb, "restore"),
     autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers, resolveInstanceWeb),
     provisionImage: provisionInstanceImage,
+    provisionGit: provisionInstanceGit,
     stopImageProvisioning: () => imageProvisioning.stop(),
+    stopGitProvisioning: () => gitProvisioning.stop(),
     usesManagedArtifact,
     warn: lifecycleLoggers.warn,
     error: (data, message) => app.log.error(data, message),
@@ -1654,6 +1796,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       ? environmentTemplates.runTemplateOperation(input.environmentSource.environmentTemplateId, () => state.createInstance(input))
       : state.createInstance(input),
     retryImageProvisioning: (id) => imageProvisioning.retry(id),
+    retryGitProvisioning: (id) => gitProvisioning.retry(id),
     update: (id, input) => {
       const current = state.requireInstance(id);
       const subagentModel = input.config?.codexSettings?.multiAgent.defaultModel;
@@ -1685,6 +1828,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       eventForwarder.syncNow();
       provisionInstanceImage(instance);
     },
+    afterGitRetry: (instance) => {
+      eventForwarder.syncNow();
+      provisionInstanceGit(instance);
+    },
     afterUpdate: async (instance) => {
       eventForwarder.syncNow();
       await Promise.all([
@@ -1698,6 +1845,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
       void syncCodexManagedSettings(instance.id);
+      // Registration is the first report that carries the instance's declared
+      // capabilities, so it is also the first moment the assigned catalog can be
+      // projected for the process this node agent just started.
+      void convergeAssignedModelEnvironment.converge(instance, report);
       void storyIdleRetention.reconcile();
       void instanceIdleRetention.reconcile();
       if (report === "register") {

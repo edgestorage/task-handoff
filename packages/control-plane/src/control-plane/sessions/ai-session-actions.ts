@@ -112,6 +112,19 @@ function isInstanceModelCatalogStaleError(error: unknown) {
   return INSTANCE_MODEL_CATALOG_STALE_CODES.has(String((error as { code?: unknown }).code));
 }
 
+/**
+ * Re-pushing the assignment makes the instance rebuild its shared
+ * codex/opencode app-server, which every bound AI session runs inside, so a
+ * stale catalog may only be corrected while the instance reports nothing bound
+ * to it. Instances that already hold sessions keep their catalog: the product
+ * answer for applying model configuration to a running instance is an instance
+ * restart, not a teardown of sessions someone else is using.
+ */
+function instanceHoldsNoBoundSessions(instance: ControlledInstance) {
+  return (instance.aiSessions?.sessions?.length ?? 0) === 0
+    && (instance.aiSessions?.runningCount ?? 0) === 0;
+}
+
 function projectAiSessionDetail(session: AiSessionStatus) {
   return AiSessionDetailSchema.parse({
     id: session.id,
@@ -253,10 +266,15 @@ export class AiSessionActionService {
   }
 
   async resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}): Promise<AiSessionResumeResult> {
-    return parseResponse(AiSessionResumeResultSchema, await this.post(
-      instanceId,
+    const instance = await this.options.requireInstance(instanceId);
+    return parseResponse(AiSessionResumeResultSchema, await this.requestWithModelCatalogResync(
+      instance,
       sessionRoute(aiSessionId, "resume"),
-      AiSessionResumeInputSchema.parse(input),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(AiSessionResumeInputSchema.parse(input)),
+      },
     ));
   }
 
@@ -300,7 +318,7 @@ export class AiSessionActionService {
     const route = input.gitSelection || input.workspaceSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
     const { cwdFolderId, reasoningEffort, ...baseInput } = input;
     const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
-    const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, route, {
+    const result = parseResponse(AiSessionCreateResultSchema, await this.requestWithModelCatalogResync(instance, route, {
       method: "POST",
       headers: { "content-type": "application/json", [TRACE_ID_HEADER]: clientRequestTraceId(input.clientRequestId) },
       body: JSON.stringify({
@@ -344,7 +362,7 @@ export class AiSessionActionService {
   }
 
   async fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput): Promise<AiSessionForkResult> {
-    return parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
+    return parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input, input.clientRequestId));
   }
 
   async updateModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
@@ -361,25 +379,18 @@ export class AiSessionActionService {
         ? "Codex provider changes require a new session."
         : `${session.agent} does not support this model change.`), { statusCode: 409, code });
     }
-    const applySelection = async () => parseResponse(AiSessionModelSelectionActionResponseSchema, await this.options.request(
+    // The switch always holds its own session, so the resync gate withholds the
+    // re-push and the instance error tells the user to restart the instance rather
+    // than tearing the shared app-server out from under the running sessions.
+    return parseResponse(AiSessionModelSelectionActionResponseSchema, await this.requestWithModelCatalogResync(
       instance,
       sessionRoute(aiSessionId, "model-selection"),
       {
         method: "PUT",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...clientRequestTraceHeader(clientRequestId) },
         body: JSON.stringify({ clientRequestId, modelSelection: selection }),
       },
     ));
-    try {
-      return await applySelection();
-    } catch (error) {
-      // A rejected target is retried once after re-pushing the authoritative
-      // catalog. The instance resolves the target before mutating the session, so
-      // a retry cannot double-apply the switch.
-      if (!this.options.syncInstanceModels || !isInstanceModelCatalogStaleError(error)) throw error;
-      await this.options.syncInstanceModels(instanceId).catch(() => undefined);
-      return await applySelection();
-    }
   }
 
   async updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: AiSessionReasoningEffort) {
@@ -398,14 +409,14 @@ export class AiSessionActionService {
       sessionRoute(aiSessionId, "reasoning-effort"),
       {
         method: "PUT",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...clientRequestTraceHeader(clientRequestId) },
         body: JSON.stringify({ clientRequestId, reasoningEffort: effort }),
       },
     ));
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
-    const result = parseResponse(AiSessionOpenAppResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
+    const result = parseResponse(AiSessionOpenAppResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }, clientRequestId));
     return result;
   }
 
@@ -414,7 +425,7 @@ export class AiSessionActionService {
   }
 
   async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
-    const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
+    const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }, clientRequestId));
     return result;
   }
 
@@ -483,7 +494,7 @@ export class AiSessionActionService {
     }
     return parseResponse(AiSessionRenameResultSchema, await this.options.request(instance, sessionRoute(sessionId, "title"), {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...clientRequestTraceHeader(body.clientRequestId) },
       body: JSON.stringify(body),
     }));
   }
@@ -532,14 +543,43 @@ export class AiSessionActionService {
     return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
 
+  /**
+   * Runs an instance request that resolves a model against the catalog the
+   * instance loaded into its own memory, healing a stale catalog once.
+   *
+   * Re-pushing the assignment makes the instance rebuild the shared
+   * codex/opencode app-server that every bound AI session runs inside, so the
+   * retry is limited to instances that report nothing bound to them. An instance
+   * that already holds sessions keeps its catalog: applying a model change to a
+   * running instance is an instance restart, not a teardown of the sessions
+   * someone else is using. Every caller resolves its target before mutating
+   * anything, so a rejected request can be replayed without double-applying.
+   */
+  private async requestWithModelCatalogResync(
+    instance: ControlledInstance,
+    route: string,
+    init: RequestInit,
+    onTiming?: (timing: RequestTimingDiagnostics) => void,
+  ) {
+    try {
+      return await this.options.request(instance, route, init, onTiming);
+    } catch (error) {
+      if (!this.options.syncInstanceModels
+        || !isInstanceModelCatalogStaleError(error)
+        || !instanceHoldsNoBoundSessions(instance)) throw error;
+      await this.options.syncInstanceModels(instance.id).catch(() => undefined);
+      return await this.options.request(instance, route, init, onTiming);
+    }
+  }
+
   private async get(instanceId: string, route: string) {
     return this.options.request(await this.options.requireInstance(instanceId), route);
   }
 
-  private async post(instanceId: string, route: string, body: unknown) {
+  private async post(instanceId: string, route: string, body: unknown, clientRequestId?: string) {
     return this.options.request(await this.options.requireInstance(instanceId), route, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...clientRequestTraceHeader(clientRequestId) },
       body: JSON.stringify(body),
     });
   }
@@ -592,6 +632,14 @@ function aiSessionQueuePauseUnsupported() {
 
 function sessionRoute(sessionId: string, suffix: string) {
   return `/ai-sessions/${encodeURIComponent(sessionId)}/${suffix}`;
+}
+
+/**
+ * 控制面 -> 实例的唯一关联不变量：调用方的 clientRequestId 在转发时同步成为 trace id，
+ * 用于把两侧日志对齐。
+ */
+function clientRequestTraceHeader(clientRequestId?: string) {
+  return clientRequestId ? { [TRACE_ID_HEADER]: clientRequestTraceId(clientRequestId) } : {};
 }
 
 function splitAiSessionReadUnavailable(error: unknown) {

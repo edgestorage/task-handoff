@@ -21,8 +21,12 @@ export function appendServerTiming(...values: Array<string | null | undefined>) 
   return values.map((value) => String(value || "").trim()).filter(Boolean).join(", ");
 }
 
+// 归一化后的 trace id 必须满足代理关联 id 的字符集（首字符为字母或数字），
+// 否则调用方传入的宽松 id 会在 node-agent 代理边界被拒。
+const TRACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
 export function traceId(value: unknown, fallback: string) {
   const candidate = Array.isArray(value) ? value[0] : value;
   const normalized = typeof candidate === "string" ? candidate.trim() : "";
-  return /^[A-Za-z0-9._:-]{1,128}$/.test(normalized) ? normalized : fallback;
+  return TRACE_ID_PATTERN.test(normalized) ? normalized : fallback;
 }

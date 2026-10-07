@@ -13,6 +13,13 @@ fail() {
   exit "${2:-1}"
 }
 
+# Stage markers are the machine-readable progress contract consumed by the node
+# agent. They are printed before the work they describe so a failing stage is
+# reported even when the underlying command produces no output.
+stage() {
+  printf 'TASK_HANDOFF_GIT_PROVISIONING_STAGE=%s\n' "$1"
+}
+
 agent_pids=()
 cleanup() {
   for agent_pid in "${agent_pids[@]}"; do kill "${agent_pid}" 2>/dev/null || true; done
@@ -86,7 +93,9 @@ git_config=(
 # Only the TASK_HANDOFF_WORKSPACE_GIT_* keys are provisioning input: released
 # images bake TASK_HANDOFF_GIT_COMMIT as the image build commit and docker run
 # exposes image environment here, so the legacy keys must never be read.
-clone_args=(clone)
+# --progress forces git to report transfer progress even though the provisioning
+# container has no TTY. It must stay before the "--" separator.
+clone_args=(clone --progress)
 # A commit SHA is not guaranteed to be reachable from a shallow default-branch clone.
 if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_DEPTH:-}" ] && [ -z "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT:-}" ]; then clone_args+=(--depth "${TASK_HANDOFF_WORKSPACE_GIT_DEPTH}"); fi
 if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_REF:-}" ]; then clone_args+=(--branch "${TASK_HANDOFF_WORKSPACE_GIT_REF}"); fi
@@ -95,6 +104,7 @@ clone_args+=(-- "${TASK_HANDOFF_WORKSPACE_GIT_URL}" "${checkout}")
 mkdir -p /tmp/task-handoff-git-home
 chown 1000:1000 /tmp/task-handoff-git-home
 
+stage cloning
 if ! runuser -u agent -- env \
   HOME=/tmp/task-handoff-git-home \
   GIT_TERMINAL_PROMPT=0 \
@@ -104,20 +114,24 @@ if ! runuser -u agent -- env \
 fi
 
 if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT:-}" ]; then
+  stage checking-out
   if ! runuser -u agent -- git -C "${checkout}" checkout --detach "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT}"; then
     fail REF_NOT_FOUND 75
   fi
 fi
 if [ "${TASK_HANDOFF_WORKSPACE_GIT_SUBMODULES:-false}" = "true" ]; then
+  stage submodules
   if ! runuser -u agent -- env \
     HOME=/tmp/task-handoff-git-home \
     GIT_TERMINAL_PROMPT=0 \
     GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" \
-    git "${git_config[@]}" -C "${checkout}" submodule update --init --recursive; then
+    git "${git_config[@]}" -C "${checkout}" submodule update --init --recursive --progress; then
     fail CLONE_FAILED 74
   fi
 fi
 if [ "${TASK_HANDOFF_WORKSPACE_GIT_LFS:-false}" = "true" ]; then
+  stage lfs
+  # git-lfs has no --progress flag; the stage marker is the progress contract here.
   if ! runuser -u agent -- env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" git "${git_config[@]}" -C "${checkout}" lfs pull; then
     fail LFS_FAILED 76
   fi
@@ -125,6 +139,8 @@ fi
 if [ -n "${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY:-}" ] && [ ! -d "${checkout}/${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY}" ]; then
   fail SUBDIRECTORY_NOT_FOUND 75
 fi
+stage finalizing
+printf 'TASK_HANDOFF_GIT_PROVISIONING_COMMIT=%s\n' "$(runuser -u agent -- git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)"
 shopt -s dotglob nullglob
 mv -- "${checkout}"/* "${workspace}/"
 rm -rf -- "${staging}"

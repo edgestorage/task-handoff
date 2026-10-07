@@ -1,7 +1,7 @@
 import type { LocalDockerImage } from "@task-handoff/protocol/control-plane";
 import { normalizeDockerImageReference } from "@task-handoff/protocol/control-plane";
 import { defaultCommandRunner, type CommandRunner } from "../shared/process/command-runner.ts";
-import { defaultTerminalCommandRunner, type TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
+import { terminalRunnerFromCommandRunner, type TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 
 export type DockerImagePhase = "checking-image" | "pulling-image" | "resolving-image";
 export type ResolvedDockerImage = {
@@ -127,16 +127,6 @@ export class DockerImageService {
     const result = await this.runCommand("docker", ["image", "inspect", reference, "--format", "{{json .}}"], { signal });
     return JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>;
   }
-}
-
-function terminalRunnerFromCommandRunner(runCommand: CommandRunner): TerminalCommandRunner {
-  if (runCommand === defaultCommandRunner) return defaultTerminalCommandRunner;
-  return async (command, args, options = {}) => {
-    const result = await runCommand(command, args, { timeoutMs: options.timeoutMs, signal: options.signal });
-    if (result.stdout) options.onData?.(result.stdout);
-    if (result.stderr) options.onData?.(result.stderr);
-    return result;
-  };
 }
 
 function dockerRepoDigests(record: Record<string, unknown>) {

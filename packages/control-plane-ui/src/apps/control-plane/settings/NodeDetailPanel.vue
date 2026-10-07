@@ -257,62 +257,50 @@
                   </ControlPlaneSelect>
                 </div>
               </div>
-              <div class="node-detail-section-body">
-              <div class="managed-update-groups">
-                <section class="managed-update-group agent-update-group">
-                  <div class="managed-update-group-head">
-                    <ServerCog :size="18" />
-                    <div>
-                      <strong>{{ t("settings.nodeDetail.nodeAgent") }}</strong>
-                      <span>{{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateDescription" : "settings.nodeDetail.nodeAgentUpdateDescription") }}</span>
-                    </div>
+              <p class="section-note">{{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateDescription" : "settings.nodeDetail.nodeAgentUpdateDescription") }}</p>
+              <div class="node-resource-list">
+                <div class="node-resource-row">
+                  <div>
+                    <strong>{{ selectedNode.name }}</strong>
+                    <code>{{ updateSummary(status.build(selectedNode.id)?.packageVersion) }}</code>
                   </div>
-                  <div class="node-resource-row">
-                    <div>
-                      <strong>{{ selectedNode.name }}</strong>
-                      <code>{{ updateSummary(status.build(selectedNode.id)?.packageVersion) }}</code>
-                    </div>
-                    <div class="settings-row-actions">
-                      <Button variant="outline" size="sm" :disabled="busy.checkingUpdateNodeId === selectedNode.id" @click="actions.checkManagedUpdate(selectedNode.id)">
-                        <RefreshCw :size="14" />
-                        <span>{{ busy.checkingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
-                      </Button>
-                      <Button variant="outline" size="sm" :disabled="!canApplyUpdate() || busy.applyingUpdateNodeId === selectedNode.id" @click="actions.applyManagedUpdate(selectedNode.id)">
-                        <Download :size="14" />
-                        <span>{{ busy.applyingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
-                      </Button>
-                    </div>
+                  <div class="settings-row-actions">
+                    <Button variant="outline" size="sm" :disabled="busy.checkingUpdateNodeId === selectedNode.id" @click="actions.checkManagedUpdate(selectedNode.id)">
+                      <RefreshCw :size="14" />
+                      <span>{{ busy.checkingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
+                    </Button>
+                    <Button variant="outline" size="sm" :disabled="!canApplyUpdate() || busy.applyingUpdateNodeId === selectedNode.id" @click="actions.applyManagedUpdate(selectedNode.id)">
+                      <Download :size="14" />
+                      <span>{{ busy.applyingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
+                    </Button>
                   </div>
-                  <p v-if="nodeUpdateCheck" class="managed-update-impact">
-                    {{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateImpact" : "settings.nodeDetail.nodeAgentUpdateImpact", { name: selectedNode.name, restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
-                  </p>
-                </section>
-
-                <section class="managed-update-group instance-update-group">
-                  <div class="managed-update-group-head">
-                    <Boxes :size="18" />
-                    <div>
-                      <strong>{{ t("settings.nodeDetail.controlledInstances", { count: resources.instances.length }) }}</strong>
-                      <span>{{ t("settings.nodeDetail.instanceConvergenceDescription") }}</span>
-                    </div>
-                  </div>
-                  <div class="node-resource-list">
-                    <div v-for="instance in resources.instances" :key="`update-${instance.id}`" class="node-resource-row">
-                      <div>
-                        <strong>{{ instance.name }}</strong>
-                        <code>{{ runtimeVersionSummary(instance) }}</code>
-                        <small v-if="instance.runtimeVersion?.error" class="settings-error">{{ instance.runtimeVersion.error.message }}</small>
-                      </div>
-                      <div class="settings-row-actions">
-                        <Badge :variant="instance.runtimeVersion?.phase === 'matched' ? 'default' : 'secondary'">{{ runtimeVersionPhase(instance) }}</Badge>
-                      </div>
-                    </div>
-                    <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noControlledInstances')" />
-                  </div>
-                </section>
+                </div>
               </div>
+              <p v-if="nodeUpdateCheck" class="managed-update-impact">
+                {{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateImpact" : "settings.nodeDetail.nodeAgentUpdateImpact", { name: selectedNode.name, restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
+              </p>
+            </div>
+
+            <div class="node-detail-section">
+              <div class="section-head">
+                <span>{{ t("settings.nodeDetail.controlledInstances", { count: resources.instances.length }) }}</span>
+              </div>
+              <p class="section-note">{{ t("settings.nodeDetail.instanceConvergenceDescription") }}</p>
+              <div class="node-resource-list">
+                <div v-for="instance in resources.instances" :key="`update-${instance.id}`" class="node-resource-row">
+                  <div>
+                    <strong>{{ instance.name }}</strong>
+                    <code>{{ runtimeVersionSummary(instance) }}</code>
+                    <small v-if="instance.runtimeVersion?.error" class="control-plane-error">{{ instance.runtimeVersion.error.message }}</small>
+                  </div>
+                  <div class="settings-row-actions">
+                    <Badge :variant="instance.runtimeVersion?.phase === 'matched' ? 'default' : 'secondary'">{{ runtimeVersionPhase(instance) }}</Badge>
+                  </div>
+                </div>
+                <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noControlledInstances')" />
               </div>
             </div>
+
             <div class="node-detail-section">
               <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.updateJobs", { count: resources.updateJobs.length }) }}</span>
@@ -904,6 +892,7 @@ watch(
   gap: 5px;
   overflow: hidden;
   border: 0;
+  text-align: left;
   background: transparent;
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
@@ -1271,10 +1260,6 @@ watch(
   min-height: 0;
 }
 
-.managed-update-group > .node-resource-list {
-  border-top: 1px solid var(--line);
-}
-
 .node-resource-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1334,52 +1319,10 @@ watch(
   width: 150px;
 }
 
-.managed-update-groups {
-  display: grid;
-  gap: 20px;
-}
-
-.managed-update-group {
-  display: grid;
-  gap: 9px;
-  min-width: 0;
-  border-left: 3px solid var(--status-info);
-  padding-left: 12px;
-}
-
-.instance-update-group {
-  border-left-color: var(--status-warning);
-}
-
-.managed-update-group-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  min-width: 0;
-  color: var(--status-info);
-}
-
-.instance-update-group .managed-update-group-head {
-  color: var(--status-warning);
-}
-
-.managed-update-group-head > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.managed-update-group-head > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.managed-update-group-head strong {
-  color: var(--text-strong);
-  font-size: 13px;
-}
-
-.managed-update-group-head span {
+.section-note {
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 12px 10px;
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
   font-weight: 400;
@@ -1388,6 +1331,8 @@ watch(
 
 .managed-update-impact {
   margin: 0;
+  border-top: 1px solid var(--line);
+  padding: 10px 12px 12px;
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
   line-height: 1.5;
@@ -1419,8 +1364,8 @@ watch(
 
 .node-diagnostic-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1431,12 +1376,8 @@ watch(
   padding: 10px 12px;
 }
 
-.node-diagnostic-grid span:nth-child(even) {
+.node-diagnostic-grid span + span {
   border-left: 1px solid var(--line);
-}
-
-.node-diagnostic-grid span:nth-child(n + 3) {
-  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid b,
@@ -1654,9 +1595,17 @@ watch(
 
 @media (max-width: 780px) {
   .node-detail-header,
-  .node-metrics,
-  .node-diagnostic-grid {
+  .node-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .node-diagnostic-grid {
+    grid-auto-flow: row;
+  }
+
+  .node-diagnostic-grid span + span {
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .node-detail-tab-list {
@@ -1665,10 +1614,6 @@ watch(
 
   .node-detail-header-actions {
     justify-content: flex-start;
-  }
-
-  .managed-update-group {
-    padding-left: 9px;
   }
 }
 </style>

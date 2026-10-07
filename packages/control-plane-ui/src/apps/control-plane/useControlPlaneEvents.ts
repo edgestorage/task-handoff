@@ -84,6 +84,11 @@ export function useControlPlaneEvents(input: {
     clear?: (instanceId: string) => void;
     reconcileLifecycle?: (lifecycle: InstanceLifecycleSnapshot) => void;
   };
+  gitProvisioningProgress?: {
+    applyEvent: (type: string, payload: unknown) => boolean;
+    clear?: (instanceId: string) => void;
+    reconcileLifecycle?: (lifecycle: InstanceLifecycleSnapshot) => void;
+  };
   nodes?: {
     joined: (event: NodeJoinedEvent) => void;
   };
@@ -270,6 +275,9 @@ export function useControlPlaneEvents(input: {
     if (event.type?.startsWith("image.pull.")) {
       return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
     }
+    if (event.type?.startsWith("git.provisioning.")) {
+      return input.gitProvisioningProgress?.applyEvent(event.type, event.payload) || false;
+    }
     if (event.type === AiSessionEventType.MessageDelta) {
       if (event.id && seenTransientEventIds.has(event.id)) return true;
       if (event.id) rememberTransientEventId(event.id);
@@ -313,6 +321,7 @@ export function useControlPlaneEvents(input: {
       const lifecycle = safeParseResponse(InstanceLifecycleSnapshotSchema, event.payload);
       if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
+      input.gitProvisioningProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
     if (event.type === "node.connection.updated" || event.type === "node.proxy-state.updated") {

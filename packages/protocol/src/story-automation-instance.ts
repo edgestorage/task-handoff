@@ -9,6 +9,7 @@ import {
   AiSessionRuntimePathSchema,
 } from "./ai-sessions.ts";
 import { StoryIdSchema } from "./story-id.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 
 /** Private Node Agent -> controlled instance wire model for Story Automation dispatch. */
 export const StoryAutomationInstanceCreateInputSchema = z.object({
@@ -19,7 +20,7 @@ export const StoryAutomationInstanceCreateInputSchema = z.object({
   workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
   message: z.string().trim().min(1).max(32_000),
   permissionMode: AiSessionPermissionModeSchema.optional(),
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema,

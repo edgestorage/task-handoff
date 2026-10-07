@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { syncAssignedModelEnvironment } = require("../packages/control-plane/src/node-agent/app.ts");
+const { createAssignedModelEnvironmentConvergence, syncAssignedModelEnvironment } = require("../packages/control-plane/src/node-agent/app.ts");
 
 const catalog = {
   protocolVersion: "2026-08-27",
@@ -124,7 +124,9 @@ test("a failed catalog push reports the snapshot the instance actually holds", a
     resolveLocalInstance,
   );
 
-  assert.equal(synced, true);
+  // The environment reached the instance, but the catalog it resolves models
+  // against did not: convergence must stay unclaimed so the caller retries.
+  assert.equal(synced, false);
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].message, "node instance model catalog live sync deferred");
   assert.equal(warnings[0].data.statusCode, 400);
@@ -178,4 +180,128 @@ test("an unreachable instance web endpoint is reported without claiming converge
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].message, "node instance model environment live sync deferred");
   assert.equal(state.materialized.length, 1);
+});
+
+test("the live model environment is withheld while sessions are bound to the instance", async () => {
+  for (const bound of [{ sessions: [{ id: "s1" }], runningCount: 0 }, { sessions: [], runningCount: 1 }]) {
+    const state = instanceState({ aiSessions: bound });
+    const warnings = [];
+    let requests = 0;
+    const fetchImpl = async () => {
+      requests += 1;
+      return jsonResponse({ data: {} });
+    };
+
+    const synced = await syncAssignedModelEnvironment(
+      fetchImpl,
+      state,
+      state.instance.id,
+      (data, message) => warnings.push({ data, message }),
+      resolveLocalInstance,
+    );
+
+    // A model change on a busy instance applies on the next start, never by
+    // tearing down the shared app-server other sessions run inside.
+    assert.equal(synced, false);
+    assert.equal(requests, 0);
+    assert.equal(state.materialized.length, 1);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].message, "node instance model environment live sync deferred");
+    assert.equal(warnings[0].data.reason, "sessions-bound");
+  }
+});
+
+// The convergence helper heals the startup snapshot a freshly started process
+// froze before it declared the capabilities the relay projection needs. It runs
+// only for a process this node agent itself replaced, and only while nothing is
+// bound to it.
+function convergenceHarness(sync, onWarn = () => {}) {
+  const converge = createAssignedModelEnvironmentConvergence(sync, onWarn);
+  const before = { id: "inst_models", processIncarnationId: "incarnation-1" };
+  const after = { ...before, processIncarnationId: "incarnation-2" };
+  return { converge, before, after };
+}
+
+test("an armed start converges once, on the heartbeat that finds the replaced process idle", async () => {
+  const pushed = [];
+  const { converge, before, after } = convergenceHarness(async (id) => {
+    pushed.push(id);
+    return true;
+  });
+
+  converge.arm(before);
+  // Registration carries no session snapshot, so the idle check waits a beat.
+  await converge.converge(after, "register");
+  await converge.converge(after, "heartbeat");
+  await converge.converge(after, "heartbeat");
+
+  assert.deepEqual(pushed, ["inst_models"]);
+});
+
+test("a start that keeps its process incarnation leaves the startup snapshot alone", async () => {
+  const pushed = [];
+  const { converge, before } = convergenceHarness(async (id) => {
+    pushed.push(id);
+    return true;
+  });
+
+  // No start armed this instance, and a report for the same incarnation means the
+  // process was reused rather than restarted.
+  await converge.converge(before, "heartbeat");
+  converge.arm(before);
+  await converge.converge(before, "heartbeat");
+
+  assert.deepEqual(pushed, []);
+});
+
+test("a rejected model environment push stays armed for later reports", async () => {
+  let attempts = 0;
+  const { converge, before, after } = convergenceHarness(async () => {
+    attempts += 1;
+    return attempts > 1;
+  });
+
+  converge.arm(before);
+  await converge.converge(after, "heartbeat");
+  await converge.converge(after, "heartbeat");
+  await converge.converge(after, "heartbeat");
+
+  assert.equal(attempts, 2);
+});
+
+test("a model environment convergence failure is reported without claiming convergence", async () => {
+  const warnings = [];
+  let attempts = 0;
+  const { converge, before, after } = convergenceHarness(async () => {
+    attempts += 1;
+    throw new Error("instance web is unreachable");
+  }, (data, message) => warnings.push({ data, message }));
+
+  converge.arm(before);
+  await converge.converge(after, "heartbeat");
+  await converge.converge(after, "heartbeat");
+
+  assert.equal(attempts, 2);
+  assert.equal(warnings.length, 2);
+  assert.equal(warnings[0].message, "node instance model environment convergence deferred");
+  assert.equal(warnings[0].data.instanceId, "inst_models");
+});
+
+test("convergence is abandoned when sessions are already bound to the replaced process", async () => {
+  const warnings = [];
+  let pushes = 0;
+  const { converge, before, after } = convergenceHarness(async () => {
+    pushes += 1;
+    return true;
+  }, (data, message) => warnings.push({ data, message }));
+  const bound = { ...after, aiSessions: { sessions: [{ id: "s1" }], runningCount: 1 } };
+
+  converge.arm(before);
+  await converge.converge(bound, "heartbeat");
+  await converge.converge(bound, "heartbeat");
+
+  assert.equal(pushes, 0);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].message, "node instance model environment convergence abandoned");
+  assert.equal(warnings[0].data.reason, "sessions-bound");
 });

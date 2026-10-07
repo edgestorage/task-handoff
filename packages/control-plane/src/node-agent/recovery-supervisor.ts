@@ -1,5 +1,5 @@
 import { ControlledInstanceSchema, type ControlledInstance } from "@task-handoff/protocol/control-plane";
-import { instanceImagePreparationPending, type RuntimeConvergenceCoordinator } from "./runtime-convergence.ts";
+import { instanceGitPreparationPending, instanceImagePreparationPending, type RuntimeConvergenceCoordinator } from "./runtime-convergence.ts";
 import type { RuntimeAdapterRegistry } from "./runtimes/adapters.ts";
 import type { NodeAgentState } from "./state.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
@@ -14,7 +14,9 @@ const RESTORABLE_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>([
 
 function isDockerRestoreCandidate(instance: ControlledInstance, runtime: { status: string }) {
   if (runtime.status === "offline") return false;
-  return RESTORABLE_INSTANCE_STATUSES.has(instance.status) && !instanceImagePreparationPending(instance);
+  return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
+    && !instanceImagePreparationPending(instance)
+    && !instanceGitPreparationPending(instance);
 }
 
 /**
@@ -35,7 +37,9 @@ type Options = {
   restoreInstance(id: string): Promise<unknown>;
   autoImport(instance: ControlledInstance): Promise<unknown>;
   provisionImage(instance: ControlledInstance): void;
+  provisionGit?(instance: ControlledInstance): void;
   stopImageProvisioning(): Promise<void>;
+  stopGitProvisioning?(): Promise<void>;
   usesManagedArtifact(instance: ControlledInstance): boolean;
   warn: Logger;
   error: Logger;
@@ -81,7 +85,9 @@ export class NodeAgentRecoverySupervisor {
 
   markRestored(id: string) {
     const instance = this.options.state.requireInstance(id);
-    if (["failed", "stopping", "stopped"].includes(instance.status) || instanceImagePreparationPending(instance)) return false;
+    if (["failed", "stopping", "stopped"].includes(instance.status)
+      || instanceImagePreparationPending(instance)
+      || instanceGitPreparationPending(instance)) return false;
     this.restoredInstances.add(id);
     this.restoreErrors.delete(id);
     return true;
@@ -160,6 +166,15 @@ export class NodeAgentRecoverySupervisor {
         && instance.imageProvisioning?.phase !== "ready"
       ) {
         this.options.provisionImage(instance);
+      }
+      if (
+        runtime.type === "docker"
+        && !runtimeUnavailable(runtime)
+        && ["provisioning", "starting"].includes(instance.status)
+        && instanceGitPreparationPending(instance)
+        && !instanceImagePreparationPending(instance)
+      ) {
+        this.options.provisionGit?.(instance);
       }
     }
 
@@ -279,10 +294,12 @@ export class NodeAgentRecoverySupervisor {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     const imageProvisioningStopped = this.options.stopImageProvisioning();
+    const gitProvisioningStopped = this.options.stopGitProvisioning?.() ?? Promise.resolve();
     const cancellations = this.options.state.listInstances().map((instance) => this.options.convergence.cancel(instance.id));
     await Promise.all(cancellations);
     await this.activeCycle;
     await imageProvisioningStopped;
+    await gitProvisioningStopped;
     await this.options.runtimeAdapters.stopAll();
     for (const instance of this.options.state.listInstances()) {
       if (this.options.state.requireRuntime(instance.runtimeId).type === "local") {

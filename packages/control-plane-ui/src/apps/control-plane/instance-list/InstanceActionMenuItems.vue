@@ -31,13 +31,13 @@
   </component>
   <component
     :is="itemComponent"
-    v-if="canShowInstanceAction(instance, 'retry-image')"
+    v-if="provisioningRetry"
     class="instance-action-item"
     :disabled="isInstanceActionBusy(instance)"
-    @select="emit('runAction', 'retry-image')"
+    @select="emit('runAction', provisioningRetry.action)"
   >
     <RotateCw :size="14" />
-    <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+    <span>{{ activeActionLabel(instance, provisioningRetry.action, provisioningRetry.label) }}</span>
   </component>
   <component :is="itemComponent" class="instance-action-item" @select="emit('openConfigSync', 'import')">
     <Download :size="14" />
@@ -79,7 +79,7 @@ import { CircleX, Download, ExternalLink, PackagePlus, Play, RotateCw, Settings,
 import type { InstanceBoardItem } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction } from "../useInstanceStatus";
+import { canShowInstanceAction, instanceProvisioningRetryAction, instanceProvisioningRetryLabel } from "../useInstanceStatus";
 
 const { t } = useI18n();
 const props = defineProps<{
@@ -101,4 +101,10 @@ const emit = defineEmits<{
 }>();
 const itemComponent = computed(() => props.variant === "context" ? ContextMenuItem : DropdownMenuItem);
 const separatorComponent = computed(() => props.variant === "context" ? ContextMenuSeparator : DropdownMenuSeparator);
+// Image and Git preparation are sequential, so a failed instance owns exactly
+// one retry; surface it as a single menu item.
+const provisioningRetry = computed(() => {
+  const action = instanceProvisioningRetryAction(props.instance);
+  return action ? { action, label: instanceProvisioningRetryLabel(props.instance, t) } : undefined;
+});
 </script>

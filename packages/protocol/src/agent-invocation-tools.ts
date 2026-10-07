@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AgentDefinitionIdSchema } from "./agent-definitions.ts";
 import { AgentOrchestrationIdSchema } from "./agent-orchestrations.ts";
 import { AgentRunBudgetSchema, AgentRunToolResultSchema } from "./agent-runs.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 
 export const AGENT_INVOCATION_TOOL_POLICY_VERSION = "2026-09-28";
 export const AGENT_INVOCATION_TOOL_NAMES = ["agent_run"] as const;
@@ -35,7 +36,9 @@ export const AgentInvocationToolInputSchema = z.object({
 export type AgentInvocationToolInput = z.infer<typeof AgentInvocationToolInputSchema>;
 
 export const AgentInvocationRequestSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/),
+  // 不透明幂等键：下游 AgentRunMemberInstanceCreateInputSchema 同样只按 160 长度上界接收，
+  // 且从不作为路径或分支名使用，因此这里不再重复约束字符集。
+  clientRequestId: ClientRequestIdSchema,
   input: AgentInvocationToolInputSchema,
 }).strict();
 export type AgentInvocationRequest = z.infer<typeof AgentInvocationRequestSchema>;

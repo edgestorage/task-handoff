@@ -33,6 +33,32 @@
         />
         <span v-else class="session-status-image-note">{{ t("instances.imagePull.waitingForOutput") }}</span>
       </div>
+      <div v-else-if="showGitPreparation" class="session-status-image-layout">
+        <div class="session-status-overview">
+          <RefreshCw v-if="instance.workspace.gitProvisioning?.phase !== 'failed'" :size="34" />
+          <CircleAlert v-else :size="34" />
+          <div class="session-status-overview-copy">
+            <strong>{{ instanceStatusTitle(instance, t) }}</strong>
+            <span>{{ instanceStatusDetail(instance, t) }}</span>
+          </div>
+          <Button
+            v-if="canShowInstanceAction(instance, 'retry-git')"
+            class="session-status-image-retry"
+            size="sm"
+            :disabled="isInstanceActionBusy(instance)"
+            @click="$emit('runAction', 'retry-git', instance)"
+          >
+            <RotateCw :size="14" />
+            <span>{{ activeActionLabel(instance, "retry-git", t("instances.actions.retryGit")) }}</span>
+          </Button>
+        </div>
+        <GitProvisioningStatus
+          v-if="instance.gitProvisioningProgress"
+          class="session-status-image-pull"
+          :progress="instance.gitProvisioningProgress"
+        />
+        <span v-else class="session-status-image-note">{{ gitProvisioningLabel(instance, t) }}</span>
+      </div>
       <template v-else>
         <RefreshCw v-if="isInstanceStatusPending(instance)" :size="34" />
         <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy' || isInstanceRuntimeUnavailable(instance)" :size="34" />
@@ -55,6 +81,10 @@
           <Button v-if="canShowInstanceAction(instance, 'retry-image')" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
             <RotateCw :size="14" />
             <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+          </Button>
+          <Button v-if="canShowInstanceAction(instance, 'retry-git')" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-git', instance)">
+            <RotateCw :size="14" />
+            <span>{{ activeActionLabel(instance, "retry-git", t("instances.actions.retryGit")) }}</span>
           </Button>
         </div>
       </template>
@@ -112,7 +142,7 @@ import { Button } from "../../../components/ui/button";
 import type { InstanceAction } from "../useInstanceActions";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl } from "../useInstanceSessions";
-import { canShowInstanceAction, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending, showGitPreparation as showGitPreparationState } from "../useInstanceStatus";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import AppSessionViewer from "../shared/AppSessionViewer.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
@@ -120,6 +150,7 @@ import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorktreesTab from "./RepositoryWorktreesTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
+import GitProvisioningStatus from "./GitProvisioningStatus.vue";
 import type { NativeNodeFolderPicker } from "../nodePath";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 
@@ -153,7 +184,7 @@ defineEmits<{
 
 const activeFrameUrl = computed(() => props.session ? sessionFrameUrl(props.instance, props.session) : "");
 const activeTerminalSocketUrl = computed(() => props.session ? sessionTerminalSocketUrl(props.instance, props.session) : "");
-const hasStatusActions = computed(() => (["start", "stop", "restart", "retry-image"] as const)
+const hasStatusActions = computed(() => (["start", "stop", "restart", "retry-image", "retry-git"] as const)
   .some((action) => canShowInstanceAction(props.instance, action)));
 const imagePreparationSteps = computed(() => [
   t("instances.imagePull.checkImage"),
@@ -166,6 +197,7 @@ const showImagePreparation = computed(() => Boolean(
   && props.instance.imageProvisioning
   && props.instance.imageProvisioning.phase !== "ready",
 ));
+const showGitPreparation = computed(() => showGitPreparationState(props.instance));
 const activeImagePreparationStep = computed(() => {
   const phase = props.instance.imageProvisioning?.phase;
   if (phase === "checking-image") return 0;

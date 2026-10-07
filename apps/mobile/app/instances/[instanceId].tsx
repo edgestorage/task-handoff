@@ -85,10 +85,13 @@ export default function InstanceDirectoryDetailRoute() {
       setRenaming(false);
     }
   };
+  const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => t(
+    action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : action === 'retry-git' ? 'instance.retryGit' : 'instance.retryImage',
+  );
   const lifecycleMenuActions: MenuAction[] = instance.availableActions.map((action) => ({
     id: action,
     image: action === 'start' ? 'play.circle' : action === 'stop' ? 'stop.circle' : 'arrow.clockwise.circle',
-    title: t(action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : 'instance.retryImage'),
+    title: lifecycleActionLabel(action),
     attributes: { disabled: Boolean(lifecycleAction) || state.phase !== 'ready', destructive: action === 'stop' },
   }));
   const menuActions: MenuAction[] = [
@@ -110,9 +113,11 @@ export default function InstanceDirectoryDetailRoute() {
       } },
     ]);
   };
-  const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => t(
-    action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : 'instance.retryImage',
-  );
+  // Image and Git preparation are sequential, so a failed instance offers a
+  // single retry for whichever step failed.
+  const retryAction: ControlPlaneInstanceAction | undefined = instance.availableActions.includes('retry-git')
+    ? 'retry-git'
+    : instance.availableActions.includes('retry-image') ? 'retry-image' : undefined;
   const executeLifecycleAction = async (action: ControlPlaneInstanceAction) => {
     if (lifecycleAction || state.phase !== 'ready' || !instance.availableActions.includes(action)) return;
     setLifecycleAction(action);
@@ -187,16 +192,16 @@ export default function InstanceDirectoryDetailRoute() {
             <Text style={[styles.lifecycleButtonText, { color: enabled ? destructive ? colors.error : colors.primary : colors.textMuted }]}>{lifecycleActionLabel(action)}</Text>
           </Pressable>;
         })}
-        {instance.availableActions.includes('retry-image') ? <Pressable
-          accessibilityLabel={lifecycleActionLabel('retry-image')}
+        {retryAction ? <Pressable
+          accessibilityLabel={lifecycleActionLabel(retryAction)}
           accessibilityRole="button"
-          accessibilityState={{ disabled: Boolean(lifecycleAction) || state.phase !== 'ready', busy: lifecycleAction === 'retry-image' }}
+          accessibilityState={{ disabled: Boolean(lifecycleAction) || state.phase !== 'ready', busy: lifecycleAction === retryAction }}
           disabled={Boolean(lifecycleAction) || state.phase !== 'ready'}
-          onPress={() => requestLifecycleAction('retry-image')}
+          onPress={() => requestLifecycleAction(retryAction)}
           style={({ pressed }) => [styles.lifecycleButton, (Boolean(lifecycleAction) || state.phase !== 'ready') && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
         >
-          {lifecycleAction === 'retry-image' ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="refresh" color={colors.primary} ios="arrow.clockwise.circle.fill" size={22} />}
-          <Text style={[styles.lifecycleButtonText, { color: colors.primary }]}>{lifecycleActionLabel('retry-image')}</Text>
+          {lifecycleAction === retryAction ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="refresh" color={colors.primary} ios="arrow.clockwise.circle.fill" size={22} />}
+          <Text style={[styles.lifecycleButtonText, { color: colors.primary }]}>{lifecycleActionLabel(retryAction)}</Text>
         </Pressable> : null}
       </View>
 

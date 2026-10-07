@@ -1462,6 +1462,12 @@ export class ControlPlaneService {
     return publicInstanceWithAccess(instance);
   }
 
+  async retryControlledInstanceGitProvisioning(id: string) {
+    const current = await this.requireNodeInstance(id);
+    const instance = await this.nodeAgentGateway.retryInstanceGitProvisioning(this.requireNode(current.nodeId), id);
+    return publicInstanceWithAccess(instance);
+  }
+
   async boardAsync() {
     // Chat commands must not mistake a cold progressive cache for an
     // authoritative empty directory. This joins the shared first refresh;

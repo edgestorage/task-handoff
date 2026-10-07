@@ -8,6 +8,7 @@ import {
   AiSessionTurnTimelineSchema,
 } from "./ai-sessions.ts";
 import { StoryIdSchema } from "./story-id.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 import {
   AgentInvocationToolGrantSchema,
   sanitizeAgentInvocationToolGrant,
@@ -270,7 +271,7 @@ export const StoryAgentActionListResultSchema = z.object({
 }).strict();
 export const StoryAgentActionRunInputSchema = z.object({
   actionId: StoryActionSchema.shape.id,
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 export const StoryAgentActionRunResultSchema = z.object({
   session: z.object({
@@ -301,7 +302,7 @@ export const StoryAgentAutomationDeleteInputSchema = z.object({
 }).strict();
 export const StoryAgentAutomationRunInputSchema = z.object({
   automationId: z.string().trim().min(1).max(120),
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 export const StoryAgentAutomationRunsInputSchema = z.object({
   automationId: z.string().trim().min(1).max(120),

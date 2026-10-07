@@ -5,6 +5,15 @@
       <button v-if="sourceDraft.mode === 'project'" type="button" @click="$emit('update:newProjectOpen', !newProjectOpen)">{{ newProjectOpen ? t("instances.create.useExisting") : t("instances.create.addRepository") }}</button>
     </div>
 
+    <div class="step-fields">
+      <label>
+        <span>{{ t("instances.create.node") }}</span>
+        <ControlPlaneSelect v-model="sourceDraft.nodeId" :placeholder="t('instances.create.selectNode')">
+          <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+    </div>
+
     <div class="choice-grid" :aria-label="t('instances.create.workspaceSource')">
       <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'local-folder' }" @click="$emit('select-source-mode', 'local-folder')">
         <Folder :size="17" />
@@ -49,22 +58,28 @@
     </div>
 
     <div v-else class="step-fields">
-      <label>
-        <span>{{ t("instances.create.node") }}</span>
-        <ControlPlaneSelect v-model="sourceDraft.localNodeId" :placeholder="t('instances.create.selectNode')">
-          <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
-      </label>
-      <label>
-        <span>{{ t("instances.create.nodeFolder") }}</span>
-        <ControlPlaneSelect :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
+      <div class="field-group">
+        <div class="field-head">
+          <span class="field-label">{{ t("instances.create.projectFolder") }}</span>
+          <TooltipProvider :delay-duration="120">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button type="button" class="field-label-hint" :aria-label="t('instances.create.projectFolderHint')">
+                  <CircleQuestionMark :size="13" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent class="field-hint-tooltip" side="top" :side-offset="8">{{ t("instances.create.projectFolderHint") }}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        <ControlPlaneSelect :aria-label="t('instances.create.projectFolder')" :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
           <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ nodeLocalFolderDisplayName(folder) }} · {{ folder.path }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="chooseFolderValue">{{ t("instances.create.chooseFolder") }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
-      </label>
+      </div>
       <span v-if="localPathOpen || sourceDraft.localPath" class="field-with-action">
         <ControlPlaneInput :model-value="sourceDraft.localPath" :placeholder="localPathPlaceholder" @update:model-value="$emit('set-local-folder-path', $event)" />
-        <Button v-if="canBrowseProjectFolder" variant="outline" size="sm" :disabled="creatingLocalFolder || !sourceDraft.localNodeId" @click="$emit('choose-project-folder-path')">
+        <Button v-if="canBrowseProjectFolder" variant="outline" size="sm" :disabled="creatingLocalFolder || !sourceDraft.nodeId" @click="$emit('choose-project-folder-path')">
           <FolderOpen :size="14" />
           <span>{{ creatingLocalFolder ? t("instances.create.choosing") : t("instances.create.browse") }}</span>
         </Button>
@@ -85,13 +100,14 @@
 </template>
 
 <script setup lang="ts">
-import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
+import { CircleQuestionMark, Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Node, NodeLocalFolder, Project } from "../../../api/types";
 import type { GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import { nodeLocalFolderDisplayName } from "../nodePath";
 import { Button } from "../../../components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -155,6 +171,7 @@ defineEmits<{
 
 .section-head span,
 .step-fields label span,
+.step-fields .field-label,
 .project-model-picker > span {
   color: var(--text-muted);
   font-size: 11px;
@@ -212,10 +229,46 @@ defineEmits<{
   gap: 10px;
 }
 
-.step-fields label {
+.step-fields label,
+.step-fields .field-group {
   display: grid;
   gap: 7px;
   min-width: 0;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.field-label-hint {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: help;
+  padding: 0;
+}
+
+.field-label-hint:hover,
+.field-label-hint:focus-visible {
+  color: var(--text-strong);
+}
+
+.field-label-hint:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+:global(.field-hint-tooltip) {
+  max-width: min(320px, calc(100vw - 24px));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .field-with-action {

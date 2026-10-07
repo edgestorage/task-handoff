@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AiSessionCreateInputSchema, AiSessionCreateRefInputSchema, AiSessionCreateWorkspaceSelectionSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
+import { ClientRequestIdSchema } from "./client-request-id.ts";
 
 const IdSchema = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -389,14 +390,14 @@ export const RepositoryStartAiSessionRequestSchema = z.object({
   agent: z.enum(["codex", "claude", "opencode"]),
   workspaceSelection: AiSessionWorkspaceSelectionSchema,
   message: z.string().trim().min(1).max(20000),
-  clientRequestId: IdSchema,
+  clientRequestId: ClientRequestIdSchema,
   permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryCreateWorktreeAiSessionRequestSchema = z.object({
   agent: z.enum(["codex", "claude", "opencode"]),
   worktree: RepositoryCreateWorktreeRequestSchema,
   message: z.string().trim().min(1).max(20000),
-  clientRequestId: IdSchema,
+  clientRequestId: ClientRequestIdSchema,
   permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryAiSessionLaunchResultSchema = z.object({

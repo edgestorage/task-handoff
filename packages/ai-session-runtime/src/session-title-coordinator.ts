@@ -9,13 +9,14 @@ import {
   type AiSessionRenameResult,
   type AiSessionStatus,
 } from "@task-handoff/protocol/ai-sessions";
+import { OptionalClientRequestIdSchema } from "@task-handoff/protocol/client-request-id";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
 import type { AiSessionRegistry } from "./ai-session-registry";
 
 const SessionRenameIntentSchema = z.object({
   schemaVersion: z.literal(1),
   operationId: z.string().trim().min(1).max(160),
-  clientRequestId: z.string().trim().min(1).max(160).optional(),
+  clientRequestId: OptionalClientRequestIdSchema,
   aiSessionId: z.string().trim().min(1).max(120),
   agent: z.string().trim().min(1).max(80),
   providerSessionId: z.string().trim().min(1).max(240).optional(),
