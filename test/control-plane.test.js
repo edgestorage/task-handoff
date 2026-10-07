@@ -450,6 +450,31 @@ function resolvedRuntimeArtifact(version, platform, arch) {
   };
 }
 
+const gitProvisionScriptPath = "/run/task-handoff/bootstrap/git-provision.sh";
+
+// Git sources are materialized by a dedicated provisioning container that the
+// node agent drives through a PTY. Injecting this runner keeps the clone
+// deterministic and stops the provisioning container from being mistaken for
+// the instance container by the Docker command mocks below.
+function completeGitProvisioningTerminal(commit = "c".repeat(40)) {
+  return async (_command, args, options = {}) => {
+    if (!args.includes(gitProvisionScriptPath)) return { stdout: "", stderr: "" };
+    options.onData?.("TASK_HANDOFF_GIT_PROVISIONING_STAGE=cloning\n");
+    options.onData?.(`TASK_HANDOFF_GIT_PROVISIONING_COMMIT=${commit}\n`);
+    return { stdout: "", stderr: "" };
+  };
+}
+
+// Starting a Git instance is queued until the asynchronous clone completes, so
+// assertions about a started container must wait for the Git-ready continuation.
+async function waitForGitWorkspaceStart(app, instanceId, containerId) {
+  await waitForCondition(
+    () => app.nodeAgentState.controlledInstances.get(instanceId)?.runtime.containerId === containerId,
+    `container start after Git provisioning for ${instanceId}`,
+  );
+  return app.nodeAgentState.controlledInstances.get(instanceId);
+}
+
 function managedDockerRuntimeCommand(app, instanceId, web, args) {
   const desiredVersion = runtimeVersionStateForActual().desiredVersion;
   if (args[0] === "inspect" && args.includes("{{json .}}")) return {
@@ -5487,6 +5512,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
         headers: { "content-type": "application/json" },
       });
     },
+    dockerTerminalCommandRunner: completeGitProvisioningTerminal(),
     dockerCommandRunner: async (command, args) => {
       calls.push([command, args]);
       if (args[0] === "volume" && args[1] === "create") {
@@ -5604,7 +5630,15 @@ test("node agent runs local docker behind node-local target and auto-imports age
 
   assert.equal(response.statusCode, 200, response.body);
   const body = response.json();
-  assert.equal(body.data.target.web, "http://127.0.0.1:18080");
+  assert.equal(body.data.status, "starting");
+  // Start is queued while the clone runs, so the started container only exists
+  // after the Git-ready continuation re-enters the lifecycle.
+  const started = await waitForGitWorkspaceStart(app, "inst_1", "container-1");
+  assert.equal(started.target.web, "http://127.0.0.1:18080");
+  await waitForCondition(
+    () => fetchCalls.some((call) => call.url.includes("/api/config-sync/import/claude")),
+    "config auto-import after Git provisioning",
+  );
   assert.deepEqual(
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
@@ -5666,6 +5700,7 @@ test("node agent keeps a managed instance started when startup runtime convergen
         retryable: false,
       });
     },
+    dockerTerminalCommandRunner: completeGitProvisioningTerminal(),
     dockerCommandRunner: async (_command, args) => {
       calls.push(args);
       if (args[0] === "volume" && args[1] === "create") {
@@ -5728,8 +5763,11 @@ test("node agent keeps a managed instance started when startup runtime convergen
   assert.equal(started.json().data.status, "starting");
   assert.equal(started.json().data.target.status, "unknown");
   assert.equal(started.json().data.workspace.error, undefined);
-  assert.equal(started.json().data.runtimeVersion.phase, "pending");
-  assert.equal(started.json().data.runtimeVersion.error.code, "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE");
+  // Runtime convergence runs after the queued start, so the artifact failure
+  // only lands once the Git-ready continuation started the container.
+  const settled = await waitForGitWorkspaceStart(app, "inst_start_fallback", "container-start-fallback");
+  assert.equal(settled.runtimeVersion.phase, "pending");
+  assert.equal(settled.runtimeVersion.error.code, "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE");
   assert.ok(calls.some((args) => args[0] === "run"), "the instance container must remain started");
 
   const attemptsAfterStart = artifactResolutions;
@@ -5851,6 +5889,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
+    dockerTerminalCommandRunner: completeGitProvisioningTerminal(),
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "volume" && args[1] === "create") {
         volumeLabels.create(args);
@@ -5917,6 +5956,8 @@ test("node agent skips start config auto-import when disabled on the instance", 
     payload: {},
   });
   assert.equal(started.statusCode, 200, started.body);
+  // The queued start only reaches the auto-import step after the clone finishes.
+  await waitForGitWorkspaceStart(app, "inst_no_auto_import", "container-1");
   assert.deepEqual(
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
@@ -5935,6 +5976,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
+    dockerTerminalCommandRunner: completeGitProvisioningTerminal(),
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "volume" && args[1] === "create") {
         volumeLabels.create(args);
@@ -6000,7 +6042,12 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     payload: {},
   });
   assert.equal(started.statusCode, 200, JSON.stringify(started.body));
-  assert.equal(started.json().data.target.status, "reachable");
+  const settled = await waitForGitWorkspaceStart(app, "inst_auto_import_fails", "container-1");
+  assert.equal(settled.target.status, "reachable");
+  await waitForCondition(
+    () => fetchCalls.some((call) => call.url.includes("/api/config-sync/import/claude")),
+    "config auto-import failure after Git provisioning",
+  );
   assert.deepEqual(
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
@@ -6032,6 +6079,7 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
+    dockerTerminalCommandRunner: completeGitProvisioningTerminal(),
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "volume" && args[1] === "create") {
         volumeLabels.create(args);
@@ -6108,8 +6156,9 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     2_000,
   );
   assert.equal(started.statusCode, 200);
-  assert.equal(started.json().data.target.status, "reachable");
-  assert.equal(abortedImports, 2);
+  const settled = await waitForGitWorkspaceStart(app, "inst_auto_import_timeout", "container-1");
+  assert.equal(settled.target.status, "reachable");
+  await waitForCondition(() => abortedImports === 2, "aborted config auto-imports after Git provisioning");
 });
 
 test("node agent local-ipc endpoint supports control plane direct requests", async (t) => {
