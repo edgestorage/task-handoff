@@ -87,6 +87,9 @@
           <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
             {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
+          <span v-else-if="instance.workspace.gitProvisioning && instance.workspace.gitProvisioning.phase !== 'ready' && !instance.gitProvisioningProgress" class="image-provisioning-status">
+            {{ gitProvisioningLabel(instance, t) }}<template v-if="instance.workspace.gitProvisioning.error"> · {{ instance.workspace.gitProvisioning.error }}</template>
+          </span>
         </div>
         <div ref="detailSideEl" class="detail-side">
           <TooltipProvider :delay-duration="120">
@@ -165,14 +168,14 @@
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</TooltipContent>
               </Tooltip>
-              <Tooltip v-if="canShowInstanceAction(instance, 'retry-image')">
+              <Tooltip v-if="provisioningRetry">
                 <TooltipTrigger as-child>
-                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, 'retry-image', t('instances.actions.retryImage'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, provisioningRetry.action, provisioningRetry.label)" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', provisioningRetry.action, instance)">
                     <RotateCw :size="14" />
-                    <span class="instance-action-label">{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+                    <span class="instance-action-label">{{ activeActionLabel(instance, provisioningRetry.action, provisioningRetry.label) }}</span>
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</TooltipContent>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, provisioningRetry.action, provisioningRetry.label) }}</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger as-child>
@@ -284,7 +287,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -371,6 +374,15 @@ defineEmits<{
   "update:sessionMenuOpen": [open: boolean];
 }>();
 
+// Image and Git preparation are sequential, so a failed instance owns exactly
+// one retry; render it as a single toolbar action with the matching label.
+const provisioningRetry = computed(() => {
+  const instance = props.instance;
+  if (!instance) return undefined;
+  const action = instanceProvisioningRetryAction(instance);
+  return action ? { action, label: instanceProvisioningRetryLabel(instance, t) } : undefined;
+});
+
 const editingNameId = ref("");
 const instanceNameDraft = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
@@ -436,12 +448,18 @@ watch([detailHeadEl, detailSideEl, instanceControlsEl], () => {
 const visibleInstanceActionLabels = computed(() => {
   const instance = props.instance;
   if (!instance) return "";
-  return (["start", "stop", "restart", "retry-image", "delete"] as const)
+  return (["start", "stop", "restart", "retry-image", "retry-git", "delete"] as const)
     .filter((action) => action === "delete" || canShowInstanceAction(instance, action))
-    .map((action) => props.activeActionLabel(instance, action, t(`instances.actions.${action === "retry-image" ? "retryImage" : action}`)))
+    .map((action) => props.activeActionLabel(instance, action, instanceActionIdleLabel(instance, action)))
     .concat(t("instances.actions.settings"))
     .join("\u0000");
 });
+
+function instanceActionIdleLabel(instance: InstanceBoardItem, action: InstanceAction) {
+  if (action === "retry-image") return t("instances.actions.retryImage");
+  if (action === "retry-git") return t("instances.actions.retryGit");
+  return t(`instances.actions.${action}`);
+}
 
 watch(visibleInstanceActionLabels, () => scheduleInstanceControlsLayout(true), { flush: "post" });
 

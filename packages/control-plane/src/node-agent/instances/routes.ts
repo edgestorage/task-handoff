@@ -21,12 +21,14 @@ type Operations = {
   list(): ControlledInstance[];
   create(input: ReturnType<typeof CreateNodeInstanceSchema.parse>): ControlledInstance | Promise<ControlledInstance>;
   retryImageProvisioning(id: string): ControlledInstance;
+  retryGitProvisioning(id: string): ControlledInstance;
   update(id: string, input: ReturnType<typeof UpdateNodeInstanceSchema.parse>): ControlledInstance;
   register(id: string, input: ControlledInstanceRegister, token?: string): ControlledInstance;
   heartbeat(id: string, input: ControlledInstanceHeartbeat, token?: string): ControlledInstance;
   sanitizeReport(id: string, report: "register" | "heartbeat", input: unknown): unknown;
   afterCreate(instance: ControlledInstance): void;
   afterImageRetry(instance: ControlledInstance): void;
+  afterGitRetry(instance: ControlledInstance): void;
   afterUpdate(instance: ControlledInstance): void | Promise<void>;
   afterReport(instance: ControlledInstance, report: "register" | "heartbeat"): void;
 };
@@ -43,6 +45,12 @@ export function registerInstanceManagementRoutes(app: FastifyInstance, operation
   app.post("/api/node-agent/instances/:id/image-provisioning/retry", async (request) => {
     const instance = operations.retryImageProvisioning((request.params as { id: string }).id);
     operations.afterImageRetry(instance);
+    return { data: instance };
+  });
+
+  app.post("/api/node-agent/instances/:id/git-provisioning/retry", async (request) => {
+    const instance = operations.retryGitProvisioning((request.params as { id: string }).id);
+    operations.afterGitRetry(instance);
     return { data: instance };
   });
 

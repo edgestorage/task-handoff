@@ -2,6 +2,9 @@ import {
   ImagePullTerminalEventType,
   ImagePullTerminalFinishedSchema,
   ImagePullTerminalOutputSchema,
+  GitProvisioningTerminalEventType,
+  GitProvisioningTerminalFinishedSchema,
+  GitProvisioningTerminalOutputSchema,
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
@@ -138,6 +141,19 @@ export class NodeTunnelEventRouter {
       const parsed = eventType === ImagePullTerminalEventType.Output
         ? safeParseResponse(ImagePullTerminalOutputSchema, payload)
         : safeParseResponse(ImagePullTerminalFinishedSchema, payload);
+      if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
+      this.enqueue(nodeId, parsed.data.instanceId, () => {
+        this.options.events?.publish(eventType, parsed.data, {
+          topic: "instances",
+          scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
+        });
+      });
+      return true;
+    }
+    if (eventType === GitProvisioningTerminalEventType.Output || eventType === GitProvisioningTerminalEventType.Finished) {
+      const parsed = eventType === GitProvisioningTerminalEventType.Output
+        ? safeParseResponse(GitProvisioningTerminalOutputSchema, payload)
+        : safeParseResponse(GitProvisioningTerminalFinishedSchema, payload);
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
       this.enqueue(nodeId, parsed.data.instanceId, () => {
         this.options.events?.publish(eventType, parsed.data, {

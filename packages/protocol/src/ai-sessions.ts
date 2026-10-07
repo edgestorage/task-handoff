@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ClientRequestIdSchema, OptionalClientRequestIdSchema } from "./client-request-id.ts";
 import { StoryIdSchema } from "./story-id.ts";
 
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
@@ -353,7 +354,7 @@ export const AiSessionCommandResultSchema = z.object({
 export const AiSessionRenameInputSchema = z.object({
   title: z.string().trim().max(120),
   expectedTitle: z.string().trim().max(240).optional(),
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 
 export const AiSessionRenameResultSchema = z.object({
@@ -442,7 +443,7 @@ const AiSessionMessageBaseSchema = z.object({
   mode: AiSessionSendModeSchema.optional(),
   permissionMode: AiSessionPermissionModeSchema.optional(),
   // Compatibility for v0.0.33: 旧实例的 strict 入参不接受该增量字段，只有声明发送幂等能力的实例才据它去重。
-  clientRequestId: z.string().trim().min(1).max(160).optional(),
+  clientRequestId: OptionalClientRequestIdSchema,
 });
 
 export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
@@ -520,7 +521,7 @@ export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.safeExtend
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema.optional(),
@@ -531,14 +532,14 @@ export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.exte
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema.optional(),
 }).strict();
 
 export const AiSessionModelSelectionInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   modelSelection: AiSessionModelSelectionSchema,
 }).strict();
 
@@ -548,7 +549,7 @@ export const AiSessionModelSelectionActionResponseSchema = z.object({
 }).strict();
 
 export const AiSessionReasoningEffortInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   reasoningEffort: AiSessionReasoningEffortSchema,
 }).strict();
 
@@ -594,7 +595,7 @@ export const AiSessionForkWorkspaceSchema = z.object({
 }).strict().default({ mode: "current" });
 
 export const AiSessionForkInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
   throughTurnId: z.string().trim().min(1).max(240).optional(),
   workspace: AiSessionForkWorkspaceSchema.optional().default({ mode: "current" }),
 }).strict();
@@ -607,7 +608,7 @@ export const AiSessionForkResultSchema = z.object({
 }).strict();
 
 export const AiSessionOpenAppInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 
 export const AiSessionOpenAppResultSchema = z.object({
@@ -619,7 +620,7 @@ export const AiSessionOpenAppResultSchema = z.object({
 }).strict();
 
 export const AiSessionCloseInputSchema = z.object({
-  clientRequestId: z.string().trim().min(1).max(160),
+  clientRequestId: ClientRequestIdSchema,
 }).strict();
 
 export const AiSessionCloseResultSchema = z.object({

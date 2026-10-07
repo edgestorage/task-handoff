@@ -94,6 +94,36 @@ test("runtime convergence Status page describes every active phase", () => {
 const english = createControlPlaneI18nForTest("en-US").global.t;
 const chinese = createControlPlaneI18nForTest("zh-CN").global.t;
 
+test("failed start shows the recorded workspace reason instead of generic copy", () => {
+  const reason = "Managed volume task-handoff-inst_status_tabs-workspace identity does not match instance inst_status_tabs.";
+  const current = {
+    ...instance("failed"),
+    workspace: {
+      mode: "git-clone",
+      status: "ready",
+      path: "/workspace",
+      error: reason,
+      gitProvisioning: { phase: "ready", generation: 0, remoteUrl: "https://git.example.test/team/repo.git" },
+    },
+  };
+  assert.equal(instanceStatusDetail(current, english), reason);
+  assert.equal(instanceStatusDetail(current, chinese), reason);
+});
+
+test("failed Git provisioning still prefers its own reason over the workspace error", () => {
+  const current = {
+    ...instance("failed"),
+    workspace: {
+      mode: "git-clone",
+      status: "failed",
+      path: "/workspace",
+      error: "workspace fallback",
+      gitProvisioning: { phase: "failed", generation: 0, remoteUrl: "https://git.example.test/team/repo.git", error: "Git clone failed" },
+    },
+  };
+  assert.equal(instanceStatusDetail(current, english), "Git clone failed");
+});
+
 function dockerInstance(runtimeStatus, overrides = {}) {
   return {
     ...instance("running"),

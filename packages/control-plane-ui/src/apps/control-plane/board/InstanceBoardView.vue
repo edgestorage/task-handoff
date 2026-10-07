@@ -71,6 +71,9 @@
             <p v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
               {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
             </p>
+            <p v-else-if="instance.workspace.gitProvisioning && instance.workspace.gitProvisioning.phase !== 'ready'" class="image-provisioning-status">
+              {{ gitProvisioningLabel(instance, t) }}<template v-if="instance.workspace.gitProvisioning.error"> · {{ instance.workspace.gitProvisioning.error }}</template>
+            </p>
             <div class="board-card-preview" :data-interactive="interactive" :data-state="boardPreviewState(instance)">
               <div
                 v-if="boardSessions(instance).length > 1"
@@ -199,9 +202,9 @@
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
               </Button>
-              <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+              <Button v-if="instanceProvisioningRetryAction(instance)" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', instanceProvisioningRetryAction(instance)!, instance)">
                 <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+                <span>{{ activeActionLabel(instance, instanceProvisioningRetryAction(instance)!, instanceProvisioningRetryLabel(instance, t)) }}</span>
               </Button>
               <Button variant="outline" size="sm" @click="$emit('openWindow', instance, boardPrimarySession(instance), boardPrimaryAiSession(instance))">
                 <ExternalLink :size="14" />
@@ -240,7 +243,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel, isInstanceAppReady } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel, isInstanceAppReady } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";

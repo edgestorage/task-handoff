@@ -5,7 +5,7 @@ export type ProjectFolderSelection = string | { path: string; ownerNodeId?: stri
 export type SourceDraft = {
   mode: SourceMode;
   projectId: string;
-  localNodeId: string;
+  nodeId: string;
   localFolderId: string;
   localPath: string;
 };

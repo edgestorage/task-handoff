@@ -12,7 +12,7 @@ import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
-import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, GitProvisioningTerminalEventType, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import {
   ControlPlaneCliAuthorizationApprovalResponseSchema,
   ControlPlaneCliAuthorizationDenialResponseSchema,
@@ -51,6 +51,7 @@ import { StorySessionIndex } from "../sessions/story-session-index.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
+import { GitProvisioningProgressProjector } from "../instances/git-provisioning-progress.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE, PUBLIC_CONTROL_PLANE_UI_ROUTE } from "./auth-boundary.ts";
 import { ControlPlaneProxyStore } from "../proxy/store.ts";
 import { ControlPlaneProxyService } from "../proxy/service.ts";
@@ -609,6 +610,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
+  const gitProvisioningProgress = new GitProvisioningProgressProjector(events);
   const aiSessionAggregator = new ControlPlaneAiSessionAggregator({
     bootstrap: () => service.bootstrapAiSessionsFromInstances(),
     logger: diagnosticLogger,
@@ -635,6 +637,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   events.on((event) => {
     imagePullProgress.handle(event);
+    gitProvisioningProgress.handle(event);
     if (event.type === "instance.deleted" || event.type === "instance.updated") {
       const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
         ? String((event.payload as { instanceId?: unknown }).instanceId || "")
@@ -777,6 +780,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     if (persistenceMaintenanceTimer) clearInterval(persistenceMaintenanceTimer);
     await pairingRecoveryInFlight?.catch(() => undefined);
     imagePullProgress.close();
+    gitProvisioningProgress.close();
     proxyEventHub.stop();
     proxyStateSubscriber.stop();
     nodeEventSubscriber.stop();
@@ -1034,6 +1038,15 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       && (!eventInstanceId || entry.instanceId === eventInstanceId)
     ))) {
       events.send(socket, ImagePullTerminalEventType.Snapshot, snapshot, {
+        topic: "instances",
+        scope: { instanceId: snapshot.instanceId },
+      });
+    }
+    for (const snapshot of gitProvisioningProgress.snapshots().filter((entry) => (
+      (!visibleInstanceIds || visibleInstanceIds.has(entry.instanceId))
+      && (!eventInstanceId || entry.instanceId === eventInstanceId)
+    ))) {
+      events.send(socket, GitProvisioningTerminalEventType.Snapshot, snapshot, {
         topic: "instances",
         scope: { instanceId: snapshot.instanceId },
       });

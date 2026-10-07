@@ -25,7 +25,7 @@ test("create timing keeps the v0.0.28 request body unchanged and forwards existi
 });
 
 test("existing request identifiers remain accepted when they cannot be sent directly as trace headers", () => {
-  for (const id of ["创建请求", "request\nnext", "x".repeat(160)]) {
+  for (const id of ["创建请求", "request\nnext", "x".repeat(160), "-leading-punctuation", ".dot-prefixed"]) {
     const trace = clientRequestTraceId(id);
     assert.match(trace, /^[a-f0-9]{64}$/);
     assert.equal(trace, clientRequestTraceId(id));

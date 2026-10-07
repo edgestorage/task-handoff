@@ -4,6 +4,7 @@ import {
   deleteControlledInstance,
   restartControlledInstance,
   retryInstanceImageProvisioning,
+  retryInstanceGitProvisioning,
   startControlledInstance,
   stopControlledInstance,
 } from "../../api/queries";
@@ -12,13 +13,14 @@ import { canExportInstanceConfig } from "./instanceConfigSync";
 import { canShowInstanceAction } from "./useInstanceStatus";
 import type { Translate } from "../../i18n/status.ts";
 
-export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "delete";
+export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "retry-git" | "delete";
 
 const actionLoadingKeys: Record<InstanceAction, string> = {
   start: "instances.actions.starting",
   stop: "instances.actions.stopping",
   restart: "instances.actions.restarting",
   "retry-image": "instances.actions.retryingImage",
+  "retry-git": "instances.actions.retryingGit",
   delete: "instances.actions.deleting",
 };
 
@@ -77,6 +79,8 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
         await restartControlledInstance(instance.id);
       } else if (action === "retry-image") {
         await retryInstanceImageProvisioning(instance.id);
+      } else if (action === "retry-git") {
+        await retryInstanceGitProvisioning(instance.id);
       }
     } catch (error) {
       reportActionError(errorText(error));

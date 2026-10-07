@@ -1084,6 +1084,10 @@ export function retryInstanceImageProvisioning(id: string) {
   return postApiData<InstanceBoardItem>(`controlled-instances/${id}/image-provisioning/retry`, {});
 }
 
+export function retryInstanceGitProvisioning(id: string) {
+  return postApiData<InstanceBoardItem>(`controlled-instances/${id}/git-provisioning/retry`, {});
+}
+
 export function createNode(input: CreateNodeInput) {
   return postApiData<Node>("nodes", input);
 }

@@ -187,7 +187,7 @@ const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckStat
 const sourceDraft = reactive<SourceDraft>({
   mode: "local-folder" as SourceMode,
   projectId: "",
-  localNodeId: "",
+  nodeId: "",
   localFolderId: "",
   localPath: "",
 });
@@ -228,7 +228,7 @@ const newImage = reactive<NewImageDraft>({
   name: "",
   reference: "",
 });
-const localFolders = useNodeLocalFoldersQuery(() => sourceDraft.localNodeId);
+const localFolders = useNodeLocalFoldersQuery(() => sourceDraft.nodeId);
 
 const activeStepIndex = computed(() => stepIndex(step.value));
 const selectedProject = computed(() => (projects.data.value || []).find((project) => project.id === sourceDraft.projectId));
@@ -241,14 +241,14 @@ const selectedProjectGitCredential = computed(() => (gitCredentials.data.value |
 watch(() => selectedProject.value?.id, () => {
   instanceDraft.retainGitCredential = false;
 });
-const selectedLocalNode = computed(() => (nodes.data.value || []).find((node) => node.id === sourceDraft.localNodeId));
+const selectedWorkspaceNode = computed(() => (nodes.data.value || []).find((node) => node.id === sourceDraft.nodeId));
 const selectedLocalFolder = computed(() => (localFolders.data.value || []).find((folder) => folder.id === sourceDraft.localFolderId));
 const localFolderPath = computed(() => sourceDraft.localPath.trim());
 const localFolderSelectValue = computed(() => (localPathOpen.value || localFolderPath.value ? chooseFolderValue : sourceDraft.localFolderId));
-const selectedLocalNodeIsControlPlaneLocal = computed(() => selectedLocalNode.value?.labels[CONTROL_PLANE_LOCAL_NODE_LABEL] === "true");
-const folderSelectionMode = computed(() => nodeFolderSelectionMode(selectedLocalNodeIsControlPlaneLocal.value, Boolean(props.chooseProjectFolder)));
+const selectedWorkspaceNodeIsControlPlaneLocal = computed(() => selectedWorkspaceNode.value?.labels[CONTROL_PLANE_LOCAL_NODE_LABEL] === "true");
+const folderSelectionMode = computed(() => nodeFolderSelectionMode(selectedWorkspaceNodeIsControlPlaneLocal.value, Boolean(props.chooseProjectFolder)));
 const canBrowseProjectFolder = computed(() => folderSelectionMode.value === "native");
-const showNodeFolderTree = computed(() => sourceDraft.mode === "local-folder" && localPathOpen.value && Boolean(sourceDraft.localNodeId) && folderSelectionMode.value === "node");
+const showNodeFolderTree = computed(() => sourceDraft.mode === "local-folder" && localPathOpen.value && Boolean(sourceDraft.nodeId) && folderSelectionMode.value === "node");
 const localPathPlaceholder = computed(() => (folderSelectionMode.value === "native" ? "/Users/me/project" : "/path/to/project/on-node"));
 const runtimesForSelectedNode = computed(() => (nodeRuntimes.data.value || []).filter((runtime) => runtime.nodeId === runtimeDraft.nodeId));
 const selectedNode = computed(() => (nodes.data.value || []).find((node) => node.id === runtimeDraft.nodeId));
@@ -257,9 +257,7 @@ const controlPlaneDefaultNodeId = computed(() => {
   const items = nodes.data.value || [];
   return items.find((node) => node.labels[CONTROL_PLANE_LOCAL_NODE_LABEL] === "true")?.id || items[0]?.id || "";
 });
-const workspaceNodeId = computed(() => sourceDraft.mode === "project"
-  ? selectedProject.value?.defaultNodeId || controlPlaneDefaultNodeId.value
-  : sourceDraft.localNodeId || controlPlaneDefaultNodeId.value);
+const workspaceNodeId = computed(() => sourceDraft.nodeId || controlPlaneDefaultNodeId.value);
 const workspaceNodeName = computed(() => (nodes.data.value || []).find((node) => node.id === workspaceNodeId.value)?.name || "");
 const selectedRuntime = computed(() => runtimesForSelectedNode.value.find((runtime) => runtime.id === runtimeDraft.runtimeId));
 const selectedImageOption = computed(() => (imageOptions.data.value || []).find((image) => image.id === runtimeDraft.imageId));
@@ -307,11 +305,11 @@ const sourceSummary = computed(() => {
   return localFolderPath.value || t("instances.create.localFolder");
 });
 const sourceBlockedReason = computed(() => {
+  if (!sourceDraft.nodeId) {
+    return t("instances.create.blocked.node");
+  }
   if (sourceDraft.mode === "project") {
     return sourceDraft.projectId ? "" : t("instances.create.blocked.repository");
-  }
-  if (!sourceDraft.localNodeId) {
-    return t("instances.create.blocked.node");
   }
   if (!sourceDraft.localFolderId && !localFolderPath.value) {
     return t("instances.create.blocked.localFolder");
@@ -373,21 +371,21 @@ watch(
   () => nodes.data.value,
   (items) => {
     const nodeItems = items || [];
-    if (sourceDraft.localNodeId && !nodeItems.some((node) => node.id === sourceDraft.localNodeId)) {
-      sourceDraft.localNodeId = "";
+    if (sourceDraft.nodeId && !nodeItems.some((node) => node.id === sourceDraft.nodeId)) {
+      sourceDraft.nodeId = "";
     }
     if (runtimeDraft.nodeId && !nodeItems.some((node) => node.id === runtimeDraft.nodeId)) {
       runtimeDraft.nodeId = "";
     }
-    if (!sourceDraft.localNodeId && nodeItems[0]) {
-      sourceDraft.localNodeId = nodeItems[0].id;
+    if (!sourceDraft.nodeId && nodeItems[0]) {
+      sourceDraft.nodeId = nodeItems[0].id;
     }
   },
   { immediate: true },
 );
 
 watch(
-  () => sourceDraft.localNodeId,
+  () => sourceDraft.nodeId,
   () => {
     resetNodeFolderTree();
   },
@@ -433,7 +431,7 @@ watch(
 );
 
 watch(
-  () => sourceDraft.localNodeId,
+  () => sourceDraft.nodeId,
   () => {
     sourceDraft.localFolderId = "";
     sourceDraft.localPath = "";
@@ -690,7 +688,7 @@ async function createInstance() {
               type: "local-folder",
               ...(selectedLocalFolder.value ? { localFolderId: selectedLocalFolder.value.id } : {}),
               path: selectedLocalFolder.value?.path || localFolderPath.value,
-              ownerNodeId: sourceDraft.localNodeId,
+              ownerNodeId: sourceDraft.nodeId,
             },
             sourceSnapshot: selectedLocalFolder.value
               ? { ...selectedLocalFolder.value }
@@ -765,8 +763,6 @@ async function createQuickProject() {
     sourceDraft.mode = "project";
     sourceDraft.projectId = project.id;
     runtimeDraft.imageId = project.defaultImageSelection?.imageId || imageOptions.data.value?.[0]?.id || "";
-    runtimeDraft.nodeId = project.defaultNodeId || nodes.data.value?.[0]?.id || "";
-    runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId);
     createdProjectName = t("instances.create.feedback.namedCreated", { name: project.name });
   } catch (error) {
     showControlPlaneToast(errorText(error), "error");
@@ -787,15 +783,15 @@ async function chooseProjectFolderPath() {
     return;
   }
   const path = typeof selected === "string" ? selected : selected.path;
-  const ownerNodeId = typeof selected === "string" ? sourceDraft.localNodeId : selected.ownerNodeId || sourceDraft.localNodeId;
+  const ownerNodeId = typeof selected === "string" ? sourceDraft.nodeId : selected.ownerNodeId || sourceDraft.nodeId;
   if (!ownerNodeId) {
     projectCreateError.value = t("instances.create.blocked.node");
     return;
   }
   creatingLocalFolder.value = true;
   try {
-    if (sourceDraft.localNodeId !== ownerNodeId) {
-      sourceDraft.localNodeId = ownerNodeId;
+    if (sourceDraft.nodeId !== ownerNodeId) {
+      sourceDraft.nodeId = ownerNodeId;
       await nextTick();
     }
     sourceDraft.localFolderId = "";
@@ -816,7 +812,7 @@ function setLocalFolderPath(value: string) {
 }
 
 async function loadNodeFolderRoots() {
-  await loadNodeFolderRootsForNode(sourceDraft.localNodeId);
+  await loadNodeFolderRootsForNode(sourceDraft.nodeId);
 }
 
 async function selectNodeFolderPath(folder: NodeFolderTreeNode) {

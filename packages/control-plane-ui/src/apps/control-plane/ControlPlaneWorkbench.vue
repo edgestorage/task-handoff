@@ -176,9 +176,9 @@
                   </span>
                   <Check v-if="instance.id === selectedInstanceId" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
                 </DropdownMenuItem>
-                <DropdownMenuItem v-if="!switcherInstances.length" class="control-plane-instance-menu-item" disabled>
+                <DropdownMenuLabel v-if="!switcherInstances.length" class="control-plane-instance-menu-empty">
                   {{ t("instances.list.noMatches") }}
-                </DropdownMenuItem>
+                </DropdownMenuLabel>
               </div>
             </ScrollArea>
             </DropdownMenuContent>
@@ -726,6 +726,7 @@ import { useAppSessionStore } from "./useAppSessionStore";
 import { useControlPlaneEvents } from "./useControlPlaneEvents";
 import { showDelayedControlPlaneLoadingToast, useControlPlaneToasts } from "./useControlPlaneToasts";
 import { useImagePullProgress } from "./useImagePullProgress";
+import { useGitProvisioningProgress } from "./useGitProvisioningProgress";
 import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanceDetailWindow } from "./instance-detail/instanceDetailWindow";
 import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, persistInstanceDetailSelection, type InstanceDetailSelection } from "./instance-detail/instanceDetailSelection";
 import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
@@ -1065,11 +1066,15 @@ watch(effectiveHeaderDensity, (density) => {
 }, { immediate: true });
 const { collapseInstances, expandInstances, instancesCollapsed, instancesSidebarVisible, setInstancesSidebarVisible, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
 const imagePullProgress = useImagePullProgress();
+const gitProvisioningProgress = useGitProvisioningProgress();
 const boardInstances = computed(() => (board.data.value || []).map((instance) => {
   const progress = imagePullProgress.state(instance.id);
-  return progress && progress.generation === instance.imageProvisioning?.generation
-    ? { ...instance, imagePullProgress: progress }
-    : instance;
+  const gitProgress = gitProvisioningProgress.state(instance.id);
+  return {
+    ...instance,
+    ...(progress && progress.generation === instance.imageProvisioning?.generation ? { imagePullProgress: progress } : {}),
+    ...(gitProgress && gitProgress.generation === instance.workspace.gitProvisioning?.generation ? { gitProvisioningProgress: gitProgress } : {}),
+  };
 }));
 const appSessionStore = useAppSessionStore({
   boardInstances: () => boardInstances.value,
@@ -1493,6 +1498,7 @@ useControlPlaneEvents({
     recoverOpen: loadActiveInstanceResourceMetrics,
   },
   imagePullProgress,
+  gitProvisioningProgress,
   nodes: {
     joined(event) {
       lastNodeJoinedEvent.value = event;

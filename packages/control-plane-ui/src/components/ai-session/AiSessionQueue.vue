@@ -13,8 +13,8 @@
         :title="paused ? t('sessions.activity.resumeQueue') : t('sessions.activity.pauseQueue')"
         @click="toggleQueuePause"
       >
-        <Play v-if="paused" :size="15" />
-        <Pause v-else :size="15" />
+        <Play v-if="paused" :size="13" />
+        <Pause v-else :size="13" />
       </button>
     </header>
     <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
@@ -232,8 +232,8 @@ watch(() => props.queue.revision, cancelQueueDrag);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   margin-inline-start: auto;
   border: 0;
   border-radius: 6px;

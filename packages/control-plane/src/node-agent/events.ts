@@ -5,7 +5,12 @@ import {
   ImagePullTerminalEventType,
   ImagePullTerminalFinishedSchema,
   ImagePullTerminalOutputSchema,
+  GitProvisioningTerminalEventType,
+  GitProvisioningTerminalFinishedSchema,
+  GitProvisioningTerminalOutputSchema,
   controlledInstanceAcceptsTraffic,
+  type GitProvisioningTerminalFinished,
+  type GitProvisioningTerminalOutput,
   type ImagePullTerminalFinished,
   type ImagePullTerminalOutput,
   type ControlledInstance,
@@ -103,6 +108,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly pendingAiSessionAuthorityFlush = new Map<WebSocket, ReturnType<typeof setTimeout>>();
   private eventTransportCongestion?: EventTransportCongestionIncident;
   private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
+  private readonly gitProvisioningTerminalByInstance = new Map<string, { output: GitProvisioningTerminalOutput; tail: string; finished?: GitProvisioningTerminalFinished }>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
   private readonly logger?: Logger;
@@ -237,6 +243,17 @@ export class NodeAgentInstanceEventForwarder {
         this.sendForwarded(socket, this.createEvent(ImagePullTerminalEventType.Finished, terminal.finished, { instanceId }));
       }
     }
+    for (const [instanceId, terminal] of this.gitProvisioningTerminalByInstance) {
+      const chunks = splitTerminalReplay(terminal.tail);
+      chunks.forEach((data, index) => this.sendForwarded(socket, this.createEvent(
+        GitProvisioningTerminalEventType.Output,
+        { ...terminal.output, sequence: terminal.output.sequence + index, data, ...(index === 0 ? { replay: true } : {}) },
+        { instanceId },
+      )));
+      if (terminal.finished) {
+        this.sendForwarded(socket, this.createEvent(GitProvisioningTerminalEventType.Finished, terminal.finished, { instanceId }));
+      }
+    }
     if (options.expectsTransientSubscription || options.legacyFallbackMs === undefined) {
       this.replaySessionAuthority(socket);
       this.syncNow();
@@ -262,6 +279,7 @@ export class NodeAgentInstanceEventForwarder {
 
   publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
     this.rememberImagePullTerminal(type, payload);
+    this.rememberGitProvisioningTerminal(type, payload);
     const event = this.createEvent(type, payload, scope);
     for (const output of this.outputs) this.sendForwarded(output, event);
   }
@@ -287,6 +305,27 @@ export class NodeAgentInstanceEventForwarder {
     }
   }
 
+  private rememberGitProvisioningTerminal(type: string, payload: unknown) {
+    if (type === GitProvisioningTerminalEventType.Output) {
+      const parsed = safeParseResponse(GitProvisioningTerminalOutputSchema, payload);
+      if (!parsed.success) return;
+      const output = parsed.data;
+      const current = this.gitProvisioningTerminalByInstance.get(output.instanceId);
+      if (current && output.generation < current.output.generation) return;
+      const sameGeneration = current?.output.generation === output.generation;
+      const tail = output.replay || !sameGeneration ? output.data : `${current.tail}${output.data}`.slice(-(256 * 1024));
+      this.gitProvisioningTerminalByInstance.set(output.instanceId, { output, tail });
+      return;
+    }
+    if (type === GitProvisioningTerminalEventType.Finished) {
+      const parsed = safeParseResponse(GitProvisioningTerminalFinishedSchema, payload);
+      if (!parsed.success) return;
+      const finished = parsed.data;
+      const current = this.gitProvisioningTerminalByInstance.get(finished.instanceId);
+      if (current?.output.generation === finished.generation) current.finished = finished;
+    }
+  }
+
   publishInstanceLifecycle(instance: ControlledInstance) {
     this.publish(
       InstanceLifecycleEventType.Snapshot,
@@ -296,6 +335,10 @@ export class NodeAgentInstanceEventForwarder {
     const terminal = this.imagePullTerminalByInstance.get(instance.id);
     if (instance.imageProvisioning?.phase === "ready" && terminal?.finished?.outcome === "succeeded") {
       this.imagePullTerminalByInstance.delete(instance.id);
+    }
+    const gitTerminal = this.gitProvisioningTerminalByInstance.get(instance.id);
+    if (instance.workspace.gitProvisioning?.phase === "ready" && gitTerminal?.finished?.outcome === "succeeded") {
+      this.gitProvisioningTerminalByInstance.delete(instance.id);
     }
   }
 
@@ -546,6 +589,9 @@ export class NodeAgentInstanceEventForwarder {
     }
     for (const instanceId of this.imagePullTerminalByInstance.keys()) {
       if (!instanceIds.has(instanceId)) this.imagePullTerminalByInstance.delete(instanceId);
+    }
+    for (const instanceId of this.gitProvisioningTerminalByInstance.keys()) {
+      if (!instanceIds.has(instanceId)) this.gitProvisioningTerminalByInstance.delete(instanceId);
     }
     if (!this.outputs.size) {
       for (const socket of this.sockets.values()) {

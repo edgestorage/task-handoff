@@ -90,6 +90,9 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
   if (action === "retry-image") {
     return instance.status === "failed" && instance.imageProvisioning?.phase === "failed";
   }
+  if (action === "retry-git") {
+    return instance.status === "failed" && instance.workspace.gitProvisioning?.phase === "failed";
+  }
   if (action === "start") {
     return !isInstanceRunning(instance) && !["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
   }
@@ -99,6 +102,23 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
   return isInstanceRunning(instance);
 }
 
+/**
+ * Provisioning retries share one user-facing action: whichever preparation step
+ * failed owns the retry, so surfaces render a single button.
+ */
+export function instanceProvisioningRetryAction(instance: InstanceBoardItem): "retry-image" | "retry-git" | undefined {
+  if (instance.status !== "failed") return undefined;
+  if (instance.workspace.gitProvisioning?.phase === "failed") return "retry-git";
+  if (instance.imageProvisioning?.phase === "failed") return "retry-image";
+  return undefined;
+}
+
+export function instanceProvisioningRetryLabel(instance: InstanceBoardItem, t: Translate) {
+  return instanceProvisioningRetryAction(instance) === "retry-git"
+    ? t("instances.actions.retryGit")
+    : t("instances.actions.retryImage");
+}
+
 export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
   if (isInstanceRuntimeUnavailable(instance)) return instanceRuntimeUnavailableLabel(instance, t);
   if (isInstanceRuntimeUpdating(instance)) return t("instances.lifecycle.updatingRuntime");
@@ -106,6 +126,9 @@ export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
     const imagePhase = instance.imageProvisioning?.phase;
     if (["checking-image", "pulling-image", "resolving-image"].includes(imagePhase || "")) return t("instances.lifecycle.preparing");
     if (imagePhase === "failed") return t("instances.lifecycle.imageFailed");
+    const gitPhase = instance.workspace.gitProvisioning?.phase;
+    if (gitPhase && ["pending", "cloning", "checking-out", "submodules", "lfs", "finalizing"].includes(gitPhase)) return t("instances.lifecycle.preparingWorkspace");
+    if (gitPhase === "failed") return t("instances.lifecycle.workspaceFailed");
   }
   if (instance.status === "created") return t("instances.lifecycle.created");
   if (instance.status === "provisioning") return t("instances.lifecycle.preparingRuntime");
@@ -136,9 +159,19 @@ export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) 
     if (imagePhase === "checking-image") return t("instances.lifecycle.checkingImageDetail");
     if (imagePhase === "pulling-image") return t("instances.lifecycle.pullingImageDetail");
     if (imagePhase === "resolving-image") return t("instances.lifecycle.resolvingImageDetail");
+    const gitPhase = instance.workspace.gitProvisioning?.phase;
+    if (gitPhase === "pending" || gitPhase === "cloning") return t("instances.lifecycle.cloningRepositoryDetail");
+    if (gitPhase === "checking-out") return t("instances.lifecycle.checkingOutDetail");
+    if (gitPhase === "submodules") return t("instances.lifecycle.submodulesDetail");
+    if (gitPhase === "lfs") return t("instances.lifecycle.lfsDetail");
+    if (gitPhase === "finalizing") return t("instances.lifecycle.finalizingWorkspaceDetail");
   }
   if (instance.status === "created") return t("instances.lifecycle.readyToStart");
   if (instance.status === "failed" && instance.imageProvisioning?.error) return instance.imageProvisioning.error;
+  if (instance.status === "failed" && instance.workspace.gitProvisioning?.error) return instance.workspace.gitProvisioning.error;
+  // Start failures are recorded on the workspace by the node agent, so a failed
+  // instance that never reached Git provisioning still shows its real reason.
+  if (instance.status === "failed" && instance.workspace.error) return instance.workspace.error;
   if (instance.status === "failed") return t("instances.lifecycle.failedDetail");
   if (instance.status === "stopped") return t("instances.lifecycle.stoppedDetail");
   if (instance.status === "unhealthy") return t("instances.lifecycle.unhealthyDetail", { health: translateStatus(healthStatusKeys, instance.health, t) });
@@ -164,6 +197,20 @@ export function imageProvisioningLabel(instance: InstanceBoardItem, t: Translate
   if (phase === "resolving-image") return t("instances.lifecycle.resolvingDigest");
   if (phase === "failed") return t("instances.lifecycle.imageProvisionFailed");
   return phase === "ready" ? t("instances.lifecycle.imageReady") : "";
+}
+
+/** Fallback copy for the workspace preparation page before live progress arrives. */
+export function gitProvisioningLabel(instance: InstanceBoardItem, t: Translate) {
+  const provisioning = instance.workspace.gitProvisioning;
+  if (!provisioning) return "";
+  if (provisioning.phase === "ready") return t("instances.lifecycle.workspaceReady");
+  if (provisioning.phase === "failed") return t("instances.lifecycle.workspaceFailed");
+  return t("instances.lifecycle.preparingWorkspace");
+}
+
+export function showGitPreparation(instance: InstanceBoardItem) {
+  const phase = instance.workspace.gitProvisioning?.phase;
+  return Boolean(phase && phase !== "ready");
 }
 
 export function shortId(id: string) {

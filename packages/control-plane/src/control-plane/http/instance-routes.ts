@@ -145,6 +145,11 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     events.publish("instance.image-provisioning-retried", { instanceId: instance.id });
     return { data: instance };
   });
+  app.post("/api/controlled-instances/:id/git-provisioning/retry", async (request) => {
+    const instance = await service.retryControlledInstanceGitProvisioning(IdParamsSchema.parse(request.params).id);
+    events.publish("instance.git-provisioning-retried", { instanceId: instance.id });
+    return { data: instance };
+  });
   app.get("/api/controlled-instances/:id/config-sync", async (request) => ({
     data: await service.instanceConfigSyncState(IdParamsSchema.parse(request.params).id),
   }));

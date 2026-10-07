@@ -38,6 +38,10 @@
       "types": "./src/ai-sessions.ts",
       "default": "./src/ai-sessions.ts"
     },
+    "./client-request-id": {
+      "types": "./src/client-request-id.ts",
+      "default": "./src/client-request-id.ts"
+    },
     "./ai-session-hierarchy": {
       "types": "./src/ai-session-hierarchy.ts",
       "default": "./src/ai-session-hierarchy.ts"

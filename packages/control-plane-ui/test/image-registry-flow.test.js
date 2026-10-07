@@ -20,6 +20,7 @@ function instance(phase, overrides = {}) {
     status: phase === "failed" ? "failed" : "provisioning",
     connectionStatus: "unknown",
     access: { status: "unknown" },
+    workspace: {},
     imageProvisioning: {
       phase,
       requestedReference: "docker.io/example/app:v1",
@@ -219,7 +220,7 @@ test("environment templates use the shared filtered directory pattern", () => {
   assert.match(section, /<AlertDialog :open="Boolean\(deleteTarget\)"/);
 });
 
-test("instance list, board, and detail expose image failure retry", () => {
+test("instance list, board, and detail expose one retry for the failed preparation step", () => {
   for (const file of [
     "src/apps/control-plane/instance-list/InstanceList.vue",
     "src/apps/control-plane/board/InstanceBoardView.vue",
@@ -228,8 +229,17 @@ test("instance list, board, and detail expose image failure retry", () => {
     const source = read(file);
     assert.match(source, /imageProvisioning/);
   }
+  // Image and Git preparation are sequential, so every surface renders the
+  // failing step's own action through the shared resolver.
+  for (const file of [
+    "src/apps/control-plane/board/InstanceBoardView.vue",
+    "src/apps/control-plane/instance-detail/InstanceDetail.vue",
+  ]) {
+    assert.match(read(file), /instanceProvisioningRetryAction/);
+  }
+  const status = read("src/apps/control-plane/useInstanceStatus.ts");
+  assert.match(status, /instance\.imageProvisioning\?\.phase === "failed"\) return "retry-image"/);
+  assert.match(status, /instance\.workspace\.gitProvisioning\?\.phase === "failed"\) return "retry-git"/);
   assert.match(read("src/apps/control-plane/instance-list/InstanceList.vue"), /<InstanceActionMenuItems/);
-  assert.match(read("src/apps/control-plane/instance-list/InstanceActionMenuItems.vue"), /retry-image/);
-  assert.match(read("src/apps/control-plane/board/InstanceBoardView.vue"), /retry-image/);
-  assert.match(read("src/apps/control-plane/instance-detail/InstanceDetail.vue"), /retry-image/);
+  assert.match(read("src/apps/control-plane/instance-list/InstanceActionMenuItems.vue"), /instanceProvisioningRetryAction/);
 });

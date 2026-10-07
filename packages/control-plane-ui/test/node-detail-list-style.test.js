@@ -22,7 +22,7 @@ test("node detail tabs reuse the shared settings directory list pattern", () => 
 
   // The taller bar is opt-in per header, not a blanket height on every card.
   assert.equal((panel.match(/class="section-head has-actions"/g) || []).length, 6);
-  assert.equal((panel.match(/class="section-head"/g) || []).length, 6);
+  assert.equal((panel.match(/class="section-head"/g) || []).length, 7);
   for (const headingKey of ["managedUpdates", "updateJobs", "localFolderCount", "dockerImages", "pairedKeys", "activeConnections"]) {
     assert.match(
       panel,
@@ -30,6 +30,11 @@ test("node detail tabs reuse the shared settings directory list pattern", () => 
       `expected has-actions on the ${headingKey} header`,
     );
   }
+
+  // Updates renders with the same cards as every other tab instead of a
+  // bespoke group rail, and keeps its explanatory copy in a shared note row.
+  assert.doesNotMatch(panel, /managed-update-group/);
+  assert.match(panel, /\.section-note\s*\{[^}]*padding:\s*9px 12px 10px;/s);
 
   // Rows: full-bleed separators with 12px horizontal padding and no extra gaps.
   assert.match(panel, /\.node-resource-row\s*\{[^}]*gap:\s*16px;[^}]*padding:\s*10px 12px;/s);

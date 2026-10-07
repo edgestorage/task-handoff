@@ -47,6 +47,8 @@ import type {
   EnvironmentSource,
   EnvironmentTemplate,
   ImagePullProgress,
+  GitProvisioningProgress,
+  GitWorkspaceProvisioningStatus,
   ApplyUpdateRequest,
   CodexInstanceSettings,
   NodeRolloutSummary,
@@ -778,6 +780,7 @@ export type ControlledInstance = {
     path?: string;
     resolvedCommit?: string;
     error?: string;
+    gitProvisioning?: GitWorkspaceProvisioningStatus;
   };
   access: InstanceAccess;
   apps: {
@@ -1061,6 +1064,7 @@ export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   runtime?: NodeRuntime;
   protocolCompatible: boolean;
   imagePullProgress?: ImagePullProgress;
+  gitProvisioningProgress?: GitProvisioningProgress;
 };
 
 export type InstanceBoardItemWithAppSessions = Omit<InstanceBoardItem, "apps"> & {

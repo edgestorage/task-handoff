@@ -1869,6 +1869,70 @@ export const ImagePullProgressSchema = ImagePullEventIdentitySchema.extend({
   terminalTruncated: z.boolean().optional(),
 }).strict();
 
+// Git workspace materialization is a workspace concern, so its authoritative
+// state lives on the instance workspace record. The phases describe the
+// provisioning script stages; the live terminal/progress flow is carried by the
+// git.provisioning.* events below instead of being persisted.
+export const GitWorkspaceProvisioningPhaseSchema = z.enum([
+  "pending",
+  "cloning",
+  "checking-out",
+  "submodules",
+  "lfs",
+  "finalizing",
+  "ready",
+  "failed",
+]);
+
+export const GitWorkspaceProvisioningStatusSchema = z.object({
+  phase: GitWorkspaceProvisioningPhaseSchema,
+  remoteUrl: z.string().trim().min(1).max(2048),
+  generation: z.number().int().nonnegative().default(0),
+  error: z.string().trim().max(4096).optional(),
+  startedAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
+export const GitProvisioningTerminalEventType = {
+  Output: "git.provisioning.terminal.output",
+  Finished: "git.provisioning.terminal.finished",
+  Progress: "git.provisioning.progress",
+  Snapshot: "git.provisioning.snapshot",
+} as const;
+
+const GitProvisioningEventIdentitySchema = z.object({
+  instanceId: IdSchema,
+  generation: z.number().int().nonnegative(),
+  remoteUrl: z.string().trim().min(1).max(2048),
+  sequence: z.number().int().nonnegative(),
+  observedAt: TimestampSchema,
+}).strict();
+
+export const GitProvisioningTerminalOutputSchema = GitProvisioningEventIdentitySchema.extend({
+  data: z.string().min(1).max(65536),
+  replay: z.boolean().optional(),
+}).strict();
+
+export const GitProvisioningTerminalFinishedSchema = GitProvisioningEventIdentitySchema.extend({
+  outcome: z.enum(["succeeded", "failed"]),
+}).strict();
+
+export const GitProvisioningProgressSchema = GitProvisioningEventIdentitySchema.extend({
+  status: z.enum(["connecting", "cloning", "checking-out", "submodules", "lfs", "finalizing", "complete", "failed"]),
+  objects: z.object({
+    received: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }).strict().optional(),
+  bytes: z.object({
+    current: z.number().finite().nonnegative(),
+    total: z.number().finite().positive(),
+  }).strict().optional(),
+  percent: z.number().finite().min(0).max(100).optional(),
+  message: z.string().trim().min(1).max(500),
+  terminalTail: z.string().max(262144).optional(),
+  terminalTruncated: z.boolean().optional(),
+}).strict();
+
 export function sanitizeStoredImageProfile(
   input: unknown,
   onWarning?: (warning: { imageId?: string; field: string }) => void,
@@ -2441,6 +2505,10 @@ export const WorkspaceStatusSchema = z
     path: z.string().trim().max(4096).optional(),
     resolvedCommit: z.string().trim().max(120).optional(),
     error: z.string().trim().max(2048).optional(),
+    // Additive workspace materialization state. Older readers keep accepting the
+    // workspace record and simply ignore unknown keys, so node agents can report
+    // Git provisioning progress without a protocol-version gate.
+    gitProvisioning: GitWorkspaceProvisioningStatusSchema.optional(),
   })
   .passthrough();
 
@@ -3320,6 +3388,10 @@ export type ImageProvisioning = z.infer<typeof ImageProvisioningSchema>;
 export type ImagePullTerminalOutput = z.infer<typeof ImagePullTerminalOutputSchema>;
 export type ImagePullTerminalFinished = z.infer<typeof ImagePullTerminalFinishedSchema>;
 export type ImagePullProgress = z.infer<typeof ImagePullProgressSchema>;
+export type GitWorkspaceProvisioningStatus = z.infer<typeof GitWorkspaceProvisioningStatusSchema>;
+export type GitProvisioningTerminalOutput = z.infer<typeof GitProvisioningTerminalOutputSchema>;
+export type GitProvisioningTerminalFinished = z.infer<typeof GitProvisioningTerminalFinishedSchema>;
+export type GitProvisioningProgress = z.infer<typeof GitProvisioningProgressSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeStateProjectionEvent = z.infer<typeof NodeStateProjectionEventSchema>;

@@ -14,6 +14,7 @@ const {
   assertDockerConfigHasNoSecrets,
   dockerGitProvisionArgs,
   dockerRunArgs,
+  GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
 } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
@@ -514,6 +515,40 @@ test("Docker Git provisioning uses a disposable helper before the final instance
   const dryRun = dockerGitProvisionArgs(value, "helper", "/private/auth");
   assert.equal(dryRun.some((item) => item.includes("provision-secret")), false);
   assert.ok(dryRun.includes(`TASK_HANDOFF_INSTANCE_ID=${value.instance.id}`));
+});
+
+test("Docker start fails fast instead of cloning inline while Git provisioning is orchestrated", async () => {
+  const value = context({
+    type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { submodules: false, lfs: false, subdirectory: "" },
+  });
+  value.gitWorkspaceProvisioning = {
+    operationId: "gitop_pending", instanceId: value.instance.id, remoteUrl: value.project.source.url,
+    ref: value.project.source.ref, clone: value.project.source.clone, credentials: [],
+  };
+  value.instance = ControlledInstanceSchema.parse({
+    ...value.instance,
+    workspace: {
+      mode: "git-clone", status: "pending",
+      gitProvisioning: { phase: "cloning", remoteUrl: value.project.source.url, generation: 0, startedAt: timestamp, updatedAt: timestamp },
+    },
+  });
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) throw Object.assign(new Error("missing"), { details: { stderr: "No such container" } });
+    if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  });
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
+  );
+  assert.equal(calls.some((args) => args[0] === "run"), false);
 });
 
 test("Docker Git provisioning returns stable errors, preserves retry input, and cleans helper material", async () => {

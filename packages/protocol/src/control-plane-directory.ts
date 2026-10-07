@@ -100,6 +100,7 @@ export const ControlPlaneInstanceActionSchema = z.enum([
   "stop",
   "restart",
   "retry-image",
+  "retry-git",
 ]);
 
 export const ControlPlaneInstanceLifecycleDirectoryEventSchema = z.object({
