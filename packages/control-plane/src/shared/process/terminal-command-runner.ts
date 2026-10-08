@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawn as spawnPty } from "node-pty";
 import type { CommandResult } from "./command-runner.ts";
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.ts";
@@ -12,6 +14,40 @@ export type TerminalCommandRunOptions = {
 
 export type TerminalCommandRunner = (command: string, args: string[], options?: TerminalCommandRunOptions) => Promise<CommandResult>;
 
+function isRegularFile(candidate: string) {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * node-pty resolves a relative command name on Windows by scanning `Path` for a file whose name
+ * matches exactly, without applying PATHEXT. Windows only ships `docker.exe`, so spawning the bare
+ * name fails with a `File not found: ` error before the process is ever created. Resolving the
+ * executable here and handing node-pty an absolute path avoids that lookup entirely.
+ */
+export function resolveTerminalCommand(
+  command: string,
+  options: { platform?: NodeJS.Platform; env?: Record<string, string | undefined>; isFile?: (candidate: string) => boolean } = {},
+) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32" || !command) return command;
+  const env = options.env ?? (process.env as Record<string, string | undefined>);
+  if (path.win32.isAbsolute(command) || /[\\/]/.test(command)) return command;
+  const isFile = options.isFile ?? isRegularFile;
+  const directories = (env.PATH ?? env.Path ?? "").split(";").map((entry) => entry.trim()).filter(Boolean);
+  const extensions = ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((entry) => entry.trim()).filter(Boolean)];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = path.win32.join(directory, `${command}${extension}`);
+      if (isFile(candidate)) return candidate;
+    }
+  }
+  return command;
+}
+
 export const defaultTerminalCommandRunner: TerminalCommandRunner = (command, args, options = {}) => new Promise((resolve, reject) => {
   if (options.signal?.aborted) {
     reject(Object.assign(new Error(`${command} was aborted.`), { code: "RUNTIME_COMMAND_ABORTED" }));
@@ -22,7 +58,7 @@ export const defaultTerminalCommandRunner: TerminalCommandRunner = (command, arg
   let aborted = false;
   let terminal: ReturnType<typeof spawnPty>;
   try {
-    terminal = spawnPty(command, args, {
+    terminal = spawnPty(resolveTerminalCommand(command), args, {
       name: "xterm-256color",
       cols: options.cols || 120,
       rows: options.rows || 40,

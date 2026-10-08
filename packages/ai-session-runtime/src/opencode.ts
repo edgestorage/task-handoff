@@ -48,6 +48,11 @@ export type OpenCodeSessionBridgeOptions = {
   }) => void | Promise<void>;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /**
+   * Provider session ids that task-handoff has closed. Discovery and provider
+   * events must not re-adopt them until an explicit resume removes the entry.
+   */
+  closedProviderSessionIds?: () => ReadonlySet<string>;
   resolveModelSelection?: (selection: AiSessionModelSelection) => { providerID: string; modelID: string } | undefined;
   projectModelSelection?: (providerID: string, modelID: string) => AiSessionModelSelection | undefined;
 };
@@ -55,6 +60,9 @@ export type OpenCodeSessionBridgeOptions = {
 export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessionDiscoveryProvider {
   readonly agent = "opencode";
   readonly id = "opencode-session-discovery";
+  // OpenCode has no API to restore an archived session, so close detaches the
+  // provider session instead of archiving it (see AiSessionControlProvider).
+  readonly closeDetachesProviderSession = true;
   private readonly client: OpenCodeClient;
   private readonly directoryBySession = new Map<string, string>();
   private readonly projectionBySession = new Map<string, OpenCodeProjection>();
@@ -136,9 +144,15 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: AiSessionAgentToolName[]) {
     await this.readSession(providerSessionId);
-    if (storyAgentTools === undefined) return;
     const directory = await this.resolveDirectory(providerSessionId);
     const current = await this.client.getSession(providerSessionId, directory);
+    // OpenCode has no API to clear `time.archived`, so a session archived by an
+    // older close implementation can never be restored. Fail loudly instead of
+    // reporting a resume that the next convergence would silently discard.
+    if (current.time.archived) {
+      throw aiSessionControlError("AI_SESSION_RESUME_UNAVAILABLE", "OpenCode cannot restore an archived session.", 409);
+    }
+    if (storyAgentTools === undefined) return;
     await this.client.setPermission(providerSessionId, directory, openCodeSessionPermissionRules(undefined, storyAgentTools, current.permission)!);
   }
 
@@ -367,6 +381,12 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   }
 
   private async reconcile(providerSessionId: string, directory: string, supplied?: OpenCodeSession, creationSource?: "ai-session" | "app-session") {
+    // A session task-handoff closed must stay closed until it is explicitly
+    // resumed, so provider events and discovery cannot re-adopt it.
+    if (!this.registry.getByProviderSessionId(this.agent, providerSessionId)
+      && this.options.closedProviderSessionIds?.().has(providerSessionId)) {
+      return;
+    }
     const projection = await this.refreshProjection(providerSessionId, directory, supplied);
     const existing = this.registry.getByProviderSessionId(this.agent, providerSessionId);
     return this.registry.applyAdapterSnapshot({

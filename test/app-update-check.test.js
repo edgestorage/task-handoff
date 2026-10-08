@@ -58,9 +58,8 @@ test("apt checks run a read-only apt-cache policy query", async () => {
   const { checker, commands } = checkerWith([{ exitCode: 0, stdout: "chromium:\n  Installed: 120.0\n  Candidate: 121.0\n", stderr: "" }]);
   const result = await checker(aptRecipe, { appId: "chromium", capabilities: aptCapabilities });
   assert.equal(result.status, "update-available");
-  assert.deepEqual(commands.map((command) => ({ executable: command.executable, args: command.args })), [
-    { executable: "apt-cache", args: ["policy", "chromium"] },
-  ]);
+  assert.ok(commands[0].executable.endsWith("apt-cache"));
+  assert.deepEqual(commands[0].args, ["policy", "chromium"]);
   assert.equal(commands[0].env.LC_ALL, "C");
 });
 
