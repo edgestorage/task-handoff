@@ -48,6 +48,7 @@ function createNodeAgentMock(options = {}) {
       }
       relay.enabled = body.enabled;
       relay.source = "persisted";
+      if (body.unknownModelPolicy) relay.unknownModelPolicy = body.unknownModelPolicy;
       return json(relay);
     }
     return error("NODE_AGENT_ROUTE_NOT_FOUND", `Unexpected node-agent request ${init.method || "GET"} ${requestPath}`, 404);
@@ -89,6 +90,12 @@ function relayCapabilities() {
       modelRelay: { protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"], streaming: true },
     },
   };
+}
+
+function relayUnknownModelPolicyCapabilities() {
+  const capabilities = relayCapabilities();
+  capabilities.managedModels.modelRelay.unknownModelPolicy = true;
+  return capabilities;
 }
 
 function onceWebSocketJsonMatching(socket, predicate, timeoutMs = 3000) {
@@ -204,6 +211,58 @@ test("node relay settings downgrade nodes without the relay capability", async (
   assert.equal(write.statusCode, 409, write.body);
   assert.equal(write.json().error.code, "NODE_MODEL_RELAY_UNSUPPORTED");
   assert.equal(mock.requests.some((request) => request.path === "/settings/model-relay"), false);
+});
+
+test("node relay settings strip the unknown-model policy for nodes that predate the capability", async (t) => {
+  // relayCapabilities() intentionally omits unknownModelPolicy: the node's
+  // strict settings schema cannot parse the additive field.
+  const { app, mock } = await createHarness(t, { capabilities: relayCapabilities() });
+
+  const rejectWrite = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, unknownModelPolicy: "reject" },
+  });
+  assert.equal(rejectWrite.statusCode, 200, rejectWrite.body);
+  const rejectForwarded = mock.requests.filter((request) => request.path === "/settings/model-relay" && request.method === "PATCH");
+  assert.deepEqual(rejectForwarded.at(-1).body, { enabled: true });
+
+  const defaultWrite = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true },
+  });
+  assert.equal(defaultWrite.statusCode, 200, defaultWrite.body);
+  const defaultForwarded = mock.requests.filter((request) => request.path === "/settings/model-relay" && request.method === "PATCH");
+  assert.deepEqual(defaultForwarded.at(-1).body, { enabled: true });
+
+  // An explicit passthrough request cannot be honored by a fail-closed node,
+  // so it downgrades loudly instead of silently keeping the node's behavior.
+  const passthroughWrite = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, unknownModelPolicy: "passthrough" },
+  });
+  assert.equal(passthroughWrite.statusCode, 409, passthroughWrite.body);
+  assert.equal(passthroughWrite.json().error.code, "NODE_MODEL_RELAY_UNKNOWN_MODEL_POLICY_UNSUPPORTED");
+  const afterDowngrade = mock.requests.filter((request) => request.path === "/settings/model-relay" && request.method === "PATCH");
+  assert.equal(afterDowngrade.length, defaultForwarded.length);
+});
+
+test("node relay settings forward the unknown-model policy when the node declares the capability", async (t) => {
+  const { app, mock } = await createHarness(t, { capabilities: relayUnknownModelPolicyCapabilities() });
+
+  const updated = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, unknownModelPolicy: "reject" },
+  });
+  assert.equal(updated.statusCode, 200, updated.body);
+  assert.deepEqual(updated.json().data, { enabled: true, source: "persisted", unknownModelPolicy: "reject" });
+  assert.deepEqual(mock.requests.at(-1).body, { enabled: true, unknownModelPolicy: "reject" });
+
+  const reread = await app.inject({ method: "GET", url: "/api/nodes/node_relay/settings/model-relay" });
+  assert.deepEqual(reread.json().data, { enabled: true, source: "persisted", unknownModelPolicy: "reject" });
 });
 
 test("node relay settings stay scoped to the addressed node", async (t) => {

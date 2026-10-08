@@ -27,6 +27,7 @@ import {
   UpdateCheckResultSchema,
   UpdateJobSchema,
   supportsNodeModelRelay,
+  supportsNodeModelRelayUnknownModelPolicy,
   nodeAgentCapabilitiesFromPublicNode,
   safeParseStoredControlledInstance,
   type ControlledInstance,
@@ -37,6 +38,7 @@ import {
   type NodeRuntime,
   type UpdateCheckRequest,
   type ApplyUpdateRequest,
+  type UpdateNodeAgentModelRelay,
 } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneNodeAgentClient, nodeAgentScopedError, type NodeAgentScopedError } from "./client.ts";
 import type {
@@ -196,8 +198,28 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.requestSchema(node, "/settings/model-relay", NodeAgentModelRelaySchema, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(parsed),
+      body: JSON.stringify(this.modelRelayWriteBody(node, parsed)),
     });
+  }
+
+  /**
+   * Compatibility for nodes without the unknown-model policy capability: their
+   * strict settings schema rejects the additive field, so it is stripped. An
+   * explicit passthrough request cannot be honored there and fails closed
+   * instead of silently leaving the node on its fail-closed behavior.
+   */
+  private modelRelayWriteBody(node: Node, parsed: UpdateNodeAgentModelRelay) {
+    if (supportsNodeModelRelayUnknownModelPolicy(nodeAgentCapabilitiesFromPublicNode(node.capabilities))) return parsed;
+    if (parsed.unknownModelPolicy === "passthrough") {
+      throw Object.assign(new Error(`Node ${node.id} must be updated before the model relay can forward unknown model names.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_RELAY_UNKNOWN_MODEL_POLICY_UNSUPPORTED",
+        details: { nodeId: node.id },
+      });
+    }
+    // A node that predates the setting is already fail closed, which matches
+    // an explicit "reject".
+    return { enabled: parsed.enabled };
   }
 
   /**

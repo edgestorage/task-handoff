@@ -85,6 +85,7 @@
                   :source-summary="sourceSummary"
                   @check-docker-runtime="checkSelectedDockerRuntime"
                   @create-image="createQuickImage"
+                  @open-model-settings="$emit('open-model-settings')"
                 />
               </div>
             </ScrollArea>
@@ -137,6 +138,7 @@ const { t } = useI18n();
 const emit = defineEmits<{
   close: [];
   created: [instance: InstanceBoardItem];
+  "open-model-settings": [];
 }>();
 
 const props = defineProps<{

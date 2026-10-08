@@ -215,7 +215,7 @@ export class CodexAppServerClient extends EventEmitter {
       : { type: "stdio", command };
     this.requestTimeoutMs = options.requestTimeoutMs
       || Number(process.env.TASK_HANDOFF_CODEX_APP_SERVER_TIMEOUT_MS)
-      || 5_000;
+      || 15_000;
     this.resolveVersion = options.resolveVersion || resolveCodexCliVersion;
     this.onDynamicToolCall = options.onDynamicToolCall;
     this.onDiagnostic = options.onDiagnostic;

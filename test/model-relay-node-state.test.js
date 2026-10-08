@@ -93,7 +93,7 @@ test("node relay settings default to off, persist across restart, and reject inv
 
   const initial = await relaySettingsPayload(app, "GET");
   assert.equal(initial.statusCode, 200);
-  assert.deepEqual(initial.json().data, { enabled: false, source: "default" });
+  assert.deepEqual(initial.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
   assert.equal(fs.existsSync(path.join(dataDir, "runtime-settings.json")), true);
 
   for (const invalid of [{ enabled: "yes" }, { enabled: true, extra: 1 }, {}]) {
@@ -101,23 +101,23 @@ test("node relay settings default to off, persist across restart, and reject inv
     assert.equal(rejected.statusCode, 400, JSON.stringify(invalid));
     assert.equal(rejected.json().error.code, "VALIDATION_ERROR");
   }
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, source: "default" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
 
   const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
   assert.equal(enabled.statusCode, 200);
-  assert.deepEqual(enabled.json().data, { enabled: true, source: "persisted" });
+  assert.deepEqual(enabled.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
-  assert.deepEqual(stored.modelRelay, { enabled: true });
+  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "passthrough" });
   assert.equal(typeof stored.externalListener.port, "number");
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), true);
 
   await app.close();
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_settings" });
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), true);
 
   const disabled = await relaySettingsPayload(app, "PATCH", { enabled: false });
-  assert.deepEqual(disabled.json().data, { enabled: false, source: "persisted" });
+  assert.deepEqual(disabled.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "persisted" });
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), false);
 });
 
@@ -169,7 +169,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
   assert.equal(refused.json().error.code, "NODE_MODEL_RELAY_IN_USE");
   // Only instances that actually consume relay routes pin the switch.
   assert.deepEqual(refused.json().error.details.instanceIds, ["inst_relay_ready"]);
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
 
   // Editing an already assigned same-name entity into a mapping applies
   // directly; the plain consumer keeps projecting nothing.
@@ -186,7 +186,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", { modelSelection: {} })).statusCode, 200);
   const closed = await relaySettingsPayload(app, "PATCH", { enabled: false });
   assert.equal(closed.statusCode, 200);
-  assert.deepEqual(closed.json().data, { enabled: false, source: "persisted" });
+  assert.deepEqual(closed.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "persisted" });
 });
 
 test("node relay routes are derived, fail closed, and resolve after restart without control-plane", async (t) => {
@@ -242,6 +242,9 @@ test("node relay routes are derived, fail closed, and resolve after restart with
   assert.equal(resolved.model.id, mappedId);
   assert.equal(resolved.protocol, "openai-responses");
   assert.equal(resolver.resolveUpstreamModelName(resolved.model, "public-routed"), "upstream-routed");
+  // Default policy forwards an unmatched name verbatim.
+  assert.equal(resolver.resolveUpstreamModelName(resolved.model, "gpt-test"), "gpt-test");
+  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: true, unknownModelPolicy: "reject" })).statusCode, 200);
   assert.throws(
     () => resolver.resolveUpstreamModelName(resolved.model, "gpt-test"),
     (error) => error.code === "MODEL_RELAY_UNKNOWN_MODEL_NAME" && error.statusCode === 400,
@@ -257,7 +260,8 @@ test("node relay routes are derived, fail closed, and resolve after restart with
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_routes" });
   const offlineResolver = new NodeModelRelayResolver(app.nodeAgentState.modelRegistry);
   assert.equal(offlineResolver.resolveRoute(instanceId, routeId).model.id, mappedId);
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, source: "persisted" });
+  // The explicit reject policy set above also survives the restart.
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "reject", source: "persisted" });
 
   // Assignment removal invalidates the derived route immediately.
   assert.equal((await request(app, "PUT", `/api/node-agent/instances/${instanceId}/model-assignment`, { modelSelection: {} })).statusCode, 200);
@@ -283,10 +287,10 @@ test("stored runtime settings sanitize unknown and malformed relay values to def
   let app;
   try {
     app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize" });
-    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, source: "default" });
+    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
 
     const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
-    assert.deepEqual(enabled.json().data, { enabled: true, source: "persisted" });
+    assert.deepEqual(enabled.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
   } finally {
     console.warn = originalWarn;
   }
@@ -298,9 +302,38 @@ test("stored runtime settings sanitize unknown and malformed relay values to def
   // The persisted file is rewritten from the sanitized model, so the unknown
   // domain disappears on the next write.
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, source: "persisted" });
-  assert.deepEqual(stored.modelRelay, { enabled: true });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "passthrough" });
   assert.equal("futureDomain" in stored, false);
+});
+
+test("stored runtime settings normalize an invalid relay policy to the passthrough default", async (t) => {
+  const dataDir = tempDataDir();
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "runtime-settings.json"), `${JSON.stringify({
+    version: 1,
+    externalListener: { bindScope: "loopback", port: 8091 },
+    modelRelay: { enabled: true, unknownModelPolicy: "bogus" },
+  })}\n`);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.map(String).join(" "));
+  let app;
+  try {
+    app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize_policy" });
+    // Only the policy is dropped; the switch itself stays persisted and on.
+    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+  } finally {
+    console.warn = originalWarn;
+  }
+  t.after(async () => app.close());
+  assert.ok(warnings.some((warning) => warning.includes("modelRelay.unknownModelPolicy")), warnings.join("\n"));
+
+  await relaySettingsPayload(app, "PATCH", { enabled: true, unknownModelPolicy: "reject" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "reject", source: "persisted" });
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
+  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "reject" });
 });
 
 test("mapping edits keep entity identity, advance revision, and store the private mapping only in SQLite", async (t) => {

@@ -187,8 +187,8 @@ export function createFakeControlPlane(options = {}) {
     sequence: 3,
     capabilities: { platform: "linux", arch: "x64", installers: ["apt"], privilege: "passwordless-sudo" },
     apps: [
-      { id: "codex", name: "Codex", kind: "tty", state: "installed", managementSource: "recipe", version: "1.2.3", canInstall: false, canUninstall: true },
-      { id: "chromium", name: "Chromium", kind: "gui", state: "not-installed", managementSource: "recipe", canInstall: true, canUninstall: false },
+      { id: "codex", name: "Codex", kind: "tty", state: "installed", managementSource: "recipe", version: "1.2.3", canInstall: false, canUninstall: true, canUpdate: true, updateCheck: { status: "update-available", installedVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: now } },
+      { id: "chromium", name: "Chromium", kind: "gui", state: "not-installed", managementSource: "recipe", canInstall: true, canUninstall: false, canUpdate: false },
     ],
     activeJobs: [],
     recentJobs: [],
@@ -695,13 +695,17 @@ export function createFakeControlPlane(options = {}) {
       const activeJobs = [...state.jobs.values()].filter((job) => !["succeeded", "failed", "cancelled", "interrupted"].includes(job.state));
       return json(200, { data: { ...appManagementSnapshot, activeJobs, recentJobs: [...state.jobs.values()] } });
     }
-    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/(install|uninstall)$/.test(path)) {
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/(install|uninstall|update)$/.test(path)) {
       const segments = path.split("/");
       const appId = segments.at(-2);
       const operation = segments.at(-1);
       const job = { id: `appjob_${operation}_01`, appId, operation, state: "queued", phase: "queued", requestedAt: now, updatedAt: now, ...(body?.requestId ? { requestId: body.requestId } : {}) };
       state.jobs.set(job.id, job);
       return json(202, { data: { job } });
+    }
+    if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/update-check$/.test(path)) {
+      const appId = path.split("/").at(-2);
+      return json(200, { data: { check: { appId, status: "update-available", installedVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: now } } });
     }
     if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/jobs\/[^/]+$/.test(path)) {
       const jobId = path.split("/").at(-1);
@@ -710,7 +714,7 @@ export function createFakeControlPlane(options = {}) {
       const polls = (state.jobPolls.get(jobId) ?? 0) + 1;
       state.jobPolls.set(jobId, polls);
       if (polls >= 2) Object.assign(job, { state: "succeeded", phase: "done", progress: { current: 1, total: 1 }, logTail: `${job.operation} finished`, finishedAt: now, updatedAt: now });
-      else Object.assign(job, { state: "running", phase: job.operation === "install" ? "installing" : "uninstalling", updatedAt: now });
+      else Object.assign(job, { state: "running", phase: job.operation === "install" ? "installing" : job.operation === "update" ? "updating" : "uninstalling", updatedAt: now });
       return json(200, { data: { job } });
     }
     if (method === "GET" && /^\/api\/controlled-instances\/[^/]+\/apps\/[^/]+\/profiles$/.test(path)) {

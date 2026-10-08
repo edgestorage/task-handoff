@@ -88,7 +88,7 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
 
   const settings = await request(app, "GET", "/api/node-agent/settings/model-relay");
   assert.equal(settings.statusCode, 200);
-  assert.deepEqual(settings.json().data, { enabled: false, source: "default" });
+  assert.deepEqual(settings.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
 
   const created = await request(app, "POST", "/api/node-agent/models", legacyModelInput());
   assert.equal(created.statusCode, 201, created.body);
@@ -102,7 +102,7 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
 
   // The switch is the only enable authority: without it the derived route is
   // refused before any upstream contact.
-  await request(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true });
+  await request(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true, unknownModelPolicy: "reject" });
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_matrix_legacy_cp/model-assignment", assignPayload(model.id))).statusCode, 200);
   const resolver = new NodeModelRelayResolver(app.nodeAgentState.modelRegistry);
   const routeId = deriveModelRelayRouteId("inst_matrix_legacy_cp", model.id, "openai-responses");
@@ -110,8 +110,9 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
   // Reading a v0.0.34 record normalizes the internal mapping to upstreamName = name.
   assert.equal(resolved.model.modelNames[0].upstreamName, "gpt-v028");
   assert.equal(resolver.resolveUpstreamModelName(resolved.model, "gpt-v028"), "gpt-v028");
-  // A name that is neither declared nor mapped still fails closed, so a
-  // v0.0.34 record cannot accidentally resolve a hidden reviewer model.
+  // With the explicit reject policy a name that is neither declared nor mapped
+  // still fails closed, so a v0.0.34 record cannot accidentally resolve a
+  // hidden reviewer model.
   assert.throws(
     () => resolver.resolveUpstreamModelName(resolved.model, "codex-auto-review"),
     (error) => error.code === "MODEL_RELAY_UNKNOWN_MODEL_NAME",

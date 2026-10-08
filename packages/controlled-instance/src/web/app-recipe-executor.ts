@@ -138,9 +138,9 @@ function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManage
     throw new AppRecipeExecutionError("installer_unavailable", `The ${recipe.installer} installer is unavailable.`);
   }
   const definitions = {
-    apt: { executable: "apt-get", install: ["install", "-y", "--no-install-recommends"], uninstall: ["remove", "-y"] },
-    dnf: { executable: "dnf", install: ["install", "-y"], uninstall: ["remove", "-y"] },
-    brew: { executable: "brew", install: ["install"], uninstall: ["uninstall"] },
+    apt: { executable: "apt-get", install: ["install", "-y", "--no-install-recommends"], update: ["install", "-y", "--only-upgrade", "--no-install-recommends"], uninstall: ["remove", "-y"] },
+    dnf: { executable: "dnf", install: ["install", "-y"], update: ["upgrade", "-y"], uninstall: ["remove", "-y"] },
+    brew: { executable: "brew", install: ["install"], update: ["upgrade"], uninstall: ["uninstall"] },
   } as const;
   const selected = definitions[recipe.installer];
   const args = [...selected[operation], ...recipe.packages];
@@ -170,9 +170,9 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
   if (!capabilities.installers.includes(recipe.installer)) {
     throw new AppRecipeExecutionError("installer_unavailable", `The ${recipe.installer} installer is unavailable.`);
   }
-  const args = operation === "install"
-    ? ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages]
-    : ["uninstall", "--global", ...recipe.packages];
+  const args = operation === "uninstall"
+    ? ["uninstall", "--global", ...recipe.packages]
+    : ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages];
   const resolution = resolveExecutable(recipe.installer, { env, platform: capabilities.platform as NodeJS.Platform });
   const installerExecutable = capabilities.platform === "win32"
     ? resolution?.executable || `${recipe.installer}.cmd`
@@ -456,9 +456,10 @@ async function extractArchive(recipe: ArchiveInstallRecipe, artifact: string, de
   await pipeArchive(recipe, artifact, unpack, 5 * 60_000);
 }
 
-async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
+type StagedArchive = { installRoot: string; extracted: string; staging: string; files: string[] };
+
+async function stageArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions): Promise<StagedArchive> {
   const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
-  if (fs.existsSync(installRoot)) throw new AppRecipeExecutionError("install_target_exists", "The managed install target already exists.");
   fs.mkdirSync(path.dirname(installRoot), { recursive: true });
   const staging = fs.mkdtempSync(path.join(path.dirname(installRoot), `.install-${context.appId}-`));
   const artifact = path.join(staging, `artifact.${recipe.format.replace(".", "-")}`);
@@ -481,36 +482,68 @@ async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeEx
       if (error instanceof AppRecipeExecutionError) throw error;
       throw new AppRecipeExecutionError("archive_extraction_failed", error instanceof Error ? error.message : "Artifact could not be extracted.");
     }
-    const files = walkOwnedFiles(extracted);
-    const ownershipManifest = manifestPath(options.stateDir, context.appId);
-    atomicWriteJsonSync(ownershipManifest, { schemaVersion: 1, appId: context.appId, installRoot, files });
-    try {
-      fs.renameSync(extracted, installRoot);
-    } catch (error) {
-      fs.rmSync(ownershipManifest, { force: true });
-      throw error;
-    }
-  } finally {
+    return { installRoot, extracted, staging, files: walkOwnedFiles(extracted) };
+  } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
+  const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
+  if (fs.existsSync(installRoot)) throw new AppRecipeExecutionError("install_target_exists", "The managed install target already exists.");
+  const staged = await stageArchive(recipe, context, options);
+  const ownershipManifest = manifestPath(options.stateDir, context.appId);
+  try {
+    atomicWriteJsonSync(ownershipManifest, { schemaVersion: 1, appId: context.appId, installRoot, files: staged.files });
+    fs.renameSync(staged.extracted, installRoot);
+  } catch (error) {
+    fs.rmSync(ownershipManifest, { force: true });
+    throw error;
+  } finally {
+    fs.rmSync(staged.staging, { recursive: true, force: true });
+  }
+}
+
+function readArchiveManifest(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
+  const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
+  const filePath = manifestPath(options.stateDir, context.appId);
+  if (!fs.existsSync(filePath)) throw new AppRecipeExecutionError("ownership_manifest_missing", "The archive ownership manifest is missing.");
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { installRoot?: unknown; files?: unknown };
+  if (raw.installRoot !== installRoot || !Array.isArray(raw.files)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "The archive ownership manifest is invalid.");
+  return { installRoot, filePath, files: raw.files.map((item) => String(item)) };
+}
+
+function removeOwnedArchiveFiles(installRoot: string, ownedFiles: string[]) {
+  const files = validateArchiveEntries(ownedFiles.map((item) => ({ path: item, type: "file" as const })));
+  for (const relative of files) {
+    const owned = path.resolve(installRoot, relative);
+    if (!owned.startsWith(`${installRoot}${path.sep}`)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "An owned path escapes the managed install root.");
+    try { fs.unlinkSync(owned); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  const directories = new Set(files.map((item) => path.dirname(path.join(installRoot, item))));
+  for (const directory of [...directories].sort((a, b) => b.length - a.length)) {
+    try { fs.rmdirSync(directory); } catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code || "")) throw error; }
+  }
+}
+
+async function updateArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
+  const manifest = readArchiveManifest(recipe, context, options);
+  if (!fs.existsSync(manifest.installRoot)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "The managed install target does not exist.");
+  const staged = await stageArchive(recipe, context, options);
+  try {
+    removeOwnedArchiveFiles(manifest.installRoot, manifest.files);
+    fs.cpSync(staged.extracted, manifest.installRoot, { recursive: true, force: true });
+    atomicWriteJsonSync(manifest.filePath, { schemaVersion: 1, appId: context.appId, installRoot: manifest.installRoot, files: staged.files });
+  } finally {
+    fs.rmSync(staged.staging, { recursive: true, force: true });
   }
 }
 
 function uninstallArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
-  const expectedRoot = controlledPath(options.installBaseDir, recipe.installRoot);
-  const filePath = manifestPath(options.stateDir, context.appId);
-  if (!fs.existsSync(filePath)) throw new AppRecipeExecutionError("ownership_manifest_missing", "The archive ownership manifest is missing.");
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { installRoot?: unknown; files?: unknown };
-  if (raw.installRoot !== expectedRoot || !Array.isArray(raw.files)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "The archive ownership manifest is invalid.");
-  const files = validateArchiveEntries(raw.files.map((item) => ({ path: String(item), type: "file" as const })));
-  for (const relative of files) {
-    const owned = path.resolve(expectedRoot, relative);
-    if (!owned.startsWith(`${expectedRoot}${path.sep}`)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "An owned path escapes the managed install root.");
-    try { fs.unlinkSync(owned); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  }
-  const directories = new Set(files.map((item) => path.dirname(path.join(expectedRoot, item))));
-  for (const directory of [...directories].sort((a, b) => b.length - a.length)) {
-    try { fs.rmdirSync(directory); } catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code || "")) throw error; }
-  }
+  const manifest = readArchiveManifest(recipe, context, options);
+  const { installRoot: expectedRoot, filePath, files } = manifest;
+  removeOwnedArchiveFiles(expectedRoot, files);
   try { fs.rmdirSync(expectedRoot); } catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code || "")) throw error; }
   fs.unlinkSync(filePath);
 }
@@ -527,11 +560,11 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       context.onCommand?.({ executable: command.executable, args: [...command.args] });
       return resolved.commandRunner(command, { onOutput: context.onOutput });
     };
-    if (recipe.type === "bundled") throw new AppRecipeExecutionError("bundled_app", "Bundled apps do not support managed installation or removal.");
+    if (recipe.type === "bundled") throw new AppRecipeExecutionError("bundled_app", "Bundled apps do not support managed installation, update, or removal.");
     if (recipe.type === "system-package") {
-      context.onPhase?.(operation === "install" ? "install-package" : "uninstall-package");
+      context.onPhase?.(operation === "install" ? "install-package" : operation === "update" ? "update-package" : "uninstall-package");
       const command = packageCommand(recipe, operation, context.capabilities, resolved.env);
-      if (operation === "install" && recipe.installer === "apt") {
+      if (operation !== "uninstall" && recipe.installer === "apt") {
         const refresh = await runCommand(aptRefreshCommand(context.capabilities, recipe));
         if (refresh.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(refresh.stderr) || "The apt package index could not be refreshed.", true);
       }
@@ -540,7 +573,7 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       return { log: bounded(result.stdout || result.stderr) };
     }
     if (recipe.type === "node-package") {
-      context.onPhase?.(operation === "install" ? "install-node-package" : "uninstall-node-package");
+      context.onPhase?.(operation === "install" ? "install-node-package" : operation === "update" ? "update-node-package" : "uninstall-node-package");
       const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env);
       let result = await runCommand(command);
       const retirementDirectory = result.exitCode === 0 ? undefined : npmRetirementDirectory(result.stderr, recipe);
@@ -553,8 +586,9 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
       return { log: bounded(result.stdout || result.stderr) };
     }
-    if (operation === "install") await installArchive(recipe, context, resolved);
-    else uninstallArchive(recipe, context, resolved);
+    if (operation === "uninstall") uninstallArchive(recipe, context, resolved);
+    else if (operation === "update") await updateArchive(recipe, context, resolved);
+    else await installArchive(recipe, context, resolved);
     return { log: "" };
   };
 }

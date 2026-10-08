@@ -104,6 +104,16 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     const input = AppManagementOperationRequestSchema.parse(request.body || {});
     return { data: await service.requestInstanceAppOperation(params.id, params.appId, "uninstall", input) };
   });
+  app.post("/api/controlled-instances/:id/apps/:appId/update", async (request) => {
+    const params = InstanceAppParamsSchema.parse(request.params);
+    const input = AppManagementOperationRequestSchema.parse(request.body || {});
+    return { data: await service.requestInstanceAppOperation(params.id, params.appId, "update", input) };
+  });
+  app.post("/api/controlled-instances/:id/apps/:appId/update-check", async (request) => {
+    const params = InstanceAppParamsSchema.parse(request.params);
+    AppManagementOperationRequestSchema.parse(request.body || {});
+    return { data: await service.requestInstanceAppUpdateCheck(params.id, params.appId) };
+  });
   app.get("/api/controlled-instances/:id/apps/jobs/:jobId", async (request) => {
     const params = InstanceAppJobParamsSchema.parse(request.params);
     return { data: await service.instanceAppManagementJob(params.id, params.jobId) };

@@ -136,11 +136,15 @@ export class NodeModelRelayResolver {
 
   /**
    * Map the request's external model name onto the upstream name. Unknown or
-   * ambiguous names fail closed before any upstream contact; there is no
+   * ambiguous names are resolved before any upstream contact; there is no
    * default-model fallback. Declared model names always win, so an explicit
    * request mapping can never change how an exposed name resolves; mappings
    * only extend resolution to names the entity does not expose (for example a
-   * product's hidden background model).
+   * product's hidden background model). When nothing matches, the live node
+   * policy decides between forwarding the requested name verbatim
+   * (`passthrough`, the default) and failing closed with
+   * `MODEL_RELAY_UNKNOWN_MODEL_NAME` (`reject`). Ambiguous names always fail
+   * closed regardless of policy.
    */
   resolveUpstreamModelName(
     model: Pick<NodeModelConfig, "modelNames" | "model"> & { mappings?: NodeModelConfig["mappings"] },
@@ -156,6 +160,7 @@ export class NodeModelRelayResolver {
       throw relayError(409, "MODEL_RELAY_AMBIGUOUS_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is ambiguous on this relay route.`);
     }
     if (mapped.length) return mapped[0].upstreamName;
+    if (this.registry.modelRelayUnknownModelPolicy() === "passthrough") return requestedName;
     throw relayError(400, "MODEL_RELAY_UNKNOWN_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is not assigned to this relay route.`);
   }
 }

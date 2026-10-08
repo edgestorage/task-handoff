@@ -1,6 +1,7 @@
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   AppManagementJobResponseSchema,
+  AppManagementUpdateCheckResponseSchema,
   AppManagementSnapshotSchema,
   ControlledInstanceSchema,
   controlledInstanceAcceptsTraffic,
@@ -1992,7 +1993,7 @@ export class ControlPlaneService {
     }
   }
 
-  async requestInstanceAppOperation(instanceId: string, appId: string, operation: "install" | "uninstall", input: AppManagementOperationRequest = {}) {
+  async requestInstanceAppOperation(instanceId: string, appId: string, operation: "install" | "uninstall" | "update", input: AppManagementOperationRequest = {}) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/${operation}`, {
       method: "POST",
@@ -2004,6 +2005,15 @@ export class ControlPlaneService {
   async instanceAppManagementJob(instanceId: string, jobId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
+  }
+
+  async requestInstanceAppUpdateCheck(instanceId: string, appId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return parseResponse(AppManagementUpdateCheckResponseSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/update-check`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
   }
 
   async instanceAppCatalog(instanceId: string) {

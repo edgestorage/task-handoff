@@ -364,6 +364,7 @@ export function managedAppProjection(
   const bundled = selected.recipe?.type === "bundled";
   const canInstall = state === "not-installed" && Boolean(selected.recipe) && !bundled;
   const canUninstall = (state === "installed" || state === "broken") && Boolean(selected.recipe) && !bundled && source === "recipe";
+  const canUpdate = canUninstall;
   const installReason = canInstall ? undefined
     : bundled ? { code: "BUNDLED" as const, message: "This app is supplied with the controlled computer." }
       : state === "installed" || state === "broken" ? { code: "ALREADY_INSTALLED" as const, message: "This app is already present." }
@@ -373,6 +374,11 @@ export function managedAppProjection(
       : source === "external" ? { code: "EXTERNALLY_MANAGED" as const, message: "This app was installed outside App management and must be removed with its original installer." }
       : state === "not-installed" || state === "unsupported" ? { code: "NOT_INSTALLED" as const, message: "This app is not installed." }
         : selected.reason;
+  const updateReason = canUpdate ? undefined
+    : bundled ? { code: "BUNDLED" as const, message: "Bundled apps are supplied with the controlled computer and cannot be updated by app management." }
+      : source === "external" ? { code: "EXTERNALLY_MANAGED" as const, message: "This app was installed outside App management and must be updated with its original installer." }
+        : state === "not-installed" || state === "unsupported" ? { code: "NOT_INSTALLED" as const, message: "This app is not installed." }
+          : selected.reason;
   return {
     id: definition.launcher.id,
     name: definition.launcher.name,
@@ -383,7 +389,9 @@ export function managedAppProjection(
     version: detection.version,
     canInstall,
     canUninstall,
+    canUpdate,
     installReason,
     uninstallReason,
+    updateReason,
   };
 }

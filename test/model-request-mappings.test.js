@@ -124,7 +124,7 @@ test("request mappings rewrite relay requests without changing catalogs, assignm
   const stored = app.nodeAgentState.modelRegistry.getModel(model.id);
   assert.equal(app.nodeAgentState.modelRegistry.isMappedModel(stored), false);
 
-  const enabled = await agentRequest(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true });
+  const enabled = await agentRequest(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true, unknownModelPolicy: "reject" });
   assert.equal(enabled.statusCode, 200, enabled.body);
   const relayAssignment = await agentRequest(app, "PUT", `/api/node-agent/instances/${RELAY_INSTANCE_ID}/model-assignment`, {
     modelSelection: { modelEntityIds: [model.id] },

@@ -10,6 +10,7 @@ import {
   type AppManagementSnapshot,
   type FinalComputerCapabilities,
   type ManagedAppManagementSource,
+  type ManagedAppUpdateState,
 } from "@task-handoff/protocol/control-plane";
 import {
   builtinManagedAppDefinitions,
@@ -24,6 +25,7 @@ import type { ManagedAppOwnershipResult } from "@task-handoff/app-runtime";
 import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecutionContext } from "./app-recipe-executor";
+import { createAppUpdateChecker, type AppUpdateCheckContext, type AppUpdateCheckResult } from "./app-update-check";
 
 const ACTIVE_STATES = new Set<AppManagementJob["state"]>(["queued", "running"]);
 const JOB_LOG_LIMIT = 32_768;
@@ -131,6 +133,7 @@ export type AppManagementManagerOptions = {
   managementSource?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppManagementSource | Promise<ManagedAppManagementSource>;
   ownership?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppOwnershipResult | Promise<ManagedAppOwnershipResult>;
   execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext) => Promise<unknown>;
+  updateCheck?: (recipe: InstallRecipe, context: AppUpdateCheckContext) => Promise<AppUpdateCheckResult>;
   sessions?: () => Array<{ id: string; appId: string; status: string }>;
   publish?: (event: AppManagementEvent) => void;
   warn?: (message: string) => void;
@@ -149,12 +152,14 @@ export class AppManagementManager {
   private readonly detection: (definition: ManagedAppDefinition) => ManagedAppDetectionResult;
   private readonly ownership: NonNullable<AppManagementManagerOptions["ownership"]>;
   private readonly execute: AppManagementManagerOptions["execute"];
+  private readonly updateCheck: NonNullable<AppManagementManagerOptions["updateCheck"]>;
   private readonly sessions: NonNullable<AppManagementManagerOptions["sessions"]>;
   private readonly publishEvent: NonNullable<AppManagementManagerOptions["publish"]>;
   private readonly now: NonNullable<AppManagementManagerOptions["now"]>;
   private readonly onTerminal: NonNullable<AppManagementManagerOptions["onTerminal"]>;
   private readonly warn: NonNullable<AppManagementManagerOptions["warn"]>;
   private readonly ownershipByApp = new Map<string, { fingerprint: string; source: ManagedAppManagementSource; recipe?: InstallRecipe }>();
+  private readonly updateChecks = new Map<string, ManagedAppUpdateState>();
   private ownershipRefresh?: Promise<void>;
   private readonly streamId = `appstream_${crypto.randomUUID().replaceAll("-", "")}`;
   private sequence = 0;
@@ -186,6 +191,7 @@ export class AppManagementManager {
       ? async (definition, detection, capabilities) => ({ source: await options.managementSource!(definition, detection, capabilities) })
       : defaultOwnership);
     this.execute = options.execute || createAppRecipeExecutor({ installBaseDir: options.installBaseDir, stateDir: options.stateDir });
+    this.updateCheck = options.updateCheck || createAppUpdateChecker();
     this.sessions = options.sessions || (() => []);
     this.publishEvent = options.publish || (() => undefined);
     this.now = options.now || (() => new Date().toISOString());
@@ -209,14 +215,17 @@ export class AppManagementManager {
           : cached?.fingerprint === fingerprint ? cached.source : "external";
       const projection = managedAppProjection(definition, detection, capabilities, source);
       const active = activeByApp.get(projection.id);
+      const check = this.updateChecks.get(projection.id);
+      const projected = check ? { ...projection, updateCheck: check } : projection;
       return active ? {
-        ...projection,
+        ...projected,
         canInstall: false,
         canUninstall: false,
+        canUpdate: false,
         installReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
         uninstallReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
         activeJobId: active.id,
-      } : projection;
+      } : projected;
     });
     return AppManagementSnapshotSchema.parse({
       streamId: this.streamId,
@@ -249,6 +258,39 @@ export class AppManagementManager {
     const job = this.store.get(jobId);
     if (!job) throw new AppManagementRequestError("app_job_not_found", "App management job not found.", 404);
     return job;
+  }
+
+  async checkForUpdate(appId: string) {
+    const definition = this.definitions().find((entry) => entry.launcher.id === appId);
+    if (!definition) throw new AppManagementRequestError("unknown_app", "The requested built-in app does not exist.", 404);
+    const capabilities = await this.ensureCapabilities();
+    const selected = selectInstallRecipe(definition, capabilities);
+    const detection = this.detection(definition);
+    const cached = this.ownershipByApp.get(definition.launcher.id);
+    const fingerprint = this.ownershipFingerprint(detection, capabilities);
+    const source = detection.state === "not-installed" ? "none"
+      : selected.recipe?.type === "bundled" ? "bundled"
+        : cached?.fingerprint === fingerprint ? cached.source : "external";
+    const projection = managedAppProjection(definition, detection, capabilities, source);
+    if (!selected.recipe || projection.canUpdate !== true) {
+      throw new AppManagementRequestError("app_operation_unavailable", projection.updateReason?.message || "The requested app update check is unavailable.", 409, { reason: projection.updateReason });
+    }
+    let outcome: AppUpdateCheckResult;
+    try {
+      outcome = await this.updateCheck(selected.recipe, { appId, capabilities });
+    } catch (error) {
+      outcome = { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
+    }
+    const state: ManagedAppUpdateState = {
+      status: outcome.status,
+      ...(outcome.installedVersion ? { installedVersion: outcome.installedVersion } : {}),
+      ...(outcome.latestVersion ? { latestVersion: outcome.latestVersion } : {}),
+      checkedAt: this.now(),
+      ...(outcome.reason ? { reason: outcome.reason } : {}),
+    };
+    this.updateChecks.set(appId, state);
+    this.publishSnapshot();
+    return { appId, ...state };
   }
 
   request(appId: string, operation: AppManagementOperation, requestId?: string) {
@@ -286,8 +328,13 @@ export class AppManagementManager {
         : cached?.fingerprint === fingerprint ? cached.source : "external";
     const projection = managedAppProjection(definition, detection, capabilities, source);
     const operationRecipe = operation === "uninstall" && cached?.fingerprint === fingerprint && cached.recipe ? cached.recipe : selected.recipe;
-    if (!operationRecipe || (operation === "install" ? !projection.canInstall : !projection.canUninstall)) {
-      const reason = operation === "install" ? projection.installReason : projection.uninstallReason;
+    const availability = operation === "install"
+      ? { allowed: projection.canInstall, reason: projection.installReason }
+      : operation === "uninstall"
+        ? { allowed: projection.canUninstall, reason: projection.uninstallReason }
+        : { allowed: projection.canUpdate === true, reason: projection.updateReason };
+    if (!operationRecipe || !availability.allowed) {
+      const reason = availability.reason;
       throw new AppManagementRequestError("app_operation_unavailable", reason?.message || "The requested app operation is unavailable.", 409, { reason });
     }
     const timestamp = this.now();
@@ -400,7 +447,7 @@ export class AppManagementManager {
       });
       flushOutput();
       const detection = this.detection(definition);
-      const satisfied = job.operation === "install" ? detection.state === "installed" : detection.state === "not-installed";
+      const satisfied = job.operation === "uninstall" ? detection.state === "not-installed" : detection.state === "installed";
       if (!satisfied) throw new AppRecipeExecutionError("postcondition_failed", `App ${job.operation} completed but detection did not confirm the required state.`, true);
       await this.refreshOwnership(definition, detection, await this.ensureCapabilities(true));
       const finishedAt = this.now();
@@ -419,6 +466,7 @@ export class AppManagementManager {
         updatedAt: finishedAt,
       });
     }
+    this.updateChecks.delete(job.appId);
     this.emit(job, true);
     void Promise.resolve(this.onTerminal(job)).catch((error) => {
       this.warn(`App inventory refresh failed after ${job.operation} for ${job.appId}: ${error instanceof Error ? error.message : String(error)}`);

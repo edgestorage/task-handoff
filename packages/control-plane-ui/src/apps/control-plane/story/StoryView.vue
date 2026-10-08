@@ -411,47 +411,52 @@
   />
 
   <Dialog v-model:open="editorOpen">
-    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><ScrollArea class="story-editor-scroll" :horizontal="false"><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
-      <fieldset v-if="agentToolSettingsState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
-        <legend>{{ t("stories.editor.agentTools") }}</legend>
-        <div v-if="agentToolSettingsState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.agentToolsLoading") }}</div>
-        <div v-else-if="agentToolSettingsState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.agentToolsUnsupported") }}</div>
-        <div v-else-if="agentToolSettingsState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ agentToolSettingsError || t("stories.editor.agentToolsUnavailable") }}</div>
-        <template v-else>
-          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.content" @update:model-value="draftAgentToolPolicy.content = $event === true" /><span>{{ t("stories.editor.agentToolContent") }}</span></label>
-          <label v-if="draftDecisionToolSupported" class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.decisions" @update:model-value="draftAgentToolPolicy.decisions = $event === true" /><span>{{ t("stories.editor.agentToolDecisions") }}</span></label>
-          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.actions" @update:model-value="draftAgentToolPolicy.actions = $event === true" /><span>{{ t("stories.editor.agentToolActions") }}</span></label>
-          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.automations" @update:model-value="draftAgentToolPolicy.automations = $event === true" /><span>{{ t("stories.editor.agentToolAutomations") }}</span></label>
-          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
-        </template>
-      </fieldset>
-      <fieldset v-if="storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
-        <legend>{{ t("stories.editor.entryAgents") }}</legend>
-        <div v-if="storyAgentEntriesState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.entryAgentsLoading") }}</div>
-        <div v-else-if="storyAgentEntriesState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsUnsupported") }}</div>
-        <div v-else-if="storyAgentEntriesState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyAgentEntriesError || t("stories.editor.entryAgentsUnavailable") }}</div>
-        <template v-else>
-          <p class="story-agent-entry-note">{{ t("stories.editor.entryAgentsScope") }}</p>
-          <div v-if="!storyAgentEntryCandidates.length" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsEmpty") }}</div>
-          <div v-for="agent in storyAgentEntryCandidates" :key="agent.id" class="story-agent-entry-row">
-            <label class="story-agent-tool-option">
-              <Checkbox :model-value="draftStoryAgentIds.includes(agent.id)" @update:model-value="toggleStoryAgentEntry(agent.id, $event === true)" />
-              <span class="story-agent-entry-copy"><span>{{ agent.name }}</span><small v-if="agent.missing"><CircleAlert :size="13" />{{ t("stories.editor.entryAgentMissing", { id: agent.id }) }}</small></span>
-            </label>
-            <ControlPlaneSelect
-              v-if="draftStoryAgentIds.includes(agent.id) && storyEntryOrchestrationOptions(agent.id).length > 1"
-              :model-value="draftStoryAgentEntryOrchestrationId(agent.id)"
-              class="story-agent-entry-orchestration"
-              :aria-label="t('stories.editor.entryAgentOrchestration', { name: agent.name })"
-              @update:model-value="(value: string) => setStoryAgentEntryOrchestration(agent.id, value)"
-            >
-              <ControlPlaneSelectItem v-for="orchestration in storyEntryOrchestrationOptions(agent.id)" :key="orchestration.id" :value="orchestration.id">
-                {{ orchestration.isDefault ? t("agents.graph.orchestrationDefaultLabel", { name: orchestration.name }) : orchestration.name }}
-              </ControlPlaneSelectItem>
-            </ControlPlaneSelect>
-          </div>
-        </template>
-      </fieldset>
+    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><ScrollArea class="story-editor-scroll" :horizontal="false"><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+      <button type="button" class="story-editor-advanced-toggle" :aria-expanded="editorAdvancedOpen" aria-controls="story-editor-advanced-settings" @click="editorAdvancedOpen = !editorAdvancedOpen"><ChevronRight :size="15" aria-hidden="true" /><span>{{ t("stories.editor.advancedSettings") }}</span></button>
+      <div id="story-editor-advanced-settings" v-show="editorAdvancedOpen" class="story-editor-advanced-settings">
+        <label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label>
+        <label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
+        <fieldset v-if="agentToolSettingsState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
+          <legend>{{ t("stories.editor.agentTools") }}</legend>
+          <div v-if="agentToolSettingsState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.agentToolsLoading") }}</div>
+          <div v-else-if="agentToolSettingsState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.agentToolsUnsupported") }}</div>
+          <div v-else-if="agentToolSettingsState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ agentToolSettingsError || t("stories.editor.agentToolsUnavailable") }}</div>
+          <template v-else>
+            <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.content" @update:model-value="draftAgentToolPolicy.content = $event === true" /><span>{{ t("stories.editor.agentToolContent") }}</span></label>
+            <label v-if="draftDecisionToolSupported" class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.decisions" @update:model-value="draftAgentToolPolicy.decisions = $event === true" /><span>{{ t("stories.editor.agentToolDecisions") }}</span></label>
+            <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.actions" @update:model-value="draftAgentToolPolicy.actions = $event === true" /><span>{{ t("stories.editor.agentToolActions") }}</span></label>
+            <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.automations" @update:model-value="draftAgentToolPolicy.automations = $event === true" /><span>{{ t("stories.editor.agentToolAutomations") }}</span></label>
+            <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
+          </template>
+        </fieldset>
+        <fieldset v-if="storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
+          <legend>{{ t("stories.editor.entryAgents") }}</legend>
+          <div v-if="storyAgentEntriesState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.entryAgentsLoading") }}</div>
+          <div v-else-if="storyAgentEntriesState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsUnsupported") }}</div>
+          <div v-else-if="storyAgentEntriesState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyAgentEntriesError || t("stories.editor.entryAgentsUnavailable") }}</div>
+          <template v-else>
+            <p class="story-agent-entry-note">{{ t("stories.editor.entryAgentsScope") }}</p>
+            <div v-if="!storyAgentEntryCandidates.length" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsEmpty") }}</div>
+            <div v-for="agent in storyAgentEntryCandidates" :key="agent.id" class="story-agent-entry-row">
+              <label class="story-agent-tool-option">
+                <Checkbox :model-value="draftStoryAgentIds.includes(agent.id)" @update:model-value="toggleStoryAgentEntry(agent.id, $event === true)" />
+                <span class="story-agent-entry-copy"><span>{{ agent.name }}</span><small v-if="agent.missing"><CircleAlert :size="13" />{{ t("stories.editor.entryAgentMissing", { id: agent.id }) }}</small></span>
+              </label>
+              <ControlPlaneSelect
+                v-if="draftStoryAgentIds.includes(agent.id) && storyEntryOrchestrationOptions(agent.id).length > 1"
+                :model-value="draftStoryAgentEntryOrchestrationId(agent.id)"
+                class="story-agent-entry-orchestration"
+                :aria-label="t('stories.editor.entryAgentOrchestration', { name: agent.name })"
+                @update:model-value="(value: string) => setStoryAgentEntryOrchestration(agent.id, value)"
+              >
+                <ControlPlaneSelectItem v-for="orchestration in storyEntryOrchestrationOptions(agent.id)" :key="orchestration.id" :value="orchestration.id">
+                  {{ orchestration.isDefault ? t("agents.graph.orchestrationDefaultLabel", { name: orchestration.name }) : orchestration.name }}
+                </ControlPlaneSelectItem>
+              </ControlPlaneSelect>
+            </div>
+          </template>
+        </fieldset>
+      </div>
       <div v-if="storyEditorError" class="story-editor-error" role="alert">{{ storyEditorError }}</div>
     </div></ScrollArea><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
@@ -933,7 +938,7 @@ const {
   maxWidth: 520,
 });
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
-const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
+const editorOpen = ref(false); const editing = ref(false); const editorAdvancedOpen = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 const savedAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 type StorySettingsState = "hidden" | "loading" | "ready" | "unsupported" | "unavailable";
@@ -1530,6 +1535,7 @@ function openCreate() {
   storyEditorError.value = "";
   agentToolSettingsError.value = "";
   storyAgentEntriesError.value = "";
+  editorAdvancedOpen.value = false;
   draftTitle.value = "";
   draftDescription.value = "";
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
@@ -1586,6 +1592,7 @@ async function openEdit() {
   storyEditorError.value = "";
   agentToolSettingsError.value = "";
   storyAgentEntriesError.value = "";
+  editorAdvancedOpen.value = false;
   draftTitle.value = story.title;
   draftDescription.value = story.description || "";
   draftNodeId.value = story.ownerNodeId;
@@ -2219,6 +2226,13 @@ onBeforeUnmount(() => {
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; padding-right:8px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
+.story-editor-advanced-toggle { display:flex; width:100%; align-items:center; gap:6px; border:1px solid var(--line); border-radius:7px; background:transparent; color:var(--text-muted); cursor:pointer; font:inherit; font-size:12px; font-weight:500; padding:9px 10px; text-align:left; }
+.story-editor-advanced-toggle:hover { background:var(--surface-hover); color:var(--text-strong); }
+.story-editor-advanced-toggle:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-2px; }
+.story-editor-advanced-toggle svg { flex:0 0 auto; transition:transform 120ms ease; }
+.story-editor-advanced-toggle[aria-expanded="true"] svg { transform:rotate(90deg); }
+.story-editor-advanced-settings { display:grid; gap:14px; min-width:0; }
+@media (prefers-reduced-motion: reduce) { .story-editor-advanced-toggle svg { transition-duration:0ms; } }
 .story-agent-tool-settings { display:grid; gap:0; min-width:0; border:1px solid var(--line); border-radius:7px; padding:0 12px 4px; }
 .story-agent-tool-settings legend { padding:0 6px; color:var(--text-muted); font-size:12px; font-weight:500; }
 .story-agent-tool-option { display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; min-height:38px; gap:10px !important; color:var(--text-strong) !important; }

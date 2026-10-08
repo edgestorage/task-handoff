@@ -562,11 +562,17 @@ export type UpdateNodeAgentExternalListener = Pick<NodeAgentExternalListener, "b
 
 export type NodeAgentModelRelay = {
   enabled: boolean;
+  /** Additive: absent on node-agents that predate the unknown-model policy. */
+  unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
   /** "default" means the switch was never persisted and relay stays off. */
   source: "default" | "persisted";
 };
 
-export type UpdateNodeAgentModelRelay = Pick<NodeAgentModelRelay, "enabled">;
+export type NodeAgentModelRelayUnknownModelPolicy = "passthrough" | "reject";
+
+export type UpdateNodeAgentModelRelay = Pick<NodeAgentModelRelay, "enabled"> & {
+  unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
+};
 
 export type NodeRuntime = {
   id: string;
@@ -828,8 +834,11 @@ export type {
   AppManagementJobResponse,
   AppManagementOperation,
   AppManagementSnapshot,
+  AppManagementUpdateCheckResponse,
   InstanceResourceMetrics,
   ManagedAppProjection,
+  ManagedAppUpdateCheck,
+  ManagedAppUpdateState,
 } from "@task-handoff/protocol/control-plane";
 
 export type TriggerSource =

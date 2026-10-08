@@ -3,6 +3,7 @@ import {
   NodeAgentExternalListenerConfigSchema,
   NodeAgentModelRelayConfigSchema,
   type NodeAgentExternalListenerConfig,
+  type NodeAgentModelRelayUnknownModelPolicy,
 } from "@task-handoff/protocol/control-plane";
 import { JsonFile } from "../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
@@ -43,12 +44,14 @@ function sanitizeStoredSettings(input: unknown) {
   const relay = source.modelRelay;
   const unknownTopLevel = Object.keys(source).filter((key) => key !== "version" && key !== "externalListener" && key !== "modelRelay");
   const unknownListener = Object.keys(listener).filter((key) => key !== "bindScope" && key !== "port");
-  let modelRelay: { enabled: boolean } | undefined;
+  let modelRelay: { enabled: boolean; unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy } | undefined;
   let relayWarning: string | undefined;
   if (relay !== undefined) {
     if (relay && typeof relay === "object" && !Array.isArray(relay) && typeof (relay as Record<string, unknown>).enabled === "boolean") {
       const value = relay as Record<string, unknown>;
-      const unknownRelay = Object.keys(value).filter((key) => key !== "enabled");
+      const unknownRelay = Object.keys(value).filter((key) => key !== "enabled" && key !== "unknownModelPolicy");
+      const storedPolicy = value.unknownModelPolicy;
+      const invalidPolicy = storedPolicy !== undefined && storedPolicy !== "passthrough" && storedPolicy !== "reject";
       if (unknownRelay.length) {
         console.warn(JSON.stringify({
           message: "unknown stored node agent runtime setting fields were ignored",
@@ -56,7 +59,19 @@ function sanitizeStoredSettings(input: unknown) {
           fields: unknownRelay.map((key) => `modelRelay.${key}`),
         }));
       }
-      modelRelay = { enabled: value.enabled as boolean };
+      if (invalidPolicy) {
+        // Invalid policies fall back to the default passthrough behavior
+        // instead of disabling the whole relay switch.
+        console.warn(JSON.stringify({
+          message: "invalid stored node agent model relay unknown model policy was normalized to passthrough",
+          filePath: "runtime-settings.json",
+          field: "modelRelay.unknownModelPolicy",
+        }));
+      }
+      modelRelay = {
+        enabled: value.enabled as boolean,
+        ...(storedPolicy === "passthrough" || storedPolicy === "reject" ? { unknownModelPolicy: storedPolicy } : {}),
+      };
     } else {
       // Missing or malformed values normalize to disabled. Dropping the field
       // (instead of writing false) keeps a malformed historical file from

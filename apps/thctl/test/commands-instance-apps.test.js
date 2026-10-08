@@ -139,6 +139,16 @@ test("instance app list, install and job follow the managed app surface", async 
   const uninstalled = await run(fake, store, ["instance", "app", "uninstall", "instance_fake001", "chromium", "--yes", "--json"]);
   assert.equal(uninstalled.code, 0, uninstalled.stderr());
   assert.equal(JSON.parse(uninstalled.stdout()).operation, "uninstall");
+
+  const updated = await run(fake, store, ["instance", "app", "update", "instance_fake001", "codex", "--yes", "--json"]);
+  assert.equal(updated.code, 0, updated.stderr());
+  assert.equal(JSON.parse(updated.stdout()).operation, "update");
+  const updateCall = fake.state.calls.find((call) => call.path.endsWith("/apps/codex/update"));
+  assert.match(updateCall?.body.requestId ?? "", /^[0-9a-f-]{36}$/);
+
+  const checked = await run(fake, store, ["instance", "app", "check-update", "instance_fake001", "codex", "--json"]);
+  assert.equal(checked.code, 0, checked.stderr());
+  assert.equal(JSON.parse(checked.stdout()).status, "update-available");
 });
 
 test("app-profile commands manage browser profiles for an instance app", async () => {

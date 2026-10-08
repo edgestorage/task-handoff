@@ -84,16 +84,24 @@
       </div>
     </div>
 
-    <p v-if="!selectedModels.length && !availableModels.length" class="model-entity-empty">
-      {{ t("instances.modelEntities.empty") }}
-    </p>
+    <div v-if="!eligibleModels.length" class="model-entity-empty">
+      <div class="model-entity-empty-copy">
+        <strong>{{ t("instances.modelEntities.empty") }}</strong>
+        <small>{{ t("instances.modelEntities.emptyHint") }}</small>
+        <small v-if="context === 'create'">{{ t("instances.modelEntities.emptyCreateHint") }}</small>
+      </div>
+      <Button type="button" variant="outline" size="sm" @click="emit('open-model-settings')">
+        <ExternalLink :size="15" />
+        {{ t("instances.modelEntities.openSettings") }}
+      </Button>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, ChevronUp, GripVertical, Plus, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, ExternalLink, GripVertical, Plus, X } from "@lucide/vue";
 import type { ModelConfig } from "../../api/types";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
@@ -103,9 +111,13 @@ const props = defineProps<{
   models: ModelConfig[];
   nodeId: string;
   disabled?: boolean;
+  context?: "create" | "instance";
 }>();
 
-const emit = defineEmits<{ "update:modelValue": [value: string[]] }>();
+const emit = defineEmits<{
+  "update:modelValue": [value: string[]];
+  "open-model-settings": [];
+}>();
 const { t } = useI18n();
 
 const eligibleModels = computed(() => props.models
@@ -273,7 +285,7 @@ function modelDescription(model: ModelConfig) {
 
 .model-entity-group-heading small,
 .model-entity-copy small,
-.model-entity-empty {
+.model-entity-empty-copy small {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
@@ -381,8 +393,21 @@ function modelDescription(model: ModelConfig) {
 }
 
 .model-entity-empty {
-  margin: 0;
+  display: grid;
+  justify-items: start;
+  gap: 10px;
   padding: 16px;
+}
+
+.model-entity-empty-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.model-entity-empty-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 @media (max-width: 560px) {

@@ -38,6 +38,7 @@ const {
   supportsNodeModelRelay,
   supportsNodeModelRelayProtocol,
   supportsNodeModelRelayStreaming,
+  supportsNodeModelRelayUnknownModelPolicy,
 } = require("../packages/protocol/src/node-agent-capabilities.ts");
 const { AiSessionCreateInputSchema, AiSessionHistoryItemSchema, AiSessionModelSelectionSchema, AiSessionRealtimeInputSchema } = require("../packages/protocol/src/ai-sessions.ts");
 const { ControlPlaneInstanceDirectoryEntrySchema } = require("../packages/protocol/src/control-plane-directory.ts");
@@ -391,6 +392,14 @@ test("relay capability documents normalize to unsupported when absent", () => {
   assert.equal(supportsNodeModelRelayProtocol(nodeCapabilities, "openai-responses"), true);
   assert.equal(supportsNodeModelRelayProtocol(nodeCapabilities, "anthropic-messages"), false);
   assert.equal(supportsNodeModelRelayStreaming(nodeCapabilities), true);
+  // Additive: a document without the field is fail-closed (unsupported).
+  assert.equal(supportsNodeModelRelayUnknownModelPolicy(nodeCapabilities), false);
+  assert.equal(
+    supportsNodeModelRelayUnknownModelPolicy(normalizeNodeAgentCapabilities({
+      managedModels: { multiEntityAssignment: true, modelRelay: { protocols: ["openai-responses"], streaming: true, unknownModelPolicy: true } },
+    })),
+    true,
+  );
 
   assert.equal(supportsControlledInstanceModelRelay(baselineFixture.controlledInstanceCapabilities), false);
   assert.equal(ControlledInstanceCapabilitiesSchema.parse({}).features.modelRelay.protocols.length, 0);
@@ -489,10 +498,15 @@ test("session selection consumes external names from both catalog projections", 
 });
 
 test("node relay settings wire model defaults to disabled and writes strictly", () => {
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: false, source: "default" });
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: false, source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "reject" }), { enabled: true, unknownModelPolicy: "reject", source: "default" });
+  // Missing or malformed policies normalize to the passthrough default.
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "bogus" }), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
   assert.deepEqual(NodeAgentModelRelaySchema.parse({ enabled: true, source: "persisted", future: true }), { enabled: true, source: "persisted" });
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true }).success, true);
+  assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, unknownModelPolicy: "passthrough" }).success, true);
+  assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, unknownModelPolicy: "bogus" }).success, false);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, scope: "all" }).success, false);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: "true" }).success, false);
 });

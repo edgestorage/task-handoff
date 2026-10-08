@@ -327,6 +327,79 @@ test("uninstall refuses running app sessions and never terminates them", () => {
   assert.deepEqual(manager.snapshot().activeJobs, []);
 });
 
+test("update re-runs the installed recipe and keeps detection authoritative", async () => {
+  const dirs = stateDirs("task-handoff-app-update-");
+  const operations = [];
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/usr/bin/tool"], version: "1.0.0" }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    execute: async (operation) => { operations.push(operation); },
+  });
+  await manager.refreshSnapshot();
+  assert.equal(manager.snapshot().apps[0].canUpdate, true);
+  const job = manager.request("tool", "update");
+  assert.equal(job.operation, "update");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.deepEqual(operations, ["update"]);
+});
+
+test("update does not require stopping running app sessions", async () => {
+  const dirs = stateDirs("task-handoff-app-update-sessions-");
+  const recipe = { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["tool"], privilege: "root" };
+  const sessions = [{ id: "session_1", appId: "tool", status: "running" }];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/usr/bin/tool"] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    sessions: () => sessions,
+    execute: async (_operation, _recipe, context) => { context.onPhase("update-node-package"); },
+  });
+  await manager.refreshSnapshot();
+  const job = manager.request("tool", "update");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.equal(sessions[0].status, "running");
+});
+
+test("update is unavailable for externally managed apps", async () => {
+  const dirs = stateDirs("task-handoff-app-update-external-");
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/opt/external/tool"] }),
+    managementSource: () => "external",
+    execute: async () => assert.fail("must not execute"),
+  });
+  await manager.refreshSnapshot();
+  assert.equal(manager.snapshot().apps[0].canUpdate, false);
+  assert.equal(manager.snapshot().apps[0].updateReason.code, "EXTERNALLY_MANAGED");
+  assert.throws(() => manager.request("tool", "update"), (error) => error.code === "app_operation_unavailable" && error.details.reason.code === "EXTERNALLY_MANAGED");
+});
+
+test("update conflicts with an active install of the same app", async () => {
+  const dirs = stateDirs("task-handoff-app-update-conflict-");
+  let release;
+  let state = "not-installed";
+  const gate = new Promise((resolve) => { release = resolve; });
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/usr/bin/tool"] : [] }),
+    ownership: async () => ({ source: state === "installed" ? "recipe" : "none", recipe: state === "installed" ? recipe : undefined }),
+    execute: async () => { await gate; state = "installed"; },
+  });
+  const install = manager.request("tool", "install");
+  assert.throws(() => manager.request("tool", "update"), (error) => error.code === "app_operation_conflict" && error.details.activeJobId === install.id);
+  release();
+  await manager.waitForIdle();
+});
+
 test("unknown apps and unavailable operations do not create jobs", () => {
   const dirs = stateDirs("task-handoff-app-invalid-");
   const manager = new AppManagementManager({
@@ -383,4 +456,144 @@ test("controlled instance exposes strict management, operation, and job APIs", a
       else process.env[key] = value;
     }
   }
+});
+
+test("controlled instance exposes the app update API", async () => {
+  const dirs = stateDirs("task-handoff-app-update-api-");
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const operations = [];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/usr/bin/tool"] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    execute: async (operation) => { operations.push(operation); },
+    updateCheck: async () => ({ status: "up-to-date", installedVersion: "1.0.0", latestVersion: "1.0.0" }),
+  });
+  const previous = Object.fromEntries(["TASK_HANDOFF_DATA_DIR", "TASK_HANDOFF_LOG_DIR", "TASK_HANDOFF_CONFIG", "TASK_HANDOFF_WEB_AUTH", "TASK_HANDOFF_AI_SESSION_SCAN", "TASK_HANDOFF_NODE_AGENT_URL"].map((key) => [key, process.env[key]]));
+  process.env.TASK_HANDOFF_DATA_DIR = path.dirname(dirs.stateDir);
+  process.env.TASK_HANDOFF_LOG_DIR = path.join(path.dirname(dirs.stateDir), "logs");
+  process.env.TASK_HANDOFF_CONFIG = path.join(path.dirname(dirs.stateDir), "config.json");
+  process.env.TASK_HANDOFF_WEB_AUTH = "off";
+  process.env.TASK_HANDOFF_AI_SESSION_SCAN = "0";
+  delete process.env.TASK_HANDOFF_NODE_AGENT_URL;
+  const web = await createWebApp({ staticDir: path.join(path.dirname(dirs.stateDir), "missing-static"), logger: false, appManagement: manager });
+  try {
+    const accepted = await web.inject({ method: "POST", url: "/api/apps/tool/update", payload: { requestId: "update_request" } });
+    assert.equal(accepted.statusCode, 202);
+    const jobId = JSON.parse(accepted.payload).data.job.id;
+    await manager.waitForIdle();
+    const job = await web.inject({ method: "GET", url: `/api/apps/jobs/${jobId}` });
+    assert.equal(job.statusCode, 200);
+    assert.equal(JSON.parse(job.payload).data.job.operation, "update");
+    assert.equal(JSON.parse(job.payload).data.job.state, "succeeded");
+    assert.deepEqual(operations, ["update"]);
+
+    const checked = await web.inject({ method: "POST", url: "/api/apps/tool/update-check", payload: {} });
+    assert.equal(checked.statusCode, 200);
+    const check = JSON.parse(checked.payload).data.check;
+    assert.equal(check.appId, "tool");
+    assert.equal(check.status, "up-to-date");
+    assert.ok(check.checkedAt);
+
+    const missing = await web.inject({ method: "POST", url: "/api/apps/missing/update-check", payload: {} });
+    assert.equal(missing.statusCode, 404);
+    assert.equal(JSON.parse(missing.payload).error.code, "unknown_app");
+  } finally {
+    await web.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("manual update checks are cached, projected, and cleared after an update", async () => {
+  const dirs = stateDirs("task-handoff-app-update-check-");
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  let state = "installed";
+  const calls = [];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/usr/bin/tool"] : [] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    updateCheck: async (receivedRecipe, context) => {
+      calls.push({ recipe: receivedRecipe, appId: context.appId, platform: context.capabilities.platform });
+      return { status: "update-available", installedVersion: "1.0.0", latestVersion: "1.1.0" };
+    },
+    execute: async () => { state = "installed"; },
+  });
+  await manager.refreshSnapshot();
+  const check = await manager.checkForUpdate("tool");
+  assert.equal(check.appId, "tool");
+  assert.equal(check.status, "update-available");
+  assert.equal(check.installedVersion, "1.0.0");
+  assert.equal(check.latestVersion, "1.1.0");
+  assert.ok(check.checkedAt);
+  assert.deepEqual(calls, [{ recipe, appId: "tool", platform: "linux" }]);
+
+  assert.deepEqual(manager.snapshot().apps[0].updateCheck, {
+    status: "update-available",
+    installedVersion: "1.0.0",
+    latestVersion: "1.1.0",
+    checkedAt: check.checkedAt,
+  });
+
+  const repeated = await manager.checkForUpdate("tool");
+  assert.equal(repeated.status, "update-available");
+  assert.equal(calls.length, 2, "each manual check runs the checker again and republishes the snapshot");
+  assert.deepEqual(manager.snapshot().apps[0].updateCheck, {
+    status: "update-available",
+    installedVersion: "1.0.0",
+    latestVersion: "1.1.0",
+    checkedAt: repeated.checkedAt,
+  });
+
+  const queued = manager.request("tool", "update");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(queued.id).state, "succeeded");
+  assert.equal(manager.snapshot().apps[0].updateCheck, undefined, "a completed update invalidates the cached check");
+});
+
+test("update checks report unknown instead of failing when the checker throws", async () => {
+  const dirs = stateDirs("task-handoff-app-update-check-error-");
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/usr/bin/tool"] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    updateCheck: async () => { throw new Error("command_timeout"); },
+    now: () => "2026-05-01T00:00:00.000Z",
+  });
+  await manager.refreshSnapshot();
+  assert.deepEqual(await manager.checkForUpdate("tool"), {
+    appId: "tool",
+    status: "unknown",
+    reason: "command_timeout",
+    checkedAt: "2026-05-01T00:00:00.000Z",
+  });
+});
+
+test("update checks reject apps that app management does not own", async () => {
+  const dirs = stateDirs("task-handoff-app-update-check-reject-");
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/usr/bin/tool"] }),
+    ownership: async () => ({ source: "external" }),
+  });
+  await manager.refreshSnapshot();
+  await assert.rejects(() => manager.checkForUpdate("tool"), (error) => {
+    assert.equal(error instanceof AppManagementRequestError, true);
+    assert.equal(error.code, "app_operation_unavailable");
+    assert.equal(error.statusCode, 409);
+    return true;
+  });
+  await assert.rejects(() => manager.checkForUpdate("missing"), (error) => {
+    assert.equal(error.code, "unknown_app");
+    assert.equal(error.statusCode, 404);
+    return true;
+  });
 });

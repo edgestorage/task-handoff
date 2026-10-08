@@ -91,6 +91,23 @@ test("system package recipes use fixed executable and argument arrays without sh
   assert.equal(commands.some((command) => Object.hasOwn(command, "shell")), false);
 });
 
+test("system package updates refresh the apt index and use --only-upgrade", async () => {
+  const commands = [];
+  const phases = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "/managed",
+    stateDir: "/state",
+    commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
+  });
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["chromium"], privilege: "passwordless-sudo" };
+  await execute("update", recipe, { appId: "chromium", capabilities, onPhase: (phase) => phases.push(phase) });
+  assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
+    { executable: "sudo", args: ["-n", "apt-get", "update"] },
+    { executable: "sudo", args: ["-n", "apt-get", "install", "-y", "--only-upgrade", "--no-install-recommends", "chromium"] },
+  ]);
+  assert.deepEqual(phases, ["update-package"]);
+});
+
 test("Codex npm recipes provide privilege-aware install and uninstall commands", async () => {
   const commands = [];
   const execute = createAppRecipeExecutor({
@@ -103,10 +120,12 @@ test("Codex npm recipes provide privilege-aware install and uninstall commands",
 
   await execute("install", recipe, context);
   await execute("uninstall", recipe, context);
+  await execute("update", recipe, context);
 
   assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
     { executable: "sudo", args: ["-n", "npm", "install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"] },
     { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
+    { executable: "sudo", args: ["-n", "npm", "install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"] },
   ]);
 });
 
@@ -278,6 +297,28 @@ test("archive install verifies checksum before extraction and uninstall preserve
   assert.equal(fs.existsSync(path.join(installBaseDir, "tool", "bin", "tool")), false);
   assert.equal(fs.readFileSync(path.join(installBaseDir, "tool", "user-config.json"), "utf8"), "{}\n");
   assert.equal(fs.existsSync(path.join(stateDir, "manifests", "tool.json")), false);
+});
+
+test("archive update re-verifies the checksum and atomically replaces the managed install", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-recipe-update-"));
+  const installBaseDir = path.join(root, "apps");
+  const stateDir = path.join(root, "state");
+  const artifact = await tarArchive(root);
+  const sha256 = crypto.createHash("sha256").update(artifact).digest("hex");
+  const phases = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir,
+    stateDir,
+    fetcher: async () => new Response(artifact, { status: 200, headers: { "content-length": String(artifact.length) } }),
+    commandRunner: async () => assert.fail("archive extraction must not invoke a system tar command"),
+  });
+  const recipe = { type: "archive", platforms: ["linux"], url: "https://downloads.example.test/tool.tar.gz", sha256, format: "tar.gz", installRoot: "tool" };
+  await execute("install", recipe, { appId: "tool", capabilities });
+  fs.writeFileSync(path.join(installBaseDir, "tool", "user-config.json"), "{}\n");
+  await execute("update", recipe, { appId: "tool", capabilities, onPhase: (phase) => phases.push(phase) });
+  assert.equal(fs.readFileSync(path.join(installBaseDir, "tool", "bin", "tool"), "utf8"), "tool\n");
+  assert.equal(fs.readFileSync(path.join(installBaseDir, "tool", "user-config.json"), "utf8"), "{}\n");
+  assert.deepEqual([...new Set(phases)], ["download", "inspect", "extract"]);
 });
 
 test("archive install rejects links before extraction", async () => {

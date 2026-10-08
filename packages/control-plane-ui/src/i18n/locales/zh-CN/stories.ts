@@ -94,6 +94,7 @@ export const stories = {
     titlePlaceholder: "Story 标题",
     descriptionLabel: "说明",
     descriptionPlaceholder: "可选说明",
+    advancedSettings: "高级设置",
     ownerNode: "所属节点",
     maxIdleAiSessions: "最多保留空闲 AI Session",
     agentTools: "Agent 工具",

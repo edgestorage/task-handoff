@@ -96,6 +96,21 @@ test("terminal events keep authoritative detection state after a failed job", as
   assert.equal(current.recentJobs[0].error.code, "postcondition_failed");
 });
 
+test("an active update job disables update without optimistically changing detection", async () => {
+  const store = useInstanceAppManagement({
+    load: async () => snapshot(1, { apps: [app({ state: "installed", canInstall: false, canUninstall: true, canUpdate: true })] }),
+    errorText: String,
+  });
+  await store.recover("instance_1");
+  store.applyJob("instance_1", job({ operation: "update", state: "queued", startedAt: undefined }));
+
+  const current = store.state("instance_1").snapshot;
+  assert.equal(current.apps[0].state, "installed");
+  assert.equal(current.apps[0].canUpdate, false);
+  assert.equal(current.apps[0].canUninstall, false);
+  assert.equal(current.activeJobs[0].operation, "update");
+});
+
 test("a restarted app-management stream replaces a higher-sequence stale snapshot", async () => {
   const store = useInstanceAppManagement({ load: async () => snapshot(40), errorText: String });
   await store.recover("instance_1");
@@ -123,6 +138,36 @@ test("a restarted app-management stream replaces a higher-sequence stale snapsho
   assert.equal(store.state("instance_1").snapshot.apps[0].state, "installed");
 });
 
+test("a manual update check merges into the cached snapshot without resolving the job", async () => {
+  const store = useInstanceAppManagement({
+    load: async () => snapshot(1, { apps: [app({ state: "installed", canInstall: false, canUninstall: true, canUpdate: true })] }),
+    errorText: String,
+  });
+  await store.recover("instance_1");
+  store.applyUpdateCheck("instance_1", {
+    appId: "chromium",
+    status: "update-available",
+    installedVersion: "1.0.0",
+    latestVersion: "1.1.0",
+    checkedAt: now,
+  });
+
+  const current = store.state("instance_1").snapshot;
+  assert.deepEqual(current.apps[0].updateCheck, {
+    status: "update-available",
+    installedVersion: "1.0.0",
+    latestVersion: "1.1.0",
+    checkedAt: now,
+  });
+  assert.equal(current.apps[0].state, "installed");
+  assert.equal(current.apps[0].canUpdate, true);
+
+  // A check for an app without a cached snapshot, or an unknown instance, is a no-op.
+  store.applyUpdateCheck("instance_1", { appId: "missing", status: "unknown", checkedAt: now });
+  store.applyUpdateCheck("instance_missing", { appId: "chromium", status: "up-to-date", checkedAt: now });
+  assert.equal(store.state("instance_1").snapshot.apps.length, 1);
+});
+
 test("Apps settings exposes capability states, task feedback, safe confirmation, and launcher separation", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
   const queries = read("src/api/queries.ts");
@@ -145,11 +190,25 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.match(dialog, /filteredManagedApps/);
   assert.match(dialog, /t\('instances\.settings\.refreshApps'\)/);
   assert.match(dialog, /t\("instances\.settings\.confirmInstall"\)/);
+  assert.match(dialog, /app\.canUpdate/);
+  assert.match(dialog, /t\("instances\.settings\.confirmUpdate"\)/);
+  assert.match(dialog, /t\("instances\.settings\.updateDescription"\)/);
+  assert.match(dialog, /DropdownMenu/);
+  assert.match(dialog, /hasAppActions/);
+  assert.match(dialog, /instances\.settings\.appActions/);
+  assert.match(dialog, /instances\.settings\.checkUpdate/);
+  assert.match(dialog, /instances\.settings\.checkingUpdate/);
+  assert.match(dialog, /updateCheckLabel\(app\)/);
+  assert.match(dialog, /checkingApps/);
   assert.match(dialog, /<Button type="button" :disabled="Boolean\(operationSubmitting\)" @click="confirmAppOperation">/);
   assert.doesNotMatch(dialog, /AlertDialogAction/);
   assert.match(dialog, /instance-app-confirmation-summary/);
   assert.match(protocol, /logTail/);
   assert.match(queries, /postApiData<AppManagementJobResponse>[^\n]+requestId \? \{ requestId \} : \{\}/);
+  assert.match(queries, /export function updateInstanceApp/);
+  assert.match(queries, /apps\/\$\{encodeURIComponent\(appId\)\}\/update/);
+  assert.match(queries, /export function checkInstanceAppUpdate/);
+  assert.match(queries, /apps\/\$\{encodeURIComponent\(appId\)\}\/update-check/);
   assert.doesNotMatch(queries, /packageName|downloadUrl|command|script/);
   assert.match(events, /recoverOpen/);
   assert.match(events, /event\.scope\.instanceId/);

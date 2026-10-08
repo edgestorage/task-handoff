@@ -12,7 +12,7 @@ const DECLARED_COMMANDS = [
   "profile add", "profile list", "profile use", "profile show", "profile remove", "profile trust", "login", "logout",
   "whoami", "instance list", "instance show", "instance create", "instance delete", "instance start",
   "instance stop", "instance restart", "instance logs", "instance rename", "instance update",
-  "instance app list", "instance app install", "instance app uninstall", "instance app job",
+  "instance app list", "instance app install", "instance app uninstall", "instance app update", "instance app check-update", "instance app job",
   "instance app catalog", "instance app catalog custom", "instance app catalog custom update",
   "ai-session list", "ai-session show",
   "ai-session history", "ai-session turns", "ai-session turn", "ai-session timeline", "ai-session turn-timeline",

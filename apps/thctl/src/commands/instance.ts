@@ -199,6 +199,7 @@ const APP_MANAGEMENT_COLUMNS = [
   { key: "managementSource", header: "source" },
   { key: "version", header: "version" },
   { key: "canInstall", header: "install" },
+  { key: "canUpdate", header: "update" },
   { key: "canUninstall", header: "uninstall" },
   { key: "activeJobId", header: "job" },
 ];
@@ -259,7 +260,7 @@ export async function instanceAppList(context: CliContext, invocation: CliInvoca
   };
 }
 
-function instanceAppOperation(operation: "install" | "uninstall") {
+function instanceAppOperation(operation: "install" | "uninstall" | "update") {
   return async (context: CliContext, invocation: CliInvocation) => {
     const instanceId = requireInstanceId(invocation);
     const appId = requireArgument(invocation, "appId");
@@ -280,6 +281,27 @@ function instanceAppOperation(operation: "install" | "uninstall") {
 
 export const instanceAppInstall = instanceAppOperation("install");
 export const instanceAppUninstall = instanceAppOperation("uninstall");
+export const instanceAppUpdate = instanceAppOperation("update");
+
+export async function instanceAppCheckUpdate(context: CliContext, invocation: CliInvocation) {
+  const instanceId = requireInstanceId(invocation);
+  const appId = requireArgument(invocation, "appId");
+  const connection = await openConnection(context);
+  const check = (await connection.client.apps.updateCheck(instanceId, appId)).check;
+  return {
+    data: check,
+    columns: [
+      { key: "appId", header: "app" },
+      { key: "status", header: "status" },
+      { key: "installedVersion", header: "installed" },
+      { key: "latestVersion", header: "latest" },
+      { key: "checkedAt", header: "checked" },
+    ],
+    message: check.status === "update-available"
+      ? `App \`${appId}\` has an update available${check.installedVersion || check.latestVersion ? ` (${check.installedVersion || "?"} → ${check.latestVersion || "?"})` : ""}.`
+      : `App \`${appId}\` update check: ${check.status}${check.reason ? ` (${check.reason})` : ""}.`,
+  };
+}
 
 export async function instanceAppJob(context: CliContext, invocation: CliInvocation) {
   const instanceId = requireInstanceId(invocation);

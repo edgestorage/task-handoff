@@ -21,6 +21,7 @@ import {
   type NodeModelAssignment,
   type NodeModelConfig,
   type NodeModelPublicRecord,
+  type NodeAgentModelRelayUnknownModelPolicy,
 } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { modelRelayRouteBaseUrl } from "./relay-routes.ts";
@@ -43,14 +44,22 @@ export class NodeModelRegistry {
   private readonly transaction: <T>(operation: () => T) => T;
   private readonly nodeId: string;
   private readonly instances: InstanceAccess;
-  private readonly modelRelay?: { enabled(): boolean; originFor(instance: ControlledInstance): string };
+  private readonly modelRelay?: {
+    enabled(): boolean;
+    unknownModelPolicy(): NodeAgentModelRelayUnknownModelPolicy;
+    originFor(instance: ControlledInstance): string;
+  };
 
   constructor(
     paths: NodeAgentStorePaths,
     nodeId: string,
     instances: InstanceAccess,
     persistence?: { models: ModelRepository; assignments: ModelAssignmentRepository; transaction<T>(operation: () => T): T },
-    modelRelay?: { enabled(): boolean; originFor(instance: ControlledInstance): string },
+    modelRelay?: {
+      enabled(): boolean;
+      unknownModelPolicy(): NodeAgentModelRelayUnknownModelPolicy;
+      originFor(instance: ControlledInstance): string;
+    },
   ) {
     this.nodeId = nodeId;
     this.instances = instances;
@@ -125,6 +134,15 @@ export class NodeModelRegistry {
   /** Live relay switch accessor; the resolver must never cache this value. */
   modelRelayEnabled() {
     return this.modelRelay?.enabled() === true;
+  }
+
+  /**
+   * Live unknown-model policy accessor. Nodes without the relay producer
+   * capability (and tests that inject only `enabled`) default to passthrough,
+   * matching the setting's wire default.
+   */
+  modelRelayUnknownModelPolicy(): NodeAgentModelRelayUnknownModelPolicy {
+    return this.modelRelay?.unknownModelPolicy() ?? "passthrough";
   }
 
   instance(instanceId: string) {
