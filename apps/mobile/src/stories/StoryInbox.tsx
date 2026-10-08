@@ -13,6 +13,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
+import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n } from '../i18n';
@@ -35,7 +36,7 @@ type StoryInboxProps = {
   onOpenDocument(story: Story, document: StoryDocument): void;
   onOpenSession(instanceId: string, sessionId: string): void;
   onEdit(story: Story): void;
-  onNewSession(story: Story, defaults: { instanceId: string; cwd?: string; cwdFolderId?: string }): void;
+  onNewSession(story: Story, defaults: { instanceId: string; sessionId?: string; cwd?: string; cwdFolderId?: string }): void;
   onAddExisting?(story: Story): void;
   onAddAction?(story: Story): void;
   onAddAutomation?(story: Story): void;
@@ -104,6 +105,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       setPhase('error');
     }
   }, [runtime.api]);
+  const pullToRefresh = usePullToRefresh(refresh);
   const replaceStory = useCallback((updated: Story) => setStories((current) => current.map((story) => storyTreeKey(story) === storyTreeKey(updated) ? updated : story)), []);
   const toggleArchive = useCallback(async (story: Story) => {
     if (!runtime.api) return;
@@ -203,8 +205,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
       style={styles.emptyState}
     />}
-    onRefresh={() => { void refresh(); }}
-    refreshing={phase === 'loading'}
+    onRefresh={pullToRefresh.onRefresh}
+    refreshing={pullToRefresh.refreshing}
     scrollEnabled={!draggingStoryKey}
     testID="story-list"
     renderItem={({ item: story }) => {

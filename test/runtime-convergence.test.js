@@ -7,6 +7,7 @@ const test = require("node:test");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
 const { RuntimeConvergenceCoordinator } = require("../packages/control-plane/src/node-agent/runtime-convergence.ts");
 const { NodeUpdateJobs } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { GIT_WORKSPACE_PROVISIONING_PENDING_CODE } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 
 function instance(overrides = {}) {
@@ -556,6 +557,50 @@ test("a new instance run can retry after dependencies return", async () => {
   assert.equal(recovered.runtimeVersion.phase, "matched");
   assert.equal(recovered.runtimeVersion.attempt, 1);
   assert.equal(installs, 2);
+});
+
+test("an un-converged instance still converges after its start fails on the current layout", async () => {
+  const store = memoryStore(instance());
+  const delays = [];
+  let installs = 0;
+  let rebuilt = false;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() {
+      installs += 1;
+    },
+    async restart(value) {
+      // A container created before the current layout rejects its start. The
+      // node agent has no legacy branch for it, so the failure is retryable and
+      // only drives diagnostic backoff until the operator rebuilds the instance.
+      if (!rebuilt) {
+        throw Object.assign(new Error(`Git workspace provisioning is not scheduled for ${value.id}.`), {
+          code: GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
+        });
+      }
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, {
+    maxAttempts: 2,
+    retryBaseDelayMs: 5,
+    retryMaxDelayMs: 5,
+    verificationTimeoutMs: 0,
+    delay: async (milliseconds) => { delays.push(milliseconds); },
+  });
+
+  const failed = await coordinator.schedule("inst_runtime");
+  assert.equal(failed.runtimeVersion.phase, "pending");
+  assert.equal(failed.runtimeVersion.error.retryable, true);
+  assert.match(failed.runtimeVersion.error.message, /provisioning is not scheduled/);
+  assert.equal(installs, 2);
+  assert.deepEqual(delays, [5]);
+
+  rebuilt = true;
+  const recovered = await coordinator.schedule("inst_runtime", { startRequested: true });
+  assert.equal(recovered.runtimeVersion.phase, "matched");
+  assert.equal(recovered.runtimeVersion.actualVersion, "2.0.0");
 });
 
 test("executor error codes outside the convergence protocol retain their message without invalidating state", async () => {

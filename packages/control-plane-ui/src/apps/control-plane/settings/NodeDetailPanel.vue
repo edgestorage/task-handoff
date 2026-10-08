@@ -353,18 +353,24 @@
               <div class="node-resource-list">
                 <div v-for="folder in resources.localFolders" :key="folder.id" class="node-resource-row">
                   <div>
-                    <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
+                    <span class="node-resource-title">
+                      <strong>{{ nodeLocalFolderDisplayName(folder, locale) }}</strong>
+                      <Badge v-if="folder.origin === 'builtin'" variant="secondary">{{ t("settings.nodeDetail.builtinProject") }}</Badge>
+                    </span>
                     <code>{{ folder.path }}</code>
                   </div>
                   <div class="node-resource-actions">
-                    <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
-                      <Pencil :size="14" />
-                      <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
-                    </Button>
-                    <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
-                      <Trash2 :size="14" />
-                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
-                    </Button>
+                    <!-- Built-in projects are owned and recreated by the node agent, so operator rename/delete stays unavailable. -->
+                    <template v-if="folder.origin !== 'builtin'">
+                      <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
+                        <Pencil :size="14" />
+                        <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
+                      </Button>
+                      <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
+                        <Trash2 :size="14" />
+                        <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                      </Button>
+                    </template>
                   </div>
                 </div>
                 <NodeResourceEmptyState v-if="!resources.localFolders.length" :icon="FolderOpen" :message="t('settings.nodeDetail.noLocalFolders')" />
@@ -1052,6 +1058,17 @@ watch(
 }
 
 .node-detail-header code,
+.node-resource-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-resource-title strong {
+  min-width: 0;
+}
+
 .node-resource-row code {
   overflow: hidden;
   color: var(--text-muted);

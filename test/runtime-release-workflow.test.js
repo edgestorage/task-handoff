@@ -10,6 +10,9 @@ const root = path.resolve(__dirname, "..");
 test("runtime releases map stable to latest and isolate prerelease dist-tags", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
 
+  // The node agent's built-in project is materialized at build time, so the
+  // release workflow owns the rollout switch alongside the other build flags.
+  assert.match(workflow, /TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED \|\| '0' \}\}/);
   assert.match(workflow, /npm_tag="latest"/);
   assert.match(workflow, /npm_tag="\$\{prerelease%%\.\*\}"/);
   assert.match(workflow, /"\$npm_tag" != "alpha" && "\$npm_tag" != "beta"/);

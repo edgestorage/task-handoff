@@ -15,11 +15,12 @@ export type InstanceFolderResolution =
 /**
  * 把一个本地文件夹标识解析为该实例内的运行路径。
  *
- * 唯一来源是 node-agent 的本地文件夹集合：Docker/Kubernetes 实例只把源目录挂进工作区根，
+ * 唯一来源是 node-agent 的本地文件夹解析（运营者目录 + 派生的内置项目目录）：
+ * Docker/Kubernetes 实例只把源目录挂进工作区根，
  * 因此文件夹必须落在实例来源目录内；Local Runtime 直接在宿主路径执行，不需要该约束。
  */
 export function resolveInstanceFolder(state: NodeAgentState, instance: ControlledInstance, folderId: string): InstanceFolderResolution {
-  const folder = state.localFolders.get(folderId);
+  const folder = state.resolveLocalFolder(folderId);
   if (!folder) return { status: "unknown-folder" };
   const workspacePath = instance.runtime.workspacePath || instance.workspace.path || "/workspace";
   const runtime = state.requireRuntime(instance.runtimeId);

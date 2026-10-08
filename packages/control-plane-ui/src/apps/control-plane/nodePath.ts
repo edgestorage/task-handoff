@@ -1,3 +1,5 @@
+import { resolveLocalizedText } from "./shared/localizedText.ts";
+
 export type NodeFolderSelectionMode = "native" | "node";
 export type NativeNodeFolderSelection = string | { path: string; ownerNodeId?: string } | undefined;
 export type NativeNodeFolderPicker = () => Promise<NativeNodeFolderSelection>;
@@ -115,8 +117,13 @@ export function nodePathName(value: string) {
   return withoutTrailingSeparators.split(separator).filter(Boolean).at(-1) || nodePath;
 }
 
-export function nodeLocalFolderDisplayName(folder: { name?: string; path: string }) {
-  return folder.name?.trim() || nodePathName(folder.path);
+export function nodeLocalFolderDisplayName(
+  folder: { name?: string; path: string; localizedNames?: Record<string, string> },
+  locale?: string,
+) {
+  // Operator folders only carry `name`; product-shipped built-in projects also
+  // carry the manifest's `localizedNames`.
+  return resolveLocalizedText(folder.localizedNames, locale) || folder.name?.trim() || nodePathName(folder.path);
 }
 
 function comparableNodePath(value: string, windows: boolean): ComparableNodePath | undefined {

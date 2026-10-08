@@ -21,6 +21,9 @@ concurrency:
 env:
   TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '0' }}
   TASK_HANDOFF_AGENT_RUNS_ENABLED: ${{ vars.TASK_HANDOFF_AGENT_RUNS_ENABLED || '0' }}
+  # Pulls the published Agent Skill into the shipped built-in project at build
+  # time; off by default until the rollout variable is turned on.
+  TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: ${{ vars.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED || '0' }}
 
 jobs:
   node-pty-prebuilds:

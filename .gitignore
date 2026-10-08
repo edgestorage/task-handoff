@@ -11,6 +11,10 @@ scripts/docker-up-workspace-local.sh
 packages/web-ui/dist/
 packages/control-plane-ui/dist/
 packages/controlled-instance-ui/dist/
+# Built-in project content and manifests are pulled from published skill
+# releases by scripts/sync-builtin-projects.mjs; only project.json is tracked.
+/builtin-projects/*/content/
+/builtin-projects/*/manifest.json
 openspec
 docs
 !docs/

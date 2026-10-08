@@ -38,6 +38,7 @@ function stateFixture() {
       return { id, type: "docker" };
     },
     localFolders: { get: (id: string) => id === "folder_one" ? { id, path: "/host/workspace/project" } : undefined },
+    resolveLocalFolder: (id: string) => id === "folder_one" ? { id, path: "/host/workspace/project" } : undefined,
   };
 }
 

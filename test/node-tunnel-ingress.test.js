@@ -129,6 +129,13 @@ test("node tunnel protocol preserves UTF-8 and binary request bodies with an exp
   await assert.rejects(pending, (error) => error.name === "AbortError");
 });
 
+test("node tunnel encodes large binary bodies without argument overflow or chunk padding", () => {
+  const binary = Buffer.alloc(1024 * 1024, 0xa5);
+  const encoded = encodeNodeTunnelRequestBody(binary);
+  assert.equal(encoded.data, binary.toString("base64"));
+  assert.deepEqual(decodeNodeTunnelRequestBody(encoded), binary);
+});
+
 test("disabled nodes reject main and every auxiliary tunnel handshake until re-enabled", () => {
   const handlers = new Map();
   let connectionEnabled = false;

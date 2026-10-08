@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The private config is mounted as a per-instance directory. The legacy single
-# file path stays readable so containers created by older node agents keep
-# starting after a node-agent upgrade.
+# The private config is mounted as a per-instance directory.
 readonly private_config_default_path="/run/task-handoff/private/private-config.json"
-readonly private_config_legacy_path="/run/task-handoff/instance-private-config.json"
 
 resolve_private_config_path() {
   local candidate
-  for candidate in "${TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-}" "${private_config_default_path}" "${private_config_legacy_path}"; do
+  for candidate in "${TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-}" "${private_config_default_path}"; do
     if [ -n "${candidate}" ] && [ -f "${candidate}" ]; then
       printf '%s' "${candidate}"
       return 0

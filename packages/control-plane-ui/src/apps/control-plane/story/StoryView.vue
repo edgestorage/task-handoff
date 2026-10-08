@@ -171,7 +171,7 @@
 
       <main class="story-content" :class="{ 'story-session-pane': (selectedResource?.kind === 'session' || selectedResource?.kind === 'new-session') }">
         <template v-if="selectedResource?.kind === 'new-session'">
-          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :creation-instance-disabled="(candidate) => !aiSessionLaunchableAppsForInstance(candidate, t).length" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :launching-app="launchingApp" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @open-settings="(instanceId, section) => emit('open-settings', instanceId, section)" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
+          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-initial-worktree-session-id="newSessionInitialWorktreeSessionId" :creation-instances="storyInstances" :creation-instance-disabled="(candidate) => !aiSessionLaunchableAppsForInstance(candidate, t).length" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :launching-app="launchingApp" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @open-settings="(instanceId, section) => emit('open-settings', instanceId, section)" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
           <div v-else class="story-content-state">{{ t("stories.noAvailableInstance") }}</div>
         </template>
         <template v-else-if="selectedResource?.kind === 'session'">
@@ -571,7 +571,7 @@ import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocument
 import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
-import { allNodesVisible, controlPlaneAgentCapabilities, nodeIsVisible, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import { allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionRootsInForest, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
 import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
@@ -973,7 +973,7 @@ const storyAgentEntryCandidates = computed(() => {
 });
 const storyEditorError = ref("");
 const editingStoryTitle = ref(false); const storyTitleDraft = ref(""); const storyTitleInput = ref<HTMLInputElement>(); const savingStoryTitle = ref(false); const storyTitleEditWidth = ref(0);
-const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
+const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const newSessionInitialWorktreeSessionId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
 const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof StoryActionEditorContent>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>();
 const targetInstance = (instanceId: string) => props.instances.find((instance) => instance.id === instanceId);
 const foldersForInstance = (instanceId: string) => {
@@ -985,10 +985,11 @@ const forcedExpandedStorySessionIds = computed(() => new Set(aiSessionAncestorId
   storySessionForest.value,
   selectedResource.value?.kind === "session" ? selectedResource.value.entry.session.id : undefined,
 )));
-const storySessionRootsFor = (story: Story) => storySessionForest.value.roots.filter((root) => {
-  const instance = targetInstance(root.session.instanceId);
-  return root.session.storyId === story.id && instance?.node?.id === story.ownerNodeId;
-});
+const storySessionRootsFor = (story: Story) => storySessionRootsInForest(
+  storySessionForest.value,
+  story.id,
+  instancesForStory(story).map((instance) => instance.id),
+);
 const sessionEntriesForRoots = (roots: AiSessionTreeNode<StorySessionRecord>[]): SessionEntry[] => flattenAiSessionForest({
   ...storySessionForest.value,
   roots,
@@ -1217,11 +1218,16 @@ async function onStoryAssigned(_target: AiSessionStoryTarget, moved: boolean) {
 function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
   showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")), "error");
 }
+// A Story opens its newest session, not the newest session the Story tree still lists:
+// sessions closed from the tree keep their place there but must not seed creation defaults.
 const latestSessionFor = (story: Story) => {
-  const root = storySessionRootsFor(story)[0];
-  if (!root) return undefined;
-  const instance = targetInstance(root.session.instanceId);
-  return instance ? { instance, session: root.session } : undefined;
+  const session = latestStorySessionForCreation(
+    storySessionForest.value,
+    story.id,
+    instancesForStory(story).map((instance) => instance.id),
+  );
+  const instance = session ? targetInstance(session.instanceId) : undefined;
+  return instance && session ? { instance, session } : undefined;
 };
 const instancesForStory = (story: Story) => props.instances.filter((instance) => instance.node?.id === story.ownerNodeId);
 const storyIsOnline = (story: Story) => isStoryOnline(story, props.nodes);
@@ -1761,8 +1767,8 @@ async function commitStoryTitleEdit() {
     savingStoryTitle.value = false;
   }
 }
-function openNewSession(story: Story) { if (!storyIsOnline(story)) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; selectedResource.value = { kind: "new-session", story }; }
-function selectCreationInstance(instanceId: string) { newSessionInstanceId.value = instanceId; newSessionInitialCwd.value = ""; newSessionInitialCwdFolderId.value = ""; }
+function openNewSession(story: Story) { if (!storyIsOnline(story)) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; newSessionInitialWorktreeSessionId.value = latest?.session.id || ""; selectedResource.value = { kind: "new-session", story }; }
+function selectCreationInstance(instanceId: string) { newSessionInstanceId.value = instanceId; newSessionInitialCwd.value = ""; newSessionInitialCwdFolderId.value = ""; newSessionInitialWorktreeSessionId.value = ""; }
 function openAssignSession() { assignSessionId.value = availableSessions.value[0] ? `${availableSessions.value[0].instance.id}:${availableSessions.value[0].session.id}` : ""; assignSessionOpen.value = true; }
 function openAssignSessionFor(story: Story) { if (!story || story.archivedAt) return; selectStory(story); openAssignSession(); }
 function editStoryFromTree(story: Story) { if (!story) return; selectStory(story); void openEdit(); }

@@ -216,7 +216,7 @@ test("detail context shows the registered folder, instance, agent, and lifecycle
   assert.match(panel, /<TooltipProvider :delay-duration="120">[\s\S]*class="session-ai-detail-context"[\s\S]*<Folder :size="14"[\s\S]*\{\{ selectedSessionFolderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*\{\{ selectedSessionInstanceName \}\}[\s\S]*<AiAgentIcon :agent="selectedSessionAgentIcon" :size="14"[\s\S]*aiSessionStatusLabel\(selectedSession, t\)/);
   assert.match(panel, /class="session-ai-detail-agent" :aria-label="agentDisplayName\(selectedSession\.agent\)"[\s\S]*<TooltipContent side="top" :side-offset="8">\{\{ agentDisplayName\(selectedSession\.agent\) \}\}<\/TooltipContent>/);
   assert.match(panel, /selectedSessionAgentIcon = computed<"codex" \| "claude" \| "opencode" \| undefined>[\s\S]*agent === "codex" \|\| agent === "claude" \|\| agent === "opencode" \? agent : undefined/);
-  assert.match(panel, /session\.cwdFolderId[\s\S]*props\.nodeLocalFolders[\s\S]*nodeLocalFolderDisplayName\(folder\)[\s\S]*aiSessionBasename\(session\.cwd\)/);
+  assert.match(panel, /session\.cwdFolderId[\s\S]*props\.nodeLocalFolders[\s\S]*nodeLocalFolderDisplayName\(folder, locale\.value as string\)[\s\S]*aiSessionBasename\(session\.cwd\)/);
   assert.match(panel, /selectedSessionFolderPath[\s\S]*session\.cwd[\s\S]*find\(\(candidate\) => candidate\.id === session\.cwdFolderId\)\?\.path/);
   assert.match(panel, /props\.instance\.name \|\| props\.instance\.id/);
   assert.match(panel, /<TooltipTrigger as-child>[\s\S]*selectedSessionFolderName[\s\S]*<TooltipContent class="ai-session-path-tooltip"[\s\S]*selectedSessionFolderPath/);

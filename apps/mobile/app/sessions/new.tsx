@@ -41,13 +41,13 @@ import { invalidateWorktreeInstance, loadWorktreeScope, subscribeToWorktreeForeg
 
 export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const toast = useMobileToast();
-  const { cwd: requestedCwd, cwdFolderId: requestedCwdFolderId, instanceId: requestedInstanceId, storyId: requestedStoryId, message: requestedMessage } = useLocalSearchParams<{ cwd?: string; cwdFolderId?: string; instanceId?: string; storyId?: string; message?: string }>();
+  const { cwd: requestedCwd, cwdFolderId: requestedCwdFolderId, instanceId: requestedInstanceId, storyId: requestedStoryId, message: requestedMessage, worktreeSessionId: requestedWorktreeSessionId } = useLocalSearchParams<{ cwd?: string; cwdFolderId?: string; instanceId?: string; storyId?: string; message?: string; worktreeSessionId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
-  const [useRequestedFolder, setUseRequestedFolder] = useState(true);
+  const [useRequestedDefaults, setUseRequestedDefaults] = useState(true);
   const [message, setMessage] = useState(typeof requestedMessage === 'string' ? requestedMessage : '');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
@@ -122,9 +122,9 @@ export default function NewAiSessionRoute() {
         api.resources.instanceWorkspaceSource(selectedInstanceId, abort.signal).catch(() => undefined),
       ]);
       if (abort.signal.aborted) return;
-      const folderOptions = aiSessionFolderOptions(source, selectedInstance?.workspace.path, nextFolders);
+      const folderOptions = aiSessionFolderOptions(source, selectedInstance?.workspace.path, nextFolders, locale);
       const defaultFolderId = defaultAiSessionFolderId(source, selectedInstance?.workspace.path, nextFolders);
-      const requestedFolderId = useRequestedFolder && selectedInstanceId === requestedInstanceId
+      const requestedFolderId = useRequestedDefaults && selectedInstanceId === requestedInstanceId
         ? initialAiSessionFolderId(folderOptions, {
           cwd: requestedCwd,
           cwdFolderId: requestedCwdFolderId,
@@ -149,7 +149,7 @@ export default function NewAiSessionRoute() {
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
     });
     return () => abort.abort();
-  }, [requestedCwd, requestedCwdFolderId, requestedInstanceId, selectedInstance?.nodeId, selectedInstance?.runtime.type, selectedInstance?.workspace.path, selectedInstanceId, useRequestedFolder]);
+  }, [requestedCwd, requestedCwdFolderId, requestedInstanceId, selectedInstance?.nodeId, selectedInstance?.runtime.type, selectedInstance?.workspace.path, selectedInstanceId, useRequestedDefaults]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -170,18 +170,23 @@ export default function NewAiSessionRoute() {
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
       const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
-      const workspace = await loadWorktreeScope(
-        { kind: 'session-workspace', instanceId: selectedInstanceId, cwdFolderId: selectedCwdFolderId },
-        () => client.aiSessions.workspace(selectedInstanceId, selectedCwdFolderId, abort.signal),
-      );
+      const [workspace, inheritedWorktreeId] = await Promise.all([
+        loadWorktreeScope(
+          { kind: 'session-workspace', instanceId: selectedInstanceId, cwdFolderId: selectedCwdFolderId },
+          () => client.aiSessions.workspace(selectedInstanceId, selectedCwdFolderId, abort.signal),
+        ),
+        useRequestedDefaults && selectedInstanceId === requestedInstanceId
+          ? inheritedStoryWorktreeId(client, selectedInstanceId, requestedWorktreeSessionId, abort.signal)
+          : undefined,
+      ]);
       if (abort.signal.aborted) return;
-      setWorkspaceState(initialAiSessionWorkspaceState(selectedInstanceId, folderId, workspace));
+      setWorkspaceState(initialAiSessionWorkspaceState(selectedInstanceId, folderId, workspace, inheritedWorktreeId));
     }).catch(() => {
       // Compatibility for v0.0.21: an older Control Plane keeps the cwd-only creation flow.
       if (!abort.signal.aborted) setWorkspaceState({ instanceId: selectedInstanceId, folderId, mode: 'current-folder' });
     });
     return () => abort.abort();
-  }, [selectedInstanceId, folderId, selectedCwdFolderId, workspaceRefreshToken]);
+  }, [selectedInstanceId, folderId, requestedInstanceId, requestedWorktreeSessionId, selectedCwdFolderId, useRequestedDefaults, workspaceRefreshToken]);
 
   const workspaceMatchesSelection = workspaceState.instanceId === selectedInstanceId && workspaceState.folderId === folderId;
   const workspaceLoading = Boolean(selectedInstanceId && folderId && !workspaceMatchesSelection);
@@ -364,7 +369,7 @@ export default function NewAiSessionRoute() {
     onInstanceChange={(instanceId) => {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
       if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'ai', instanceId);
-      setUseRequestedFolder(false);
+      setUseRequestedDefaults(false);
       setReasoningEffort(undefined);
       setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}
@@ -398,6 +403,26 @@ export default function NewAiSessionRoute() {
     title={t('sessions.newWorktree')}
     visible={worktreeDialogOpen}
   /> : null}</>;
+}
+
+/**
+ * The Story composer inherits the worktree of the Story session it was opened from.
+ * The session's own repository context is the authority for where it runs; a failure
+ * is not fatal because the folder defaults still produce a usable composer.
+ */
+async function inheritedStoryWorktreeId(
+  client: ReturnType<typeof createMobileControlPlaneClient>['api'],
+  instanceId: string,
+  sessionId: string | undefined,
+  signal: AbortSignal,
+) {
+  if (!sessionId) return undefined;
+  try {
+    const context = await client.repository.context({ instanceId, sessionKind: 'ai-session', sessionId }, { signal });
+    return context.currentWorktree?.id;
+  } catch {
+    return undefined;
+  }
 }
 
 type NewSessionLocalAttachment = {

@@ -27,6 +27,7 @@ function definitionState() {
       return instance;
     },
     localFolders: { get: (id: string) => id === "folder_one" ? { id, path: "/host/workspace/app" } : undefined },
+    resolveLocalFolder: (id: string) => id === "folder_one" ? { id, path: "/host/workspace/app" } : undefined,
     requireRuntime: () => ({ type: "docker" }),
   };
 }

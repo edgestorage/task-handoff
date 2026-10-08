@@ -437,10 +437,10 @@ export class NodeAgentInstanceEventForwarder {
     const instanceId = event.scope?.instanceId;
     if (!instanceId) return false;
     if (this.pendingAiSessionAuthorityByOutput.get(output)?.has(instanceId)) return true;
-    // Compatibility for v0.0.23: older controlled instances publish a full
-    // snapshot for every registry mutation. Once an output is actually slow,
-    // collapse both old snapshots and current patches into the latest recovery
-    // snapshot. Without backpressure every transition remains observable.
+    // The current stream is incremental, so every transition stays observable
+    // while the output keeps up. A slow output cannot drain patch by patch
+    // without unbounded growth, so once it is actually backpressured the
+    // pending patches collapse into the latest recovery snapshot.
     return output.bufferedAmount >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES;
   }
 
@@ -981,8 +981,8 @@ function instanceEventUrl(instance: ControlledInstance) {
   try {
     const url = new URL("/api/events", base);
     url.searchParams.set("aiSessionTransient", "1");
-    // Compatibility for v0.0.23: older controlled instances ignore this
-    // optional bootstrap request and continue emitting full authority events.
+    // A stateful relay owns no projection when it reconnects, so it asks the
+    // current producer for a bootstrap snapshot before it consumes patches.
     url.searchParams.set("aiSessionAuthoritySnapshot", "1");
     // Compatibility for v0.0.28: absence asks a current producer for flat sessions.
     url.searchParams.set("aiSessionHierarchy", "subagents");

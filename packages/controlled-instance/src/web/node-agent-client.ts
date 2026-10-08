@@ -77,15 +77,9 @@ export type StoryAgentToolAccess = {
   storyId: string;
   enabledTools: AiSessionAgentToolName[];
   revision?: string;
-  source: "node-agent" | "legacy-v0.0.32" | "fail-closed";
+  source: "node-agent" | "fail-closed";
   diagnostic?: string;
 };
-
-const LEGACY_STORY_CONTENT_TOOLS: StoryAgentToolName[] = [
-  "story_list_content",
-  "story_get_content",
-  "story_set_content",
-];
 
 export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NodeAgentRegistrationConfig {
   return {
@@ -117,7 +111,7 @@ export class NodeAgentRegistrationClient {
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
   private readonly storyToolPolicies = new StoryToolPolicyCache();
-  private storyToolPolicyCapability: "unknown" | "supported" | "legacy-content-only" = "unknown";
+  private storyToolPolicyCapability: "unknown" | "supported" = "unknown";
 
   constructor(
     config: NodeAgentRegistrationConfig,
@@ -320,16 +314,6 @@ export class NodeAgentRegistrationClient {
       this.storyToolPolicies.remember(resolution);
       return accessFromResolution(resolution);
     } catch (error) {
-      // Compatibility for v0.0.32: the node-agent advertised only the original
-      // Content tools and did not expose the private policy resolution route.
-      if (requestStatus(error) === 404 && !requestCode(error)) {
-        this.storyToolPolicyCapability = "legacy-content-only";
-        return {
-          storyId,
-          enabledTools: [...LEGACY_STORY_CONTENT_TOOLS],
-          source: "legacy-v0.0.32",
-        };
-      }
       return {
         storyId,
         enabledTools: [],
@@ -491,12 +475,6 @@ export class NodeAgentRegistrationClient {
 function requestStatus(error: unknown) {
   return error && typeof error === "object" && "statusCode" in error
     ? Number((error as { statusCode?: unknown }).statusCode)
-    : undefined;
-}
-
-function requestCode(error: unknown) {
-  return error && typeof error === "object" && "code" in error
-    ? String((error as { code?: unknown }).code || "") || undefined
     : undefined;
 }
 

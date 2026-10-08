@@ -11,6 +11,9 @@ const prepareDesktopRuntime = fs.readFileSync(path.join(root, "scripts", "prepar
 test("desktop releases build the shared official account feature flag into the UI", () => {
   assert.match(workflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '0' \}\}/);
   assert.match(workflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);
+  // Built-in project content is materialized during `desktop:prepare`, so the
+  // release workflow owns the rollout switch for the shipped folder.
+  assert.match(workflow, /TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED \|\| '0' \}\}/);
 });
 
 test("mobile releases pass the Agent Runs build flag through to Expo", () => {

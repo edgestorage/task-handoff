@@ -56,6 +56,32 @@ describe('mobile worktree session selection', () => {
     expect(state.worktreeId).toBe('worktree_demo');
   });
 
+  test('inherits the Story session worktree when the folder workspace proves it is selectable', () => {
+    const state = initialAiSessionWorkspaceState('instance-1', 'folder-1', workspace(), 'worktree_demo');
+    expect(state.mode).toBe('worktree');
+    expect(state.worktreeId).toBe('worktree_demo');
+    expect(aiSessionWorkspaceSelection(state, true)).toEqual({
+      type: 'existing-worktree',
+      repositoryContextId: 'context_one',
+      worktreeId: 'worktree_demo',
+    });
+  });
+
+  test('keeps the folder default unless the inherited worktree is really usable here', () => {
+    const locked = workspace({
+      worktrees: [
+        workspace().worktrees[0],
+        workspace().worktrees[1],
+        { ...workspace().worktrees[1], id: 'worktree_locked', canCreateAiSession: false, createAiSessionBlockers: ['locked'] },
+      ],
+    });
+    for (const [snapshot, id] of [[workspace(), 'worktree_missing'], [workspace(), 'worktree_main'], [locked, 'worktree_locked']] as const) {
+      const state = initialAiSessionWorkspaceState('instance-1', 'folder-1', snapshot, id);
+      expect(state.mode).toBe('current-folder');
+      expect(state.worktreeId).toBe('worktree_demo');
+    }
+  });
+
   test('switches to worktree mode and derives existing-worktree selections instead of a branch', () => {
     const state = switchAiSessionWorkspaceMode(initialAiSessionWorkspaceState('instance-1', 'folder-1', workspace()), 'worktree');
     expect(aiSessionGitSelection(state, true)).toBeUndefined();

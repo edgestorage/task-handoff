@@ -3,6 +3,10 @@ import type { auth as englishAuth } from "../en-US/auth.ts";
 
 export const auth = {
   controlPlane: "控制面板",
+  brandTagline: "面向本地与远程 AI 工作空间的统一控制面板。",
+  linkWebsite: "官网",
+  linkDocs: "文档",
+  linkGithub: "GitHub",
   loading: "加载中",
   createAdmin: "创建管理员",
   signIn: "登录",

@@ -92,6 +92,7 @@ function createRunState() {
       return instance;
     },
     localFolders: { get: (id: string) => ["folder_one", "folder_two", "folder_other"].includes(id) ? { id, path: "/host/workspace/packages/app" } : undefined },
+    resolveLocalFolder: (id: string) => ["folder_one", "folder_two", "folder_other"].includes(id) ? { id, path: "/host/workspace/packages/app" } : undefined,
     requireRuntime(id: string) {
       if (id !== "runtime_docker" && id !== "runtime_other") throw Object.assign(new Error("Runtime not found."), { code: "NODE_RUNTIME_NOT_FOUND", statusCode: 404 });
       return { id, type: "docker" };

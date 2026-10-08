@@ -396,7 +396,7 @@ export const settings = {
     serverUpdateDescription: "更新当前控制面板服务器及其内置 Node Agent。", nodeAgentUpdateDescription: "仅更新此节点的 Node Agent，其他节点独立更新。", queuing: "正在排队", update: "更新",
     controlledInstances: "受管实例 · {count}", instanceConvergenceDescription: "实例由节点自动收敛到同一产品版本。", noControlledInstances: "此节点上没有受管实例",
     updateJobs: "更新任务 · {count}", refresh: "刷新", nodeRollout: "服务器更新", unknown: "未知", noUpdateJobs: "此节点上没有托管更新任务",
-    localFolderCount: "本地文件夹 · {count}", adding: "正在添加", add: "添加", noLocalFolders: "此节点上没有本地文件夹", renameLocalFolder: "修改名称", renameLocalFolderDescription: "设置此文件夹在会话分组和文件夹选择器中显示的名称，不会修改实际路径。",
+    localFolderCount: "本地文件夹 · {count}", adding: "正在添加", add: "添加", noLocalFolders: "此节点上没有本地文件夹", renameLocalFolder: "修改名称", builtinProject: "内置", renameLocalFolderDescription: "设置此文件夹在会话分组和文件夹选择器中显示的名称，不会修改实际路径。",
     dockerImages: "{name} 的 Docker 镜像 · {count}", unknownSize: "大小未知", unknownAge: "时间未知", noImages: "此节点未加载镜像",
     instanceCount: "实例 · {count}", instanceSettings: "{name} 的设置", settings: "设置", noInstances: "此节点上没有实例",
     pairedKeys: "已配对控制面板 · {count}", pairedAt: "配对于 {time}", current: "当前", currentRequester: "当前查看方", inactive: "未激活", paired: "已配对",

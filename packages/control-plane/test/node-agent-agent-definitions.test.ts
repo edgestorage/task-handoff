@@ -65,6 +65,7 @@ function createState() {
       return instance;
     },
     localFolders: { get: (id: string) => FOLDERS[id] },
+    resolveLocalFolder: (id: string) => FOLDERS[id],
     requireRuntime(id: string) {
       const runtime = RUNTIMES[id];
       if (!runtime) throw Object.assign(new Error("Runtime not found."), { code: "NODE_RUNTIME_NOT_FOUND", statusCode: 404 });
@@ -134,7 +135,7 @@ test("AgentDefinition repository derives revision from content and rejects stale
   const fixture = await createFixture();
   try {
     const created = fixture.service.create(input());
-    assert.match(created.id, /^agent_[0-9a-f]{20}$/);
+    assert.match(created.id, /^agent_[0-9abcdefghjkmnpqrstvwxyz]{13}$/);
     assert.equal(created.revision, revisionOf(created));
     assert.deepEqual(created.executionPolicy, { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" });
 

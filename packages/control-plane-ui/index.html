@@ -15,19 +15,21 @@
       })();
     </script>
     <style>
+      /* --workspace-bg is the authority once the theme CSS loads; the literal values below
+         only cover the pre-CSS first paint and must match the web-theme token. */
       html,
       body,
       #app {
         min-height: 100%;
         margin: 0;
-        background: hsl(195 45% 5%);
+        background: var(--workspace-bg, hsl(195 45% 5%));
         color-scheme: dark;
       }
 
       html[data-theme="light"],
       html[data-theme="light"] body,
       html[data-theme="light"] #app {
-        background: hsl(190 24% 95%);
+        background: var(--workspace-bg, hsl(190 24% 95%));
         color-scheme: light;
       }
     </style>

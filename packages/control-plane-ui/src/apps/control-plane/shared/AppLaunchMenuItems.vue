@@ -45,7 +45,7 @@
         <DropdownMenuItem v-for="folder in filteredCwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
           <Folder :size="14" />
           <span>
-            <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
+            <strong>{{ nodeLocalFolderDisplayName(folder, locale) }}</strong>
             <small>{{ folder.path }}</small>
           </span>
         </DropdownMenuItem>

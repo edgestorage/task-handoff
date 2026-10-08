@@ -77,22 +77,17 @@ test("v0.0.21 Repository authentication error remains valid", () => {
   assert.deepEqual(RepositoryErrorSchema.parse(fixture.repositoryError), fixture.repositoryError);
 });
 
-test("v0.0.21 instance private config remains readable for startup migration", () => {
+test("v0.0.21 instance credential alias remains readable in the current layout", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-v21-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
-    store.init();
-    // Compatibility for v0.0.21: that release wrote a single <instanceId>.json
-    // file, which the current store keeps readable through legacyFilePath.
-    fs.writeFileSync(store.legacyFilePath(fixture.instancePrivateConfig.instanceId), JSON.stringify(fixture.instancePrivateConfig));
-    const migrated = store.inspectMaterialized(fixture.instancePrivateConfig.instanceId);
-    assert.equal(migrated.instanceCredential, fixture.instancePrivateConfig.registrationToken);
-    assert.equal("gitCredentials" in migrated, false);
-    // The next startup migrates the legacy file into the per-instance directory
-    // without changing what readers observe.
-    store.init();
-    assert.deepEqual(store.inspectMaterialized(fixture.instancePrivateConfig.instanceId), migrated);
-    assert.equal(fs.existsSync(store.filePath(fixture.instancePrivateConfig.instanceId)), true);
+    // The retired v0.0.21 single-file layout is no longer read; only the
+    // `registrationToken` credential alias stays readable as historical data.
+    fs.mkdirSync(path.dirname(store.filePath(fixture.instancePrivateConfig.instanceId)), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(store.filePath(fixture.instancePrivateConfig.instanceId), `${JSON.stringify(fixture.instancePrivateConfig, null, 2)}\n`, { mode: 0o600 });
+    const restored = store.inspectMaterialized(fixture.instancePrivateConfig.instanceId);
+    assert.equal(restored.instanceCredential, fixture.instancePrivateConfig.registrationToken);
+    assert.equal("gitCredentials" in restored, false);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

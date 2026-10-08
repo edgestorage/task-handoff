@@ -80,7 +80,7 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
   visualBalanceInset?: number;
 }) {
   const { colors } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
   const { state: directory } = useActiveDirectories();
   const [title, setTitle] = useState('');
@@ -143,7 +143,7 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
       runtime.api.resources.instanceWorkspaceSource(selectedInstance.id, abort.signal).catch(() => undefined),
     ]).then(([nodeFolders, source]) => {
       if (abort.signal.aborted) return;
-      const options = aiSessionFolderOptions(source, selectedInstance.workspace.path, nodeFolders);
+      const options = aiSessionFolderOptions(source, selectedInstance.workspace.path, nodeFolders, locale);
       const defaultFolder = defaultAiSessionFolderId(source, selectedInstance.workspace.path, nodeFolders);
       setFolderState({ nodeId: selectedInstance.nodeId, folders: options });
       setSelection((current) => ({

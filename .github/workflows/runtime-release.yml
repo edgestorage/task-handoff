@@ -19,6 +19,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pulls the published Agent Skill into the node agent's shipped built-in
+  # project at build time; off by default until the rollout variable is on.
+  TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: ${{ vars.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED || '0' }}
+
 jobs:
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
