@@ -139,12 +139,13 @@ test("relay projection exposes routes, not upstream secrets, and stays callable 
   assert.ok(codexRoute.baseUrl.includes(`/api/node-agent/model-relay/instances/${INSTANCE_ID}/routes/`));
   assert.equal(codex.endpoint, undefined);
   assert.equal(codex.key, undefined);
-  assert.deepEqual(codex.modelNames, [{ name: "public-codex", order: 100 }]);
+  assert.deepEqual(codex.modelNames, [{ name: "public-codex", upstreamName: "upstream-codex", order: 100 }]);
 
-  // The instance-side selection uses only the external identity.
+  // The instance-side selection reports the display label plus the stable
+  // upstream identity so a later rename cannot orphan a saved session.
   assert.deepEqual(
     resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: entities.codex.id, modelName: "public-codex" }),
-    { modelEntityId: entities.codex.id, modelName: "public-codex" },
+    { modelEntityId: entities.codex.id, modelName: "public-codex", modelUpstreamName: "upstream-codex" },
   );
 
   const environment = app.nodeAgentState.resolvedAssignedModelEnvironment(INSTANCE_ID);
@@ -153,9 +154,10 @@ test("relay projection exposes routes, not upstream secrets, and stays callable 
   assert.equal(environment.TASK_HANDOFF_CODEX_BASE_URL, undefined);
   assert.equal(environment.ANTHROPIC_API_KEY, INSTANCE_TOKEN);
   assert.ok(environment.ANTHROPIC_BASE_URL.startsWith(listener));
-  assert.equal(environment.TASK_HANDOFF_CLAUDE_MODEL, "public-claude");
+  // Adapters are driven by the stable upstream name, not the display label.
+  assert.equal(environment.TASK_HANDOFF_CLAUDE_MODEL, "upstream-claude");
   const opencode = JSON.parse(environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT);
-  assert.equal(opencode.model, `task-handoff-${entities.chat.id}/public-chat`);
+  assert.equal(opencode.model, `task-handoff-${entities.chat.id}/upstream-chat`);
   assert.equal(opencode.provider[`task-handoff-${entities.chat.id}`].options.apiKey, INSTANCE_TOKEN);
   assert.ok(opencode.provider[`task-handoff-${entities.chat.id}`].options.baseURL.startsWith(listener));
 
@@ -170,11 +172,12 @@ test("relay projection exposes routes, not upstream secrets, and stays callable 
   assert.equal(upstreamRequest.headers.authorization, `Bearer ${CODEX_KEY}`);
   assert.equal(upstreamRequest.body.toString("utf8"), JSON.stringify({ model: "upstream-codex", input: "hi" }));
 
-  // The materialized private config carries the same relay catalog and no
-  // upstream endpoint, key or upstreamName anywhere.
+  // The materialized private config carries the same relay catalog. The stable
+  // upstream model identity travels with it, but the upstream endpoint and
+  // every credential stay behind.
   const privateConfig = fs.readFileSync(app.nodeAgentState.instancePrivateConfigs.filePath(INSTANCE_ID), "utf8");
   assert.equal(privateConfig.includes(INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION), true);
-  for (const secret of [CODEX_KEY, CHAT_KEY, CLAUDE_KEY, upstream.origin, "upstream-codex", "upstream-chat", "upstream-claude"]) {
+  for (const secret of [CODEX_KEY, CHAT_KEY, CLAUDE_KEY, upstream.origin]) {
     assert.equal(privateConfig.includes(secret), false, `${secret} must not reach the instance private config`);
   }
   for (const secret of [CODEX_KEY, CHAT_KEY, CLAUDE_KEY, upstream.origin, "upstream-codex"]) {
@@ -206,7 +209,7 @@ test("codex, claude and opencode relay configs use the relay base URL and instan
   assert.ok(configToml.includes(`[model_providers.${providerId}]`));
   const relayBaseUrl = catalog.entities.find((entity) => entity.id === entities.codex.id).routes[0].baseUrl;
   assert.ok(configToml.includes(`base_url = "${relayBaseUrl}"`));
-  assert.ok(configToml.includes('model = "public-codex"'));
+  assert.ok(configToml.includes('model = "upstream-codex"'));
   assert.equal(configToml.includes(CODEX_KEY), false);
   assert.equal(configToml.includes(upstream.origin), false);
   const providerKeys = Object.values(codexProviderEnvironment(catalog, codexEnv));
@@ -220,7 +223,7 @@ test("codex, claude and opencode relay configs use the relay base URL and instan
   const claudeEnv = JSON.parse(claudeSettings).env;
   assert.equal(claudeEnv.ANTHROPIC_API_KEY, INSTANCE_TOKEN);
   assert.equal(claudeEnv.ANTHROPIC_BASE_URL, environment.ANTHROPIC_BASE_URL);
-  assert.equal(claudeEnv.ANTHROPIC_MODEL, "public-claude");
+  assert.equal(claudeEnv.ANTHROPIC_MODEL, "upstream-claude");
   assert.equal(claudeSettings.includes(CLAUDE_KEY), false);
   assert.equal(claudeSettings.includes(upstream.origin), false);
 
@@ -228,8 +231,46 @@ test("codex, claude and opencode relay configs use the relay base URL and instan
   const chatProvider = opencode.provider[`task-handoff-${entities.chat.id}`];
   assert.equal(chatProvider.options.apiKey, INSTANCE_TOKEN);
   assert.equal(chatProvider.options.baseURL, catalog.entities.find((entity) => entity.id === entities.chat.id).routes[0].baseUrl);
-  assert.deepEqual(Object.keys(chatProvider.models), ["public-chat"]);
+  assert.deepEqual(Object.keys(chatProvider.models), ["upstream-chat"]);
   assert.equal(JSON.stringify(opencode).includes(CHAT_KEY), false);
+});
+
+test("renaming a display label leaves the Codex config and instance environment untouched", async (t) => {
+  const upstream = await startUpstream((_record, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  t.after(() => upstream.close());
+  const { app, entities } = await resolveRelayOrigin(t, upstream);
+
+  const beforeEnvironment = app.nodeAgentState.resolvedAssignedModelEnvironment(INSTANCE_ID);
+  const beforeCatalog = app.nodeAgentState.modelRegistry.privateCatalog(INSTANCE_ID);
+  const home = tempDir("task-handoff-relay-rename-home-");
+  const codexEnv = {
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_REGISTRATION_TOKEN: INSTANCE_TOKEN,
+    HOME: home,
+    CODEX_HOME: path.join(home, ".codex"),
+  };
+  assert.equal(applyManagedCodexModelConfig(codexEnv, beforeCatalog).applied, true);
+  const configPath = path.join(home, ".codex", "config.toml");
+  const beforeConfig = fs.readFileSync(configPath, "utf8");
+
+  for (const [key, upstreamName] of [["codex", "upstream-codex"], ["chat", "upstream-chat"], ["claude", "upstream-claude"]]) {
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/node-agent/models/${entities[key].id}`,
+      headers: { authorization: "Bearer agent-secret" },
+      payload: { modelNames: [{ name: `renamed-${key}`, upstreamName, order: 100 }] },
+    });
+    assert.equal(patched.statusCode, 200, patched.body);
+  }
+
+  // Adapters are driven by the stable upstream identity, so the environment and
+  // the Codex config stay byte-identical: a rename requires no rewrite at all.
+  assert.deepEqual(app.nodeAgentState.resolvedAssignedModelEnvironment(INSTANCE_ID), beforeEnvironment);
+  assert.equal(applyManagedCodexModelConfig(codexEnv, app.nodeAgentState.modelRegistry.privateCatalog(INSTANCE_ID)).applied, false);
+  assert.equal(fs.readFileSync(configPath, "utf8"), beforeConfig);
 });
 
 test("turning the switch off restores the v0.0.34 direct projection without restarting", async (t) => {

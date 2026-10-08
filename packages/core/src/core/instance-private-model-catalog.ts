@@ -14,6 +14,9 @@ export const INSTANCE_PRIVATE_MODEL_CATALOG_DIRECT_PROTOCOL_VERSION = "2026-08-2
 export const INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION = "2026-10-02";
 
 const PrivateModelNameEntrySchema = z.object({
+  // Stable model identity. `name` stays the mutable display label: renaming an
+  // entry must never change which model a session or client refers to.
+  upstreamName: z.string().trim().min(1).max(240).optional(),
   name: z.string().trim().min(1).max(240),
   order: z.number().int().min(0).max(1_000_000),
 }).strip();
@@ -75,6 +78,42 @@ export type InstancePrivateModelCatalog = z.infer<typeof InstancePrivateModelCat
 
 export function directInstancePrivateModelCatalog(catalog: InstancePrivateModelCatalog | undefined) {
   return catalog?.protocolVersion === INSTANCE_PRIVATE_MODEL_CATALOG_DIRECT_PROTOCOL_VERSION ? catalog : undefined;
+}
+
+export type PrivateModelNameEntryLike = { name: string; upstreamName?: string };
+
+/**
+ * Stable identity of one exposed model name. `name` is a mutable display label;
+ * the upstream model name is what the provider (or the node relay in front of
+ * it) actually receives, so clients and sessions key on it and renaming the
+ * label never changes which model is selected. Entries written before the field
+ * existed fall back to the label itself.
+ */
+export function modelNameEntryIdentity(entry: PrivateModelNameEntryLike) {
+  return entry.upstreamName?.trim() || entry.name.trim();
+}
+
+/**
+ * True when `model` refers to `entry`. Both the stable identity and the display
+ * label are accepted so clients configured before the identity split keep
+ * working; callers that need a unique target resolve identity matches first.
+ */
+export function modelNameEntryMatches(entry: PrivateModelNameEntryLike, model: string) {
+  return modelNameEntryIdentity(entry) === model || entry.name === model;
+}
+
+/**
+ * Resolve the single entry a client-reported `model` refers to. The stable
+ * identity is tried first so a renamed display label cannot shadow another
+ * model. Duplicate identities describe the same upstream model, so the first
+ * (order-sorted) entry wins; duplicate display labels stay ambiguous and
+ * resolve to nothing.
+ */
+export function selectModelNameEntry<T extends PrivateModelNameEntryLike>(entries: readonly T[], model: string): T | undefined {
+  const byIdentity = entries.find((entry) => modelNameEntryIdentity(entry) === model);
+  if (byIdentity) return byIdentity;
+  const byName = entries.filter((entry) => entry.name === model);
+  return byName.length === 1 ? byName[0] : undefined;
 }
 
 export function relayInstancePrivateModelCatalog(catalog: InstancePrivateModelCatalog | undefined) {
@@ -151,9 +190,13 @@ export function sanitizeInstancePrivateModelCatalog(input: unknown, onWarning?: 
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
           const name = entry as Record<string, unknown>;
           for (const key of Object.keys(name)) {
-            if (key !== "name" && key !== "order") onWarning?.({ field: `entities[${entityIndex}].modelNames[${entryIndex}].${key}` });
+            if (key !== "name" && key !== "upstreamName" && key !== "order") onWarning?.({ field: `entities[${entityIndex}].modelNames[${entryIndex}].${key}` });
           }
-          return { name: name.name, order: name.order };
+          return {
+            ...(typeof name.upstreamName === "string" ? { upstreamName: name.upstreamName } : {}),
+            name: name.name,
+            order: name.order,
+          };
         }) : item.modelNames,
       };
       if (relay) {

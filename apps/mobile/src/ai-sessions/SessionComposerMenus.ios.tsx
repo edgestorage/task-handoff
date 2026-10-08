@@ -2,11 +2,12 @@ import { MenuView, type MenuAction } from '@react-native-menu/menu';
 import { Button, Host, Menu, RNHostView } from '@expo/ui/swift-ui';
 import { disabled as disabledModifier } from '@expo/ui/swift-ui/modifiers';
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
-import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
+import type { AiSessionModelGroup, AiSessionModelOption } from '@task-handoff/control-plane-client';
 
 import { AnchoredSelectMenu } from '../components/AnchoredSelectMenu';
 import { useMobileTheme } from '../components/theme';
 import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary } from './model-settings-menu';
+import { modelSelectionFromOption, sameModelSelection } from './model-selection';
 
 type Trigger = (onPress?: () => void) => React.ReactElement;
 
@@ -87,13 +88,13 @@ type ModelSettingsMenuActionInput = Pick<ModelSettingsMenuProps,
 > & { imageColor: string; selectedImageColor: string };
 
 export function modelSettingsMenuActions(input: ModelSettingsMenuActionInput): MenuAction[] {
+  const isSelected = (model: AiSessionModelOption) =>
+    input.modelSelection ? sameModelSelection(model, input.modelSelection) : false;
   const modelActions = input.modelGroups.map((group, groupIndex): MenuAction => {
-    const selectedModel = input.modelSelection?.modelEntityId === group.modelEntityId
-      ? input.modelSelection.modelName
-      : undefined;
+    const groupHasSelected = group.models.some(isSelected);
     const common = {
-      image: group.models.length > 1 && selectedModel ? 'checkmark' : 'sparkles',
-      imageColor: group.models.length > 1 && selectedModel ? input.selectedImageColor : input.imageColor,
+      image: group.models.length > 1 && groupHasSelected ? 'checkmark' : 'sparkles',
+      imageColor: group.models.length > 1 && groupHasSelected ? input.selectedImageColor : input.imageColor,
       subtitle: modelGroupSubtitle(group, input.modelSelection, input.formatModelGroupSummary),
       title: group.providerName,
     };
@@ -101,14 +102,14 @@ export function modelSettingsMenuActions(input: ModelSettingsMenuActionInput): M
       return {
         ...common,
         id: `model:${groupIndex}:0`,
-        state: selectedModel === group.models[0].modelName ? 'on' : 'off',
+        state: isSelected(group.models[0]) ? 'on' : 'off',
       };
     }
     return {
       ...common,
       subactions: group.models.map((model, modelIndex) => ({
         id: `model:${groupIndex}:${modelIndex}`,
-        state: selectedModel === model.modelName ? 'on' : 'off',
+        state: isSelected(model) ? 'on' : 'off',
         title: model.modelName,
       })),
     };
@@ -151,7 +152,7 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
     const match = /^model:(\d+):(\d+)$/.exec(id);
     if (!match) return;
     const model = props.modelGroups[Number(match[1])]?.models[Number(match[2])];
-    if (model) props.onModelChange({ modelEntityId: model.modelEntityId, modelName: model.modelName });
+    if (model) props.onModelChange(modelSelectionFromOption(model));
   };
   return <MenuView
     actions={actions}

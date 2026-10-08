@@ -1,4 +1,4 @@
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, sameAiSessionModelSelection, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionProviderTimelineItemListener, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
@@ -389,7 +389,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       if (!client.updateThreadSettings || client.supportsThreadSettingsUpdate?.() !== true) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNSUPPORTED", "This Codex version does not support model switching.", 409);
       }
-      const updated = await client.updateThreadSettings(threadId, { model: selection.modelName });
+      // Switch to the stable upstream name, matching how the thread was started.
+      const updated = await client.updateThreadSettings(threadId, { model: selection.modelUpstreamName ?? selection.modelName });
       if (!updated.model) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex reported no model after updating thread settings.", 502);
       }
@@ -400,8 +401,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       const actualSelection = updated.modelProvider
         ? this.options.projectModelSelection
           ? this.options.projectModelSelection(updated.modelProvider, updated.model)
-          : expectedProvider === updated.modelProvider ? { ...selection, modelName: updated.model } : undefined
-        : { ...selection, modelName: updated.model };
+          // Without a catalog projection the observed slug is the stable
+          // upstream identity; keep the display label as-is rather than
+          // overwriting it with the upstream name.
+          : expectedProvider === updated.modelProvider ? { ...selection, modelUpstreamName: updated.model } : undefined
+        : { ...selection, modelUpstreamName: updated.model };
       if (!actualSelection) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex reported an unknown model provider.", 502);
       }
@@ -639,9 +643,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex did not confirm the resumed provider and model.", 502);
     }
     const actual = this.actualModelSelection(thread, requested);
-    if (requested && (!actual
-      || actual.modelEntityId !== requested.modelEntityId
-      || actual.modelName !== requested.modelName)) {
+    if (requested && (!actual || !sameAiSessionModelSelection(requested, actual))) {
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex resumed the thread with a different provider or model.", 502);
     }
     return actual;
@@ -658,7 +660,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       if (!requested) return undefined;
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex reported an unknown model provider.", 502);
     }
-    if (requested && (requested.modelEntityId !== actual.modelEntityId || requested.modelName !== actual.modelName)) {
+    if (requested && !sameAiSessionModelSelection(requested, actual)) {
       this.options.onDiagnostic?.({
         code: "AI_SESSION_MODEL_SELECTION_RECONCILED",
         requested,

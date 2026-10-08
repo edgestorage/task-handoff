@@ -1,5 +1,6 @@
 import {
   AiSessionResumeResultSchema,
+  sameAiSessionModelSelection,
   type AiSessionHistoryItem,
   type AiSessionModelSelection,
   type AiSessionResumeResult,
@@ -78,8 +79,7 @@ export class AiSessionResumeCoordinator {
           : undefined;
         const actualModelSelection = await this.options.resumeProvider(resumeItem, storyAgentTools);
         if (requestedModelSelection && (!actualModelSelection
-          || actualModelSelection.modelEntityId !== requestedModelSelection.modelEntityId
-          || actualModelSelection.modelName !== requestedModelSelection.modelName)) {
+          || !sameAiSessionModelSelection(actualModelSelection, requestedModelSelection))) {
           throw new Error("Provider resumed the session with a different model selection.");
         }
         this.options.history.activate(item.id);

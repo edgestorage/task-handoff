@@ -71,6 +71,7 @@ export const AgentRunMemberExecutionSnapshotSchema = z.object({
   providerId: StableIdSchema,
   modelEntityId: StableIdSchema.optional(),
   modelName: z.string().trim().min(1).max(120).optional(),
+  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
   reasoningEffort: z.string().trim().min(1).max(120).optional(),
   permissionMode: z.string().trim().min(1).max(120).optional(),
   executionPolicy: AgentExecutionPolicySchema,

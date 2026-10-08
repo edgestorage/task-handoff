@@ -26,7 +26,7 @@
                 :key="`${model.modelEntityId}:${model.modelName}`"
                 class="ai-session-model-menu__item"
                 :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(model) }"
-                @select="emit('selectModel', { modelEntityId: model.modelEntityId, modelName: model.modelName })"
+                @select="emit('selectModel', { modelEntityId: model.modelEntityId, modelName: model.modelName, modelUpstreamName: model.modelUpstreamName })"
               >
                 <span class="ai-session-model-menu__copy"><strong>{{ model.modelName }}</strong></span>
                 <Check v-if="isSelectedModel(model)" class="ai-session-model-menu__check" :size="16" />
@@ -37,7 +37,7 @@
             v-else
             class="ai-session-model-menu__item ai-session-model-menu__provider-item"
             :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(group.models[0]) }"
-            @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName })"
+            @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName, modelUpstreamName: group.models[0].modelUpstreamName })"
           >
             <Waypoints class="ai-session-model-menu__icon" :size="17" />
             <span class="ai-session-model-menu__copy">
@@ -85,6 +85,7 @@ import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-ha
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "../ui/dropdown-menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { supportedAiSessionReasoningEfforts } from "./aiSessionReasoningEfforts";
+import { sameModelSelectionRef } from "./modelSelectionRef";
 
 /**
  * 新建会话 composer 与 Agent 编辑器共用的模型菜单：面板按模型连接（provider）分组，
@@ -117,13 +118,16 @@ const { t } = useI18n();
 const availableReasoningEfforts = computed(() => supportedAiSessionReasoningEfforts(props.agent));
 
 function isSelectedModel(model: AiSessionModelSelection) {
-  return model.modelEntityId === props.modelSelection?.modelEntityId && model.modelName === props.modelSelection?.modelName;
+  return Boolean(props.modelSelection) && sameModelSelectionRef(model, props.modelSelection!);
 }
 
 function selectedModelNameForGroup(group: AiSessionModelGroup) {
-  return props.modelSelection?.modelEntityId === group.modelEntityId
-    ? props.modelSelection.modelName
-    : undefined;
+  const selection = props.modelSelection;
+  if (!selection || selection.modelEntityId !== group.modelEntityId) return undefined;
+  // Show the entry's current label: a stored selection keeps its stable
+  // identity, but the display label may have been renamed since.
+  return group.models.find((candidate) => sameModelSelectionRef(candidate, selection))?.modelName
+    ?? selection.modelName;
 }
 
 function modelGroupSubtitle(group: AiSessionModelGroup) {

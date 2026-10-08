@@ -11,6 +11,7 @@ import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n } from '../i18n';
+import { modelSelectionLabel } from './model-selection';
 import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
   SESSION_COMPOSER_ACTION_RADIUS,
@@ -70,6 +71,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
   const selectedWorktreeLabel = props.selectedWorktreeLabel
     || (selectedWorktree ? repositoryWorktreeLabel(selectedWorktree, t) : t('sessions.selectWorktree'));
   const modelGroups = props.modelGroups || [];
+  const displayedModelName = modelSelectionLabel(modelGroups, props.modelSelection) || t('sessions.model');
 
   const content = <>
       {props.header ?? <View style={styles.intro}>
@@ -167,8 +169,8 @@ export function NewSessionForm(props: NewSessionFormProps) {
           </View>
           <View style={styles.trailingTools}>
             {modelGroups.length || props.reasoningEffortEnabled ? <ModelSettingsMenu provider={props.selectedAgent} cancelLabel={t('common.cancel')} disabled={props.busy} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
-              {(onPress) => <Pressable accessibilityLabel={props.modelSelection?.modelName || t('sessions.model')} accessibilityRole="button" disabled={props.busy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
-                <Text numberOfLines={1} style={[styles.modelLabel, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>
+              {(onPress) => <Pressable accessibilityLabel={displayedModelName} accessibilityRole="button" disabled={props.busy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
+                <Text numberOfLines={1} style={[styles.modelLabel, { color: colors.textMuted }]}>{displayedModelName}</Text>
                 <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
               </Pressable>}
             </ModelSettingsMenu> : null}

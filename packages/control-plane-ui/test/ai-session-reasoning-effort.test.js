@@ -34,7 +34,9 @@ test("composer and agent editor share the same model menu", () => {
 
 test("model trigger tooltip summarizes the selected provider, model, and reasoning effort", () => {
   assert.match(composer, /<TooltipContent class="ai-session-model-summary-tooltip"[\s\S]*displayedProviderName[\s\S]*displayedModelName[\s\S]*reasoningEffort/);
-  assert.match(composer, /model\.modelEntityId === displayedModelSelection\.value\?\.modelEntityId[\s\S]*model\.modelName === displayedModelSelection\.value\?\.modelName/);
+  // The stored selection is matched to a catalog option by its stable identity,
+  // so a renamed display label still resolves to the same option.
+  assert.match(composer, /modelOptions\.value\.find\(\(model\) => sameModelSelectionRef\(model, selection\)\)/);
   assert.match(composer, /sessions\.composer\.selectionNotSet/);
   assert.match(composer, /<DropdownMenu[^>]*@update:open="updateModelMenuOpen">\s*<DropdownMenuTrigger as-child>\s*<button/);
   assert.match(composer, /<Tooltip :open="modelSummaryTooltipOpen">[\s\S]*<TooltipTrigger\s*:reference="modelTriggerEl"/);

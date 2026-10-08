@@ -260,7 +260,11 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
       const pathPolicy = this.options.sharedSpaces.pathPolicyForMember(run.runId, runtime.id, workspace.layout.cwd);
       const invocation = this.options.runs.resolveMemberInvocationTools(run.runId, member.agentId);
       const modelSelection = member.executionSnapshot.modelEntityId && member.executionSnapshot.modelName
-        ? { modelEntityId: member.executionSnapshot.modelEntityId, modelName: member.executionSnapshot.modelName }
+        ? {
+            modelEntityId: member.executionSnapshot.modelEntityId,
+            modelName: member.executionSnapshot.modelName,
+            modelUpstreamName: member.executionSnapshot.modelUpstreamName,
+          }
         : undefined;
       if (!member.input) throw Object.assign(new Error("The Agent Run member has no frozen input."), { code: "AGENT_RUN_MEMBER_INPUT_MISSING" });
       const created = await this.options.sessions.create(instance, {

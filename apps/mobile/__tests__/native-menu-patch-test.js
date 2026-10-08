@@ -30,7 +30,8 @@ test('the native menu keeps the presented UIKit menu event target enabled until 
 test('the iOS model selector remains a native UIMenu with subtitles and controlled states', () => {
   expect(sessionMenus).toContain("from '@react-native-menu/menu'");
   expect(sessionMenus).toContain('subtitle: modelGroupSubtitle');
-  expect(sessionMenus).toMatch(/state: selectedModel === model\.modelName \? 'on' : 'off'/);
+  expect(sessionMenus).toMatch(/state: isSelected\(model\) \? 'on' : 'off'/);
+  expect(sessionMenus).toContain('sameModelSelection(model, input.modelSelection)');
   expect(sessionMenus).not.toContain('<Popover');
 });
 

@@ -5,6 +5,7 @@ import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoni
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary } from './model-settings-menu';
+import { modelSelectionFromOption, sameModelSelection } from './model-selection';
 
 type Trigger = (onPress?: () => void) => ReactElement;
 
@@ -75,11 +76,11 @@ const checkedLabel = (label: string, selected: boolean) => `${selected ? '\u2713
 
 export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
   const chooseModel = (group: AiSessionModelGroup) => {
-    if (group.models.length === 1) return props.onModelChange({ modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName });
+    if (group.models.length === 1) return props.onModelChange(modelSelectionFromOption(group.models[0]));
     Alert.alert(group.providerName, undefined, [
       ...group.models.map((model) => ({
-        text: checkedLabel(model.modelName, props.modelSelection?.modelEntityId === model.modelEntityId && props.modelSelection.modelName === model.modelName),
-        onPress: () => props.onModelChange({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
+        text: checkedLabel(model.modelName, props.modelSelection ? sameModelSelection(model, props.modelSelection) : false),
+        onPress: () => props.onModelChange(modelSelectionFromOption(model)),
       })),
       { text: props.cancelLabel, style: 'cancel' as const },
     ]);

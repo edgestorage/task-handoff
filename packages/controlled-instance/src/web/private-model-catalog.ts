@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import {
   InstancePrivateModelCatalogSchema,
+  modelNameEntryIdentity,
   parseInstancePrivateModelCatalog,
   type InstancePrivateModelCatalog,
 } from "@task-handoff/core/core/instance-private-model-catalog";
@@ -103,13 +104,23 @@ export function resolveControlledPrivateModelSelection(
       : previouslySelectedModelUnavailable("AI_SESSION_MODEL_ENTITY_UNAVAILABLE");
   }
   const names = entity.modelNames.slice().sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
-  const modelName = requested?.modelName || names[0]?.name;
-  if (!modelName || !names.some((entry) => entry.name === modelName)) {
+  // The stable identity wins over the display label, so a session recorded
+  // before the model was renamed still resolves to the same model and reports
+  // the entry's current label back to the caller.
+  const entry = requested
+    ? names.find((candidate) => requested.modelUpstreamName && modelNameEntryIdentity(candidate) === requested.modelUpstreamName)
+      // `modelName` is normally the display label, but a client (for example the
+      // CLI) may only know the stable upstream name; accept it here too, identity
+      // first, so selecting by the id clients are configured with never fails.
+      ?? names.find((candidate) => modelNameEntryIdentity(candidate) === requested.modelName)
+      ?? names.find((candidate) => candidate.name === requested.modelName)
+    : names[0];
+  if (!entry) {
     throw options.intent === "target"
       ? modelTargetUnavailable()
       : previouslySelectedModelUnavailable("AI_SESSION_MODEL_NAME_UNAVAILABLE");
   }
-  return { modelEntityId: entity.id, modelName };
+  return { modelEntityId: entity.id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) };
 }
 
 function parseControlledPrivateModelCatalog(value: unknown, env: NodeJS.ProcessEnv) {

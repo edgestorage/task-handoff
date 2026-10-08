@@ -474,3 +474,19 @@ test("v0.0.34 name rows stay readable without a migration rewrite", async (t) =>
   verify.close();
   assert.deepEqual(JSON.parse(row.model_names_json), [{ name: "gpt-legacy-row", order: 100 }]);
 });
+
+test("the stable upstream identity wins over a colliding display label", () => {
+  const resolver = new NodeModelRelayResolver({ modelRelayUnknownModelPolicy: () => "passthrough" });
+  const model = {
+    id: "mdl_collision",
+    model: "shared",
+    modelNames: [
+      { name: "shared", upstreamName: "upstream-a", order: 100 },
+      { name: "upstream-a", upstreamName: "shared", order: 200 },
+    ],
+  };
+  // "shared" is the second entry's stable identity, not the first entry's label.
+  assert.equal(resolver.resolveUpstreamModelName(model, "shared"), "shared");
+  // "upstream-a" is the first entry's identity, not the second entry's label.
+  assert.equal(resolver.resolveUpstreamModelName(model, "upstream-a"), "upstream-a");
+});

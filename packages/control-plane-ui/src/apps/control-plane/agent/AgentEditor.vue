@@ -164,7 +164,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ChevronDown, FolderCheck, X } from "@lucide/vue";
-import { defaultAiSessionModelSelection, deriveAiSessionModelGroups } from "@task-handoff/control-plane-client";
+import { defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionModelOption } from "@task-handoff/control-plane-client";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
@@ -180,6 +180,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import AiSessionModelMenu from "@/components/ai-session/AiSessionModelMenu.vue";
 import { AI_SESSION_REASONING_EFFORTS } from "@/components/ai-session/aiSessionReasoningEfforts";
+import { sameModelSelectionRef } from "@/components/ai-session/modelSelectionRef";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { nodeLocalFolderDisplayName, nodePathName } from "../nodePath";
@@ -271,7 +272,9 @@ const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.m
 const currentModelOption = computed(() => modelOptions.value.find(matchesDraftModel));
 const draftModelSelection = computed<AiSessionModelSelection | undefined>(() => {
   const option = currentModelOption.value;
-  return option ? { modelEntityId: option.modelEntityId, modelName: option.modelName } : undefined;
+  return option
+    ? { modelEntityId: option.modelEntityId, modelName: option.modelName, modelUpstreamName: option.modelUpstreamName }
+    : undefined;
 });
 // 触发器同时给出模型连接与模型名，和菜单里的分组标题一致；目录里没有该模型时只回显已保存的模型名。
 const modelTriggerLabel = computed(() => currentModelOption.value
@@ -319,6 +322,7 @@ watch(modelOptions, (options) => {
   const fallback = defaultAiSessionModelSelection(modelGroups.value);
   draft.value.modelEntityId = fallback?.modelEntityId || "";
   draft.value.modelName = fallback?.modelName || "";
+  draft.value.modelUpstreamName = fallback?.modelUpstreamName || "";
 });
 
 watch(folderCandidates, (folders) => {
@@ -340,9 +344,11 @@ function modelGroupsFor(agent: string) {
   });
 }
 
-function matchesDraftModel(option: { modelEntityId: string; modelName: string }) {
-  if (!draft.value.modelName || option.modelName !== draft.value.modelName) return false;
-  return !draft.value.modelEntityId || option.modelEntityId === draft.value.modelEntityId;
+// A stored agent keeps referring to the same model after the operator renames
+// its display label; matching is by stable identity first.
+function matchesDraftModel(option: AiSessionModelOption) {
+  if (!draft.value.modelName && !draft.value.modelUpstreamName) return false;
+  return sameModelSelectionRef(option, draft.value);
 }
 
 function instanceLabel(instance: InstanceBoardItem) {
@@ -358,18 +364,21 @@ function applyAgent(agentId: string, storedSelection?: AiSessionModelSelection) 
   draft.value.providerId = agentId;
   const options = modelOptionsFor(agentId);
   const groups = modelGroupsFor(agentId);
-  const match = storedSelection ? options.find((option) => option.modelName === storedSelection.modelName && (!storedSelection.modelEntityId || option.modelEntityId === storedSelection.modelEntityId)) : undefined;
+  const match = storedSelection ? options.find((option) => sameModelSelectionRef(option, storedSelection)) : undefined;
   const fallback = options.length ? defaultAiSessionModelSelection(groups) : undefined;
   const selection = match || fallback;
   if (selection) {
     draft.value.modelEntityId = selection.modelEntityId;
     draft.value.modelName = selection.modelName;
+    draft.value.modelUpstreamName = selection.modelUpstreamName || "";
   } else if (storedSelection) {
     draft.value.modelEntityId = storedSelection.modelEntityId;
     draft.value.modelName = storedSelection.modelName;
+    draft.value.modelUpstreamName = storedSelection.modelUpstreamName || "";
   } else {
     draft.value.modelEntityId = "";
     draft.value.modelName = "";
+    draft.value.modelUpstreamName = "";
   }
   if (normalizeAiSessionReasoningEffortCapabilities(agentCapabilityFor(agentId)).selectAtCreate) {
     draft.value.reasoningEffort = AI_SESSION_REASONING_EFFORTS.includes(draft.value.reasoningEffort as AiSessionReasoningEffort) ? draft.value.reasoningEffort : AI_SESSION_DEFAULT_REASONING_EFFORT;
@@ -402,7 +411,9 @@ function initialize() {
   const instance = selectedInstance.value;
   if (!instance) return;
   const agentId = launchableAgents.value.some((candidate) => candidate.id === draft.value.providerId) ? draft.value.providerId : launchableAgents.value[0]?.id || draft.value.providerId;
-  applyAgent(agentId, agent ? { modelEntityId: draft.value.modelEntityId, modelName: draft.value.modelName } : undefined);
+  applyAgent(agentId, agent
+    ? { modelEntityId: draft.value.modelEntityId, modelName: draft.value.modelName, modelUpstreamName: draft.value.modelUpstreamName || undefined }
+    : undefined);
   if (!draft.value.permissionMode) draft.value.permissionMode = permissionOptions.value[0] || instance.config.defaultCodexPermissionMode;
   if (!draft.value.cwdFolderPath) applyDefaultFolder();
 }
@@ -426,6 +437,7 @@ function selectAgent(agentId: string) {
 function selectModel(selection: AiSessionModelSelection) {
   draft.value.modelEntityId = selection.modelEntityId;
   draft.value.modelName = selection.modelName;
+  draft.value.modelUpstreamName = selection.modelUpstreamName || "";
 }
 
 function selectReasoningEffort(effort: AiSessionReasoningEffort) {

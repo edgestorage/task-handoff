@@ -943,3 +943,26 @@ test("OpenCode shared runtime keeps Basic auth private and attaches TTY sessions
   runtime.stopAll();
   assert.equal(stopped.length, 1);
 });
+
+test("OpenCode stores the catalog identity when a switch request only carries the upstream name", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-identity-")) });
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "ses_identity",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "provider_one", modelName: "old-label", modelUpstreamName: "up-1" },
+  });
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+    resolveModelSelection: (selection) => ({ providerID: selection.modelEntityId, modelID: selection.modelUpstreamName ?? selection.modelName }),
+    projectModelSelection: (providerID, modelID) => modelID === "up-2"
+      ? { modelEntityId: providerID, modelName: "new-label", modelUpstreamName: "up-2" }
+      : undefined,
+  });
+
+  await bridge.updateModelSelection(session, { modelEntityId: "provider_one", modelName: "up-2" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_one", modelName: "new-label", modelUpstreamName: "up-2" });
+});

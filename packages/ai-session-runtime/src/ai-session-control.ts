@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { AiSessionConversationAttachmentSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionConversationAttachmentSchema, sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
@@ -289,7 +289,7 @@ export class AiSessionController {
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "The model cannot be changed while a turn is active.", 409);
     }
-    if (session.modelSelection?.modelEntityId === selection.modelEntityId && session.modelSelection.modelName === selection.modelName) {
+    if (session.modelSelection && sameAiSessionModelSelection(session.modelSelection, selection)) {
       return selection;
     }
     const provider = this.requireProvider(session);

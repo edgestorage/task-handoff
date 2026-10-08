@@ -47,7 +47,7 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /v-model:attachments="historyMessageAttachments"/);
   assert.match(panel, /:model-groups="historyModelGroups"/);
   assert.match(panel, /:model-selection="historyModelDisplay"/);
-  assert.match(panel, /const historyModelDisplay = computed\(\(\) => historyModelSelection\.value \|\| historyDetail\.value\?\.item\.modelSelection\)/);
+  assert.match(panel, /const historyModelDisplay = computed\(\(\) => \{[\s\S]*historyModelSelection\.value \|\| historyDetail\.value\?\.item\.modelSelection[\s\S]*sameModelSelectionRef\(model, selection\)/);
   assert.match(panel, /@select-model="historyModelSelection = \$event"/);
   assert.match(panel, /@run="sendHistoryMessage"/);
   assert.match(panel, /if \(!item \|\| resumingHistoryId\.value/);

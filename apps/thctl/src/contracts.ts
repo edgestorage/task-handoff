@@ -537,7 +537,7 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
       { flags: "--permission-mode <ask|auto-review|full-access>", description: "Permission mode for the initial message" },
       { flags: "--reasoning <none|minimal|low|medium|high|xhigh|max|ultra>", description: "Reasoning effort for the session" },
       { flags: "--model-entity <modelEntityId>", description: "Model entity to start the session on" },
-      { flags: "--model-name <modelName>", description: "Model name within the entity" },
+      { flags: "--model-name <modelName>", description: "Model display label or stable upstream name within the entity" },
       { flags: "--request-id <id>", description: "Client request ID for retry-safe creation" },
     ],
     input: inputOf({ instanceId: z.string(), prompt: z.string(), agent: z.string(), cwdFolder: z.string().optional(), story: z.string().optional(), permissionMode: z.string().optional(), reasoning: z.string().optional(), modelEntity: z.string().optional(), modelName: z.string().optional(), requestId: z.string().optional() }),
@@ -777,7 +777,7 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
     ],
     options: [
       { flags: "--entity <modelEntityId>", description: "Model entity ID" },
-      { flags: "--name <modelName>", description: "Model name within the entity" },
+      { flags: "--name <modelName>", description: "Model display label or stable upstream name within the entity" },
       { flags: "--request-id <id>", description: "Client request ID for retry-safe switching" },
     ],
     input: inputOf({ instanceId: z.string(), sessionId: z.string(), entity: z.string(), name: z.string(), requestId: z.string().optional() }),

@@ -79,14 +79,15 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     future: true,
   });
   // stableModelIdentity is additive: peers that predate it normalize to false.
-  // modelRelay is additive too: absence keeps the relay feature domain closed.
+  // modelRelay is additive too: absence keeps the relay feature domain closed,
+  // which also defaults the additive unknown-model policy to its safe base.
   // requestMappings is additive as well: peers without it cannot receive
   // request-mapping edits from the control plane.
   assert.deepEqual(node.managedModels, {
     multiEntityAssignment: true,
     privateModelCatalog: true,
     stableModelIdentity: false,
-    modelRelay: { protocols: [], streaming: false },
+    modelRelay: { protocols: [], streaming: false, unknownModelPolicy: false },
     requestMappings: false,
   });
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { stableModelIdentity: true } }), true);
@@ -103,6 +104,9 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     selectProviderAtResume: false,
     switchModelWithinProvider: false,
     switchProviderDuringSession: false,
+    // stableIdentity is additive as well: absence means the peer rejects the
+    // newer `modelUpstreamName` field.
+    stableIdentity: false,
   });
   assert.deepEqual(normalizeAiSessionModelSelectionCapabilities({
     agent: "codex",
@@ -122,7 +126,14 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     selectProviderAtResume: false,
     switchModelWithinProvider: true,
     switchProviderDuringSession: false,
+    stableIdentity: false,
   });
+  assert.equal(normalizeAiSessionModelSelectionCapabilities({
+    agent: "codex",
+    actions: {},
+    timeline: {},
+    modelSelection: { stableIdentity: true },
+  }).stableIdentity, true);
   assert.deepEqual(normalizeAiSessionReasoningEffortCapabilities({
     agent: "codex",
     actions: {},

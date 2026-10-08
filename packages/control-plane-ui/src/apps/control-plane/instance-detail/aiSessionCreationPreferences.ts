@@ -41,6 +41,9 @@ export function loadAiSessionCreationPreferences(
     const modelSelection = AiSessionModelSelectionSchema.safeParse({
       modelEntityId: storedModel.modelEntityId,
       modelName: storedModel.modelName,
+      // Only carry the optional identity when it was actually stored; passing an
+      // explicit undefined would leave an empty own-key on the parsed object.
+      ...(typeof storedModel.modelUpstreamName === "string" ? { modelUpstreamName: storedModel.modelUpstreamName } : {}),
     });
     const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(record.reasoningEffort);
     return {

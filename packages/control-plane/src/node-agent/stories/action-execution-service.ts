@@ -1,4 +1,4 @@
-import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
+import { modelSelectionForInstance, type ControlledInstance } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import type { z } from "zod";
 import { StoryActionRunResultSchema } from "@task-handoff/protocol/stories";
@@ -66,12 +66,18 @@ export class StoryActionExecutionService {
   async dispatch(input: StoryAutomationExecutionInput, clientRequestId: string) {
     const instance = this.state.requireInstance(input.targetInstanceId);
     if (!instance.registrationToken) throw actionError("STORY_ACTION_INSTANCE_CREDENTIAL_MISSING", "Target instance has no registration credential.", 503);
+    const request = this.request(input, clientRequestId);
+    // An instance that predates the stable-identity split rejects the additive
+    // field; drop it and let that instance resolve from its own catalog.
+    const body = request.modelSelection
+      ? { ...request, modelSelection: modelSelectionForInstance(instance.capabilities, request.agent, request.modelSelection) }
+      : request;
     let response: Response;
     try {
       response = await this.fetchImpl(`${await this.resolveInstanceWeb(instance)}/api/internal/node-agent/story-automation/ai-sessions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${instance.registrationToken}` },
-        body: JSON.stringify(this.request(input, clientRequestId)),
+        body: JSON.stringify(body),
       });
     } catch (cause) {
       throw actionError("STORY_ACTION_DISPATCH_UNAVAILABLE", "Target instance is temporarily unavailable.", 503, cause, true);

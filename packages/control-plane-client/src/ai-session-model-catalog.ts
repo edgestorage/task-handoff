@@ -11,7 +11,7 @@ export type AiSessionCatalogModelEntity = {
   order: number;
   app?: string;
   protocols?: string[];
-  modelNames?: Array<{ name: string; order: number }>;
+  modelNames?: Array<{ name: string; upstreamName?: string; order: number }>;
   locations?: Array<{ type: "control-plane" | "node"; nodeId?: string; enabled: boolean }>;
 };
 
@@ -97,14 +97,23 @@ export function deriveAiSessionModelGroups(input: {
     return [{
       modelEntityId: entity.id,
       providerName: entity.name,
-      models: names.map((entry) => ({ modelEntityId: entity.id, modelName: entry.name, providerName: entity.name })),
+      models: names.map((entry) => ({
+        modelEntityId: entity.id,
+        modelName: entry.name,
+        // Stable identity: renamed display labels must not change which model
+        // an existing session or agent refers to.
+        modelUpstreamName: entry.upstreamName ?? entry.name,
+        providerName: entity.name,
+      })),
     }];
   });
 }
 
 export function defaultAiSessionModelSelection(groups: AiSessionModelGroup[]): AiSessionModelSelection | undefined {
   const first = groups[0]?.models[0];
-  return first ? { modelEntityId: first.modelEntityId, modelName: first.modelName } : undefined;
+  return first
+    ? { modelEntityId: first.modelEntityId, modelName: first.modelName, modelUpstreamName: first.modelUpstreamName }
+    : undefined;
 }
 
 function entityAvailable(entity: AiSessionCatalogModelEntity, nodeId: string) {

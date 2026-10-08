@@ -330,6 +330,12 @@ const modelRequestMappings = `
 ALTER TABLE na_models ADD COLUMN mappings_json TEXT NOT NULL DEFAULT '[]';
 `;
 
+// Stable model identity for agent definitions: the display label may be renamed
+// at any time, so the upstream name is stored alongside it.
+const agentDefinitionModelIdentity = `
+ALTER TABLE na_agent_definitions ADD COLUMN model_upstream_name TEXT;
+`;
+
 const storyDecisionDomain = `
 ALTER TABLE na_stories ADD COLUMN agent_tools_decisions INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_decisions IN (0, 1));
 CREATE TABLE na_story_decisions (
@@ -377,4 +383,5 @@ export const nodeAgentMigrations = [
   migration("0012_agent_orchestration_domain", agentOrchestrationDomain),
   migration("0013_model_request_mappings", modelRequestMappings),
   migration("0014_story_decision_domain", storyDecisionDomain),
+  migration("0015_agent_definition_model_identity", agentDefinitionModelIdentity),
 ] as const;

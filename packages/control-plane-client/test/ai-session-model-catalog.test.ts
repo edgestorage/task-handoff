@@ -10,7 +10,7 @@ const entities = [
 test("derives create choices in assignment and model-name order", () => {
   const groups = deriveAiSessionModelGroups({ entities, assignment: { modelEntityIds: ["two", "one"] }, agent: "codex", nodeId: "node-1", mode: "create", capability: { selectModelAtCreate: true, selectProviderAtCreate: true } });
   assert.deepEqual(groups.map((group) => [group.modelEntityId, group.models.map((model) => model.modelName)]), [["two", ["same"]], ["one", ["small", "large"]]]);
-  assert.deepEqual(defaultAiSessionModelSelection(groups), { modelEntityId: "two", modelName: "same" });
+  assert.deepEqual(defaultAiSessionModelSelection(groups), { modelEntityId: "two", modelName: "same", modelUpstreamName: "same" });
 });
 
 test("restricts existing Codex choices to the current provider", () => {

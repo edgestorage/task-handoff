@@ -1367,6 +1367,7 @@ import { supportsAiSessionQueuePause, supportsAiSessionWorkspaceCheckout } from 
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import { supportedAiSessionReasoningEfforts } from "../../../components/ai-session/aiSessionReasoningEfforts";
+import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -2016,13 +2017,13 @@ function providerPermissionModes(agent: string) {
 
 watch(newSessionModelGroups, (groups) => {
   const current = newSessionModelSelection.value;
-  if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) {
+  if (current && groups.some((group) => group.models.some((model) => sameModelSelectionRef(model, current)))) {
     newSessionModelSelection.value = current;
     return;
   }
   if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && current
-    && current.modelEntityId === props.creationInitialPreset?.modelSelection?.modelEntityId
-    && current.modelName === props.creationInitialPreset.modelSelection.modelName) return;
+    && Boolean(props.creationInitialPreset?.modelSelection)
+    && sameModelSelectionRef(current, props.creationInitialPreset!.modelSelection!)) return;
   newSessionModelSelection.value = defaultAiSessionModelSelection(groups);
 }, { immediate: true });
 watch([() => props.instance.id, newSessionApp, newSessionReasoningEffortCapability], ([, agent, capability]) => {
@@ -2256,13 +2257,20 @@ const historyModelSelectionEnabled = computed(() => aiSessionModelSelectionAllow
   "resume",
 ));
 // An unsupported resume leaves no catalog to pick from; keep showing the
-// resumed session's own model instead of an empty, misleading selection.
-const historyModelDisplay = computed(() => historyModelSelection.value || historyDetail.value?.item.modelSelection);
+// resumed session's own model instead of an empty, misleading selection. When
+// the catalog does have the model, prefer its current label so a rename is
+// reflected without losing the stored stable identity.
+const historyModelDisplay = computed(() => {
+  const selection = historyModelSelection.value || historyDetail.value?.item.modelSelection;
+  if (!selection) return undefined;
+  const option = historyModelGroups.value.flatMap((group) => group.models).find((model) => sameModelSelectionRef(model, selection));
+  return option
+    ? { ...selection, modelName: option.modelName, modelUpstreamName: option.modelUpstreamName ?? selection.modelUpstreamName }
+    : selection;
+});
 watch(historyModelGroups, (groups) => {
   const current = historyModelSelection.value;
-  if (current && groups.some((group) => group.models.some((model) => (
-    model.modelEntityId === current.modelEntityId && model.modelName === current.modelName
-  )))) return;
+  if (current && groups.some((group) => group.models.some((model) => sameModelSelectionRef(model, current)))) return;
   historyModelSelection.value = defaultAiSessionModelSelection(groups);
 });
 let currentListScrollTop = 0;
@@ -3604,10 +3612,8 @@ defineExpose({ submitCreation });
 
 async function selectExistingSessionModel(modelSelection: AiSessionModelSelection) {
   const session = selectedSession.value;
-  if (!session || modelSelectionPendingSessionId.value || (
-    session.modelSelection?.modelEntityId === modelSelection.modelEntityId
-    && session.modelSelection.modelName === modelSelection.modelName
-  )) return;
+  if (!session || modelSelectionPendingSessionId.value
+    || (session.modelSelection && sameModelSelectionRef(session.modelSelection, modelSelection))) return;
   modelSelectionPendingSessionId.value = session.id;
   try {
     await updateAiSessionModelSelection(props.instance.id, session.id, createBrowserUuid(), modelSelection);

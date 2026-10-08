@@ -63,6 +63,7 @@ import {
 import {
   aiSessionProviderCapability,
   aiSessionTimelineCapabilityAgents,
+  modelSelectionForInstance,
   supportsAiSessionQueuePause,
   supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
@@ -267,13 +268,18 @@ export class AiSessionActionService {
 
   async resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}): Promise<AiSessionResumeResult> {
     const instance = await this.options.requireInstance(instanceId);
+    const parsed = AiSessionResumeInputSchema.parse(input);
+    const session = instance.aiSessions?.sessions?.find((candidate) => candidate.id === aiSessionId);
+    const body = parsed.modelSelection && session
+      ? { ...parsed, modelSelection: modelSelectionForInstance(instance.capabilities, session.agent, parsed.modelSelection) }
+      : parsed;
     return parseResponse(AiSessionResumeResultSchema, await this.requestWithModelCatalogResync(
       instance,
       sessionRoute(aiSessionId, "resume"),
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(AiSessionResumeInputSchema.parse(input)),
+        body: JSON.stringify(body),
       },
     ));
   }
@@ -316,13 +322,14 @@ export class AiSessionActionService {
     const effectivePermissionMode = input.permissionMode
       || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
     const route = input.gitSelection || input.workspaceSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
-    const { cwdFolderId, reasoningEffort, ...baseInput } = input;
+    const { cwdFolderId, reasoningEffort, modelSelection, ...baseInput } = input;
     const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
     const result = parseResponse(AiSessionCreateResultSchema, await this.requestWithModelCatalogResync(instance, route, {
       method: "POST",
       headers: { "content-type": "application/json", [TRACE_ID_HEADER]: clientRequestTraceId(input.clientRequestId) },
       body: JSON.stringify({
         ...baseInput,
+        ...(modelSelection ? { modelSelection: modelSelectionForInstance(instance.capabilities, input.agent, modelSelection) } : {}),
         // Compatibility for v0.0.21: its strict controlled-instance create schema does not accept cwdFolderId.
         ...(supportsWorkspaceSelection && cwdFolderId ? { cwdFolderId } : {}),
         // Older controlled instances may omit the additive reasoning capability.
@@ -388,7 +395,7 @@ export class AiSessionActionService {
       {
         method: "PUT",
         headers: { "content-type": "application/json", ...clientRequestTraceHeader(clientRequestId) },
-        body: JSON.stringify({ clientRequestId, modelSelection: selection }),
+        body: JSON.stringify({ clientRequestId, modelSelection: modelSelectionForInstance(instance.capabilities, session.agent, selection) }),
       },
     ));
   }
