@@ -650,7 +650,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /if \(isCommandActivity\(activity\)\) return activity\.input\?\.trim\(\) \|\| undefined/);
   assert.doesNotMatch(group, /ai-session-activity-item-head-command/);
   assert.match(group, /\.ai-session-activity-item-head > \.ai-session-activity-summary \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
-  assert.match(group, /ai-session-command-disclosure-icon[\s\S]*rotate\(90deg\)/);
+  assert.match(group, /ai-session-activity-disclosure-trailing[\s\S]*rotate\(90deg\)/);
   for (const kind of [
     "reasoning", "plan", "hookPrompt", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
     "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",

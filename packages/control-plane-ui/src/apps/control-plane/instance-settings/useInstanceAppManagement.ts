@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import type { AppManagementEvent, AppManagementJob, AppManagementSnapshot } from "../../../api/types";
+import type { AppManagementEvent, AppManagementJob, AppManagementSnapshot, ManagedAppUpdateCheck } from "../../../api/types";
 
 type InstanceAppManagementState = {
   snapshot?: AppManagementSnapshot;
@@ -70,11 +70,21 @@ export function useInstanceAppManagement(options: {
     current.snapshot = snapshotWithJob(current.snapshot, job);
   }
 
+  function applyUpdateCheck(instanceId: string, check: ManagedAppUpdateCheck) {
+    const current = state(instanceId);
+    if (!current.snapshot) return;
+    const { appId, ...updateCheck } = check;
+    current.snapshot = {
+      ...current.snapshot,
+      apps: current.snapshot.apps.map((app) => app.id === appId ? { ...app, updateCheck } : app),
+    };
+  }
+
   function clear(instanceId: string) {
     delete states[instanceId];
   }
 
-  return { applyEvent, applyJob, clear, recover, state };
+  return { applyEvent, applyJob, applyUpdateCheck, clear, recover, state };
 }
 
 function applyAuthoritativeEvent(state: InstanceAppManagementState, event: AppManagementEvent) {
@@ -111,7 +121,7 @@ function snapshotWithJob(snapshot: AppManagementSnapshot, job: AppManagementJob,
     activeJobs,
     recentJobs: recentJobs.slice(0, 50),
     apps: snapshot.apps.map((app) => app.id === job.appId
-      ? { ...app, ...(active ? { activeJobId: job.id, canInstall: false, canUninstall: false } : { activeJobId: undefined }) }
+      ? { ...app, ...(active ? { activeJobId: job.id, canInstall: false, canUninstall: false, canUpdate: false } : { activeJobId: undefined }) }
       : app),
     observedAt,
   };

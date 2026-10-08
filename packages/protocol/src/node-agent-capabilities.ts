@@ -37,7 +37,11 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   modelRelay: z.object({
     protocols: z.array(ModelProtocolSchema).max(3).default([]),
     streaming: z.boolean().default(false),
-  }).strip().default(() => ({ protocols: [], streaming: false })),
+    // Additive capability: the node persists and honors the relay
+    // unknown-model policy. Absence (v0.0.34 and earlier) means the node
+    // always fails closed and its strict settings schema rejects the field.
+    unknownModelPolicy: z.boolean().default(false),
+  }).strip().default(() => ({ protocols: [], streaming: false, unknownModelPolicy: false })),
 }).strip();
 
 export const NodeAgentStoryAgentToolCapabilitiesSchema = z.object({
@@ -177,6 +181,11 @@ export function supportsNodeModelRelayProtocol(capabilities: unknown, protocol: 
 
 export function supportsNodeModelRelayStreaming(capabilities: unknown) {
   return nodeAgentModelRelayCapabilities(capabilities).streaming;
+}
+
+/** Single query for the relay unknown-model policy producer capability. */
+export function supportsNodeModelRelayUnknownModelPolicy(capabilities: unknown) {
+  return nodeAgentModelRelayCapabilities(capabilities).unknownModelPolicy;
 }
 
 export function supportsNodeCodexManagedSettings(capabilities: unknown) {

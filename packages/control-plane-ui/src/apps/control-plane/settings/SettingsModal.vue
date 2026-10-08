@@ -448,8 +448,8 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, UpdateChannel } from "../../../api/types";
-import { nodeSupportsModelRelay } from "../../../api/nodeCapabilities";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayUnknownModelPolicy, UpdateChannel } from "../../../api/types";
+import { nodeSupportsModelRelay, nodeSupportsModelRelayUnknownModelPolicy } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
@@ -839,6 +839,7 @@ const modelRelayError = ref("");
 const loadingModelRelay = ref(false);
 const savingModelRelay = ref(false);
 const selectedNodeSupportsModelRelay = computed(() => nodeSupportsModelRelay(selectedNode.value));
+const selectedNodeSupportsModelRelayUnknownModelPolicy = computed(() => nodeSupportsModelRelayUnknownModelPolicy(selectedNode.value));
 
 async function loadModelRelay() {
   const node = selectedNode.value;
@@ -880,6 +881,25 @@ async function setModelRelayEnabled(enabled: boolean) {
           instances: instanceIds.map((id) => selectedNodeInstances.value.find((instance) => instance.id === id)?.name || id).join(", "),
         })}`
       : errorText(error);
+    showControlPlaneToast(modelRelayError.value, "error");
+  } finally {
+    savingModelRelay.value = false;
+    await loadModelRelay();
+  }
+}
+
+async function setModelRelayUnknownModelPolicy(unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy) {
+  const node = selectedNode.value;
+  if (!node || !nodeSupportsModelRelayUnknownModelPolicy(node) || savingModelRelay.value || !modelRelay.value) return;
+  if (modelRelay.value.unknownModelPolicy === unknownModelPolicy) return;
+  savingModelRelay.value = true;
+  modelRelayError.value = "";
+  try {
+    // Only the policy changes here; the node-agent keeps the authoritative
+    // switch state and refuses to honor an unsupported field.
+    modelRelay.value = await updateNodeModelRelay(node.id, { enabled: modelRelay.value.enabled, unknownModelPolicy });
+  } catch (error) {
+    modelRelayError.value = errorText(error);
     showControlPlaneToast(modelRelayError.value, "error");
   } finally {
     savingModelRelay.value = false;
@@ -1214,6 +1234,7 @@ const nodeDetailActions = computed(() => ({
   removeRuntime,
   saveExternalListener,
   setModelRelayEnabled,
+  setModelRelayUnknownModelPolicy,
   submitNodeLocalFolder,
   setUpdateChannel,
   updateExternalListenerDraft,
@@ -1263,6 +1284,7 @@ const nodeDetailResources = computed(() => ({
   modelRelay: modelRelay.value,
   modelRelayError: modelRelayError.value,
   modelRelaySupported: selectedNodeSupportsModelRelay.value,
+  modelRelayUnknownModelPolicySupported: selectedNodeSupportsModelRelayUnknownModelPolicy.value,
   runtimes: selectedNodeRuntimes.value,
   selectedImageNodeId: selectedImageNodeId.value,
   selectedNodeIsLocal: selectedNodeIsLocal.value,

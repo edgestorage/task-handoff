@@ -306,7 +306,7 @@ export async function nodeModelRelayShow(context: CliContext, invocation: CliInv
   const connection = await openConnection(context);
   const relay = await connection.client.nodeAdmin.getModelRelay(nodeId, context.signal);
   if (context.output.json) return { data: relay };
-  return { data: relay, columns: [{ key: "enabled", header: "enabled" }, { key: "source", header: "source" }, { key: "endpoint", header: "endpoint", width: 40 }] };
+  return { data: relay, columns: [{ key: "enabled", header: "enabled" }, { key: "source", header: "source" }, { key: "unknownModelPolicy", header: "unknownModelPolicy" }] };
 }
 
 export async function nodeModelRelaySet(context: CliContext, invocation: CliInvocation) {

@@ -30,7 +30,7 @@
               <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
               <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
               <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
-              <ChevronRight v-if="isCommandActivity(activity)" class="ai-session-command-disclosure-icon" :size="14" aria-hidden="true" />
+              <ChevronRight v-if="activityIcon(activity)" class="ai-session-activity-disclosure-trailing" :size="14" aria-hidden="true" />
             </button>
             <div v-else class="ai-session-activity-item-head">
               <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
@@ -156,8 +156,7 @@ const props = withDefaults(defineProps<{
   activities: AiSessionTimelineActivity[];
   open?: boolean;
   summaryVisible?: boolean;
-  autoExpandKinds?: string[];
-}>(), { open: false, summaryVisible: true, autoExpandKinds: () => [] });
+}>(), { open: false, summaryVisible: true });
 const emit = defineEmits<{ "update:open": [open: boolean]; addToConversation: [content: string] }>();
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
@@ -170,18 +169,9 @@ const summaryLabel = computed(() => t("sessions.timeline.activityCount", { count
 const fileChangesByActivityId = computed(() => new Map(props.activities.map((activity) => [activity.id, aiSessionFileChanges(activity)])));
 const groupOpen = ref(props.summaryVisible ? props.open : true);
 const openActivities = ref(new Set<string>());
-const autoExpandedActivityIds = new Set<string>();
 const reasoningMenuOpen = ref(false);
 const selectedReasoningText = ref("");
 watch(() => props.open, (value) => { if (props.summaryVisible) groupOpen.value = value; });
-watch(() => [props.activities, props.autoExpandKinds] as const, ([activities, autoExpandKinds]) => {
-  const automatic = activities
-    .filter((activity) => autoExpandKinds.includes(activity.activityKind) && !autoExpandedActivityIds.has(activity.id))
-    .map((activity) => activity.id);
-  if (!automatic.length) return;
-  automatic.forEach((id) => autoExpandedActivityIds.add(id));
-  openActivities.value = new Set([...openActivities.value, ...automatic]);
-}, { immediate: true, deep: true });
 function toggleGroup(event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); groupOpen.value = !groupOpen.value; emit("update:open", groupOpen.value); }
 function activityOpen(activity: AiSessionTimelineActivity) { return openActivities.value.has(activity.id); }
 function toggleActivity(id: string, event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); const next = new Set(openActivities.value); next.has(id) ? next.delete(id) : next.add(id); openActivities.value = next; }
@@ -337,8 +327,9 @@ function runtimePathBasename(path: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ai-session-activity-item-head > .ai-session-command-disclosure-icon { flex: 0 0 auto; margin-left: auto; transition: transform 120ms ease; }
-.ai-session-activity-item-head[aria-expanded="true"] > .ai-session-command-disclosure-icon { transform: rotate(90deg); }
+.ai-session-activity-item-head > .ai-session-activity-disclosure-trailing { flex: 0 0 auto; margin-left: auto; transition: transform 120ms ease; }
+.ai-session-activity-item-head small + .ai-session-activity-disclosure-trailing { margin-left: 0; }
+.ai-session-activity-item-head[aria-expanded="true"] > .ai-session-activity-disclosure-trailing { transform: rotate(90deg); }
 .ai-session-activity-item-head > .ai-session-activity-summary::before { content: "\00b7"; margin-right: 5px; }
 .ai-session-activity-item-head small {
   flex: 0 0 auto;

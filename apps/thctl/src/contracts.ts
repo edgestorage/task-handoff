@@ -19,6 +19,7 @@ import {
   ControlledInstanceSchema,
   InstanceCreateResultSchema,
   InstanceDeleteResultSchema,
+  ManagedAppUpdateCheckSchema,
 } from "@task-handoff/protocol/control-plane";
 import {
   AiSessionActionCompatibleResponseSchema,
@@ -115,7 +116,7 @@ import {
 import { appSessionAccess, appSessionList, appSessionLogs, appSessionRename, appSessionRestart, appSessionRevokeAccess, appSessionScreenshot, appSessionShow, appSessionStart, appSessionStop } from "./commands/app-session.ts";
 import { appProfileCreate, appProfileList, appProfileRemove, appProfileRename, appProfileSetDefault } from "./commands/app-profile.ts";
 import { eventsCommand } from "./commands/events.ts";
-import { instanceAppCatalog, instanceAppCatalogCustom, instanceAppCatalogCustomUpdate, instanceAppInstall, instanceAppJob, instanceAppList, instanceAppUninstall, instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop, instanceUpdate } from "./commands/instance.ts";
+import { instanceAppCatalog, instanceAppCatalogCustom, instanceAppCatalogCustomUpdate, instanceAppCheckUpdate, instanceAppInstall, instanceAppJob, instanceAppList, instanceAppUninstall, instanceAppUpdate, instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop, instanceUpdate } from "./commands/instance.ts";
 import { modelList, modelShow } from "./commands/model.ts";
 import { nodeList, nodeRename, nodeShow } from "./commands/node.ts";
 import { profileAdd, profileList, profileRemove, profileShow, profileTrust, profileUse } from "./commands/profile.ts";
@@ -376,8 +377,37 @@ const instanceGroup = group("instance", "Inspect and control instances", [
     handler: instanceAppUninstall,
   },
   {
+    id: "instance app update", group: "instance", name: "app update", stage: "B", write: true,
+    summary: "Update a managed app to the latest version from its built-in recipe (asynchronous job)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    options: [
+      { flags: "--request-id <requestId>", description: "Client request ID for idempotency (defaults to a random UUID)" },
+      { flags: "--wait", description: "Poll the job until it reaches a terminal state" },
+      { flags: "--logs", description: "Append the job log tail to the output" },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string(), requestId: z.string().optional(), wait: z.boolean().optional(), logs: z.boolean().optional() }),
+    output: AppManagementJobSchema,
+    examples: ["thctl instance app update <instanceId> codex --wait", "thctl instance app update <instanceId> codex --json"],
+    handler: instanceAppUpdate,
+  },
+  {
+    id: "instance app check-update", group: "instance", name: "app check-update", stage: "B",
+    summary: "Check whether a managed app has an available update (read-only)",
+    args: [
+      { name: "instanceId", description: "Controlled instance ID", required: true },
+      { name: "appId", description: "App ID", required: true },
+    ],
+    input: inputOf({ instanceId: z.string(), appId: z.string() }),
+    output: ManagedAppUpdateCheckSchema,
+    examples: ["thctl instance app check-update <instanceId> codex", "thctl instance app check-update <instanceId> codex --json"],
+    handler: instanceAppCheckUpdate,
+  },
+  {
     id: "instance app job", group: "instance", name: "app job", stage: "B",
-    summary: "Show an app install/uninstall job",
+    summary: "Show an app install/update/uninstall job",
     args: [
       { name: "instanceId", description: "Controlled instance ID", required: true },
       { name: "jobId", description: "App management job ID", required: true },

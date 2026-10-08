@@ -212,6 +212,20 @@
                 </span>
               </label>
               <p v-else class="node-relay-description node-relay-upgrade">{{ t("settings.nodeDetail.modelRelayUnsupported") }}</p>
+              <div v-if="resources.modelRelaySupported && resources.modelRelayUnknownModelPolicySupported" class="node-relay-policy">
+                <label>
+                  <span>{{ t("settings.nodeDetail.modelRelayUnknownModelPolicy") }}</span>
+                  <ControlPlaneSelect
+                    :model-value="resources.modelRelay?.unknownModelPolicy || 'passthrough'"
+                    :disabled="busy.loadingModelRelay || busy.savingModelRelay || !resources.modelRelay"
+                    @update:model-value="(value) => actions.setModelRelayUnknownModelPolicy(value === 'reject' ? 'reject' : 'passthrough')"
+                  >
+                    <ControlPlaneSelectItem value="passthrough">{{ t("settings.nodeDetail.modelRelayUnknownModelPassthrough") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="reject">{{ t("settings.nodeDetail.modelRelayUnknownModelReject") }}</ControlPlaneSelectItem>
+                  </ControlPlaneSelect>
+                </label>
+                <small>{{ t("settings.nodeDetail.modelRelayUnknownModelPolicyHint") }}</small>
+              </div>
               <p v-if="resources.modelRelayError" class="control-plane-error">{{ resources.modelRelayError }}</p>
               </div>
             </div>
@@ -549,7 +563,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -618,6 +632,7 @@ type NodeDetailActions = {
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   setModelRelayEnabled: (enabled: boolean) => void | Promise<void>;
+  setModelRelayUnknownModelPolicy: (policy: NodeAgentModelRelayUnknownModelPolicy) => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
@@ -667,6 +682,7 @@ type NodeDetailResources = {
   modelRelay?: NodeAgentModelRelay;
   modelRelayError: string;
   modelRelaySupported: boolean;
+  modelRelayUnknownModelPolicySupported: boolean;
   runtimes: NodeRuntime[];
   selectedImageNodeId: string;
   selectedNodeIsLocal: boolean;
@@ -887,7 +903,7 @@ watch(
   display: flex;
   align-items: center;
   flex: 1 1 auto;
-  max-width: 320px;
+  max-width: min(560px, 100%);
   min-width: 0;
   gap: 5px;
   overflow: hidden;
@@ -909,7 +925,7 @@ watch(
 
 .node-detail-inline-meta > span:first-of-type {
   flex: 0 1 auto;
-  max-width: 140px;
+  max-width: min(220px, 40%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1129,6 +1145,26 @@ watch(
 
 .node-relay-upgrade {
   margin-top: 10px;
+}
+
+.node-relay-policy {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 420px;
+}
+
+.node-relay-policy label {
+  display: grid;
+  gap: 6px;
+}
+
+.node-relay-policy span,
+.node-relay-policy small {
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  font-weight: 400;
+  line-height: 1.5;
 }
 
 .node-detail-tabs {

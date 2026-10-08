@@ -83,7 +83,7 @@ Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <
 | --- | --- |
 | `profile` | `add`, `list`, `use`, `show`, `remove`, `trust` |
 | auth | `login`, `logout`, `whoami` |
-| `instance` | `list`, `show`, `create`, `delete`, `start`, `stop`, `restart`, `rename`, `update`, `app list`, `app install`, `app uninstall`, `app job`, `app catalog`, `app catalog custom`, `app catalog custom update` |
+| `instance` | `list`, `show`, `create`, `delete`, `start`, `stop`, `restart`, `rename`, `update`, `app list`, `app install`, `app update`, `app check-update`, `app uninstall`, `app job`, `app catalog`, `app catalog custom`, `app catalog custom update` |
 | `ai-session` | `list`, `show`, `history`, `turns`, `turn`, `timeline`, `turn-timeline`, `create`, `send`, `interrupt`, `approval`, `resume`, `read`, `rename`, `fork`, `close`, `story`, `open-app`, `open-terminal`, `command`, `mentions`, `mentions files`, `upload`, `attachment`, `model`, `reasoning`, `workspace`, `checkout`, `transcript`, `story-content`, `story-content read`, `queue list`, `queue steer`, `queue retry`, `queue remove`, `queue edit`, `queue reorder` |
 | `app-session` | `list`, `show`, `start`, `stop`, `rename`, `access`, `revoke-access`, `restart`, `logs`, `screenshot` |
 | `app-profile` | `list`, `create`, `rename`, `set-default`, `remove` |

@@ -295,8 +295,24 @@ test("managed projection derives actions without exposing trusted recipe details
   assert.equal(projection.state, "not-installed");
   assert.equal(projection.canInstall, true);
   assert.equal(projection.canUninstall, false);
+  assert.equal(projection.canUpdate, false);
+  assert.equal(projection.updateReason.code, "NOT_INSTALLED");
   assert.equal(JSON.stringify(projection).includes("packages"), false);
   assert.equal(JSON.stringify(projection).includes("command"), false);
+});
+
+test("managed projection exposes update capability only for recipe-managed installed apps", () => {
+  const app = definition();
+  const capabilities = { platform: "linux", arch: "x64", installers: ["apt"], privilege: "passwordless-sudo" };
+  const installed = managedAppProjection(app, { state: "installed", executablePaths: ["/usr/bin/tool"] }, capabilities, "recipe");
+  assert.equal(installed.canUpdate, true);
+  assert.equal(installed.updateReason, undefined);
+  const broken = managedAppProjection(app, { state: "broken", executablePaths: ["/usr/bin/tool"] }, capabilities, "recipe");
+  assert.equal(broken.canUpdate, true);
+  const bundled = definition({ distribution: { recipes: [{ type: "bundled", platforms: ["linux"] }] } });
+  const bundledProjection = managedAppProjection(bundled, { state: "installed", executablePaths: ["/usr/bin/tool"] }, capabilities, "bundled");
+  assert.equal(bundledProjection.canUpdate, false);
+  assert.equal(bundledProjection.updateReason.code, "BUNDLED");
 });
 
 test("node-package ownership requires the detected executable to resolve into the managed package", async () => {
@@ -320,6 +336,8 @@ test("node-package ownership requires the detected executable to resolve into th
   const external = managedAppProjection(nodeApp, detected, capabilities, "external");
   assert.equal(external.canUninstall, false);
   assert.equal(external.uninstallReason.code, "EXTERNALLY_MANAGED");
+  assert.equal(external.canUpdate, false);
+  assert.equal(external.updateReason.code, "EXTERNALLY_MANAGED");
 });
 
 test("node-package ownership retains the recipe whose npm prefix owns the executable", async () => {

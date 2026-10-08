@@ -33,13 +33,12 @@ test("expanded tool activity consumes live items without triggering timeline rel
   assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
 });
 
-test("reasoning activity expands inside the thinking disclosure and renders Markdown", () => {
-  assert.match(activity, /:auto-expand-kinds="\['reasoning'\]"/);
+test("reasoning activity stays collapsed inside the thinking disclosure and renders Markdown on demand", () => {
+  assert.doesNotMatch(activity, /auto-expand-kinds|autoExpandKinds/);
+  assert.doesNotMatch(activityGroup, /autoExpandKinds|autoExpandedActivityIds/);
   assert.match(activityGroup, /activity\.activityKind === 'reasoning'/);
   assert.match(activityGroup, /<MarkdownContent[\s\S]*:content="activity\.output"/);
-  assert.match(activityGroup, /const autoExpandedActivityIds = new Set<string>\(\)/);
-  assert.match(activityGroup, /!autoExpandedActivityIds\.has\(activity\.id\)/);
-  assert.match(activityGroup, /automatic\.forEach\(\(id\) => autoExpandedActivityIds\.add\(id\)\)/);
+  assert.match(activityGroup, /<ChevronRight v-if="activityIcon\(activity\)" class="ai-session-activity-disclosure-trailing"/);
   assert.match(activityGroup, /\.ai-session-activity-details :deep\(\.markdown-content\) \{[\s\S]*font-size: 14px;[\s\S]*line-height: 1\.55;/);
 });
 

@@ -19,12 +19,24 @@
         <span>{{ t("instances.create.name") }}</span>
         <ControlPlaneInput v-model="instanceDraft.name" :placeholder="t('instances.create.optionalInstanceName')" />
       </label>
-      <label>
-        <span>{{ t("instances.create.runtime") }}</span>
-        <ControlPlaneSelect v-model="runtimeDraft.runtimeId" :placeholder="t('instances.create.selectRuntime')">
+      <div class="field-group">
+        <span class="field-head">
+          <span class="field-label">{{ t("instances.create.runtime") }}</span>
+          <TooltipProvider :delay-duration="120">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button type="button" class="field-label-hint" :aria-label="t('instances.create.runtimeHint')">
+                  <CircleQuestionMark :size="13" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent class="field-hint-tooltip" side="top" :side-offset="8">{{ t("instances.create.runtimeHint") }}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </span>
+        <ControlPlaneSelect v-model="runtimeDraft.runtimeId" :aria-label="t('instances.create.runtime')" :placeholder="t('instances.create.selectRuntime')">
           <ControlPlaneSelectItem v-for="runtime in runtimesForSelectedNode" :key="runtime.id" :value="runtime.id">{{ runtime.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
-      </label>
+      </div>
       <div v-if="selectedRuntimeRequiresImage" class="environment-source-field">
         <span>{{ t("instances.create.environmentSource") }}</span>
         <div class="environment-source-control" role="group" :aria-label="t('instances.create.environmentSource')">
@@ -215,7 +227,7 @@
 
     <div class="instance-model-fields">
       <span class="instance-model-fields-title">{{ t("instances.settings.modelSelection") }}</span>
-      <ModelEntitySelection v-model="instanceDraft.modelEntityIds" :models="models" :node-id="runtimeDraft.nodeId" />
+      <ModelEntitySelection v-model="instanceDraft.modelEntityIds" :models="models" :node-id="runtimeDraft.nodeId" context="create" @open-model-settings="$emit('open-model-settings')" />
     </div>
 
     <label class="config-check-field">
@@ -227,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { Check, ChevronDown, CircleAlert, CircleCheck, ExternalLink, Image, LoaderCircle, Package, Plus, RefreshCw, Search } from "@lucide/vue";
+import { Check, ChevronDown, CircleAlert, CircleCheck, CircleQuestionMark, ExternalLink, Image, LoaderCircle, Package, Plus, RefreshCw, Search } from "@lucide/vue";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { EnvironmentTemplate, ModelConfig, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
@@ -237,6 +249,7 @@ import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import ImageArtwork from "../shared/ImageArtwork.vue";
 import { resolveImageDescription } from "../shared/imageDescription";
 import { resolveImageTag, selectableImageTags } from "./imageTagSelection";
@@ -380,6 +393,7 @@ watch(templatePickerOpen, async (open) => {
 defineEmits<{
   "check-docker-runtime": [];
   "create-image": [];
+  "open-model-settings": [];
   "update:newImageOpen": [open: boolean];
 }>();
 </script>
@@ -415,6 +429,7 @@ defineEmits<{
 
 .section-head span,
 .step-fields label span,
+.step-fields .field-group .field-label,
 .instance-name-field span {
   color: var(--text-muted);
   font-size: 11px;
@@ -814,10 +829,46 @@ defineEmits<{
 }
 
 .step-fields label,
+.step-fields .field-group,
 .instance-name-field {
   display: grid;
   gap: 7px;
   min-width: 0;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.field-label-hint {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: help;
+  padding: 0;
+}
+
+.field-label-hint:hover,
+.field-label-hint:focus-visible {
+  color: var(--text-strong);
+}
+
+.field-label-hint:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+:global(.field-hint-tooltip) {
+  max-width: min(320px, calc(100vw - 24px));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .config-check-field {

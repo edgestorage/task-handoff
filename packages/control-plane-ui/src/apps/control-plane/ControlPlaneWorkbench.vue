@@ -603,7 +603,7 @@
       </div>
     </Transition>
 
-    <NewInstanceModal v-if="!standaloneMode && newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
+    <NewInstanceModal v-if="!standaloneMode && newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" @open-model-settings="openControlPlaneModelSettings" />
 
     <AccountSecurityDialog v-model:open="accountSecurityOpen" />
 
@@ -643,8 +643,10 @@
       :app-management-error="instanceSettingsAppManagement?.error || ''"
       :refresh-app-management="recoverInstanceAppManagement"
       :manage-app="manageInstanceApp"
+      :check-app-update="runInstanceAppUpdateCheck"
       :update-instance="updateInstanceSettings"
       @open-app-session="focusAppSessionById"
+      @open-model-settings="openControlPlaneModelSettings"
     />
 
   </div>
@@ -660,7 +662,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { cancelStoryDecision, controlPlaneQueryKeys, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -2014,6 +2016,14 @@ function openSettings(section: typeof settingsSection.value = "nodes") {
   closeFloatingLayers();
 }
 
+// Model selection can be empty until a provider is registered, so route the user
+// to the control plane model settings; close the instance dialog first to keep a
+// single top-level dialog in focus.
+function openControlPlaneModelSettings() {
+  if (instanceSettingsId.value) instanceSettingsId.value = "";
+  openSettings("models");
+}
+
 function openAccountSecurity() {
   accountSecurityOpen.value = true;
   closeFloatingLayers();
@@ -2054,8 +2064,15 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   const requestId = `appop_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
   const response = operation === "install"
     ? await installInstanceApp(instanceId, appId, requestId)
-    : await uninstallInstanceApp(instanceId, appId, requestId);
+    : operation === "update"
+      ? await updateInstanceApp(instanceId, appId, requestId)
+      : await uninstallInstanceApp(instanceId, appId, requestId);
   instanceAppManagement.applyJob(instanceId, response.job);
+}
+
+async function runInstanceAppUpdateCheck(instanceId: string, appId: string) {
+  const response = await checkInstanceAppUpdate(instanceId, appId);
+  instanceAppManagement.applyUpdateCheck(instanceId, response.check);
 }
 
 function openInstanceSettings(instanceId: string, section: "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps" = "general") {

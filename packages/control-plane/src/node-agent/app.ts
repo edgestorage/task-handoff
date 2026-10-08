@@ -1653,7 +1653,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             // node configuration and deliberately not part of this document.
             modelRelay: (() => {
               const protocols = modelRelay.protocolCapabilities();
-              return { protocols, streaming: protocols.length > 0 };
+              return { protocols, streaming: protocols.length > 0, unknownModelPolicy: true };
             })(),
           },
           aiSessionHistoryLimit: true,

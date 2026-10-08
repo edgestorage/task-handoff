@@ -809,6 +809,17 @@ export const ManagedAppActionReasonSchema = z.object({
   code: z.enum(["BUNDLED", "EXTERNALLY_MANAGED", "ALREADY_INSTALLED", "NOT_INSTALLED", "UNSUPPORTED_PLATFORM", "INSTALLER_UNAVAILABLE", "INSTALLER_NOT_WRITABLE", "INSUFFICIENT_PRIVILEGE", "OPERATION_IN_PROGRESS"]),
   message: z.string().trim().min(1).max(500),
 }).strict();
+export const ManagedAppUpdateStatusSchema = z.enum(["update-available", "up-to-date", "unknown", "unsupported"]);
+// Read-only result of the most recent manual update check. Omitted until the
+// user checks and by instances that predate the update-check capability.
+export const ManagedAppUpdateStateSchema = z.object({
+  status: ManagedAppUpdateStatusSchema,
+  installedVersion: z.string().trim().max(120).optional(),
+  latestVersion: z.string().trim().max(120).optional(),
+  checkedAt: TimestampSchema,
+  reason: z.string().trim().max(500).optional(),
+}).strict();
+export const ManagedAppUpdateCheckSchema = ManagedAppUpdateStateSchema.extend({ appId: IdSchema }).strict();
 export const ManagedAppProjectionSchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(120),
@@ -819,12 +830,17 @@ export const ManagedAppProjectionSchema = z.object({
   version: z.string().trim().max(120).optional(),
   canInstall: z.boolean(),
   canUninstall: z.boolean(),
+  // Optional for N-1 compatibility: instances that predate app updates omit these
+  // fields and consumers must treat a missing value as "not updatable".
+  canUpdate: z.boolean().optional(),
   installReason: ManagedAppActionReasonSchema.optional(),
   uninstallReason: ManagedAppActionReasonSchema.optional(),
+  updateReason: ManagedAppActionReasonSchema.optional(),
+  updateCheck: ManagedAppUpdateStateSchema.optional(),
   activeJobId: IdSchema.optional(),
 }).strict();
 
-export const AppManagementOperationSchema = z.enum(["install", "uninstall"]);
+export const AppManagementOperationSchema = z.enum(["install", "uninstall", "update"]);
 export const AppManagementJobStateSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]);
 export const AppManagementProgressSchema = z.object({
   current: z.number().finite().nonnegative().optional(),
@@ -875,6 +891,9 @@ export const AppManagementOperationRequestSchema = z.object({
 }).strict();
 export const AppManagementJobResponseSchema = z.object({
   job: AppManagementJobSchema,
+}).strict();
+export const AppManagementUpdateCheckResponseSchema = z.object({
+  check: ManagedAppUpdateCheckSchema,
 }).strict();
 export const AppManagementEventSchema = z.object({
   type: z.literal("app-management"),
@@ -2303,15 +2322,25 @@ export const UpdateNodeAgentExternalListenerSchema = NodeAgentExternalListenerCo
 /**
  * Node-level model relay switch persisted in runtime settings. Missing or
  * malformed stored values normalize to disabled; only an explicit boolean
- * enables the relay data plane.
+ * enables the relay data plane. The additive `unknownModelPolicy` defaults to
+ * forwarding unmatched names verbatim when absent or malformed.
  */
+export const NodeAgentModelRelayUnknownModelPolicySchema = z.enum(["passthrough", "reject"]);
+
 export const NodeAgentModelRelayConfigSchema = z.object({
   enabled: z.boolean(),
+  // Additive: a request model that matches neither declared names nor request
+  // mappings is forwarded verbatim when "passthrough" (the default) and fails
+  // closed with MODEL_RELAY_UNKNOWN_MODEL_NAME when "reject".
+  unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicySchema.optional(),
 }).strict();
 
 /** Effective node-agent response consumed by the control panel. */
 export const NodeAgentModelRelaySchema = z.object({
   enabled: z.boolean(),
+  // Optional on the wire so a node-agent that predates this setting still
+  // parses; writers must gate the field on the relay capability.
+  unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicySchema.optional(),
   // "default" means the switch was never persisted and relay stays off.
   source: z.enum(["default", "persisted"]),
 }).strip();
@@ -2323,6 +2352,7 @@ export function normalizeNodeAgentModelRelaySettings(input: unknown): z.infer<ty
   const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   return {
     enabled: source.enabled === true,
+    unknownModelPolicy: source.unknownModelPolicy === "reject" ? "reject" : "passthrough",
     source: source.source === "persisted" ? "persisted" : "default",
   };
 }
@@ -3404,6 +3434,7 @@ export type NodeAgentExternalListenerConfig = z.infer<typeof NodeAgentExternalLi
 export type NodeAgentExternalListener = z.infer<typeof NodeAgentExternalListenerSchema>;
 export type UpdateNodeAgentExternalListener = z.infer<typeof UpdateNodeAgentExternalListenerSchema>;
 export type NodeAgentModelRelayConfig = z.infer<typeof NodeAgentModelRelayConfigSchema>;
+export type NodeAgentModelRelayUnknownModelPolicy = z.infer<typeof NodeAgentModelRelayUnknownModelPolicySchema>;
 export type NodeAgentModelRelay = z.infer<typeof NodeAgentModelRelaySchema>;
 export type UpdateNodeAgentModelRelay = z.infer<typeof UpdateNodeAgentModelRelaySchema>;
 export type NodeAgentPairingInviteResponse = z.infer<typeof NodeAgentPairingInviteResponseSchema>;
@@ -3443,6 +3474,9 @@ export type FinalComputerCapabilities = z.infer<typeof FinalComputerCapabilities
 export type ManagedAppState = z.infer<typeof ManagedAppStateSchema>;
 export type ManagedAppManagementSource = z.infer<typeof ManagedAppManagementSourceSchema>;
 export type ManagedAppActionReason = z.infer<typeof ManagedAppActionReasonSchema>;
+export type ManagedAppUpdateStatus = z.infer<typeof ManagedAppUpdateStatusSchema>;
+export type ManagedAppUpdateState = z.infer<typeof ManagedAppUpdateStateSchema>;
+export type ManagedAppUpdateCheck = z.infer<typeof ManagedAppUpdateCheckSchema>;
 export type ManagedAppProjection = z.infer<typeof ManagedAppProjectionSchema>;
 export type AppManagementOperation = z.infer<typeof AppManagementOperationSchema>;
 export type AppManagementJobState = z.infer<typeof AppManagementJobStateSchema>;
@@ -3452,6 +3486,7 @@ export type AppManagementJob = z.infer<typeof AppManagementJobSchema>;
 export type AppManagementSnapshot = z.infer<typeof AppManagementSnapshotSchema>;
 export type AppManagementOperationRequest = z.infer<typeof AppManagementOperationRequestSchema>;
 export type AppManagementJobResponse = z.infer<typeof AppManagementJobResponseSchema>;
+export type AppManagementUpdateCheckResponse = z.infer<typeof AppManagementUpdateCheckResponseSchema>;
 export type AppManagementEvent = z.infer<typeof AppManagementEventSchema>;
 export type ControlledInstanceRegister = z.infer<typeof ControlledInstanceRegisterSchema>;
 export type ControlledInstanceHeartbeat = z.infer<typeof ControlledInstanceHeartbeatSchema>;

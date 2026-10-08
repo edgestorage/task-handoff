@@ -47,7 +47,7 @@
               >
                 <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
               </article>
-              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" :auto-expand-kinds="['reasoning']" @add-to-conversation="$emit('addToConversation', $event)" />
+              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" @add-to-conversation="$emit('addToConversation', $event)" />
             </template>
           </template>
           <span v-else>{{ t("sessions.timeline.noActivities") }}</span>

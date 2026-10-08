@@ -2785,6 +2785,26 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/update", async (request, reply) => {
+    try {
+      const input = AppManagementOperationRequestSchema.parse(request.body || {});
+      await appManagement.refreshSnapshot();
+      return reply.code(202).send({ data: { job: appManagement.request(request.params.appId, "update", input.requestId) } });
+    } catch (error) {
+      return appManagementError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/update-check", async (request, reply) => {
+    try {
+      AppManagementOperationRequestSchema.parse(request.body || {});
+      await appManagement.refreshSnapshot();
+      return { data: { check: await appManagement.checkForUpdate(request.params.appId) } };
+    } catch (error) {
+      return appManagementError(reply, error);
+    }
+  });
+
   app.get<{ Params: { jobId: string } }>("/api/apps/jobs/:jobId", async (request, reply) => {
     try {
       return { data: { job: appManagement.getJob(request.params.jobId) } };

@@ -31,3 +31,29 @@ test("instance model providers share animated drag ordering and a fallback move 
   assert.doesNotMatch(modelEntitySelection, /<Button[^>]*moveUp/);
   assert.doesNotMatch(modelEntitySelection, /<Button[^>]*moveDown/);
 });
+
+test("empty model selection guides to control plane settings and notes later edits", () => {
+  assert.match(modelEntitySelection, /!eligibleModels\.length[\s\S]*class="model-entity-empty"/);
+  assert.match(modelEntitySelection, /instances\.modelEntities\.emptyHint/);
+  assert.match(modelEntitySelection, /instances\.modelEntities\.openSettings/);
+  assert.match(modelEntitySelection, /context === 'create'[\s\S]*instances\.modelEntities\.emptyCreateHint/);
+  assert.match(modelEntitySelection, /@click="emit\('open-model-settings'\)"/);
+  assert.match(runtimeStep, /context="create"[\s\S]*@open-model-settings="\$emit\('open-model-settings'\)"/);
+  assert.match(newInstanceModal, /@open-model-settings="\$emit\('open-model-settings'\)"/);
+  assert.match(instanceSettings, /@open-model-settings="emit\('open-model-settings'\)"/);
+});
+
+test("the workbench routes empty model selection to the control plane model settings", () => {
+  const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
+  assert.match(workbench, /@open-model-settings="openControlPlaneModelSettings"/);
+  assert.match(workbench, /function openControlPlaneModelSettings\(\)[\s\S]*openSettings\("models"\)/);
+});
+
+test("the Chinese locale translates provider terminology in the model selector", () => {
+  const zhInstances = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/instances.ts", import.meta.url), "utf8");
+  const zhSessions = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/sessions.ts", import.meta.url), "utf8");
+  assert.match(zhInstances, /available: "可用提供方"/);
+  assert.match(zhInstances, /selected: "已选模型提供方"/);
+  assert.doesNotMatch(zhInstances, /可用 Provider/);
+  assert.match(zhSessions, /provider: "提供方"/);
+});

@@ -333,7 +333,16 @@ test("unknown operations, unknown names and missing models fail closed before up
     response.end("{}");
   });
   t.after(() => upstream.close());
-  const { route } = await setupRelay(t, upstream);
+  const { app, route } = await setupRelay(t, upstream);
+
+  // The node defaults to forwarding unmatched names, so this test pins the
+  // fail-closed policy explicitly.
+  const rejectPolicy = await app.inject({
+    method: "PATCH", url: "/api/node-agent/settings/model-relay",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { enabled: true, unknownModelPolicy: "reject" },
+  });
+  assert.equal(rejectPolicy.statusCode, 200, rejectPolicy.body);
 
   const unknownOperation = await fetch(route("codex", "/embeddings"), {
     method: "POST", headers: { authorization: `Bearer ${INSTANCE_TOKEN}` }, body: "{}",
@@ -355,6 +364,33 @@ test("unknown operations, unknown names and missing models fail closed before up
   assert.equal(missing.status, 400);
   assert.equal((await missing.json()).error.code, "MODEL_RELAY_INVALID_REQUEST_MODEL");
   assert.equal(upstream.requests.length, 0);
+});
+
+test("an unmatched model name is forwarded verbatim under the default policy", async (t) => {
+  const upstream = await startUpstream((record, _request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ id: "resp_1", model: "not-assigned" }));
+  });
+  t.after(() => upstream.close());
+  const { route } = await setupRelay(t, upstream);
+
+  // Every protocol forwards the unmatched name without rewriting the field.
+  const cases = [
+    { key: "codex", operation: "/responses", headers: { authorization: `Bearer ${INSTANCE_TOKEN}` } },
+    { key: "chat", operation: "/chat/completions", headers: { authorization: `Bearer ${INSTANCE_TOKEN}` } },
+    { key: "claude", operation: "/messages", headers: { "x-api-key": INSTANCE_TOKEN } },
+  ];
+  for (const testCase of cases) {
+    const payload = JSON.stringify({ model: "not-assigned", input: "hi" });
+    const response = await fetch(route(testCase.key, testCase.operation), {
+      method: "POST",
+      headers: { ...testCase.headers, "content-type": "application/json" },
+      body: payload,
+    });
+    assert.equal(response.status, 200, testCase.key);
+    // The identity rewrite leaves the request bytes intact.
+    assert.equal(upstream.requests.at(-1).body.toString("utf8"), payload, testCase.key);
+  }
 });
 
 test("a duplicate top-level model field aborts the upstream request", async (t) => {

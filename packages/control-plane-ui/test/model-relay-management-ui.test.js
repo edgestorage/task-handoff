@@ -36,6 +36,8 @@ test("node detail renders the relay switch from the authoritative response", () 
   assert.match(nodeDetail, /settings\.nodeDetail\.modelRelayDefaultHint/);
   assert.match(nodeDetail, /settings\.nodeDetail\.modelRelayUnsupported/);
   assert.match(nodeDetail, /resources\.modelRelaySupported/);
+  assert.match(nodeDetail, /resources\.modelRelayUnknownModelPolicySupported/);
+  assert.match(nodeDetail, /actions\.setModelRelayUnknownModelPolicy\(/);
 });
 
 test("node relay state loads and saves through the API without a local write", () => {
@@ -44,11 +46,12 @@ test("node relay state loads and saves through the API without a local write", (
   assert.match(settingsModal, /modelRelayInUseInstances/);
   assert.doesNotMatch(settingsModal, /modelRelay\.value = \{ enabled/);
   assert.match(settingsModal, /void loadModelRelay\(\)/);
+  assert.match(settingsModal, /setModelRelayUnknownModelPolicy/);
 });
 
 test("relay copy ships in both locales", () => {
   for (const locale of [zhSettings, enSettings]) {
-    for (const key of ["modelRelay:", "modelRelayDescription:", "modelRelayDefaultHint:", "modelRelayUnsupported:", "externalName:", "upstreamName:"]) {
+    for (const key of ["modelRelay:", "modelRelayDescription:", "modelRelayDefaultHint:", "modelRelayUnsupported:", "modelRelayUnknownModelPolicy:", "externalName:", "upstreamName:"]) {
       assert.ok(locale.includes(key), `missing ${key}`);
     }
   }

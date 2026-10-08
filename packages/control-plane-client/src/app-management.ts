@@ -3,6 +3,7 @@ import {
   AppManagementJobResponseSchema,
   AppManagementOperationRequestSchema,
   AppManagementSnapshotSchema,
+  AppManagementUpdateCheckResponseSchema,
 } from "@task-handoff/protocol/control-plane";
 import { CustomAppCatalogSchema, CustomAppCatalogUpdateInputSchema, InstanceAppCatalogSchema, type CustomAppCatalogUpdateInput } from "@task-handoff/protocol/app-catalog";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -14,7 +15,7 @@ export function createControlPlaneAppManagementApi(transport: ControlPlaneClient
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (
     (await transport.request(path, DataSchema(schema), init)).data
   );
-  const requestOperation = (instanceId: string, appId: string, operation: "install" | "uninstall", requestId?: string) => {
+  const requestOperation = (instanceId: string, appId: string, operation: "install" | "uninstall" | "update", requestId?: string) => {
     const body = AppManagementOperationRequestSchema.parse(requestId ? { requestId } : {});
     return requestData(`${base(instanceId)}/${encodeURIComponent(appId)}/${operation}`, AppManagementJobResponseSchema, {
       method: "POST",
@@ -31,6 +32,16 @@ export function createControlPlaneAppManagementApi(transport: ControlPlaneClient
     },
     uninstall(instanceId: string, appId: string, requestId?: string) {
       return requestOperation(instanceId, appId, "uninstall", requestId);
+    },
+    update(instanceId: string, appId: string, requestId?: string) {
+      return requestOperation(instanceId, appId, "update", requestId);
+    },
+    updateCheck(instanceId: string, appId: string) {
+      return requestData(`${base(instanceId)}/${encodeURIComponent(appId)}/update-check`, AppManagementUpdateCheckResponseSchema, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
     },
     job(instanceId: string, jobId: string, signal?: AbortSignal) {
       return requestData(`${base(instanceId)}/jobs/${encodeURIComponent(jobId)}`, AppManagementJobResponseSchema, { signal });

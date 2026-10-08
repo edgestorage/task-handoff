@@ -225,6 +225,7 @@ export class NodeAgentState {
       put: (instance) => this.controlledInstances.put(instance),
     }, persistence.model, {
       enabled: () => this.modelRelaySwitch.enabled(),
+      unknownModelPolicy: () => this.modelRelaySwitch.unknownModelPolicy(),
       // Relay routes must be reachable from inside the instance: Docker
       // containers use the host-gateway alias, local runtimes use loopback.
       originFor: (instance) => instance.runtime.kind === "docker"

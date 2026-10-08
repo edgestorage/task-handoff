@@ -1,12 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import {
-  NodeAgentModelRelaySchema,
   UpdateNodeAgentModelRelaySchema,
   type NodeAgentModelRelay,
+  type NodeAgentModelRelayUnknownModelPolicy,
 } from "@task-handoff/protocol/control-plane";
 import type { JsonFile } from "../../shared/persistence/store.ts";
 import type { NodeAgentRuntimeSettings } from "../runtime-settings.ts";
 import type { NodeModelRegistry } from "./registry.ts";
+
+/** Effective relay settings; unlike the wire model, the policy is always resolved. */
+export type EffectiveNodeAgentModelRelay = NodeAgentModelRelay & {
+  unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy;
+};
 
 /**
  * Process-wide live view of the persisted relay switch. The runtime settings
@@ -14,14 +19,20 @@ import type { NodeModelRegistry } from "./registry.ts";
  * assignment gates do not re-read and re-parse the file on every request.
  */
 export class NodeModelRelaySwitch {
-  private value = false;
+  private enabledValue = false;
+  private unknownModelPolicyValue: NodeAgentModelRelayUnknownModelPolicy = "passthrough";
 
   enabled() {
-    return this.value;
+    return this.enabledValue;
   }
 
-  set(enabled: boolean) {
-    this.value = enabled;
+  unknownModelPolicy() {
+    return this.unknownModelPolicyValue;
+  }
+
+  set(input: { enabled: boolean; unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy }) {
+    this.enabledValue = input.enabled;
+    this.unknownModelPolicyValue = input.unknownModelPolicy;
   }
 }
 
@@ -48,15 +59,19 @@ export class NodeModelRelaySettings {
   /** Load the persisted value into the live switch during startup. */
   restore(): NodeAgentModelRelay {
     const effective = this.effective();
-    this.relaySwitch.set(effective.enabled);
+    this.relaySwitch.set({ enabled: effective.enabled, unknownModelPolicy: effective.unknownModelPolicy });
     return effective;
   }
 
-  effective(): NodeAgentModelRelay {
+  effective(): EffectiveNodeAgentModelRelay {
     const stored = this.settings.get().modelRelay;
-    return NodeAgentModelRelaySchema.parse(stored
-      ? { enabled: stored.enabled, source: "persisted" }
-      : { enabled: false, source: "default" });
+    // The stored value is already schema-validated by JsonFile, so the
+    // effective document is built directly instead of re-parsing.
+    return {
+      enabled: stored?.enabled ?? false,
+      unknownModelPolicy: stored?.unknownModelPolicy ?? "passthrough",
+      source: stored ? "persisted" : "default",
+    };
   }
 
   enabled() {
@@ -66,8 +81,11 @@ export class NodeModelRelaySettings {
   update(input: unknown): NodeAgentModelRelay {
     const candidate = UpdateNodeAgentModelRelaySchema.parse(input);
     if (!candidate.enabled) this.assertDisableAllowed();
-    this.settings.put({ ...this.settings.get(), version: 1, modelRelay: { enabled: candidate.enabled } });
-    this.relaySwitch.set(candidate.enabled);
+    // The policy field is additive: an older control plane that only sends
+    // `enabled` must keep the node's current unknown-model policy.
+    const unknownModelPolicy = candidate.unknownModelPolicy ?? this.effective().unknownModelPolicy;
+    this.settings.put({ ...this.settings.get(), version: 1, modelRelay: { enabled: candidate.enabled, unknownModelPolicy } });
+    this.relaySwitch.set({ enabled: candidate.enabled, unknownModelPolicy });
     return this.effective();
   }
 

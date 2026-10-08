@@ -157,7 +157,7 @@
                 <p>{{ t("instances.settings.modelSelectionDescription") }}</p>
               </div>
               <div class="instance-model-surface instance-settings-surface">
-                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels || !codexConfigEnabled" />
+                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels || !codexConfigEnabled" @open-model-settings="emit('open-model-settings')" />
                 <div class="instance-settings-general-actions">
                   <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
                     {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
@@ -265,6 +265,7 @@
                           <strong>{{ app.name }}</strong>
                           <small v-if="app.description">{{ app.description }}</small>
                           <code>{{ app.id }} · {{ app.kind }}<template v-if="app.version"> · {{ app.version }}</template></code>
+                          <small v-if="updateCheckLabel(app)" class="instance-app-update-check" :class="updateCheckClass(app)">{{ updateCheckLabel(app) }}</small>
                           <small v-if="appActionHint(app)" class="instance-app-action-reason">{{ appActionHint(app) }}</small>
                         </div>
                       </div>
@@ -272,10 +273,23 @@
                         <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
                         <Button v-if="activeJob(app)" size="sm" disabled>
                           <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="13" />
-                          {{ activeJob(app)?.operation === "install" ? t("instances.settings.installing") : t("instances.settings.uninstalling") }}
+                          {{ operationLabel(activeJob(app)!.operation) }}
                         </Button>
-                        <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
-                        <Button v-else-if="app.canUninstall" size="sm" variant="destructive" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</Button>
+                        <DropdownMenu v-else-if="hasAppActions(app)">
+                          <DropdownMenuTrigger as-child>
+                            <Button size="sm" variant="outline" :disabled="operationSubmitting === app.id || checkingApps.has(app.id)" :aria-label="t('instances.settings.appActions')">
+                              <LoaderCircle v-if="checkingApps.has(app.id)" class="animate-spin motion-reduce:animate-none" :size="13" />
+                              <MoreHorizontal v-else :size="14" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" :side-offset="6" class="instance-app-actions-menu">
+                            <DropdownMenuItem v-if="app.canInstall" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</DropdownMenuItem>
+                            <DropdownMenuItem v-if="app.canUpdate" :disabled="checkingApps.has(app.id)" @select="runAppUpdateCheck(app)">{{ checkingApps.has(app.id) ? t("instances.settings.checkingUpdate") : t("instances.settings.checkUpdate") }}</DropdownMenuItem>
+                            <DropdownMenuItem v-if="app.canUpdate" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'update')">{{ t("instances.settings.update") }}</DropdownMenuItem>
+                            <DropdownMenuSeparator v-if="app.canUninstall" />
+                            <DropdownMenuItem v-if="app.canUninstall" class="instance-app-action-danger" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </div>
                     <div v-if="activeJob(app) || executionJob(app)?.command || executionJob(app)?.logTail || terminalJob(app)" class="instance-app-activity">
@@ -328,13 +342,8 @@
       <AlertDialog :open="Boolean(appConfirmation)" @update:open="(value) => { if (!value && !operationSubmitting) appConfirmation = undefined; }">
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{{ t("instances.settings.operationQuestion", { operation: appConfirmation?.operation === "uninstall" ? t("instances.settings.uninstall") : t("instances.settings.install"), name: appConfirmation?.app.name }) }}</AlertDialogTitle>
-            <AlertDialogDescription v-if="appConfirmation?.operation === 'uninstall'">
-              {{ t("instances.settings.uninstallDescription") }}
-            </AlertDialogDescription>
-            <AlertDialogDescription v-else>
-              {{ t("instances.settings.installDescription") }}
-            </AlertDialogDescription>
+            <AlertDialogTitle>{{ appConfirmationTitle }}</AlertDialogTitle>
+            <AlertDialogDescription>{{ appConfirmationDescription }}</AlertDialogDescription>
           </AlertDialogHeader>
           <div v-if="appConfirmation" class="instance-app-confirmation-summary">
             <span><small>{{ t("instances.settings.app") }}</small><strong>{{ appConfirmation.app.name }}</strong></span>
@@ -345,7 +354,7 @@
             <AlertDialogCancel :disabled="Boolean(operationSubmitting)">{{ t("instances.settings.cancel") }}</AlertDialogCancel>
             <Button type="button" :disabled="Boolean(operationSubmitting)" @click="confirmAppOperation">
               <LoaderCircle v-if="operationSubmitting" class="animate-spin motion-reduce:animate-none" :size="14" />
-              {{ operationSubmitting ? t("instances.settings.queuing") : appConfirmation?.operation === "uninstall" ? t("instances.settings.confirmUninstall") : t("instances.settings.confirmInstall") }}
+              {{ appConfirmationConfirmLabel }}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -355,9 +364,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -369,6 +378,7 @@ import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Progress } from "../../../components/ui/progress";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
@@ -403,11 +413,13 @@ const props = defineProps<{
   appManagementError: string;
   refreshAppManagement: (instanceId: string) => Promise<void>;
   manageApp: (instanceId: string, appId: string, operation: AppManagementOperation) => Promise<void>;
+  checkAppUpdate: (instanceId: string, appId: string) => Promise<void>;
   updateInstance: (instance: InstanceBoardItem, input: UpdateControlledInstanceInput) => Promise<void>;
 }>();
 
 const emit = defineEmits<{
   "open-app-session": [instanceId: string, sessionId: string];
+  "open-model-settings": [];
   "update:open": [open: boolean];
 }>();
 const section = ref<InstanceSettingsSection>("general");
@@ -441,6 +453,7 @@ const savingGeneral = ref(false);
 const savingCodex = ref(false);
 const savingModels = ref(false);
 const operationSubmitting = ref("");
+const checkingApps = reactive(new Set<string>());
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appFilter = ref<AppFilter>("all");
 const noGitCredentialValue = "__none__";
@@ -835,8 +848,20 @@ function progressPercent(job?: AppManagementJob) {
 }
 
 function jobLabel(job: AppManagementJob) {
-  const operation = job.operation === "install" ? t("instances.settings.installing") : t("instances.settings.uninstalling");
+  const operation = operationLabel(job.operation);
   return `${job.state === "queued" ? t("instances.settings.queued") : operation}${job.phase ? ` · ${humanizeJobPhase(job.phase)}` : ""}`;
+}
+
+function operationLabel(operation: AppManagementOperation) {
+  return operation === "install" ? t("instances.settings.installing")
+    : operation === "update" ? t("instances.settings.updating")
+      : t("instances.settings.uninstalling");
+}
+
+function operationNoun(operation: AppManagementOperation) {
+  return operation === "install" ? t("instances.settings.installation")
+    : operation === "update" ? t("instances.settings.update")
+      : t("instances.settings.uninstallation");
 }
 
 function humanizeJobPhase(phase: string) {
@@ -844,7 +869,7 @@ function humanizeJobPhase(phase: string) {
 }
 
 function terminalJobLabel(job: AppManagementJob) {
-  const operation = job.operation === "install" ? t("instances.settings.installation") : t("instances.settings.uninstallation");
+  const operation = operationNoun(job.operation);
   if (job.state === "succeeded") return t("instances.settings.succeeded", { operation });
   if (job.state === "cancelled") return t("instances.settings.cancelled", { operation });
   if (job.state === "interrupted") return t("instances.settings.interrupted", { operation });
@@ -871,15 +896,70 @@ function managedAppIcon(app: ManagedAppProjection) {
 }
 
 function appActionHint(app: ManagedAppProjection) {
-  if (activeJob(app) || app.canInstall || app.canUninstall) return "";
-  const reason = app.state === "installed" ? app.uninstallReason : app.installReason;
+  if (activeJob(app) || app.canInstall || app.canUninstall || app.canUpdate) return "";
+  const reason = app.state === "installed" || app.state === "broken"
+    ? app.updateReason || app.uninstallReason
+    : app.installReason;
   if (reason?.code === "BUNDLED" && app.state === "not-installed") return t("instances.settings.bundledUnavailable");
   return reason?.message || t("instances.settings.noAction");
+}
+
+function hasAppActions(app: ManagedAppProjection) {
+  return Boolean(app.canInstall || app.canUpdate || app.canUninstall);
 }
 
 function openAppConfirmation(app: ManagedAppProjection, operation: AppManagementOperation) {
   appConfirmation.value = { app, operation };
 }
+
+async function runAppUpdateCheck(app: ManagedAppProjection) {
+  if (!props.instance || checkingApps.has(app.id) || operationSubmitting.value) return;
+  checkingApps.add(app.id);
+  try {
+    await props.checkAppUpdate(props.instance.id, app.id);
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t), "error");
+  } finally {
+    checkingApps.delete(app.id);
+  }
+}
+
+function updateCheckLabel(app: ManagedAppProjection) {
+  const check = app.updateCheck;
+  if (!check) return "";
+  if (check.status === "update-available") {
+    return t("instances.settings.updateAvailable", {
+      installed: check.installedVersion || app.version || t("instances.settings.notReported"),
+      latest: check.latestVersion || t("instances.settings.notReported"),
+    });
+  }
+  if (check.status === "up-to-date") return t("instances.settings.updateUpToDate");
+  if (check.status === "unsupported") return t("instances.settings.updateUnsupported");
+  return check.reason ? t("instances.settings.updateUnknownReason", { reason: check.reason }) : t("instances.settings.updateUnknown");
+}
+
+function updateCheckClass(app: ManagedAppProjection) {
+  return app.updateCheck?.status === "update-available" ? "is-available" : "";
+}
+
+const appConfirmationTitle = computed(() => appConfirmation.value
+  ? t("instances.settings.operationQuestion", { operation: operationNoun(appConfirmation.value.operation), name: appConfirmation.value.app.name })
+  : "");
+
+const appConfirmationDescription = computed(() => {
+  const operation = appConfirmation.value?.operation;
+  return operation === "uninstall" ? t("instances.settings.uninstallDescription")
+    : operation === "update" ? t("instances.settings.updateDescription")
+      : t("instances.settings.installDescription");
+});
+
+const appConfirmationConfirmLabel = computed(() => {
+  if (operationSubmitting.value) return t("instances.settings.queuing");
+  const operation = appConfirmation.value?.operation;
+  return operation === "uninstall" ? t("instances.settings.confirmUninstall")
+    : operation === "update" ? t("instances.settings.confirmUpdate")
+      : t("instances.settings.confirmInstall");
+});
 
 async function confirmAppOperation() {
   if (!props.instance || !appConfirmation.value || operationSubmitting.value) return;
@@ -888,7 +968,7 @@ async function confirmAppOperation() {
   try {
     await props.manageApp(props.instance.id, app.id, operation);
     showControlPlaneToast(t("instances.settings.operationQueued", {
-      operation: operation === "install" ? t("instances.settings.installation") : t("instances.settings.uninstallation"),
+      operation: operationNoun(operation),
       name: app.name,
     }), "success");
     appConfirmation.value = undefined;
@@ -1392,6 +1472,19 @@ async function confirmAppOperation() {
 
 .instance-app-action-reason {
   color: var(--text-muted);
+}
+
+.instance-app-update-check {
+  color: var(--text-muted);
+}
+
+.instance-app-update-check.is-available {
+  color: var(--status-success);
+  font-weight: 600;
+}
+
+.instance-app-action-danger {
+  color: var(--status-danger, #dc2626);
 }
 
 .instance-app-activity {

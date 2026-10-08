@@ -70,6 +70,58 @@ test("control-plane gateway sends app management requests through the generic no
   assert.equal(requests[0].body.path.includes("job_apps"), false);
 });
 
+test("control-plane gateway forwards app update requests with the same instance and app identity", async () => {
+  const requests = [];
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async (_node, route, init) => {
+      requests.push({ route, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ data: { job: { id: "job_update", appId: "chromium", operation: "update", state: "queued" } } }), { status: 202, headers: { "content-type": "application/json" } });
+    }),
+  });
+  const result = await gateway.request(instance, "/apps/chromium/update", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "request_update" }),
+  });
+  assert.equal(result.job.id, "job_update");
+  assert.equal(result.job.operation, "update");
+  assert.deepEqual(requests, [{
+    route: "/instances/inst_apps/proxy",
+    body: {
+      path: "/api/apps/chromium/update",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "request_update" }),
+    },
+  }]);
+});
+
+test("control-plane gateway forwards app update checks without creating a job", async () => {
+  const requests = [];
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async (_node, route, init) => {
+      requests.push({ route, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ data: { check: { appId: "chromium", status: "up-to-date", checkedAt: "2026-07-16T00:00:00.000Z" } } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }),
+  });
+  const result = await gateway.request(instance, "/apps/chromium/update-check", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+  });
+  assert.equal(result.check.status, "up-to-date");
+  assert.equal(result.check.appId, "chromium");
+  assert.deepEqual(requests, [{
+    route: "/instances/inst_apps/proxy",
+    body: {
+      path: "/api/apps/chromium/update-check",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    },
+  }]);
+});
+
 test("control-plane gateway reports transport and upstream Server-Timing without changing the response model", async () => {
   let timing;
   let outerHeaders;

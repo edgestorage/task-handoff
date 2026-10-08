@@ -376,7 +376,9 @@ export async function createModelRelayRequestBody(input: {
       const resolved = input.resolveUpstreamModelName(value);
       externalModelName = value;
       upstreamModelName = resolved;
-      return Buffer.from(JSON.stringify(resolved), "utf8");
+      // Passthrough (or an identity mapping) must keep the caller's original
+      // bytes: the relay only rewrites model fields it actually remaps.
+      return resolved === value ? undefined : Buffer.from(JSON.stringify(resolved), "utf8");
     },
   });
   const held: Buffer[] = [];

@@ -56,7 +56,7 @@ export const errors = {
   AGENT_DEFINITION_REVISION_CONFLICT: "该 Agent 定义已被其他会话修改，请重新打开后再提交。",
   AGENT_DEFINITION_TARGET_INSTANCE_UNKNOWN: "目标实例不属于该节点。",
   AGENT_DEFINITION_FOLDER_UNKNOWN: "所选工作目录在该实例上不可用。",
-  AGENT_DEFINITION_PROVIDER_UNSUPPORTED: "目标实例未发布该 Provider。",
+  AGENT_DEFINITION_PROVIDER_UNSUPPORTED: "目标实例未发布该提供方。",
   AGENT_DEFINITION_CALLABLE_TARGET_UNKNOWN: "被引用的 Agent 已不存在，请刷新后重试。",
   AGENT_DEFINITION_SELF_REFERENCE: "Agent 不能调用自己。",
   AGENT_DEFINITION_CYCLE: "该可调用关系会形成环：{cycle}。",

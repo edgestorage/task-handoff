@@ -91,6 +91,7 @@ export const stories = {
     titlePlaceholder: "Story title",
     descriptionLabel: "Description",
     descriptionPlaceholder: "Optional description",
+    advancedSettings: "Advanced settings",
     ownerNode: "Owner node",
     maxIdleAiSessions: "Keep idle AI Sessions",
     agentTools: "Agent tools",

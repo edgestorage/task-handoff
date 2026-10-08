@@ -6,6 +6,7 @@ const {
   AppManagementJobResponseSchema,
   AppManagementOperationRequestSchema,
   AppManagementSnapshotSchema,
+  AppManagementUpdateCheckResponseSchema,
 } = require("../packages/protocol/src/control-plane.ts");
 
 const now = "2026-07-16T00:00:00.000Z";
@@ -54,4 +55,49 @@ test("app management public projections reject recipes and secrets", () => {
     apps: [{ ...snapshot.apps[0], command: "apt", packages: ["chromium"], key: "secret" }],
   }).success, false);
   assert.equal(AppManagementEventSchema.safeParse({ type: "app-management", streamId: "appstream_1", sequence: 2, observedAt: now }).success, false);
+});
+
+test("app management accepts update operations and optional update capabilities", () => {
+  assert.equal(AppManagementJobResponseSchema.safeParse({ job: { ...job, operation: "update" } }).success, true);
+  assert.equal(AppManagementSnapshotSchema.safeParse({
+    ...snapshot,
+    apps: [{ ...snapshot.apps[0], canUpdate: true }],
+  }).success, true);
+  assert.equal(AppManagementSnapshotSchema.safeParse({
+    ...snapshot,
+    apps: [{ ...snapshot.apps[0], canUpdate: false, updateReason: { code: "BUNDLED", message: "Bundled apps cannot be updated." } }],
+  }).success, true);
+  // Older instances omit the optional fields entirely and must still parse.
+  assert.equal(AppManagementSnapshotSchema.safeParse(snapshot).success, true);
+  assert.equal(AppManagementSnapshotSchema.safeParse({
+    ...snapshot,
+    apps: [{ ...snapshot.apps[0], updateReason: { code: "NOT_A_REASON", message: "bad" } }],
+  }).success, false);
+});
+
+test("app management accepts omitted and populated update checks", () => {
+  const check = { status: "update-available", installedVersion: "1.0.0", latestVersion: "1.1.0", checkedAt: now };
+  assert.equal(AppManagementSnapshotSchema.safeParse({
+    ...snapshot,
+    apps: [{ ...snapshot.apps[0], canUpdate: true, updateCheck: check }],
+  }).success, true);
+  assert.equal(AppManagementSnapshotSchema.safeParse({
+    ...snapshot,
+    apps: [{ ...snapshot.apps[0], canUpdate: true, updateCheck: { status: "up-to-date", checkedAt: now } }],
+  }).success, true);
+  assert.equal(AppManagementUpdateCheckResponseSchema.safeParse({ check: { appId: "chromium", ...check } }).success, true);
+
+  for (const candidate of [
+    { status: "stale", checkedAt: now },
+    { status: "update-available" },
+    { status: "unknown", checkedAt: now, extra: true },
+    { status: "unsupported", checkedAt: now, reason: "x".repeat(501) },
+  ]) {
+    assert.equal(AppManagementSnapshotSchema.safeParse({
+      ...snapshot,
+      apps: [{ ...snapshot.apps[0], canUpdate: true, updateCheck: candidate }],
+    }).success, false, `snapshot must reject ${JSON.stringify(candidate)}`);
+  }
+  assert.equal(AppManagementUpdateCheckResponseSchema.safeParse({ check: { status: "up-to-date", checkedAt: now } }).success, false);
+  assert.equal(AppManagementUpdateCheckResponseSchema.safeParse({ check: { appId: "chromium", status: "up-to-date", checkedAt: now }, extra: true }).success, false);
 });
