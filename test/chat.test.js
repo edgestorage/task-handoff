@@ -8037,11 +8037,15 @@ test("Codex model switching is not blocked by a stored selection the catalog dro
 
   await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_new", modelName: "new-model" });
 
+  // Both resumes carry the switch target explicitly: Codex must never fall back
+  // to the stored selection, which the catalog dropped (and whose recorded
+  // provider id may no longer resolve in config.toml).
+  const targetResumeOptions = { model: "new-model", modelProvider: codexProviderId("mdl_new"), reasoningEffort: "medium" };
   assert.deepEqual(fake.calls, [
-    ["resume", "thread_stale_selection", undefined],
+    ["resume", "thread_stale_selection", targetResumeOptions],
     ["archive", "thread_stale_selection"],
     ["unarchive", "thread_stale_selection"],
-    ["resume", "thread_stale_selection", { model: "new-model", modelProvider: codexProviderId("mdl_new"), reasoningEffort: "medium" }],
+    ["resume", "thread_stale_selection", targetResumeOptions],
   ]);
   assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_new", modelName: "new-model" });
 });

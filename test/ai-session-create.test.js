@@ -948,6 +948,63 @@ test("Codex send self-heals a missing shared app-server provider", async () => {
   ]);
 });
 
+test("Codex model switch resumes with an explicit provider override", async () => {
+  const { registry } = runtime();
+  const resumes = [];
+  class SwitchClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async archiveThread(threadId) { resumes.push(["thread-archive", threadId]); }
+    async unarchiveThread(threadId) { resumes.push(["thread-unarchive", threadId]); }
+    async resumeThread(threadId, options) {
+      resumes.push(["thread-resume", threadId, options]);
+      return {
+        id: threadId,
+        cwd: "/workspace",
+        status: { type: "idle" },
+        turns: [],
+        model: "gpt-6-astra",
+        modelProvider: "task-handoff-mdl_5e033mea8h4y1",
+      };
+    }
+  }
+  // The rollout persisted a retired provider id: Codex's own thread metadata
+  // points at `task-handoff-mdl_b6a5...`, which no longer resolves in config.toml.
+  const session = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-switch",
+    cwd: "/workspace",
+    status: "idle",
+    reasoningEffort: "medium",
+    modelSelection: {
+      modelEntityId: "mdl_b6a558905ae2b3196dd7f9b1948f4abd19bc10bdacea4fc6f92336287bcb5476",
+      modelName: "gpt-6-astra",
+    },
+  });
+  const bridge = new CodexAppServerSessionBridge(registry, new SwitchClient(), {
+    resolveModelSelection: () => ({ model: "gpt-6-astra", modelProvider: "task-handoff-mdl_5e033mea8h4y1" }),
+    projectModelSelection: (_provider, model) => ({ modelEntityId: "mdl_5e033mea8h4y1", modelName: model }),
+  });
+
+  const result = await bridge.updateModelSelection(session, { modelEntityId: "mdl_5e033mea8h4y1", modelName: "gpt-6-astra" });
+
+  // Every thread resume carries the requested model and provider, so Codex never
+  // falls back to the retired provider recorded in its rollout metadata.
+  const resumeOptions = resumes.filter(([kind]) => kind === "thread-resume").map(([, , options]) => options);
+  assert.equal(resumeOptions.length, 2);
+  for (const options of resumeOptions) {
+    assert.deepEqual(options, {
+      model: "gpt-6-astra",
+      modelProvider: "task-handoff-mdl_5e033mea8h4y1",
+      reasoningEffort: "medium",
+    });
+  }
+  assert.deepEqual(result, { modelEntityId: "mdl_5e033mea8h4y1", modelName: "gpt-6-astra" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_5e033mea8h4y1", modelName: "gpt-6-astra" });
+});
+
 test("Close AI Session self-heals a missing shared app-server before archiving", async () => {
   const { registry, controller } = runtime();
   const calls = [];

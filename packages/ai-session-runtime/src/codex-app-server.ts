@@ -343,10 +343,20 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     this.pendingThreadSettings.add(session.id);
     try {
       // A switch replaces the stored selection, so loading the thread must not
-      // resolve it: the catalog may have dropped the previous model, and that
-      // resume/send scoped error must not block switching to an available one.
-      // The resumed thread is verified against the requested selection below.
-      const client = await this.requireReadyThreadClient(threadId, null);
+      // resolve the previous one: the catalog may have dropped that model, and
+      // the resume/send scoped error must not block switching to an available
+      // one. Resume against the requested selection instead of Codex's own
+      // persisted thread metadata, whose recorded provider id can be a retired
+      // identity that no longer resolves in config.toml (for example after a
+      // model entity id migration). The resumed thread is verified below.
+      const requestedModel = this.options.resolveModelSelection?.(selection);
+      if (!requestedModel) {
+        throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The Codex provider for this session is no longer available.", 409);
+      }
+      const client = await this.requireReadyThreadClient(threadId, {
+        ...requestedModel,
+        reasoningEffort: session.reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT,
+      });
       if (selection.modelEntityId !== session.modelSelection.modelEntityId) {
         if (session.lineage?.kind === "subagent" || this.registry.all().some((candidate) => (
           candidate.lineage?.kind === "subagent"
