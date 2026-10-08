@@ -135,6 +135,12 @@ export interface AiSessionControlProvider {
   activeSessionExists?(providerSessionId: string): Promise<boolean>;
   deleteSession?(providerSessionId: string): Promise<void>;
   unsubscribeSession?(providerSessionId: string): Promise<void>;
+  /**
+   * When true, closing a session detaches it from task-handoff without
+   * archiving the provider session. Providers that cannot restore an archived
+   * session must keep it live so it stays resumable.
+   */
+  readonly closeDetachesProviderSession?: boolean;
   startMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   steerMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   sendMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;

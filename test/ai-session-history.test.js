@@ -655,6 +655,29 @@ test("AI session resume coordinator restores Direct history without launching an
   assert.deepEqual(releasedSessions, []);
 });
 
+test("AI session resume keeps history when the provider does not keep the session active", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-reaped-"));
+  const history = new AiSessionHistoryStore({ dataDir: root });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "registry") });
+  const item = historyItem(16, { id: "ai-reaped", creationSource: "ai-session" });
+  history.upsert(item);
+  const coordinator = new AiSessionResumeCoordinator({
+    history,
+    registry,
+    appSessions: () => [],
+    startApp: () => { throw new Error("must not start an App"); },
+    resumeProvider: async () => {
+      // Simulate convergence discarding the session right after the provider
+      // reports a successful resume.
+      registry.discard(item.id);
+    },
+  });
+
+  await assert.rejects(coordinator.resume(item.id), (error) => error.code === "AI_SESSION_RESUME_UNAVAILABLE" && error.statusCode === 409);
+  assert.equal(history.get(item.id).id, item.id);
+  assert.equal(registry.get(item.id), undefined);
+});
+
 test("AI session resume coordinator retains history and permits retry after provider failure", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-retry-"));
   const history = new AiSessionHistoryStore({ dataDir: root });

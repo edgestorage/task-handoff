@@ -1302,6 +1302,41 @@ test("App exit closes an App-owned AI session", async () => {
   assert.equal((await coordinator.close(session.id)).disposition, "already-closed");
 });
 
+test("close detaches a provider that cannot restore an archived session", async () => {
+  const { registry, controller } = runtime();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-detach-close-"));
+  const history = new AiSessionHistoryStore({ dataDir: root });
+  const archived = [];
+  const unsubscribed = [];
+  controller.register({
+    agent: "opencode",
+    closeDetachesProviderSession: true,
+    async archiveSession(id) { archived.push(id); },
+    async unsubscribeSession(id) { unsubscribed.push(id); },
+    async interrupt(session) { return { session, provider: "opencode", action: "interrupt" }; },
+  });
+  const session = registry.applyAdapterSnapshot({
+    agent: "opencode",
+    creationSource: "ai-session",
+    appId: "opencode",
+    providerSessionId: "ses_detach",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  assert.deepEqual(await coordinator.close(session.id), {
+    disposition: "closed",
+    aiSessionId: session.id,
+    providerSessionId: "ses_detach",
+    creationSource: "ai-session",
+  });
+  assert.deepEqual(archived, []);
+  assert.deepEqual(unsubscribed, ["ses_detach"]);
+  assert.equal(registry.get(session.id), undefined);
+  assert.equal(history.get(session.id).providerSessionId, "ses_detach");
+});
+
 test("App exit preserves a Direct AI session that was opened in the App", async () => {
   const { registry, controller } = runtime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-direct-app-exit-"));

@@ -193,14 +193,18 @@ export class AiSessionCloseCoordinator {
       throw aiSessionControlError("AI_SESSION_CLOSE_UNAVAILABLE", "AI session has no provider identity.", 409);
     }
     const provider = this.options.controller.provider(session.agent);
-    if (!provider.archiveSession) {
+    // OpenCode cannot restore an archived session, so its close detaches the
+    // provider session instead of archiving it. The session stays live and
+    // resumable; task-handoff's own history records that it is closed.
+    const detachOnly = provider.closeDetachesProviderSession === true;
+    if (!detachOnly && !provider.archiveSession) {
       throw aiSessionControlError("AI_SESSION_CLOSE_UNSUPPORTED", `${session.agent} does not support provider archive.`, 400);
     }
     try {
       if (!providerAlreadyAbsent && (session.status === "running" || session.status === "waiting") && session.activeTurnId) {
         await this.options.controller.interrupt(session.id);
       }
-      if (!providerAlreadyAbsent) {
+      if (!providerAlreadyAbsent && !detachOnly) {
         try {
           await provider.archiveSession(session.providerSessionId);
         } catch (archiveError: unknown) {

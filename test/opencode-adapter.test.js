@@ -746,6 +746,69 @@ test("OpenCode discovery restores forks and converges archived sessions", async 
   bridge.close();
 });
 
+test("OpenCode discovery does not resurrect a closed provider session", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-closed-"));
+  const registry = createAiSessionRegistry({ dir: root });
+  const closed = new Set(["ses_closed"]);
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+    closedProviderSessionIds: () => closed,
+  });
+  const session = (id) => ({ id, directory: "/workspace/project", title: id, version: "1.18.21", time: { created: 1, updated: 2 } });
+  bridge.client = {
+    health: async () => ({ healthy: true, version: "1.18.21" }),
+    subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
+    listGlobalSessions: async () => ({ data: [session("ses_open"), session("ses_closed")] }),
+    getSession: async (id) => session(id),
+    status: async () => ({}),
+    messages: async () => [],
+    permissions: async () => [],
+  };
+
+  await bridge.refresh({ registry, appSessions: [] });
+  assert.ok(registry.getByProviderSessionId("opencode", "ses_open"));
+  assert.equal(registry.getByProviderSessionId("opencode", "ses_closed"), undefined);
+
+  // An explicit resume clears the closed marker, so discovery adopts it again.
+  closed.delete("ses_closed");
+  await bridge.refresh({ registry, appSessions: [] });
+  assert.ok(registry.getByProviderSessionId("opencode", "ses_closed"));
+  bridge.close();
+});
+
+test("OpenCode resume rejects a session that is still archived", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-archived-resume-"));
+  const registry = createAiSessionRegistry({ dir: root });
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    health: async () => ({ healthy: true, version: "1.18.21" }),
+    subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
+    listGlobalSessions: async () => ({ data: [] }),
+    getSession: async (id) => ({ id, directory: "/workspace/project", title: "Archived", version: "1.18.21", time: { created: 1, updated: 2, archived: 3 } }),
+    status: async () => ({}),
+    messages: async () => [],
+    permissions: async () => [],
+  };
+  // Resume restores history into the registry before asking the provider.
+  registry.applyAdapterSnapshot({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "ses_archived_resume",
+    cwd: "/workspace/project",
+    status: "idle",
+  });
+
+  await assert.rejects(
+    bridge.resumeSession("ses_archived_resume", undefined, undefined, []),
+    (error) => error.code === "AI_SESSION_RESUME_UNAVAILABLE" && error.statusCode === 409,
+  );
+  bridge.close();
+});
+
 test("OpenCode readiness does not gate structured session fields by provider version", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-version-"));
   const diagnostics = [];

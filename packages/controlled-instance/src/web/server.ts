@@ -941,6 +941,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const configured = repositoryWorkspaceRootsFromEnv();
       return configured.length ? configured : [process.env.TASK_HANDOFF_WORKSPACE || process.cwd()];
     },
+    // Closed direct sessions stay live in OpenCode (it cannot unarchive), so
+    // discovery must not resurrect them from the provider's active list.
+    closedProviderSessionIds: () => new Set(
+      aiSessionHistory.list()
+        .filter((item) => item.agent === "opencode")
+        .map((item) => item.providerSessionId),
+    ),
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
         instanceId,

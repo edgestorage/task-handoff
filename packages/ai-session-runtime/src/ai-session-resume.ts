@@ -82,6 +82,11 @@ export class AiSessionResumeCoordinator {
           || !sameAiSessionModelSelection(actualModelSelection, requestedModelSelection))) {
           throw new Error("Provider resumed the session with a different model selection.");
         }
+        // Never drop the only resumable record of a session that the provider
+        // (or convergence) did not actually keep active.
+        if (!this.options.registry.get(item.id)) {
+          throw new Error("Provider resume did not keep the AI session active.");
+        }
         this.options.history.activate(item.id);
         return AiSessionResumeResultSchema.parse({
           disposition: "resumed",
