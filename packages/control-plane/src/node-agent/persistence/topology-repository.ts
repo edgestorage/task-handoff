@@ -151,7 +151,16 @@ export class InstanceRepository {
       const registrationCredential = parsed.registrationToken || (current?.registration_credential as string | undefined);
       const desired = desiredProjection({ ...parsed, stateRevision });
       const observed = observationProjection(parsed);
-      const sourceLocalFolderId = parsed.source.type === "local-folder" ? parsed.source.localFolderId : undefined;
+      // This column is only a referential projection of the operator folder set;
+      // the instance source itself stays authoritative in `desired_json`. A
+      // node-agent-owned built-in project folder is derived and has no row here,
+      // so only a real operator folder reference may be persisted — otherwise the
+      // insert would break the foreign key that keeps folder deletion consistent.
+      const requestedSourceFolderId = parsed.source.type === "local-folder" ? parsed.source.localFolderId : undefined;
+      const sourceLocalFolderId = requestedSourceFolderId
+        && this.client.prepare("SELECT 1 AS present FROM na_local_folders WHERE id = ?").get(requestedSourceFolderId)
+        ? requestedSourceFolderId
+        : undefined;
       this.client.prepare(`INSERT INTO na_instances
         (id, node_id, runtime_id, source_local_folder_id, name, status, state_revision, process_incarnation_id,
          registration_credential, desired_json, created_at, updated_at)

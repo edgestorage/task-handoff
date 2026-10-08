@@ -33,6 +33,14 @@ export type ReverseTunnelConnectionInput = {
   secret?: string;
 };
 
+function decodeLocalRequestBody(value: unknown): string | Buffer | undefined {
+  const body = decodeNodeTunnelRequestBody(value);
+  // `Buffer` is itself a `Uint8Array`, so check it first: a Node-side decode
+  // already returns a Buffer and must not be copied per proxied body.
+  if (Buffer.isBuffer(body)) return body;
+  return body instanceof Uint8Array ? Buffer.from(body) : body;
+}
+
 export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunnelConnectionInput) {
   const url = new URL(input.tunnelUrl);
   url.searchParams.set("nodeId", input.nodeId);
@@ -162,7 +170,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
       const method = nodeAgentProxyMethod(init.method);
       let body: string | Buffer | undefined;
       try {
-        body = decodeNodeTunnelRequestBody(init.body);
+        body = decodeLocalRequestBody(init.body);
       } catch (error) {
         app.log.warn({
           nodeId: input.nodeId,
@@ -303,7 +311,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
       const method = nodeAgentProxyMethod(init.method);
       let body: string | Buffer | undefined;
       try {
-        body = decodeNodeTunnelRequestBody(init.body);
+        body = decodeLocalRequestBody(init.body);
       } catch (error) {
         app.log.warn({
           nodeId: input.nodeId,

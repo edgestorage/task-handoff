@@ -14,11 +14,7 @@ export type ControlledPrivateModelCatalog = InstancePrivateModelCatalog;
 export type ControlledPrivateModelCatalogSource = "environment" | "private-config-file" | "none";
 
 function privateConfigFilePath(env: NodeJS.ProcessEnv) {
-  // Compatibility for v0.0.34: the Docker entrypoint always exports the path it
-  // resolved, so this fallback only serves containers created by that release
-  // with the legacy single-file mount. Remove it once they are recreated.
-  return env.TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH?.trim()
-    || (env.TASK_HANDOFF_RUNTIME_KIND === "docker" ? "/run/task-handoff/instance-private-config.json" : "");
+  return env.TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH?.trim() || "";
 }
 
 export function readControlledPrivateModelCatalog(env: NodeJS.ProcessEnv = process.env) {

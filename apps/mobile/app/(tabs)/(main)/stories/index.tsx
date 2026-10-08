@@ -22,6 +22,7 @@ export default function StoriesRoute() {
         storyId: story.id,
         ...(defaults.cwd ? { cwd: defaults.cwd } : {}),
         ...(defaults.cwdFolderId ? { cwdFolderId: defaults.cwdFolderId } : {}),
+        ...(defaults.sessionId ? { worktreeSessionId: defaults.sessionId } : {}),
       },
     })}
     onOpen={(story) => router.push({ pathname: '/stories/[storyId]' as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}

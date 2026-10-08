@@ -655,15 +655,24 @@
                     :aria-label="t('sessions.panel.searchProjects')"
                   />
                   <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
-                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
-                      <Folder :size="15" />
+                    <DropdownMenuItem v-for="folder in filteredNewSessionBuiltinFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
+                      <Sparkles :size="15" />
                       <span class="session-ai-project-folder-copy">
-                        <strong>{{ folder.name }}</strong>
+                        <strong>{{ nodeLocalFolderDisplayName(folder, locale) }}</strong>
                         <small>{{ folder.path }}</small>
                       </span>
                       <Check v-if="newSessionFolderId === folder.id" :size="15" />
                     </DropdownMenuItem>
-                    <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
+                    <DropdownMenuSeparator v-if="filteredNewSessionBuiltinFolders.length && filteredNewSessionFolders.length" />
+                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
+                      <Folder :size="15" />
+                      <span class="session-ai-project-folder-copy">
+                        <strong>{{ nodeLocalFolderDisplayName(folder, locale) }}</strong>
+                        <small>{{ folder.path }}</small>
+                      </span>
+                      <Check v-if="newSessionFolderId === folder.id" :size="15" />
+                    </DropdownMenuItem>
+                    <p v-if="!filteredNewSessionFolders.length && !filteredNewSessionBuiltinFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
                   </ScrollArea>
                   <template v-if="instance.source.type === 'local-folder'">
                     <DropdownMenuSeparator />
@@ -1334,7 +1343,7 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Sparkles, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
@@ -1348,7 +1357,7 @@ import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
-import { createRepositoryWorkspaceWorktree } from "../../../api/repository";
+import { createRepositoryWorkspaceWorktree, getRepositoryContext } from "../../../api/repository";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionUserMessageDetail } from "@task-handoff/protocol/ai-sessions";
@@ -1398,7 +1407,7 @@ import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-grou
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
-import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
+import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, partitionInstanceCwdFolders, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
@@ -1535,6 +1544,7 @@ const props = defineProps<{
   chooseProjectFolder?: NativeNodeFolderPicker;
   creationInitialCwd?: string;
   creationInitialCwdFolderId?: string;
+  creationInitialWorktreeSessionId?: string;
   creationInitialPreset?: StorySessionPreset;
   creationInitialPrompt?: string;
   creationEmbedded?: boolean;
@@ -1807,7 +1817,7 @@ const selectedSessionFolderName = computed(() => {
     ? (props.nodeLocalFolders || []).find((candidate) => candidate.id === session.cwdFolderId)
     : undefined;
   return folder
-    ? nodeLocalFolderDisplayName(folder)
+    ? nodeLocalFolderDisplayName(folder, locale.value as string)
     : aiSessionBasename(session.cwd) || t("sessions.board.unknownFolder");
 });
 const selectedSessionRuntimePath = computed(() => {
@@ -1965,6 +1975,7 @@ const newSessionWorkspace = ref<RepositoryAiSessionWorkspace>();
 const newSessionWorkspaceMode = ref<"current-folder" | "worktree">(props.creationMode === "preset" ? props.creationInitialPreset?.gitSelection?.mode || "current-folder" : "current-folder");
 const newSessionBranch = ref(props.creationMode === "preset" ? props.creationInitialPreset?.gitSelection?.branch || "" : "");
 const newSessionWorktreeId = ref("");
+const creationInheritedWorktreeId = ref("");
 const newSessionWorktreeQuery = ref("");
 const newSessionWorktreeDialogOpen = ref(false);
 const newSessionManagedWorktreeBranch = ref("");
@@ -2051,7 +2062,7 @@ const canSubmitPathGroupRename = computed(() => Boolean(
   && !renamingPathGroup.value,
 ));
 const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
-type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path"> & { cwdFolderId?: string };
+type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path" | "origin" | "localizedNames"> & { cwdFolderId?: string };
 const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
   const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
   if (props.instance.source.type !== "local-folder") {
@@ -2065,8 +2076,10 @@ const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
   return selectableInstanceCwdFolders(props.instance, folders).map((folder) => ({
     id: folder.id,
     cwdFolderId: folder.id,
-    name: nodeLocalFolderDisplayName(folder),
+    name: nodeLocalFolderDisplayName(folder, locale.value as string),
+    localizedNames: folder.localizedNames,
     path: folder.path,
+    origin: folder.origin,
   }));
 });
 const newSessionFolderPathsByInstance = new Map<string, string>();
@@ -2150,7 +2163,15 @@ const newProjectPicker = useNodeStorageFolderPicker({
   },
 });
 const filteredNewSessionFolders = computed(() => {
-  return filterInstanceCwdFolders(newSessionFolders.value, newSessionFolderQuery.value);
+  return filterInstanceCwdFolders(partitionInstanceCwdFolders(newSessionFolders.value).user, newSessionFolderQuery.value, locale.value as string);
+});
+// Built-in projects are product-shipped, so they are not mixed into the user's
+// project list; the menu renders them above a plain separator instead.
+const newSessionBuiltinFolders = computed(() => {
+  return partitionInstanceCwdFolders(newSessionFolders.value).builtin;
+});
+const filteredNewSessionBuiltinFolders = computed(() => {
+  return filterInstanceCwdFolders(newSessionBuiltinFolders.value, newSessionFolderQuery.value, locale.value as string);
 });
 const filteredNewSessionBranches = computed(() => {
   const query = newSessionBranchQuery.value.trim().toLowerCase();
@@ -2651,13 +2672,17 @@ watch(
     const queryKey = controlPlaneQueryKeys.aiSessionWorkspace(instanceId, cwdFolderId);
     const cachedWorkspace = queryClient.getQueryData<RepositoryAiSessionWorkspace>(queryKey);
     newSessionWorkspace.value = cachedWorkspace;
-    if (cachedWorkspace) syncNewSessionBranchFromWorkspace(cachedWorkspace);
+    if (cachedWorkspace) {
+      applyCreationInitialWorktree(cachedWorkspace);
+      syncNewSessionBranchFromWorkspace(cachedWorkspace);
+    }
     newSessionWorkspaceLoading.value = true;
     void getAiSessionWorkspace(instanceId, cwdFolderId, abort.signal)
       .then((workspace) => {
         if (revision !== newSessionWorkspaceRevision) return;
         queryClient.setQueryData(queryKey, workspace);
         newSessionWorkspace.value = workspace;
+        applyCreationInitialWorktree(workspace);
         syncNewSessionBranchFromWorkspace(workspace);
       })
       .catch(() => {
@@ -2667,6 +2692,50 @@ watch(
       })
       .finally(() => {
         if (revision === newSessionWorkspaceRevision) newSessionWorkspaceLoading.value = false;
+      });
+  },
+  { immediate: true },
+);
+
+/**
+ * A Story composer inherits the worktree of the Story session it was opened from.
+ * The inherited session's own repository context is the only authority for which
+ * worktree hosts it, so the id is resolved on its own and applied once the current
+ * folder workspace proves that worktree is selectable here.
+ *
+ * Applying is one-shot per inherited session: the folder is deliberately not part
+ * of the applied key, because a workspace reload caused by the user picking another
+ * project must not drag the inherited worktree back in. The composer remounts for
+ * every Story session composer, so reopening it inherits again.
+ */
+let creationInitialWorktreeApplied = "";
+function applyCreationInitialWorktree(workspace: RepositoryAiSessionWorkspace) {
+  const worktreeId = creationInheritedWorktreeId.value;
+  if (!worktreeId) return;
+  const appliedKey = `${props.instance.id}\u0000${props.creationInitialWorktreeSessionId}\u0000${worktreeId}`;
+  if (creationInitialWorktreeApplied === appliedKey) return;
+  const worktree = (workspace.worktrees || []).find((candidate) => candidate.id === worktreeId);
+  if (!worktree || worktree.isCurrent || !worktree.canCreateAiSession) return;
+  creationInitialWorktreeApplied = appliedKey;
+  newSessionWorkspaceMode.value = "worktree";
+  newSessionWorktreeId.value = worktreeId;
+}
+
+watch(
+  [() => props.instance.id, () => props.creationInitialWorktreeSessionId],
+  ([instanceId, sessionId], _previous, onCleanup) => {
+    creationInheritedWorktreeId.value = "";
+    if (!instanceId || !sessionId) return;
+    const abort = new AbortController();
+    onCleanup(() => abort.abort());
+    void getRepositoryContext({ instanceId, sessionKind: "ai-session", sessionId }, { signal: abort.signal })
+      .then((context) => {
+        if (abort.signal.aborted) return;
+        creationInheritedWorktreeId.value = context.currentWorktree?.id || "";
+        if (newSessionWorkspace.value) applyCreationInitialWorktree(newSessionWorkspace.value);
+      })
+      .catch(() => {
+        // Inheriting a worktree is best-effort; the folder defaults still apply.
       });
   },
   { immediate: true },

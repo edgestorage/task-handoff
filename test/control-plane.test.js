@@ -34,7 +34,7 @@ const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-pl
 const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = require("../packages/control-plane/src/shared/security/node-agent-auth.ts");
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
-const { LocalDockerExecutor, agentRunRuntimeVolume, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { LocalDockerExecutor, agentRunRuntimeVolume, DOCKER_AGENT_RUN_ROOT, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { waitForChildExit } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock, readProcessSingletonLockOwner } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
@@ -5078,6 +5078,7 @@ test("local docker executor checks local images and pulls registry images before
     };
     return { Name: name, Labels: volume.labels };
   };
+  const existingAgentRunVolume = agentRunRuntimeVolume("node_unset", "runtime_local_docker");
   const existingContainerInspection = {
     Id: "container-1",
     Image: "sha256:existing-image",
@@ -5089,6 +5090,7 @@ test("local docker executor checks local images and pulls registry images before
     Mounts: [
       ...testManagedVolumes("inst_1").map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
       { Type: "volume", Name: "task-handoff-inst_1-runtime", Destination: "/opt/task-handoff/instance-runtime" },
+      { Type: "volume", Name: existingAgentRunVolume.name, Destination: DOCKER_AGENT_RUN_ROOT },
       { Type: "bind", Source: path.resolve(__dirname, "../docker"), Destination: "/run/task-handoff/bootstrap" },
       { Type: "bind", Source: "/tmp/workspace", Destination: "/workspace" },
     ],
@@ -5282,17 +5284,16 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumed.runtime.containerId, "container-1");
   assert.equal(resumed.target.web, "http://127.0.0.1:18081");
   assert.equal(resumed.target.api, "http://127.0.0.1:18081/api");
-  const existingAgentRunVolume = agentRunRuntimeVolume("node_unset", "runtime_local_docker").name;
   assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "create").map(([, args]) => args.at(-1)), [
     "task-handoff-inst_1-runtime",
-    existingAgentRunVolume,
+    existingAgentRunVolume.name,
   ]);
   assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "inspect").map(([, args]) => args.at(-1)), [
-    existingAgentRunVolume,
+    existingAgentRunVolume.name,
     "task-handoff-inst_1-data",
     "task-handoff-inst_1-agent-home",
     "task-handoff-inst_1-runtime",
-    existingAgentRunVolume,
+    existingAgentRunVolume.name,
   ]);
   assert.ok(existingCalls.some(([, args]) => args[0] === "start" && args[1] === "task-handoff-inst_1"));
 
@@ -5801,6 +5802,7 @@ test("node agent starts a managed container before startup convergence", async (
     dataDir: tempDataDir("node-agent-restore-before-convergence"),
     logger: false,
     token: "agent-secret",
+    nodeId: "node_restore_order",
     resolveRuntimeArtifact: async () => {
       artifactResolutions += 1;
       actions.push("resolve-artifact");
@@ -5837,6 +5839,7 @@ test("node agent starts a managed container before startup convergence", async (
               Destination: volume.mountPath,
             })).concat([
               { Type: "volume", Name: "task-handoff-inst_restore_order-runtime", Destination: "/opt/task-handoff/instance-runtime" },
+              { Type: "volume", Name: agentRunRuntimeVolume("node_restore_order", "runtime_local_docker").name, Destination: DOCKER_AGENT_RUN_ROOT },
               { Type: "bind", Source: path.resolve(__dirname, "../docker"), Destination: "/run/task-handoff/bootstrap" },
             ]),
           }),

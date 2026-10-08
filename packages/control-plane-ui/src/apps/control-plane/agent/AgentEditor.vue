@@ -51,7 +51,7 @@
                   {{ t("agents.editor.instanceWorkspace") }} · {{ instanceWorkspacePath }}
                 </ControlPlaneSelectItem>
                 <ControlPlaneSelectItem v-for="folder in folderCandidates" :key="folder.id" :value="folder.id">
-                  {{ nodeLocalFolderDisplayName(folder) }} · {{ folder.path }}
+                  {{ nodeLocalFolderDisplayName(folder, locale) }} · {{ folder.path }}
                 </ControlPlaneSelectItem>
                 <ControlPlaneSelectItem v-if="canRegisterFolder" :value="chooseFolderValue">{{ t("agents.editor.chooseFolder") }}</ControlPlaneSelectItem>
               </ControlPlaneSelect>
@@ -204,7 +204,7 @@ const emit = defineEmits<{
   "update:open": [open: boolean];
 }>();
 
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const modelsQuery = useModelsQuery();
 
 const draft = ref<AgentEditorDraft>(emptyAgentDraft());

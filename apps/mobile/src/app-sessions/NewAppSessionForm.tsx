@@ -33,7 +33,7 @@ type Props = {
 
 export function NewAppSessionForm(props: Props) {
   const { colors } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [selectionRowWidth, setSelectionRowWidth] = useState<number>();
   const apps = props.apps ?? props.selectedInstance?.availableApps ?? [];
   const selectedApp = apps.find((app) => app.id === props.selectedAppId);
@@ -47,7 +47,7 @@ export function NewAppSessionForm(props: Props) {
   }));
   const folderOptions: AnchoredSelectOption[] = [
     { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
-    ...props.folders.map((folder) => ({ description: folder.path, label: controlPlaneLocalFolderDisplayName(folder), systemImage: 'folder' as const, value: folder.id })),
+    ...props.folders.map((folder) => ({ description: folder.path, label: controlPlaneLocalFolderDisplayName(folder, locale), systemImage: 'folder' as const, value: folder.id })),
   ];
 
   return <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} contentContainerStyle={styles.screenContent}>

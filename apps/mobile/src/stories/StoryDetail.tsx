@@ -222,6 +222,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
         storyId: story.id,
         ...(newSessionDefaults.cwd ? { cwd: newSessionDefaults.cwd } : {}),
         ...(newSessionDefaults.cwdFolderId ? { cwdFolderId: newSessionDefaults.cwdFolderId } : {}),
+        ...(newSessionDefaults.sessionId ? { worktreeSessionId: newSessionDefaults.sessionId } : {}),
       },
     });
   };

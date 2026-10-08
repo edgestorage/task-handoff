@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "assistant",
+  "name": "Assistant",
+  "localizedNames": {
+    "en-US": "Assistant",
+    "zh-CN": "助理"
+  },
+  "runtimes": [
+    "local"
+  ],
+  "skill": {
+    "name": "taskhandoff"
+  }
+}

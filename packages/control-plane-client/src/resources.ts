@@ -72,13 +72,37 @@ export const ControlPlaneNodeLocalFolderSchema = z.object({
   nodeId: z.string().trim().min(1).max(120),
   name: z.string().trim().min(1).max(160),
   path: z.string().trim().min(1).max(4096),
+  /** `builtin` folders are materialized by the node agent from a product-shipped built-in project; absent means `user`. */
+  origin: z.enum(["user", "builtin"]).optional(),
+  /** Locale-keyed names for product-shipped built-in projects; `name` is the fallback. */
+  localizedNames: z.record(z.string(), z.string()).optional(),
   labels: z.record(z.string(), z.string()),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 }).passthrough();
 export type ControlPlaneNodeLocalFolder = z.infer<typeof ControlPlaneNodeLocalFolderSchema>;
 
-export function controlPlaneLocalFolderDisplayName(folder: Pick<ControlPlaneNodeLocalFolder, "name" | "path">) {
+/**
+ * Resolves a locale-keyed display name the same way the Web UI resolves image
+ * descriptions: exact locale, then language, then no match so the caller can
+ * fall back to the canonical `name`.
+ */
+export function resolveLocalizedDisplayName(entries: Record<string, string> | undefined, locale: string | undefined) {
+  if (!entries || !locale) return undefined;
+  const normalized = locale.trim().replaceAll("_", "-").toLowerCase();
+  if (!normalized) return undefined;
+  const language = normalized.split("-")[0];
+  const pairs = Object.entries(entries);
+  return pairs.find(([key]) => key.toLowerCase() === normalized)?.[1]
+    || pairs.find(([key]) => key.toLowerCase() === language)?.[1];
+}
+
+export function controlPlaneLocalFolderDisplayName(
+  folder: Pick<ControlPlaneNodeLocalFolder, "name" | "path"> & { localizedNames?: Record<string, string> },
+  locale?: string,
+) {
+  const localized = resolveLocalizedDisplayName(folder.localizedNames, locale);
+  if (localized) return localized;
   const name = folder.name.trim();
   if (name) return name;
   const path = folder.path.replace(/[\\/]+$/u, "");

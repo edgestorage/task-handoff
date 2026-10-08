@@ -1,5 +1,9 @@
 export const auth = {
   controlPlane: "Control Plane",
+  brandTagline: "A unified control plane for AI workspaces across local and remote machines.",
+  linkWebsite: "Website",
+  linkDocs: "Documentation",
+  linkGithub: "GitHub",
   loading: "Loading",
   createAdmin: "Create admin",
   signIn: "Sign in",

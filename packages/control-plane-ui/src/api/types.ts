@@ -617,6 +617,10 @@ export type NodeLocalFolder = {
   nodeId: string;
   name: string;
   path: string;
+  /** `builtin` folders are materialized by the node agent from a product-shipped built-in project; absent means `user`. */
+  origin?: "user" | "builtin";
+  /** Locale-keyed names for product-shipped built-in projects; `name` is the fallback. */
+  localizedNames?: Record<string, string>;
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;

@@ -24,7 +24,7 @@ test("compact detail prompt keeps 8px before its divider", () => {
 });
 
 test("project rows show folder paths", () => {
-  assert.match(panel, /class="session-ai-project-item session-ai-project-folder-item"[\s\S]*class="session-ai-project-folder-copy"[\s\S]*<strong>\{\{ folder\.name \}\}<\/strong>[\s\S]*<small>\{\{ folder\.path \}\}<\/small>/);
+  assert.match(panel, /class="session-ai-project-item session-ai-project-folder-item"[\s\S]*class="session-ai-project-folder-copy"[\s\S]*<strong>\{\{ nodeLocalFolderDisplayName\(folder, locale\) \}\}<\/strong>[\s\S]*<small>\{\{ folder\.path \}\}<\/small>/);
   assert.match(styles, /\.session-ai-project-folder-item\)[^{]*\{[^}]*min-height: 44px;/s);
   assert.match(styles, /\.session-ai-project-item\)[^{]*\{[^}]*font-weight: 500 !important;/s);
   assert.match(styles, /\.session-ai-project-folder-copy > strong\) \{ font-weight: 500; \}/);

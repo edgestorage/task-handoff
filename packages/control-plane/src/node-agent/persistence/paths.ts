@@ -6,6 +6,8 @@ export type NodeAgentStorePaths = {
   identityPath: string;
   settingsPath: string;
   localFoldersDir: string;
+  /** Host location of built-in projects materialized by this node agent. */
+  builtinProjectTargetsDir: string;
   nodeRuntimesDir: string;
   controlledInstancesDir: string;
   environmentTemplatesDir: string;
@@ -39,6 +41,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     identityPath: path.join(root, "identity.json"),
     settingsPath: path.join(root, "runtime-settings.json"),
     localFoldersDir: path.join(root, "local-folders"),
+    builtinProjectTargetsDir: path.join(root, "builtin-projects"),
     nodeRuntimesDir: path.join(root, "node-runtimes"),
     controlledInstancesDir: path.join(root, "controlled-instances"),
     environmentTemplatesDir: path.join(root, "environment-templates"),

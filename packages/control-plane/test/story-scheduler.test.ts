@@ -28,7 +28,7 @@ async function fixture(
   };
   const state = {
     node: { id: "node_1" }, requireInstance: () => instance, listInstances: () => [instance],
-    localFolders: { get: () => undefined }, requireRuntime: () => ({ type: "local" }),
+    localFolders: { get: () => undefined }, resolveLocalFolder: () => undefined, requireRuntime: () => ({ type: "local" }),
   };
   const stories = { automationContext: async () => ({
     id: "story_1",

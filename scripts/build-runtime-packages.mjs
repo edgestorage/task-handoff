@@ -3,13 +3,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, Option } from "commander";
 import { list } from "tar";
 import { runtimePackages } from "../runtime-packages.config.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const { resolveFeatureFlags } = createRequire(import.meta.url)("../shared/feature-flags.cjs");
+const builtinProjects = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
 const npmCache = path.join(os.tmpdir(), "task-handoff-npm-cache");
 const targetNames = Object.keys(runtimePackages);
 const cliArgv = process.argv[2] === "--" ? [...process.argv.slice(0, 2), ...process.argv.slice(3)] : process.argv;
@@ -47,6 +50,25 @@ function requiredExecutablePaths(name, definition) {
   ];
 }
 
+/**
+ * Non-executable files that must ship with a runtime package. The built-in
+ * project catalog only ships when the `builtinProjects` feature flag enabled
+ * this build, so the required manifests are derived from what the build
+ * materialized instead of naming one specific project.
+ */
+function requiredAssetPaths(name) {
+  if (name !== "node-agent" || !resolveFeatureFlags().builtinProjects) return [];
+  const source = path.join(root, "builtin-projects");
+  const manifests = fs.existsSync(source)
+    ? fs.readdirSync(source, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()
+        && fs.existsSync(path.join(source, entry.name, builtinProjects.BUILTIN_PROJECT_MANIFEST_FILE)))
+      .map((entry) => `builtin-projects/${entry.name}/${builtinProjects.BUILTIN_PROJECT_MANIFEST_FILE}`)
+    : [];
+  if (!manifests.length) throw new Error("Built-in projects are enabled but no project was materialized; run node scripts/sync-builtin-projects.mjs first.");
+  return manifests;
+}
+
 async function verifyArchiveExecutables(name, definition, archivePath) {
   const requiredNativeFiles = definition.bundledNativeDependencies?.includes("node-pty")
     ? [
@@ -54,7 +76,7 @@ async function verifyArchiveExecutables(name, definition, archivePath) {
         "node_modules/node-pty/prebuilds/linux-arm64/pty.node",
       ]
     : [];
-  const missing = new Set([...requiredExecutablePaths(name, definition), ...requiredNativeFiles]);
+  const missing = new Set([...requiredExecutablePaths(name, definition), ...requiredAssetPaths(name), ...requiredNativeFiles]);
   await list({
     file: archivePath,
     strict: true,
@@ -67,11 +89,18 @@ async function verifyArchiveExecutables(name, definition, archivePath) {
       missing.delete(relativePath);
     },
   });
-  if (missing.size) throw new Error(`Runtime package ${name} archive is missing executables: ${[...missing].join(", ")}`);
+  if (missing.size) throw new Error(`Runtime package ${name} archive is missing required files: ${[...missing].join(", ")}`);
 }
 
 for (const name of selected) {
   fs.rmSync(path.join(root, "release", "npm", name), { recursive: true, force: true });
+}
+
+// Built-in projects are pulled from the published skill release at build time,
+// so the packaged catalog always follows the product source instead of a
+// committed snapshot.
+if (selected.includes("node-agent")) {
+  run(process.execPath, ["scripts/sync-builtin-projects.mjs"]);
 }
 
 if (selected.includes("control-plane")) {

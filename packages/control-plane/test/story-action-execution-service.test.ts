@@ -54,6 +54,7 @@ function fixture(overrides: {
       return instance;
     },
     localFolders: { get: (id: string) => id === "folder_1" ? { id, path: "/host/workspace/packages/app" } : undefined },
+    resolveLocalFolder: (id: string) => id === "folder_1" ? { id, path: "/host/workspace/packages/app" } : undefined,
     requireRuntime: () => ({ type: "docker" }),
   };
   const stories = { automationContext: async (id: string) => id === story.id ? story : undefined };

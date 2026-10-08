@@ -67,37 +67,30 @@ test("model catalog is pushed to the instance even while it is not marked reacha
   assert.equal(state.materialized.length, 1);
 });
 
-test("the live model environment carries the OpenCode config only for instances that declare the capability", async () => {
-  for (const declared of [false, true]) {
-    const state = instanceState({
-      capabilities: {
-        features: {
-          privateModelCatalog: true,
-          ...(declared ? { managedModelEnvironment: { openCodeConfig: true } } : {}),
-        },
-      },
-    });
-    const openCodeConfig = JSON.stringify({ model: "task-handoff-mdl_fresh/gpt-5.6-sol", provider: {} });
-    state.resolvedAssignedModelEnvironment = () => ({
-      TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol",
-      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig,
-    });
-    const bodies = [];
-    const fetchImpl = async (url, init = {}) => {
-      if (new URL(String(url)).pathname === "/api/internal/model-environment") bodies.push(JSON.parse(String(init.body)));
-      return jsonResponse({ data: { applied: true } });
-    };
+test("the live model environment is projected with the current schema", async () => {
+  const state = instanceState();
+  const openCodeConfig = JSON.stringify({ model: "task-handoff-mdl_fresh/gpt-5.6-sol", provider: {} });
+  state.resolvedAssignedModelEnvironment = () => ({
+    TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol",
+    TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig,
+  });
+  const bodies = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (new URL(String(url)).pathname === "/api/internal/model-environment") bodies.push(JSON.parse(String(init.body)));
+    return jsonResponse({ data: { applied: true } });
+  };
 
-    const synced = await syncAssignedModelEnvironment(fetchImpl, state, state.instance.id, undefined, resolveLocalInstance);
+  const synced = await syncAssignedModelEnvironment(fetchImpl, state, state.instance.id, undefined, resolveLocalInstance);
 
-    assert.equal(synced, true);
-    assert.deepEqual(bodies, [declared
-      ? { TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol", TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig }
-      : { TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol" }]);
-    // The materialized private config and launch environment keep the full
-    // environment; only the strict live route is narrowed for older builds.
-    assert.equal(state.materialized[0][2].TASK_HANDOFF_OPENCODE_CONFIG_CONTENT, openCodeConfig);
-  }
+  assert.equal(synced, true);
+  // node-agent treats the instance as the same internal version domain: the live
+  // push, the materialized private config, and the launch environment all carry
+  // the same current-schema environment.
+  assert.deepEqual(bodies, [{
+    TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol",
+    TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig,
+  }]);
+  assert.equal(state.materialized[0][2].TASK_HANDOFF_OPENCODE_CONFIG_CONTENT, openCodeConfig);
 });
 
 test("a failed catalog push reports the snapshot the instance actually holds", async () => {
@@ -136,7 +129,7 @@ test("a failed catalog push reports the snapshot the instance actually holds", a
   assert.equal(JSON.stringify(warnings).includes("secret"), false);
 });
 
-test("instances without the private catalog route are left on the environment sync", async () => {
+test("a missing catalog route is reported instead of being read as convergence", async () => {
   const state = instanceState();
   const warnings = [];
   let diagnosticReads = 0;
@@ -156,9 +149,13 @@ test("instances without the private catalog route are left on the environment sy
     resolveLocalInstance,
   );
 
-  assert.equal(synced, true);
-  assert.equal(warnings.length, 0);
-  assert.equal(diagnosticReads, 0);
+  // The instance and the node agent are one internal version domain, so a
+  // missing catalog route is a real failure: it must stay unclaimed and visible.
+  assert.equal(synced, false);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].message, "node instance model catalog live sync deferred");
+  assert.equal(warnings[0].data.statusCode, 404);
+  assert.equal(diagnosticReads, 1);
 });
 
 test("an unreachable instance web endpoint is reported without claiming convergence", async () => {

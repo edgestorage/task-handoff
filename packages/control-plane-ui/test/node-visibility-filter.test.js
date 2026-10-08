@@ -166,7 +166,7 @@ test("Story AI sessions open a supported terminal in the session working directo
 
 test("Story AI sessions derive cross-instance trees and sort by each root's own user message", () => {
   assert.match(storyView, /deriveAiSessionForest\(storySessionRecords\.value, \{ orderBy: "last-user-message" \}\)/);
-  assert.match(storyView, /root\.session\.storyId === story\.id && instance\?\.node\?\.id === story\.ownerNodeId/);
+  assert.match(storyView, /storySessionRootsInForest\(\s*storySessionForest\.value,\s*story\.id,\s*instancesForStory\(story\)\.map\(\(instance\) => instance\.id\),\s*\)/);
   assert.match(storyView, /flattenAiSessionForest\(\{[\s\S]*roots,[\s\S]*expandedSessionIds: expandedStorySessionIds\.value/);
   assert.match(storyView, /Date\.parse\(root\.session\.lastUserMessageAt/);
   assert.match(storyView, /const sessionCount = \(story: Story\) => storySessionRootsFor\(story\)\.length;/);

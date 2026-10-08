@@ -54,22 +54,19 @@ test("registration client fails closed only the Story tool domain on invalid res
   assert.match(access.diagnostic || "", /revision|policy/i);
 });
 
-test("registration client preserves the v0.0.32 Content-only compatibility profile", async () => {
+test("registration client fails the Story tool domain closed when the policy route is missing", async () => {
   const registration = client((async () => new Response(JSON.stringify({
     statusCode: 404,
     error: "Not Found",
     message: "Route not found",
   }), { status: 404, headers: { "content-type": "application/json" } })) as typeof fetch);
 
-  assert.deepEqual(await registration.resolveStoryAgentToolsForStory("story_one"), {
-    storyId: "story_one",
-    enabledTools: ["story_list_content", "story_get_content", "story_set_content"],
-    source: "legacy-v0.0.32",
-  });
-  assert.equal(registration.storyAgentToolCapability(), "legacy-content-only");
+  const access = await registration.resolveStoryAgentToolsForStory("story_one");
+  assert.equal(access.source, "fail-closed");
+  assert.deepEqual(access.enabledTools, []);
 });
 
-test("registration client does not treat a structured missing Story as a legacy node-agent", async () => {
+test("registration client keeps a structured missing Story in the same fail-closed domain", async () => {
   const registration = client((async () => new Response(JSON.stringify({
     error: { code: "STORY_NOT_FOUND", message: "Story was not found." },
   }), { status: 404, headers: { "content-type": "application/json" } })) as typeof fetch);

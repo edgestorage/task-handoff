@@ -27,16 +27,24 @@ export function initialAiSessionWorkspaceState(
   instanceId: string | undefined,
   folderId: string | undefined,
   workspace: RepositoryAiSessionWorkspace,
+  inheritedWorktreeId?: string,
 ): AiSessionWorkspaceSelectionState {
+  // The inherited worktree comes from the session's own repository context; it only
+  // takes effect when this folder's workspace proves it is selectable here. The
+  // folder's own worktree stays in `current-folder` mode.
+  const inherited = inheritedWorktreeId
+    ? workspace.worktrees.find((candidate) => candidate.id === inheritedWorktreeId && !candidate.isCurrent && candidate.canCreateAiSession)
+    : undefined;
   return {
     instanceId,
     folderId,
     workspace,
-    mode: 'current-folder',
+    mode: inherited ? 'worktree' : 'current-folder',
     branch: workspace.currentBranch
       || workspace.branches.find((candidate) => candidate.current)?.name
       || workspace.branches.find((candidate) => candidate.currentFolderSelectable)?.name,
-    worktreeId: workspace.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
+    worktreeId: inherited?.id
+      || workspace.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
       || workspace.worktrees.find((candidate) => candidate.canCreateAiSession)?.id,
   };
 }

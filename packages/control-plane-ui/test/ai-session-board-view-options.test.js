@@ -40,7 +40,7 @@ test("AI board node and agent groups use authoritative identifiers", () => {
 test("AI board path groups resolve the authoritative local-folder display name", () => {
   assert.match(board, /props\.nodeLocalFoldersByNodeId\[card\.instance\.nodeId\]/);
   assert.match(board, /candidate\.id === card\.session\.cwdFolderId/);
-  assert.match(board, /const folderName = folder \? nodeLocalFolderDisplayName\(folder\) : undefined/);
+  assert.match(board, /const folderName = folder \? nodeLocalFolderDisplayName\(folder, locale\.value as string\) : undefined/);
   assert.match(board, /label: folderName \|\| path \|\| t\("sessions\.board\.unknownPath"\)/);
 });
 

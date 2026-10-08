@@ -394,7 +394,7 @@ export const settings = {
     serverUpdateDescription: "Updates this control-plane server and its built-in node agent.", nodeAgentUpdateDescription: "Updates only this node agent. Other nodes update independently.", queuing: "Queuing", update: "Update",
     controlledInstances: "Controlled instances · {count}", instanceConvergenceDescription: "The node automatically converges every instance to the same product version.", noControlledInstances: "No controlled instances on this node",
     updateJobs: "Update jobs · {count}", refresh: "Refresh", nodeRollout: "Server update", unknown: "unknown", noUpdateJobs: "No managed update jobs on this node",
-    localFolderCount: "Local folders · {count}", adding: "Adding", add: "Add", noLocalFolders: "No local folders on this node", renameLocalFolder: "Rename", renameLocalFolderDescription: "Set the name shown for this folder in session groups and folder pickers without changing its path.",
+    localFolderCount: "Local folders · {count}", adding: "Adding", add: "Add", noLocalFolders: "No local folders on this node", renameLocalFolder: "Rename", builtinProject: "Built-in", renameLocalFolderDescription: "Set the name shown for this folder in session groups and folder pickers without changing its path.",
     dockerImages: "{name} Docker images · {count}", unknownSize: "unknown size", unknownAge: "unknown age", noImages: "No images loaded for this node",
     instanceCount: "Instances · {count}", instanceSettings: "Settings for {name}", settings: "Settings", noInstances: "No instances on this node",
     pairedKeys: "Paired control planes · {count}", pairedAt: "paired {time}", current: "Current", currentRequester: "Viewing control plane", inactive: "Inactive", paired: "Paired",

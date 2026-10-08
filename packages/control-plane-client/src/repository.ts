@@ -7,6 +7,7 @@ import {
   RepositoryMoveWorktreePreflightSchema,
   RepositoryMoveWorktreeRequestSchema,
   RepositoryMoveWorktreeResultSchema,
+  RepositoryContextSchema,
   RepositoryRemoveWorktreeRequestSchema,
   RepositoryRemoveWorktreeResultSchema,
   RepositoryWorktreesSchema,
@@ -70,6 +71,14 @@ export function createControlPlaneRepositoryApi(transport: ControlPlaneClientTra
   );
 
   return {
+    /**
+     * Repository context of a concrete session. The controlled instance resolves the
+     * session's own working directory, so this is the authority for which worktree a
+     * session runs in; clients must not infer that from worktree occupancy projections.
+     */
+    async context(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
+      return await requestData(`${repositorySessionBasePath(target)}/context`, RepositoryContextSchema, { signal: options?.signal });
+    },
     async worktrees(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
       try {
         return await requestData(repositoryWorkspaceResource(target, "worktrees"), RepositoryWorktreesSchema, { signal: options?.signal });

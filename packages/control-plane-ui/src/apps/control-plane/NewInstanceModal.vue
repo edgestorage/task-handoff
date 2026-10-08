@@ -118,6 +118,7 @@ import { useI18n } from "vue-i18n";
 import { supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { translateApiError } from "../../i18n/apiError";
 import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useAuthSessionQuery, useCurrentAccessQuery, useEnvironmentTemplatesQuery, useGitCredentialsQuery, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { nodeLocalFolderDisplayName } from "./nodePath";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -133,7 +134,7 @@ import { nodeFolderSelectionMode, nodePathName } from "./nodePath";
 import { useNodeFolderBrowser } from "./useNodeFolderBrowser";
 import { showControlPlaneToast } from "./useControlPlaneToasts";
 
-const { t } = useI18n();
+const { locale, t } = useI18n();
 
 const emit = defineEmits<{
   close: [];
@@ -302,7 +303,7 @@ const sourceSummary = computed(() => {
     return selectedProject.value?.name || t("instances.create.repository");
   }
   if (selectedLocalFolder.value) {
-    return selectedLocalFolder.value.name || selectedLocalFolder.value.path;
+    return nodeLocalFolderDisplayName(selectedLocalFolder.value, locale.value as string);
   }
   return localFolderPath.value || t("instances.create.localFolder");
 });

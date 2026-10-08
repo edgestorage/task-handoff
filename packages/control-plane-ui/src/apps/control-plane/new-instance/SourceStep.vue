@@ -73,7 +73,7 @@
           </TooltipProvider>
         </div>
         <ControlPlaneSelect :aria-label="t('instances.create.projectFolder')" :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
-          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ nodeLocalFolderDisplayName(folder) }} · {{ folder.path }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ nodeLocalFolderDisplayName(folder, locale) }} · {{ folder.path }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="chooseFolderValue">{{ t("instances.create.chooseFolder") }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </div>
@@ -115,7 +115,7 @@ import NodeFolderTree from "./NodeFolderTree.vue";
 import type { NodeFolderTreeNode } from "./nodeFolderTree";
 import type { NewProjectDraft, SourceDraft, SourceMode } from "./newInstanceTypes";
 
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const noCredentialValue = "__none__";
 
 const props = defineProps<{

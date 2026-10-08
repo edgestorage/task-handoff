@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import { ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
@@ -79,6 +79,56 @@ describe('<StoryInbox />', () => {
 
     await waitFor(() => expect(screen.getByText('Beta')).toBeTruthy());
     expect(list).toHaveBeenCalledTimes(2);
+    await screen.unmount();
+  });
+
+  test('keeps automatic Story refreshes silent and shows the indicator only for manual refresh', async () => {
+    const initial: Story = {
+      id: 'story-1', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    const updated = { ...initial, title: 'Beta', updatedAt: '2026-09-04T00:01:00.000Z' };
+    let resolveAutomatic!: (value: { stories: Story[]; unavailableNodeIds: string[] }) => void;
+    let resolveManual!: (value: { stories: Story[]; unavailableNodeIds: string[] }) => void;
+    const list = jest.fn()
+      .mockResolvedValueOnce({ stories: [initial], unavailableNodeIds: [] })
+      .mockImplementationOnce(() => new Promise<{ stories: Story[]; unavailableNodeIds: string[] }>((resolve) => { resolveAutomatic = resolve; }))
+      .mockImplementationOnce(() => new Promise<{ stories: Story[]; unavailableNodeIds: string[] }>((resolve) => { resolveManual = resolve; }));
+    let storyDomain: MobileControlPlaneDomain | undefined;
+    const register = jest.fn((domain: MobileControlPlaneDomain) => {
+      storyDomain = domain;
+      void domain.start(new AbortController().signal);
+      return jest.fn();
+    });
+    mockRuntime.mockReturnValue({
+      api: { stories: { list } },
+      coordinator: { register },
+    } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+    expect(screen.getByTestId('story-list').props.refreshing).toBe(false);
+
+    storyDomain!.onEvent({
+      type: 'story.changed',
+      topic: 'stories',
+      payload: { storyId: initial.id, nodeId: initial.ownerNodeId, change: 'updated' },
+    });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('story-list').props.refreshing).toBe(false);
+
+    await act(async () => { resolveAutomatic({ stories: [updated], unavailableNodeIds: [] }); });
+    await waitFor(() => expect(screen.getByText('Beta')).toBeTruthy());
+    expect(screen.getByTestId('story-list').props.refreshing).toBe(false);
+
+    await fireEvent(screen.getByTestId('story-list'), 'refresh');
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('story-list').props.refreshing).toBe(true);
+
+    await act(async () => { resolveManual({ stories: [updated], unavailableNodeIds: [] }); });
+    await waitFor(() => expect(screen.getByTestId('story-list').props.refreshing).toBe(false));
     await screen.unmount();
   });
 
@@ -204,10 +254,10 @@ describe('<StoryInbox />', () => {
       updatedAt: '2026-09-04T00:03:00.000Z',
       instances: [
         { instanceId: 'instance-a', streamId: 'stream-a', aiSessions: { updatedAt: '2026-09-04T00:01:00.000Z', sessions: [
-          { id: 'older', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/old', cwdFolderId: 'folder-old', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:01:00.000Z', unread: false },
+          { id: 'older', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/old', cwdFolderId: 'folder-old', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:01:00.000Z', lastUserMessageAt: '2026-09-04T00:01:00.000Z', unread: false },
         ] } },
         { instanceId: 'instance-b', streamId: 'stream-b', aiSessions: { updatedAt: '2026-09-04T00:02:00.000Z', sessions: [
-          { id: 'latest', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/latest', cwdFolderId: 'folder-latest', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:02:00.000Z', unread: false },
+          { id: 'latest', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/latest', cwdFolderId: 'folder-latest', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:02:00.000Z', lastUserMessageAt: '2026-09-04T00:02:00.000Z', unread: false },
         ] } },
       ],
     }));
@@ -219,6 +269,7 @@ describe('<StoryInbox />', () => {
 
     expect(onNewSession).toHaveBeenCalledWith(story, {
       instanceId: 'instance-b',
+      sessionId: 'latest',
       cwd: '/workspace/latest',
       cwdFolderId: 'folder-latest',
     });

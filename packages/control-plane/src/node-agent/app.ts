@@ -20,13 +20,7 @@ import {
   InstanceResourceMetricsEventType,
   sanitizeCrossVersionControlledInstanceHeartbeat,
   sanitizeCrossVersionControlledInstanceRegister,
-  supportsAiSessionAttachmentRetentionSettings,
-  supportsAiSessionFileSizeLimitSettings,
-  supportsAiSessionPersistenceSettings,
   supportsGitCliCredentialBroker,
-  supportsControlledInstancePrivateModelCatalog,
-  supportsControlledInstanceCodexManagedSettings,
-  supportsControlledInstanceOpenCodeEnvironment,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   UpdateControlledInstanceNodeAgentConnectionSchema,
   type BuildInfo,
@@ -44,6 +38,8 @@ import {
   type ExecutorContext,
 } from "./runtimes/docker.ts";
 import { materializeDockerBootstrapAssets } from "./runtimes/bootstrap-assets.ts";
+import { loadBuiltinProjectDefinitions, packagedBuiltinProjectsDir, type BuiltinProjectDefinition } from "./builtin-projects/assets.ts";
+import { createBuiltinProjectFolderProjection } from "./builtin-projects/catalog.ts";
 import { DockerImageService } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
@@ -212,6 +208,8 @@ export type CreateNodeAgentAppOptions = {
   fetchImpl?: typeof fetch;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
+  /** Test-only built-in project catalog override. Production always reads the shipped bundle. */
+  builtinProjectsDir?: string;
   /** Test-only lock-path injection. Production always uses the host-user global lock. */
   localControlledInstanceLockPath?: string;
   resolveRuntimeArtifactRelease?: (version: string, platform: string, arch: string) => Promise<PublishedRuntimeArtifact>;
@@ -389,6 +387,26 @@ export async function syncControlledInstanceNodeAgentConnection(
   return "applied" as const;
 }
 
+/**
+ * Loads the built-in project catalog shipped with this node agent. The catalog
+ * is static for the process lifetime, so a missing or invalid bundle degrades to
+ * a diagnostic without built-in folders instead of failing node-agent startup.
+ */
+function loadBuiltinProjectsForApp(loggers: NodeAgentLifecycleLoggers, sourceDir?: string): BuiltinProjectDefinition[] | undefined {
+  const catalogDir = sourceDir ?? packagedBuiltinProjectsDir();
+  try {
+    const definitions = loadBuiltinProjectDefinitions(catalogDir);
+    if (definitions.length) return definitions;
+    loggers.diagnostic({ sourceDir: catalogDir }, "node agent built-in project catalog is empty");
+  } catch (error) {
+    loggers.diagnostic({
+      sourceDir: catalogDir,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node agent built-in project catalog unavailable");
+  }
+  return undefined;
+}
+
 async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: ControlledInstance, action: "start" | "restart", loggers: NodeAgentLifecycleLoggers, resolveInstanceWeb: ResolveInstanceWeb) {
   if (!instance.config.autoImportAgentConfigs) {
     loggers.diagnostic({ instanceId: instance.id, action }, "node instance config auto-import skipped");
@@ -411,11 +429,6 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
       loggers.warn({ instanceId: instance.id, action, preset, error: error instanceof Error ? error.message : String(error) }, "node instance config auto-import failed");
     }
   }
-}
-
-function withoutOpenCodeModelEnvironment(environment: Record<string, string>) {
-  const { TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: _openCodeConfig, ...flatEnvironment } = environment;
-  return flatEnvironment;
 }
 
 export async function syncAssignedModelEnvironment(
@@ -445,14 +458,6 @@ export async function syncAssignedModelEnvironment(
     }, "node instance model environment live sync deferred");
     return false;
   }
-  // Compatibility for v0.0.35: its managed model environment route is strict and
-  // rejects the OpenCode config key, which would fail the whole environment sync
-  // and skip the catalog push. Older builds still receive the key through the
-  // materialized private config and launch environment; only the live push is
-  // narrowed to the flat key set until the instance declares the capability.
-  const liveModelEnvironment = supportsControlledInstanceOpenCodeEnvironment(instance.capabilities)
-    ? modelEnvironment
-    : withoutOpenCodeModelEnvironment(modelEnvironment);
   // Materializing the private config to disk is not enough: the running instance
   // keeps its own in-memory catalog, so a skipped live push leaves it resolving
   // models against a stale catalog while AI session resume/send reports those
@@ -475,7 +480,7 @@ export async function syncAssignedModelEnvironment(
         "content-type": "application/json",
         authorization: `Bearer ${instance.registrationToken}`,
       },
-      body: JSON.stringify(liveModelEnvironment),
+      body: JSON.stringify(modelEnvironment),
     }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
   } catch (error) {
     warn?.({
@@ -493,7 +498,6 @@ export async function syncAssignedModelEnvironment(
     }, "node instance model environment live sync deferred");
     return false;
   }
-  if (!supportsControlledInstancePrivateModelCatalog(instance.capabilities)) return true;
   // The environment push alone is not convergence for instances that resolve
   // models from the private catalog: a rejected catalog push leaves the running
   // process on the snapshot it started with, so report it as unsynced and let
@@ -549,10 +553,6 @@ async function pushInstancePrivateModelCatalog(
     return false;
   }
   if (response.ok) return true;
-  // Compatibility for controlled instances without the private catalog route:
-  // they consume assigned models through the environment push only, so there is
-  // no catalog convergence left to wait for.
-  if (response.status === 404) return true;
   const diagnostic = await readInstanceModelCatalogDiagnostic(fetchImpl, instanceBase, instance.registrationToken);
   warn?.({
     instanceId: instance.id,
@@ -882,12 +882,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   };
   const syncAiSessionPersistenceSettings = async (id: string) => {
     const instance = state.requireInstance(id);
-    if (!supportsAiSessionPersistenceSettings(instance.capabilities)
-      || instance.targetStatus !== "reachable"
+    if (instance.targetStatus !== "reachable"
       || !instance.registrationToken) return false;
-    const supportsAttachmentRetention = supportsAiSessionAttachmentRetentionSettings(instance.capabilities);
-    const supportsFileSizeLimit = supportsAiSessionFileSizeLimitSettings(instance.capabilities);
-    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${supportsAttachmentRetention ? instance.config.aiSessionAttachmentRetentionDays : "unsupported"}:${supportsFileSizeLimit ? instance.config.aiSessionMaxFileAttachmentBytes : "unsupported"}`;
+    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${instance.config.aiSessionAttachmentRetentionDays}:${instance.config.aiSessionMaxFileAttachmentBytes}`;
     if (aiSessionPersistenceSyncKeys.get(id) === syncKey) return true;
     let response: Response;
     try {
@@ -899,10 +896,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         },
         body: JSON.stringify({
           historyLimit: instance.config.aiSessionHistoryLimit,
-          // Compatibility for v0.0.21: omit this field unless the controlled instance advertises support.
-          ...(supportsAttachmentRetention ? { attachmentRetentionDays: instance.config.aiSessionAttachmentRetentionDays } : {}),
-          // Compatibility for v0.0.21: its strict settings schema rejects this additive field.
-          ...(supportsFileSizeLimit ? { maxFileAttachmentBytes: instance.config.aiSessionMaxFileAttachmentBytes } : {}),
+          attachmentRetentionDays: instance.config.aiSessionAttachmentRetentionDays,
+          maxFileAttachmentBytes: instance.config.aiSessionMaxFileAttachmentBytes,
         }),
       }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
     } catch (error) {
@@ -929,8 +924,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       instance.config.codexSettings,
     );
     if (!instance.config.codexSettings) return true;
-    if (!supportsControlledInstanceCodexManagedSettings(instance.capabilities)
-      || instance.targetStatus !== "reachable"
+    if (instance.targetStatus !== "reachable"
       || !instance.registrationToken) return false;
     try {
       const response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/codex-settings`, {
@@ -1414,6 +1408,38 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   };
 
+  // Built-in project content ships with this node agent and is materialized on
+  // this node's host file system, so the catalog is static for the process
+  // lifetime and the folders are derived from it: they are never persisted, and
+  // an operator can never own or delete them.
+  //
+  // A node without a local runtime has no use for a host directory, so it is not
+  // prepared there; a missing or mismatched bundle degrades to a diagnostic
+  // instead of failing startup or instance creation.
+  const builtinProjects = loadBuiltinProjectsForApp(lifecycleLoggers, options.builtinProjectsDir);
+  if (builtinProjects) {
+    const builtinFolders = createBuiltinProjectFolderProjection({
+      definitions: builtinProjects,
+      targetsDir: paths.builtinProjectTargetsDir,
+      nodeId,
+    });
+    state.attachBuiltinProjectFolders(builtinFolders);
+    if (state.nodeRuntimes.list().some((runtime) => runtime.type === "local")) {
+      for (const outcome of builtinFolders.prepare()) {
+        if (outcome.status === "failed") {
+          lifecycleLoggers.diagnostic({
+            projectId: outcome.projectId,
+            targetDir: outcome.targetDir,
+            errorCode: outcome.code,
+            error: outcome.message,
+          }, "builtin project initialization failed");
+          continue;
+        }
+        app.log.info({ projectId: outcome.projectId, status: outcome.status }, "builtin project ready");
+      }
+    }
+  }
+
   recoverySupervisor = new NodeAgentRecoverySupervisor({
     state,
     runtimeAdapters,
@@ -1734,12 +1760,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const runtime = state.requireRuntime(id);
       return state.checkRuntime(id, runtimeAdapters.forRuntime(runtime));
     },
-    listLocalFolders: () => state.localFolders.list(),
+    listLocalFolders: () => state.listLocalFolders(),
     listFolderPlaces: folderPlaces,
     listFolderTree,
     createLocalFolder: (input) => state.createLocalFolder(input),
     updateLocalFolder: (id, input) => state.updateLocalFolder(id, input),
-    deleteLocalFolder: (id) => state.localFolders.delete(id),
+    deleteLocalFolder: (id) => state.deleteLocalFolder(id),
   });
 
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);

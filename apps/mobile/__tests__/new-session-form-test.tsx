@@ -1,6 +1,7 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import type { ControlPlaneAiSessionSummary, ControlPlaneAiSessions } from '@task-handoff/control-plane-client';
 
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 import { initialAiSessionFolderId, storyAiSessionCreationDefaults } from '../src/ai-sessions/new-session-types';
@@ -25,26 +26,74 @@ const instance = {
 } as ControlPlaneInstanceDirectoryEntry;
 const node = { id: 'node-1', name: 'Mac Studio' } as ControlPlaneNodeDirectoryEntry;
 
-describe('<NewSessionForm />', () => {
-  test('inherits the latest Story session instance and folder like Web', () => {
-    const instances = [instance, { ...instance, id: 'instance-2' }];
-    const defaults = storyAiSessionCreationDefaults(instances, {
-      updatedAt: '2026-09-04T00:03:00.000Z',
-      instances: [{
-        instanceId: 'instance-2', streamId: 'stream-2', aiSessions: { updatedAt: '2026-09-04T00:03:00.000Z', sessions: [
-          { id: 'older', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/old', cwdFolderId: 'folder-old', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:01:00.000Z', unread: false },
-          { id: 'latest', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/mobile', cwdFolderId: 'folder-mobile', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:02:00.000Z', unread: false },
-        ] },
-      }],
-    }, 'story-1', 'node-1');
+function storySession(overrides: Partial<ControlPlaneAiSessionSummary> & { id: string }): ControlPlaneAiSessionSummary {
+  const startedAt = '2026-09-04T00:00:00.000Z';
+  return {
+    agent: 'codex',
+    creationSource: 'ai-session',
+    phase: 'unknown',
+    providerSessionId: overrides.id,
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    startedAt,
+    status: 'idle',
+    subAgents: [],
+    toolCallsSinceLastMessage: 0,
+    unread: false,
+    updatedAt: startedAt,
+    ...overrides,
+  };
+}
 
-    expect(defaults).toEqual({ instanceId: 'instance-2', cwd: '/workspace/mobile', cwdFolderId: 'folder-mobile' });
+function storySnapshot(sessions: ControlPlaneAiSessionSummary[], instanceId: string): ControlPlaneAiSessions {
+  const updatedAt = '2026-09-04T00:03:00.000Z';
+  return {
+    updatedAt,
+    instances: [{
+      instanceId,
+      streamId: `stream-${instanceId}`,
+      aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions, updatedAt },
+    }],
+  };
+}
+
+describe('<NewSessionForm />', () => {
+  test('inherits the newest Story session instance, folder, and worktree like Web', () => {
+    const instances = [instance, { ...instance, id: 'instance-2' }];
+    const snapshot = storySnapshot([
+      storySession({ id: 'older', agent: 'codex', storyId: 'story-1', cwd: '/workspace/old', cwdFolderId: 'folder-old', lastUserMessageAt: '2026-09-04T00:01:00.000Z' }),
+      storySession({ id: 'newest', agent: 'codex', storyId: 'story-1', cwd: '/workspace/old/wt', cwdFolderId: 'folder-old', lastUserMessageAt: '2026-09-04T00:05:00.000Z' }),
+    ], 'instance-2');
+
+    const defaults = storyAiSessionCreationDefaults(instances, snapshot, 'story-1', 'node-1');
+
+    expect(defaults).toEqual({ instanceId: 'instance-2', sessionId: 'newest', cwd: '/workspace/old/wt', cwdFolderId: 'folder-old' });
     expect(initialAiSessionFolderId([
-      { id: 'folder-mobile', cwdFolderId: 'folder-mobile', name: 'Mobile', path: '/host/projects/mobile' },
-    ], { ...defaults, runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-mobile');
+      { id: 'folder-old', cwdFolderId: 'folder-old', name: 'Old', path: '/host/projects/old' },
+    ], { ...defaults, runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-old');
     expect(initialAiSessionFolderId([
-      { id: 'folder-mobile', cwdFolderId: 'folder-mobile', name: 'Mobile', path: '/host/projects/mobile' },
-    ], { cwd: '/workspace/mobile', runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-mobile');
+      { id: 'folder-old', cwdFolderId: 'folder-old', name: 'Old', path: '/host/projects/old' },
+    ], { cwd: '/workspace/old', runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-old');
+  });
+
+  test('ignores Story sessions that were closed in the Story tree', () => {
+    const snapshot = storySnapshot([
+      storySession({ id: 'closed', agent: 'codex', storyId: 'story-1', cwd: '/workspace/closed', cwdFolderId: 'folder-closed', lastUserMessageAt: '2026-09-04T00:09:00.000Z', actions: { send: false, close: false } }),
+      storySession({ id: 'open', agent: 'codex', storyId: 'story-1', cwd: '/workspace/open', cwdFolderId: 'folder-open', lastUserMessageAt: '2026-09-04T00:02:00.000Z' }),
+    ], 'instance-2');
+
+    expect(storyAiSessionCreationDefaults([instance, { ...instance, id: 'instance-2' }], snapshot, 'story-1', 'node-1'))
+      .toEqual({ instanceId: 'instance-2', sessionId: 'open', cwd: '/workspace/open', cwdFolderId: 'folder-open' });
+  });
+
+  test('inherits only Story roots and falls back to the node instance when every session is closed', () => {
+    const forked = storySession({ id: 'subagent', agent: 'codex', storyId: 'story-1', cwd: '/workspace/subagent', lastUserMessageAt: '2026-09-04T00:10:00.000Z', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-root' } });
+    const root = storySession({ id: 'root', agent: 'codex', storyId: 'story-1', cwd: '/workspace/root', lastUserMessageAt: '2026-09-04T00:01:00.000Z', providerSessionId: 'provider-root' });
+    expect(storyAiSessionCreationDefaults([instance, { ...instance, id: 'instance-2' }], storySnapshot([root, forked], 'instance-2'), 'story-1', 'node-1'))
+      .toEqual({ instanceId: 'instance-2', sessionId: 'root', cwd: '/workspace/root', cwdFolderId: undefined });
+
+    const closedRoot = storySession({ id: 'root', agent: 'codex', storyId: 'story-1', actions: { close: false } });
+    expect(storyAiSessionCreationDefaults([instance, { ...instance, id: 'instance-2', nodeId: 'node-1' }], storySnapshot([closedRoot], 'instance-2'), 'story-1', 'node-1'))
+      .toEqual({ instanceId: 'instance-1' });
   });
 
   test('uses one mobile composer for context, prompt, permission, and send', async () => {

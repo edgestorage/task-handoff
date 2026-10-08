@@ -103,6 +103,24 @@ test("repository client validates create input and posts to the workspace route"
   await assert.rejects(() => api.createWorktree(target, { mode: "existing-branch", branchName: " ", expectedSnapshotId: "snapshot_one" }));
 });
 
+test("repository client reads a session's own context from the session route", async () => {
+  const { api, requests } = fixture(() => ({
+    availability: "available",
+    sessionKind: "ai-session",
+    sessionId: "session_one",
+    observedAt: "2026-09-04T00:00:00.000Z",
+    repositoryContextId: "context_one",
+    currentWorktree: worktree({ activeAiSessionIds: ["session_one"] }),
+  }));
+
+  const context = await api.context(legacySession);
+
+  assert.equal(context.currentWorktree?.id, "worktree_one");
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/instances/instance%20one/api/ai-sessions/session%20one/repository/context",
+  ]);
+});
+
 test("repository client falls back to the legacy session route on 404", async () => {
   const { api, requests } = fixture((path) => (
     path.startsWith("/api/") ? notFound() : worktreesPayload()

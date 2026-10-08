@@ -3,13 +3,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
 import { exactInstalledDependencies } from "./runtime-dependency-versions.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
+const { resolveFeatureFlags } = require("../shared/feature-flags.cjs");
+const builtinProjects = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const program = new Command()
   .name("prepare-runtime-packages")
@@ -102,6 +104,20 @@ for (const [name, definition] of selected) {
     for (const standalone of definition.standaloneInputs || []) {
       copyLinuxExecutable(path.join(root, "dist", "runtime-packages", name, standalone.entryFile), path.join(dockerAssetsDir, standalone.entryFile));
     }
+    // Built-in project content is materialized on the host, so it ships with the
+    // node agent package and is verified at startup against its manifest digest.
+    // The `builtinProjects` feature flag owns whether the feature ships at all:
+    // without it the package carries no catalog and the node agent offers no
+    // built-in folder.
+    const builtinProjectsDir = path.join(packageDir, "builtin-projects");
+    fs.rmSync(builtinProjectsDir, { recursive: true, force: true });
+    if (resolveFeatureFlags().builtinProjects) {
+      const builtinProjectsSource = path.join(root, "builtin-projects");
+      if (!builtinProjects.holdsBuiltinProjects(builtinProjectsSource)) {
+        throw new Error("Built-in projects are enabled but no project was materialized; run node scripts/sync-builtin-projects.mjs first.");
+      }
+      fs.cpSync(builtinProjectsSource, builtinProjectsDir, { recursive: true });
+    }
     const bundledRuntimeDir = path.join(packageDir, "runtime-artifacts");
     fs.rmSync(bundledRuntimeDir, { recursive: true, force: true });
     const runtimeArtifactSource = path.join(root, "release", "runtime-artifacts");
@@ -125,6 +141,7 @@ for (const [name, definition] of selected) {
       ...(definition.input ? ["dist"] : []),
       ...(definition.uiDir ? ["ui"] : []),
       ...(name === "node-agent" ? ["docker"] : []),
+      ...(name === "node-agent" && fs.existsSync(path.join(packageDir, "builtin-projects")) ? ["builtin-projects"] : []),
       ...(name === "node-agent" && fs.existsSync(path.join(packageDir, "runtime-artifacts")) ? ["runtime-artifacts"] : []),
       "README.md",
       "LICENSE",

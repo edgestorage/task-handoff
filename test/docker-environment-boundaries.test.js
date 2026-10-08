@@ -117,93 +117,100 @@ test("private instance config is atomically materialized with restricted permiss
     assert.equal(value.environment.OPENAI_API_KEY, "model-secret");
     assert.equal(fs.statSync(store.filePath("inst_one")).mode & 0o777, 0o600);
     assert.equal(fs.statSync(path.dirname(store.filePath("inst_one"))).mode & 0o777, 0o700);
-    // Compatibility for v0.0.34: legacy containers keep their single-file bind mount.
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).mode & 0o777, 0o600);
-    assert.deepEqual(JSON.parse(fs.readFileSync(store.legacyFilePath("inst_one"), "utf8")), JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")));
     store.delete("inst_one");
     assert.equal(fs.existsSync(store.filePath("inst_one")), false);
-    assert.equal(fs.existsSync(store.legacyFilePath("inst_one")), false);
     assert.equal(fs.existsSync(path.dirname(store.filePath("inst_one"))), false);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test("private instance config keeps the legacy mount inode and skips unchanged rewrites", () => {
+test("private instance config skips unchanged rewrites", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-rewrite-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
     store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
-    const legacyInode = fs.statSync(store.legacyFilePath("inst_one")).ino;
     const newInode = fs.statSync(store.filePath("inst_one")).ino;
     const stored = store.inspectMaterialized("inst_one");
 
     const unchanged = store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
     // Runtime convergence materializes before every start/restart; unchanged
-    // payloads must not touch either layout.
+    // payloads must not touch the layout on disk.
     assert.equal(unchanged.updatedAt, stored.updatedAt);
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).ino, legacyInode);
     assert.equal(fs.statSync(store.filePath("inst_one")).ino, newInode);
 
     store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "rotated-secret" });
-    // The legacy file is rewritten in place: replacing it would invalidate the
-    // bind mount of containers created before the directory mount.
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).ino, legacyInode);
     assert.equal(store.inspectMaterialized("inst_one").environment.OPENAI_API_KEY, "rotated-secret");
-    assert.equal(JSON.parse(fs.readFileSync(store.legacyFilePath("inst_one"), "utf8")).environment.OPENAI_API_KEY, "rotated-secret");
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test("private instance config materializes the directory layout for legacy-only instances", () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-legacy-only-"));
+test("private instance config ignores the retired single-file layout", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-retired-"));
   try {
-    const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
-    // Compatibility for v0.0.34: an instance created by that release only has
-    // the single-file layout on disk.
-    fs.mkdirSync(path.dirname(store.legacyFilePath("inst_one")), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(store.legacyFilePath("inst_one"), `${JSON.stringify({
+    const paths = nodeAgentStorePaths(dataDir);
+    const store = new InstancePrivateConfigStore(paths);
+    // node-agent treats controlled instances as the same internal version
+    // domain, so a container created before the directory mount is neither read
+    // nor migrated from its retired single-file layout.
+    fs.mkdirSync(paths.instancePrivateConfigsDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_one.json"), `${JSON.stringify({
       version: 1,
       instanceId: "inst_one",
       instanceCredential: "registration-secret",
       environment: { OPENAI_API_KEY: "model-secret" },
       updatedAt: timestamp,
     }, null, 2)}\n`, { mode: 0o600 });
-    const legacyInode = fs.statSync(store.legacyFilePath("inst_one")).ino;
 
-    // A recreated container mounts the per-instance directory, so the new
-    // layout must exist even when the payload itself did not change.
+    assert.equal(store.inspectMaterialized("inst_one"), undefined);
+
     store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
-    assert.equal(fs.statSync(store.filePath("inst_one")).mode & 0o777, 0o600);
     assert.equal(JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")).instanceCredential, "registration-secret");
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).ino, legacyInode);
-    assert.deepEqual(JSON.parse(fs.readFileSync(store.legacyFilePath("inst_one"), "utf8")), JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")));
-
-    const newInode = fs.statSync(store.filePath("inst_one")).ino;
-    store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
-    assert.equal(fs.statSync(store.filePath("inst_one")).ino, newInode);
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).ino, legacyInode);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test("private instance config recovers a torn directory layout from the legacy file", () => {
+test("private instance config repairs a torn current layout on the next materialize", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-torn-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
     store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
     fs.writeFileSync(store.filePath("inst_one"), "", { mode: 0o600 });
 
-    // Reads fall back to the healthy legacy layout instead of failing startup.
-    assert.equal(store.inspectMaterialized("inst_one").instanceCredential, "registration-secret");
+    // No sibling layout masks a torn current file.
+    assert.throws(() => store.inspectMaterialized("inst_one"));
 
-    // Materialization repairs the directory layout and keeps the legacy inode.
-    const legacyInode = fs.statSync(store.legacyFilePath("inst_one")).ino;
     store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
     assert.equal(JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")).environment.OPENAI_API_KEY, "model-secret");
-    assert.equal(fs.statSync(store.legacyFilePath("inst_one")).ino, legacyInode);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("private instance config reports structured errors for missing credentials and identity mismatch", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-errors-"));
+  try {
+    const paths = nodeAgentStorePaths(dataDir);
+    const store = new InstancePrivateConfigStore(paths);
+    assert.throws(
+      () => store.materialize("inst_one", undefined, {}),
+      (error) => error.code === "INSTANCE_PRIVATE_CONFIG_CREDENTIAL_MISSING" && error.statusCode === 409,
+    );
+
+    fs.mkdirSync(path.dirname(store.filePath("inst_one")), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(store.filePath("inst_one"), `${JSON.stringify({
+      version: 1,
+      instanceId: "inst_other",
+      instanceCredential: "registration-secret",
+      environment: {},
+      updatedAt: timestamp,
+    }, null, 2)}\n`, { mode: 0o600 });
+    assert.throws(
+      () => store.inspectMaterialized("inst_one"),
+      (error) => error.code === "INSTANCE_PRIVATE_CONFIG_IDENTITY_MISMATCH" && error.statusCode === 409,
+    );
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -232,7 +239,7 @@ test("private instance config preserves managed Codex settings for restart recov
 
     const restored = new InstancePrivateConfigStore(paths).inspectMaterialized("inst_one");
     assert.deepEqual(restored.codexSettings, settings);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(paths.instancePrivateConfigsDir, "inst_one.json"), "utf8")).codexSettings, settings);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(paths.instancePrivateConfigsDir, "inst_one", "private-config.json"), "utf8")).codexSettings, settings);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -241,11 +248,11 @@ test("private instance config preserves managed Codex settings for restart recov
 test("Docker entrypoints project managed Codex settings before dropping privileges", () => {
   const source = fs.readFileSync(path.join(__dirname, "../docker/entrypoint.sh"), "utf8");
   assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
-  // The container reads the private config from the directory mount, the
-  // explicit env override, or the legacy single-file path, in that order.
+  // The container reads the private config from the directory mount or the
+  // explicit env override.
   assert.match(source, /private_config_default_path="\/run\/task-handoff\/private\/private-config\.json"/);
-  assert.match(source, /private_config_legacy_path="\/run\/task-handoff\/instance-private-config\.json"/);
-  assert.match(source, /for candidate in "\$\{TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-\}" "\$\{private_config_default_path\}" "\$\{private_config_legacy_path\}"/);
+  assert.match(source, /for candidate in "\$\{TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-\}" "\$\{private_config_default_path\}"/);
+  assert.equal(source.includes("instance-private-config.json"), false);
 });
 
 test("entrypoint private config loading tolerates deferred files and keeps only identity mandatory", async () => {
@@ -349,23 +356,20 @@ test("entrypoint private config loading tolerates deferred files and keeps only 
   }
 });
 
-test("legacy private registration fields remain readable for startup migration", () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-migration-"));
+test("legacy private registration field remains readable in the current layout", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-registration-token-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
-    store.init();
-    fs.writeFileSync(store.legacyFilePath("inst_one"), JSON.stringify({
+    fs.mkdirSync(path.dirname(store.filePath("inst_one")), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(store.filePath("inst_one"), `${JSON.stringify({
       version: 1,
       instanceId: "inst_one",
       registrationToken: "legacy-secret",
       environment: {},
       updatedAt: timestamp,
-    }));
+    }, null, 2)}\n`, { mode: 0o600 });
 
     assert.equal(store.inspectMaterialized("inst_one").instanceCredential, "legacy-secret");
-    store.init();
-    assert.equal(JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")).instanceCredential, "legacy-secret");
-    assert.equal(fs.existsSync(store.legacyFilePath("inst_one")), true);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -490,11 +494,11 @@ test("Docker Git provisioning uses a disposable helper before the final instance
     if (args[0] === "port") return { stdout: "127.0.0.1:18080", stderr: "" };
     return { stdout: args.at(-1) || "", stderr: "" };
   });
-  await executor.start(value);
+  // The asynchronous provisioning controller materializes the workspace first.
+  await executor.provisionGitWorkspaceStreaming(value);
   const helperIndex = calls.findIndex((args) => args[0] === "run" && args.includes("/run/task-handoff/bootstrap/git-provision.sh"));
   const staleCleanupIndex = calls.findIndex((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision"));
-  const finalIndex = calls.findIndex((args, index) => index > helperIndex && args[0] === "run" && args.includes("task-handoff"));
-  assert.ok(staleCleanupIndex >= 0 && staleCleanupIndex < helperIndex && finalIndex > helperIndex);
+  assert.ok(staleCleanupIndex >= 0 && staleCleanupIndex < helperIndex);
   assert.ok(calls[helperIndex].includes("task-handoff.role=git-provisioning"));
   assert.ok(calls[helperIndex].includes(`task-handoff.instance-id=${value.instance.id}`));
   assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
@@ -504,6 +508,23 @@ test("Docker Git provisioning uses a disposable helper before the final instance
   assert.equal(calls[helperIndex].some((item) => item.startsWith("TASK_HANDOFF_GIT_") && !item.startsWith("TASK_HANDOFF_GIT_PROVISIONING_")), false);
   assert.equal(completed, 1);
   assert.equal(fs.existsSync(authDirectory), false);
+
+  // Once provisioning reaches the ready phase, the instance starts on the
+  // current layout without re-cloning the workspace.
+  await executor.start({
+    ...value,
+    instance: ControlledInstanceSchema.parse({
+      ...value.instance,
+      workspace: {
+        mode: "git-clone", status: "ready", path: value.project.workspacePolicy.path,
+        gitProvisioning: {
+          phase: "ready", remoteUrl: value.project.source.url, generation: 0, startedAt: timestamp, updatedAt: timestamp,
+        },
+      },
+    }),
+  });
+  const finalIndex = calls.findIndex((args, index) => index > helperIndex && args[0] === "run" && args.includes("task-handoff"));
+  assert.ok(finalIndex > helperIndex);
   const finalArgs = calls[finalIndex];
   assert.ok(finalArgs.includes("TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP=true"));
   assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
@@ -594,14 +615,13 @@ test("Docker Git provisioning returns stable errors, preserves retry input, and 
   });
 
   await assert.rejects(
-    () => executor.start(value),
+    () => executor.provisionGitWorkspaceStreaming(value),
     (error) => error.code === "GIT_WORKSPACE_PROVISIONING_CREDENTIAL_MISSING"
       && !error.message.includes("never-expose-this")
       && error.cause === undefined,
   );
   assert.equal(completed, 0);
   assert.equal(fs.existsSync(authDirectory), false);
-  assert.equal(calls.some((args) => args[0] === "run" && args.includes("task-handoff") && !args.includes("/run/task-handoff/bootstrap/git-provision.sh")), false);
   assert.equal(calls.filter((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision")).length, 2);
 });
 
@@ -626,7 +646,7 @@ test("Docker Git provisioning maps timeout without retaining command output", as
     return { stdout: "", stderr: "" };
   });
   await assert.rejects(
-    () => executor.start(value),
+    () => executor.provisionGitWorkspaceStreaming(value),
     (error) => error.code === "GIT_WORKSPACE_PROVISIONING_TIMEOUT" && !error.message.includes("secret output") && error.cause === undefined,
   );
 });
@@ -659,7 +679,7 @@ test("Docker Git provisioning cancellation aborts the helper and still removes i
     return { stdout: "", stderr: "" };
   });
   await assert.rejects(
-    () => executor.start(value),
+    () => executor.provisionGitWorkspaceStreaming(value),
     (error) => error.code === "GIT_WORKSPACE_PROVISIONING_CANCELLED" && !error.message.includes("raw output"),
   );
   assert.equal(calls.filter((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision")).length, 2);
@@ -728,6 +748,7 @@ test("docker executor keeps an existing container when stable bootstrap and cont
         Mounts: [
           ...persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
           { Type: "volume", Name: runtimeVolume.name, Destination: runtimeVolume.mountPath },
+          ...agentRunVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
           { Type: "bind", Source: path.resolve("docker"), Destination: "/run/task-handoff/bootstrap" },
           { Type: "bind", Source: "/run/task-handoff/container", Destination: "/run/task-handoff/node-agent-transport" },
           { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
@@ -772,7 +793,7 @@ test("existing containers keep their original bootstrap and TCP node-agent trans
   const containerId = "existing-tcp-container-id";
   const packageBootstrap = "/usr/lib/node_modules/@task-handoff/node-agent/docker";
   const runtimeVolume = volumeForInspection(value, `task-handoff-${value.instance.id}-runtime`);
-  const volumes = [...persistentVolumes(value), runtimeVolume];
+  const volumes = [...persistentVolumes(value), runtimeVolume, ...agentRunVolumes(value)];
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
@@ -822,6 +843,43 @@ test("existing containers keep their original bootstrap and TCP node-agent trans
     ...value,
     instance: { ...value.instance, runtime: { ...value.instance.runtime, containerName, containerId } },
   }), value.nodeAgentUrl);
+});
+
+test("v0.0.32 containers without the Agent Run mount can restart for upgrade recovery", async () => {
+  const value = context();
+  const containerName = "task-handoff-inst_one";
+  const containerId = "existing-container-id";
+  const runtimeVolume = volumeForInspection(value, `task-handoff-${value.instance.id}-runtime`);
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: containerId,
+        State: { Running: false },
+        Config: { Labels: { "task-handoff.instance-id": value.instance.id } },
+        Mounts: [
+          ...persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+          { Type: "volume", Name: runtimeVolume.name, Destination: runtimeVolume.mountPath },
+          { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
+        ],
+      }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Driver: "local", Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "port") return { stdout: "127.0.0.1:19090", stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+
+  const result = await executor.start({
+    ...value,
+    instance: { ...value.instance, runtime: { ...value.instance.runtime, containerName, containerId } },
+  });
+  assert.equal(result.runtime.containerId, containerId);
+  assert.ok(calls.some((args) => args[0] === "start" && args[1] === containerName));
+  assert.equal(calls.some((args) => ["rm", "run", "rename"].includes(args[0])), false);
 });
 
 test("existing containers reject a foreign volume at an Agent Run runtime path", async () => {

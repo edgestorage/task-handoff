@@ -294,14 +294,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         // workspace and consumed its grant; completing again is idempotent and
         // covers older grants applied to an already-materialized workspace.
         context.completeGitWorkspaceProvisioning?.();
-      } else if (gitPhase === undefined) {
-        // Compatibility for v0.0.37 and earlier: instances created before the
-        // asynchronous Git provisioning controller still clone inline.
-        await this.provisionGitWorkspace(context);
       } else {
         throw runtimeExecutorError(
           GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
-          `Git workspace provisioning is ${gitPhase} for ${context.instance.id}.`,
+          `Git workspace provisioning is ${gitPhase ?? "not scheduled"} for ${context.instance.id}.`,
         );
       }
     }
@@ -359,10 +355,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       await this.runCommand("docker", ["rm", "-f", containerName], { timeoutMs: 30_000 }).catch(() => ({ stdout: "", stderr: "" }));
       fs.rmSync(authDirectory, { recursive: true, force: true });
     }
-  }
-
-  private provisionGitWorkspace(context: ExecutorContext) {
-    return this.provisionGitWorkspaceStreaming(context);
   }
 
   private materializeGitProvisioningAuth(directory: string, input: NonNullable<ExecutorContext["gitWorkspaceProvisioning"]>) {
@@ -520,10 +512,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         code: "INSTANCE_VOLUME_MOUNT_IDENTITY_MISMATCH",
       });
     }
-    // Compatibility for v0.0.32: existing containers predate Agent Run runtime volumes.
-    // Missing mounts only disable Agent execution; ordinary instance startup remains available.
     const agentRunVolume = agentRunRuntimeVolumeForContext(context);
     await this.validateAgentRunRuntimeVolume(context, agentRunVolume);
+    // Compatibility for v0.0.32: existing containers cannot acquire a new mount.
+    // Keep startup and upgrade recovery available, but reject any foreign mount at this path.
     const agentRunMount = mounts.find((item) => item.destination === agentRunVolume.mountPath);
     if (agentRunMount && (agentRunMount.type !== "volume" || agentRunMount.name !== agentRunVolume.name)) {
       throw Object.assign(new Error(`Docker Agent Run mount does not match managed volume ${agentRunVolume.name}.`), {

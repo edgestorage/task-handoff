@@ -125,6 +125,10 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
     "desktop packaging must unpack exactly the node agent bootstrap assets",
   );
   assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
+  // Built-in project content is read from disk by the node agent, so it must be
+  // packaged as a real file rather than living inside the asar archive.
+  assert.ok(packageJson.build.files.includes("builtin-projects/**/*"), "desktop packaging must include built-in project content");
+  assert.ok(packageJson.build.asarUnpack.includes("builtin-projects/**/*"), "built-in project content must be available as a real file");
   assert.ok(packageJson.files.includes("shared"), "npm releases must contain shared desktop runtime sources");
   assert.ok(packageJson.build.files.includes("shared/process-start-identity.cjs"), "Desktop packages must contain the shared process identity helper");
   assert.equal(packageJson.build.extraResources.some((entry) => entry.from === "dist"), false);

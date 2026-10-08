@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, selectableInstanceCwdFolders } from "../src/apps/control-plane/shared/instanceCwdFolders.ts";
+import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, partitionInstanceCwdFolders, selectableInstanceCwdFolders } from "../src/apps/control-plane/shared/instanceCwdFolders.ts";
 
 const folders = [
   { id: "project", name: "Project", path: "/workspace/project" },
@@ -40,4 +40,20 @@ test("cwd folder selection matches normalized paths across instances", () => {
     { id: "windows", path: "C:\\Workspace\\Project" },
   ], "c:/workspace/project/")?.id, "windows");
   assert.equal(findInstanceCwdFolderByPath(folders, "/workspace/missing"), undefined);
+});
+
+test("built-in projects stay out of the user project list", () => {
+  const { builtin, user } = partitionInstanceCwdFolders([
+    { id: "user-a", path: "/workspace/a" },
+    { id: "assistant", path: "/builtin/assistant", origin: "builtin" },
+    { id: "user-b", path: "/workspace/b", origin: "user" },
+  ]);
+  assert.deepEqual(builtin.map((folder) => folder.id), ["assistant"]);
+  assert.deepEqual(user.map((folder) => folder.id), ["user-a", "user-b"]);
+});
+
+test("folders without an origin are legacy records and stay user projects", () => {
+  const { builtin, user } = partitionInstanceCwdFolders([{ id: "legacy", path: "/workspace/legacy" }]);
+  assert.deepEqual(builtin, []);
+  assert.deepEqual(user.map((folder) => folder.id), ["legacy"]);
 });

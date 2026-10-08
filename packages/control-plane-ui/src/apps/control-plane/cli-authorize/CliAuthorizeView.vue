@@ -127,9 +127,7 @@ async function deny() {
   display: grid;
   min-height: 100vh;
   place-items: center;
-  background:
-    linear-gradient(180deg, var(--surface-raised), var(--surface-inset)),
-    var(--workspace-bg);
+  background: var(--workspace-bg);
   padding: 24px;
 }
 

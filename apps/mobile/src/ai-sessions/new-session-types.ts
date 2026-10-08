@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { controlPlaneLocalFolderDisplayName, type AiSessionModelGroup, type AiSessionPastedTextPresentation, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import { controlPlaneLocalFolderDisplayName, latestStorySessionForCreation, type AiSessionModelGroup, type AiSessionPastedTextPresentation, type ControlPlaneAiSessions, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import { storyTreeSessionForest } from '../stories/story-tree-model';
 
 type InstanceWorkspaceSource = { type: string; localFolderId?: string; path?: string };
 export const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
@@ -80,30 +81,25 @@ export function defaultAiSessionFolderId(
   return sourcePath ? folders.find((folder) => normalizeFolderPath(folder.path) === sourcePath)?.id : undefined;
 }
 
+/**
+ * Creation defaults for a Story composer follow the Web Story view exactly: the
+ * newest root session of the Story on the Story's own node, ordered by last user
+ * message. Sessions closed from the Story tree stay visible there but must not
+ * seed new sessions, so they are skipped.
+ */
 export function storyAiSessionCreationDefaults(
   instances: readonly Pick<ControlPlaneInstanceDirectoryEntry, 'id' | 'nodeId'>[],
-  snapshot: {
-    instances: readonly ({
-      instanceId: string;
-      aiSessions: { sessions: readonly ({ id?: string; agent?: string; cwd?: string; cwdFolderId?: string; storyId?: string; updatedAt: string } & Record<string, unknown>)[] } & Record<string, unknown>;
-    } & Record<string, unknown>)[];
-  } & Record<string, unknown> | undefined,
+  snapshot: ControlPlaneAiSessions | undefined,
   storyId: string,
   nodeId: string,
-): { instanceId?: string; cwd?: string; cwdFolderId?: string } {
-  const storyInstanceIds = new Set(instances.filter((instance) => instance.nodeId === nodeId).map((instance) => instance.id));
-  let latest: { instanceId: string; cwd?: string; cwdFolderId?: string; updatedAt: string } | undefined;
-  for (const instance of snapshot?.instances ?? []) {
-    if (!storyInstanceIds.has(instance.instanceId)) continue;
-    for (const session of instance.aiSessions.sessions) {
-      if (session.storyId !== storyId) continue;
-      if (!latest || Date.parse(session.updatedAt) > Date.parse(latest.updatedAt)) {
-        latest = { instanceId: instance.instanceId, cwd: session.cwd, cwdFolderId: session.cwdFolderId, updatedAt: session.updatedAt };
-      }
-    }
-  }
+): { instanceId?: string; sessionId?: string; cwd?: string; cwdFolderId?: string } {
+  const latest = latestStorySessionForCreation(
+    storyTreeSessionForest(snapshot),
+    storyId,
+    instances.filter((instance) => instance.nodeId === nodeId).map((instance) => instance.id),
+  );
   return latest
-    ? { instanceId: latest.instanceId, cwd: latest.cwd, cwdFolderId: latest.cwdFolderId }
+    ? { instanceId: latest.instanceId, sessionId: latest.id, cwd: latest.cwd, cwdFolderId: latest.cwdFolderId }
     : { instanceId: instances.find((instance) => instance.nodeId === nodeId)?.id };
 }
 
@@ -140,10 +136,11 @@ export function initialAiSessionFolderId(
 export function aiSessionFolderOptions(
   source: InstanceWorkspaceSource | undefined,
   workspacePath: string | undefined,
-  folders: readonly Pick<ControlPlaneNodeLocalFolder, 'id' | 'name' | 'path'>[],
+  folders: readonly Pick<ControlPlaneNodeLocalFolder, 'id' | 'name' | 'path' | 'localizedNames'>[],
+  locale?: string,
 ): AiSessionFolderOption[] {
   if (source?.type === 'local-folder') {
-    return folders.map((folder) => ({ ...folder, name: controlPlaneLocalFolderDisplayName(folder), cwdFolderId: folder.id }));
+    return folders.map((folder) => ({ id: folder.id, path: folder.path, name: controlPlaneLocalFolderDisplayName(folder, locale), cwdFolderId: folder.id }));
   }
   const path = workspacePath?.trim();
   return path ? [{ id: INSTANCE_WORKSPACE_FOLDER_ID, name: folderPathName(path), path }] : [];

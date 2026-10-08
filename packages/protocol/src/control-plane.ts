@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { z } from "zod";
 import {
   AI_SESSION_HISTORY_DEFAULT_LIMIT,
@@ -19,6 +18,7 @@ import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, Trigger
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 import { GitCredentialRetentionSchema } from "./managed-git-credentials.ts";
 import { NodeAgentCapabilitiesSchema } from "./node-agent-capabilities.ts";
+import { base64Decode, base64Encode, randomBytes, sha256Bytes, sha256Hex } from "./crypto.ts";
 export * from "./node-agent-capabilities.ts";
 import { ModelProtocolSchema, type ModelProtocol } from "./model-protocol.ts";
 export * from "./model-protocol.ts";
@@ -519,7 +519,14 @@ export const NodeTunnelRequestBodySchema = z.object({
   encoding: z.enum(["utf8", "base64"]),
   data: z.string(),
 }).strict().superRefine((body, context) => {
-  if (body.encoding === "base64" && Buffer.from(body.data, "base64").toString("base64") !== body.data) {
+  if (body.encoding !== "base64") return;
+  let canonical = false;
+  try {
+    canonical = base64Encode(base64Decode(body.data)) === body.data;
+  } catch {
+    canonical = false;
+  }
+  if (!canonical) {
     context.addIssue({ code: "custom", path: ["data"], message: "Node tunnel binary body must use canonical base64 encoding." });
   }
 });
@@ -529,18 +536,18 @@ export type NodeTunnelRequestBody = z.infer<typeof NodeTunnelRequestBodySchema>;
 export function encodeNodeTunnelRequestBody(value: unknown): NodeTunnelRequestBody | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return { encoding: "utf8", data: value };
-  if (Buffer.isBuffer(value)) return { encoding: "base64", data: value.toString("base64") };
-  if (value instanceof ArrayBuffer) return { encoding: "base64", data: Buffer.from(value).toString("base64") };
+  if (value instanceof Uint8Array) return { encoding: "base64", data: base64Encode(value) };
+  if (value instanceof ArrayBuffer) return { encoding: "base64", data: base64Encode(new Uint8Array(value)) };
   if (ArrayBuffer.isView(value)) {
-    return { encoding: "base64", data: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64") };
+    return { encoding: "base64", data: base64Encode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) };
   }
   throw new TypeError("Node tunnel request body must be a string or binary buffer.");
 }
 
-export function decodeNodeTunnelRequestBody(value: unknown): string | Buffer | undefined {
+export function decodeNodeTunnelRequestBody(value: unknown): string | Uint8Array | undefined {
   if (value === undefined || value === null) return undefined;
   const parsed = NodeTunnelRequestBodySchema.parse(value);
-  return parsed.encoding === "utf8" ? parsed.data : Buffer.from(parsed.data, "base64");
+  return parsed.encoding === "utf8" ? parsed.data : base64Decode(parsed.data);
 }
 
 const DockerTagPattern = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
@@ -723,9 +730,14 @@ export function sanitizeStoredProject(input: unknown) {
 export function sanitizeStoredNodeLocalFolder(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
-  const { defaultImageId, ...record } = source;
+  const { defaultImageId, origin, localizedNames, ...record } = source;
   return {
     ...record,
+    // `origin` and `localizedNames` are destructured out above because the node
+    // agent derives them from the shipped built-in project catalog: a stored or
+    // projected record must not be able to claim them. Dropping them here lets the
+    // schema default `origin` back to `user` and keeps the canonical `name` as the
+    // display fallback.
     defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
   };
 }
@@ -1108,12 +1120,41 @@ export const GitRepositorySchema = z
   })
   .strict();
 
+/**
+ * Ownership discriminator for a node local folder. `user` folders are registered
+ * by an operator; `builtin` folders are projected by the node agent from a
+ * product-shipped built-in project that it materialized itself. The distinction
+ * cannot be derived by a consumer (it cannot read the shipped project catalog),
+ * and it is what lets the control panel keep built-in entries separated from
+ * operator projects and read-only. Absence (v0.0.35 and earlier) means `user`.
+ */
+export const NodeLocalFolderOriginSchema = z.enum(["user", "builtin"]);
+
+/**
+ * Locale-keyed display names for a node local folder, mirroring image
+ * `localizedDescriptions`. Only the node agent's built-in project projection
+ * carries them: the authoritative names live in the shipped manifest, which a
+ * control plane or client cannot read, so the projection has to include them.
+ * `name` stays the canonical fallback for every locale that has no entry.
+ */
+export const NodeLocalFolderLocalizedNamesSchema = z.record(
+  z.string().trim().min(2).max(35),
+  z.string().trim().min(1).max(160),
+);
+
 export const NodeLocalFolderSchema = z
   .object({
     id: IdSchema,
     nodeId: IdSchema,
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
+    // Additive, node-agent-derived field. Readers strip unknown keys, so older
+    // control planes keep working against a newer node agent and simply treat the
+    // folder as operator-owned.
+    origin: NodeLocalFolderOriginSchema.default("user"),
+    // Additive, node-agent-derived field. Absent for operator folders and for
+    // every folder created by a node agent that predates built-in projects.
+    localizedNames: NodeLocalFolderLocalizedNamesSchema.optional(),
     // Compatibility for v0.0.21: accepted from older node-agents, but local folders no longer select images.
     defaultImageSelection: ImageSelectionSchema.optional(),
     labels: LabelsSchema,
@@ -1579,7 +1620,7 @@ export function modelContentRevision(
       ? { mappings: mappings.map((entry) => ({ name: entry.name, upstreamName: entry.upstreamName, order: entry.order })) }
       : {}),
   };
-  return `mdlr_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+  return `mdlr_${sha256Hex(JSON.stringify(canonical))}`;
 }
 
 export function isModelContentRevision(value: string) {
@@ -1623,7 +1664,8 @@ let mintedEntityIds: { timestamp: bigint; random: Set<bigint> } | undefined;
 function drawEntityIdRandom(timestamp: bigint) {
   if (mintedEntityIds?.timestamp !== timestamp) mintedEntityIds = { timestamp, random: new Set() };
   for (;;) {
-    const random = BigInt(crypto.randomBytes(3).readUIntBE(0, 3)) >> 1n;
+    const bytes = randomBytes(3);
+    const random = BigInt((bytes[0] << 16) | (bytes[1] << 8) | bytes[2]) >> 1n;
     if (!mintedEntityIds.random.has(random)) {
       mintedEntityIds.random.add(random);
       return random;
@@ -1661,8 +1703,10 @@ export function isModelEntityId(value: string) {
  * {@link createModelEntityId}, and nothing may derive fresh identities here.
  */
 export function migratedModelEntityId(legacyId: string) {
-  const digest = crypto.createHash("sha256").update(`task-handoff:model-entity-migration:v1:${legacyId}`).digest();
-  return `mdl_${encodeEntityIdPayload(digest.readBigUInt64BE(0), ENTITY_ID_PAYLOAD_LENGTH)}`;
+  const digest = sha256Bytes(`task-handoff:model-entity-migration:v1:${legacyId}`);
+  let value = 0n;
+  for (const byte of digest.subarray(0, 8)) value = (value << 8n) | BigInt(byte);
+  return `mdl_${encodeEntityIdPayload(value, ENTITY_ID_PAYLOAD_LENGTH)}`;
 }
 
 export const ImageOriginSchema = z.enum(["market", "custom"]);

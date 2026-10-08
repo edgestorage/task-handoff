@@ -5,6 +5,7 @@ import {
   canUseNativeProjectFolderPicker,
   isSameOrChildNodePath,
   nativeNodeFolderSelectionResult,
+  nodeLocalFolderDisplayName,
   nodePathBreadcrumbs,
   nodeFolderSelectionMode,
   nodePathName,
@@ -90,4 +91,12 @@ test("relative node paths preserve folder names while enforcing containment", ()
   assert.deepEqual(relativeNodePathSegments("/workspace", "/workspace/project/../src"), ["src"]);
   assert.equal(relativeNodePathSegments("/workspace", "/workspace-other/project"), undefined);
   assert.equal(relativeNodePathSegments("C:\\workspace", "D:\\workspace\\project"), undefined);
+});
+
+test("node folder display names resolve localized built-in project names", () => {
+  const folder = { name: "Assistant", path: "/home/agent/builtin-projects/assistant", localizedNames: { "en-US": "Assistant", "zh-CN": "助理" } };
+  assert.equal(nodeLocalFolderDisplayName(folder, "zh-CN"), "助理");
+  assert.equal(nodeLocalFolderDisplayName(folder, "zh-Hans-CN"), "Assistant");
+  assert.equal(nodeLocalFolderDisplayName(folder, "fr-FR"), "Assistant");
+  assert.equal(nodeLocalFolderDisplayName({ name: "Workspace", path: "/home/agent/workspace" }, "zh-CN"), "Workspace");
 });

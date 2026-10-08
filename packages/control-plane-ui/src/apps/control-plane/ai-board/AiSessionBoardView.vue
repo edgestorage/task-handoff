@@ -641,7 +641,7 @@ function aiBoardCardPath(card: AiBoardCard) {
     ? folders.find((candidate) => candidate.id === card.session.cwdFolderId)
     : undefined)
     || folders.find((candidate) => normalizeFolderPath(candidate.path) === normalizedPath);
-  const folderName = folder ? nodeLocalFolderDisplayName(folder) : undefined;
+  const folderName = folder ? nodeLocalFolderDisplayName(folder, locale.value as string) : undefined;
   return {
     key: normalizedPath || "__unknown_path__",
     label: folderName || path || t("sessions.board.unknownPath"),

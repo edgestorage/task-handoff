@@ -54,6 +54,7 @@ import { reduceInstanceLifecycle, type InstanceLifecycleEvent } from "./instance
 import type { ExecutorContext } from "./runtimes/docker.ts";
 import type { RuntimeAdapter } from "./runtimes/adapters.ts";
 import { requireBrowsableFolderPath } from "./folders.ts";
+import type { BuiltinProjectFolderProjection } from "./builtin-projects/catalog.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { resolveGitCredential } from "@task-handoff/protocol/managed-git-credentials";
@@ -204,6 +205,7 @@ export class NodeAgentState {
   private listenerPort: number;
   private readonly containerUrlOverride?: string;
   private readonly platform: NodeJS.Platform;
+  private builtinFolders?: BuiltinProjectFolderProjection;
 
   constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform, repository?: NodeAgentRepository) {
     this.paths = paths;
@@ -378,17 +380,58 @@ export class NodeAgentState {
     return this.localFolders.put(folder);
   }
 
+  /**
+   * Attaches the node-agent-owned built-in project projection. It is derived from
+   * the shipped catalog plus the on-disk materialization markers, so it is
+   * attached once at startup and never persists anything of its own.
+   */
+  attachBuiltinProjectFolders(projection: BuiltinProjectFolderProjection) {
+    this.builtinFolders = projection;
+  }
+
+  /** Operator folders plus the built-in project folders this node offers. */
+  listLocalFolders() {
+    return [...this.localFolders.list(), ...(this.builtinFolders?.list() || [])];
+  }
+
+  /**
+   * Resolves any folder id an instance may use as its cwd. Operator folders come
+   * from the database; built-in project folders are projected from the shipped
+   * catalog and the materialization marker on disk.
+   */
+  resolveLocalFolder(id: string) {
+    return this.localFolders.get(id) || this.builtinFolders?.get(id);
+  }
+
   updateLocalFolder(id: string, input: z.infer<typeof UpdateLocalFolderSchema>) {
     const folder = this.localFolders.get(id);
     if (!folder) {
-      const error = new Error(`Local folder ${id} was not found.`);
-      throw Object.assign(error, { statusCode: 404, code: "NODE_LOCAL_FOLDER_NOT_FOUND" });
+      throw this.builtinFolderReadOnlyError(id, "renamed");
     }
     return this.localFolders.put(NodeLocalFolderSchema.parse({
       ...folder,
       name: input.name.trim() || path.basename(folder.path),
       updatedAt: now(),
     }));
+  }
+
+  deleteLocalFolder(id: string) {
+    if (this.localFolders.get(id)) return this.localFolders.delete(id);
+    if (this.builtinFolders?.owns(id)) throw this.builtinFolderReadOnlyError(id, "removed");
+    return false;
+  }
+
+  private builtinFolderReadOnlyError(id: string, action: string) {
+    if (this.builtinFolders?.owns(id)) {
+      return Object.assign(
+        new Error(`Built-in project folder ${id} is owned by the node agent and cannot be ${action}.`),
+        { statusCode: 409, code: "NODE_LOCAL_FOLDER_BUILTIN_READONLY" },
+      );
+    }
+    return Object.assign(
+      new Error(`Local folder ${id} was not found.`),
+      { statusCode: 404, code: "NODE_LOCAL_FOLDER_NOT_FOUND" },
+    );
   }
 
   createRuntime(input: z.infer<typeof CreateNodeRuntimeSchema>) {

@@ -20,7 +20,7 @@ type LoadStatus = 'loading' | 'ready' | 'unsupported' | 'error';
 
 export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, workspacePath }: { instanceId: string; nodeId: string; refreshToken?: number; workspacePath?: string }) {
   const { colors } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const toast = useMobileToast();
   const [status, setStatus] = useState<LoadStatus>('loading');
   const [error, setError] = useState<string>();
@@ -44,7 +44,7 @@ export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, wor
         client.resources.nodeLocalFolders(nodeId),
         client.resources.instanceWorkspaceSource(instanceId).catch(() => undefined),
       ]);
-      const options = aiSessionFolderOptions(source, workspacePath, folders);
+      const options = aiSessionFolderOptions(source, workspacePath, folders, locale);
       const folderId = defaultAiSessionFolderId(source, workspacePath, folders);
       return { cwdFolderId: options.find((folder) => folder.id === folderId)?.cwdFolderId };
     });
