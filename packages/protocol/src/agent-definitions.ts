@@ -54,6 +54,9 @@ export const AgentDefinitionSchema = z.object({
   providerId: StableIdSchema,
   modelEntityId: StableIdSchema.optional(),
   modelName: z.string().trim().min(1).max(120).optional(),
+  // Stable model identity (see AiSessionModelSelectionSchema). Optional so
+  // definitions written before the identity split keep parsing.
+  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
   reasoningEffort: z.string().trim().min(1).max(120).optional(),
   permissionMode: z.string().trim().min(1).max(120).optional(),
   executionPolicy: AgentExecutionPolicySchema,
@@ -71,6 +74,7 @@ const definitionInputShape = {
   providerId: StableIdSchema,
   modelEntityId: StableIdSchema.optional(),
   modelName: z.string().trim().min(1).max(120).optional(),
+  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
   reasoningEffort: z.string().trim().min(1).max(120).optional(),
   permissionMode: z.string().trim().min(1).max(120).optional(),
   executionPolicy: AgentExecutionPolicySchema.optional(),
@@ -93,6 +97,7 @@ export const AgentDefinitionUpdateInputSchema = z.object({
   providerId: definitionInputShape.providerId.optional(),
   modelEntityId: StableIdSchema.nullable().optional(),
   modelName: z.string().trim().min(1).max(120).nullable().optional(),
+  modelUpstreamName: z.string().trim().min(1).max(240).nullable().optional(),
   reasoningEffort: z.string().trim().min(1).max(120).nullable().optional(),
   permissionMode: z.string().trim().min(1).max(120).nullable().optional(),
   executionPolicy: definitionInputShape.executionPolicy,

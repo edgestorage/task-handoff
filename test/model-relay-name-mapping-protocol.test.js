@@ -376,9 +376,16 @@ test("instance directory and AI session projections only carry external names", 
   assert.deepEqual(groups, [{
     modelEntityId: "mdl_abcdefghjkmnp",
     providerName: "Coding fast",
-    models: [{ modelEntityId: "mdl_abcdefghjkmnp", modelName: "coding-fast", providerName: "Coding fast" }],
+    models: [{
+      modelEntityId: "mdl_abcdefghjkmnp",
+      modelName: "coding-fast",
+      // Stable identity travels with the option so a display rename cannot
+      // orphan a saved session or agent.
+      modelUpstreamName: "provider-model-2026-09",
+      providerName: "Coding fast",
+    }],
   }]);
-  assert.doesNotMatch(JSON.stringify(groups), /upstreamName|provider-model-2026-09|provider-secret|provider\.example/);
+  assert.doesNotMatch(JSON.stringify(groups), /provider-secret|provider\.example/);
 });
 
 test("relay capability documents normalize to unsupported when absent", () => {
@@ -452,7 +459,9 @@ test("private catalog v1/v2 union keeps relay projections free of upstream secre
   assert.equal(relay.entities.length, 1);
   assert.equal("endpoint" in relay.entities[0], false);
   assert.equal("key" in relay.entities[0], false);
-  assert.equal("upstreamName" in relay.entities[0].modelNames[0], false);
+  // The stable model identity is part of the relay projection; the endpoint and
+  // key are not.
+  assert.equal(relay.entities[0].modelNames[0].upstreamName, "provider-model-2026-09");
   assert.equal(relay.entities[0].routes[0].baseUrl.includes("/model-relay/"), true);
 
   const summary = summarizeInstancePrivateModelCatalog(parsed);
@@ -493,7 +502,7 @@ test("session selection consumes external names from both catalog projections", 
     updatedAt: timestamp,
   });
   const selection = resolveControlledPrivateModelSelection(catalog, "codex");
-  assert.deepEqual(selection, { modelEntityId: "mdl_abcdefghjkmnp", modelName: "coding-fast" });
+  assert.deepEqual(selection, { modelEntityId: "mdl_abcdefghjkmnp", modelName: "coding-fast", modelUpstreamName: "coding-fast" });
   assert.equal(AiSessionModelSelectionSchema.safeParse(selection).success, true);
 });
 

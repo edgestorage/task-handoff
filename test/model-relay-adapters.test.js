@@ -531,6 +531,47 @@ test("an upstream model mismatch keeps the actual value and logs a safe diagnost
   assert.equal(serialized.includes("mismatch-secret"), false);
 });
 
+test("an identity mapping keeps the actual value without a mismatch diagnostic", async (t) => {
+  const logs = [];
+  const logger = { info: (data, message) => logs.push({ level: "info", data, message }), warn: (data, message) => logs.push({ level: "warn", data, message }), debug: () => undefined };
+  const instance = relayInstance();
+  // A declared name that resolves to itself (or a passthrough of an unknown
+  // name) remaps nothing, so the upstream answering with a different canonical
+  // name is expected and must not spam the warn-level mismatch diagnostic.
+  const model = {
+    id: "mdl_identity", name: "Identity", endpoint: "http://identity-upstream.invalid/v1", key: "identity-secret",
+    model: "public-identity", modelNames: [{ name: "public-identity", upstreamName: "public-identity", order: 100 }],
+    protocols: ["openai-responses"], app: "codex", enabled: true, order: 100, labels: {},
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  const service = new ModelRelayService({
+    resolver: {
+      instance: () => instance,
+      relayEnabled: () => true,
+      resolveRoute: () => ({ instance, model, protocol: "openai-responses", routeId: "rly_identity" }),
+      resolveUpstreamModelName: (_model, name) => name,
+    },
+    adapters: [createOpenAiResponsesAdapter()],
+    log: logger,
+    fetchImpl: async () => new Response(JSON.stringify({ model: "vendor-alias", output: "ok" }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const Fastify = require("fastify");
+  const app = Fastify({ logger: false });
+  service.registerRoutes(app);
+  t.after(async () => app.close());
+  await app.ready();
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/model-relay/instances/inst_adapters/routes/rly_identity/v1/responses",
+    headers: { authorization: `Bearer ${INSTANCE_TOKEN}`, "content-type": "application/json" },
+    payload: JSON.stringify({ model: "public-identity", input: "hi" }),
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().model, "vendor-alias");
+  assert.equal(JSON.stringify(logs).includes("MODEL_RELAY_UPSTREAM_MODEL_MISMATCH"), false);
+});
+
 test("an upstream error response is forwarded unchanged without model rewriting", async (t) => {
   const errorBody = JSON.stringify({ error: { type: "rate_limit_error", message: "upstream-chat is rate limited", model: "upstream-chat" } });
   const upstream = await startUpstream((_record, _request, response) => {

@@ -70,3 +70,82 @@ test("v0.0.31 controlled instance disables only rename and does not receive the 
   assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.approval, true);
   assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.close, true);
 });
+
+function instanceWithModelSelection(stableIdentity: boolean | undefined, sessions: unknown[] = []) {
+  const modelSelection: Record<string, unknown> = {
+    selectModelAtCreate: true,
+    selectProviderAtCreate: true,
+    selectModelAtResume: true,
+    selectProviderAtResume: true,
+    switchModelWithinProvider: true,
+    switchProviderDuringSession: true,
+  };
+  if (stableIdentity !== undefined) modelSelection.stableIdentity = stableIdentity;
+  return {
+    id: "inst_identity",
+    nodeId: "node_identity",
+    config: { defaultCodexPermissionMode: "ask" },
+    capabilities: { features: { aiSessionProviders: [{ agent: "codex", actions: { create: true, send: true }, timeline: {}, modelSelection }] } },
+    aiSessions: { sessions, runningCount: 0 },
+  } as unknown as ControlledInstance;
+}
+
+const identitySelection = { modelEntityId: "mdl_a", modelName: "model-a", modelUpstreamName: "upstream-a" };
+
+test("modelUpstreamName is withheld from instances that predate the stable-identity split", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const service = new AiSessionActionService({
+    requireInstance: async () => instanceWithModelSelection(undefined),
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, _route, init) => {
+      requests.push(JSON.parse(String(init?.body || "{}")));
+      return { disposition: "created", aiSessionId: "session_identity", providerSessionId: "thread_identity", creationSource: "ai-session" };
+    },
+  });
+
+  await service.create("inst_identity", {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    message: "hello",
+    clientRequestId: "request_identity",
+    modelSelection: identitySelection,
+  });
+  assert.deepEqual(requests[0].modelSelection, { modelEntityId: "mdl_a", modelName: "model-a" });
+});
+
+test("modelUpstreamName reaches instances that advertise stable identity", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const service = new AiSessionActionService({
+    requireInstance: async () => instanceWithModelSelection(true),
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, _route, init) => {
+      requests.push(JSON.parse(String(init?.body || "{}")));
+      return { disposition: "created", aiSessionId: "session_identity", providerSessionId: "thread_identity", creationSource: "ai-session" };
+    },
+  });
+
+  await service.create("inst_identity", {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    message: "hello",
+    clientRequestId: "request_identity",
+    modelSelection: identitySelection,
+  });
+  assert.deepEqual(requests[0].modelSelection, identitySelection);
+});
+
+test("a model switch also withholds modelUpstreamName from a pre-split instance", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const session = { id: "session_identity", agent: "codex", status: "idle", actions: { send: true }, modelSelection: { modelEntityId: "mdl_a", modelName: "model-a" } };
+  const service = new AiSessionActionService({
+    requireInstance: async () => instanceWithModelSelection(undefined, [session]),
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, _route, init) => {
+      requests.push(JSON.parse(String(init?.body || "{}")));
+      return { sessionId: "session_identity", accepted: true };
+    },
+  });
+
+  await service.updateModelSelection("inst_identity", "session_identity", "request_identity", identitySelection);
+  assert.deepEqual(requests[0].modelSelection, { modelEntityId: "mdl_a", modelName: "model-a" });
+});

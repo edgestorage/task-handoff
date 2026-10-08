@@ -742,6 +742,7 @@ function createInputFromDraft(draft: AgentEditorDraft): AgentDefinitionCreateInp
     providerId: draft.providerId,
     ...(draft.modelEntityId ? { modelEntityId: draft.modelEntityId } : {}),
     ...(draft.modelName ? { modelName: draft.modelName } : {}),
+    ...(draft.modelUpstreamName ? { modelUpstreamName: draft.modelUpstreamName } : {}),
     ...(draft.reasoningEffort ? { reasoningEffort: draft.reasoningEffort } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
   };
@@ -759,6 +760,7 @@ function updateInputFromDraft(draft: AgentEditorDraft): AgentDefinitionUpdateInp
     providerId: input.providerId,
     modelEntityId: input.modelEntityId ?? null,
     modelName: input.modelName ?? null,
+    modelUpstreamName: input.modelUpstreamName ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     permissionMode: input.permissionMode ?? null,
   };

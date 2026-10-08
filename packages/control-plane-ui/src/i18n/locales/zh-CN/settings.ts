@@ -279,7 +279,7 @@ export const settings = {
     mergeTitle: "合并重复模型？", merge: "合并", merging: "正在合并",
     mergeConfirm: "把引用 {source} 的全部实例改指 {target}，并删除被取代的副本？",
     merged: "已合并，重新指向 {count} 个实例。",
-    controlPlane: "控制面板", allLocations: "全部 {count} 个位置", model: "模型", modelNames: "模型名称", externalName: "对外名称", upstreamName: "上游模型", upstreamNamePlaceholder: "默认与对外名称相同", addModelName: "添加模型名称", modelNamePlaceholder: "输入模型 ID", removeModelName: "删除模型名称", reorderRow: "拖拽调整顺序，或单击查看更多操作", moveRowUp: "上移", moveRowDown: "下移", keepKey: "留空以保留当前密钥",
+    controlPlane: "控制面板", allLocations: "全部 {count} 个位置", model: "模型", modelNames: "模型名称", externalName: "显示名称", upstreamName: "上游模型", upstreamNamePlaceholder: "默认与显示名称相同", addModelName: "添加模型名称", modelNamePlaceholder: "输入模型 ID", removeModelName: "删除模型名称", reorderRow: "拖拽调整顺序，或单击查看更多操作", moveRowUp: "上移", moveRowDown: "下移", keepKey: "留空以保留当前密钥",
     protocols: "接口协议", protocolsDescription: "可多选。实例会根据程序所需协议筛选可用模型。", protocol: { "openai-responses": "OpenAI Responses", "openai-chat-completions": "Chat Completions", "anthropic-messages": "Anthropic Messages" }, protocolDescription: { "openai-responses": "/responses", "openai-chat-completions": "/chat/completions", "anthropic-messages": "/messages" },
     keepCredential: "留空以保留所有位置的当前凭据。", save: "保存模型", create: "创建模型", saving: "正在保存", saved: "{name} 已保存。",
     deleteConfirm: "确认从 {location} 删除 {name}？其他位置将保留。", selectLocation: "选择位置", selectApp: "选择应用", namePlaceholder: "OpenAI 主配置", nodeLocation: "节点 · {name}",

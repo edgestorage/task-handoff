@@ -27,6 +27,7 @@ function pathsFor(root) {
     configPath: path.join(root, "config.json"), dataDir: root, appCatalogDir: path.join(root, "app-catalog"),
     appSessionsDir: path.join(root, "app-sessions"), runtimeDir: path.join(root, "runtime"), eventsDir: path.join(root, "events"),
     artifactDir: path.join(root, "artifacts"), logDir: path.join(root, "logs"), webTokenPath: path.join(root, "web-token"),
+    codexHome: path.join(root, "codex-home"),
   };
 }
 
@@ -48,6 +49,10 @@ function setEnvironment(paths, catalog) {
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_INSTANCE_ID: instanceId,
     TASK_HANDOFF_REGISTRATION_TOKEN: registrationToken,
+    // The test host may run inside a controlled instance (TASK_HANDOFF_CONTROL_MODE
+    // is inherited from the shell), so pin an isolated Codex home instead of
+    // writing the developer's real ~/.codex/config.toml.
+    CODEX_HOME: paths.codexHome,
     TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: catalog === undefined ? undefined : JSON.stringify(catalog),
   };
   const previous = Object.fromEntries(Object.keys(patch).map((key) => [key, process.env[key]]));
@@ -121,7 +126,7 @@ test("switching an AI session to a model the instance holds is accepted", async 
     });
     assert.equal(response.statusCode, 200, JSON.stringify(response.json()));
     assert.deepEqual(response.json().data, { sessionId: session.id, accepted: true });
-    assert.deepEqual(switches, [{ sessionId: session.id, selection: { modelEntityId: "mdl_current", modelName: "gpt-5.6-sol" } }]);
+    assert.deepEqual(switches, [{ sessionId: session.id, selection: { modelEntityId: "mdl_current", modelName: "gpt-5.6-sol", modelUpstreamName: "gpt-5.6-sol" } }]);
   } finally {
     await app.close();
     restore();
@@ -171,7 +176,7 @@ test("a live catalog push heals a switch target the runtime had not loaded", asy
       payload: { clientRequestId: "switch-after-heal", modelSelection: { modelEntityId: "mdl_fresh", modelName: "gpt-5.6-terra" } },
     });
     assert.equal(accepted.statusCode, 200, JSON.stringify(accepted.json()));
-    assert.deepEqual(switches, [{ sessionId: session.id, selection: { modelEntityId: "mdl_fresh", modelName: "gpt-5.6-terra" } }]);
+    assert.deepEqual(switches, [{ sessionId: session.id, selection: { modelEntityId: "mdl_fresh", modelName: "gpt-5.6-terra", modelUpstreamName: "gpt-5.6-terra" } }]);
   } finally {
     await app.close();
     restore();
@@ -248,7 +253,7 @@ test("a relay catalog selects and persists only the external model identity", as
     assert.equal(accepted.statusCode, 200, JSON.stringify(accepted.json()));
     assert.deepEqual(switches, [{
       sessionId: session.id,
-      selection: { modelEntityId: "mdl_relay_current", modelName: "public-codex" },
+      selection: { modelEntityId: "mdl_relay_current", modelName: "public-codex", modelUpstreamName: "public-codex" },
     }]);
     assert.equal(JSON.stringify(switches).includes("upstream"), false);
 

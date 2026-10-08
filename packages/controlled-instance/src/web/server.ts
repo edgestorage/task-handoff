@@ -13,7 +13,12 @@ import type { FastifyServerOptions } from "fastify";
 import { proxyFetch } from "httpxy";
 import { z } from "zod";
 import { appendJsonl, processSnapshot } from "@task-handoff/core/core/diagnostics";
-import { summarizeInstancePrivateModelCatalog } from "@task-handoff/core/core/instance-private-model-catalog";
+import {
+  modelNameEntryIdentity,
+  modelNameEntryMatches,
+  selectModelNameEntry,
+  summarizeInstancePrivateModelCatalog,
+} from "@task-handoff/core/core/instance-private-model-catalog";
 import { acquireLocalControlledInstanceLock } from "@task-handoff/core/core/local-controlled-instance-lock";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { TriggerExecutor } from "../triggers/executor";
@@ -872,7 +877,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     resolveModelSelection: (selection) => {
       const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "codex", selection);
       return {
-        model: resolved.modelName,
+        // Drive Codex with the stable upstream name so a display rename is
+        // inert: the label only ever describes the model in the UI.
+        model: resolved.modelUpstreamName ?? resolved.modelName,
         modelProvider: codexProviderId(resolved.modelEntityId),
       };
     },
@@ -885,10 +892,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       // unique in the instance catalog.
       const entity = entities.find((candidate) => codexProviderId(candidate.id) === modelProvider)
         || (() => {
-          const matches = entities.filter((candidate) => candidate.modelNames.some((entry) => entry.name === model));
+          const matches = entities.filter((candidate) => candidate.modelNames.some((entry) => modelNameEntryMatches(entry, model)));
           return matches.length === 1 ? matches[0] : undefined;
         })();
-      return entity ? { modelEntityId: entity.id, modelName: model } : undefined;
+      const entry = entity && selectModelNameEntry(entity.modelNames, model);
+      return entity && entry
+        ? { modelEntityId: entity.id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) }
+        : undefined;
     },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "Codex model selection diagnostic"),
     onMessageDelta: (delta) => {
@@ -905,13 +915,21 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const openCode = new OpenCodeSessionBridge(aiSessions, {
     resolveModelSelection: (selection) => {
       const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "opencode", selection);
-      return resolved ? { providerID: `task-handoff-${resolved.modelEntityId}`, modelID: resolved.modelName } : undefined;
+      // Same as Codex: the request model is the stable upstream name, so a
+      // display rename never changes what OpenCode asks the relay for.
+      return resolved
+        ? { providerID: `task-handoff-${resolved.modelEntityId}`, modelID: resolved.modelUpstreamName ?? resolved.modelName }
+        : undefined;
     },
     projectModelSelection: (providerID, modelID) => {
       const entityId = providerID.startsWith("task-handoff-") ? providerID.slice("task-handoff-".length) : undefined;
       const entities = privateModelCatalog?.entities.filter((candidate) => candidate.protocols.includes("openai-chat-completions")) || [];
-      const matches = entities.filter((candidate) => (!entityId || candidate.id === entityId) && candidate.modelNames.some((entry) => entry.name === modelID));
-      return matches.length === 1 ? { modelEntityId: matches[0].id, modelName: modelID } : undefined;
+      const matches = entities.filter((candidate) => (!entityId || candidate.id === entityId) && candidate.modelNames.some((entry) => modelNameEntryMatches(entry, modelID)));
+      if (matches.length !== 1) return undefined;
+      const entry = selectModelNameEntry(matches[0].modelNames, modelID);
+      return entry
+        ? { modelEntityId: matches[0].id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) }
+        : undefined;
     },
     connection: () => {
       appRuntime.ensureSharedResource("opencode");
@@ -1016,6 +1034,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         selectProviderAtResume: codexAppServer.supportsProviderReload(),
         switchModelWithinProvider: codexAppServer.supportsThreadSettingsUpdate(),
         switchProviderDuringSession: codexAppServer.supportsProviderReload(),
+        stableIdentity: true,
       },
       reasoningEffort: {
         // thread/start has accepted model_reasoning_effort before thread/settings/update existed.
@@ -1041,6 +1060,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         selectProviderAtResume: false,
         switchModelWithinProvider: false,
         switchProviderDuringSession: false,
+        stableIdentity: true,
       },
       reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
       hierarchy: { subagents: false },
@@ -1067,6 +1087,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           selectProviderAtResume: false,
           switchModelWithinProvider: true,
           switchProviderDuringSession: true,
+          stableIdentity: true,
         },
         reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
         hierarchy: { subagents: true },

@@ -14,6 +14,7 @@ import { useMobileToast } from '../../../src/components/MobileToast';
 import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
+import { resolveModelSelection } from '../../../src/ai-sessions/model-selection';
 import { useMobileTheme } from '../../../src/components/theme';
 import { NativePrimaryButton } from '../../../src/ai-sessions/NativeSessionControls';
 import { ModelSettingsMenu } from '../../../src/ai-sessions/SessionComposerMenus';
@@ -56,11 +57,10 @@ export default function HistoryDetailRoute() {
     currentSelection: detail.item.modelSelection,
     capability: directoryAiSessionProviderCapability(instance.capabilities, detail.item.agent)?.modelSelection,
   }) : [], [detail, instance, modelEntities]);
-  const resolvedModelSelection = useMemo(() => (
-    modelSelection && modelGroups.some((group) => group.models.some((model) => model.modelEntityId === modelSelection.modelEntityId && model.modelName === modelSelection.modelName))
-      ? modelSelection
-      : defaultAiSessionModelSelection(modelGroups)
-  ), [modelGroups, modelSelection]);
+  const resolvedModelSelection = useMemo(
+    () => resolveModelSelection(modelGroups, modelSelection) ?? defaultAiSessionModelSelection(modelGroups),
+    [modelGroups, modelSelection],
+  );
   const resume = async () => {
     setBusy(true);
     try {

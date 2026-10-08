@@ -10,6 +10,10 @@ export const AiSessionModelSelectionCapabilitiesSchema = z.object({
   selectProviderAtResume: z.boolean().default(false),
   switchModelWithinProvider: z.boolean().default(false),
   switchProviderDuringSession: z.boolean().default(false),
+  // Compatibility for v0.0.39: absence means the instance's strict selection
+  // schema predates the additive `modelUpstreamName` field. Callers must omit
+  // that field when talking to such an instance or its parse rejects the body.
+  stableIdentity: z.boolean().default(false),
 }).strip().default({
   selectModelAtCreate: false,
   selectProviderAtCreate: false,
@@ -17,6 +21,7 @@ export const AiSessionModelSelectionCapabilitiesSchema = z.object({
   selectProviderAtResume: false,
   switchModelWithinProvider: false,
   switchProviderDuringSession: false,
+  stableIdentity: false,
 });
 
 export const AiSessionReasoningEffortCapabilitiesSchema = z.object({

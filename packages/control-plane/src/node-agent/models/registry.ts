@@ -29,6 +29,7 @@ import type { ModelAssignmentRepository, ModelRepository } from "../persistence/
 import { createNodeAgentRepository } from "../persistence/repository.ts";
 import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import { modelNameEntryIdentity } from "@task-handoff/core/core/instance-private-model-catalog";
 import { INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION, InstancePrivateModelCatalogSchema } from "./private-catalog.ts";
 
 type InstanceAccess = {
@@ -398,31 +399,33 @@ export class NodeModelRegistry {
     const claudeEntity = entities.find((model) => this.modelSupportsApp(model, "claude") && routeBaseUrl(model, "anthropic-messages"));
     if (claudeEntity && credential) {
       const baseUrl = routeBaseUrl(claudeEntity, "anthropic-messages")!;
-      const name = normalizeModelNames(claudeEntity.modelNames, claudeEntity.model)
+      // Claude is driven by the stable upstream name, like the other adapters,
+      // so renaming a display label never rewrites the instance environment.
+      const entry = normalizeModelNames(claudeEntity.modelNames, claudeEntity.model)
         .slice()
-        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0]?.name;
-      if (name) {
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0];
+      if (entry) {
         environment.ANTHROPIC_API_KEY = credential;
         environment.ANTHROPIC_BASE_URL = baseUrl;
-        environment.TASK_HANDOFF_CLAUDE_MODEL = name;
+        environment.TASK_HANDOFF_CLAUDE_MODEL = modelNameEntryIdentity(entry);
       }
     }
     const opencodeEntities = entities.filter((model) => this.modelSupportsApp(model, "opencode") && routeBaseUrl(model, "openai-chat-completions"));
     if (opencodeEntities.length && credential) {
       const firstEntity = opencodeEntities[0];
-      const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)
+      const firstEntry = normalizeModelNames(firstEntity.modelNames, firstEntity.model)
         .slice()
-        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0]?.name;
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))[0];
       const providers = Object.fromEntries(opencodeEntities.map((model) => [
         `task-handoff-${model.id}`,
-        openCodeProvider(model, normalizeModelNames(model.modelNames, model.model).map((entry) => entry.name), {
+        openCodeProvider(model, normalizeModelNames(model.modelNames, model.model).map((entry) => modelNameEntryIdentity(entry)), {
           baseUrl: routeBaseUrl(model, "openai-chat-completions")!,
           apiKey: credential,
         }),
       ]));
       environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT = JSON.stringify({
         $schema: "https://opencode.ai/config.json",
-        model: `task-handoff-${firstEntity.id}/${firstModelName}`,
+        model: `task-handoff-${firstEntity.id}/${firstEntry ? modelNameEntryIdentity(firstEntry) : firstEntity.model}`,
         provider: providers,
       });
     }
@@ -448,7 +451,11 @@ export class NodeModelRegistry {
           return {
             id: model.id,
             protocols,
-            modelNames: normalizeModelNames(model.modelNames, model.model),
+            // Project name entries: the stable identity only travels to the
+            // instance when it differs from the display label, so a rename can
+            // never orphan a saved selection while derivable values stay off
+            // the wire for older readers.
+            modelNames: projectModelNameEntries(normalizeModelNames(model.modelNames, model.model)),
             routes: protocols
               .filter((protocol) => supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol))
               .map((protocol) => ({ protocol, baseUrl: modelRelayRouteBaseUrl(origin, instanceId, model.id, protocol) })),
@@ -470,7 +477,9 @@ export class NodeModelRegistry {
           endpoint: model.endpoint,
           key: model.key,
           protocols: model.protocols?.length ? model.protocols : defaultProtocols(model.app),
-          modelNames: normalizeModelNames(model.modelNames, model.model),
+          // Distinct external/upstream names are excluded above, so a direct
+          // catalog never carries a name identity that its requests ignore.
+          modelNames: projectModelNameEntries(normalizeModelNames(model.modelNames, model.model)),
         }];
       }),
       updatedAt,

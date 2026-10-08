@@ -135,22 +135,32 @@ export class NodeModelRelayResolver {
   }
 
   /**
-   * Map the request's external model name onto the upstream name. Unknown or
-   * ambiguous names are resolved before any upstream contact; there is no
-   * default-model fallback. Declared model names always win, so an explicit
-   * request mapping can never change how an exposed name resolves; mappings
-   * only extend resolution to names the entity does not expose (for example a
-   * product's hidden background model). When nothing matches, the live node
-   * policy decides between forwarding the requested name verbatim
-   * (`passthrough`, the default) and failing closed with
-   * `MODEL_RELAY_UNKNOWN_MODEL_NAME` (`reject`). Ambiguous names always fail
-   * closed regardless of policy.
+   * Map the request's model name onto the upstream name. Unknown or ambiguous
+   * names are resolved before any upstream contact; there is no default-model
+   * fallback. Resolution order:
+   *
+   * 1. the stable upstream name (`upstreamName`), the model identity clients
+   *    are configured with. It maps to itself and is tried first so renaming a
+   *    display label is inert and a label that happens to collide with another
+   *    entry's identity cannot shadow it;
+   * 2. the declared external name (`name`), so legacy clients that speak the
+   *    display label keep working; duplicate labels fail closed;
+   * 3. request mappings, which only extend resolution to names the entity does
+   *    not expose (for example a product's hidden background model).
+   *
+   * When nothing matches, the live node policy decides between forwarding the
+   * requested name verbatim (`passthrough`, the default) and failing closed
+   * with `MODEL_RELAY_UNKNOWN_MODEL_NAME` (`reject`). Ambiguous external names
+   * always fail closed regardless of policy.
    */
   resolveUpstreamModelName(
     model: Pick<NodeModelConfig, "modelNames" | "model"> & { mappings?: NodeModelConfig["mappings"] },
     requestedName: string,
   ) {
-    const matches = normalizeModelNameEntries(model.modelNames, model.model).filter((entry) => entry.name === requestedName);
+    const entries = normalizeModelNameEntries(model.modelNames, model.model);
+    // The stable identity always wins, even over another entry's display label.
+    if (entries.some((entry) => entry.upstreamName === requestedName)) return requestedName;
+    const matches = entries.filter((entry) => entry.name === requestedName);
     if (matches.length > 1) {
       throw relayError(409, "MODEL_RELAY_AMBIGUOUS_MODEL_NAME", `Model name ${JSON.stringify(requestedName)} is ambiguous on this relay route.`);
     }

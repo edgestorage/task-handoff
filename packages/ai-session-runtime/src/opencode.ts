@@ -12,6 +12,7 @@ import {
   type AiSessionSendInput,
 } from "./ai-session-control";
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
@@ -146,14 +147,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (session.status === "running" || session.status === "waiting") throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "Model cannot be changed while a turn is active.", 409);
     const pending = this.pendingSettingsBySession.get(session.providerSessionId);
     const reasoningEffort = pending?.reasoningEffort ?? session.reasoningEffort;
-    if (!this.modelRef(selection, reasoningEffort)) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
-    this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: selection, reasoningEffort });
+    const ref = this.modelRef(selection, reasoningEffort);
+    if (!ref) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
+    // Store the catalog's canonical selection, like the Codex path: a request
+    // may carry only a label (or only the upstream name), and the stable
+    // identity plus the current display label must survive a later rename.
+    const canonical = this.options.projectModelSelection?.(ref.providerID, ref.modelID) ?? selection;
+    this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: canonical, reasoningEffort });
     this.registry.applyRealtimeEvent(session.id, {
       kind: "model-selection",
-      modelSelection: selection,
+      modelSelection: canonical,
       observedAt: new Date().toISOString(),
     });
-    return selection;
+    return canonical;
   }
 
   async updateReasoningEffort(session: AiSessionStatus, effort: AiSessionReasoningEffort) {
@@ -385,8 +391,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (pending) {
       const observed = observedProjection.snapshot.modelSelection;
       const observedEffort = observedProjection.snapshot.reasoningEffort;
-      if (observed?.modelEntityId === pending.modelSelection.modelEntityId
-        && observed.modelName === pending.modelSelection.modelName
+      if (observed && sameAiSessionModelSelection(observed, pending.modelSelection)
         && observedEffort === pending.reasoningEffort) {
         this.pendingSettingsBySession.delete(providerSessionId);
       } else {

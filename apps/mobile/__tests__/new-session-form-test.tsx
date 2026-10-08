@@ -138,6 +138,34 @@ describe('<NewSessionForm />', () => {
     expect(modelGroupSubtitle(modelGroups[0], { modelEntityId: 'provider-one', modelName: 'large' }, formatModelGroupSummary)).toBe('large');
     expect(modelGroupSubtitle(modelGroups[0], undefined, formatModelGroupSummary)).toBe('small and 2 models');
     expect(modelGroupSubtitle(modelGroups[1], undefined, formatModelGroupSummary)).toBe('only');
+    const renamedGroups = [{
+      modelEntityId: 'provider-one',
+      providerName: 'Provider One',
+      models: [
+        { modelEntityId: 'provider-one', modelName: 'small', modelUpstreamName: 'upstream-small', providerName: 'Provider One' },
+        { modelEntityId: 'provider-one', modelName: 'large-2026', modelUpstreamName: 'upstream-large', providerName: 'Provider One' },
+      ],
+    }];
+    const renamedSelection = { modelEntityId: 'provider-one', modelName: 'stale-label', modelUpstreamName: 'upstream-large' };
+    expect(modelGroupSubtitle(renamedGroups[0], renamedSelection, formatModelGroupSummary)).toBe('large-2026');
+    expect(modelSettingsMenuActions({
+      formatModelGroupSummary,
+      imageColor: '#aeaeb2',
+      selectedImageColor: '#0a84ff',
+      modelGroups: renamedGroups,
+      modelSelection: renamedSelection,
+      provider: 'codex',
+      reasoningEnabled: false,
+      reasoningTitle: 'Reasoning effort',
+    })[0]).toEqual(expect.objectContaining({
+      image: 'checkmark',
+      imageColor: '#0a84ff',
+      subtitle: 'large-2026',
+      subactions: expect.arrayContaining([
+        expect.objectContaining({ state: 'off', title: 'small' }),
+        expect.objectContaining({ state: 'on', title: 'large-2026' }),
+      ]),
+    }));
     const settingsActions = modelSettingsMenuActions({
       formatModelGroupSummary,
       imageColor: '#aeaeb2',

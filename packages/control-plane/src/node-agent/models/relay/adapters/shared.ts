@@ -63,11 +63,18 @@ export function createProtocolAdapter(input: {
     },
     prepareResponse: ({ body, plan, externalModelName, upstreamModelName, maxResponseEventBytes, onDiagnostic }) => {
       if (plan.responseMode === "raw") return body;
+      // An identity mapping (a declared name that equals its upstream name, or a
+      // passthrough of an unknown name) rewrites nothing, so an upstream that
+      // answers with a different canonical model name is expected rather than a
+      // mismatch worth warning about.
+      const remapped = externalModelName !== undefined
+        && upstreamModelName !== undefined
+        && externalModelName !== upstreamModelName;
       const mapping: JsonModelRewriteMapping = {
         paths: input.responsePaths,
         externalName: externalModelName,
         expectedUpstreamName: upstreamModelName,
-        onMismatch: () => onDiagnostic?.({ code: "MODEL_RELAY_UPSTREAM_MODEL_MISMATCH" }),
+        ...(remapped ? { onMismatch: () => onDiagnostic?.({ code: "MODEL_RELAY_UPSTREAM_MODEL_MISMATCH" }) } : {}),
       };
       if (plan.responseMode === "sse") {
         return rewriteSseModelResponseBody(body, mapping, { maxEventBytes: maxResponseEventBytes });

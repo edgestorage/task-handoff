@@ -275,7 +275,8 @@
                           <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="13" />
                           {{ operationLabel(activeJob(app)!.operation) }}
                         </Button>
-                        <DropdownMenu v-else-if="hasAppActions(app)">
+                        <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
+                        <DropdownMenu v-else-if="hasAppMenuActions(app)">
                           <DropdownMenuTrigger as-child>
                             <Button size="sm" variant="outline" :disabled="operationSubmitting === app.id || checkingApps.has(app.id)" :aria-label="t('instances.settings.appActions')">
                               <LoaderCircle v-if="checkingApps.has(app.id)" class="animate-spin motion-reduce:animate-none" :size="13" />
@@ -283,10 +284,9 @@
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" :side-offset="6" class="instance-app-actions-menu">
-                            <DropdownMenuItem v-if="app.canInstall" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</DropdownMenuItem>
                             <DropdownMenuItem v-if="app.canUpdate" :disabled="checkingApps.has(app.id)" @select="runAppUpdateCheck(app)">{{ checkingApps.has(app.id) ? t("instances.settings.checkingUpdate") : t("instances.settings.checkUpdate") }}</DropdownMenuItem>
                             <DropdownMenuItem v-if="app.canUpdate" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'update')">{{ t("instances.settings.update") }}</DropdownMenuItem>
-                            <DropdownMenuSeparator v-if="app.canUninstall" />
+                            <DropdownMenuSeparator v-if="app.canUpdate && app.canUninstall" />
                             <DropdownMenuItem v-if="app.canUninstall" class="instance-app-action-danger" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -367,7 +367,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, CodexInstanceSettings, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
@@ -376,6 +376,7 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
+import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -540,8 +541,10 @@ const codexInstalled = computed(() => {
   return !app || app.state === "installed";
 });
 const codexControlsDisabled = computed(() => savingCodex.value || !codexConfigEnabled.value || !codexSettingsSupported.value);
-function codexModelValue(modelEntityId: string, modelName: string) {
-  return `${encodeURIComponent(modelEntityId)}:${encodeURIComponent(modelName)}`;
+function codexModelValue(selection: AiSessionModelSelection) {
+  return [selection.modelEntityId, selection.modelUpstreamName || selection.modelName, selection.modelName]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
 }
 const codexModelOptions = computed(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
@@ -551,23 +554,37 @@ const codexModelOptions = computed(() => {
     .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
       .slice()
       .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-      .map((entry) => ({ value: codexModelValue(instanceModelEntityId(model), entry.name), label: `${model.name} · ${entry.name}` })));
+      .map((entry) => {
+        const selection: AiSessionModelSelection = {
+          modelEntityId: instanceModelEntityId(model),
+          modelName: entry.name,
+          modelUpstreamName: entry.upstreamName ?? entry.name,
+        };
+        return { value: codexModelValue(selection), label: `${model.name} · ${entry.name}`, selection };
+      }));
 });
 function currentCodexSettings(): CodexInstanceSettings {
   const selectedModel = codexSubagentModel.value === "default"
     ? undefined
     : codexModelOptions.value.find((option) => option.value === codexSubagentModel.value);
-  const [encodedEntityId, encodedModelName] = selectedModel?.value.split(":") || [];
   return {
     ...(codexVerbosity.value === "default" ? {} : { modelVerbosity: codexVerbosity.value }),
     ...(codexPersonality.value === "default" ? {} : { personality: codexPersonality.value }),
     multiAgent: {
       enabled: codexMultiAgentEnabled.value,
       ...(codexMultiAgentMaxThreads.value ? { maxConcurrentThreads: Number(codexMultiAgentMaxThreads.value) } : {}),
-      ...(encodedEntityId && encodedModelName ? { defaultModel: { modelEntityId: decodeURIComponent(encodedEntityId), modelName: decodeURIComponent(encodedModelName) } } : {}),
+      ...(selectedModel ? { defaultModel: selectedModel.selection } : {}),
       ...(codexSubagentReasoning.value === "default" ? {} : { defaultReasoningEffort: codexSubagentReasoning.value }),
     },
   };
+}
+/**
+ * Encode a stored subagent pin, resolving it through the catalog first so a
+ * rename keeps the pin and the picker shows the entry's current label.
+ */
+function storedCodexSubagentModelValue(defaultModel: AiSessionModelSelection): string {
+  const option = codexModelOptions.value.find((candidate) => sameModelSelectionRef(candidate.selection, defaultModel));
+  return option?.value ?? codexModelValue(defaultModel);
 }
 const codexChanged = computed(() => Boolean(props.instance && (
   codexConfigEnabled.value !== props.instance.config.codexConfigEnabled
@@ -686,9 +703,8 @@ watch(
     codexPersonality.value = codexSettings?.personality || "default";
     codexMultiAgentEnabled.value = codexSettings?.multiAgent.enabled ?? true;
     codexMultiAgentMaxThreads.value = codexSettings?.multiAgent.maxConcurrentThreads ? String(codexSettings.multiAgent.maxConcurrentThreads) : "";
-    codexSubagentModel.value = codexSettings?.multiAgent.defaultModel
-      ? codexModelValue(codexSettings.multiAgent.defaultModel.modelEntityId, codexSettings.multiAgent.defaultModel.modelName)
-      : "default";
+    const storedSubagentModel = codexSettings?.multiAgent.defaultModel;
+    codexSubagentModel.value = storedSubagentModel ? storedCodexSubagentModelValue(storedSubagentModel) : "default";
     codexSubagentReasoning.value = codexSettings?.multiAgent.defaultReasoningEffort || "default";
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
@@ -788,7 +804,7 @@ async function saveCodex() {
     codexMultiAgentEnabled.value = settings?.multiAgent.enabled ?? true;
     codexMultiAgentMaxThreads.value = settings?.multiAgent.maxConcurrentThreads ? String(settings.multiAgent.maxConcurrentThreads) : "";
     codexSubagentModel.value = settings?.multiAgent.defaultModel
-      ? codexModelValue(settings.multiAgent.defaultModel.modelEntityId, settings.multiAgent.defaultModel.modelName)
+      ? storedCodexSubagentModelValue(settings.multiAgent.defaultModel)
       : "default";
     codexSubagentReasoning.value = settings?.multiAgent.defaultReasoningEffort || "default";
     showControlPlaneToast(translateApiError(cause, t), "error");
@@ -904,8 +920,8 @@ function appActionHint(app: ManagedAppProjection) {
   return reason?.message || t("instances.settings.noAction");
 }
 
-function hasAppActions(app: ManagedAppProjection) {
-  return Boolean(app.canInstall || app.canUpdate || app.canUninstall);
+function hasAppMenuActions(app: ManagedAppProjection) {
+  return Boolean(app.canUpdate || app.canUninstall);
 }
 
 function openAppConfirmation(app: ManagedAppProjection, operation: AppManagementOperation) {

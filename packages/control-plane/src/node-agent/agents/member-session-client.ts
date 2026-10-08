@@ -1,4 +1,4 @@
-import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
+import { modelSelectionForInstance, type ControlledInstance } from "@task-handoff/protocol/control-plane";
 import {
   AgentRunMemberInstanceCloseResultSchema,
   AgentRunMemberInstanceCreateInputSchema,
@@ -25,10 +25,18 @@ export class AgentRunMemberSessionClient {
   }
 
   async create(instance: ControlledInstance, input: AgentRunMemberInstanceCreateInput) {
+    const body = AgentRunMemberInstanceCreateInputSchema.parse({
+      ...input,
+      // An instance that predates the stable-identity split rejects the
+      // additive field; drop it and let that instance resolve from its catalog.
+      ...(input.modelSelection
+        ? { modelSelection: modelSelectionForInstance(instance.capabilities, input.providerId, input.modelSelection) }
+        : {}),
+    });
     return AgentRunMemberInstanceCreateResultSchema.parse(await this.request(
       instance,
       "/api/internal/node-agent/agent-runs/members",
-      { method: "POST", body: AgentRunMemberInstanceCreateInputSchema.parse(input) },
+      { method: "POST", body },
     ));
   }
 

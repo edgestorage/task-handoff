@@ -51,6 +51,9 @@ export const CodexPersonalitySchema = z.enum(["none", "friendly", "pragmatic"]);
 export const CodexSubagentModelSchema = z.object({
   modelEntityId: z.string().trim().min(1).max(120),
   modelName: z.string().trim().min(1).max(240),
+  // Stable model identity; see AiSessionModelSelectionSchema. Optional so
+  // settings written before the identity split still parse.
+  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
 }).strict();
 export const CodexInstanceSettingsSchema = z.object({
   modelVerbosity: CodexModelVerbositySchema.optional(),
@@ -81,6 +84,9 @@ export function sanitizeCodexInstanceSettings(input: unknown) {
               : {
                   modelEntityId: (defaultModel as Record<string, unknown>).modelEntityId,
                   modelName: (defaultModel as Record<string, unknown>).modelName,
+                  ...(typeof (defaultModel as Record<string, unknown>).modelUpstreamName === "string"
+                    ? { modelUpstreamName: (defaultModel as Record<string, unknown>).modelUpstreamName }
+                    : {}),
                 },
           }),
           ...(value.defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort: value.defaultReasoningEffort }),
@@ -435,6 +441,24 @@ export function aiSessionProviderCapabilities(capabilities: unknown) {
 
 export function aiSessionProviderCapability(capabilities: unknown, agent: string) {
   return aiSessionProviderCapabilities(capabilities).find((provider) => provider.agent === agent);
+}
+
+/**
+ * Older controlled instances parse `modelSelection` with a strict schema that
+ * predates the additive `modelUpstreamName` field, so sending it there fails
+ * the whole request. Drop the field unless the instance advertises
+ * stable-identity support; those instances resolve identity from their own
+ * model catalog anyway.
+ */
+export function modelSelectionForInstance<T extends { modelUpstreamName?: string }>(
+  capabilities: unknown,
+  agent: string,
+  selection: T,
+): T {
+  if (selection.modelUpstreamName === undefined) return selection;
+  if (aiSessionProviderCapability(capabilities, agent)?.modelSelection?.stableIdentity) return selection;
+  const { modelUpstreamName: _omitted, ...legacy } = selection;
+  return legacy as T;
 }
 
 export function aiSessionConversationAttachmentCapabilityAgents(

@@ -19,6 +19,7 @@ import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiS
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
+import { sameModelSelectionRef } from "./modelSelectionRef";
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
@@ -176,11 +177,17 @@ const selectedPermission = computed(() => permissionOptions.value.find((option) 
 const modelGroups = computed(() => props.modelGroups || []);
 const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
 const displayedModelSelection = computed(() => props.modelSelection || modelOptions.value[0]);
-const displayedModelName = computed(() => displayedModelSelection.value?.modelName || t("sessions.composer.modelSelectionUnavailable"));
-const displayedProviderName = computed(() => modelOptions.value.find((model) => (
-  model.modelEntityId === displayedModelSelection.value?.modelEntityId
-  && model.modelName === displayedModelSelection.value?.modelName
-))?.providerName || t("sessions.composer.selectionNotSet"));
+// Resolve the catalog option so a stored selection shows the entry's current
+// display label after a rename; the stored label is only the last resort.
+const displayedModelOption = computed(() => {
+  const selection = displayedModelSelection.value;
+  return selection ? modelOptions.value.find((model) => sameModelSelectionRef(model, selection)) : undefined;
+});
+const displayedModelName = computed(() => displayedModelOption.value?.modelName
+  || displayedModelSelection.value?.modelName
+  || t("sessions.composer.modelSelectionUnavailable"));
+const displayedProviderName = computed(() => displayedModelOption.value?.providerName
+  || t("sessions.composer.selectionNotSet"));
 const modelTriggerEl = ref<HTMLButtonElement>();
 const modelMenuOpen = ref(false);
 const modelSummaryTooltipOpen = ref(false);

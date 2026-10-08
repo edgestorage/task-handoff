@@ -22,7 +22,8 @@ test("the session and history composers follow the provider's model-selection ca
   assert.match(panel, /const historyModelSelectionEnabled = computed\(\(\) => aiSessionModelSelectionAllowed\(/);
   assert.match(panel, /:model-selection-enabled="selectedSessionModelSelectionEnabled"/);
   assert.match(panel, /:model-selection-enabled="historyModelSelectionEnabled"/);
-  // 只读回显要保留被恢复会话自身的模型，而不是被空目录清成占位文案。
-  assert.match(panel, /const historyModelDisplay = computed\(\(\) => historyModelSelection\.value \|\| historyDetail\.value\?\.item\.modelSelection\)/);
+  // 只读回显要保留被恢复会话自身的模型，而不是被空目录清成占位文案；随后按
+  // 稳定标识在目录里解析出当前展示名，改名后仍能对上同一个模型。
+  assert.match(panel, /const historyModelDisplay = computed\(\(\) => \{[\s\S]*historyModelSelection\.value \|\| historyDetail\.value\?\.item\.modelSelection[\s\S]*sameModelSelectionRef\(model, selection\)/);
   assert.match(panel, /:model-selection="historyModelDisplay"/);
 });

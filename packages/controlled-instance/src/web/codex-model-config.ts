@@ -8,6 +8,8 @@ import { createManagedBackupSync, pruneManagedBackupsSync } from "@task-handoff/
 import {
   instancePrivateModelCatalogBaseUrl,
   relayInstancePrivateModelCatalog,
+  modelNameEntryIdentity,
+  selectModelNameEntry,
   type InstancePrivateModelCatalog,
 } from "@task-handoff/core/core/instance-private-model-catalog";
 import type { ControlledPrivateModelCatalog } from "./private-model-catalog";
@@ -115,8 +117,11 @@ export function applyManagedCodexModelConfig(
   // default provider.
   const entities = codexEntities(catalog).filter((entity) => codexEntityBaseUrl(catalog, entity.id));
   const defaultEntity = entities[0];
-  const defaultName = defaultEntity?.modelNames.slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))[0]?.name;
-  const model = defaultName || (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
+  const defaultEntry = defaultEntity?.modelNames.slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))[0];
+  // Codex is configured with the stable upstream name, not the display label,
+  // so an operator renaming a label never rewrites the Codex config.
+  const defaultIdentity = defaultEntry ? modelNameEntryIdentity(defaultEntry) : undefined;
+  const model = defaultIdentity || (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
   const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || "").trim();
   const apiKey = (env.OPENAI_API_KEY || "").trim();
   const hasManagedModel = catalog ? Boolean(defaultEntity && model) : Boolean(model && baseUrl && apiKey);
@@ -200,14 +205,20 @@ function applyManagedSettings(config: ConfigObject, settings: CodexInstanceSetti
     agents.max_concurrent_threads_per_session = settings.multiAgent.maxConcurrentThreads;
   }
   if (settings.multiAgent.defaultModel) {
-    const entity = catalog?.entities.find((candidate) => candidate.id === settings.multiAgent.defaultModel?.modelEntityId
+    const defaultModel = settings.multiAgent.defaultModel;
+    const entity = catalog?.entities.find((candidate) => candidate.id === defaultModel.modelEntityId
       && candidate.protocols.includes("openai-responses"));
-    if (!entity?.modelNames.some((entry) => entry.name === settings.multiAgent.defaultModel?.modelName)) {
+    // Resolve by stable identity first: a subagent pinned before the model was
+    // renamed must keep working and be written out under its current label.
+    const entry = entity && (selectModelNameEntry(entity.modelNames, defaultModel.modelUpstreamName ?? defaultModel.modelName)
+      ?? selectModelNameEntry(entity.modelNames, defaultModel.modelName));
+    if (!entry) {
       throw Object.assign(new Error("The configured Codex subagent model is not assigned to this instance."), {
         code: "CODEX_SUBAGENT_MODEL_UNAVAILABLE",
       });
     }
-    agents.default_subagent_model = settings.multiAgent.defaultModel.modelName;
+    // The subagent default follows the same stable identity as the main model.
+    agents.default_subagent_model = modelNameEntryIdentity(entry);
   }
   if (settings.multiAgent.defaultReasoningEffort) {
     agents.default_subagent_reasoning_effort = settings.multiAgent.defaultReasoningEffort;

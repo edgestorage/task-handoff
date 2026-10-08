@@ -31,6 +31,8 @@ export type AgentCatalogAgent = {
   providerId: string;
   provider: string;
   model: string;
+  /** 稳定模型身份；`model` 只是可能被改名的展示标签。 */
+  modelUpstreamName?: string;
   permissionMode: string;
   reasoning: string;
   executionPolicy: AgentExecutionPolicy;
@@ -71,6 +73,7 @@ export type AgentEditorDraft = {
   providerId: string;
   modelEntityId: string;
   modelName: string;
+  modelUpstreamName: string;
   reasoningEffort: string;
   permissionMode: string;
   /**

@@ -16,7 +16,7 @@ type Row = Record<string, unknown>;
 /** 定义行的权威列集合：不在这里的列只说明它是更高版本写入的，读取时忽略并记录诊断。 */
 const AGENT_DEFINITION_COLUMNS = new Set([
   "id", "name", "description", "appended_prompt", "target_instance_id", "cwd_folder_id", "provider_id",
-  "model_entity_id", "model_name", "reasoning_effort", "permission_mode", "execution_policy_json",
+  "model_entity_id", "model_name", "model_upstream_name", "reasoning_effort", "permission_mode", "execution_policy_json",
   "revision", "created_at", "updated_at",
 ]);
 
@@ -33,6 +33,7 @@ export type AgentDefinitionContent = {
   providerId: string;
   modelEntityId?: string;
   modelName?: string;
+  modelUpstreamName?: string;
   reasoningEffort?: string;
   permissionMode?: string;
   executionPolicy: AgentExecutionPolicy;
@@ -75,6 +76,7 @@ export function agentDefinitionRevision(content: Omit<AgentDefinitionContent, "i
     content.providerId,
     content.modelEntityId ?? null,
     content.modelName ?? null,
+    content.modelUpstreamName ?? null,
     content.reasoningEffort ?? null,
     content.permissionMode ?? null,
     content.executionPolicy.workspaceMaterializer,
@@ -116,12 +118,12 @@ export class AgentDefinitionRepository {
       const revision = agentDefinitionRevision(content);
     this.client.prepare(`INSERT INTO na_agent_definitions
         (id, name, description, appended_prompt, target_instance_id, cwd_folder_id, provider_id,
-         model_entity_id, model_name, reasoning_effort, permission_mode, execution_policy_json,
+         model_entity_id, model_name, model_upstream_name, reasoning_effort, permission_mode, execution_policy_json,
          revision, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(content.id, content.name, content.description, content.appendedPrompt, content.targetInstanceId,
           content.cwdFolderId, content.providerId, content.modelEntityId ?? null, content.modelName ?? null,
-          content.reasoningEffort ?? null, content.permissionMode ?? null, json(content.executionPolicy),
+          content.modelUpstreamName ?? null, content.reasoningEffort ?? null, content.permissionMode ?? null, json(content.executionPolicy),
           revision, timestamp, timestamp);
       return this.requireDefinition(content.id);
     });
@@ -135,11 +137,11 @@ export class AgentDefinitionRepository {
       const revision = agentDefinitionRevision(content);
       this.client.prepare(`UPDATE na_agent_definitions SET
           name = ?, description = ?, appended_prompt = ?, target_instance_id = ?, cwd_folder_id = ?, provider_id = ?,
-          model_entity_id = ?, model_name = ?, reasoning_effort = ?, permission_mode = ?, execution_policy_json = ?,
+          model_entity_id = ?, model_name = ?, model_upstream_name = ?, reasoning_effort = ?, permission_mode = ?, execution_policy_json = ?,
           revision = ?, updated_at = ?
         WHERE id = ?`)
         .run(content.name, content.description, content.appendedPrompt, content.targetInstanceId, content.cwdFolderId,
-          content.providerId, content.modelEntityId ?? null, content.modelName ?? null, content.reasoningEffort ?? null,
+          content.providerId, content.modelEntityId ?? null, content.modelName ?? null, content.modelUpstreamName ?? null, content.reasoningEffort ?? null,
           content.permissionMode ?? null, json(content.executionPolicy), revision, timestamp, id);
       return { status: "updated", definition: this.requireDefinition(id) };
     });
@@ -173,6 +175,7 @@ export class AgentDefinitionRepository {
       providerId: row.provider_id,
       modelEntityId: row.model_entity_id ?? undefined,
       modelName: row.model_name ?? undefined,
+      modelUpstreamName: row.model_upstream_name ?? undefined,
       reasoningEffort: row.reasoning_effort ?? undefined,
       permissionMode: row.permission_mode ?? undefined,
       executionPolicy: parseJson(row.execution_policy_json),

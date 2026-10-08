@@ -30,6 +30,7 @@ test("private catalog resolves defaults and rejects stale selections without fal
   assert.deepEqual(resolveControlledPrivateModelSelection(catalog, "codex"), {
     modelEntityId: "provider_one",
     modelName: "model-one",
+    modelUpstreamName: "model-one",
   });
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "removed", modelName: "model-one" }),
@@ -62,7 +63,58 @@ test("a switch target is never reported as the model previously selected for the
   );
   assert.deepEqual(
     resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "provider_one", modelName: "model-one" }, { intent: "target" }),
-    { modelEntityId: "provider_one", modelName: "model-one" },
+    { modelEntityId: "provider_one", modelName: "model-one", modelUpstreamName: "model-one" },
+  );
+});
+
+test("renaming a display label keeps resolving a stored selection by its stable identity", () => {
+  const renamed = {
+    ...catalog,
+    entities: [{
+      ...catalog.entities[0],
+      modelNames: [{ name: "model-one-renamed", upstreamName: "model-one", order: 0 }],
+    }],
+  };
+  // A session recorded before the rename carries the old label plus the stable
+  // identity; it must resolve and report the entry's current label.
+  assert.deepEqual(
+    resolveControlledPrivateModelSelection(renamed, "codex", {
+      modelEntityId: "provider_one",
+      modelName: "model-one",
+      modelUpstreamName: "model-one",
+    }),
+    { modelEntityId: "provider_one", modelName: "model-one-renamed", modelUpstreamName: "model-one" },
+  );
+});
+
+test("a client may select a model by its stable upstream name instead of the display label", () => {
+  const renamed = {
+    ...catalog,
+    entities: [{
+      ...catalog.entities[0],
+      modelNames: [{ name: "pretty-label", upstreamName: "upstream-id", order: 0 }],
+    }],
+  };
+  assert.deepEqual(
+    resolveControlledPrivateModelSelection(renamed, "codex", { modelEntityId: "provider_one", modelName: "upstream-id" }),
+    { modelEntityId: "provider_one", modelName: "pretty-label", modelUpstreamName: "upstream-id" },
+  );
+});
+
+test("the stable upstream name wins when a label collides with another entry's identity", () => {
+  const colliding = {
+    ...catalog,
+    entities: [{
+      ...catalog.entities[0],
+      modelNames: [
+        { name: "shared", upstreamName: "upstream-a", order: 0 },
+        { name: "upstream-a", upstreamName: "shared", order: 1 },
+      ],
+    }],
+  };
+  assert.deepEqual(
+    resolveControlledPrivateModelSelection(colliding, "codex", { modelEntityId: "provider_one", modelName: "shared" }),
+    { modelEntityId: "provider_one", modelName: "upstream-a", modelUpstreamName: "shared" },
   );
 });
 

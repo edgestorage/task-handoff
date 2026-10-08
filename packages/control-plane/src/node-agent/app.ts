@@ -12,6 +12,7 @@ import { z } from "zod";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
+import { selectModelNameEntry } from "@task-handoff/core/core/instance-private-model-catalog";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
@@ -1803,7 +1804,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       if (subagentModel) {
         const entity = state.modelRegistry.privateCatalog(id).entities.find((candidate) => candidate.id === subagentModel.modelEntityId
           && candidate.protocols.includes("openai-responses"));
-        if (!entity?.modelNames.some((entry) => entry.name === subagentModel.modelName)) {
+        const entry = entity && (selectModelNameEntry(entity.modelNames, subagentModel.modelUpstreamName ?? subagentModel.modelName)
+          ?? selectModelNameEntry(entity.modelNames, subagentModel.modelName));
+        if (!entry) {
           throw Object.assign(new Error("The Codex subagent model must be assigned to this instance."), {
             statusCode: 400,
             code: "CODEX_SUBAGENT_MODEL_UNAVAILABLE",

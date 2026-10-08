@@ -194,7 +194,8 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.match(dialog, /t\("instances\.settings\.confirmUpdate"\)/);
   assert.match(dialog, /t\("instances\.settings\.updateDescription"\)/);
   assert.match(dialog, /DropdownMenu/);
-  assert.match(dialog, /hasAppActions/);
+  assert.match(dialog, /hasAppMenuActions/);
+  assert.match(dialog, /v-else-if="app\.canInstall"[^\n]*openAppConfirmation\(app, 'install'\)/);
   assert.match(dialog, /instances\.settings\.appActions/);
   assert.match(dialog, /instances\.settings\.checkUpdate/);
   assert.match(dialog, /instances\.settings\.checkingUpdate/);

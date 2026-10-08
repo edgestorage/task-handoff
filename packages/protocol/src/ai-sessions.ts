@@ -475,10 +475,34 @@ export const AiSessionRuntimePathSchema = z.object({
 
 // Public wire identity only. Endpoint, protocol and credentials remain in the
 // controlled instance's private model catalog.
+//
+// `modelUpstreamName` is the stable model identity: it is the name the provider
+// (or the node relay in front of it) actually receives, so renaming the
+// user-facing `modelName` never breaks an existing session. `modelName` stays
+// the display label and is refreshed from the catalog whenever the selection is
+// resolved. Records written before this field existed fall back to matching by
+// `modelName`.
 export const AiSessionModelSelectionSchema = z.object({
   modelEntityId: z.string().trim().min(1).max(120),
   modelName: z.string().trim().min(1).max(240),
+  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
 }).strict();
+
+/** Stable model identity of a selection; `modelName` is only the display label. */
+export function aiSessionModelSelectionIdentity(selection: AiSessionModelSelection) {
+  return selection.modelUpstreamName || selection.modelName;
+}
+
+/**
+ * True when two selections refer to the same model. Comparison is by entity id
+ * plus stable identity, with the display label accepted as a fallback so
+ * records written before `modelUpstreamName` existed still match.
+ */
+export function sameAiSessionModelSelection(left: AiSessionModelSelection, right: AiSessionModelSelection) {
+  if (left.modelEntityId !== right.modelEntityId) return false;
+  return aiSessionModelSelectionIdentity(left) === aiSessionModelSelectionIdentity(right)
+    || left.modelName === right.modelName;
+}
 
 export const AiSessionReasoningEffortSchema = z.enum([
   "none",
