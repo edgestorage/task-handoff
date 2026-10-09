@@ -22,11 +22,22 @@ function isRegularFile(candidate: string) {
   }
 }
 
+const EXECUTABLE_EXTENSIONS = [".com", ".exe"];
+
+function isExecutableExtension(extension: string) {
+  return EXECUTABLE_EXTENSIONS.includes(extension.toLowerCase());
+}
+
 /**
  * node-pty resolves a relative command name on Windows by scanning `Path` for a file whose name
  * matches exactly, without applying PATHEXT. Windows only ships `docker.exe`, so spawning the bare
  * name fails with a `File not found: ` error before the process is ever created. Resolving the
  * executable here and handing node-pty an absolute path avoids that lookup entirely.
+ *
+ * CreateProcess only loads PE images, so shims and extension-less launchers (`.cmd`, `.bat`, the
+ * scripts npm and scoop drop next to a binary) fail there with `Cannot create process, error code:
+ * 193`. Every `Path` entry is searched for a real executable first, so a wrapper that sits earlier
+ * in `Path` cannot shadow the `docker.exe` the plain command runner uses.
  */
 export function resolveTerminalCommand(
   command: string,
@@ -38,11 +49,21 @@ export function resolveTerminalCommand(
   if (path.win32.isAbsolute(command) || /[\\/]/.test(command)) return command;
   const isFile = options.isFile ?? isRegularFile;
   const directories = (env.PATH ?? env.Path ?? "").split(";").map((entry) => entry.trim()).filter(Boolean);
-  const extensions = ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((entry) => entry.trim()).filter(Boolean)];
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidate = path.win32.join(directory, `${command}${extension}`);
-      if (isFile(candidate)) return candidate;
+  const hasExtension = path.win32.extname(command) !== "";
+  const configured = hasExtension
+    ? [""]
+    : (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((entry) => entry.trim()).filter(Boolean);
+  const executables = hasExtension ? [] : configured.filter(isExecutableExtension);
+  const scripts = hasExtension ? [] : configured.filter((extension) => !isExecutableExtension(extension));
+  const searchOrders = hasExtension
+    ? [configured]
+    : [executables.length ? executables : EXECUTABLE_EXTENSIONS, [...scripts, ""]];
+  for (const extensions of searchOrders) {
+    for (const directory of directories) {
+      for (const extension of extensions) {
+        const candidate = path.win32.join(directory, `${command}${extension}`);
+        if (isFile(candidate)) return candidate;
+      }
     }
   }
   return command;
@@ -57,16 +78,23 @@ export const defaultTerminalCommandRunner: TerminalCommandRunner = (command, arg
   let timedOut = false;
   let aborted = false;
   let terminal: ReturnType<typeof spawnPty>;
+  const resolvedCommand = resolveTerminalCommand(command);
   try {
-    terminal = spawnPty(resolveTerminalCommand(command), args, {
+    terminal = spawnPty(resolvedCommand, args, {
       name: "xterm-256color",
       cols: options.cols || 120,
       rows: options.rows || 40,
       cwd: process.cwd(),
       env: process.env as Record<string, string>,
     });
-  } catch (error) {
-    reject(error);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    reject(Object.assign(
+      new Error(resolvedCommand === command
+        ? `${command} could not be started: ${detail}`
+        : `${command} could not be started from ${resolvedCommand}: ${detail}`),
+      { code: "RUNTIME_EXECUTOR_FAILED", cause },
+    ));
     return;
   }
   const timer = options.timeoutMs ? setTimeout(() => {
