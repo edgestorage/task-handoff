@@ -304,8 +304,14 @@ jobs:
                 else
                   architecture="arm64"
                 fi
-              elif [[ "$name" == *-x64.* && "$platform" == "macOS" ]]; then
-                architecture="Intel"
+              elif [[ "$name" == *-x64.* ]]; then
+                if [[ "$platform" == "macOS" ]]; then
+                  architecture="Intel"
+                fi
+              elif [[ "$platform" == "Windows" ]]; then
+                # electron-builder also emits one installer covering every target
+                # architecture; its file name carries no architecture token.
+                architecture="x64 + arm64"
               fi
               url="https://github.com/${GH_REPO}/releases/download/${GITHUB_REF_NAME}/${name}"
               printf '| %s | %s | [%s](%s) |\n' "$platform" "$architecture" "$format" "$url"
