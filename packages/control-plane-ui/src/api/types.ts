@@ -564,7 +564,7 @@ export type NodeAgentModelRelay = {
   enabled: boolean;
   /** Additive: absent on node-agents that predate the unknown-model policy. */
   unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
-  /** "default" means the switch was never persisted and relay stays off. */
+  /** "default" means the switch was never persisted and relay stays on. */
   source: "default" | "persisted";
 };
 

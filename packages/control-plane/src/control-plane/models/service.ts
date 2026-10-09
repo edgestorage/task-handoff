@@ -49,41 +49,6 @@ function nodeSupportsModelRequestMappings(node: Node) {
   return supportsNodeModelRequestMappings(nodeAgentCapabilities(node));
 }
 
-/**
- * A record or write patch is mapped when any external name resolves to a
- * different upstream name; patches without name entries never introduce one.
- */
-function modelRecordHasMapping(model: { model?: string; modelNames?: ModelNameEntry[] }) {
-  return normalizeModelNameEntries(model.modelNames, model.model).some((entry) => entry.upstreamName !== entry.name);
-}
-
-function relayUnsupportedError(node: Node, mapping = false) {
-  return Object.assign(new Error(mapping
-    ? `Node ${node.id} does not support the model relay required to store or assign a model name mapping.`
-    : `Node ${node.id} does not support the model relay.`), {
-    statusCode: 409,
-    code: "NODE_MODEL_RELAY_UNSUPPORTED",
-    details: { nodeId: node.id },
-  });
-}
-
-function requestMappingsUnsupportedError(node: Node) {
-  return Object.assign(new Error(`Node ${node.id} must be updated before model request mappings can be stored.`), {
-    statusCode: 409,
-    code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
-    details: { nodeId: node.id },
-  });
-}
-
-/**
- * Explicit mapping edits fail closed instead of silently dropping the field on
- * a node that cannot store it. Untouched patches never trip this check.
- */
-function assertRequestMappingsSupported(node: Node, mappings?: ModelRequestMapping[]) {
-  if (nodeSupportsModelRequestMappings(node)) return;
-  if (normalizeModelRequestMappings(mappings).length) throw requestMappingsUnsupportedError(node);
-}
-
 type NodeOwnedWriteIntent = "edit" | "sync";
 
 // A node without a capability document cannot be classified; only a parsed
@@ -128,11 +93,6 @@ function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInpu
   };
 }
 
-/** True when a wire payload carries request mappings this node cannot store. */
-function requestMappingsDropped(node: Node, mappings?: ModelRequestMapping[]) {
-  return !nodeSupportsModelRequestMappings(node) && normalizeModelRequestMappings(mappings).length > 0;
-}
-
 // Compatibility for v0.0.34: nodes without the request-mapping capability
 // have a strict wire schema that rejects the additive field, so it is removed
 // entirely instead of being sent as an empty list.
@@ -143,19 +103,19 @@ function withoutRequestMappings<T extends { mappings?: ModelRequestMapping[] }>(
 }
 
 /**
- * Project one model write onto a node's wire model. Mapping-carrying records
- * stay explicit only towards relay-capable nodes; a mapped record targeted at
- * a node without relay fails closed instead of silently degrading to a
- * same-name model.
+ * Project one model write onto a node's wire model. A node without the relay
+ * producer capability cannot honor a non-same-name mapping, so the mapping is
+ * ignored silently and the record is projected with upstreamName = name
+ * instead of failing the write or the assignment that depends on it.
  */
 function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[] }>(node: Node, patch: T): T {
   const wire = nodeSupportsModelRequestMappings(node) ? patch : withoutRequestMappings(patch);
   if (!wire.modelNames?.length) return wire;
-  if (modelRecordHasMapping({ model: wire.model ?? "", modelNames: wire.modelNames })
-    && !supportsNodeModelRelay(nodeAgentCapabilities(node))) {
-    throw relayUnsupportedError(node, true);
-  }
-  return { ...wire, modelNames: projectModelNameEntries(normalizeModelNameEntries(wire.modelNames, wire.model)) };
+  const entries = normalizeModelNameEntries(wire.modelNames, wire.model);
+  const projected = supportsNodeModelRelay(nodeAgentCapabilities(node))
+    ? entries
+    : entries.map((entry) => ({ ...entry, upstreamName: entry.name }));
+  return { ...wire, modelNames: projectModelNameEntries(projected) };
 }
 
 function nodeLocationFailure(nodeId: string, error: unknown): ModelLocationSyncResult {
@@ -432,19 +392,6 @@ export class ControlPlaneModelService {
       // The node upgrades a legacy id on save, so the returned record may
       // carry the new entity identity. Follow it instead of failing.
       const { referenceCount: _referenceCount, ...publicRecord } = record;
-      // The base content converged; the mapping domain stays closed on this
-      // node and is reported instead of blocking the edit or failing silently.
-      if (requestMappingsDropped(node, patch.mappings)) {
-        return {
-          location: ModelLocationSyncResultSchema.parse({
-            nodeId: node.id,
-            state: "unsupported",
-            code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
-            message: `Node ${node.id} must be updated before model request mappings can sync there.`,
-          }),
-          record: publicRecord,
-        };
-      }
       return {
         location: ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }),
         record: publicRecord,
@@ -616,13 +563,11 @@ export class ControlPlaneModelService {
 
   private async createNodeModelWrite(node: Node, input: ReturnType<typeof CreateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
-    assertRequestMappingsSupported(target, input.mappings);
     return this.options.gateway.createModel(target, nodeModelWirePatch(target, input));
   }
 
   private async updateNodeModelWrite(node: Node, modelId: string, input: ReturnType<typeof UpdateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
-    assertRequestMappingsSupported(target, input.mappings);
     return this.options.gateway.updateModel(target, modelId, nodeModelWirePatch(target, input));
   }
 
@@ -692,7 +637,6 @@ export class ControlPlaneModelService {
     };
     const entityIds = storedSelection.modelEntityIds || [];
     const controlPlaneModels = this.listAll();
-    this.assertMappedAssignmentAllowed(node, storedSelection, nodeModels);
     const resolvedEntities: ModelConfig[] = [];
     const nodeEntityIds: string[] = [];
     for (const entityId of entityIds) {
@@ -766,41 +710,6 @@ export class ControlPlaneModelService {
     const node = this.options.requireNode(instance.nodeId);
     const prepared = await this.prepareAssignment(node, instance.modelSelection, instance);
     return this.options.gateway.assignInstanceModels(node, instance.id, prepared);
-  }
-
-  /**
-   * Fail closed before any node write when the selection contains mapped
-   * entities and the node wire model cannot carry them: the node relay
-   * producer capability is the only gate. Relay support and the relay switch
-   * are consumption concerns, so a consumer that cannot relay simply
-   * projects nothing.
-   */
-  private assertMappedAssignmentAllowed(
-    node: Node,
-    selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
-    nodeModels: NodeModelPublicRecord[],
-  ) {
-    const ids = [...new Set([
-      ...(selection.modelEntityIds || []),
-      selection.codexModelHash,
-      selection.claudeModelHash,
-      selection.opencodeModelHash,
-    ].filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))];
-    if (!ids.length) return;
-    const mapped = ids.flatMap((id) => {
-      const controlPlaneModel = this.modelGet(id);
-      if (controlPlaneModel) {
-        return modelRecordHasMapping(controlPlaneModel) ? [controlPlaneModel] : [];
-      }
-      const local = nodeModels.find((model) => model.id === id);
-      if (!local) return [];
-      const record = nodePublicModelToConfig(local);
-      return modelRecordHasMapping(record) ? [record] : [];
-    });
-    if (!mapped.length) return;
-    if (!supportsNodeModelRelay(nodeAgentCapabilities(node))) {
-      throw relayUnsupportedError(node, true);
-    }
   }
 
   private listAll() {
@@ -966,12 +875,7 @@ export class ControlPlaneModelService {
       }
       try {
         await this.options.gateway.deployModel(resolved, model.id, nodeModelWirePatch(resolved, model));
-        results.push(ModelLocationSyncResultSchema.parse(requestMappingsDropped(resolved, model.mappings) ? {
-          nodeId: node.id,
-          state: "unsupported",
-          code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
-          message: `Node ${node.id} must be updated before model request mappings can sync there.`,
-        } : { nodeId: node.id, state: "synced" }));
+        results.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
       } catch (error) {
         const failure = nodeLocationFailure(node.id, error);
         if (failure.state === "pending") pending.add(node.id);

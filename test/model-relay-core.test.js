@@ -231,8 +231,9 @@ test("relay uses x-api-key for anthropic routes and never contacts the upstream 
     headers: { authorization: "Bearer agent-secret" },
     payload: { enabled: false },
   });
-  assert.equal(disabled.statusCode, 409, JSON.stringify(disabled.json()));
-  assert.equal(disabled.json().error.code, "NODE_MODEL_RELAY_IN_USE");
+  // The entity declares no request-name rewrite, so the display label differing
+  // from its upstream identity does not pin the switch.
+  assert.equal(disabled.statusCode, 200, JSON.stringify(disabled.json()));
   assert.equal(upstream.requests.length, 1);
 });
 

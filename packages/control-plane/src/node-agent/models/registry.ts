@@ -171,11 +171,14 @@ export class NodeModelRegistry {
   }
 
   /**
-   * A mapping is non-trivial when an external name differs from the upstream
-   * name it resolves to. Entities without such an entry stay direct-mode safe.
+   * True when the entity declares request-name rewrites. Those rewrites only
+   * exist on the node model relay, so they are the only thing that genuinely
+   * requires it; a display label that differs from its upstream identity is not
+   * a mapping, because every projection drives the provider with the upstream
+   * identity.
    */
-  isMappedModel(model: Pick<NodeModelConfig, "modelNames" | "model">) {
-    return normalizeModelNames(model.modelNames, model.model).some((entry) => entry.upstreamName !== entry.name);
+  isMappedModel(model: Pick<NodeModelConfig, "mappings">) {
+    return normalizeModelRequestMappings(model.mappings).length > 0;
   }
 
   /** Instance ids with any model assignment, including legacy hash refs. */
@@ -187,7 +190,7 @@ export class NodeModelRegistry {
   }
 
   /**
-   * Instance ids whose assignment contains a non-same-name mapping and that
+   * Instance ids whose assignment contains a request-name rewrite and that
    * actually consume relay routes. Disabling the relay switch must be rejected
    * while this list is non-empty; instances without relay support are not
    * affected by the switch, so they never pin it.
@@ -366,9 +369,7 @@ export class NodeModelRegistry {
     const firstCompatible = (app: "codex" | "claude" | "opencode") => assignment.modelEntityIds
       .find((id) => {
         const model = this.requireModel(id);
-        // Mapped entities resolve exclusively through relay routes; injecting
-        // their direct endpoint/key would send the external name upstream.
-        return !this.isMappedModel(model) && this.modelSupportsApp(model, app);
+        return this.modelSupportsApp(model, app);
       });
     return {
       ...this.environmentForRef("codex", firstCompatible("codex") || assignment.codexModelHash),
@@ -468,17 +469,14 @@ export class NodeModelRegistry {
       protocolVersion: "2026-08-27",
       instanceId,
       entities: models.flatMap((model) => {
-        // Mapped entities are only projected through the relay catalog, which
-        // is materialized separately. Direct catalogs must fail closed instead
-        // of leaking the upstream endpoint/key behind an external name.
-        if (this.isMappedModel(model)) return [];
         return [{
           id: model.id,
           endpoint: model.endpoint,
           key: model.key,
           protocols: model.protocols?.length ? model.protocols : defaultProtocols(model.app),
-          // Distinct external/upstream names are excluded above, so a direct
-          // catalog never carries a name identity that its requests ignore.
+          // `name` is a display label only; `upstreamName` is the stable
+          // identity every request is driven with, in both the relay and the
+          // direct projection, so a direct catalog carries it unchanged.
           modelNames: projectModelNameEntries(normalizeModelNames(model.modelNames, model.model)),
         }];
       }),
@@ -603,39 +601,40 @@ export class NodeModelRegistry {
     if (!modelHash) return {};
     this.validateRef(app, modelHash);
     const model = this.requireModel(modelHash);
-    if (this.isMappedModel(model)) return {};
+    // Direct mode drives providers with the stable upstream identity; `name`
+    // only ever describes the model in the UI, never the request.
+    const identity = modelNameEntryIdentity(normalizeModelNames(model.modelNames, model.model)[0]);
     if (app === "codex") return {
       OPENAI_API_KEY: model.key,
       OPENAI_BASE_URL: model.endpoint,
       TASK_HANDOFF_CODEX_BASE_URL: model.endpoint,
-      TASK_HANDOFF_CODEX_MODEL: model.model,
+      TASK_HANDOFF_CODEX_MODEL: identity,
     };
     return {
       ANTHROPIC_API_KEY: model.key,
       ANTHROPIC_BASE_URL: model.endpoint,
-      TASK_HANDOFF_CLAUDE_MODEL: model.model,
+      TASK_HANDOFF_CLAUDE_MODEL: identity,
     };
   }
 
   private environmentForOpenCode(assignment: z.infer<typeof NodeModelAssignmentSchema>) {
     const entities = assignment.modelEntityIds
       .map((id) => this.requireModel(id))
-      .filter((model) => !this.isMappedModel(model) && this.modelSupportsApp(model, "opencode"));
+      .filter((model) => this.modelSupportsApp(model, "opencode"));
     if (!entities.length) return {};
     const firstEntity = entities[0];
-    const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)[0].name;
+    const identity = (model: NodeModelConfig) => normalizeModelNames(model.modelNames, model.model).map((entry) => modelNameEntryIdentity(entry));
+    const firstModelName = identity(firstEntity)[0];
     const providers = Object.fromEntries(entities.map((model) => [
       `task-handoff-${model.id}`,
-      openCodeProvider(model, normalizeModelNames(model.modelNames, model.model).map((entry) => entry.name)),
+      openCodeProvider(model, identity(model)),
     ]));
     // Compatibility for v0.0.23: sessions created from a legacy assignment
     // persist the stable `task-handoff` provider id. Keep that alias available,
     // while the ordered entity catalog remains authoritative for new choices.
     if (assignment.opencodeModelHash) {
       const legacyModel = this.requireModel(assignment.opencodeModelHash);
-      if (!this.isMappedModel(legacyModel)) {
-        providers["task-handoff"] = openCodeProvider(legacyModel, [legacyModel.model]);
-      }
+      providers["task-handoff"] = openCodeProvider(legacyModel, identity(legacyModel));
     }
     return {
       TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({

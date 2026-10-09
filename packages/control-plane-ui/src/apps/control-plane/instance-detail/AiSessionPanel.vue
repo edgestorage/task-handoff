@@ -572,12 +572,15 @@
             :model-groups="historyModelGroups"
             :model-selection="historyModelDisplay"
             :model-selection-enabled="historyModelSelectionEnabled"
+            :reasoning-effort="historyReasoningEffort"
+            :reasoning-effort-enabled="historyReasoningEffortEnabled"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
             :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
             :placeholder="t('sessions.panel.continueConversation')"
             @run="sendHistoryMessage"
             @select-model="historyModelSelection = $event"
+            @select-reasoning-effort="historyReasoningEffort = $event"
             @open-model-settings="emit('openSettings', instance.id, 'models')"
           />
         </template>
@@ -2258,6 +2261,7 @@ const historyDetailLoading = ref(false);
 const historyDetailError = ref("");
 const resumingHistoryId = ref("");
 const historyModelSelection = ref<AiSessionModelSelection>();
+const historyReasoningEffort = ref<AiSessionReasoningEffort>();
 const historyMessageDraft = ref("");
 const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const historyModelGroups = computed(() => {
@@ -2276,6 +2280,10 @@ const historyModelGroups = computed(() => {
 const historyModelSelectionEnabled = computed(() => aiSessionModelSelectionAllowed(
   modelSelectionCapability(historyDetail.value?.item.agent || ""),
   "resume",
+));
+const historyReasoningEffortEnabled = computed(() => Boolean(
+  historyDetail.value?.item.creationSource === "ai-session"
+  && reasoningEffortCapability(historyDetail.value.item.agent).selectAtCreate,
 ));
 // An unsupported resume leaves no catalog to pick from; keep showing the
 // resumed session's own model instead of an empty, misleading selection. When
@@ -2608,6 +2616,7 @@ watch(() => props.instance.id, () => {
   selectedHistoryId.value = "";
   historyDetail.value = undefined;
   historyModelSelection.value = undefined;
+  historyReasoningEffort.value = undefined;
   historyDetailError.value = "";
   historyMessageDraft.value = "";
   historyMessageAttachments.value = [];
@@ -3085,6 +3094,7 @@ async function selectHistoryItem(item: AiSessionHistoryItem) {
   selectedHistoryId.value = item.id;
   historyDetail.value = undefined;
   historyModelSelection.value = undefined;
+  historyReasoningEffort.value = undefined;
   historyDetailError.value = "";
   historyDetailLoading.value = true;
   try {
@@ -3092,6 +3102,8 @@ async function selectHistoryItem(item: AiSessionHistoryItem) {
     if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
       historyDetail.value = detail;
       historyModelSelection.value = detail.item.modelSelection;
+      historyReasoningEffort.value = detail.item.reasoningEffort
+        || (detail.item.agent === "codex" ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined);
     }
   } catch (error) {
     if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
@@ -3112,7 +3124,11 @@ function relativeHistoryTime(value: string) {
 
 async function resumeHistorySession(item: AiSessionHistoryItem) {
   const selection = historyModelGroups.value.length ? historyModelSelection.value : undefined;
-  const result = await resumeAiSession(props.instance.id, item.id, selection ? { modelSelection: selection } : {});
+  const reasoningEffort = historyReasoningEffortEnabled.value ? historyReasoningEffort.value : undefined;
+  const result = await resumeAiSession(props.instance.id, item.id, {
+    ...(selection ? { modelSelection: selection } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  });
   const findAuthoritativeSession = () => visibleAiSessions.value.find((session) => (
     session.id === result.aiSessionId
     && session.providerSessionId === result.providerSessionId

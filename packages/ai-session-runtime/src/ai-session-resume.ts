@@ -3,6 +3,7 @@ import {
   sameAiSessionModelSelection,
   type AiSessionHistoryItem,
   type AiSessionModelSelection,
+  type AiSessionReasoningEffort,
   type AiSessionResumeResult,
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
@@ -31,7 +32,7 @@ export class AiSessionResumeCoordinator {
     this.options = options;
   }
 
-  resume(aiSessionId: string, modelSelection?: AiSessionModelSelection) {
+  resume(aiSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort) {
     const item = this.options.history.get(aiSessionId);
     if (!item) {
       throw resumeError("AI_SESSION_HISTORY_NOT_FOUND", "AI session history entry not found.", 404);
@@ -39,7 +40,7 @@ export class AiSessionResumeCoordinator {
     const keys = [`ai:${item.id}`, `provider:${item.agent}:${item.providerSessionId}`];
     const active = keys.map((key) => this.pending.get(key)).find(Boolean);
     if (active) return active;
-    const promise = this.perform(item, modelSelection).finally(() => {
+    const promise = this.perform(item, modelSelection, reasoningEffort).finally(() => {
       for (const key of keys) {
         if (this.pending.get(key) === promise) this.pending.delete(key);
       }
@@ -48,8 +49,12 @@ export class AiSessionResumeCoordinator {
     return promise;
   }
 
-  private async perform(item: AiSessionHistoryItem, requestedModelSelection?: AiSessionModelSelection): Promise<AiSessionResumeResult> {
-    const resumeItem = requestedModelSelection ? { ...item, modelSelection: requestedModelSelection } : item;
+  private async perform(item: AiSessionHistoryItem, requestedModelSelection?: AiSessionModelSelection, requestedReasoningEffort?: AiSessionReasoningEffort): Promise<AiSessionResumeResult> {
+    const resumeItem = {
+      ...item,
+      ...(requestedModelSelection ? { modelSelection: requestedModelSelection } : {}),
+      ...(requestedReasoningEffort ? { reasoningEffort: requestedReasoningEffort } : {}),
+    };
     const runningAppIds = new Set(this.options.appSessions()
       .filter((session) => typeof session.status !== "string" || session.status === "running")
       .map((session) => session.id));

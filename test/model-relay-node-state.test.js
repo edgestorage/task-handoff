@@ -86,14 +86,14 @@ function assignPayload(modelEntityId, modelApp) {
   };
 }
 
-test("node relay settings default to off, persist across restart, and reject invalid writes", async (t) => {
+test("node relay settings default to on, persist across restart, and reject invalid writes", async (t) => {
   const dataDir = tempDataDir();
   let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_settings" });
   t.after(async () => app.close());
 
   const initial = await relaySettingsPayload(app, "GET");
   assert.equal(initial.statusCode, 200);
-  assert.deepEqual(initial.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(initial.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
   assert.equal(fs.existsSync(path.join(dataDir, "runtime-settings.json")), true);
 
   for (const invalid of [{ enabled: "yes" }, { enabled: true, extra: 1 }, {}]) {
@@ -101,7 +101,7 @@ test("node relay settings default to off, persist across restart, and reject inv
     assert.equal(rejected.statusCode, 400, JSON.stringify(invalid));
     assert.equal(rejected.json().error.code, "VALIDATION_ERROR");
   }
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
 
   const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
   assert.equal(enabled.statusCode, 200);
@@ -134,6 +134,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
     name: "Mapped Codex",
     key: "mapped-secret",
     modelNames: [{ name: "public-model", upstreamName: "upstream-model", order: 100 }],
+    mappings: [{ name: "alias-model", upstreamName: "upstream-model", order: 200 }],
   }));
   assert.equal(mapped.statusCode, 201);
   const mappedId = mapped.json().data.id;
@@ -142,24 +143,30 @@ test("node relay gate keeps mapped records writable and pins the switch only for
     ...modelInput({ name: "Mapped Codex", key: "mapped-secret" }),
     model: "public-model",
     modelNames: [{ name: "public-model", upstreamName: "upstream-model", order: 100 }],
+    mappings: [{ name: "alias-model", upstreamName: "upstream-model", order: 200 }],
     protocols: ["openai-responses"],
   }));
 
   // Neither the switch nor the instance relay capability gates a write: with
-  // the relay off the assignment still stores and simply projects nothing.
+  // the relay off the assignment still stores and projects the direct catalog.
+  // A display label that differs from the upstream identity is not a mapping,
+  // so the direct projection still carries the entity and its upstream name.
   assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: false })).statusCode, 200);
   const offAssignment = await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", assignPayload(mappedId, "codex"));
   assert.equal(offAssignment.statusCode, 200);
-  assert.deepEqual(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_ready").entities, []);
+  const offCatalog = app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_ready");
+  assert.equal(offCatalog.protocolVersion, "2026-08-27");
+  assert.deepEqual(offCatalog.entities.map((entity) => entity.id), [mappedId]);
+  assert.equal(offCatalog.entities[0].modelNames[0].upstreamName, "upstream-model");
 
   assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: true })).statusCode, 200);
   assert.equal(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_ready").entities.length, 1);
   // Instance relay support is not a write-time gate: a plain instance accepts
-  // the assignment and simply projects no relay routes.
+  // the assignment and projects the direct catalog without relay routes.
   const plainGate = await request(app, "PUT", "/api/node-agent/instances/inst_relay_plain/model-assignment", assignPayload(mappedId, "codex"));
   assert.equal(plainGate.statusCode, 200);
-  assert.deepEqual(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain"), {});
-  assert.deepEqual(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_plain").entities, []);
+  assert.equal(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain").TASK_HANDOFF_CODEX_MODEL, "upstream-model");
+  assert.deepEqual(app.nodeAgentState.modelRegistry.privateCatalog("inst_relay_plain").entities.map((entity) => entity.id), [mappedId]);
 
   const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", assignPayload(mappedId, "codex"));
   assert.equal(assigned.statusCode, 200);
@@ -167,12 +174,13 @@ test("node relay gate keeps mapped records writable and pins the switch only for
   const refused = await relaySettingsPayload(app, "PATCH", { enabled: false });
   assert.equal(refused.statusCode, 409);
   assert.equal(refused.json().error.code, "NODE_MODEL_RELAY_IN_USE");
-  // Only instances that actually consume relay routes pin the switch.
+  // Only instances that actually consume relay routes and hold a request-name
+  // rewrite pin the switch.
   assert.deepEqual(refused.json().error.details.instanceIds, ["inst_relay_ready"]);
   assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
 
-  // Editing an already assigned same-name entity into a mapping applies
-  // directly; the plain consumer keeps projecting nothing.
+  // Editing an already assigned same-name entity into a distinct upstream
+  // identity applies directly; the plain consumer still projects the catalog.
   const sameName = await request(app, "POST", "/api/node-agent/models", modelInput({ name: "Same name", key: "same-secret", model: "same-model" }));
   const sameNameId = sameName.json().data.id;
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_plain/model-assignment", assignPayload(sameNameId, "codex"))).statusCode, 200);
@@ -180,7 +188,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
     modelNames: [{ name: "same-model", upstreamName: "elsewhere", order: 100 }],
   });
   assert.equal(promoted.statusCode, 200);
-  assert.deepEqual(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain"), {});
+  assert.equal(app.nodeAgentState.modelRegistry.resolvedEnvironment("inst_relay_plain").TASK_HANDOFF_CODEX_MODEL, "elsewhere");
 
   // Same-name assignment stays allowed on a plain instance while relay is on.
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", { modelSelection: {} })).statusCode, 200);
@@ -230,6 +238,8 @@ test("node relay routes are derived, fail closed, and resolve after restart with
   );
 
   const resolver = new NodeModelRelayResolver(app.nodeAgentState.modelRegistry);
+  // The switch ships enabled, so turn it off to prove the resolver fails closed.
+  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: false })).statusCode, 200);
   assert.throws(
     () => resolver.resolveRoute(instanceId, routeId),
     (error) => error.code === "MODEL_RELAY_DISABLED" && error.statusCode === 503,
@@ -271,7 +281,7 @@ test("node relay routes are derived, fail closed, and resolve after restart with
   );
 });
 
-test("stored runtime settings sanitize unknown and malformed relay values to default off", async (t) => {
+test("stored runtime settings sanitize unknown and malformed relay values to the default on", async (t) => {
   const dataDir = tempDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(dataDir, "runtime-settings.json"), `${JSON.stringify({
@@ -287,7 +297,7 @@ test("stored runtime settings sanitize unknown and malformed relay values to def
   let app;
   try {
     app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize" });
-    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
 
     const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
     assert.deepEqual(enabled.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
@@ -435,11 +445,11 @@ test("relay switch changes converge assigned instances without restarting them",
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_converge/model-assignment", assignPayload(modelId, "codex"))).statusCode, 200);
 
   calls.length = 0;
-  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: true })).statusCode, 200);
+  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: false })).statusCode, 200);
   assert.ok(calls.some((call) => call.url === "http://127.0.0.1:32123/api/internal/model-environment" && call.method === "PUT"), JSON.stringify(calls));
 
   calls.length = 0;
-  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: false })).statusCode, 200);
+  assert.equal((await relaySettingsPayload(app, "PATCH", { enabled: true })).statusCode, 200);
   assert.ok(calls.some((call) => call.url === "http://127.0.0.1:32123/api/internal/model-environment" && call.method === "PUT"), JSON.stringify(calls));
 });
 

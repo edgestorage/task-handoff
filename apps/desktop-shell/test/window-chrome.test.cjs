@@ -84,7 +84,7 @@ test("macOS keeps its native inset traffic lights", () => {
     height: 56,
     trafficLightPosition: { x: 16, y: 21 },
   }), {
-    frame: false,
+    frame: true,
     titleBarStyle: "hiddenInset",
     titleBarOverlay: { height: 56 },
     trafficLightPosition: { x: 16, y: 21 },

@@ -21,6 +21,14 @@ test("Story Action automation UI uses authoritative API state without parameter 
   assert.doesNotMatch(source, /parameterValues|\{\{parameter\}\}/);
 });
 
+test("Automation failures render localized API error text instead of the raw server message", () => {
+  assert.match(source, /import \{ translateApiError \} from "\.\.\/\.\.\/\.\.\/i18n\/apiError"/);
+  assert.match(source, /\{\{ automationErrorText\(entry\) \}\}/);
+  assert.match(source, /translateApiError\(entry\.blockedReason \|\| entry\.lastRun\?\.error, t\)/);
+  assert.doesNotMatch(source, /\(entry\.blockedReason \|\| entry\.lastRun\?\.error\)\?\.message/);
+  assert.doesNotMatch(source, /cause instanceof Error \? cause\.message : String\(cause\)/);
+});
+
 test("Story details use four scroll anchors and one authoritative automation list", () => {
   for (const section of ["actions", "documents", "sessions", "automations"]) {
     assert.match(storyViewSource, new RegExp(`<TabsTrigger value="${section}">`));

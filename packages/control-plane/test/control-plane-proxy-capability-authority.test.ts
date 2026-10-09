@@ -162,7 +162,7 @@ test("relay settings revalidate the capability document through the node agent",
       return jsonResponse({ data: { ok: true, role: "node-agent", nodeId: NODE_ID, protocolVersion: "2026-10-02", capabilities: relayCapabilities.agent.capabilities, build: relayCapabilities.agent.build } });
     }
     if (url.pathname.endsWith("/settings/model-relay")) {
-      return jsonResponse({ data: method === "PATCH" ? { enabled: true, source: "persisted" } : { enabled: false, source: "default" } });
+      return jsonResponse({ data: method === "PATCH" ? { enabled: true, source: "persisted" } : { enabled: true, source: "default" } });
     }
     return jsonResponse({ error: { code: "NOT_FOUND", message: "not found" } }, 404);
   }) as typeof fetch;
@@ -173,7 +173,7 @@ test("relay settings revalidate the capability document through the node agent",
     await service.nodes.put(proxyNode());
     assert.equal(supportsNodeModelRelay(nodeAgentCapabilityDocument(service.requireNode(NODE_ID))), false);
 
-    assert.deepEqual(await service.getNodeModelRelay(NODE_ID), { enabled: false, source: "default" });
+    assert.deepEqual(await service.getNodeModelRelay(NODE_ID), { enabled: true, source: "default" });
     assert.equal(supportsNodeModelRelay(nodeAgentCapabilityDocument(service.requireNode(NODE_ID))), true);
     assert.ok(requests.some((entry) => entry.endsWith("/health")));
 

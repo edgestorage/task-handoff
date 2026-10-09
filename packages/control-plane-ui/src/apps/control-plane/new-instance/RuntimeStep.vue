@@ -940,6 +940,7 @@ defineEmits<{
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;

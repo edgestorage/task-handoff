@@ -116,9 +116,10 @@ test("no `Compatibility for v` branch survives outside the preserved runtime bou
   const unclassified = [...sites.keys()].filter((file) => !RETAINED_NODE_AGENT_COMPAT_SITES.has(file));
   assert.deepEqual(unclassified, [], "internal runtime compat branches must not be reintroduced; classify new sites explicitly");
 
-  // The removed internal runtime branches stay removed.
+  // The removed internal runtime branches stay removed. The Docker entrypoint
+  // intentionally keeps reading the retired single-file mount so containers
+  // created by older node agents keep starting until they are recreated.
   for (const file of [
-    "docker/entrypoint.sh",
     "packages/controlled-instance/src/web/private-model-catalog.ts",
     "packages/control-plane/src/node-agent/instances/private-config-store.ts",
   ]) {

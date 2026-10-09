@@ -1009,6 +1009,7 @@ export const AiSessionHistoryDetailSchema = z.object({
 
 export const AiSessionResumeInputSchema = z.object({
   modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
 }).strict();
 
 export const AiSessionResumeResultSchema = z.object({

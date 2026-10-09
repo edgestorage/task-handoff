@@ -495,6 +495,7 @@
         :loading="board.isLoading.value"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         @open-ai-session-app="openAiSessionAppFromBoard"
+        @open-instance-settings="openInstanceSettings"
         @resolve-approval="resolveAiSessionApprovalAction"
         @select-instance="selectInstance"
       />
@@ -2017,11 +2018,38 @@ function openSettings(section: typeof settingsSection.value = "nodes") {
 }
 
 // Model selection can be empty until a provider is registered, so route the user
-// to the control plane model settings; close the instance dialog first to keep a
-// single top-level dialog in focus.
+// to the control plane model settings. Close any open instance dialog first so the
+// settings view is actually visible and a single top-level dialog stays in focus,
+// then confirm the jump so the user knows where they landed. Standalone detail
+// windows cannot render the settings view, so they open the control plane instead.
 function openControlPlaneModelSettings() {
-  if (instanceSettingsId.value) instanceSettingsId.value = "";
+  instanceSettingsId.value = "";
+  newInstanceOpen.value = false;
+  if (standaloneMode.value) {
+    notifyModelSettingsOpened();
+    void openControlPlaneRootWindow();
+    return;
+  }
   openSettings("models");
+  notifyModelSettingsOpened();
+}
+
+function notifyModelSettingsOpened() {
+  // i18n-audit-allow-next-line code-token: toast presentation variant
+  showToast(t("instances.modelEntities.openedSettings"), "info");
+}
+
+async function openControlPlaneRootWindow() {
+  const url = new URL("/", window.location.origin).toString();
+  if (desktopBridge?.openControlPlaneWindow) {
+    try {
+      await desktopBridge.openControlPlaneWindow(url);
+      return;
+    } catch {
+      // Fall through to a browser tab when the desktop bridge rejects the request.
+    }
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function openAccountSecurity() {

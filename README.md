@@ -26,7 +26,15 @@ TaskHandoff brings Codex and other AI development work into one control plane. I
 
 ### Story
 
-![TaskHandoff Story workspace](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
+Light mode:
+
+![TaskHandoff Story workspace in light mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
+
+Dark mode, with a Story session and a browser running in the container:
+
+![TaskHandoff Story workspace in dark mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
+
+For more interface screenshots, see the [Interface and Workbench guide](https://docs.thandoff.com/en/guide/workbench).
 
 ## Features
 

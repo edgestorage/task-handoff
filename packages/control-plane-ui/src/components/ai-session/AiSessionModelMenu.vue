@@ -48,7 +48,7 @@
           </DropdownMenuItem>
         </template>
         <template v-if="reasoningEffortEnabled">
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator v-if="modelGroups.length" />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger class="ai-session-model-menu__item ai-session-model-menu__provider-item">
               <BrainCircuit class="ai-session-model-menu__icon" :size="17" />

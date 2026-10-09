@@ -17,6 +17,7 @@ export const instances = {
     emptyHint: "请前往控制面板的「设置 → 模型」添加模型提供方。",
     emptyCreateHint: "也可以先创建实例，稍后在实例设置的「模型」中再修改。",
     openSettings: "打开控制面板设置",
+    openedSettings: "已打开控制面板设置，请在此添加模型提供方。",
   },
   window: {
     invalidRoute: "实例详情链接无效，请从实例切换器中选择实例。",

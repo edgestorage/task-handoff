@@ -185,6 +185,13 @@
         :can-interrupt="canInterrupt"
         :provider="card.session.agent"
         :permission-modes="permissionModes"
+        :model-groups="modelGroups"
+        :model-selection="card.session.modelSelection"
+        :model-selection-pending="modelSelectionPending"
+        :model-selection-enabled="modelSelectionEnabled"
+        :reasoning-effort="reasoningEffort"
+        :reasoning-effort-enabled="reasoningEffortEnabled"
+        :reasoning-effort-pending="reasoningEffortPending"
         :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
         :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
         :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
@@ -195,6 +202,9 @@
         @cancel-edit="$emit('cancelEdit')"
         @steer="$emit('steer')"
         @command="$emit('command', $event)"
+        @select-model="$emit('selectModel', $event)"
+        @open-model-settings="$emit('openModelSettings')"
+        @select-reasoning-effort="$emit('selectReasoningEffort', $event)"
       />
     </div>
   </aside>
@@ -212,7 +222,8 @@ import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionComp
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
-import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
@@ -253,6 +264,12 @@ const props = defineProps<{
   mentionTrigger: string;
   commandTrigger: string;
   sessionBusy: boolean;
+  modelGroups: AiSessionModelGroup[];
+  modelSelectionPending: boolean;
+  modelSelectionEnabled: boolean;
+  reasoningEffort?: AiSessionReasoningEffort;
+  reasoningEffortEnabled: boolean;
+  reasoningEffortPending: boolean;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   promptCount: number;
   promptIndex: number;
@@ -279,6 +296,9 @@ defineEmits<{
   retryDetail: [];
   run: [permissionMode?: AiSessionPermissionMode];
   command: [input: AiSessionCommandInput];
+  selectModel: [modelSelection: AiSessionModelSelection];
+  openModelSettings: [];
+  selectReasoningEffort: [reasoningEffort: AiSessionReasoningEffort];
   steer: [];
   steerQueuedMessage: [queueId: string];
   "update:collapsed": [value: boolean];
@@ -894,9 +914,9 @@ onBeforeUnmount(() => {
   --ai-composer-muted: var(--ai-board-muted);
   --ai-composer-primary-bg: var(--ai-board-active-border);
   --ai-composer-primary-text: var(--ai-board-title);
-  --ai-composer-stop-bg: var(--ai-board-card-failed-border);
-  --ai-composer-stop-text: var(--ai-board-stale-text);
-  --ai-composer-danger: var(--ai-board-stale-text);
+  --ai-composer-stop-bg: var(--status-danger-bg);
+  --ai-composer-stop-text: var(--status-danger);
+  --ai-composer-danger: var(--status-danger);
   --ai-composer-shadow: var(--ai-board-floating-shadow, 0 18px 48px rgb(0 0 0 / 34%));
   min-height: 86px;
   max-height: min(280px, calc(100vh - 144px));

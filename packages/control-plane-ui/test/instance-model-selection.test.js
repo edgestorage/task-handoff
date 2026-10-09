@@ -46,7 +46,11 @@ test("empty model selection guides to control plane settings and notes later edi
 test("the workbench routes empty model selection to the control plane model settings", () => {
   const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
   assert.match(workbench, /@open-model-settings="openControlPlaneModelSettings"/);
-  assert.match(workbench, /function openControlPlaneModelSettings\(\)[\s\S]*openSettings\("models"\)/);
+  assert.match(
+    workbench,
+    /function openControlPlaneModelSettings\(\)\s*\{[\s\S]*instanceSettingsId\.value = "";[\s\S]*newInstanceOpen\.value = false;[\s\S]*openSettings\("models"\);[\s\S]*t\("instances\.modelEntities\.openedSettings"\)/,
+  );
+  assert.match(workbench, /function openControlPlaneModelSettings\(\)[\s\S]*standaloneMode\.value[\s\S]*openControlPlaneRootWindow\(\)/);
 });
 
 test("the Chinese locale translates provider terminology in the model selector", () => {

@@ -14,12 +14,19 @@ export type EffectiveNodeAgentModelRelay = NodeAgentModelRelay & {
 };
 
 /**
+ * Product default for the node-level relay switch. A node that never persisted
+ * `modelRelay` reports `source: "default"` and relays; only an explicit
+ * persisted boolean flips the live switch.
+ */
+export const NODE_MODEL_RELAY_DEFAULT_ENABLED: boolean = true;
+
+/**
  * Process-wide live view of the persisted relay switch. The runtime settings
  * file stays the only authority; this holder exists so route resolution and
  * assignment gates do not re-read and re-parse the file on every request.
  */
 export class NodeModelRelaySwitch {
-  private enabledValue = false;
+  private enabledValue: boolean = NODE_MODEL_RELAY_DEFAULT_ENABLED;
   private unknownModelPolicyValue: NodeAgentModelRelayUnknownModelPolicy = "passthrough";
 
   enabled() {
@@ -39,7 +46,7 @@ export class NodeModelRelaySwitch {
 /**
  * Node-level model relay switch persisted in runtime-settings.json. Missing or
  * malformed stored values are reported as `source: "default"` and keep relay
- * disabled; only an explicit persisted boolean flips the live switch.
+ * enabled; only an explicit persisted boolean flips the live switch.
  */
 export class NodeModelRelaySettings {
   private readonly settings: JsonFile<NodeAgentRuntimeSettings>;
@@ -68,7 +75,7 @@ export class NodeModelRelaySettings {
     // The stored value is already schema-validated by JsonFile, so the
     // effective document is built directly instead of re-parsing.
     return {
-      enabled: stored?.enabled ?? false,
+      enabled: stored?.enabled ?? NODE_MODEL_RELAY_DEFAULT_ENABLED,
       unknownModelPolicy: stored?.unknownModelPolicy ?? "passthrough",
       source: stored ? "persisted" : "default",
     };

@@ -2389,9 +2389,9 @@ export const UpdateNodeAgentExternalListenerSchema = NodeAgentExternalListenerCo
 
 /**
  * Node-level model relay switch persisted in runtime settings. Missing or
- * malformed stored values normalize to disabled; only an explicit boolean
- * enables the relay data plane. The additive `unknownModelPolicy` defaults to
- * forwarding unmatched names verbatim when absent or malformed.
+ * malformed stored values normalize to enabled; only an explicit persisted
+ * boolean turns the relay data plane off. The additive `unknownModelPolicy`
+ * defaults to forwarding unmatched names verbatim when absent or malformed.
  */
 export const NodeAgentModelRelayUnknownModelPolicySchema = z.enum(["passthrough", "reject"]);
 
@@ -2409,7 +2409,7 @@ export const NodeAgentModelRelaySchema = z.object({
   // Optional on the wire so a node-agent that predates this setting still
   // parses; writers must gate the field on the relay capability.
   unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicySchema.optional(),
-  // "default" means the switch was never persisted and relay stays off.
+  // "default" means the switch was never persisted and relay stays on.
   source: z.enum(["default", "persisted"]),
 }).strip();
 
@@ -2419,7 +2419,9 @@ export const UpdateNodeAgentModelRelaySchema = NodeAgentModelRelayConfigSchema;
 export function normalizeNodeAgentModelRelaySettings(input: unknown): z.infer<typeof NodeAgentModelRelaySchema> {
   const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   return {
-    enabled: source.enabled === true,
+    // Only an explicit persisted `false` disables the relay; an absent or
+    // malformed value falls back to the product default, which is on.
+    enabled: source.enabled !== false,
     unknownModelPolicy: source.unknownModelPolicy === "reject" ? "reject" : "passthrough",
     source: source.source === "persisted" ? "persisted" : "default",
   };

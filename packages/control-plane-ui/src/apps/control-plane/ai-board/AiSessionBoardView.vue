@@ -197,6 +197,12 @@
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
           :session-busy="selectedCard.session.status === 'running' || selectedCard.session.status === 'waiting'"
+          :model-groups="selectedCardModelGroups"
+          :model-selection-pending="modelSelectionPendingSessionId === selectedCard.session.id"
+          :model-selection-enabled="selectedCardModelSelectionEnabled"
+          :reasoning-effort="selectedCard.session.reasoningEffort || (selectedCard.session.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
+          :reasoning-effort-enabled="selectedCardReasoningEffortEnabled"
+          :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedCard.session.id"
           :instance-display-name="instanceDisplayName"
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
@@ -206,6 +212,9 @@
           :turn-timelines="conversationTurnTimelines"
           @latest-prompt="backToLatestPrompt(selectedCard)"
           @next-prompt="nextPrompt(selectedCard)"
+          @select-model="selectSelectedSessionModel"
+          @open-model-settings="emit('openInstanceSettings', selectedCard.instance.id, 'models')"
+          @select-reasoning-effort="selectSelectedSessionReasoningEffort"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
           @edit-queued-message="editSelectedQueuedMessage"
@@ -259,10 +268,13 @@ import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
 import { ArrowUpDown, Bot, Boxes, Columns3, Folder, LayoutGrid, Search, Server, SlidersHorizontal, Ungroup } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, updateAiSessionModelSelection, updateAiSessionReasoningEffort, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useModelsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
+import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
+import { aiSessionModelSelectionAllowed, deriveAiSessionModelGroups } from "@task-handoff/control-plane-client";
 import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { supportsAiSessionQueuePause } from "@task-handoff/protocol/control-plane";
@@ -310,6 +322,8 @@ import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
 import { nodeLocalFolderDisplayName } from "../nodePath";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
+import { persistAiSessionCreationPreferences } from "../instance-detail/aiSessionCreationPreferences";
 import { aiSessionSubtreePostorder, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
@@ -337,6 +351,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
+  openInstanceSettings: [instanceId: string, section: "models"];
   resolveApproval: [instance: InstanceWithAiSessions, session: AiSessionSummary, decision: "allow" | "deny" | "skip"];
   selectInstance: [instanceId: string];
   "update:filter": [value: string];
@@ -363,6 +378,8 @@ const queueComposerEdit = ref<{
   previousMentionBindings: AiSessionMentionBinding[];
 }>();
 const aiSessionActionBusy = ref(false);
+const modelSelectionPendingSessionId = ref("");
+const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
 const stoppingAppSessionKey = ref("");
 const forkingSessionKey = ref("");
 const renameSessionTarget = ref<AiBoardCard>();
@@ -463,6 +480,27 @@ const visibleCards = computed(() => {
 
 const totalBoundSessions = computed(() => allCards.value.length);
 const selectedCard = computed(() => allCards.value.find((card) => card.key === selectedCardKey.value));
+const modelsQuery = useModelsQuery(computed(() => Boolean(selectedCard.value)));
+const selectedCardModelCapability = computed(() => normalizeAiSessionModelSelectionCapabilities(
+  directoryAiSessionProviderCapability(selectedCard.value?.instance.capabilities?.features, selectedCard.value?.session.agent || ""),
+));
+const selectedCardModelSelectionEnabled = computed(() => aiSessionModelSelectionAllowed(selectedCardModelCapability.value, "existing"));
+const selectedCardModelGroups = computed(() => {
+  const card = selectedCard.value;
+  if (!card) return [];
+  return deriveAiSessionModelGroups({
+    entities: modelsQuery.data.value || [],
+    assignment: card.instance.modelSelection,
+    agent: card.session.agent,
+    nodeId: card.instance.nodeId,
+    mode: "existing",
+    currentSelection: card.session.modelSelection,
+    capability: selectedCardModelCapability.value,
+  });
+});
+const selectedCardReasoningEffortEnabled = computed(() => normalizeAiSessionReasoningEffortCapabilities(
+  directoryAiSessionProviderCapability(selectedCard.value?.instance.capabilities?.features, selectedCard.value?.session.agent || ""),
+).updateDuringSession);
 const messageAttachments = useAiSessionAttachmentDraft(
   computed(() => selectedCard.value?.session.id || ""),
   { persistWhen: () => !queueComposerEdit.value },
@@ -865,7 +903,7 @@ function closeBoardOverlays(event: MouseEvent) {
   if (!target) {
     return;
   }
-  if (target.closest(".ai-board-card") || target.closest(".ai-board-floating-dock") || target.closest("[data-ai-session-composer-overlay]")) {
+  if (target.closest(".ai-board-card") || target.closest(".ai-board-floating-dock") || target.closest("[data-ai-session-composer-overlay]") || target.closest(".ai-session-model-menu")) {
     return;
   }
   clearSelectedCard();
@@ -892,6 +930,34 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
     return;
   }
   await interruptSelectedSession();
+}
+
+async function selectSelectedSessionModel(modelSelection: AiSessionModelSelection) {
+  const card = selectedCard.value;
+  if (!card || modelSelectionPendingSessionId.value
+    || (card.session.modelSelection && sameModelSelectionRef(card.session.modelSelection, modelSelection))) return;
+  modelSelectionPendingSessionId.value = card.session.id;
+  try {
+    await updateAiSessionModelSelection(card.instance.id, card.session.id, createBrowserUuid(), modelSelection);
+    persistAiSessionCreationPreferences(card.session.agent, { modelSelection });
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")), "error");
+  } finally {
+    if (modelSelectionPendingSessionId.value === card.session.id) modelSelectionPendingSessionId.value = "";
+  }
+}
+
+async function selectSelectedSessionReasoningEffort(reasoningEffort: AiSessionReasoningEffort) {
+  const card = selectedCard.value;
+  if (!card || reasoningEffortPending.value || card.session.reasoningEffort === reasoningEffort) return;
+  reasoningEffortPending.value = { sessionId: card.session.id, target: reasoningEffort };
+  try {
+    await updateAiSessionReasoningEffort(card.instance.id, card.session.id, createBrowserUuid(), reasoningEffort);
+    persistAiSessionCreationPreferences(card.session.agent, { reasoningEffort });
+  } catch (error) {
+    if (reasoningEffortPending.value?.sessionId === card.session.id) reasoningEffortPending.value = undefined;
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")), "error");
+  }
 }
 
 async function uploadMessageAttachments(instanceId: string, sessionId: string) {
@@ -1196,6 +1262,13 @@ function openSelectedAiSessionApp() {
 watch(selectedCard, (card) => {
   if (!card && selectedCardKey.value) {
     clearSelectedCard();
+  }
+});
+
+watch(() => props.instances, (instances) => {
+  const pending = reasoningEffortPending.value;
+  if (pending && instances.some((instance) => instance.aiSessions?.sessions.some((session) => session.id === pending.sessionId && session.reasoningEffort === pending.target))) {
+    reasoningEffortPending.value = undefined;
   }
 });
 

@@ -248,11 +248,12 @@ test("private instance config preserves managed Codex settings for restart recov
 test("Docker entrypoints project managed Codex settings before dropping privileges", () => {
   const source = fs.readFileSync(path.join(__dirname, "../docker/entrypoint.sh"), "utf8");
   assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
-  // The container reads the private config from the directory mount or the
-  // explicit env override.
+  // The container reads the private config from the directory mount, the
+  // explicit env override, or the retired single-file mount that containers
+  // created by older node agents still bind.
   assert.match(source, /private_config_default_path="\/run\/task-handoff\/private\/private-config\.json"/);
-  assert.match(source, /for candidate in "\$\{TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-\}" "\$\{private_config_default_path\}"/);
-  assert.equal(source.includes("instance-private-config.json"), false);
+  assert.match(source, /private_config_legacy_path="\/run\/task-handoff\/instance-private-config\.json"/);
+  assert.match(source, /for candidate in "\$\{TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-\}" "\$\{private_config_default_path\}" "\$\{private_config_legacy_path\}"/);
 });
 
 test("entrypoint private config loading tolerates deferred files and keeps only identity mandatory", async () => {
