@@ -18,6 +18,28 @@ test("windows terminal commands read Path when that is the inherited casing", ()
   assert.equal(resolveTerminalCommand("docker", { platform: "win32", env, isFile }), DOCKER_EXE);
 });
 
+test("windows terminal commands ignore shims that earlier Path entries shadow with", () => {
+  const shimDirectory = "C:\\Users\\dev\\AppData\\Roaming\\npm";
+  const env = { PATH: `${shimDirectory};${DOCKER_BIN}`, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  const normalize = (candidate) => candidate.toLowerCase();
+  const isFile = (candidate) => normalize(candidate) === normalize(path.win32.join(shimDirectory, "docker")) || normalize(candidate) === normalize(DOCKER_EXE);
+  assert.equal(normalize(resolveTerminalCommand("docker", { platform: "win32", env, isFile })), normalize(DOCKER_EXE));
+});
+
+test("windows terminal commands keep a shim script as a last resort", () => {
+  const shim = path.win32.join("C:\\tools", "docker.cmd");
+  const env = { PATH: "C:\\tools", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  const isFile = (candidate) => candidate.toLowerCase() === shim.toLowerCase();
+  const resolved = resolveTerminalCommand("docker", { platform: "win32", env, isFile });
+  assert.equal(resolved.toLowerCase(), shim.toLowerCase());
+});
+
+test("windows terminal commands that already carry an extension resolve exactly", () => {
+  const env = { PATH: `${DOCKER_BIN};C:\\tools`, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  const isFile = (candidate) => candidate === DOCKER_EXE;
+  assert.equal(resolveTerminalCommand("docker.exe", { platform: "win32", env, isFile }), DOCKER_EXE);
+});
+
 test("windows terminal commands pass through paths that already carry a directory", () => {
   const env = { PATH: DOCKER_BIN, PATHEXT: ".exe" };
   const isFile = () => true;
