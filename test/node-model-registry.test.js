@@ -390,7 +390,9 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   assert.deepEqual(Object.keys(openCodeConfig.provider[`task-handoff-${sharedId}`].models), ["shared-first", "same-name"]);
   assert.ok(openCodeConfig.provider[`task-handoff-${sharedId}`].models["same-name"], "selected non-default model must be registered");
   assert.deepEqual(openCodeConfig.provider[`task-handoff-${sharedId}`].models["shared-first"].variants, openCodeReasoningVariants);
-  assert.deepEqual(Object.keys(openCodeConfig.provider["task-handoff"].models), ["shared-first"]);
+  // The v0.0.23 compatibility alias mirrors the authoritative entity catalog, so it carries every
+  // request identity of the aliased entity instead of only its default name.
+  assert.deepEqual(Object.keys(openCodeConfig.provider["task-handoff"].models), ["shared-first", "same-name"]);
   const catalog = app.nodeAgentState.modelRegistry.privateCatalog("inst_multi_models");
   assert.deepEqual(catalog.entities.map((entity) => entity.id), [sharedId, responsesId]);
   assert.deepEqual(catalog.entities[0].modelNames.map((entry) => entry.name), ["shared-first", "same-name"]);

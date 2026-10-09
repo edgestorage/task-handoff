@@ -51,7 +51,8 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /@select-model="historyModelSelection = \$event"/);
   assert.match(panel, /@run="sendHistoryMessage"/);
   assert.match(panel, /if \(!item \|\| resumingHistoryId\.value/);
-  assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id, selection \? \{ modelSelection: selection \} : \{\}\);/);
+  assert.match(panel, /const reasoningEffort = historyReasoningEffortEnabled\.value \? historyReasoningEffort\.value : undefined;/);
+  assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id, \{\n\s+\.\.\.\(selection \? \{ modelSelection: selection \} : \{\}\),\n\s+\.\.\.\(reasoningEffort \? \{ reasoningEffort \} : \{\}\),\n\s+\}\);/);
   assert.match(panel, /session\.id === result\.aiSessionId/);
   assert.match(panel, /session\.providerSessionId === result\.providerSessionId/);
   assert.match(panel, /session\.creationSource === result\.creationSource/);
