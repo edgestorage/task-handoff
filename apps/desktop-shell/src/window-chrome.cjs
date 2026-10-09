@@ -34,7 +34,7 @@ function desktopTitleBarOptions({
   const mode = desktopWindowChromeMode(platform);
   if (mode === "macos-overlay") {
     return {
-      frame: false,
+      frame: true,
       titleBarStyle: "hiddenInset",
       titleBarOverlay: height ? { height } : true,
       ...(trafficLightPosition ? { trafficLightPosition } : {}),

@@ -72,7 +72,7 @@ function assignPayload(modelEntityId) {
   };
 }
 
-test("v0.0.34 control-plane wire stays same-name and relay defaults off on a current node-agent", async (t) => {
+test("v0.0.34 control-plane wire stays same-name and relay defaults on on a current node-agent", async (t) => {
   const dataDir = tempDataDir();
   const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_matrix_legacy_cp" });
   t.after(async () => { await app.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
@@ -88,7 +88,7 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
 
   const settings = await request(app, "GET", "/api/node-agent/settings/model-relay");
   assert.equal(settings.statusCode, 200);
-  assert.deepEqual(settings.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(settings.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
 
   const created = await request(app, "POST", "/api/node-agent/models", legacyModelInput());
   assert.equal(created.statusCode, 201, created.body);
@@ -119,7 +119,7 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
   );
 });
 
-test("a v0.0.34 controlled instance keeps the direct catalog and ignores mapped assignments", async (t) => {
+test("a v0.0.34 controlled instance keeps the direct catalog including distinct upstream identities", async (t) => {
   const dataDir = tempDataDir();
   const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_matrix_legacy_instance" });
   t.after(async () => { await app.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
@@ -155,8 +155,9 @@ test("a v0.0.34 controlled instance keeps the direct catalog and ignores mapped 
   }));
   assert.equal(mapped.statusCode, 201, mapped.body);
   // Instance relay support is a consumption capability, not an assignment
-  // gate: the selection is stored and the direct catalog keeps ignoring the
-  // mapped entity while the same-name entity stays usable.
+  // gate: the selection is stored and the direct catalog carries every
+  // assigned entity, since a display label differing from its upstream
+  // identity is not a relay-only mapping.
   assert.equal((await request(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true })).statusCode, 200);
   const sameNameId = sameName.json().data.id;
   const mappedId = mapped.json().data.id;
@@ -169,5 +170,6 @@ test("a v0.0.34 controlled instance keeps the direct catalog and ignores mapped 
 
   const unchanged = app.nodeAgentState.modelRegistry.privateCatalog("inst_matrix_legacy_instance");
   assert.equal(unchanged.protocolVersion, "2026-08-27");
-  assert.deepEqual(unchanged.entities.map((entity) => entity.id), [sameName.json().data.id]);
+  assert.deepEqual(unchanged.entities.map((entity) => entity.id), [sameName.json().data.id, mappedId]);
+  assert.equal(unchanged.entities[1].modelNames[0].upstreamName, "upstream-model");
 });

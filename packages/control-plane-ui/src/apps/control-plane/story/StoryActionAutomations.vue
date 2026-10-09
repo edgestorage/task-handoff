@@ -53,7 +53,7 @@
             </PopoverContent>
           </Popover>
         </div>
-        <small v-if="entry.blockedReason || entry.lastRun?.error" class="story-automation-error">{{ (entry.blockedReason || entry.lastRun?.error)?.message }}</small>
+        <small v-if="entry.blockedReason || entry.lastRun?.error" class="story-automation-error">{{ automationErrorText(entry) }}</small>
       </div>
       <TooltipProvider :delay-duration="120">
         <div class="story-automation-actions">
@@ -184,6 +184,7 @@ import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { currentTimezone, timezoneOptions } from "../../../lib/timezones";
+import { translateApiError } from "../../../i18n/apiError";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -268,7 +269,7 @@ const automationQuery = useQuery({
 });
 const automations = computed(() => automationQuery.data.value || []);
 const loading = computed(() => automationQuery.isPending.value);
-const error = computed(() => mutationError.value || (automationQuery.error.value instanceof Error ? automationQuery.error.value.message : automationQuery.error.value ? String(automationQuery.error.value) : ""));
+const error = computed(() => mutationError.value || (automationQuery.error.value ? translateApiError(automationQuery.error.value, t, t("errors.unknown")) : ""));
 watch(automations, (entries) => emit("loaded", entries), { immediate: true });
 
 async function load() {
@@ -357,7 +358,7 @@ async function save() {
     editorOpen.value = false;
     await load();
   } catch (cause) {
-    editorError.value = cause instanceof Error ? cause.message : String(cause);
+    editorError.value = translateApiError(cause, t);
   } finally {
     saving.value = false;
   }
@@ -377,7 +378,7 @@ async function saveWithNewAction(draft: AiSessionCreationPresetDraft) {
     editorOpen.value = false;
     await load();
   } catch (cause) {
-    editorError.value = cause instanceof Error ? cause.message : String(cause);
+    editorError.value = translateApiError(cause, t);
   } finally {
     saving.value = false;
   }
@@ -391,7 +392,10 @@ async function remove(entry: StoryAutomationStatus) {
 async function mutate(entry: StoryAutomationStatus, operation: () => Promise<unknown>) {
   busyId.value = entry.automation.id;
   mutationError.value = "";
-  try { await operation(); await load(); } catch (cause) { mutationError.value = cause instanceof Error ? cause.message : String(cause); } finally { busyId.value = ""; }
+  try { await operation(); await load(); } catch (cause) { mutationError.value = translateApiError(cause, t); } finally { busyId.value = ""; }
+}
+function automationErrorText(entry: StoryAutomationStatus) {
+  return translateApiError(entry.blockedReason || entry.lastRun?.error, t);
 }
 function scheduleLabel(schedule: StoryAutomationSchedule) {
   if (schedule.scheduleKind === "interval") return t("stories.automation.everyMinutes", { count: schedule.intervalMs / 60_000 });

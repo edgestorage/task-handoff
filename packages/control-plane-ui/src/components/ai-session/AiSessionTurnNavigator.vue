@@ -115,7 +115,6 @@ defineEmits<{
   gap: 2px;
   padding: 1px;
   background: var(--surface-subtle);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
   transform: none;
 }
 

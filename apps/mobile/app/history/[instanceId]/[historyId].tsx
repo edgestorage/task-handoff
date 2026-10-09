@@ -2,9 +2,10 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { AiSessionHistoryDetail, AiSessionModelSelection } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionHistoryDetail, type AiSessionModelSelection, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
+import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 
 import { SafeMarkdown } from '../../../src/components/SafeMarkdown';
 import { Screen } from '../../../src/components/Screen';
@@ -33,11 +34,12 @@ export default function HistoryDetailRoute() {
   const [busy, setBusy] = useState(false);
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const [modelSelection, setModelSelection] = useState<AiSessionModelSelection>();
+  const [reasoningEffort, setReasoningEffort] = useState<AiSessionReasoningEffort>();
   const [actionsHeight, setActionsHeight] = useState(0);
   const actionsBottom = Math.max(insets.bottom, 12);
   useEffect(() => {
     let live = true;
-    void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) { setDetail(result); setModelSelection(result.item.modelSelection); } }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
+    void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) { setDetail(result); setModelSelection(result.item.modelSelection); setReasoningEffort(result.item.reasoningEffort || (result.item.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)); } }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
     return () => { live = false; };
   }, [historyId, instanceId]);
   useEffect(() => {
@@ -61,10 +63,15 @@ export default function HistoryDetailRoute() {
     () => resolveModelSelection(modelGroups, modelSelection) ?? defaultAiSessionModelSelection(modelGroups),
     [modelGroups, modelSelection],
   );
+  const reasoningEnabled = Boolean(instance && detail?.item.creationSource === 'ai-session'
+    && normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(instance.capabilities, detail.item.agent)).selectAtCreate);
   const resume = async () => {
     setBusy(true);
     try {
-      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId, modelGroups.length && resolvedModelSelection ? { modelSelection: resolvedModelSelection } : {}));
+      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId, {
+        ...(modelGroups.length && resolvedModelSelection ? { modelSelection: resolvedModelSelection } : {}),
+        ...(reasoningEnabled && reasoningEffort ? { reasoningEffort } : {}),
+      }));
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: result.aiSessionId } });
     } catch (cause) {
       toast.show({ detail: lifecycleGuidance(cause).message, title: t('toast.actionFailed', { action: t('history.resume') }), tone: 'error' });
@@ -106,21 +113,22 @@ export default function HistoryDetailRoute() {
     style={[styles.actions, { bottom: actionsBottom }]}
     testID="history-resume-actions"
   >
-    {modelGroups.length ? <ModelSettingsMenu
+    {modelGroups.length || reasoningEnabled ? <ModelSettingsMenu
       cancelLabel={t('common.cancel')}
       disabled={busy}
       formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })}
       modelGroups={modelGroups}
       modelSelection={resolvedModelSelection}
       onModelChange={setModelSelection}
-      onReasoningChange={() => undefined}
+      onReasoningChange={setReasoningEffort}
       provider={detail.item.agent}
-      reasoningEnabled={false}
+      reasoningEffort={reasoningEffort}
+      reasoningEnabled={reasoningEnabled}
       reasoningTitle={t('sessions.reasoningEffort')}
-      title={t('sessions.model')}
+      title={modelGroups.length ? t('sessions.model') : t('sessions.reasoningEffort')}
     >{(onPress) => <Pressable accessibilityRole="button" disabled={!onPress} onPress={onPress} style={[styles.modelButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <SystemIcon android="tune" color={colors.primary} ios="slider.horizontal.3" size={16} />
-      <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{resolvedModelSelection?.modelName || t('sessions.model')}</Text>
+      <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{resolvedModelSelection?.modelName || t('sessions.reasoningEffort')}</Text>
       <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
     </Pressable>}</ModelSettingsMenu> : null}
     <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />

@@ -46,6 +46,7 @@ import {
   AiSessionTurnIndexSchema,
   AiSessionTurnIndexReadSchema,
   AiSessionSummarySchema,
+  AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   AiSessionSubAgentSchema,
   AiSessionToolSchema,
@@ -281,6 +282,8 @@ test("AI session history schemas expose bounded strict summaries and resume resu
   });
   assert.equal(AiSessionHistoryDetailSchema.safeParse({ item, turns: [{ id: "turn-history-1", status: "completed", currentTool: {} }] }).success, false);
   assert.equal(AiSessionHistoryDetailSchema.safeParse({ item, turns: Array.from({ length: 51 }, (_, index) => ({ id: `turn-${index}`, status: "completed" })) }).success, false);
+  assert.deepEqual(AiSessionResumeInputSchema.parse({ reasoningEffort: "high" }), { reasoningEffort: "high" });
+  assert.equal(AiSessionResumeInputSchema.safeParse({ reasoningEffort: "invalid" }).success, false);
   assert.deepEqual(AiSessionResumeResultSchema.parse({
     disposition: "resumed",
     aiSessionId: item.id,

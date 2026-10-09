@@ -180,7 +180,7 @@ function errorCode(error: unknown) {
   return (error as { code?: string }).code;
 }
 
-test("node model saves project mapping only to relay-capable nodes and require the switch", async () => {
+test("node model saves project mapping only to relay-capable nodes and silently drop it elsewhere", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: true, node_legacy: true } });
   try {
     await harness.service.createOnNode("node_relay", mappedModelInput());
@@ -210,11 +210,11 @@ test("node model saves project mapping only to relay-capable nodes and require t
     });
     assert.deepEqual(harness.calls.create[2].input.modelNames, [{ name: "legacy-same", order: 100 }]);
 
-    await assert.rejects(
-      () => harness.service.createOnNode("node_legacy", mappedModelInput({ modelNames: [{ name: "public-model", upstreamName: "elsewhere", order: 100 }] })),
-      (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
-    );
-    assert.equal(harness.calls.create.length, 3);
+    // A mapped write to a node without the relay producer is never blocked:
+    // the mapping is ignored silently and projected as a same-name record.
+    await harness.service.createOnNode("node_legacy", mappedModelInput({ modelNames: [{ name: "public-model", upstreamName: "elsewhere", order: 100 }] }));
+    assert.equal(harness.calls.create.length, 4);
+    assert.deepEqual(harness.calls.create[3].input.modelNames, [{ name: "public-model", order: 100 }]);
   } finally {
     await harness.close();
   }
@@ -245,7 +245,7 @@ test("mapped node model saves stay writable while the node relay is disabled", a
   }
 });
 
-test("mapped assignments require only the node relay wire capability", async () => {
+test("mapped assignments never depend on the node relay capability", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: true } });
   try {
     const model = await harness.service.create(mappedModelInput());
@@ -277,10 +277,24 @@ test("mapped assignments require only the node relay wire capability", async () 
       const legacyModel = await nodeWithoutRelay.service.create(mappedModelInput());
       await assert.rejects(
         () => nodeWithoutRelay.service.prepareAssignment(nodeWithoutRelay.nodes[0], { modelEntityIds: [legacyModel.id] }, relayInstance("inst_legacy_node", "node_legacy")),
-        (error) => errorCode(error) === "NODE_MODEL_RELAY_UNSUPPORTED",
+        (error) => errorCode(error) === "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
       );
     } finally {
       await nodeWithoutRelay.close();
+    }
+
+    // A node with stable identities but no relay producer still receives the
+    // entity; the mapping is silently dropped to a same-name projection.
+    const noRelay = await createHarness({ nodes: [stableNodeWithoutRelay("node_no_relay")], relayEnabled: { node_no_relay: true } });
+    try {
+      const noRelayNode = noRelay.nodes[0];
+      const noRelayModel = await noRelay.service.create(mappedModelInput());
+      const noRelayAssignment = await noRelay.service.prepareAssignment(noRelayNode, { modelEntityIds: [noRelayModel.id] }, relayInstance("inst_no_relay", "node_no_relay"));
+      assert.deepEqual(noRelayAssignment.modelSelection.modelEntityIds, [noRelayModel.id]);
+      const deployed = noRelay.calls.deploy.find((call) => call.nodeId === noRelayNode.id);
+      assert.deepEqual((deployed?.input.modelNames as Array<Record<string, unknown>>)[0], { name: "public-model", order: 100 });
+    } finally {
+      await noRelay.close();
     }
 
     const disabled = await createHarness({ relayEnabled: { node_relay: false } });
@@ -311,7 +325,7 @@ test("mapped assignments require only the node relay wire capability", async () 
   }
 });
 
-test("mapped entities refuse to converge onto nodes that cannot store the mapping", async () => {
+test("mapped entities converge onto nodes without relay as same-name projections", async () => {
   const stable = stableNodeWithoutRelay();
   const harness = await createHarness({ nodes: [relayNode(), stable], relayEnabled: { node_relay: true, node_stable: true } });
   try {
@@ -325,53 +339,48 @@ test("mapped entities refuse to converge onto nodes that cannot store the mappin
     });
     const result = await harness.service.sync(model.id);
     const stableLocation = result.locations.find((location) => location.nodeId === stable.id);
-    assert.equal(stableLocation?.state, "error");
-    assert.equal(stableLocation?.code, "NODE_MODEL_RELAY_UNSUPPORTED");
-    assert.equal(harness.calls.deploy.some((call) => call.nodeId === stable.id), false);
+    assert.equal(stableLocation?.state, "synced");
+    const stableDeploy = harness.calls.deploy.find((call) => call.nodeId === stable.id);
+    assert.deepEqual((stableDeploy?.input.modelNames as Array<Record<string, unknown>>)[0], { name: "public-model", order: 100 });
   } finally {
     await harness.close();
   }
 });
 
-test("explicit request mapping writes fail closed on nodes that cannot store them", async () => {
+test("explicit request mapping writes silently drop the field on nodes that cannot store them", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: true, node_legacy: true } });
   try {
     const [relay, legacy] = harness.nodes;
     const relayed = await harness.service.createOnNode(relay.id, sameNameModelInput({ mappings: [requestMapping()] }));
     assert.deepEqual(harness.calls.create[0].input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
 
-    await assert.rejects(
-      () => harness.service.createOnNode(legacy.id, sameNameModelInput({ mappings: [requestMapping()] })),
-      (error) => errorCode(error) === "NODE_MODEL_MAPPINGS_UNSUPPORTED",
-    );
-    assert.equal(harness.calls.create.length, 1);
+    // A node without the request-mapping capability is never blocked: the
+    // additive field is stripped and the write proceeds.
+    await harness.service.createOnNode(legacy.id, sameNameModelInput({ name: "Legacy mapped", mappings: [requestMapping()] }));
+    assert.equal(harness.calls.create.length, 2);
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.create[1].input, "mappings"), false);
 
     // Same-name writes without mappings keep the released wire shape: the
     // additive field is absent entirely, not empty.
-    await harness.service.createOnNode(legacy.id, sameNameModelInput({ name: "Legacy" }));
-    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.create[1].input, "mappings"), false);
-
-    // Untouched patches stay allowed; an explicit clear is inert, an explicit
-    // mapping edit fails closed before any node write.
+    // Untouched patches stay allowed and an explicit clear is inert; an
+    // explicit mapping edit is dropped before any node write.
     const legacySame = await harness.service.createOnNode(legacy.id, sameNameModelInput({ name: "Legacy same" })) as { id: string };
     await harness.service.updateOnNode(legacy.id, legacySame.id, { name: "Renamed" });
     assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.update[0].input, "mappings"), false);
     await harness.service.updateOnNode(legacy.id, legacySame.id, { mappings: [] });
     assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.update[1].input, "mappings"), false);
-    await assert.rejects(
-      () => harness.service.updateOnNode(legacy.id, legacySame.id, { mappings: [requestMapping()] }),
-      (error) => errorCode(error) === "NODE_MODEL_MAPPINGS_UNSUPPORTED",
-    );
-    assert.equal(harness.calls.update.length, 2);
+    await harness.service.updateOnNode(legacy.id, legacySame.id, { mappings: [requestMapping()] });
+    assert.equal(harness.calls.update.length, 3);
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.update[2].input, "mappings"), false);
 
     await harness.service.updateOnNode(relay.id, relayed.id, { mappings: [requestMapping({ upstreamName: "upstream-2" })] });
-    assert.deepEqual(harness.calls.update[2].input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-2", order: 100 }]);
+    assert.deepEqual(harness.calls.update[3].input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-2", order: 100 }]);
   } finally {
     await harness.close();
   }
 });
 
-test("control-plane request mappings sync to capable replicas and degrade visibly elsewhere", async () => {
+test("control-plane request mappings sync to capable replicas and are silently dropped elsewhere", async () => {
   const stable = stableNodeWithoutRelay("node_stable_mappings");
   const harness = await createHarness({ nodes: [relayNode("node_relay_mappings"), stable] });
   try {
@@ -391,8 +400,7 @@ test("control-plane request mappings sync to capable replicas and degrade visibl
 
     const result = await harness.service.sync(model.id);
     const stableLocation = result.locations.find((location) => location.nodeId === stable.id);
-    assert.equal(stableLocation?.state, "unsupported");
-    assert.equal(stableLocation?.code, "NODE_MODEL_MAPPINGS_UNSUPPORTED");
+    assert.equal(stableLocation?.state, "synced");
     const relayLocation = result.locations.find((location) => location.nodeId === relay.id);
     assert.equal(relayLocation?.state, "synced");
   } finally {

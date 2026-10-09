@@ -13,7 +13,11 @@ function tempDataDir(name) {
 
 function createNodeAgentMock(options = {}) {
   const requests = [];
-  const relay = { enabled: Boolean(options.relayEnabled), source: options.relayEnabled ? "persisted" : "default" };
+  // The node-agent ships with the relay on; only an explicit relayEnabled:false
+  // simulates a node that persisted the switch off.
+  const relay = options.relayEnabled === false
+    ? { enabled: false, source: "persisted" }
+    : { enabled: true, source: options.relayEnabled === true ? "persisted" : "default" };
   const json = (data, status = 200) => new Response(JSON.stringify({ data }), {
     status,
     headers: { "content-type": "application/json" },
@@ -134,7 +138,7 @@ test("node relay settings read and write the node-agent authority and publish th
 
   const initial = await app.inject({ method: "GET", url: "/api/nodes/node_relay/settings/model-relay" });
   assert.equal(initial.statusCode, 200, initial.body);
-  assert.deepEqual(initial.json().data, { enabled: false, source: "default" });
+  assert.deepEqual(initial.json().data, { enabled: true, source: "default" });
 
   // Strict write model: unknown fields and wrong types never reach the node.
   const invalidType = await app.inject({

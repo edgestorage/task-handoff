@@ -122,7 +122,9 @@ test("request mappings rewrite relay requests without changing catalogs, assignm
     { name: "gpt-5.6-luna", upstreamName: "upstream-codex", order: 200 },
   ]);
   const stored = app.nodeAgentState.modelRegistry.getModel(model.id);
-  assert.equal(app.nodeAgentState.modelRegistry.isMappedModel(stored), false);
+  // Request-name rewrites are the relay-only mapping: the entity is mapped, yet
+  // its declared names must never appear in the exposed catalog.
+  assert.equal(app.nodeAgentState.modelRegistry.isMappedModel(stored), true);
 
   const enabled = await agentRequest(app, "PATCH", "/api/node-agent/settings/model-relay", { enabled: true, unknownModelPolicy: "reject" });
   assert.equal(enabled.statusCode, 200, enabled.body);

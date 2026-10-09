@@ -306,20 +306,27 @@ test("turning the switch off restores the v0.0.34 direct projection without rest
   assert.equal(opencode.provider[`task-handoff-${entities.chat.id}`].options.baseURL, `${upstream.origin}/v1`);
 });
 
-test("instances without the relay consumer capability keep the direct projection and ignore mapped assignments", async (t) => {
+test("instances without the relay consumer capability keep the direct projection including distinct upstream identities", async (t) => {
   const upstream = await startUpstream((_record, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end("{}");
   });
   t.after(() => upstream.close());
-  const { app } = await resolveRelayOrigin(t, upstream, {
+  const { app, entities } = await resolveRelayOrigin(t, upstream, {
     capabilities: { features: { privateModelCatalog: true } },
   });
 
   const catalog = app.nodeAgentState.modelRegistry.privateCatalog(INSTANCE_ID);
   assert.equal(catalog.protocolVersion, "2026-08-27");
-  assert.equal(catalog.entities.length, 0, "mapped entities must not leak into a direct catalog");
-  assert.deepEqual(app.nodeAgentState.resolvedAssignedModelEnvironment(INSTANCE_ID), {});
+  // A display label that differs from its upstream identity is not a relay-only
+  // mapping: the direct catalog still carries every assigned entity and the
+  // stable upstream name its requests are driven with.
+  assert.deepEqual(
+    catalog.entities.map((entity) => entity.id).sort(),
+    [entities.codex.id, entities.chat.id, entities.claude.id].sort(),
+  );
+  assert.equal(catalog.entities.find((entity) => entity.id === entities.codex.id)?.modelNames[0].upstreamName, "upstream-codex");
+  assert.notDeepEqual(app.nodeAgentState.resolvedAssignedModelEnvironment(INSTANCE_ID), {});
 });
 
 test("relay catalogs read back from the private config file and sanitize unknown fields", async () => {

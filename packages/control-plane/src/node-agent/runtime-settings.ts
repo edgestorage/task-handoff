@@ -10,7 +10,7 @@ import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 
 /**
  * Version 1 node-agent runtime settings. Domains are additive: older files
- * without `modelRelay` stay readable and normalize to the default-off relay
+ * without `modelRelay` stay readable and normalize to the default-on relay
  * switch, which is why the field is optional instead of defaulted in the
  * schema. The presence of a valid boolean is what marks the switch as
  * persisted; a schema default would make a never-written setting

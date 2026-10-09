@@ -26,7 +26,15 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 
 ### Story
 
-![TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
+亮色模式：
+
+![亮色模式下的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
+
+暗色模式，包含 Story 会话和容器中运行的浏览器：
+
+![暗色模式下的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
+
+更多界面截图见 [界面与工作台指南](https://docs.thandoff.com/zh/guide/workbench)。
 
 ## 核心能力
 

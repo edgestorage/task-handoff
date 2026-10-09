@@ -2244,7 +2244,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         selection = resolveControlledPrivateModelSelection(privateModelCatalog, item.agent, body.modelSelection, { intent: "target" });
         if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
       }
-      const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id, selection));
+      if (body.reasoningEffort && (item.creationSource !== "ai-session"
+        || !normalizeAiSessionReasoningEffortCapabilities(aiSessionProviders.capability(item.agent)).selectAtCreate)) {
+        throw Object.assign(new Error("Reasoning effort selection is unavailable while resuming this session."), { code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED", statusCode: 409 });
+      }
+      const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id, selection, body.reasoningEffort));
       await refreshAndPublishAiSessions("control-action");
       return { data: result };
     } catch (error: unknown) {

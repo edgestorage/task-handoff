@@ -10,7 +10,7 @@ const agentEditor = fs.readFileSync(new URL("../src/apps/control-plane/agent/Age
 
 test("shared model menu appends the reasoning effort submenu after provider models", () => {
   const providers = modelMenu.indexOf('v-for="group in modelGroups"');
-  const separator = modelMenu.indexOf("<DropdownMenuSeparator />", providers);
+  const separator = modelMenu.indexOf('<DropdownMenuSeparator v-if="modelGroups.length" />', providers);
   const reasoning = modelMenu.indexOf('t("sessions.composer.reasoningEffort")', separator);
 
   assert.ok(providers >= 0);
@@ -53,4 +53,11 @@ test("new and existing sessions use the same reasoning effort composer control",
   assert.match(panel, /@select-reasoning-effort="selectExistingSessionReasoningEffort"/);
   assert.match(panel, /updateAiSessionReasoningEffort/);
   assert.match(panel, /persistAiSessionCreationPreferences\(session\.agent, \{ reasoningEffort \}\)/);
+});
+
+test("history composer sends its selected reasoning effort when resuming", () => {
+  assert.match(panel, /:reasoning-effort="historyReasoningEffort"/);
+  assert.match(panel, /@select-reasoning-effort="historyReasoningEffort = \$event"/);
+  assert.match(panel, /resumeAiSession\(props\.instance\.id, item\.id, \{[\s\S]*reasoningEffort/);
+  assert.match(composer, /modelOptions\.value\.length === 0 && !props\.reasoningEffortEnabled/);
 });

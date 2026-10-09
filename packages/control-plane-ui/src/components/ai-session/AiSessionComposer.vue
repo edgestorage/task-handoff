@@ -185,6 +185,7 @@ const displayedModelOption = computed(() => {
 });
 const displayedModelName = computed(() => displayedModelOption.value?.modelName
   || displayedModelSelection.value?.modelName
+  || (props.reasoningEffortEnabled ? t("sessions.composer.reasoningEffort") : undefined)
   || t("sessions.composer.modelSelectionUnavailable"));
 const displayedProviderName = computed(() => displayedModelOption.value?.providerName
   || t("sessions.composer.selectionNotSet"));
@@ -198,7 +199,7 @@ const modelMenuDisabled = computed(() => Boolean(
   || props.reasoningEffortPending
   || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
 ));
-const noModelAvailable = computed(() => modelOptions.value.length === 0);
+const noModelAvailable = computed(() => modelOptions.value.length === 0 && !props.reasoningEffortEnabled);
 // An empty catalog means "no model configured" only when the provider actually
 // offers in-session model selection; otherwise the session keeps its current
 // model and the trigger stays read-only.

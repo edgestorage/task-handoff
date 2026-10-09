@@ -624,6 +624,7 @@ test("AI session resume coordinator restores Direct history without launching an
     id: "ai-direct-resume",
     creationSource: "ai-session",
     modelSelection: { modelEntityId: "model-old", modelName: "old-model" },
+    reasoningEffort: "medium",
   });
   history.upsert(item);
   let providerResumes = 0;
@@ -636,11 +637,12 @@ test("AI session resume coordinator restores Direct history without launching an
       providerResumes += 1;
       assert.equal(entry.providerSessionId, item.providerSessionId);
       assert.deepEqual(entry.modelSelection, { modelEntityId: "model-new", modelName: "new-model" });
+      assert.equal(entry.reasoningEffort, "high");
       return entry.modelSelection;
     },
   });
 
-  assert.deepEqual(await coordinator.resume(item.id, { modelEntityId: "model-new", modelName: "new-model" }), {
+  assert.deepEqual(await coordinator.resume(item.id, { modelEntityId: "model-new", modelName: "new-model" }, "high"), {
     disposition: "resumed",
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
@@ -649,6 +651,7 @@ test("AI session resume coordinator restores Direct history without launching an
   assert.equal(providerResumes, 1);
   assert.equal(registry.get(item.id).creationSource, "ai-session");
   assert.deepEqual(registry.get(item.id).modelSelection, { modelEntityId: "model-new", modelName: "new-model" });
+  assert.equal(registry.get(item.id).reasoningEffort, "high");
   assert.equal(registry.get(item.id).appSessionId, undefined);
   assert.ok(Date.parse(registry.get(item.id).updatedAt) > Date.parse(item.lastActiveAt));
   assert.equal(history.get(item.id), undefined);

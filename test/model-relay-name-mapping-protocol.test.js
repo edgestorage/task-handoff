@@ -506,9 +506,10 @@ test("session selection consumes external names from both catalog projections", 
   assert.equal(AiSessionModelSelectionSchema.safeParse(selection).success, true);
 });
 
-test("node relay settings wire model defaults to disabled and writes strictly", () => {
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
+test("node relay settings wire model defaults to enabled and writes strictly", () => {
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: false }), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
   assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "reject" }), { enabled: true, unknownModelPolicy: "reject", source: "default" });
   // Missing or malformed policies normalize to the passthrough default.
   assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "bogus" }), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });

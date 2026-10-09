@@ -14,6 +14,7 @@ export const instances = {
     emptyHint: "Go to Settings → Models in the control plane to add model providers.",
     emptyCreateHint: "You can also create this instance now and change its model providers later in instance settings.",
     openSettings: "Open control plane settings",
+    openedSettings: "Opened control plane settings so you can add model providers.",
   },
   window: {
     invalidRoute: "This instance detail link is invalid. Choose an instance from the switcher.",
