@@ -58,6 +58,21 @@ test("macOS updater metadata is generated from one dual-architecture build", () 
   assert.match(workflow, /Expected signed arm64 and x64 TaskHandoff\.app bundles/);
 });
 
+test("Windows updater metadata is generated from one dual-architecture build", () => {
+  // Two separate Windows jobs would each write `latest.yml` and the merged release
+  // assets would silently drop one architecture, so both arches build together.
+  assert.match(workflow, /platform: windows-x64-arm64[\s\S]*arch_args: --x64 --arm64/);
+  assert.equal((workflow.match(/platform: windows-/g) || []).length, 1);
+  assert.equal((workflow.match(/target: win\b/g) || []).length, 1);
+  assert.match(workflow, /platform: linux-x64[\s\S]*arch_args: --x64/);
+});
+
+test("release notes label arm64 installers per platform", () => {
+  assert.match(workflow, /architecture="Apple Silicon"/);
+  assert.match(workflow, /else\n\s+architecture="arm64"/);
+  assert.match(workflow, /append_installers exe Windows Installer/);
+});
+
 test("desktop builds embed one Linux-container controlled-instance artifact assembled from native node-pty prebuilds", () => {
   for (const identity of ["linux-x64", "linux-arm64"]) {
     const [platform, arch] = identity.split("-");
