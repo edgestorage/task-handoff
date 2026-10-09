@@ -297,7 +297,7 @@ disabled while no public key is configured. Configuration:
 
 ### Desktop application
 
-Semantic version tags build macOS arm64/x64, Windows x64, and Linux x64 installers and publish them to GitHub Releases. Versions with an `alpha` or `beta` suffix are marked as prereleases. macOS artifacts are signed, notarized, stapled, and verified with Gatekeeper. Windows code signing is not enabled yet.
+Semantic version tags build macOS arm64/x64, Windows arm64/x64, and Linux x64 installers and publish them to GitHub Releases. Versions with an `alpha` or `beta` suffix are marked as prereleases. macOS artifacts are signed, notarized, stapled, and verified with Gatekeeper. Windows code signing is not enabled yet.
 
 Closing the Desktop control-panel window keeps TaskHandoff running in the system tray. The tray shows the current Control Plane and Node Agent service status and can reopen the existing window without restarting either service. Choose **Quit TaskHandoff** from the tray or the platform application menu to stop the Desktop services. A graceful Node Agent shutdown stops Local Runtime controlled instances so they can be restored on the next launch; Docker Runtime controlled instances keep running and are rediscovered when the Node Agent returns.
 
