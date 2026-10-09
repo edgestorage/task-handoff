@@ -70,6 +70,9 @@ test("Windows updater metadata is generated from one dual-architecture build", (
 test("release notes label arm64 installers per platform", () => {
   assert.match(workflow, /architecture="Apple Silicon"/);
   assert.match(workflow, /else\n\s+architecture="arm64"/);
+  // The dual-architecture Windows build also emits one installer without an
+  // architecture token, which installs either architecture.
+  assert.match(workflow, /elif \[\[ "\$platform" == "Windows" \]\]; then\n(?:\s+#[^\n]*\n)*\s+architecture="x64 \+ arm64"/);
   assert.match(workflow, /append_installers exe Windows Installer/);
 });
 
