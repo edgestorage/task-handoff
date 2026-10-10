@@ -783,7 +783,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
   const platform = options.platform || process.platform;
   const arch = options.arch || process.arch;
-  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform, storyRepository);
+  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, storyRepository);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
