@@ -202,6 +202,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
     env:
       GH_REPO: ${{ github.repository }}
     steps:
@@ -219,6 +220,9 @@ jobs:
         with:
           node-version: 24.15.0
           registry-url: https://registry.npmjs.org
+
+      - name: Install the npm CLI that supports OIDC dist-tags
+        run: npm install -g npm@^11.21.0
 
       - name: Prepare immutable draft GitHub Release
         if: github.event_name == 'push'
@@ -251,7 +255,6 @@ jobs:
 
       - name: Publish or verify immutable npm packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ needs.runtime-packages.outputs.npm_tag }}
           RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
         shell: bash
@@ -286,7 +289,6 @@ jobs:
       - name: Keep prereleases out of the latest dist-tag
         if: needs.runtime-packages.outputs.npm_tag != 'latest'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
         shell: bash
         run: |
