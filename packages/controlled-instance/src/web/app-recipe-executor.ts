@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createGunzip } from "node:zlib";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
-import { resolveExecutable } from "@task-handoff/app-runtime";
+import { commandInvocation, quoteCommandInterpreterArgument } from "@task-handoff/core/core/command-invocation";
 import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
@@ -124,10 +124,8 @@ function signalChildProcess(child: { pid?: number; kill: (signal?: NodeJS.Signal
 }
 
 function resolvedCommand(executable: string, args: string[], timeoutMs: number, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): AppRecipeCommand {
-  const resolution = resolveExecutable(executable, { env, platform });
-  return resolution?.env
-    ? { executable: resolution.executable, args, timeoutMs, env: { ...env, ...resolution.env } }
-    : { executable, args, timeoutMs };
+  const invocation = commandInvocation(executable, args, { env, platform });
+  return { executable: invocation.executable, args: invocation.args, env: invocation.env, timeoutMs };
 }
 
 function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv): AppRecipeCommand {
@@ -173,13 +171,18 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
   const args = operation === "uninstall"
     ? ["uninstall", "--global", ...recipe.packages]
     : ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages];
-  const resolution = resolveExecutable(recipe.installer, { env, platform: capabilities.platform as NodeJS.Platform });
-  const installerExecutable = capabilities.platform === "win32"
-    ? resolution?.executable || `${recipe.installer}.cmd`
-    : resolution?.env ? resolution.executable : recipe.installer;
-  const command = capabilities.platform === "win32"
-    ? { executable: env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", installerExecutable, ...args], timeoutMs: 15 * 60_000, ...(resolution?.env ? { env: { ...env, ...resolution.env } } : {}) }
-    : { executable: installerExecutable, args, timeoutMs: 15 * 60_000, ...(resolution?.env ? { env: { ...env, ...resolution.env } } : {}) };
+  const invocation = commandInvocation(recipe.installer, args, {
+    env,
+    platform: capabilities.platform as NodeJS.Platform,
+    // npm is a `.cmd` launcher on Windows even when PATH lookup cannot see it.
+    win32ShimWhenUnresolved: true,
+  });
+  const command: AppRecipeCommand = {
+    executable: invocation.executable,
+    args: invocation.args,
+    env: invocation.env,
+    timeoutMs: 15 * 60_000,
+  };
   if (capabilities.privilege === "root" || recipe.privilege === "user") {
     return command;
   }
@@ -206,7 +209,7 @@ function npmRetirementDirectory(stderr: string, recipe: NodePackageInstallRecipe
 
 function npmRetirementCleanupCommand(command: AppRecipeCommand, destination: string, capabilities: FinalComputerCapabilities): AppRecipeCommand {
   if (capabilities.platform === "win32") {
-    return { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "rmdir", "/s", "/q", destination], timeoutMs: 60_000 };
+    return { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "rmdir", "/s", "/q", quoteCommandInterpreterArgument(destination)], timeoutMs: 60_000 };
   }
   const prefix = command.executable === "sudo" ? ["-n"] : [];
   return command.executable === "sudo"

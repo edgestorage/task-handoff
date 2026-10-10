@@ -13,7 +13,7 @@ const timestamp = "2026-08-04T00:00:00.000Z";
 
 function fixture() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-template-instance-"));
-  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091, "linux");
+  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091);
   state.init();
   state.environmentTemplates.put({
     id: "template_ready",
@@ -114,7 +114,7 @@ test("SQLite instance credentials rebuild a missing private config", (t) => {
   const created = first.state.createInstance(createInput("inst_legacy_credential", { type: "local-folder", path: "/tmp/local-project" }));
   first.state.instancePrivateConfigs.delete(created.id);
 
-  const restored = new NodeAgentState(first.state.paths, "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091, "linux");
+  const restored = new NodeAgentState(first.state.paths, "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091);
   restored.init();
 
   assert.equal(restored.requireInstance(created.id).registrationToken, created.registrationToken);
