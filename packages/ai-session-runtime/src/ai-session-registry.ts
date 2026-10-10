@@ -155,9 +155,22 @@ export function aiSessionDetailRevision(session: AiSessionStatus) {
 
 const aiSessionTurnsRevisionCache = new WeakMap<AiSessionStatus, string>();
 
+// A Turn's body revision must only move when its body moves. Adapter
+// observation metadata (observedAt/snapshotVersion) is rewritten for every
+// Turn whenever the session snapshot advances — for OpenCode it derives from
+// the session-wide updated time — so hashing it in would keep reporting a new
+// revision for Turns whose content is unchanged. Clients then reject their
+// freshly fetched body and history navigation deadlocks on the latest Turn.
+function aiSessionTurnBodyRevisionValue(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
+  const body: Record<string, unknown> = { ...turn };
+  delete body.observedAt;
+  delete body.snapshotVersion;
+  return body;
+}
+
 export function aiSessionTurnBodyRevision(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
   return createHash("sha256")
-    .update(JSON.stringify(canonicalDetailValue(turn)))
+    .update(JSON.stringify(canonicalDetailValue(aiSessionTurnBodyRevisionValue(turn))))
     .digest("base64url")
     .slice(0, 22);
 }
