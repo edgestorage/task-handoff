@@ -13,6 +13,20 @@ const require = createRequire(import.meta.url);
 const { resolveFeatureFlags } = require("../shared/feature-flags.cjs");
 const builtinProjects = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+// Published runtime packages mirror the product entry points, so the root
+// manifest is the single source for the homepage, repository, and issues URL.
+for (const field of ["homepage", "repository", "bugs"]) {
+  if (!rootPackage[field]) throw new Error(`Root package.json must define "${field}" so published runtime packages expose it.`);
+}
+const repositoryUrl = rootPackage.repository.url.replace(/^git\+/, "").replace(/\.git$/, "");
+const readmeLinks = [
+  "## Links",
+  "",
+  `- Documentation: ${rootPackage.homepage}`,
+  `- Repository: ${repositoryUrl}`,
+  `- Issues: ${rootPackage.bugs.url}`,
+  "",
+].join("\n");
 const program = new Command()
   .name("prepare-runtime-packages")
   .description("Assemble built TaskHandoff runtime npm package directories.")
@@ -134,6 +148,10 @@ for (const [name, definition] of selected) {
     version: process.env.TASK_HANDOFF_VERSION || rootPackage.version,
     description: definition.description,
     license: rootPackage.license,
+    homepage: rootPackage.homepage,
+    repository: rootPackage.repository,
+    bugs: rootPackage.bugs,
+    keywords: definition.keywords,
     type: "commonjs",
     bin,
     files: [
@@ -156,11 +174,14 @@ for (const [name, definition] of selected) {
   };
   fs.writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   if (definition.bundledNativeDependencies?.includes("node-pty")) copyBundledNodePty(packageDir);
-  const readme = definition.readmeFile
+  const readmeBody = definition.readmeFile
     ? fs.readFileSync(path.join(root, definition.readmeFile), "utf8")
     : definition.aggregateDependencies
-      ? `# ${definition.packageName}\n\nComplete TaskHandoff server package. Installing it installs the control plane, node agent, and controlled instance runtimes at the same version. Run \`task-handoff install\` as root to create and start the systemd services.\n`
-      : `# ${definition.packageName}\n\nPrebuilt ${name} runtime for TaskHandoff. This package contains compiled JavaScript${definition.uiDir ? " and built Web UI assets" : ""}; it does not contain monorepo source code.\n`;
+      ? `# ${definition.packageName}\n\n${definition.description} Installing it installs the control plane, node agent, and controlled instance runtimes at the same version. Run \`task-handoff install\` as root to create and start the systemd services.\n`
+      : `# ${definition.packageName}\n\n${definition.description} This package contains compiled JavaScript${definition.uiDir ? " and built Web UI assets" : ""}; it does not contain monorepo source code.\n`;
+  // Every npm page carries the product entry points, including the readme views
+  // that render before the manifest metadata.
+  const readme = `${readmeBody.replace(/\s+$/, "")}\n\n${readmeLinks}`;
   fs.writeFileSync(path.join(packageDir, "README.md"), readme);
   fs.copyFileSync(path.join(root, "LICENSE"), path.join(packageDir, "LICENSE"));
   fs.copyFileSync(path.join(root, "NOTICE"), path.join(packageDir, "NOTICE"));
