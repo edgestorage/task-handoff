@@ -86,7 +86,6 @@ test("node-agent refuses to persist a local folder until its path passes authori
     "http://127.0.0.1:8091",
     "http://host.docker.internal:8091",
     8091,
-    "linux",
   );
   state.init();
 

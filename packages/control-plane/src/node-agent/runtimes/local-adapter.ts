@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
+import {
+  cleanupLocalIpcEndpoint,
+  createLocalIpcTempEndpoint,
+  restrictToCurrentUser,
+} from "@task-handoff/core/core/local-ipc-endpoint";
+import { commandInvocation } from "@task-handoff/core/core/command-invocation";
 import { InstanceDeleteResultSchema, type ControlledInstance, type InstanceDeleteInput, type NodeRuntime } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { copyTruncateOpenLog } from "@task-handoff/core/storage/open-log-retention";
@@ -35,16 +40,6 @@ function localWorkspacePath(instance: ControlledInstance) {
   return path.resolve(instance.source.path);
 }
 
-export function localGitBrokerDirectoryPrefix(
-  instanceId: string,
-  platform = process.platform,
-  temporaryDirectory = os.tmpdir(),
-) {
-  const temporaryRoot = platform === "darwin" ? "/private/tmp" : temporaryDirectory;
-  const instanceHash = crypto.createHash("sha256").update(instanceId).digest("hex").slice(0, 12);
-  return path.join(temporaryRoot, `th-git-${instanceHash}-`);
-}
-
 export function configuredLocalControlledCommand() {
   const value = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV?.trim();
   if (!value) {
@@ -74,7 +69,12 @@ function localControlledInstanceCommand(configured?: string[]) {
 }
 async function commandVersion(runCommand: CommandRunner, command: string) {
   try {
-    const result = await runCommand(command, ["--version"]);
+    const invocation = commandInvocation(command, ["--version"]);
+    // Only a win32 `.cmd`/`.bat` shim needs the interpreter wrapper; every other
+    // case keeps the caller's command so PATH lookup and runner contracts hold.
+    const result = invocation.interpreterWrapped
+      ? await runCommand(invocation.executable, invocation.args, { env: invocation.env })
+      : await runCommand(command, ["--version"]);
     return {
       available: true,
       command,
@@ -147,9 +147,9 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       : undefined;
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
     if (codexHome) fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
-    fs.chmodSync(dataDir, 0o700);
-    fs.chmodSync(logDir, 0o700);
-    if (codexHome) fs.chmodSync(codexHome, 0o700);
+    restrictToCurrentUser(dataDir, 0o700);
+    restrictToCurrentUser(logDir, 0o700);
+    if (codexHome) restrictToCurrentUser(codexHome, 0o700);
     const [command, ...baseArgs] = localControlledInstanceCommand(this.commandOverride);
     const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
     const processNonce = crypto.randomUUID();
@@ -157,8 +157,18 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const errPath = path.join(logDir, "controlled-instance.err.log");
     copyTruncateOpenLog(outPath);
     copyTruncateOpenLog(errPath);
-    const gitBrokerDir = fs.mkdtempSync(localGitBrokerDirectoryPrefix(context.instance.id));
-    fs.chmodSync(gitBrokerDir, 0o700);
+    // The broker socket is a named pipe on Windows, where no scope directory exists.
+    const gitBroker = createLocalIpcTempEndpoint({
+      scope: "th-git",
+      key: context.instance.id,
+      keyHashLength: 12,
+      fileName: "broker.sock",
+    });
+    if (gitBroker.directory) restrictToCurrentUser(gitBroker.directory, 0o700);
+    const releaseGitBrokerEndpoint = () => {
+      cleanupLocalIpcEndpoint(gitBroker.endpoint);
+      if (gitBroker.directory) fs.rmSync(gitBroker.directory, { recursive: true, force: true });
+    };
     const out = fs.openSync(outPath, "a", 0o600);
     const err = fs.openSync(errPath, "a", 0o600);
     const child = spawn(command, args, {
@@ -188,7 +198,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",
         TASK_HANDOFF_WEB_PORT: String(port),
         TASK_HANDOFF_WEB_HOST: "127.0.0.1",
-        TASK_HANDOFF_GIT_CREDENTIAL_SOCKET: path.join(gitBrokerDir, "broker.sock"),
+        TASK_HANDOFF_GIT_CREDENTIAL_SOCKET: gitBroker.endpoint.path,
         ...(context.modelEnv || {}),
         // CODEX_HOME belongs to the controlled instance's private config area.
         // Explicitly clear an inherited value when Codex configuration is
@@ -201,7 +211,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     try {
       await waitForChildSpawn(child);
     } catch (error) {
-      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
+      releaseGitBrokerEndpoint();
       const message = error instanceof Error ? error.message : String(error);
       try {
         fs.appendFileSync(
@@ -234,7 +244,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       }
     });
     child.once("exit", (code, signal) => {
-      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
+      releaseGitBrokerEndpoint();
       try {
         fs.appendFileSync(
           lifecycleLogPath,

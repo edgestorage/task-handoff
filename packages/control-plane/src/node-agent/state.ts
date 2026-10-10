@@ -204,10 +204,9 @@ export class NodeAgentState {
   readonly node: Node;
   private listenerPort: number;
   private readonly containerUrlOverride?: string;
-  private readonly platform: NodeJS.Platform;
   private builtinFolders?: BuiltinProjectFolderProjection;
 
-  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform, repository?: NodeAgentRepository) {
+  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, repository?: NodeAgentRepository) {
     this.paths = paths;
     this.nodeId = nodeId;
     const persistence = repository || createNodeAgentRepository(openNodeAgentDatabaseSync(paths));
@@ -236,7 +235,6 @@ export class NodeAgentState {
     });
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
-    this.platform = platform;
     this.containerUrlOverride = containerUrl;
     const timestamp = now();
     this.node = NodeSchema.parse({
@@ -285,22 +283,20 @@ export class NodeAgentState {
         }),
       );
     }
-    if (this.platform !== "win32") {
-      const current = this.nodeRuntimes.get(BUILTIN_LOCAL_RUNTIME_ID);
-      const timestamp = now();
-      this.nodeRuntimes.put(NodeRuntimeSchema.parse({
-        id: BUILTIN_LOCAL_RUNTIME_ID,
-        nodeId: this.nodeId,
-        name: "Local Runtime",
-        type: "local",
-        status: current?.status || "unknown",
-        accessStrategy: "node-proxy",
-        capabilities: localRuntimeCapabilities(current?.capabilities),
-        labels: { ...current?.labels, [BUILTIN_RUNTIME_LABEL]: "true" },
-        createdAt: current?.createdAt || timestamp,
-        updatedAt: current?.updatedAt || timestamp,
-      }));
-    }
+    const currentLocalRuntime = this.nodeRuntimes.get(BUILTIN_LOCAL_RUNTIME_ID);
+    const localRuntimeTimestamp = now();
+    this.nodeRuntimes.put(NodeRuntimeSchema.parse({
+      id: BUILTIN_LOCAL_RUNTIME_ID,
+      nodeId: this.nodeId,
+      name: "Local Runtime",
+      type: "local",
+      status: currentLocalRuntime?.status || "unknown",
+      accessStrategy: "node-proxy",
+      capabilities: localRuntimeCapabilities(currentLocalRuntime?.capabilities),
+      labels: { ...currentLocalRuntime?.labels, [BUILTIN_RUNTIME_LABEL]: "true" },
+      createdAt: currentLocalRuntime?.createdAt || localRuntimeTimestamp,
+      updatedAt: currentLocalRuntime?.updatedAt || localRuntimeTimestamp,
+    }));
     for (const runtime of this.nodeRuntimes.list()) {
       if (runtime.nodeId !== this.nodeId) {
         this.nodeRuntimes.put(NodeRuntimeSchema.parse({ ...runtime, nodeId: this.nodeId, updatedAt: now() }));
@@ -436,11 +432,8 @@ export class NodeAgentState {
 
   createRuntime(input: z.infer<typeof CreateNodeRuntimeSchema>) {
     if (input.type === "local") {
-      const unsupported = this.platform === "win32";
-      const error = new Error(unsupported
-        ? "Local Runtime is not supported on Windows."
-        : "Local Runtime is built in and cannot be added manually.");
-      Object.assign(error, { statusCode: unsupported ? 400 : 409, code: unsupported ? "LOCAL_RUNTIME_UNSUPPORTED" : "LOCAL_RUNTIME_BUILTIN" });
+      const error = new Error("Local Runtime is built in and cannot be added manually.");
+      Object.assign(error, { statusCode: 409, code: "LOCAL_RUNTIME_BUILTIN" });
       throw error;
     }
     const timestamp = now();
@@ -465,11 +458,8 @@ export class NodeAgentState {
       throw error;
     }
     if (current.type === "local" || input.type === "local") {
-      const unsupported = this.platform === "win32";
-      const error = new Error(unsupported
-        ? "Local Runtime is not supported on Windows."
-        : "Local Runtime is built in and cannot be configured manually.");
-      Object.assign(error, { statusCode: unsupported ? 400 : 409, code: unsupported ? "LOCAL_RUNTIME_UNSUPPORTED" : "LOCAL_RUNTIME_BUILTIN" });
+      const error = new Error("Local Runtime is built in and cannot be configured manually.");
+      Object.assign(error, { statusCode: 409, code: "LOCAL_RUNTIME_BUILTIN" });
       throw error;
     }
     const updated = NodeRuntimeSchema.parse({

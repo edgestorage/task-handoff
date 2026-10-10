@@ -35,7 +35,7 @@ const {
 } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
 const {
   resolveExecutable,
-} = require("../packages/app-runtime/src/executable-resolver.ts");
+} = require("../packages/core/src/core/executable-resolver.ts");
 const {
   resolveAppExecutable,
 } = require("../packages/app-runtime/src/catalog.ts");

@@ -8,6 +8,7 @@ export type CommandResult = {
 export type CommandRunOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type CommandRunner = (command: string, args: string[], options?: CommandRunOptions) => Promise<CommandResult>;
@@ -20,6 +21,7 @@ export function defaultCommandRunner(command: string, args: string[], options: C
     }
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      ...(options.env ? { env: options.env } : {}),
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { localIpcEndpoint } from "@task-handoff/core/core/local-ipc-endpoint";
 
 export type GuiVncBackend = "novnc" | "kasmvnc";
 
@@ -28,9 +28,13 @@ export function guiAppHomeDir() {
 
 export function codexAppServerSocketPath(runtimeDir: string) {
   const configuredRoot = process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR?.trim();
-  const root = configuredRoot ? fs.realpathSync(configuredRoot) : process.platform === "darwin" ? "/private/tmp" : fs.realpathSync(os.tmpdir());
-  const hash = createHash("sha256").update(runtimeDir).digest("hex").slice(0, 16);
-  return path.join(root, `task-handoff-codex-${hash}`, "app-server.sock");
+  return localIpcEndpoint({
+    kind: "codex-af-unix",
+    scope: "task-handoff-codex",
+    key: runtimeDir,
+    fileName: "app-server.sock",
+    rootDir: configuredRoot ? fs.realpathSync(configuredRoot) : undefined,
+  }).path;
 }
 
 export function ensureNodePtySpawnHelperExecutable() {
