@@ -29,7 +29,7 @@ test("operation-only provisioning survives a node-agent restart and is consumed 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
     state.init();
     const input = {
       id: "inst_one",
@@ -74,7 +74,7 @@ test("operation-only provisioning survives a node-agent restart and is consumed 
     assert.equal(privateRecord.includes("operation-secret"), false);
     assert.equal(fs.existsSync(paths.gitCredentialPayloadsDir), false);
     assert.equal(state.persistence.git.getProvisioning("inst_one")?.status, "pending");
-    const restored = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    const restored = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
     restored.init();
     assert.equal(restored.takeGitWorkspaceProvisioning("inst_one")?.credentials[0]?.payload.secret.kind, "https-token");
     assert.equal(restored.takeGitWorkspaceProvisioning("inst_one"), undefined);
@@ -87,7 +87,7 @@ test("instance-retained provisioning snapshots are not persisted beside the auth
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-retained-snapshot-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
     state.init();
     assert.throws(() => state.gitCredentials.putWorkspaceProvisioning({
       operationId: "gitop_retained",
@@ -118,7 +118,7 @@ test("operation-only provisioning material is physically removed at its private-
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-expiry-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
     state.init();
     seedInstance(state);
     const store = new NodeGitCredentialStore(paths, { workspaceProvisioningTtlMs: 20, repository: state.persistence.git });
@@ -154,7 +154,7 @@ test("a consumed operation leaves only a secret-free receipt for asynchronous ac
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-receipt-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
     state.init();
     seedInstance(state);
     const store = new NodeGitCredentialStore(paths, { repository: state.persistence.git });

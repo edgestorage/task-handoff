@@ -87,6 +87,15 @@ test("managed Git capability installation reports an unavailable CLI", () => {
   assert.equal(installGitBrokerEnvironment(undefined, "/run/task-handoff/git-proxy/broker.sock"), false);
 });
 
+test("a named-pipe broker keeps its SSH invocation directory out of the pipe namespace", () => {
+  // Windows gives the broker socket no parent directory, so the SSH agent
+  // directory has to come from the temporary root instead of the socket path.
+  const broker = new GitCredentialBroker({ socketPath: "\\\\.\\pipe\\task-handoff-git-proxy-4321" });
+  assert.equal(broker.socketPath, "\\\\.\\pipe\\task-handoff-git-proxy-4321");
+  assert.doesNotMatch(broker.runtimeDir, /pipe/i);
+  assert.match(broker.runtimeDir, /task-handoff-git-proxy-\d+$/);
+});
+
 test("managed SSH accepts one Git service argument and rebuilds it safely", () => {
   assert.deepEqual(parseGitSshInvocation(["git@git.example.com", "git-upload-pack 'team/repo.git'"]), {
     remote: "ssh://git.example.com/team/repo.git",

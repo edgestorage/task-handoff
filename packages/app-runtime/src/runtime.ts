@@ -8,9 +8,10 @@ import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import { commandInvocation, resolveCommandExecutable } from "@task-handoff/core/core/command-invocation";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import type { AppProfile } from "@task-handoff/protocol/app-profiles";
-import { AppCatalogRepository, executablePath } from "./catalog";
+import { AppCatalogRepository } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { ManagedAppPreparedTtyLaunch, ManagedAppProfileRecord, ManagedAppProfilesRuntime, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
@@ -2042,18 +2043,19 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   private hasCommand(command: string, env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()) {
-    return Boolean(executablePath(command, env, cwd));
+    return Boolean(resolveCommandExecutable(command, { env, cwd }));
   }
 
   private spawnTerminalPty(shell: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
     try {
       ensureNodePtySpawnHelperExecutable();
-      const pty = spawnPty(shell, args, {
+      const invocation = commandInvocation(shell, args, { env, cwd });
+      const pty = spawnPty(invocation.executable, invocation.args, {
         name: "xterm-256color",
         cols: 120,
         rows: 32,
         cwd,
-        env,
+        env: invocation.env,
       });
       this.trackManagedProcessTree({ pid: pty.pid, pty, rootExited: false });
       pty.onExit(() => this.markManagedProcessRootExited(pty.pid));
@@ -2065,9 +2067,10 @@ export class AppRuntimeManager extends EventEmitter {
 
   private spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string) {
     const logStream = new RotatingLogWriter(path.join(logDir, logName));
-    const child = spawn(command, args, {
+    const invocation = commandInvocation(command, args, { env, cwd });
+    const child = spawn(invocation.executable, invocation.args, {
       cwd,
-      env,
+      env: invocation.env,
       stdio: ["ignore", "pipe", "pipe"],
       // A separate process group is the ownership boundary for every app tree.
       // It lets the controlled instance terminate launchers and all descendants

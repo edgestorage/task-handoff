@@ -1,13 +1,29 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
+import {
+  cleanupLocalIpcEndpoint,
+  listenOnLocalIpcEndpoint,
+  localIpcEndpointInDirectory,
+  localIpcEndpoint,
+  localIpcTemporaryRoot,
+  prepareLocalIpcEndpoint,
+  restrictToCurrentUser,
+  type LocalIpcEndpoint,
+} from "@task-handoff/core/core/local-ipc-endpoint";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
-import { parseGitSshInvocation, remoteFromHttpsCredentialRequest, runSsh } from "./git-transport.ts";
+import { nullDevicePath, parseGitSshInvocation, remoteFromHttpsCredentialRequest, runSsh } from "./git-transport.ts";
 
 type BrokerResponse = Record<string, unknown> & { status: string };
-type LocalSshInvocation = { server: net.Server; sockets: Set<net.Socket>; directory: string; invocationId: string };
+type LocalSshInvocation = {
+  server: net.Server;
+  sockets: Set<net.Socket>;
+  directory: string;
+  invocationId: string;
+  /** Unix socket on POSIX, named pipe on Windows. */
+  socketPath: string;
+};
 
 function brokerError(code: string, message: string) {
   return Object.assign(new Error(message), { code, statusCode: 409 });
@@ -18,17 +34,12 @@ function credentialFailure(status: string) {
   return brokerError(`GIT_CREDENTIAL_${marker}`, `TASK_HANDOFF_GIT_CREDENTIAL_ERROR=${marker}`);
 }
 
-function safeSocketPath(value: string | undefined) {
-  if (value?.trim()) return value.trim();
-  const temporaryRoot = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
-  return path.join(temporaryRoot, `task-handoff-git-proxy-${process.pid}`, "broker.sock");
-}
-
 export class GitCredentialBroker {
   private server?: net.Server;
   private readonly sockets = new Set<net.Socket>();
   private requestCount = 0;
   private readonly sshInvocations = new Map<string, LocalSshInvocation>();
+  private readonly endpoint: LocalIpcEndpoint;
   readonly socketPath: string;
   readonly runtimeDir: string;
   private readonly options: {
@@ -43,8 +54,20 @@ export class GitCredentialBroker {
     nodeAgentClient?: () => NodeAgentRegistrationClient;
   } = {}) {
     this.options = options;
-    this.socketPath = safeSocketPath(options.socketPath || process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET);
-    this.runtimeDir = options.runtimeDir || path.dirname(this.socketPath);
+    this.endpoint = localIpcEndpoint({
+      scope: "task-handoff-git-proxy",
+      key: String(process.pid),
+      directoryName: `task-handoff-git-proxy-${process.pid}`,
+      fileName: "broker.sock",
+      explicitPath: options.socketPath || process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET || undefined,
+    });
+    this.socketPath = this.endpoint.path;
+    // A named pipe has no parent directory, so the invocation directory the SSH
+    // proxy needs has to come from the temporary root instead of the socket path.
+    this.runtimeDir = options.runtimeDir
+      || (this.endpoint.filesystemBacked
+        ? path.dirname(this.socketPath)
+        : path.join(localIpcTemporaryRoot(), `task-handoff-git-proxy-${process.pid}`));
   }
 
   handledRequestCount() { return this.requestCount; }
@@ -54,9 +77,11 @@ export class GitCredentialBroker {
   }
 
   async start() {
-    fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
-    fs.chmodSync(this.runtimeDir, 0o700);
-    fs.rmSync(this.socketPath, { force: true });
+    prepareLocalIpcEndpoint(this.endpoint);
+    if (this.runtimeDir !== path.dirname(this.socketPath)) {
+      fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
+      restrictToCurrentUser(this.runtimeDir, 0o700);
+    }
     this.server = net.createServer({ allowHalfOpen: true }, (socket) => {
       this.trackSocket(this.sockets, socket);
       let input = "";
@@ -68,11 +93,8 @@ export class GitCredentialBroker {
         });
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject);
-      this.server!.listen(this.socketPath, () => resolve());
-    });
-    fs.chmodSync(this.socketPath, 0o600);
+    await listenOnLocalIpcEndpoint(this.server, this.endpoint);
+    restrictToCurrentUser(this.socketPath, 0o600);
   }
 
   async close() {
@@ -81,7 +103,7 @@ export class GitCredentialBroker {
     this.server = undefined;
     for (const socket of this.sockets) socket.destroy();
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-    fs.rmSync(this.socketPath, { force: true });
+    cleanupLocalIpcEndpoint(this.endpoint);
   }
 
   private client() { return this.options.nodeAgentClient?.(); }
@@ -113,7 +135,7 @@ export class GitCredentialBroker {
         return {
           status: "ok",
           invocationId: prepared.invocationId,
-          agentSocket: path.join(local.directory, "agent.sock"),
+          agentSocket: local.socketPath,
           publicIdentityPath: path.join(local.directory, "identity.pub"),
           knownHostsPath: path.join(local.directory, "known_hosts"),
         };
@@ -130,19 +152,19 @@ export class GitCredentialBroker {
 
   private async createSshAgentProxy(client: NodeAgentRegistrationClient, invocationId: string) {
     const directory = fs.mkdtempSync(path.join(this.runtimeDir, "ssh-"));
-    fs.chmodSync(directory, 0o700);
-    const socketPath = path.join(directory, "agent.sock");
+    restrictToCurrentUser(directory, 0o700);
+    // The directory always exists: it also carries the pinned host key and the
+    // public identity that `git ssh` points at. Only the socket moves to a
+    // named pipe on Windows.
+    const endpoint = localIpcEndpointInDirectory(directory, { scope: "task-handoff-git-agent", key: invocationId, fileName: "agent.sock" });
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
       this.trackSocket(sockets, socket);
       proxyAgentConnection(socket, (frame) => client.exchangeGitSshAgent(invocationId, frame.toString("base64")));
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, () => resolve());
-    });
-    fs.chmodSync(socketPath, 0o600);
-    const value = { server, sockets, directory, invocationId };
+    await listenOnLocalIpcEndpoint(server, endpoint);
+    if (endpoint.filesystemBacked) restrictToCurrentUser(endpoint.path, 0o600);
+    const value = { server, sockets, directory, invocationId, socketPath: endpoint.path };
     this.sshInvocations.set(invocationId, value);
     return value;
   }
@@ -231,7 +253,15 @@ export async function runGitCredentialHelper(action: string | undefined) {
 async function delegateCredentialLookup(input: Record<string, string>) {
   const originalCount = Number(process.env.TASK_HANDOFF_GIT_ORIGINAL_CONFIG_COUNT || 0);
   const currentCount = Number(process.env.GIT_CONFIG_COUNT || 0);
-  const env = { ...process.env, GIT_CONFIG_COUNT: String(originalCount), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false", SSH_ASKPASS: "/bin/false" };
+  const env = {
+    ...process.env,
+    GIT_CONFIG_COUNT: String(originalCount),
+    GIT_TERMINAL_PROMPT: "0",
+    SSH_ASKPASS_REQUIRE: "never",
+    // `/bin/false` is the POSIX way to force an askpass failure. Windows has no
+    // equivalent binary, and GIT_TERMINAL_PROMPT=0 already suppresses prompts.
+    ...(process.platform === "win32" ? {} : { GIT_ASKPASS: "/bin/false", SSH_ASKPASS: "/bin/false" }),
+  };
   for (let index = originalCount; index < currentCount; index += 1) {
     delete env[`GIT_CONFIG_KEY_${index}`];
     delete env[`GIT_CONFIG_VALUE_${index}`];
@@ -257,8 +287,8 @@ export async function runGitSsh(args: string[]) {
   if (response.status !== "ok" || typeof response.agentSocket !== "string" || typeof response.publicIdentityPath !== "string" || typeof response.knownHostsPath !== "string") throw credentialFailure(response.status);
   try {
     return await runSsh([
-      "-F", "/dev/null", "-oBatchMode=yes", "-oIdentitiesOnly=yes", "-oIdentityFile=none", "-oStrictHostKeyChecking=yes",
-      `-oUserKnownHostsFile=${response.knownHostsPath}`, "-oGlobalKnownHostsFile=/dev/null", `-oIdentityAgent=${response.agentSocket}`,
+      "-F", nullDevicePath, "-oBatchMode=yes", "-oIdentitiesOnly=yes", "-oIdentityFile=none", "-oStrictHostKeyChecking=yes",
+      `-oUserKnownHostsFile=${response.knownHostsPath}`, `-oGlobalKnownHostsFile=${nullDevicePath}`, `-oIdentityAgent=${response.agentSocket}`,
       "-i", response.publicIdentityPath, ...invocation.args,
     ], true, { SSH_AUTH_SOCK: response.agentSocket });
   } finally {

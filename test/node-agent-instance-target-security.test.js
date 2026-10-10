@@ -69,7 +69,6 @@ test("register and heartbeat cannot overwrite the node-owned runtime target", (t
     "http://127.0.0.1:8091",
     "http://host.docker.internal:8091",
     8091,
-    "linux",
   );
   state.init();
   state.controlledInstances.put(controlledInstance());

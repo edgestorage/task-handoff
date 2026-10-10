@@ -7962,7 +7962,7 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(deleteRuntime.json().error.code, "NODE_RUNTIME_BUILTIN");
 });
 
-test("node agent omits local runtime on Windows and rejects manual creation", async (t) => {
+test("node agent offers the built-in local runtime on Windows and rejects manual creation", async (t) => {
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-windows-local-runtime"),
     logger: false,
@@ -7976,7 +7976,7 @@ test("node agent omits local runtime on Windows and rejects manual creation", as
     url: "/api/node-agent/runtimes",
     headers: { authorization: "Bearer agent-secret" },
   });
-  assert.deepEqual(runtimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker"]);
+  assert.deepEqual(runtimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker", "runtime_local_host"]);
 
   const created = await app.inject({
     method: "POST",
@@ -7984,8 +7984,8 @@ test("node agent omits local runtime on Windows and rejects manual creation", as
     headers: { authorization: "Bearer agent-secret" },
     payload: { id: "runtime_windows_local", name: "Local Runtime", type: "local" },
   });
-  assert.equal(created.statusCode, 400);
-  assert.equal(created.json().error.code, "LOCAL_RUNTIME_UNSUPPORTED");
+  assert.equal(created.statusCode, 409);
+  assert.equal(created.json().error.code, "LOCAL_RUNTIME_BUILTIN");
 });
 
 test("node agent reserves the built-in runtime marker", async (t) => {

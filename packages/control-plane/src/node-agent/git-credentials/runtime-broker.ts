@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { localIpcEndpointInDirectory, localIpcTemporaryRoot, restrictToCurrentUser } from "@task-handoff/core/core/local-ipc-endpoint";
 import type { NodeGitCredentialStore } from "./store.ts";
 
 const SSH_INVOCATION_IDLE_TTL_MS = 60_000;
@@ -16,10 +16,13 @@ type SshInvocation = {
   credentialRevision: number;
   socketPath: string;
   agentPid: number;
+  /** Invocation directory: key material, askpass, and the socket itself on POSIX. */
   directory: string;
   idleExpiresAt: number;
   absoluteExpiresAt: number;
 };
+
+const ASKPASS_SCRIPT = "#!/bin/sh\nprintf '%s' \"${TASK_HANDOFF_SSH_KEY_PASSPHRASE:-}\"\n";
 
 export class NodeGitCredentialRuntimeBroker {
   private readonly invocations = new Map<string, SshInvocation>();
@@ -45,34 +48,26 @@ export class NodeGitCredentialRuntimeBroker {
     const { match, payload } = this.store.resolve(instanceId, remoteUrl);
     if (match.status !== "unique" || payload?.secret.kind !== "ssh-key") return { status: match.status } as const;
     const invocationId = `gitssh_${crypto.randomUUID()}`;
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-ssh-"));
-    fs.chmodSync(directory, 0o700);
-    const socketPath = path.join(directory, "agent.sock");
-    const askpassPath = path.join(directory, "askpass.sh");
-    fs.writeFileSync(askpassPath, "#!/bin/sh\nprintf '%s' \"${TASK_HANDOFF_SSH_KEY_PASSPHRASE:-}\"\n", { mode: 0o700 });
+    const directory = fs.mkdtempSync(path.join(localIpcTemporaryRoot(), "task-handoff-node-git-ssh-"));
+    restrictToCurrentUser(directory, 0o700);
+    // A unix socket on POSIX, a named pipe on Windows; the directory always
+    // exists because it also carries the key material and host pinning below.
+    const endpoint = localIpcEndpointInDirectory(directory, { scope: "task-handoff-git-agent", key: invocationId, fileName: "agent.sock" });
+    const agentEnv: NodeJS.ProcessEnv = { ...process.env, SSH_AUTH_SOCK: endpoint.path };
     let agentPid: number | undefined;
     try {
-      const agent = await spawnCapture("ssh-agent", ["-s", "-a", socketPath]);
+      const agent = await spawnCapture("ssh-agent", ["-s", "-a", endpoint.path]);
       agentPid = Number(/SSH_AGENT_PID=(\d+)/.exec(agent)?.[1]);
       if (!Number.isInteger(agentPid) || agentPid <= 0) throw new Error("ssh-agent did not report a process id.");
-      const env = {
-        ...process.env,
-        SSH_AUTH_SOCK: socketPath,
-        SSH_ASKPASS: askpassPath,
-        SSH_ASKPASS_REQUIRE: "force",
-        DISPLAY: process.env.DISPLAY || ":0",
-        TASK_HANDOFF_SSH_KEY_PASSPHRASE: payload.secret.passphrase || "",
-      };
-      await spawnCaptureWithInput("ssh-add", ["-"], payload.secret.privateKey, env);
-      const publicIdentity = await spawnCapture("ssh-add", ["-L"], env);
-      fs.rmSync(askpassPath, { force: true });
+      await addIdentity(directory, payload.secret.privateKey, payload.secret.passphrase, agentEnv);
+      const publicIdentity = await spawnCapture("ssh-add", ["-L"], agentEnv);
       const timestamp = Date.now();
       this.invocations.set(invocationId, {
         instanceId,
         remoteUrl,
         credentialId: payload.credential.id,
         credentialRevision: payload.credential.revision,
-        socketPath,
+        socketPath: endpoint.path,
         agentPid,
         directory,
         idleExpiresAt: timestamp + this.idleTtlMs,
@@ -156,6 +151,43 @@ export class NodeGitCredentialRuntimeBroker {
 
 function brokerError(code: string, statusCode: number) {
   return Object.assign(new Error("Managed Git broker request was rejected."), { code, statusCode });
+}
+
+/**
+ * Loads the stored private key into the agent. POSIX prompts `ssh-add` through
+ * a throwaway askpass script because `ssh-add` refuses to read a passphrase
+ * from a pipe.
+ *
+ * Windows cannot execute a script as the askpass program (OpenSSH starts it
+ * directly, without a shell), so the key is unlocked into a throwaway copy
+ * inside the invocation directory instead and removed as soon as the agent
+ * holds it.
+ */
+async function addIdentity(directory: string, privateKey: string, passphrase: string | undefined, agentEnv: NodeJS.ProcessEnv) {
+  if (process.platform !== "win32") {
+    const askpassPath = path.join(directory, "askpass.sh");
+    fs.writeFileSync(askpassPath, ASKPASS_SCRIPT, { mode: 0o700 });
+    try {
+      await spawnCaptureWithInput("ssh-add", ["-"], privateKey, {
+        ...agentEnv,
+        SSH_ASKPASS: askpassPath,
+        SSH_ASKPASS_REQUIRE: "force",
+        DISPLAY: process.env.DISPLAY || ":0",
+        TASK_HANDOFF_SSH_KEY_PASSPHRASE: passphrase || "",
+      });
+    } finally {
+      fs.rmSync(askpassPath, { force: true });
+    }
+    return;
+  }
+  const keyPath = path.join(directory, "identity");
+  fs.writeFileSync(keyPath, privateKey, { mode: 0o600 });
+  try {
+    if (passphrase) await spawnCapture("ssh-keygen", ["-p", "-P", passphrase, "-N", "", "-f", keyPath]);
+    await spawnCapture("ssh-add", [keyPath], agentEnv);
+  } finally {
+    fs.rmSync(keyPath, { force: true });
+  }
 }
 
 function spawnCapture(command: string, args: string[], env: NodeJS.ProcessEnv = process.env) {

@@ -1029,3 +1029,58 @@ test("OpenCode stores the catalog identity when a switch request only carries th
   await bridge.updateModelSelection(session, { modelEntityId: "provider_one", modelName: "up-2" });
   assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_one", modelName: "new-label", modelUpstreamName: "up-2" });
 });
+
+test("OpenCode shared runtime stays on loopback HTTP and injects the story plugin", (context) => {
+  const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-plugin-"));
+  const pluginPath = path.join(pluginDir, "opencode-story-plugin.mjs");
+  fs.writeFileSync(pluginPath, "export default async () => ({});\n");
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-log-"));
+  context.after(() => {
+    fs.rmSync(pluginDir, { recursive: true, force: true });
+    fs.rmSync(logDir, { recursive: true, force: true });
+  });
+
+  const child = Object.assign(new (require("node:events").EventEmitter)(), { killed: false, exitCode: null, pid: 4322 });
+  const spawned = [];
+  const readiness = [];
+  const runtime = createOpenCodeRuntime({
+    paths: { logDir },
+    allocatePort: () => 43211,
+    hasCommand: () => true,
+    spawnLogged: (command, args, env, dir, logName, cwd) => { spawned.push({ command, args, env, dir, logName, cwd }); return child; },
+    stopProcessTree: () => undefined,
+    waitForHttp: (url, headers) => { readiness.push({ url, headers }); },
+    // The OpenCode server is loopback HTTP/SSE; a unix socket would be a bug.
+    waitForUnixSocket: () => { throw new Error("OpenCode runtime must not wait for a unix socket"); },
+  });
+
+  const app = { id: "opencode", command: "opencode" };
+  const env = { TASK_HANDOFF_OPENCODE_STORY_PLUGIN: pluginPath };
+  const publicInfo = runtime.sharedResource.ensure({ app, cwd: "/workspace", env });
+
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0].args, ["serve", "--hostname=127.0.0.1", "--port=43211"]);
+  assert.equal(spawned[0].cwd, "/workspace");
+  assert.equal(spawned[0].env.OPENCODE_CLIENT, "task-handoff");
+  assert.equal(spawned[0].env.OPENCODE_SERVER_USERNAME, "task-handoff");
+  assert.ok(spawned[0].env.OPENCODE_SERVER_PASSWORD.length > 20);
+  const config = JSON.parse(spawned[0].env.OPENCODE_CONFIG_CONTENT);
+  assert.ok(config.plugin.includes(pathToFileURL(pluginPath).href), JSON.stringify(config.plugin));
+
+  assert.equal(publicInfo.details.transport, "http");
+  assert.equal(publicInfo.details.endpoint, "http://127.0.0.1:43211");
+  assert.equal(readiness[0].url, "http://127.0.0.1:43211/global/health");
+  assert.equal(readiness[0].headers.Authorization, runtime.sharedResource.privateConnection().headers.Authorization);
+  assert.equal(JSON.stringify(publicInfo).includes("Authorization"), false);
+
+  const launch = runtime.prepareTtyLaunch({ app, sessionId: "app_2", command: "opencode", cwd: "/workspace", env, launchArgs: ["--model", "x"], resumeArgs: [] });
+  assert.deepEqual(launch.args, ["attach", "http://127.0.0.1:43211", "--dir", "/workspace", "--model", "x"]);
+  assert.equal(launch.env.OPENCODE_SERVER_USERNAME, "task-handoff");
+  assert.equal(launch.env.OPENCODE_SERVER_PASSWORD, spawned[0].env.OPENCODE_SERVER_PASSWORD);
+
+  // Nothing on the OpenCode path may carry a unix socket or named pipe.
+  for (const surface of [JSON.stringify(publicInfo), JSON.stringify(launch), JSON.stringify(spawned[0].args), JSON.stringify(spawned[0].env)]) {
+    assert.equal(surface.includes(".sock"), false, surface);
+    assert.equal(surface.includes("\\\\.\\pipe"), false, surface);
+  }
+});

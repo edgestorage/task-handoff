@@ -10,7 +10,7 @@ import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveExecutable } from "./executable-resolver";
+import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 
 export {
   BUILTIN_APP_CATALOG,

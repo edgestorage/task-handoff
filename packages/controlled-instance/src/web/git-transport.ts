@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
 
+/**
+ * `/dev/null` only exists on POSIX; Windows reserves `NUL` for the same job.
+ * Git for Windows normalizes POSIX paths, but the Win32 OpenSSH that also
+ * ships on Windows does not, so the ssh command line has to say `NUL` there.
+ */
+export const nullDevicePath = process.platform === "win32" ? "NUL" : "/dev/null";
+
 export function remoteFromHttpsCredentialRequest(request: Record<string, unknown>) {
   const protocol = request.protocol === "https" ? "https" : undefined;
   const host = typeof request.host === "string" ? request.host.trim() : "";

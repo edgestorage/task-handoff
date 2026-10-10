@@ -77,7 +77,7 @@ TaskHandoff is organized into three runtime layers:
 
 Chat and AI Session state form a cross-layer path: the Control Plane owns chat credentials, bindings, command parsing, and routing, while each target AI Session remains the source of truth for conversation state.
 
-Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on supported non-Windows nodes for one controlled instance per host user. Runtime capabilities and adapters keep the same model extensible to Kubernetes without creating a separate UI flow.
+Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on Windows, macOS, and Linux for one controlled instance per host user. Runtime capabilities and adapters keep the same model extensible to Kubernetes without creating a separate UI flow.
 
 ### Environment templates
 

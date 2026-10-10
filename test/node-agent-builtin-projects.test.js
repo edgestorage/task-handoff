@@ -227,7 +227,7 @@ test("node agent owns built-in folders: rename and delete are refused", (t) => {
   const definitions = loadBuiltinProjectDefinitions(fixture.sourceRoot);
   const dataDir = tempDir(t, "task-handoff-builtin-state-");
   const targetsDir = path.join(dataDir, "builtin-projects");
-  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091, "linux");
+  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091);
   state.init();
 
   const projection = createBuiltinProjectFolderProjection({ definitions, targetsDir, nodeId: "node_one" });

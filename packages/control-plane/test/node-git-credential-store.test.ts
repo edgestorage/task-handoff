@@ -28,7 +28,7 @@ function authorization(generation: number, credentialIds = ["gitcred_one"]) {
 
 function createState(dataDir: string, instanceIds = ["inst_one"]) {
   const paths = nodeAgentStorePaths(dataDir);
-  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
   state.init();
   for (const id of instanceIds) state.createInstance({
     id, runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },
@@ -117,7 +117,7 @@ test("node restart keeps shared authorization, rotation reaches every instance, 
 
 test("runtime HTTPS broker authenticates the instance and returns the latest node payload", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-route-"));
-  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+  const state = new NodeAgentState(nodeAgentStorePaths(dataDir), "node_one", "http://127.0.0.1:8091", undefined, 8091);
   state.init();
   const instance = state.createInstance({
     id: "inst_one", runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },

@@ -111,7 +111,7 @@ test("SSH agent exchange is bounded by the invocation deadline", async () => {
 
 function authorizedBroker(dataDir: string) {
   const paths = nodeAgentStorePaths(dataDir);
-  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091);
   state.init();
   state.createInstance({
     id: "inst_one", runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },
