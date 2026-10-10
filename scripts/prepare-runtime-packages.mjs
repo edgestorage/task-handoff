@@ -133,6 +133,7 @@ for (const [name, definition] of selected) {
     name: definition.packageName,
     version: process.env.TASK_HANDOFF_VERSION || rootPackage.version,
     description: definition.description,
+    repository: rootPackage.repository,
     license: rootPackage.license,
     type: "commonjs",
     bin,

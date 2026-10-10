@@ -6,6 +6,10 @@
     "name": "TaskHandoff",
     "email": "hdreamcom@gmail.com"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edgestorage/task-handoff.git"
+  },
   "private": true,
   "type": "commonjs",
   "main": "apps/desktop-shell/src/main.cjs",
