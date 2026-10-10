@@ -4,11 +4,11 @@ import { resolveExecutable, type ExecutableResolverOptions } from "./executable-
 /**
  * A resolved, directly spawnable command invocation.
  *
- * Resolution (PATH, win32 PATHEXT, NVM, Homebrew) and the win32 interpreter
- * wrapping live here so that probing (`hasCommand`) and launching
- * (`spawnLogged`, `spawnTerminalPty`, `CommandRunner`) can never drift apart:
- * npm-installed CLIs resolve to a `.cmd` shim, and a `.cmd` shim can only be
- * started through `ComSpec /d /s /c call`.
+ * Resolution (PATH, win32 PATHEXT, NVM, Homebrew, the npm global prefix) and
+ * the win32 interpreter wrapping live here so that probing (`hasCommand`) and
+ * launching (`spawnLogged`, `spawnTerminalPty`, `CommandRunner`) can never
+ * drift apart: npm-installed CLIs resolve to a `.cmd` shim, and a `.cmd` shim
+ * can only be started through `ComSpec /d /s /c call`.
  */
 export type CommandInvocation = {
   executable: string;

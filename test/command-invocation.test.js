@@ -10,6 +10,7 @@ const {
   quoteCommandInterpreterArgument,
   resolveCommandExecutable,
 } = require("../packages/core/src/core/command-invocation.ts");
+const { resolveExecutable } = require("../packages/core/src/core/executable-resolver.ts");
 
 function shimDirectory(t, entries) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-"));
@@ -20,6 +21,14 @@ function shimDirectory(t, entries) {
     fs.writeFileSync(path.join(bin, entry), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
   return bin;
+}
+
+// Windows paths are case-insensitive, and the resolver probes PATHEXT entries
+// in their declared case. On a case-insensitive host (like the macOS runner
+// used for the win32-shaped tests) that surfaces as `.CMD` even when the file
+// on disk is `.cmd`, so compare win32 paths case-insensitively.
+function assertSameWin32Path(actual, expected) {
+  assert.equal(actual.toLowerCase(), expected.toLowerCase());
 }
 
 test("leaves a POSIX executable untouched", (t) => {
@@ -128,4 +137,44 @@ test("only opts into the win32 command-shim fallback when asked", () => {
   assert.equal(commandInvocation("npm.exe", [], options).interpreterWrapped, false);
   assert.equal(commandInvocation("npm", [], { ...options, platform: "linux" }).executable, "npm");
   assert.equal(commandInvocation("npm", [], { env: missing, platform: "win32" }).executable, "npm");
+});
+
+test("resolves a win32 npm global shim that the process PATH omits", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-npm-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roaming = path.join(root, "Roaming");
+  const npmBin = path.join(roaming, "npm");
+  fs.mkdirSync(npmBin, { recursive: true });
+  fs.writeFileSync(path.join(npmBin, "codex.cmd"), "@echo off\r\n", { mode: 0o755 });
+
+  const env = { PATH: "/missing", APPDATA: roaming, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
+  const options = { env, platform: "win32" };
+
+  assertSameWin32Path(resolveCommandExecutable("codex", options), path.join(npmBin, "codex.cmd"));
+
+  const invocation = commandInvocation("codex", ["--version"], options);
+  assert.equal(invocation.interpreterWrapped, true);
+  assertSameWin32Path(invocation.args[4], path.join(npmBin, "codex.cmd"));
+  assert.equal(invocation.env.PATH, `${npmBin}${path.delimiter}/missing`);
+});
+
+test("searches npm global directories last and honors NPM_CONFIG_PREFIX", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-npm-prefix-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pathBin = path.join(root, "bin");
+  const prefixBin = path.join(root, "prefix", "bin");
+  fs.mkdirSync(pathBin, { recursive: true });
+  fs.mkdirSync(prefixBin, { recursive: true });
+  for (const directory of [pathBin, prefixBin]) {
+    fs.writeFileSync(path.join(directory, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  const prefix = path.join(root, "prefix");
+
+  const onPath = resolveExecutable("codex", { env: { PATH: pathBin, NPM_CONFIG_PREFIX: prefix }, homeDir: root, platform: "linux" });
+  assert.equal(onPath.resolver, "path");
+
+  const inPrefix = resolveExecutable("codex", { env: { PATH: "/missing", NPM_CONFIG_PREFIX: prefix }, homeDir: root, platform: "linux" });
+  assert.equal(inPrefix.resolver, "npm-global");
+  assert.equal(inPrefix.executable, path.join(prefixBin, "codex"));
+  assert.equal(inPrefix.env.PATH, `${prefixBin}${path.delimiter}/missing`);
 });
