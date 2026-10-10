@@ -1,5 +1,5 @@
 export const agents = {
-  view: "Agents",
+  view: "Agent",
   region: "Agent list",
   resizeList: "Resize the agent list",
   list: {
