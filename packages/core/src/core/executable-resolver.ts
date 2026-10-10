@@ -15,6 +15,7 @@ export type ExecutableResolverOptions = {
   homeDir?: string;
   nvmDir?: string;
   homebrewBinDirectories?: string[];
+  npmGlobalBinDirectories?: string[];
   resolvers?: ExecutableResolver[];
 };
 
@@ -26,6 +27,7 @@ export type ExecutableResolverContext = {
   homeDir: string;
   nvmDir: string;
   homebrewBinDirectories: string[];
+  npmGlobalBinDirectories: string[];
   explicitPath: boolean;
 };
 
@@ -35,8 +37,10 @@ export type ExecutableResolver = {
 };
 
 function executableCandidate(candidate: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv) {
+  // Windows matches PATHEXT case-insensitively, so probing the lowercase form
+  // as well keeps npm's lowercase `.cmd` shims resolvable everywhere.
   const extensions = platform === "win32"
-    ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    ? [...new Set((env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).flatMap((extension) => [extension, extension.toLowerCase()]))]
     : [""];
   for (const extension of extensions) {
     const resolved = platform === "win32" && !path.extname(candidate) ? `${candidate}${extension}` : candidate;
@@ -174,16 +178,46 @@ export const homebrewExecutableResolver: ExecutableResolver = {
   },
 };
 
+export const npmGlobalExecutableResolver: ExecutableResolver = {
+  id: "npm-global",
+  resolve(context) {
+    if (context.explicitPath) return undefined;
+    for (const directory of context.npmGlobalBinDirectories) {
+      const resolution = resolutionFromBin(this.id, directory, context);
+      if (resolution) return resolution;
+    }
+    return undefined;
+  },
+};
+
 export const DEFAULT_EXECUTABLE_RESOLVERS: ExecutableResolver[] = [
   pathExecutableResolver,
   nvmExecutableResolver,
   homebrewExecutableResolver,
+  npmGlobalExecutableResolver,
 ];
 
 function defaultHomebrewBinDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv) {
   const directories = env.HOMEBREW_PREFIX ? [path.join(env.HOMEBREW_PREFIX, "bin")] : [];
   if (platform === "darwin") directories.push("/opt/homebrew/bin", "/usr/local/bin");
   if (platform === "linux") directories.push("/home/linuxbrew/.linuxbrew/bin");
+  return [...new Set(directories)];
+}
+
+/**
+ * The directory npm installs global CLI shims into. Windows keeps it under the
+ * roaming profile, which is only reachable through the user PATH, so anything
+ * that runs without the user PATH (services, installers, GUI apps started from
+ * a stale environment) resolves `npm` but not the tools npm installed.
+ */
+function defaultNpmGlobalBinDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, homeDir: string) {
+  const directories: string[] = [];
+  const prefix = env.NPM_CONFIG_PREFIX || env.npm_config_prefix;
+  if (prefix) directories.push(platform === "win32" ? prefix : path.join(prefix, "bin"));
+  if (platform === "win32") {
+    const roaming = env.APPDATA || (homeDir ? path.join(homeDir, "AppData", "Roaming") : undefined);
+    if (roaming) directories.push(path.join(roaming, "npm"));
+  }
   return [...new Set(directories)];
 }
 
@@ -199,6 +233,7 @@ export function resolveExecutable(command: string, options: ExecutableResolverOp
     homeDir,
     nvmDir: options.nvmDir || env.NVM_DIR || path.join(homeDir, ".nvm"),
     homebrewBinDirectories: options.homebrewBinDirectories || defaultHomebrewBinDirectories(platform, env),
+    npmGlobalBinDirectories: options.npmGlobalBinDirectories || defaultNpmGlobalBinDirectories(platform, env, homeDir),
     explicitPath: path.isAbsolute(command) || command.includes("/") || command.includes("\\"),
   };
   for (const resolver of options.resolvers || DEFAULT_EXECUTABLE_RESOLVERS) {
