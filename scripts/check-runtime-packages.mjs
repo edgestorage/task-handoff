@@ -207,6 +207,15 @@ for (const [name, definition] of selected) {
   if (manifest.license !== rootPackage.license) {
     throw new Error(`${name} package license must match the root package license.`);
   }
+  if (manifest.homepage !== rootPackage.homepage) {
+    throw new Error(`${name} package homepage must match the root package homepage.`);
+  }
+  if (JSON.stringify(manifest.repository) !== JSON.stringify(rootPackage.repository)) {
+    throw new Error(`${name} package repository must match the root package repository.`);
+  }
+  if (!Array.isArray(manifest.keywords) || manifest.keywords.length === 0) {
+    throw new Error(`${name} package must declare search keywords.`);
+  }
   for (const legalFile of ["LICENSE", "NOTICE"]) {
     if (!fs.existsSync(path.join(packageDir, legalFile))) {
       throw new Error(`${name} package is missing ${legalFile}.`);

@@ -68,6 +68,14 @@
     "node": ">=24.15.0 <25"
   },
   "license": "Apache-2.0",
+  "homepage": "https://docs.thandoff.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edgestorage/task-handoff.git"
+  },
+  "bugs": {
+    "url": "https://github.com/edgestorage/task-handoff/issues"
+  },
   "build": {
     "appId": "com.taskhandoff.desktop",
     "productName": "TaskHandoff",

@@ -56,6 +56,7 @@ export const runtimePackages = {
   server: {
     packageName: "@task-handoff/server",
     description: "Complete TaskHandoff server package.",
+    keywords: ["task-handoff", "server", "self-hosted", "installer", "systemd", "control-plane", "ai-agents", "agent-orchestration"],
     input: "apps/cli/src/runtime/server.ts",
     entryFile: "server-cli.js",
     updateWorkerInput: "scripts/node-update-worker.cts",
@@ -71,6 +72,7 @@ export const runtimePackages = {
   "control-plane": {
     packageName: "@task-handoff/control-plane",
     description: "Prebuilt TaskHandoff control plane runtime.",
+    keywords: ["task-handoff", "control-plane", "server", "web-ui", "ai-agents", "agent-orchestration"],
     input: "apps/cli/src/runtime/control-plane.ts",
     entryFile: "cli.js",
     binName: "task-handoff-control-plane",
@@ -89,6 +91,7 @@ export const runtimePackages = {
   "node-agent": {
     packageName: "@task-handoff/node-agent",
     description: "Prebuilt TaskHandoff node agent runtime.",
+    keywords: ["task-handoff", "node-agent", "docker", "runtime", "ai-agents", "agent-orchestration"],
     input: "apps/cli/src/runtime/node-agent.ts",
     entryFile: "cli.js",
     updateWorkerInput: "scripts/node-update-worker.cts",
@@ -109,6 +112,7 @@ export const runtimePackages = {
   thctl: {
     packageName: "@task-handoff/thctl",
     description: "TaskHandoff Control Plane command line client.",
+    keywords: ["task-handoff", "thctl", "cli", "command-line", "control-plane", "ai-agents"],
     input: "apps/thctl/src/bin.ts",
     entryFile: "thctl.js",
     binName: "thctl",
@@ -122,6 +126,7 @@ export const runtimePackages = {
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",
     description: "Prebuilt TaskHandoff controlled instance runtime.",
+    keywords: ["task-handoff", "controlled-instance", "sandbox", "runtime", "ai-agents", "agent-orchestration"],
     input: "apps/controlled-instance-image/src/cli.ts",
     entryFile: "controlled-instance-cli.js",
     standaloneInputs: [{
