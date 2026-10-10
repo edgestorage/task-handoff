@@ -55,6 +55,37 @@ test("AI session Turn structure and body revisions change independently", () => 
   }));
 });
 
+test("Turn body revisions ignore adapter observation metadata", () => {
+  const opened = {
+    id: "msg_99316df928ca427eaf9f2f3b",
+    providerTurnId: "msg_99316df928ca427eaf9f2f3b",
+    source: "adapter-snapshot",
+    userPrompt: "234",
+    userMessages: [{ id: "msg_99316df928ca427eaf9f2f3b", text: "234", attachments: [] }],
+    status: "completed",
+    phase: "unknown",
+    lastMessage: 'Not sure what you mean by "234".',
+    lastMessageItemId: "prt_1",
+    revision: 12,
+    sourcePriority: 60,
+    observedAt: "2026-10-10T12:47:53.259Z",
+    snapshotVersion: 1791636479119,
+    startedAt: "2026-10-10T12:47:48.339Z",
+    updatedAt: "2026-10-10T12:47:53.257Z",
+    completedAt: "2026-10-10T12:47:53.259Z",
+  };
+  // OpenCode rewrites observedAt/snapshotVersion from the session-wide updated
+  // time on every snapshot, so a completed body must keep a stable revision.
+  assert.equal(aiSessionTurnBodyRevision({
+    ...opened,
+    observedAt: "2026-10-10T12:48:10.500Z",
+    snapshotVersion: 1791636490500,
+  }), aiSessionTurnBodyRevision(opened));
+  assert.notEqual(aiSessionTurnBodyRevision({ ...opened, lastMessage: "changed" }), aiSessionTurnBodyRevision(opened));
+  assert.notEqual(aiSessionTurnBodyRevision({ ...opened, status: "running" }), aiSessionTurnBodyRevision(opened));
+  assert.notEqual(aiSessionTurnBodyRevision({ ...opened, completedAt: "2026-10-10T12:48:00.000Z" }), aiSessionTurnBodyRevision(opened));
+});
+
 test("AI session controller routes Timeline reads through provider capabilities", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-control-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
