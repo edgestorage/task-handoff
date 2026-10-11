@@ -225,7 +225,14 @@ jobs:
         run: |
           set -euo pipefail
           docker build --platform linux/amd64 --target runtime-core -t task-handoff-wsl-base:ci -f Dockerfile .
-          container="$(docker create --platform linux/amd64 task-handoff-wsl-base:ci)"
+          # A WSL distro boots through systemd, but the shared image base layer has no init (it is a
+          # Docker workload). Add systemd/systemd-sysv (plus dbus) to the exported rootfs only, so the
+          # Docker runtime keeps the unmodified image; scripts/build-wsl-base-template.mjs verifies it.
+          docker run --name task-handoff-wsl-systemd --platform linux/amd64 task-handoff-wsl-base:ci \
+            bash -c "apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus && rm -rf /var/lib/apt/lists/*"
+          docker commit task-handoff-wsl-systemd task-handoff-wsl-base:prepared
+          docker rm task-handoff-wsl-systemd
+          container="$(docker create --platform linux/amd64 task-handoff-wsl-base:prepared)"
           mkdir -p "$GITHUB_WORKSPACE/wsl-build"
           docker export "$container" -o "$GITHUB_WORKSPACE/wsl-build/rootfs.tar"
           docker rm "$container"
