@@ -1,5 +1,15 @@
+import fs from "node:fs";
 import net from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
+
+/**
+ * Upstream app-server the proxy relays to. POSIX connects straight to the
+ * AF_UNIX endpoint; Windows cannot, so it opens the loopback websocket the
+ * app-server exposes and authenticates with the capability token.
+ */
+export type CodexAppServerUpstream =
+  | { transport: "unix"; socketPath: string }
+  | { transport: "ws"; endpoint: string; tokenFile?: string };
 
 type CodexRpcMessage = {
   id?: unknown;
@@ -20,7 +30,7 @@ export class CodexAppServerConnectionProxy {
   private stopped = false;
 
   constructor(
-    private readonly socketPath: string,
+    private readonly upstream: CodexAppServerUpstream,
     private readonly onThreadBound: (threadId: string) => void,
   ) {}
 
@@ -52,10 +62,11 @@ export class CodexAppServerConnectionProxy {
       client.close();
       return;
     }
-    const upstream = new WebSocket("ws://localhost/rpc", {
-      createConnection: () => net.createConnection(this.socketPath),
-      perMessageDeflate: false,
-    });
+    const upstream = this.connectUpstream();
+    if (!upstream) {
+      client.close();
+      return;
+    }
     const pending = new Map<string, CodexPendingBindingRequest>();
     const upstreamQueue: Array<{ data: WebSocket.RawData; isBinary: boolean }> = [];
 
@@ -97,6 +108,26 @@ export class CodexAppServerConnectionProxy {
     client.on("error", closeBoth);
     upstream.on("close", closeBoth);
     upstream.on("error", closeBoth);
+  }
+
+  private connectUpstream(): WebSocket | undefined {
+    if (this.upstream.transport === "unix") {
+      const socketPath = this.upstream.socketPath;
+      return new WebSocket("ws://localhost/rpc", {
+        createConnection: () => net.createConnection(socketPath),
+        perMessageDeflate: false,
+      });
+    }
+    let token: string;
+    try {
+      token = this.upstream.tokenFile ? fs.readFileSync(this.upstream.tokenFile, "utf8").trim() : "";
+    } catch {
+      return undefined;
+    }
+    return new WebSocket(`${this.upstream.endpoint}/rpc`, {
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      perMessageDeflate: false,
+    });
   }
 
   private observeClientMessage(raw: string, pending: Map<string, CodexPendingBindingRequest>) {
