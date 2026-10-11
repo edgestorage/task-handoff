@@ -55,6 +55,13 @@ type CodexAppServerListenPlan =
   | { transport: "unix"; endpoint: string; socketPath: string; listenArgs: string[] }
   | { transport: "ws"; endpoint: string; tokenFile: string; healthUrl: string; listenArgs: string[] };
 
+/**
+ * A cold app-server start is a Node wrapper that boots the CLI and then binds
+ * its listener. Windows antivirus adds real time to that first launch, so the
+ * socket and loopback probes share one budget wide enough not to race it.
+ */
+export const CODEX_APP_SERVER_READY_TIMEOUT_MS = 15_000;
+
 function codexAppServerListenPlan(transport: CodexAppServerTransport, allocatePort: () => number, runtimeDir: string): CodexAppServerListenPlan {
   if (transport === "unix") {
     const socketPath = codexAppServerSocketPath(runtimeDir);
@@ -192,7 +199,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     const plan = codexAppServerListenPlan(transport, () => this.host.allocatePort("web"), runtimeDir);
     const args = [...codexStoryMcpArgs(childEnvironment), "app-server", ...plan.listenArgs];
 
-    const child = this.host.spawnLogged(appServerCommand, args, childEnvironment, logDir, "codex-app-server.log", cwd);
+    const child = this.host.spawnLogged(appServerCommand, args, childEnvironment, logDir, "codex-app-server.log", cwd, "codex app-server");
     const appServer: SharedCodexAppServer = {
       status: "running",
       transport,
@@ -215,9 +222,9 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     });
     try {
       if (plan.transport === "unix") {
-        this.host.waitForUnixSocket(plan.socketPath, 5_000, () => spawnError);
+        this.host.waitForUnixSocket(plan.socketPath, CODEX_APP_SERVER_READY_TIMEOUT_MS, () => spawnError);
       } else {
-        this.host.waitForHttp(plan.healthUrl, {}, 5_000, () => spawnError);
+        this.host.waitForHttp(plan.healthUrl, {}, CODEX_APP_SERVER_READY_TIMEOUT_MS, () => spawnError);
       }
     } catch (error) {
       this.host.stopProcessTree(child);

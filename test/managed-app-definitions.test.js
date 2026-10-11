@@ -41,6 +41,7 @@ const {
 } = require("../packages/app-runtime/src/catalog.ts");
 const {
   createCodexRuntime,
+  CODEX_APP_SERVER_READY_TIMEOUT_MS,
 } = require("../packages/app-runtime/src/managed-app-definitions/codex/runtime.ts");
 const {
   codexAppServerSocketPath,
@@ -229,11 +230,13 @@ test("the websocket app-server transport listens on loopback behind a capability
   let readyUrl;
   let tokenAtSpawn;
   let tokenFile;
+  let logHeader;
   const runtime = createCodexRuntime({
     paths: { runtimeDir, logDir },
     allocatePort: () => 8107,
     hasCommand: () => true,
-    spawnLogged: (_command, args) => {
+    spawnLogged: (_command, args, _env, _logDir, _logName, _cwd, header) => {
+      logHeader = header;
       const listenIndex = args.indexOf("--listen");
       assert.equal(args[listenIndex + 1], "ws://127.0.0.1:8107");
       assert.equal(args[args.indexOf("--ws-auth") + 1], "capability-token");
@@ -248,12 +251,15 @@ test("the websocket app-server transport listens on loopback behind a capability
     waitForHttp: (url, headers, timeoutMs) => {
       readyUrl = url;
       assert.deepEqual(headers, {});
-      assert.equal(timeoutMs, 5_000);
+      assert.equal(timeoutMs, CODEX_APP_SERVER_READY_TIMEOUT_MS);
     },
     patchSession: () => {},
   });
 
   const info = runtime.sharedResource.acquire("codex", root, process.env, "consumer-one");
+  // The launch has to stay diagnosable from its own log when it never becomes
+  // ready, which on win32 is the only signal a failed shim leaves behind.
+  assert.equal(logHeader, "codex app-server");
   assert.equal(readyUrl, "http://127.0.0.1:8107/readyz");
   assert.equal(info.details.transport, "ws");
   assert.equal(info.details.endpoint, "ws://127.0.0.1:8107");
