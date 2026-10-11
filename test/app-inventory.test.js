@@ -281,3 +281,24 @@ test("app inventory recovers valid custom entries and reports a sanitized issue"
   assert.equal(updated.items.some((item) => item.id === "new-custom"), true);
   assert.deepEqual(updated.issues, []);
 });
+
+test("records the launch of a logged app session ahead of its output", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-launch-log-"));
+  const logDir = path.join(root, "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtime = new AppRuntimeManager(storagePaths(root), createManagedAppRegistry([]));
+  runtime.spawnLogged(process.execPath, ["-e", "process.stdout.write('child-output\\n')"], process.env, logDir, "launch.log", root, "test launch");
+  const logPath = path.join(logDir, "launch.log");
+  await waitForFile(logPath);
+  let log = "";
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline && !log.includes("child-output")) {
+    log = fs.readFileSync(logPath, "utf8");
+    if (!log.includes("child-output")) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.match(log, /^# \d{4}-\d\d-\d\dT[\d:.]+Z test launch\n# {3}exec: /);
+  assert.match(log, /\n# {3}PATH: /);
+  assert.equal(log.indexOf("test launch") < log.indexOf("child-output"), true);
+  await runtime.stopAll();
+});
