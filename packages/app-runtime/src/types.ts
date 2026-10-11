@@ -177,9 +177,12 @@ export type AppSession = {
     activeThreadId?: string;
     threadIds?: string[];
     appServer?: {
-      transport: "unix";
+      transport: "unix" | "ws";
       endpoint: string;
-      socketPath: string;
+      /** AF_UNIX endpoints only; the websocket transport has no filesystem entity. */
+      socketPath?: string;
+      /** Capability token file the websocket transport authenticates with. */
+      tokenFile?: string;
       proxyEndpoint?: string;
       proxyPort?: number;
       pid?: number;

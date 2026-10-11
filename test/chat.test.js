@@ -3735,9 +3735,9 @@ test("codex app server connection manager ignores stale client events and initia
     onEvent(event) { events.push(event); },
   });
 
-  manager.configure("/tmp/first.sock");
+  manager.configure({ transport: "unix", socketPath: "/tmp/first.sock" });
   const staleStart = manager.ready();
-  manager.configure("/tmp/second.sock");
+  manager.configure({ transport: "unix", socketPath: "/tmp/second.sock" });
   await manager.ready();
   const staleStartRejected = assert.rejects(staleStart, /connection changed/);
   releaseFirstStart();
@@ -10179,7 +10179,7 @@ test("app runtime codex app-server proxy records thread bindings from the app co
     unixServer.listen(upstreamSocketPath, resolve);
   });
 
-  const proxy = new CodexAppServerConnectionProxy(upstreamSocketPath, (threadId) => boundThreads.push(threadId));
+  const proxy = new CodexAppServerConnectionProxy({ transport: "unix", socketPath: upstreamSocketPath }, (threadId) => boundThreads.push(threadId));
   const port = runtime.allocatePort("web");
   proxy.start(port);
   try {
