@@ -50,7 +50,12 @@ test("runtime release builds one Linux controlled-instance artifact from support
   assert.match(workflow, /needs: node-pty-prebuilds/);
   assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
   assert.ok(workflow.indexOf("name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}") < workflow.indexOf("name: Build npm tarballs"));
-  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages\]/);
+  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template\]/);
+  // The WSL base template rides the same release chain and must be attached to the published release.
+  assert.match(workflow, /wsl-base-template:\n\s+name: WSL base template \(linux-x64\)\n\s+needs: runtime-packages/);
+  assert.match(workflow, /apt-get install -y --no-install-recommends systemd systemd-sysv dbus/);
+  assert.match(workflow, /name: wsl-base-template-\$\{\{ needs\.runtime-packages\.outputs\.version \}\}/);
+  assert.match(workflow, /name: wsl-base-template-\$\{\{ needs\.runtime-packages\.outputs\.version \}\}[\s\S]*?path: release\/runtime-artifacts/);
   assert.match(workflow, /publish:\n[\s\S]*?env:\n\s+GH_REPO: \$\{\{ github\.repository \}\}/);
   assert.match(workflow, /merge-multiple: true/);
   assert.match(workflow, /gh release create[\s\S]*release\/runtime-artifacts\/\*/);
