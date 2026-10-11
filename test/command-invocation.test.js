@@ -39,6 +39,8 @@ test("leaves a POSIX executable untouched", (t) => {
   assert.equal(invocation.executable, path.join(bin, "codex"));
   assert.deepEqual(invocation.args, ["exec", "--json"]);
   assert.equal(invocation.interpreterWrapped, false);
+  // Only win32 shims need an interpreter brought into reach.
+  assert.deepEqual(invocation.env, { PATH: bin });
 });
 
 test("wraps a win32 .cmd shim through ComSpec with call", (t) => {
@@ -177,4 +179,60 @@ test("searches npm global directories last and honors NPM_CONFIG_PREFIX", (t) =>
   assert.equal(inPrefix.resolver, "npm-global");
   assert.equal(inPrefix.executable, path.join(prefixBin, "codex"));
   assert.equal(inPrefix.env.PATH, `${prefixBin}${path.delimiter}/missing`);
+});
+
+function win32ShimFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-node-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const npmBin = path.join(root, "Roaming", "npm");
+  const preferredNodeBin = path.join(root, "ProgramFiles", "nodejs");
+  const fallbackNodeBin = path.join(root, "elsewhere");
+  for (const directory of [npmBin, preferredNodeBin, fallbackNodeBin]) fs.mkdirSync(directory, { recursive: true });
+  // An npm shim is a batch file that shells out to a bare `node`, so a fixture
+  // that starts one has to ship an interpreter the way npm's own directory does.
+  fs.writeFileSync(path.join(npmBin, "codex.cmd"), "@echo off\r\nnode \"%~dp0node_modules\\codex.js\" %*\r\n", { mode: 0o755 });
+  for (const directory of [preferredNodeBin, fallbackNodeBin]) {
+    fs.writeFileSync(path.join(directory, "node.exe"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  return { npmBin, preferredNodeBin, fallbackNodeBin };
+}
+
+test("finds the interpreter a win32 npm shim needs when PATH cannot reach one", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  const env = { PATH: npmBin, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
+
+  const invocation = commandInvocation("codex", ["app-server"], {
+    env,
+    platform: "win32",
+    nodeRuntimeDirectories: [preferredNodeBin, fallbackNodeBin],
+  });
+  assert.equal(invocation.interpreterWrapped, true);
+  assertSameWin32Path(invocation.args[4], path.join(npmBin, "codex.cmd"));
+  // The runtime goes first because the shim's bare `node` is the name that
+  // failed to resolve in the first place.
+  assert.equal(invocation.env.PATH, `${preferredNodeBin}${path.delimiter}${npmBin}`);
+  assert.equal(invocation.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+  assert.equal(invocation.env.ComSpec, env.ComSpec);
+});
+
+test("keeps the shim PATH when it can already start node", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  const env = { PATH: `${preferredNodeBin}${path.delimiter}${npmBin}`, PATHEXT: ".CMD" };
+
+  const invocation = commandInvocation("codex", [], { env, platform: "win32", nodeRuntimeDirectories: [fallbackNodeBin] });
+  assert.equal(invocation.interpreterWrapped, true);
+  assert.equal(invocation.env.PATH, env.PATH);
+  assert.equal(invocation.env.PATHEXT, ".CMD");
+});
+
+test("leaves a shim environment alone when no Node runtime can be found", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  fs.rmSync(preferredNodeBin, { recursive: true, force: true });
+  fs.rmSync(fallbackNodeBin, { recursive: true, force: true });
+  const env = { PATH: npmBin, ComSpec: "cmd.exe" };
+
+  const invocation = commandInvocation("codex", [], { env, platform: "win32", nodeRuntimeDirectories: [fallbackNodeBin, preferredNodeBin] });
+  assert.equal(invocation.interpreterWrapped, true);
+  assert.equal(invocation.env.PATH, npmBin);
+  assert.equal(invocation.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
 });
