@@ -2313,13 +2313,14 @@ export const NodeRuntimeSchema = z
  *
  * Node Agent 写入侧是 additively 扩展的：新 Node Agent 会发布旧消费者不认识的 runtime 类型。
  * 旧消费者若直接 `z.array(NodeRuntimeSchema)` 解析，会因未知枚举值让整表失败，连 Docker/Local
- * 一并不可见。这里先按已知值过滤，再对剩余条目严格解析；未知类型只被忽略，已知类型的字段
- * 校验仍然严格。
+ * 一并不可见。这里只丢弃「`type` 是未知字符串」的条目，再对剩余条目严格解析；已知类型的字段
+ * 校验仍然严格，且缺失/非法 `type` 仍按协议损坏上报，不会被当成正常空表。
  */
 export const NodeRuntimeConsumerListSchema = z.array(z.unknown())
   .transform((entries) => entries.filter((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    return nodeRuntimeTypeIsKnown((entry as Record<string, unknown>).type);
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return true;
+    const type = (entry as Record<string, unknown>).type;
+    return !(typeof type === "string" && !nodeRuntimeTypeIsKnown(type));
   }))
   .pipe(z.array(NodeRuntimeSchema));
 

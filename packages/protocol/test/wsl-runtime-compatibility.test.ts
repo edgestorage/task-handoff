@@ -47,10 +47,15 @@ test("consumer runtime lists ignore unknown types instead of failing the whole t
     runtime("docker"),
     runtime("wsl"),
     runtime("podman"),
-    { id: "runtime_broken" },
-    null,
   ]);
   assert.deepEqual(parsed.map((entry) => entry.type), ["docker", "wsl"]);
+});
+
+test("consumer runtime lists still report structurally broken entries", () => {
+  // 只容忍未知的 `type` 字符串；缺字段或非对象条目继续按协议损坏上报，
+  // 避免把一个发送坏数据的节点伪装成「没有 runtime」。
+  assert.throws(() => NodeRuntimeConsumerListSchema.parse([{ id: "runtime_broken" }]));
+  assert.throws(() => NodeRuntimeConsumerListSchema.parse([null]));
 });
 
 test("consumer runtime lists keep strict field validation for known types", () => {
