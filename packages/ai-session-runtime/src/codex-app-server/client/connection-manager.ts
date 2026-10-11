@@ -1,3 +1,4 @@
+import type { CodexAppServerClientOptions } from "./client";
 import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./contract";
 import type { CodexAppServerEvent, CodexThread } from "../protocol/types";
 
@@ -6,11 +7,30 @@ export type CodexAppServerConnection = {
   epoch: number;
 };
 
+/** Endpoint the manager connects to. Absent means "spawn a private stdio server". */
+export type CodexAppServerConnectionTarget =
+  | { transport: "unix"; socketPath: string }
+  | { transport: "ws"; endpoint: string; tokenFile?: string };
+
 type ConnectionState = "idle" | "connecting" | "ready" | "closing";
+
+/** Stable identity for a target so a republished snapshot does not rebuild the client. */
+function codexAppServerTargetKey(target?: CodexAppServerConnectionTarget) {
+  if (!target) return "";
+  return target.transport === "unix"
+    ? `unix\u0000${target.socketPath}`
+    : `ws\u0000${target.endpoint}\u0000${target.tokenFile ?? ""}`;
+}
+
+function codexAppServerClientOptions(target: CodexAppServerConnectionTarget): CodexAppServerClientOptions {
+  return target.transport === "unix"
+    ? { socketPath: target.socketPath }
+    : { endpoint: target.endpoint, ...(target.tokenFile ? { tokenFile: target.tokenFile } : {}) };
+}
 
 type ConnectionManagerOptions = {
   injectedClient?: CodexAppServerClientLike;
-  createClient: (options: { socketPath?: string; command?: string }) => CodexAppServerClientLike;
+  createClient: (options: CodexAppServerClientOptions) => CodexAppServerClientLike;
   onEvent: (event: CodexAppServerEvent, connection: CodexAppServerConnection) => void;
   onDisconnect?: (connection: CodexAppServerConnection) => void;
   onInvalidate?: (connection: CodexAppServerConnection) => void;
@@ -21,7 +41,7 @@ type ConnectionManagerOptions = {
 /** Owns the lifecycle of exactly one Codex app-server connection generation. */
 export class CodexAppServerConnectionManager {
   private clientValue?: CodexAppServerClientLike;
-  private socketPathValue?: string;
+  private targetValue?: CodexAppServerConnectionTarget;
   private commandValue?: string;
   private state: ConnectionState = "idle";
   private epochValue = 0;
@@ -46,8 +66,8 @@ export class CodexAppServerConnectionManager {
     return this.clientValue;
   }
 
-  get socketPath() {
-    return this.socketPathValue;
+  get target() {
+    return this.targetValue;
   }
 
   get epoch() {
@@ -55,21 +75,21 @@ export class CodexAppServerConnectionManager {
   }
 
   /** Selects the desired endpoint, disposing an older endpoint atomically. */
-  configure(socketPath?: string, command?: string) {
+  configure(target?: CodexAppServerConnectionTarget, command?: string) {
     if (this.options.injectedClient) {
       if (!this.clientValue) {
         this.install(this.options.injectedClient, undefined);
       }
       return this.current();
     }
-    if (this.clientValue && this.socketPathValue === socketPath && this.commandValue === command) {
+    if (this.clientValue && codexAppServerTargetKey(this.targetValue) === codexAppServerTargetKey(target) && this.commandValue === command) {
       return this.current();
     }
     this.disposeCurrent();
     this.install(this.options.createClient({
-      ...(socketPath ? { socketPath } : {}),
+      ...(target ? codexAppServerClientOptions(target) : {}),
       ...(command ? { command } : {}),
-    }), socketPath, command);
+    }), target, command);
     return this.current();
   }
 
@@ -248,9 +268,9 @@ export class CodexAppServerConnectionManager {
     this.retryAfter = 0;
   }
 
-  private install(client: CodexAppServerClientLike, socketPath?: string, command?: string) {
+  private install(client: CodexAppServerClientLike, target?: CodexAppServerConnectionTarget, command?: string) {
     this.clientValue = client;
-    this.socketPathValue = socketPath;
+    this.targetValue = target;
     this.commandValue = command;
     this.state = "idle";
     this.epochValue += 1;
@@ -304,7 +324,7 @@ export class CodexAppServerConnectionManager {
     this.resetSubscriptions();
     client?.stop();
     this.clientValue = undefined;
-    this.socketPathValue = undefined;
+    this.targetValue = undefined;
     this.commandValue = undefined;
     this.state = "idle";
     if (invalidated) this.options.onInvalidate?.(invalidated);

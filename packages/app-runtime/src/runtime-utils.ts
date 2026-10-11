@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,57 @@ export function codexAppServerSocketPath(runtimeDir: string) {
     fileName: "app-server.sock",
     rootDir: configuredRoot ? fs.realpathSync(configuredRoot) : undefined,
   }).path;
+}
+
+export type CodexAppServerTransport = "unix" | "ws";
+
+/**
+ * Transport for the shared Codex app-server.
+ *
+ * POSIX keeps the AF_UNIX endpoint: the CLI owns the socket, Node reaches it
+ * through `codex app-server proxy --sock`, and the TUI attaches to the loopback
+ * proxy the runtime runs. Windows cannot bind or connect AF_UNIX from Node (and
+ * the CLI re-homes a unix listener behind a daemon symlink there), so it uses
+ * the app-server's own loopback WebSocket listener guarded by a capability
+ * token. `TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT` overrides the choice so both
+ * paths stay exercisable on one machine.
+ */
+export function codexAppServerTransport(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): CodexAppServerTransport {
+  const configured = env.TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT?.trim().toLowerCase();
+  if (configured === "unix" || configured === "ws") return configured;
+  return platform === "win32" ? "ws" : "unix";
+}
+
+export function codexAppServerWsEndpoint(port: number) {
+  return `ws://127.0.0.1:${port}`;
+}
+
+/**
+ * Readiness surface of the same loopback port. The app-server answers `/readyz`
+ * over HTTP (no token required) once it can serve the websocket endpoint.
+ */
+export function codexAppServerHealthUrl(port: number, path = "/readyz") {
+  return `http://127.0.0.1:${port}${path}`;
+}
+
+export function codexAppServerWsListenArgs(endpoint: string, tokenFile: string) {
+  return ["--listen", endpoint, "--ws-auth", "capability-token", "--ws-token-file", tokenFile];
+}
+
+/**
+ * Capability token the loopback listener requires. It lives in the per-user
+ * runtime directory: POSIX tightens it with 0600, Windows inherits the profile
+ * ACL of that directory.
+ */
+export function codexAppServerTokenFile(runtimeDir: string) {
+  return path.join(runtimeDir, "app-server-token");
+}
+
+export function createCodexAppServerToken() {
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 export function ensureNodePtySpawnHelperExecutable() {

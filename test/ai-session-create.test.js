@@ -1723,7 +1723,7 @@ test("connection manager drops a ready generation whose transport died without a
     onEvent: () => {},
     onInvalidate: (connection) => invalidated.push(connection),
   });
-  manager.configure("/tmp/app-server.sock", "codex");
+  manager.configure({ transport: "unix", socketPath: "/tmp/app-server.sock" }, "codex");
   await manager.ready();
   assert.equal(client.starts, 1);
 
@@ -1752,7 +1752,7 @@ test("connection manager keeps a ready generation when the client has no livenes
   }
   const client = new LegacyClient();
   const manager = new CodexAppServerConnectionManager({ createClient: () => client, onEvent: () => {} });
-  manager.configure("/tmp/app-server.sock", "codex");
+  manager.configure({ transport: "unix", socketPath: "/tmp/app-server.sock" }, "codex");
   await manager.ready();
   await manager.ready();
   assert.equal(client.starts, 1);

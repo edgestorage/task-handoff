@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
@@ -20,13 +21,18 @@ import { codexThreadConfig } from "../story-tool-config.ts";
 
 export type CodexAppServerClientMode =
   | { type: "stdio"; command: string }
-  | { type: "unix"; command: string; socketPath: string };
+  | { type: "unix"; command: string; socketPath: string }
+  | { type: "ws"; command: string; endpoint: string; tokenFile?: string };
 
 export type CodexAppServerClientOptions = {
   command?: string;
   requestTimeoutMs?: number;
   resolveVersion?: (command: string) => Promise<string>;
   socketPath?: string;
+  /** Loopback websocket endpoint of an app-server started with `--listen ws://`. */
+  endpoint?: string;
+  /** Capability token file the websocket endpoint authenticates with. */
+  tokenFile?: string;
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   // Fires once per resolved artifact version so owners can re-publish capability
@@ -210,9 +216,11 @@ export class CodexAppServerClient extends EventEmitter {
       || process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND
       || process.env.TASK_HANDOFF_CODEX_COMMAND
       || "codex";
-    this.mode = options.socketPath
-      ? { type: "unix", command, socketPath: options.socketPath }
-      : { type: "stdio", command };
+    this.mode = options.endpoint
+      ? { type: "ws", command, endpoint: options.endpoint, ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}) }
+      : options.socketPath
+        ? { type: "unix", command, socketPath: options.socketPath }
+        : { type: "stdio", command };
     this.requestTimeoutMs = options.requestTimeoutMs
       || Number(process.env.TASK_HANDOFF_CODEX_APP_SERVER_TIMEOUT_MS)
       || 15_000;
@@ -239,6 +247,10 @@ export class CodexAppServerClient extends EventEmitter {
     }
     if (this.mode.type === "unix") {
       await this.startUnixSocket(this.mode.command, this.mode.socketPath);
+      return;
+    }
+    if (this.mode.type === "ws") {
+      await this.startWebSocket(this.mode.endpoint, this.mode.tokenFile);
       return;
     }
     const child = spawn(this.mode.command, ["app-server", "--listen", "stdio://"], {
@@ -917,6 +929,66 @@ export class CodexAppServerClient extends EventEmitter {
           .then(() => resolve())
           .catch((error) => {
             socket.close();
+            reject(error);
+          });
+      });
+    });
+  }
+
+  /**
+   * Loopback websocket endpoint. There is no CLI bridge to spawn here: the
+   * app-server itself listens on the loopback port, guarded by a capability
+   * token only this user can read.
+   */
+  private startWebSocket(endpoint: string, tokenFile?: string) {
+    return new Promise<void>((resolve, reject) => {
+      let token = "";
+      if (tokenFile) {
+        try {
+          token = fs.readFileSync(tokenFile, "utf8").trim();
+        } catch (error) {
+          reject(new Error(`Codex app-server token file is unreadable: ${tokenFile}`));
+          return;
+        }
+      }
+      const socket = new WebSocket(`${endpoint}/rpc`, {
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+        perMessageDeflate: false,
+      });
+      this.socket = socket;
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.socket = undefined;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+        reject(error);
+      };
+      socket.once("error", fail);
+      socket.once("unexpected-response", (_request, response) => {
+        fail(new Error(`Codex app-server websocket rejected the connection: http ${response.statusCode}.`));
+      });
+      socket.once("open", () => {
+        settled = true;
+        socket.off("error", fail);
+        socket.on("message", (data) => this.handleLine(data.toString()));
+        socket.once("close", () => {
+          this.socket = undefined;
+          for (const [id, request] of this.pending) {
+            clearTimeout(request.timer);
+            request.reject(new Error("Codex app-server disconnected."));
+            this.pending.delete(id);
+          }
+          this.emit("disconnect");
+        });
+        this.initialize()
+          .then(() => resolve())
+          .catch((error) => {
+            this.stop();
             reject(error);
           });
       });
