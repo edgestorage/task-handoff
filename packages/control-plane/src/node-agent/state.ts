@@ -53,13 +53,17 @@ import {
 import { reduceInstanceLifecycle, type InstanceLifecycleEvent } from "./instance-lifecycle-state.ts";
 import type { ExecutorContext } from "./runtimes/docker.ts";
 import type { RuntimeAdapter } from "./runtimes/adapters.ts";
+import { normalizeRuntimeCapabilities, runtimeRequiresImage, runtimeUsesManagedArtifacts } from "./runtime-capabilities.ts";
+import { bootstrapExternalListener, createRuntimeSettingsFile, wslRuntimePublishEnabled } from "./runtime-settings.ts";
 import { requireBrowsableFolderPath } from "./folders.ts";
 import type { BuiltinProjectFolderProjection } from "./builtin-projects/catalog.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { resolveGitCredential } from "@task-handoff/protocol/managed-git-credentials";
+import { normalizeWslRuntimeCapabilities } from "@task-handoff/protocol/control-plane";
 
 const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
+const BUILTIN_WSL_RUNTIME_ID = "runtime_wsl_host";
 const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
 
 function userRuntimeLabels(labels: Record<string, string> | undefined) {
@@ -123,26 +127,11 @@ function storedInstancePayloadError(id: string, issues: Array<{ path: PropertyKe
   );
 }
 
-function runtimeRequiresImage(runtime: NodeRuntime) {
-  if (typeof runtime.capabilities.requiresImage === "boolean") return runtime.capabilities.requiresImage;
-  return runtime.type !== "local";
-}
-
-export function runtimeUsesManagedArtifacts(runtime: NodeRuntime) {
-  return runtime.capabilities.artifactKind !== "none";
-}
+// capability 默认值的唯一真源见 ./runtime-capabilities.ts（refactor-runtime-adapter-registry D4）。
+export { runtimeRequiresImage, runtimeUsesManagedArtifacts } from "./runtime-capabilities.ts";
 
 export function localRuntimeCapabilities(capabilities: Record<string, unknown> = {}) {
-  return {
-    ...capabilities,
-    requiresImage: false,
-    supportsControlledInstanceApi: true,
-    supportsContainerLifecycle: false,
-    supportsAppSessions: true,
-    supportsHostSessions: true,
-    artifactKind: "none",
-    isolation: "none",
-  };
+  return normalizeRuntimeCapabilities("local", capabilities);
 }
 
 function defaultAccessStrategyForRuntime(type: NodeRuntime["type"]) {
@@ -299,6 +288,25 @@ export class NodeAgentState {
         labels: { ...current?.labels, [BUILTIN_RUNTIME_LABEL]: "true" },
         createdAt: current?.createdAt || timestamp,
         updatedAt: current?.updatedAt || timestamp,
+      }));
+    }
+    // D14：`wsl` runtime 只在 win32 且节点级开关显式开启时发布；开关关闭时不新建记录（错峰升级安全），
+    // 但已存在的记录保留（存量只读，不被静默删除）。
+    const existingWslRuntime = this.nodeRuntimes.get(BUILTIN_WSL_RUNTIME_ID);
+    const wslSettings = createRuntimeSettingsFile(this.paths, bootstrapExternalListener("127.0.0.1", this.listenerPort)).get();
+    if (this.platform === "win32" && wslRuntimePublishEnabled(wslSettings)) {
+      const timestamp = now();
+      this.nodeRuntimes.put(NodeRuntimeSchema.parse({
+        id: BUILTIN_WSL_RUNTIME_ID,
+        nodeId: this.nodeId,
+        name: "WSL",
+        type: "wsl",
+        status: existingWslRuntime?.status || "unknown",
+        accessStrategy: "node-proxy",
+        capabilities: normalizeWslRuntimeCapabilities(existingWslRuntime?.capabilities),
+        labels: { ...existingWslRuntime?.labels, [BUILTIN_RUNTIME_LABEL]: "true" },
+        createdAt: existingWslRuntime?.createdAt || timestamp,
+        updatedAt: timestamp,
       }));
     }
     for (const runtime of this.nodeRuntimes.list()) {

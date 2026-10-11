@@ -55,16 +55,23 @@ export function isInstanceRuntimeUnavailable(instance: InstanceBoardItem) {
 }
 
 export function instanceRuntimeUnavailableReason(instance: InstanceBoardItem) {
-  const daemon = (instance.runtime?.capabilities as Record<string, unknown> | undefined)?.daemon;
-  if (!daemon || typeof daemon !== "object") return undefined;
-  const error = (daemon as Record<string, unknown>).error;
-  return typeof error === "string" && error.trim() ? error : undefined;
+  const capabilities = instance.runtime?.capabilities as Record<string, unknown> | undefined;
+  // Each runtime publishes its availability detail in a runtime-named subdomain
+  // (docker → `daemon`, wsl → `wsl`); unknown subdomains are ignored.
+  for (const domain of ["daemon", "wsl"]) {
+    const value = capabilities?.[domain];
+    if (!value || typeof value !== "object") continue;
+    const error = (value as Record<string, unknown>).error;
+    if (typeof error === "string" && error.trim()) return error;
+  }
+  return undefined;
 }
 
 export function instanceRuntimeUnavailableLabel(instance: InstanceBoardItem, t: Translate) {
   const type = instance.runtime?.type;
   if (type === "docker") return t("instances.lifecycle.runtimeUnavailableDocker");
   if (type === "local") return t("instances.lifecycle.runtimeUnavailableLocal");
+  if (type === "wsl") return t("instances.lifecycle.runtimeUnavailableWsl");
   return t("instances.lifecycle.runtimeUnavailable");
 }
 
@@ -73,6 +80,7 @@ export function instanceRuntimeNameLabel(instance: InstanceBoardItem, t: Transla
   const type = instance.runtime?.type;
   if (type === "docker") return t("instances.lifecycle.runtimeNameDocker");
   if (type === "local") return t("instances.lifecycle.runtimeNameLocal");
+  if (type === "wsl") return t("instances.lifecycle.runtimeNameWsl");
   return instance.runtime?.name || t("instances.lifecycle.runtimeUnavailable");
 }
 

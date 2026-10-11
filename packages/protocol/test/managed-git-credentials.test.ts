@@ -229,6 +229,7 @@ test("managed Git capabilities normalize N-1 absence and ignore future fields", 
     docker: true,
     kubernetes: false,
     local: false,
+    wsl: false,
   });
   assert.equal(normalizeControlledInstanceCapabilities({ features: { future: true } }).features.gitCliCredentialBroker, false);
   assert.equal(normalizeControlledInstanceCapabilities({ features: { aiSessionWorkspaceSelection: true } }).features.aiSessionWorkspaceCheckout, false);

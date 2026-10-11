@@ -7,14 +7,30 @@ export const NODE_AGENT_CAPABILITIES_CHANGED_EVENT_TYPE = "node-agent.capabiliti
 export const NodeAgentCapabilitiesChangedEventSchema = z.object({}).strict();
 export type NodeAgentCapabilitiesChangedEvent = z.infer<typeof NodeAgentCapabilitiesChangedEventSchema>;
 
+/**
+ * Runtime values a Node Agent may report for shared agent execution space.
+ * `wsl` is additive (add-wsl-runtime D1/D11); readers filter by known values so an
+ * unknown future runtime never resets the whole `agentExecution` capability group.
+ */
+export const NODE_AGENT_SHARED_SPACE_RUNTIMES = ["docker", "local", "wsl"] as const;
+
+export const NodeAgentSharedSpaceRuntimeSchema = z.enum(NODE_AGENT_SHARED_SPACE_RUNTIMES);
+
+export type NodeAgentSharedSpaceRuntime = z.infer<typeof NodeAgentSharedSpaceRuntimeSchema>;
+
+export const NodeAgentManagedGitWorkspaceProvisioningSchema = z.object({
+  docker: z.boolean().default(false),
+  kubernetes: z.boolean().default(false),
+  local: z.boolean().default(false),
+  // Compatibility for add-wsl-runtime: older node agents strip this key, so an old
+  // control plane keeps reading exactly the three legacy keys.
+  wsl: z.boolean().default(false),
+}).strip();
+
 export const NodeAgentManagedGitCapabilitiesSchema = z.object({
   registry: z.boolean().default(false),
   runtimeBroker: z.boolean().default(false),
-  workspaceProvisioning: z.object({
-    docker: z.boolean().default(false),
-    kubernetes: z.boolean().default(false),
-    local: z.boolean().default(false),
-  }).strip().default({ docker: false, kubernetes: false, local: false }),
+  workspaceProvisioning: NodeAgentManagedGitWorkspaceProvisioningSchema.default({ docker: false, kubernetes: false, local: false, wsl: false }),
 }).strip();
 
 export const NodeAgentManagedModelCapabilitiesSchema = z.object({
@@ -83,15 +99,25 @@ export const NodeAgentAgentExecutionCapabilitiesSchema = z.object({
   }).strip().default({ storyEntryAuthorization: false, orchestrations: false, runMembers: false, manualRuns: false }),
   sharedSpace: z.object({
     enabled: z.boolean().default(false),
-    runtimes: z.array(z.enum(["docker", "local"])).default([]),
+    runtimes: z.array(NodeAgentSharedSpaceRuntimeSchema).default([]),
   }).strip().default({ enabled: false, runtimes: [] }),
   // 每个条目是 Node Agent 已注册并实现的完整组合；不能从各维度独立布尔值推导可用性。
   combinations: z.array(NodeAgentExecutionCombinationSchema).default([]),
 }).strip();
 
+// 消费侧把共享空间的 runtime 读成字符串数组再按已知值过滤（add-wsl-runtime D11）：
+// 出现未知 runtime 时只丢弃该值，MUST NOT 让整组 agentExecution 能力退回默认值。
+const NodeAgentSharedSpaceConsumerSchema = z.object({
+  enabled: z.boolean().default(false),
+  runtimes: z.array(z.string().trim().min(1).max(64)).default([]),
+}).strip().default({ enabled: false, runtimes: [] });
+
 const NodeAgentAgentExecutionCapabilitiesConsumerSchema = NodeAgentAgentExecutionCapabilitiesSchema
-  .omit({ combinations: true })
-  .extend({ combinations: z.array(z.unknown()).default([]) })
+  .omit({ combinations: true, sharedSpace: true })
+  .extend({
+    combinations: z.array(z.unknown()).default([]),
+    sharedSpace: NodeAgentSharedSpaceConsumerSchema,
+  })
   .strip();
 
 export const NodeAgentCapabilitiesSchema = z.object({
@@ -131,6 +157,12 @@ export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgent
   const normalizedAgentExecution = agentExecution.success
     ? NodeAgentAgentExecutionCapabilitiesSchema.parse({
       ...agentExecution.data,
+      sharedSpace: {
+        enabled: agentExecution.data.sharedSpace.enabled,
+        runtimes: agentExecution.data.sharedSpace.runtimes.filter(
+          (runtime): runtime is NodeAgentSharedSpaceRuntime => (NODE_AGENT_SHARED_SPACE_RUNTIMES as readonly string[]).includes(runtime),
+        ),
+      },
       combinations: agentExecution.data.combinations.flatMap((combination) => {
         const parsedCombination = NodeAgentExecutionCombinationSchema.safeParse(combination);
         return parsedCombination.success ? [parsedCombination.data] : [];
@@ -224,9 +256,10 @@ export function supportsNodeAgentManualRuns(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).agentExecution.orchestration.manualRuns;
 }
 
-export function supportsNodeAgentSharedSpace(capabilities: unknown, runtime: "docker" | "local") {
+/** `runtime` 是窄 union 的替代：未知 runtime 归为不支持，而不是类型错误（add-wsl-runtime 2.3）。 */
+export function supportsNodeAgentSharedSpace(capabilities: unknown, runtime: string) {
   const sharedSpace = normalizeNodeAgentCapabilities(capabilities).agentExecution.sharedSpace;
-  return sharedSpace.enabled && sharedSpace.runtimes.includes(runtime);
+  return sharedSpace.enabled && sharedSpace.runtimes.some((value) => value === runtime);
 }
 
 /** 执行组合必须由同一个 Node Agent 的真实探测结果显式发布，缺失即不支持。 */
@@ -266,8 +299,10 @@ export function supportsNodeGitCredentialRuntimeBroker(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.runtimeBroker;
 }
 
-export function supportsNodeGitWorkspaceProvisioning(capabilities: unknown, runtime: "docker" | "kubernetes" | "local") {
-  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.workspaceProvisioning[runtime];
+/** 未知 runtime（含未来新增类型）归为不支持，调用点不再需要 runtime 字面量 union（add-wsl-runtime 2.3）。 */
+export function supportsNodeGitWorkspaceProvisioning(capabilities: unknown, runtime: string) {
+  const provisioning = normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.workspaceProvisioning as Record<string, boolean>;
+  return provisioning[runtime] === true;
 }
 
 export function supportsNodeFolderPlaces(capabilities: unknown) {

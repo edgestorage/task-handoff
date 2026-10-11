@@ -15,10 +15,10 @@ const { RuntimeAdapterRegistry } = require("../packages/control-plane/src/node-a
 
 test("node-agent global shutdown stops only the Local Runtime adapter", async () => {
   const calls = [];
-  const registry = new RuntimeAdapterRegistry(
-    { stopAll: async () => calls.push("docker") },
-    { stopAll: async () => calls.push("local") },
-  );
+  const registry = new RuntimeAdapterRegistry([
+    { type: "docker", adapter: { stopAll: async () => calls.push("docker") } },
+    { type: "local", adapter: { stopOnShutdown: true, stopAll: async () => calls.push("local") } },
+  ]);
   await registry.stopAll();
   assert.deepEqual(calls, ["local"]);
 });

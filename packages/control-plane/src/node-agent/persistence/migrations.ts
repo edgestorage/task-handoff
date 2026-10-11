@@ -1,9 +1,18 @@
 import crypto from "node:crypto";
 
-export type NodeAgentMigration = { id: string; checksum: string; sql: string };
+export type NodeAgentMigration = {
+  id: string;
+  checksum: string;
+  sql: string;
+  /**
+   * 表重建型迁移需要在整个连接上关闭 `foreign_keys`（SQLite 在事务内不接受该 pragma，
+   * 且 `ON DELETE RESTRICT` 不能被 defer）。置位后 runner 会提交当前事务、关闭 FK、单独事务执行。
+   */
+  foreignKeysOff?: boolean;
+};
 
-function migration(id: string, sql: string): NodeAgentMigration {
-  return { id, sql, checksum: crypto.createHash("sha256").update(sql).digest("hex") };
+function migration(id: string, sql: string, options: { foreignKeysOff?: boolean } = {}): NodeAgentMigration {
+  return { id, sql, checksum: crypto.createHash("sha256").update(sql).digest("hex"), ...(options.foreignKeysOff ? { foreignKeysOff: true } : {}) };
 }
 
 const initialStoryDomain = `
@@ -366,6 +375,23 @@ CREATE INDEX na_story_decisions_story_idx ON na_story_decisions(story_id, create
 CREATE INDEX na_story_decisions_session_idx ON na_story_decisions(session_id, status);
 `;
 
+// `wsl` runtime（add-wsl-runtime）：na_runtimes.type 的 CHECK 需要扩展，SQLite 不支持修改 CHECK，
+// 只能重建表。`na_instances.runtime_id` 以 ON DELETE RESTRICT 引用它，因此重建必须在 FK 关闭的
+// 独立事务里进行（DROP/RENAME 在 FK 开启时无法执行，RESTRICT 也不能被 defer）。
+const runtimeTypeWsl = `
+CREATE TABLE na_runtimes_wsl (
+  id TEXT PRIMARY KEY NOT NULL, node_id TEXT NOT NULL REFERENCES na_node_identity(node_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  name TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('docker','kubernetes','local','wsl')),
+  status TEXT NOT NULL CHECK(status IN ('unknown','online','offline','degraded')), access_strategy TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL, labels_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO na_runtimes_wsl (id, node_id, name, type, status, access_strategy, capabilities_json, labels_json, created_at, updated_at)
+  SELECT id, node_id, name, type, status, access_strategy, capabilities_json, labels_json, created_at, updated_at FROM na_runtimes;
+DROP TABLE na_runtimes;
+ALTER TABLE na_runtimes_wsl RENAME TO na_runtimes;
+CREATE INDEX na_runtimes_node_type_idx ON na_runtimes(node_id, type);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -384,4 +410,5 @@ export const nodeAgentMigrations = [
   migration("0013_model_request_mappings", modelRequestMappings),
   migration("0014_story_decision_domain", storyDecisionDomain),
   migration("0015_agent_definition_model_identity", agentDefinitionModelIdentity),
+  migration("0016_runtime_type_wsl", runtimeTypeWsl, { foreignKeysOff: true }),
 ] as const;

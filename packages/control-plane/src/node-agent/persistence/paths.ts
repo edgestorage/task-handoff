@@ -21,6 +21,11 @@ export type NodeAgentStorePaths = {
   gitWorkspaceProvisioningIntentsDir: string;
   updatesDir: string;
   dockerBootstrapDir: string;
+  /** WSL runtime 私有根目录：distro 安装目录、base 模板缓存与归属索引。 */
+  wslDir: string;
+  wslDistrosDir: string;
+  wslBaseTemplateCacheDir: string;
+  wslDistroIndexPath: string;
   logsDir: string;
   databasePath: string;
   storyRegistryDir: string;
@@ -55,6 +60,10 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     gitWorkspaceProvisioningIntentsDir: path.join(root, "git-credentials", "workspace-provisioning-intents"),
     updatesDir: path.join(root, "updates"),
     dockerBootstrapDir: path.join(root, "docker-bootstrap"),
+    wslDir: path.join(root, "wsl"),
+    wslDistrosDir: path.join(root, "wsl", "distros"),
+    wslBaseTemplateCacheDir: path.join(root, "wsl", "base-templates"),
+    wslDistroIndexPath: path.join(root, "wsl", "distros.json"),
     logsDir: path.join(root, "logs"),
     databasePath: path.join(root, "node-agent.sqlite"),
     storyRegistryDir: path.join(root, "story-registry"),

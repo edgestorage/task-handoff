@@ -23,6 +23,7 @@ import {
   NodeModelAssignmentSchema,
   NodeModelMergeResultSchema,
   NodeModelPublicRecordSchema,
+  NodeRuntimeConsumerListSchema,
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
@@ -347,7 +348,8 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   listRuntimes(node: Node, init: RequestInit = {}) {
-    return this.client.requestSchema(node, "/runtimes", z.array(NodeRuntimeSchema), init);
+    // add-wsl-runtime D11: 未知 runtime 类型只被忽略，不能让旧端整表解析失败。
+    return this.client.requestSchema(node, "/runtimes", NodeRuntimeConsumerListSchema, init);
   }
 
   async createRuntime(node: Node, input: unknown) {

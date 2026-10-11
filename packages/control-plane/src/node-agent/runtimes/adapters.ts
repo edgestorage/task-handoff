@@ -1,56 +1,27 @@
-import type {
-  InstanceDeleteInput,
-  InstanceDeleteResult,
-  NodeRuntime,
-  RuntimeArtifactIdentity,
-} from "@task-handoff/protocol/control-plane";
+import type { NodeRuntime, RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import type { ResolvedRuntimeArtifact } from "../runtime-artifacts.ts";
+import { LocalDockerExecutor, type CommandRunner } from "./docker.ts";
+import { normalizeRuntimeCapabilities } from "../runtime-capabilities.ts";
 import {
-  LocalDockerExecutor,
-  type CommandRunner,
+  finalComputerPlatform,
+  isManagedRuntimeAdapter,
   type ExecutorContext,
-  type ExecutorStartResult,
+  type InstanceDeleteInput,
+  type InstanceDeleteResult,
+  type ManagedRuntimeAdapter,
+  type RuntimeAdapter,
   type RuntimeLiveness,
-} from "./docker.ts";
+} from "./contracts.ts";
 
-const FINAL_COMPUTER_PLATFORMS = new Set([
-  "linux",
-  "darwin",
-  "win32",
-  "freebsd",
-  "openbsd",
-  "aix",
-  "sunos",
-]);
-
-export function finalComputerPlatform(platform: string) {
-  return FINAL_COMPUTER_PLATFORMS.has(platform) ? platform : "unknown";
-}
-
-export type RuntimeAdapter = {
-  resolveInstanceWeb(context: ExecutorContext): Promise<string>;
-  resolveNodeAgentUrl?(context: ExecutorContext): Promise<string>;
-  /** Reports whether the runtime is alive without touching the instance itself. */
-  runtimeState?(context: ExecutorContext): Promise<RuntimeLiveness>;
-  start(context: ExecutorContext): Promise<ExecutorStartResult>;
-  stop(context: ExecutorContext): Promise<ExecutorStartResult>;
-  restart(context: ExecutorContext): Promise<ExecutorStartResult>;
-  delete(context: ExecutorContext, input: InstanceDeleteInput): Promise<InstanceDeleteResult>;
-  managedArtifacts?: boolean;
-  check?(runtime: NodeRuntime): Promise<Partial<NodeRuntime>>;
-  stopAll?(): Promise<void>;
-};
-
-export type ManagedRuntimeAdapter = RuntimeAdapter & {
-  managedArtifacts: true;
-  artifactTarget(context?: ExecutorContext): Promise<{ platform: string; arch: string; launcherAbi: number }>;
-  installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact): Promise<void>;
-  inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity): Promise<boolean>;
-};
-
-export function isManagedRuntimeAdapter(adapter: RuntimeAdapter): adapter is ManagedRuntimeAdapter {
-  return adapter.managedArtifacts === true;
-}
+// 共享契约定义在 ./contracts.ts；这里保留同名 re-export，既有调用点无需改动。
+export { finalComputerPlatform, isManagedRuntimeAdapter } from "./contracts.ts";
+export type {
+  ExecutorContext,
+  ExecutorStartResult,
+  ManagedRuntimeAdapter,
+  RuntimeAdapter,
+  RuntimeLiveness,
+} from "./contracts.ts";
 
 function artifactIdentityMatches(actual: Partial<RuntimeArtifactIdentity>, expected: RuntimeArtifactIdentity) {
   return actual.packageName === expected.packageName
@@ -145,7 +116,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return {
         status: "online",
         capabilities: {
-          ...runtime.capabilities,
+          ...normalizeRuntimeCapabilities("docker", runtime.capabilities),
           daemon: {
             status: "online",
             hostPlatform: finalComputerPlatform(this.platform),
@@ -157,7 +128,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return {
         status: "offline",
         capabilities: {
-          ...runtime.capabilities,
+          ...normalizeRuntimeCapabilities("docker", runtime.capabilities),
           daemon: {
             status: "offline",
             hostPlatform: finalComputerPlatform(this.platform),
@@ -169,32 +140,57 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 }
 
-export class RuntimeAdapterRegistry {
-  private readonly docker: RuntimeAdapter;
-  private readonly local: RuntimeAdapter;
+export type RuntimeAdapterMember = {
+  type: string;
+  adapter: RuntimeAdapter;
+};
 
-  constructor(
-    docker: RuntimeAdapter,
-    local: RuntimeAdapter,
-  ) {
-    this.docker = docker;
-    this.local = local;
+/**
+ * Provider-neutral runtime 成员表（openspec change refactor-runtime-adapter-registry，D1）。
+ *
+ * 新增 runtime 只需 `register(type, adapter)`，MUST NOT 修改分发实现。未注册类型保持结构化
+ * `NODE_RUNTIME_TYPE_UNSUPPORTED`（statusCode 400）且不回退到其它 runtime。
+ */
+export class RuntimeAdapterRegistry {
+  private readonly members = new Map<string, RuntimeAdapter>();
+
+  constructor(members: Iterable<RuntimeAdapterMember> = []) {
+    for (const member of members) this.register(member.type, member.adapter);
+  }
+
+  register(type: string, adapter: RuntimeAdapter) {
+    this.members.set(type, adapter);
+    return this;
+  }
+
+  has(type: string) {
+    return this.members.has(type);
+  }
+
+  types() {
+    return [...this.members.keys()];
   }
 
   forRuntime(runtime: NodeRuntime) {
-    if (runtime.type === "docker") return this.docker;
-    if (runtime.type === "local") return this.local;
-    throw Object.assign(
-      new Error(`Runtime type ${runtime.type} is not supported by this node agent.`),
-      { statusCode: 400, code: "NODE_RUNTIME_TYPE_UNSUPPORTED" },
-    );
+    const adapter = this.members.get(runtime.type);
+    if (!adapter) {
+      throw Object.assign(
+        new Error(`Runtime type ${runtime.type} is not supported by this node agent.`),
+        { statusCode: 400, code: "NODE_RUNTIME_TYPE_UNSUPPORTED" },
+      );
+    }
+    return adapter;
   }
 
-  managedAdapters() {
-    return [this.docker, this.local].filter(isManagedRuntimeAdapter);
+  managedAdapters(): ManagedRuntimeAdapter[] {
+    return [...this.members.values()].filter(isManagedRuntimeAdapter);
   }
 
+  /** 只停止显式声明 `stopOnShutdown` 的成员；受管实例由 runtime 自身持有，Node Agent 退出不得牵连。 */
   async stopAll() {
-    await this.local.stopAll?.();
+    for (const adapter of this.members.values()) {
+      if (adapter.stopOnShutdown !== true) continue;
+      await adapter.stopAll?.();
+    }
   }
 }

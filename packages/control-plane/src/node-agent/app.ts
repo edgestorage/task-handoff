@@ -125,6 +125,16 @@ import {
   LocalhostRuntimeAdapter,
   configuredLocalControlledCommand,
 } from "./runtimes/local-adapter.ts";
+import { WslRuntimeAdapter } from "./runtimes/wsl-adapter.ts";
+import { WslExecutor } from "./runtimes/wsl-executor.ts";
+import { WSL_UNIT_NAME } from "./runtimes/wsl-lifecycle.ts";
+import {
+  WslDistroIndexStore,
+  WslDistroProvisioner,
+  defaultWslBaseTemplateSourceDirs,
+} from "./runtimes/wsl-provisioning.ts";
+import { WslSessionSupervisor } from "./runtimes/wsl-session-supervisor.ts";
+import { WslGitWorkspaceProvisioner } from "./runtimes/wsl-git-provisioning.ts";
 import {
   bootstrapExternalListener,
   createRuntimeSettingsFile,
@@ -153,6 +163,7 @@ declare module "fastify" {
     nodeAgentRecoverManagedInstances?: () => Promise<void>;
     nodeAgentStartRecoverySupervisor?: () => void;
     nodeAgentStartRuntimeAvailabilityMonitor?: () => void;
+    nodeAgentStartWslSessionSupervisor?: () => void;
     nodeAgentResolveInstanceNodeAgentUrl?: (instance: ControlledInstance) => Promise<string>;
     nodeAgentModelRelay?: ModelRelayService;
   }
@@ -329,10 +340,15 @@ function nodeAgentDiagnosticLogsEnabled() {
 
 /** Runtime adapters report their availability detail inside runtime capabilities. */
 function runtimeDaemonError(runtime: NodeRuntime) {
-  const daemon = (runtime.capabilities as Record<string, unknown> | undefined)?.daemon;
-  if (!daemon || typeof daemon !== "object") return undefined;
-  const error = (daemon as Record<string, unknown>).error;
-  return typeof error === "string" && error.trim() ? error : undefined;
+  const capabilities = runtime.capabilities as Record<string, unknown> | undefined;
+  // 每个 runtime 类型把自己的在线/离线诊断放在同名子域（docker → `daemon`，wsl → `wsl`）。
+  for (const domain of ["daemon", "wsl"]) {
+    const value = capabilities?.[domain];
+    if (!value || typeof value !== "object") continue;
+    const error = (value as Record<string, unknown>).error;
+    if (typeof error === "string" && error.trim()) return error;
+  }
+  return undefined;
 }
 
 type ResolveInstanceWeb = (instance: ControlledInstance) => Promise<string>;
@@ -806,21 +822,52 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     nodeAgentContainerIpcPath: options.containerIpcPath,
   });
   let recoverySupervisor!: NodeAgentRecoverySupervisor;
-  const runtimeAdapters = new RuntimeAdapterRegistry(
-    new DockerRuntimeAdapter(dockerExecutor, dockerCommandRunner, platform, arch),
-    new LocalhostRuntimeAdapter(
-      options.dockerCommandRunner || defaultCommandRunner,
-      paths,
-      () => state.localNodeAgentUrl,
-      configuredLocalControlledCommand(),
-      options.localControlledInstanceLockPath || process.env.TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH,
-      (event) => recoverySupervisor.handleUnexpectedLocalExit(
-        event.instanceId,
-        new Error(`Local controlled instance exited unexpectedly (pid=${event.pid ?? "unknown"}, code=${event.code ?? "none"}, signal=${event.signal ?? "none"}).`),
+  // 成员表驱动（refactor-runtime-adapter-registry D1）：新增 runtime 只在这里注册一个成员。
+  const runtimeAdapters = new RuntimeAdapterRegistry([
+    { type: "docker", adapter: new DockerRuntimeAdapter(dockerExecutor, dockerCommandRunner, platform, arch) },
+    {
+      type: "local",
+      adapter: new LocalhostRuntimeAdapter(
+        options.dockerCommandRunner || defaultCommandRunner,
+        paths,
+        () => state.localNodeAgentUrl,
+        configuredLocalControlledCommand(),
+        options.localControlledInstanceLockPath || process.env.TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH,
+        (event) => recoverySupervisor.handleUnexpectedLocalExit(
+          event.instanceId,
+          new Error(`Local controlled instance exited unexpectedly (pid=${event.pid ?? "unknown"}, code=${event.code ?? "none"}, signal=${event.signal ?? "none"}).`),
+        ),
+        (error, event) => app.log.error({ error, instanceId: event.instanceId, pid: event.pid }, "local controlled instance exit recovery failed"),
       ),
-      (error, event) => app.log.error({ error, instanceId: event.instanceId, pid: event.pid }, "local controlled instance exit recovery failed"),
-    ),
-  );
+    },
+  ]);
+  // D14：`wsl` runtime 只在 win32 且节点级开关已开启（state.init 已发布 builtin 记录）时注册成员。
+  // 关闭时既不发布也不注册，旧 Control Plane 不会因闭合枚举让 `/runtimes` 整表失败。
+  const wslExecutor = state.nodeRuntimes.get("runtime_wsl_host") ? new WslExecutor({ platform }) : undefined;
+  const wslIndex = new WslDistroIndexStore(paths.wslDistroIndexPath);
+  const wslProvisioner = wslExecutor
+    ? new WslDistroProvisioner({
+      executor: wslExecutor,
+      nodeId,
+      distroRoot: paths.wslDistrosDir,
+      baseTemplateCacheDir: paths.wslBaseTemplateCacheDir,
+      index: wslIndex,
+      baseTemplateSourceDirs: defaultWslBaseTemplateSourceDirs(),
+      expectedArch: arch,
+      logger: (message, data) => app.log.info(data, message),
+    })
+    : undefined;
+  if (wslExecutor && wslProvisioner) {
+    runtimeAdapters.register("wsl", new WslRuntimeAdapter(wslExecutor, {
+      platform,
+      hostArch: arch,
+      provisioner: wslProvisioner,
+      listenerPort: port,
+      bootstrapDir: dockerBootstrapDir,
+      fallbackNodeAgentUrl: state.containerUrl,
+      logger: (message, data) => app.log.info(data, message),
+    }));
+  }
   const resolveInstanceWeb: ResolveInstanceWeb = async (instance) => nodeLocalInstanceWebBase(
     instance,
     await runtimeAdapters.forRuntime(state.requireRuntime(instance.runtimeId)).resolveInstanceWeb(state.context(instance)),
@@ -966,9 +1013,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   };
   const adapterForInstance = (instance: ControlledInstance) => runtimeAdapters.forRuntime(state.requireRuntime(instance.runtimeId));
   const resolveNodeAgentUrlForInstance = async (instance: ControlledInstance) => {
+    // capability 驱动：任何 adapter 声明的权威 URL 优先；缺失时只按 runtime 类型回退到既有默认值。
+    const adapter = adapterForInstance(instance);
+    const resolved = await adapter.resolveNodeAgentUrl?.(state.context(instance));
+    if (resolved) return resolved;
     const runtime = state.requireRuntime(instance.runtimeId);
-    if (runtime.type !== "docker") return state.localNodeAgentUrl;
-    return await adapterForInstance(instance).resolveNodeAgentUrl?.(state.context(instance)) || state.containerUrl;
+    return runtime.type === "docker" ? state.containerUrl : state.localNodeAgentUrl;
   };
   const managedAdapterForInstance = (instance: ControlledInstance) => {
     const adapter = adapterForInstance(instance);
@@ -1383,12 +1433,28 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   };
 
+  const wslGitProvisioning = wslExecutor
+    ? new WslGitWorkspaceProvisioner({ executor: wslExecutor, logger: (message, data) => app.log.debug(data, message) })
+    : undefined;
   const gitProvisioning = new InstanceGitWorkspaceProvisioningController(state.controlledInstances, {
     context: (instance) => state.context(instance),
-    run: (context, options) => dockerExecutor.provisionGitWorkspaceStreaming(context, {
-      onOutput: options.onOutput,
-      signal: options.signal,
-    }),
+    run: (context, options) => {
+      const runtime = state.requireRuntime(context.instance.runtimeId);
+      if (runtime.type === "wsl") {
+        if (!wslGitProvisioning || !wslProvisioner) {
+          throw Object.assign(new Error(`The WSL runtime is not configured on this node; cannot provision the Git workspace for ${context.instance.id}.`), {
+            statusCode: 503,
+            code: "GIT_WORKSPACE_PROVISIONING_UNSUPPORTED",
+          });
+        }
+        const distroName = wslProvisioner.distroNameForInstance({ id: context.instance.id, containerName: context.instance.runtime.containerName });
+        return wslGitProvisioning.provision(context, distroName, { onOutput: options.onOutput, signal: options.signal });
+      }
+      return dockerExecutor.provisionGitWorkspaceStreaming(context, {
+        onOutput: options.onOutput,
+        signal: options.signal,
+      });
+    },
     sync: () => eventForwarder.syncNow(),
     diagnostic: lifecycleLoggers.diagnostic,
     warn: lifecycleLoggers.warn,
@@ -1455,6 +1521,40 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     error: (data, message) => app.log.error(data, message),
     runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
   });
+
+  // Phase 8.6/8.7：WSL 保活会话监督。distro 生命周期由活跃 `wsl.exe` 会话决定（D13），
+  // desired lifecycle 为 running 的实例 MUST 持有常驻会话；丢失时重建并等待单元与端点健康，
+  // 并把「会话丢失/被回收」与「实例自身崩溃」区分开。
+  const wslSessionSupervisor = wslExecutor && wslProvisioner && runtimeAdapters.has("wsl")
+    ? new WslSessionSupervisor({
+      listRunningInstances: () => state.listInstances()
+        .filter((instance) => state.requireRuntime(instance.runtimeId).type === "wsl")
+        .filter((instance) => ["registering", "registered", "running", "unhealthy"].includes(instance.status))
+        .map((instance) => ({
+          id: instance.id,
+          distroName: wslProvisioner.distroNameForInstance({ id: instance.id, containerName: instance.runtime.containerName }),
+        })),
+      holdSession: (distroName) => wslExecutor.holdSession(distroName),
+      sessionAlive: (distroName) => wslExecutor.sessionAlive(distroName),
+      releaseSession: (distroName) => wslExecutor.releaseSession(distroName),
+      distroState: (distroName) => wslExecutor.distroState(distroName),
+      ensureDistroRunning: async (distroName) => {
+        await wslExecutor.ensureDistroRunning(distroName);
+      },
+      unitActive: (distroName) => wslExecutor.unitActive(distroName, WSL_UNIT_NAME),
+      waitForEndpointHealthy: async (id) => (await probeInstanceEndpoint(fetchImpl, state.requireInstance(id), resolveInstanceWeb)) === "reachable",
+      onDiagnostic: (event) => {
+        if (event.code === "WSL_SESSION_RECOVERED") app.log.info(event, event.message);
+        else app.log.warn(event, event.message);
+        eventForwarder.syncNow();
+      },
+      onSessionLost: (id, distroName) => {
+        recoverySupervisor.allowRecovery(id);
+        lifecycleLoggers.warn({ instanceId: id, distroName }, "wsl keep-alive session lost; the supervisor will rebuild it");
+        eventForwarder.syncNow();
+      },
+    })
+    : undefined;
 
   // Runtime availability is the authoritative explanation for instances whose
   // base runtime is gone. Probing it in the background keeps the persisted
@@ -1637,6 +1737,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       runtimeMetrics.stop();
       runtimeAvailability.stop();
       eventForwarder.stop();
+      await wslSessionSupervisor?.stop();
       await recoverySupervisor.stop();
       await stories.drain();
       await storyRepository.close();
@@ -1649,6 +1750,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentRecoverManagedInstances", () => recoverySupervisor.recoverManagedInstances());
   app.decorate("nodeAgentStartRecoverySupervisor", () => recoverySupervisor.start());
   app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
+  app.decorate("nodeAgentStartWslSessionSupervisor", () => wslSessionSupervisor?.start());
 
   app.get("/api/node-agent/health", async () => {
     const hostname = os.hostname().trim();
@@ -1689,7 +1791,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           codexManagedSettings: true,
           folderPlaces: true,
           localFolderNameUpdate: true,
-          managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
+          managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false, wsl: runtimeAdapters.has("wsl") } },
           stories: {
             enabled: true,
             agentTools: true,
@@ -2162,6 +2264,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       // a stale runtime record and drive instance phases while the runtime is gone.
       app.nodeAgentStartRuntimeAvailabilityMonitor?.();
       app.nodeAgentStartRecoverySupervisor?.();
+      app.nodeAgentStartWslSessionSupervisor?.();
     } catch (error) {
       await app.close();
       throw error;

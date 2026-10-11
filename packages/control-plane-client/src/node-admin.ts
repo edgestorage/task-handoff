@@ -14,6 +14,7 @@ import {
   NodeImageAvailabilitySchema,
   NodeJoinInviteStatusSchema,
   NodeLocalFolderSchema,
+  NodeRuntimeConsumerListSchema,
   NodeRuntimeSchema,
   NodeSchema,
   UpdateCheckRequestSchema,
@@ -52,7 +53,8 @@ export const DeleteNodeResultSchema = z.object({
 }).strict();
 
 const NodeRuntimesPayloadSchema = z.object({
-  data: z.array(NodeRuntimeSchema),
+  // Consumer-side tolerance for additive runtime types (add-wsl-runtime D11).
+  data: NodeRuntimeConsumerListSchema,
   meta: z.object({
     nodeErrors: z.array(ControlPlaneNodeFleetErrorSchema).default([]),
     nodeStates: z.array(ControlPlaneNodeFleetStateSchema).default([]),
@@ -129,7 +131,7 @@ export function createControlPlaneNodeAdminApi(transport: ControlPlaneClientTran
       return transport.request(`/api/node-runtimes${query}`, NodeRuntimesPayloadSchema, { signal: options.signal });
     },
     listRuntimes(nodeId: string, signal?: AbortSignal) {
-      return requestData(runtimePath(nodeId), z.array(NodeRuntimeSchema), { signal });
+      return requestData(runtimePath(nodeId), NodeRuntimeConsumerListSchema, { signal });
     },
     createRuntime(nodeId: string, input: unknown) {
       return requestData(runtimePath(nodeId), NodeRuntimeSchema, jsonRequest("POST", input));

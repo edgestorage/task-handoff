@@ -11,36 +11,11 @@ import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/manag
 import { LEGACY_WORKSPACE_GIT_ENV, WORKSPACE_GIT_ENV } from "@task-handoff/protocol/workspace-git";
 import { packagedDockerBootstrapAssetsDir } from "./bootstrap-assets.ts";
 import { INSTANCE_PRIVATE_CONFIG_FILE_NAME } from "../instances/private-config-store.ts";
+import type { ExecutorContext, ExecutorStartResult, RuntimeLiveness } from "./contracts.ts";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
-
-export type ExecutorContext = {
-  project: Project;
-  image: InstanceImageSnapshot;
-  node: Node;
-  runtime: NodeRuntime;
-  instance: ControlledInstance;
-  nodeAgentUrl?: string;
-  modelEnv?: Record<string, string>;
-  privateConfigPath?: string;
-  gitWorkspaceProvisioning?: GitWorkspaceProvisioningInput;
-  completeGitWorkspaceProvisioning?: () => void;
-  signal?: AbortSignal;
-};
-
-export type ExecutorStartResult = {
-  status?: ControlledInstance["status"];
-  health?: ControlledInstance["health"];
-  connectionStatus?: ControlledInstance["connectionStatus"];
-  agentStatus?: ControlledInstance["agentStatus"];
-  targetStatus?: ControlledInstance["targetStatus"];
-  uiAccessStatus?: ControlledInstance["uiAccessStatus"];
-  target?: Partial<ControlledInstance["target"]>;
-  workspace?: Partial<ControlledInstance["workspace"]>;
-  runtime?: Partial<ControlledInstance["runtime"]>;
-};
-
-export type RuntimeLiveness = "running" | "stopped" | "absent" | "unknown";
+// 共享契约定义在 ./contracts.ts；这里保留同名 re-export，调用点无需改动。
+export type { ExecutorContext, ExecutorStartResult, RuntimeLiveness } from "./contracts.ts";
 
 export type NodeRuntimeExecutor = {
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
@@ -1296,7 +1271,7 @@ function appendDockerEnv(args: string[], key: string, value: string) {
   args.push("-e", `${key}=${value}`);
 }
 
-type WorkspaceGitSource = {
+export type WorkspaceGitSource = {
   url: string;
   ref: { type: "branch" | "tag"; name: string } | { type: "commit"; commit: string };
   clone?: { depth?: number; submodules?: boolean; lfs?: boolean };
@@ -1307,7 +1282,7 @@ type WorkspaceGitSource = {
  * as empty strings so the container environment is fully declared by the node
  * agent and image build metadata cannot leak in as checkout input.
  */
-function workspaceGitEnvironmentEntries(source: WorkspaceGitSource, options: { legacy: boolean }): Array<[string, string]> {
+export function workspaceGitEnvironmentEntries(source: WorkspaceGitSource, options: { legacy: boolean }): Array<[string, string]> {
   const refName = source.ref.type === "commit" ? "" : source.ref.name;
   const commit = source.ref.type === "commit" ? source.ref.commit : "";
   const depth = source.clone?.depth ? String(source.clone.depth) : "";
