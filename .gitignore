@@ -24,6 +24,7 @@ docs/*
 !docs/mobile-control-plane-future-changes.md
 !docs/mobile-control-plane-operations.md
 !docs/mobile-control-plane-security.md
+!docs/wsl-runtime.md
 knowledge
 AGENTS.md
 AGENTS.local.md
