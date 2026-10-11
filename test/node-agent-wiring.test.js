@@ -132,6 +132,12 @@ test("localhost adapter forwards supervised process exits to its recovery callba
 
 test("localhost adapter keeps the macOS Git broker socket below the Unix socket path limit", (t) => {
   const longMacTemporaryDirectory = "/var/folders/fn/d8yvkv5s14j7zxw15lg6x1rw0000gn/T";
+  // The production darwin root is /private/tmp, which only exists on macOS. On other
+  // hosts exercise the same shortening behaviour against a portable short root so the
+  // platform simulation stays runnable on Linux CI.
+  const portableRoot = process.platform === "darwin" ? "/private/tmp" : fs.mkdtempSync(path.join(os.tmpdir(), "th-git-root-"));
+  if (portableRoot !== "/private/tmp") t.after(() => fs.rmSync(portableRoot, { recursive: true, force: true }));
+  const expectedRoot = process.platform === "darwin" ? "/private/tmp" : portableRoot;
   const { endpoint, directory } = createLocalIpcTempEndpoint({
     scope: "th-git",
     key: "inst_a9d717a9fef24c93a7d6",
@@ -139,10 +145,11 @@ test("localhost adapter keeps the macOS Git broker socket below the Unix socket 
     fileName: "broker.sock",
     platform: "darwin",
     temporaryDirectory: longMacTemporaryDirectory,
+    ...(process.platform === "darwin" ? {} : { rootDir: portableRoot }),
   });
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  assert.match(directory, /^\/private\/tmp\/th-git-[a-f0-9]{12}-[a-zA-Z0-9]{6}$/);
+  assert.match(directory, new RegExp(`^${expectedRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/th-git-[a-f0-9]{12}-[a-zA-Z0-9]{6}$`));
   assert.equal(path.basename(endpoint.path), "broker.sock");
   assert.ok(endpoint.path.length < 104, `expected a short macOS Unix socket path, received ${endpoint.path.length} characters`);
 });
