@@ -202,6 +202,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # npm Trusted Publishing (OIDC): the token is minted from this job's
+      # identity, so the workflow must not authenticate with secrets.NPM_TOKEN.
+      id-token: write
     env:
       GH_REPO: ${{ github.repository }}
     steps:
@@ -251,7 +254,6 @@ jobs:
 
       - name: Publish or verify immutable npm packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ needs.runtime-packages.outputs.npm_tag }}
           RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
         shell: bash
@@ -286,7 +288,6 @@ jobs:
       - name: Keep prereleases out of the latest dist-tag
         if: needs.runtime-packages.outputs.npm_tag != 'latest'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
         shell: bash
         run: |
