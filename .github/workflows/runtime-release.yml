@@ -195,8 +195,73 @@ jobs:
           path: release/npm
           if-no-files-found: error
 
+  # The WSL base template rides the runtime release chain (add-wsl-runtime 10.1/10.2). The tool
+  # baseline is the public task-handoff-images base layer, pinned by commit so distro tooling cannot
+  # drift; the result ships as an ordinary release asset instead of a hand-uploaded rootfs. Bump the
+  # pin deliberately (or override with the repository variable) when the base layer changes.
+  wsl-base-template:
+    name: WSL base template (linux-x64)
+    needs: runtime-packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out the image base layer
+        uses: actions/checkout@v7
+        with:
+          repository: edgestorage/task-handoff-images
+          ref: ${{ vars.TASK_HANDOFF_WSL_BASE_IMAGES_REF || '7370170211a989378a3bcdeea280e32a678559f2' }}
+          path: images
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build the base layer rootfs
+        working-directory: images
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --target runtime-core -t task-handoff-wsl-base:ci -f Dockerfile .
+          container="$(docker create --platform linux/amd64 task-handoff-wsl-base:ci)"
+          docker export "$container" -o "$GITHUB_WORKSPACE/wsl-build/rootfs.tar"
+          docker rm "$container"
+          mkdir -p "$GITHUB_WORKSPACE/wsl-build/rootfs"
+          tar -xf "$GITHUB_WORKSPACE/wsl-build/rootfs.tar" -C "$GITHUB_WORKSPACE/wsl-build/rootfs"
+
+      - name: Package the versioned template
+        run: |
+          set -euo pipefail
+          version="${{ needs.runtime-packages.outputs.version }}"
+          images_sha="$(git -C images rev-parse HEAD)"
+          # The packager only needs `tar`; keep the install out of the monorepo workspace.
+          tools="$GITHUB_WORKSPACE/wsl-build/tools"
+          mkdir -p "$tools"
+          (cd "$tools" && npm init -y >/dev/null && npm install --no-audit --no-fund --no-save tar@7 >/dev/null)
+          cp source/scripts/build-wsl-base-template.mjs "$tools/"
+          node "$tools/build-wsl-base-template.mjs" build \
+            --rootfs "$GITHUB_WORKSPACE/wsl-build/rootfs" \
+            --version "$version" \
+            --arch x64 \
+            --out "$GITHUB_WORKSPACE/wsl-build/out"
+          {
+            echo "### WSL base template"
+            echo ""
+            echo "- version: \`$version\`"
+            echo "- tool baseline: \`edgestorage/task-handoff-images@$images_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -l "$GITHUB_WORKSPACE/wsl-build/out"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wsl-base-template-${{ needs.runtime-packages.outputs.version }}
+          path: ${{ github.workspace }}/wsl-build/out/*
+          if-no-files-found: error
+
   publish:
-    needs: [controlled-instance-artifact, runtime-packages]
+    needs: [controlled-instance-artifact, runtime-packages, wsl-base-template]
     if: github.event_name == 'push' || inputs.publish_npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -217,6 +282,11 @@ jobs:
         with:
           name: task-handoff-runtime-packages-${{ needs.runtime-packages.outputs.version }}
           path: release/npm
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: wsl-base-template-${{ needs.runtime-packages.outputs.version }}
+          path: release/runtime-artifacts
 
       - uses: actions/setup-node@v7
         with:
