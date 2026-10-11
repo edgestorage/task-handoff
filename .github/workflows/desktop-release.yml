@@ -351,10 +351,13 @@ jobs:
           fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
+            # The desktop release owns the user-facing update assets: a concurrent Runtime Package
+            # Release may have created the same tag as a draft, and a draft is invisible to the
+            # updater and anonymous downloads. Always land this release as published.
             if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-              gh release edit "$GITHUB_REF_NAME" --prerelease --notes-file release-notes.md
+              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --notes-file release-notes.md
             else
-              gh release edit "$GITHUB_REF_NAME" --prerelease=false --notes-file release-notes.md
+              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --notes-file release-notes.md
             fi
           else
             gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --notes-file release-notes.md --title "TaskHandoff $GITHUB_REF_NAME" "${prerelease_flag[@]}"
