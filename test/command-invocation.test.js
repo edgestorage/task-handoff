@@ -1,0 +1,238 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+
+const {
+  commandInvocation,
+  isCommandInterpreterShim,
+  quoteCommandInterpreterArgument,
+  resolveCommandExecutable,
+} = require("../packages/core/src/core/command-invocation.ts");
+const { resolveExecutable } = require("../packages/core/src/core/executable-resolver.ts");
+
+function shimDirectory(t, entries) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  for (const entry of entries) {
+    fs.writeFileSync(path.join(bin, entry), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  return bin;
+}
+
+// Windows paths are case-insensitive, and the resolver probes PATHEXT entries
+// in their declared case. On a case-insensitive host (like the macOS runner
+// used for the win32-shaped tests) that surfaces as `.CMD` even when the file
+// on disk is `.cmd`, so compare win32 paths case-insensitively.
+function assertSameWin32Path(actual, expected) {
+  assert.equal(actual.toLowerCase(), expected.toLowerCase());
+}
+
+test("leaves a POSIX executable untouched", (t) => {
+  const bin = shimDirectory(t, ["codex"]);
+  const invocation = commandInvocation("codex", ["exec", "--json"], {
+    env: { PATH: bin },
+  });
+  assert.equal(invocation.executable, path.join(bin, "codex"));
+  assert.deepEqual(invocation.args, ["exec", "--json"]);
+  assert.equal(invocation.interpreterWrapped, false);
+  // Only win32 shims need an interpreter brought into reach.
+  assert.deepEqual(invocation.env, { PATH: bin });
+});
+
+test("wraps a win32 .cmd shim through ComSpec with call", (t) => {
+  const bin = shimDirectory(t, ["opencode.cmd"]);
+  const invocation = commandInvocation("opencode", ["serve", "--port=1234"], {
+    env: { PATH: bin, ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    platform: "win32",
+  });
+  assert.equal(invocation.interpreterWrapped, true);
+  assert.equal(invocation.executable, "C:\\Windows\\System32\\cmd.exe");
+  assert.deepEqual(invocation.args.slice(0, 4), ["/d", "/s", "/c", "call"]);
+  assert.equal(path.dirname(invocation.args[4]), bin);
+  assert.equal(path.basename(invocation.args[4]).toLowerCase(), "opencode.cmd");
+  assert.deepEqual(invocation.args.slice(5), ["serve", "--port=1234"]);
+});
+
+test("wraps a win32 .bat shim and defaults to cmd.exe without ComSpec", (t) => {
+  const bin = shimDirectory(t, ["legacy.bat"]);
+  const invocation = commandInvocation("legacy", ["--flag"], { env: { PATH: bin, PATHEXT: ".BAT" }, platform: "win32" });
+  assert.equal(invocation.executable, "cmd.exe");
+  assert.deepEqual(invocation.args[0], "/d");
+  assert.equal(path.dirname(invocation.args[4]), bin);
+  assert.equal(path.basename(invocation.args[4]).toLowerCase(), "legacy.bat");
+});
+
+test("does not wrap a win32 .exe", (t) => {
+  const bin = shimDirectory(t, ["codex.exe"]);
+  const invocation = commandInvocation("codex", ["app-server"], { env: { PATH: bin, ComSpec: "cmd.exe" }, platform: "win32" });
+  assert.equal(invocation.interpreterWrapped, false);
+  assert.equal(path.dirname(invocation.executable), bin);
+  assert.equal(path.basename(invocation.executable).toLowerCase(), "codex.exe");
+  assert.deepEqual(invocation.args, ["app-server"]);
+});
+
+test("quotes arguments that cmd.exe would otherwise re-parse", () => {
+  assert.equal(quoteCommandInterpreterArgument("plain"), "plain");
+  assert.equal(quoteCommandInterpreterArgument(""), '""');
+  assert.equal(quoteCommandInterpreterArgument("a b"), '"a b"');
+  assert.equal(quoteCommandInterpreterArgument("a&b"), '"a&b"');
+  assert.equal(quoteCommandInterpreterArgument("a|b"), '"a|b"');
+  assert.equal(quoteCommandInterpreterArgument("a>b<c"), '"a>b<c"');
+  assert.equal(quoteCommandInterpreterArgument("a(b)c"), '"a(b)c"');
+  assert.equal(quoteCommandInterpreterArgument('say "hi"'), '"say \\"hi\\""');
+});
+
+test("rejects arguments cmd.exe cannot pass through safely", () => {
+  assert.throws(() => quoteCommandInterpreterArgument("100%"), (error) => error.code === "COMMAND_ARGUMENT_UNSUPPORTED");
+  assert.throws(() => quoteCommandInterpreterArgument("line\nbreak"), (error) => error.code === "COMMAND_ARGUMENT_INVALID");
+  assert.throws(() => quoteCommandInterpreterArgument("nul\0byte"), (error) => error.code === "COMMAND_ARGUMENT_INVALID");
+});
+
+test("probing and launching share one resolution so success implies launchable", (t) => {
+  const bin = shimDirectory(t, ["opencode.cmd"]);
+  const env = { PATH: bin, ComSpec: "cmd.exe" };
+  const options = { env, platform: "win32" };
+
+  const probed = resolveCommandExecutable("opencode", options);
+  const invocation = commandInvocation("opencode", ["run"], options);
+  assert.equal(probed, invocation.args[4]);
+  assert.equal(isCommandInterpreterShim(probed, "win32"), true);
+
+  const missing = { PATH: path.join(path.dirname(bin), "empty") };
+  assert.equal(resolveCommandExecutable("opencode", { env: missing, platform: "win32" }), undefined);
+  const fallback = commandInvocation("opencode", ["run"], { env: missing, platform: "win32" });
+  assert.equal(fallback.interpreterWrapped, false);
+  assert.equal(fallback.executable, "opencode");
+});
+
+test("merges resolver environment additions into the invocation env", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-nvm-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nvmBin = path.join(root, "nvm", "versions", "node", "v24.1.0", "bin");
+  fs.mkdirSync(nvmBin, { recursive: true });
+  fs.writeFileSync(path.join(nvmBin, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  const invocation = commandInvocation("codex", [], {
+    env: { PATH: "/missing", NVM_DIR: path.join(root, "nvm") },
+    homeDir: root,
+  });
+  assert.equal(invocation.executable, path.join(nvmBin, "codex"));
+  assert.equal(invocation.env.NVM_BIN, nvmBin);
+  assert.equal(invocation.env.PATH, `${nvmBin}${path.delimiter}/missing`);
+});
+
+test("only opts into the win32 command-shim fallback when asked", () => {
+  const missing = { PATH: "/task-handoff/definitely-missing", ComSpec: "C:\\Windows\\System32\\cmd.exe" };
+  const options = { env: missing, platform: "win32", win32ShimWhenUnresolved: true };
+
+  const fallback = commandInvocation("npm", ["install", "--global"], options);
+  assert.equal(fallback.interpreterWrapped, true);
+  assert.equal(fallback.executable, "C:\\Windows\\System32\\cmd.exe");
+  assert.deepEqual(fallback.args, ["/d", "/s", "/c", "call", "npm.cmd", "install", "--global"]);
+
+  // A name that already carries an extension is never guessed at, and POSIX
+  // hosts keep the unresolved command so their PATH lookup still applies.
+  assert.equal(commandInvocation("npm.exe", [], options).interpreterWrapped, false);
+  assert.equal(commandInvocation("npm", [], { ...options, platform: "linux" }).executable, "npm");
+  assert.equal(commandInvocation("npm", [], { env: missing, platform: "win32" }).executable, "npm");
+});
+
+test("resolves a win32 npm global shim that the process PATH omits", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-npm-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roaming = path.join(root, "Roaming");
+  const npmBin = path.join(roaming, "npm");
+  fs.mkdirSync(npmBin, { recursive: true });
+  fs.writeFileSync(path.join(npmBin, "codex.cmd"), "@echo off\r\n", { mode: 0o755 });
+
+  const env = { PATH: "/missing", APPDATA: roaming, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
+  const options = { env, platform: "win32" };
+
+  assertSameWin32Path(resolveCommandExecutable("codex", options), path.join(npmBin, "codex.cmd"));
+
+  const invocation = commandInvocation("codex", ["--version"], options);
+  assert.equal(invocation.interpreterWrapped, true);
+  assertSameWin32Path(invocation.args[4], path.join(npmBin, "codex.cmd"));
+  assert.equal(invocation.env.PATH, `${npmBin}${path.delimiter}/missing`);
+});
+
+test("searches npm global directories last and honors NPM_CONFIG_PREFIX", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-npm-prefix-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pathBin = path.join(root, "bin");
+  const prefixBin = path.join(root, "prefix", "bin");
+  fs.mkdirSync(pathBin, { recursive: true });
+  fs.mkdirSync(prefixBin, { recursive: true });
+  for (const directory of [pathBin, prefixBin]) {
+    fs.writeFileSync(path.join(directory, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  const prefix = path.join(root, "prefix");
+
+  const onPath = resolveExecutable("codex", { env: { PATH: pathBin, NPM_CONFIG_PREFIX: prefix }, homeDir: root, platform: "linux" });
+  assert.equal(onPath.resolver, "path");
+
+  const inPrefix = resolveExecutable("codex", { env: { PATH: "/missing", NPM_CONFIG_PREFIX: prefix }, homeDir: root, platform: "linux" });
+  assert.equal(inPrefix.resolver, "npm-global");
+  assert.equal(inPrefix.executable, path.join(prefixBin, "codex"));
+  assert.equal(inPrefix.env.PATH, `${prefixBin}${path.delimiter}/missing`);
+});
+
+function win32ShimFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-invocation-node-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const npmBin = path.join(root, "Roaming", "npm");
+  const preferredNodeBin = path.join(root, "ProgramFiles", "nodejs");
+  const fallbackNodeBin = path.join(root, "elsewhere");
+  for (const directory of [npmBin, preferredNodeBin, fallbackNodeBin]) fs.mkdirSync(directory, { recursive: true });
+  // An npm shim is a batch file that shells out to a bare `node`, so a fixture
+  // that starts one has to ship an interpreter the way npm's own directory does.
+  fs.writeFileSync(path.join(npmBin, "codex.cmd"), "@echo off\r\nnode \"%~dp0node_modules\\codex.js\" %*\r\n", { mode: 0o755 });
+  for (const directory of [preferredNodeBin, fallbackNodeBin]) {
+    fs.writeFileSync(path.join(directory, "node.exe"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  return { npmBin, preferredNodeBin, fallbackNodeBin };
+}
+
+test("finds the interpreter a win32 npm shim needs when PATH cannot reach one", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  const env = { PATH: npmBin, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
+
+  const invocation = commandInvocation("codex", ["app-server"], {
+    env,
+    platform: "win32",
+    nodeRuntimeDirectories: [preferredNodeBin, fallbackNodeBin],
+  });
+  assert.equal(invocation.interpreterWrapped, true);
+  assertSameWin32Path(invocation.args[4], path.join(npmBin, "codex.cmd"));
+  // The runtime goes first because the shim's bare `node` is the name that
+  // failed to resolve in the first place.
+  assert.equal(invocation.env.PATH, `${preferredNodeBin}${path.delimiter}${npmBin}`);
+  assert.equal(invocation.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+  assert.equal(invocation.env.ComSpec, env.ComSpec);
+});
+
+test("keeps the shim PATH when it can already start node", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  const env = { PATH: `${preferredNodeBin}${path.delimiter}${npmBin}`, PATHEXT: ".CMD" };
+
+  const invocation = commandInvocation("codex", [], { env, platform: "win32", nodeRuntimeDirectories: [fallbackNodeBin] });
+  assert.equal(invocation.interpreterWrapped, true);
+  assert.equal(invocation.env.PATH, env.PATH);
+  assert.equal(invocation.env.PATHEXT, ".CMD");
+});
+
+test("leaves a shim environment alone when no Node runtime can be found", (t) => {
+  const { npmBin, preferredNodeBin, fallbackNodeBin } = win32ShimFixture(t);
+  fs.rmSync(preferredNodeBin, { recursive: true, force: true });
+  fs.rmSync(fallbackNodeBin, { recursive: true, force: true });
+  const env = { PATH: npmBin, ComSpec: "cmd.exe" };
+
+  const invocation = commandInvocation("codex", [], { env, platform: "win32", nodeRuntimeDirectories: [fallbackNodeBin, preferredNodeBin] });
+  assert.equal(invocation.interpreterWrapped, true);
+  assert.equal(invocation.env.PATH, npmBin);
+  assert.equal(invocation.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+});

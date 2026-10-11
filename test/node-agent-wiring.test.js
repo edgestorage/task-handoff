@@ -8,7 +8,8 @@ const Fastify = require("fastify");
 
 const { registerInstanceLifecycleRoutes } = require("../packages/control-plane/src/node-agent/instances/lifecycle-routes.ts");
 const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
-const { LocalhostRuntimeAdapter, localGitBrokerDirectoryPrefix } = require("../packages/control-plane/src/node-agent/runtimes/local-adapter.ts");
+const { LocalhostRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/local-adapter.ts");
+const { createLocalIpcTempEndpoint } = require("../packages/core/src/core/local-ipc-endpoint.ts");
 const { ControlledInstanceSchema, NodeAgentInstanceLifecycleResultSchema } = require("../packages/protocol/src/control-plane.ts");
 const { EventEmitter } = require("node:events");
 
@@ -129,17 +130,21 @@ test("localhost adapter forwards supervised process exits to its recovery callba
   assert.deepEqual(exits, [{ instanceId: "inst_adapter_exit", pid: 701, code: 17, signal: null }]);
 });
 
-test("localhost adapter keeps the macOS Git broker socket below the Unix socket path limit", () => {
+test("localhost adapter keeps the macOS Git broker socket below the Unix socket path limit", (t) => {
   const longMacTemporaryDirectory = "/var/folders/fn/d8yvkv5s14j7zxw15lg6x1rw0000gn/T";
-  const prefix = localGitBrokerDirectoryPrefix(
-    "inst_a9d717a9fef24c93a7d6",
-    "darwin",
-    longMacTemporaryDirectory,
-  );
-  const socketPath = path.join(`${prefix}${"x".repeat(6)}`, "broker.sock");
+  const { endpoint, directory } = createLocalIpcTempEndpoint({
+    scope: "th-git",
+    key: "inst_a9d717a9fef24c93a7d6",
+    keyHashLength: 12,
+    fileName: "broker.sock",
+    platform: "darwin",
+    temporaryDirectory: longMacTemporaryDirectory,
+  });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  assert.match(prefix, /^\/private\/tmp\/th-git-[a-f0-9]{12}-$/);
-  assert.ok(socketPath.length < 104, `expected a short macOS Unix socket path, received ${socketPath.length} characters`);
+  assert.match(directory, /^\/private\/tmp\/th-git-[a-f0-9]{12}-[a-zA-Z0-9]{6}$/);
+  assert.equal(path.basename(endpoint.path), "broker.sock");
+  assert.ok(endpoint.path.length < 104, `expected a short macOS Unix socket path, received ${endpoint.path.length} characters`);
 });
 
 test("localhost adapter materializes its private Codex home before startup readiness", async (t) => {

@@ -15,6 +15,8 @@ export type ExecutableResolverOptions = {
   homeDir?: string;
   nvmDir?: string;
   homebrewBinDirectories?: string[];
+  npmGlobalBinDirectories?: string[];
+  nodeRuntimeDirectories?: string[];
   resolvers?: ExecutableResolver[];
 };
 
@@ -26,6 +28,7 @@ export type ExecutableResolverContext = {
   homeDir: string;
   nvmDir: string;
   homebrewBinDirectories: string[];
+  npmGlobalBinDirectories: string[];
   explicitPath: boolean;
 };
 
@@ -35,8 +38,10 @@ export type ExecutableResolver = {
 };
 
 function executableCandidate(candidate: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv) {
+  // Windows matches PATHEXT case-insensitively, so probing the lowercase form
+  // as well keeps npm's lowercase `.cmd` shims resolvable everywhere.
   const extensions = platform === "win32"
-    ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    ? [...new Set((env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).flatMap((extension) => [extension, extension.toLowerCase()]))]
     : [""];
   for (const extension of extensions) {
     const resolved = platform === "win32" && !path.extname(candidate) ? `${candidate}${extension}` : candidate;
@@ -174,10 +179,23 @@ export const homebrewExecutableResolver: ExecutableResolver = {
   },
 };
 
+export const npmGlobalExecutableResolver: ExecutableResolver = {
+  id: "npm-global",
+  resolve(context) {
+    if (context.explicitPath) return undefined;
+    for (const directory of context.npmGlobalBinDirectories) {
+      const resolution = resolutionFromBin(this.id, directory, context);
+      if (resolution) return resolution;
+    }
+    return undefined;
+  },
+};
+
 export const DEFAULT_EXECUTABLE_RESOLVERS: ExecutableResolver[] = [
   pathExecutableResolver,
   nvmExecutableResolver,
   homebrewExecutableResolver,
+  npmGlobalExecutableResolver,
 ];
 
 function defaultHomebrewBinDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv) {
@@ -185,6 +203,97 @@ function defaultHomebrewBinDirectories(platform: NodeJS.Platform, env: NodeJS.Pr
   if (platform === "darwin") directories.push("/opt/homebrew/bin", "/usr/local/bin");
   if (platform === "linux") directories.push("/home/linuxbrew/.linuxbrew/bin");
   return [...new Set(directories)];
+}
+
+/**
+ * The directory npm installs global CLI shims into. Windows keeps it under the
+ * roaming profile, which is only reachable through the user PATH, so anything
+ * that runs without the user PATH (services, installers, GUI apps started from
+ * a stale environment) resolves `npm` but not the tools npm installed.
+ */
+function defaultNpmGlobalBinDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, homeDir: string) {
+  const directories: string[] = [];
+  const prefix = env.NPM_CONFIG_PREFIX || env.npm_config_prefix;
+  if (prefix) directories.push(platform === "win32" ? prefix : path.join(prefix, "bin"));
+  if (platform === "win32") {
+    const roaming = env.APPDATA || (homeDir ? path.join(homeDir, "AppData", "Roaming") : undefined);
+    if (roaming) directories.push(path.join(roaming, "npm"));
+  }
+  return [...new Set(directories)];
+}
+
+/**
+ * Where a win32 Node runtime lives. `node.exe` ships as a plain PE image in a
+ * directory that only the Node installer, nvm-windows, or a package-manager
+ * shim adds to `PATH`, so a process that starts without the user PATH has no
+ * way to reach it. `NVM_SYMLINK`, `NVM_HOME`, and `TASK_HANDOFF_NODE` are
+ * honored first because they are explicit rather than guessed.
+ */
+function defaultNodeRuntimeDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, homeDir: string) {
+  if (platform !== "win32") return [];
+  const localAppData = env.LOCALAPPDATA || (homeDir ? path.join(homeDir, "AppData", "Local") : undefined);
+  const roaming = env.APPDATA || (homeDir ? path.join(homeDir, "AppData", "Roaming") : undefined);
+  // A process that is already the win32 Node runtime knows exactly where its
+  // siblings are, which is the only reliable answer for a CLI or a service.
+  const runningNode = path.basename(process.execPath).toLowerCase() === "node.exe" ? path.dirname(process.execPath) : undefined;
+  const candidates = [
+    env.NVM_SYMLINK,
+    env.NVM_HOME,
+    env.TASK_HANDOFF_NODE ? path.dirname(env.TASK_HANDOFF_NODE) : undefined,
+    runningNode,
+    env.ProgramFiles ? path.join(env.ProgramFiles, "nodejs") : undefined,
+    env["ProgramFiles(x86)"] ? path.join(env["ProgramFiles(x86)"], "nodejs") : undefined,
+    localAppData ? path.join(localAppData, "Programs", "nodejs") : undefined,
+    localAppData ? path.join(localAppData, "Volta", "bin") : undefined,
+    localAppData ? path.join(localAppData, "Microsoft", "WinGet", "Links") : undefined,
+    homeDir ? path.join(homeDir, "scoop", "shims") : undefined,
+    roaming ? path.join(roaming, "nvm") : undefined,
+  ];
+  return [...new Set(candidates.filter((directory): directory is string => Boolean(directory)))];
+}
+
+/** The first directory that actually holds a `node` the current PATHEXT can start. */
+function nodeRuntimeDirectory(env: NodeJS.ProcessEnv, options: ExecutableResolverOptions = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32") return undefined;
+  const homeDir = options.homeDir || os.homedir();
+  const directories = options.nodeRuntimeDirectories || defaultNodeRuntimeDirectories(platform, env, homeDir);
+  for (const directory of directories) {
+    if (executableCandidate(path.join(directory, "node"), platform, env)) return directory;
+  }
+  return undefined;
+}
+
+function nodeRuntimeOnPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
+  for (const directory of (env.PATH || "").split(path.delimiter).filter(Boolean)) {
+    if (executableCandidate(path.join(directory, "node"), platform, env)) return true;
+  }
+  return false;
+}
+
+const WINDOWS_COMMAND_INTERPRETER_PATHEXT = ".COM;.EXE;.BAT;.CMD";
+
+/**
+ * The environment a win32 `.cmd`/`.bat` shim needs from whoever starts it.
+ *
+ * `cmd.exe` resolves the shim's own commands through PATHEXT, and every npm
+ * shim — `npm`, `npx`, and each globally installed CLI — is a batch file that
+ * shells out to the bare name `node`. An environment captured before Node was
+ * installed (a GUI app started from a stale session, a service) therefore
+ * resolves the shim but not its interpreter, and the launch dies with
+ * `'"node"' is not recognized` before the shim can do anything.
+ */
+export function commandInterpreterShimEnvironment(env: NodeJS.ProcessEnv, options: ExecutableResolverOptions = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32") return env;
+  const prepared = env.PATHEXT ? env : { ...env, PATHEXT: WINDOWS_COMMAND_INTERPRETER_PATHEXT };
+  if (nodeRuntimeOnPath(prepared, platform)) return prepared;
+  const directory = nodeRuntimeDirectory(prepared, { ...options, platform });
+  if (!directory) return prepared;
+  return {
+    ...prepared,
+    PATH: prepared.PATH ? `${directory}${path.delimiter}${prepared.PATH}` : directory,
+  };
 }
 
 export function resolveExecutable(command: string, options: ExecutableResolverOptions = {}) {
@@ -199,6 +308,7 @@ export function resolveExecutable(command: string, options: ExecutableResolverOp
     homeDir,
     nvmDir: options.nvmDir || env.NVM_DIR || path.join(homeDir, ".nvm"),
     homebrewBinDirectories: options.homebrewBinDirectories || defaultHomebrewBinDirectories(platform, env),
+    npmGlobalBinDirectories: options.npmGlobalBinDirectories || defaultNpmGlobalBinDirectories(platform, env, homeDir),
     explicitPath: path.isAbsolute(command) || command.includes("/") || command.includes("\\"),
   };
   for (const resolver of options.resolvers || DEFAULT_EXECUTABLE_RESOLVERS) {

@@ -1,7 +1,9 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
+import { commandInvocation } from "@task-handoff/core/core/command-invocation";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
@@ -20,13 +22,18 @@ import { codexThreadConfig } from "../story-tool-config.ts";
 
 export type CodexAppServerClientMode =
   | { type: "stdio"; command: string }
-  | { type: "unix"; command: string; socketPath: string };
+  | { type: "unix"; command: string; socketPath: string }
+  | { type: "ws"; command: string; endpoint: string; tokenFile?: string };
 
 export type CodexAppServerClientOptions = {
   command?: string;
   requestTimeoutMs?: number;
   resolveVersion?: (command: string) => Promise<string>;
   socketPath?: string;
+  /** Loopback websocket endpoint of an app-server started with `--listen ws://`. */
+  endpoint?: string;
+  /** Capability token file the websocket endpoint authenticates with. */
+  tokenFile?: string;
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   // Fires once per resolved artifact version so owners can re-publish capability
@@ -121,12 +128,34 @@ export function parseCodexCliVersion(output: string) {
   return output.match(CODEX_VERSION_PATTERN)?.[1];
 }
 
+/**
+ * Every place that probes or starts the Codex CLI resolves it through
+ * `commandInvocation` first. On Windows an npm-installed CLI is a `.cmd` shim:
+ * `CreateProcess` cannot load it and a bare token search never finds it, so a
+ * direct `spawn`/`execFile` of `codex` fails outright instead of running the
+ * CLI. Non-shim commands keep the caller's command so PATH lookup and the
+ * existing process contracts are unchanged.
+ */
+export function codexCliInvocation(
+  command: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+) {
+  const invocation = commandInvocation(command, args, options);
+  return invocation.interpreterWrapped
+    ? { executable: invocation.executable, args: invocation.args, env: invocation.env, interpreterWrapped: true as const }
+    : { executable: command, args: [...args], env: options.env || process.env, interpreterWrapped: false as const };
+}
+
 export function resolveCodexCliVersion(command: string) {
+  const launch = codexCliInvocation(command, ["--version"]);
   return new Promise<string>((resolve, reject) => {
-    execFile(command, ["--version"], {
-      env: process.env,
+    execFile(launch.executable, launch.args, {
+      env: launch.env,
       encoding: "utf8",
-      timeout: 2_000,
+      // A win32 shim launches cmd.exe plus the Node launcher before the native
+      // binary runs, which needs more headroom than the binary alone.
+      timeout: launch.interpreterWrapped ? 10_000 : 2_000,
       maxBuffer: 64 * 1024,
     }, (error, stdout, stderr) => {
       const output = `${stdout || ""}\n${stderr || ""}`;
@@ -210,9 +239,11 @@ export class CodexAppServerClient extends EventEmitter {
       || process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND
       || process.env.TASK_HANDOFF_CODEX_COMMAND
       || "codex";
-    this.mode = options.socketPath
-      ? { type: "unix", command, socketPath: options.socketPath }
-      : { type: "stdio", command };
+    this.mode = options.endpoint
+      ? { type: "ws", command, endpoint: options.endpoint, ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}) }
+      : options.socketPath
+        ? { type: "unix", command, socketPath: options.socketPath }
+        : { type: "stdio", command };
     this.requestTimeoutMs = options.requestTimeoutMs
       || Number(process.env.TASK_HANDOFF_CODEX_APP_SERVER_TIMEOUT_MS)
       || 15_000;
@@ -241,9 +272,14 @@ export class CodexAppServerClient extends EventEmitter {
       await this.startUnixSocket(this.mode.command, this.mode.socketPath);
       return;
     }
-    const child = spawn(this.mode.command, ["app-server", "--listen", "stdio://"], {
+    if (this.mode.type === "ws") {
+      await this.startWebSocket(this.mode.endpoint, this.mode.tokenFile);
+      return;
+    }
+    const launch = codexCliInvocation(this.mode.command, ["app-server", "--listen", "stdio://"]);
+    const child = spawn(launch.executable, launch.args, {
       stdio: ["pipe", "pipe", "ignore"],
-      env: process.env,
+      env: launch.env,
     });
     this.child = child;
     child.stdout.on("data", (chunk) => this.onData(chunk));
@@ -856,9 +892,10 @@ export class CodexAppServerClient extends EventEmitter {
 
   private startUnixSocket(command: string, socketPath: string) {
     return new Promise<void>((resolve, reject) => {
-      const proxy = spawn(command, ["app-server", "proxy", "--sock", socketPath], {
+      const launch = codexCliInvocation(command, ["app-server", "proxy", "--sock", socketPath]);
+      const proxy = spawn(launch.executable, launch.args, {
         stdio: ["pipe", "pipe", "ignore"],
-        env: process.env,
+        env: launch.env,
       });
       this.proxyChild = proxy;
       const socket = new WebSocket("ws://localhost/rpc", {
@@ -917,6 +954,66 @@ export class CodexAppServerClient extends EventEmitter {
           .then(() => resolve())
           .catch((error) => {
             socket.close();
+            reject(error);
+          });
+      });
+    });
+  }
+
+  /**
+   * Loopback websocket endpoint. There is no CLI bridge to spawn here: the
+   * app-server itself listens on the loopback port, guarded by a capability
+   * token only this user can read.
+   */
+  private startWebSocket(endpoint: string, tokenFile?: string) {
+    return new Promise<void>((resolve, reject) => {
+      let token = "";
+      if (tokenFile) {
+        try {
+          token = fs.readFileSync(tokenFile, "utf8").trim();
+        } catch (error) {
+          reject(new Error(`Codex app-server token file is unreadable: ${tokenFile}`));
+          return;
+        }
+      }
+      const socket = new WebSocket(`${endpoint}/rpc`, {
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+        perMessageDeflate: false,
+      });
+      this.socket = socket;
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.socket = undefined;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+        reject(error);
+      };
+      socket.once("error", fail);
+      socket.once("unexpected-response", (_request, response) => {
+        fail(new Error(`Codex app-server websocket rejected the connection: http ${response.statusCode}.`));
+      });
+      socket.once("open", () => {
+        settled = true;
+        socket.off("error", fail);
+        socket.on("message", (data) => this.handleLine(data.toString()));
+        socket.once("close", () => {
+          this.socket = undefined;
+          for (const [id, request] of this.pending) {
+            clearTimeout(request.timer);
+            request.reject(new Error("Codex app-server disconnected."));
+            this.pending.delete(id);
+          }
+          this.emit("disconnect");
+        });
+        this.initialize()
+          .then(() => resolve())
+          .catch((error) => {
+            this.stop();
             reject(error);
           });
       });

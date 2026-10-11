@@ -147,6 +147,7 @@ for (const [name, definition] of selected) {
     name: definition.packageName,
     version: process.env.TASK_HANDOFF_VERSION || rootPackage.version,
     description: definition.description,
+    repository: rootPackage.repository,
     license: rootPackage.license,
     homepage: rootPackage.homepage,
     repository: rootPackage.repository,

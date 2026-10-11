@@ -37,8 +37,8 @@ test("wsl runtime stays unpublished by default and on non-Windows hosts", (t) =>
 
   const windows = stateFor(dir, "win32");
   assert.equal(windows.nodeRuntimes.get(WSL_RUNTIME_ID), undefined);
-  // 既有行为不变：win32 上仍然不发布进程式 Local Runtime。
-  assert.equal(windows.nodeRuntimes.get("runtime_local_host"), undefined);
+  // feature/windows 起 win32 也发布进程式 Local Runtime；WSL 仍需节点级开关。
+  assert.ok(windows.nodeRuntimes.get("runtime_local_host"));
   assert.ok(windows.nodeRuntimes.get("runtime_local_docker"));
 
   const linuxDir = dataDir();
