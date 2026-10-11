@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveExecutable, type ExecutableResolverOptions } from "./executable-resolver.ts";
+import { commandInterpreterShimEnvironment, resolveExecutable, type ExecutableResolverOptions } from "./executable-resolver.ts";
 
 /**
  * A resolved, directly spawnable command invocation.
@@ -87,10 +87,13 @@ export function commandInvocation(
   if (!isCommandInterpreterShim(resolvedExecutable, platform)) {
     return { executable: resolvedExecutable, args: [...args], env, interpreterWrapped: false };
   }
+  // The shim runs inside cmd.exe, which resolves its own commands through
+  // PATHEXT and reaches `node` through PATH rather than through our resolver.
+  const shimEnv = commandInterpreterShimEnvironment(env, { ...options, env, platform });
   return {
-    executable: env.ComSpec || "cmd.exe",
+    executable: shimEnv.ComSpec || "cmd.exe",
     args: ["/d", "/s", "/c", "call", resolvedExecutable, ...args.map((arg) => quoteCommandInterpreterArgument(arg))],
-    env,
+    env: shimEnv,
     interpreterWrapped: true,
   };
 }
