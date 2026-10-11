@@ -43,7 +43,10 @@ node scripts/build-wsl-base-template.mjs build \
 ```
 
 The build script enables the systemd boot model (`/etc/wsl.conf`), records observed tool versions for
-diagnostics, and emits `wsl-base-<version>-<arch>.tar.gz` plus a manifest. The Node Agent locates the
+diagnostics, and emits `wsl-base-<version>-<arch>.tar.gz` plus a manifest. The rootfs must ship a
+systemd init: the `task-handoff-images` base layer is a Docker workload with no init, so the release
+workflow installs `systemd systemd-sysv dbus` into the exported rootfs before packaging (the build
+script fails the build when either `systemd` or `systemctl` is missing). The Node Agent locates the
 template via `TASK_HANDOFF_WSL_BASE_TEMPLATE_DIR`, the bundled `runtime-artifacts/wsl-base` directory,
 or the `runtime-artifacts` root, verifies its SHA-256, and caches it at the node level for reuse
 across instances. The template provides Node, Python, git, and the base system dependencies; it never

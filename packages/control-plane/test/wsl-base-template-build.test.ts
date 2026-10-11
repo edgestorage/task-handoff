@@ -8,11 +8,13 @@ import { WslBaseTemplateManifestSchema } from "../src/node-agent/runtimes/wsl-pr
 
 function syntheticRootfs() {
   const rootfs = fs.mkdtempSync(path.join(os.tmpdir(), "th-wsl-rootfs-"));
-  for (const directory of ["etc", "usr/bin", "proc", "sys", "dev", "run", "opt"]) {
+  for (const directory of ["etc", "usr/bin", "lib/systemd", "proc", "sys", "dev", "run", "opt"]) {
     fs.mkdirSync(path.join(rootfs, directory), { recursive: true });
   }
   fs.writeFileSync(path.join(rootfs, "etc/os-release"), "ID=ubuntu\n");
   fs.writeFileSync(path.join(rootfs, "usr/bin/node"), "#!/bin/sh\necho v22\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(rootfs, "lib/systemd/systemd"), "", { mode: 0o755 });
+  fs.writeFileSync(path.join(rootfs, "usr/bin/systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   fs.writeFileSync(path.join(rootfs, "proc/mounts"), "should not be packaged\n");
   return rootfs;
 }
@@ -30,6 +32,15 @@ test("buildWslBaseTemplate enables systemd and emits a schema-valid versioned ma
   assert.equal(parsed.arch, "x64");
   assert.equal(parsed.platform, "linux");
   assert.equal(fs.readFileSync(path.join(rootfs, "etc/wsl.conf"), "utf8"), "[boot]\nsystemd=true\n");
+});
+
+test("buildWslBaseTemplate rejects a rootfs without a systemd init", async () => {
+  const rootfs = syntheticRootfs();
+  fs.rmSync(path.join(rootfs, "lib/systemd/systemd"));
+  await assert.rejects(
+    buildWslBaseTemplate({ rootfs, version: "1.2.3", arch: "x64", outputDir: fs.mkdtempSync(path.join(os.tmpdir(), "th-wsl-nosystemd-")) }),
+    { message: /missing a systemd init/ },
+  );
 });
 
 test("buildWslBaseTemplate is deterministic for a fixed createdAt and excludes mounted roots", async () => {

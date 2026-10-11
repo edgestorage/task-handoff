@@ -76,6 +76,31 @@ async function ensureSystemdBoot(rootfs) {
   await fs.writeFile(wslConf, `${existing}${addition}`, "utf8");
 }
 
+// `[boot] systemd=true` only works when the rootfs actually carries an init: the Docker base layer
+// (`node:*-bookworm-slim`) has none, so `systemctl daemon-reload` would fail with exit code 127
+// inside the distro. Verify the boot model and the CLI the lifecycle calls are both present.
+const SYSTEMD_INIT_CANDIDATES = ["lib/systemd/systemd", "usr/lib/systemd/systemd", "sbin/init"];
+const SYSTEMDCTL_CANDIDATES = ["usr/bin/systemctl", "bin/systemctl"];
+
+async function anyPathExists(rootfs, candidates) {
+  for (const candidate of candidates) {
+    if (await pathExists(path.join(rootfs, candidate))) return true;
+  }
+  return false;
+}
+
+async function assertSystemdBootable(rootfs) {
+  const missing = [];
+  if (!await anyPathExists(rootfs, SYSTEMD_INIT_CANDIDATES)) missing.push("a systemd init (/lib/systemd/systemd)");
+  if (!await anyPathExists(rootfs, SYSTEMDCTL_CANDIDATES)) missing.push("systemctl (/usr/bin/systemctl)");
+  if (missing.length) {
+    throw new Error(
+      `WSL base template rootfs is missing ${missing.join(" and ")}. The task-handoff-images base layer ships no init, `
+      + "so the template build must install `systemd` + `systemd-sysv` (and `dbus`) into the exported rootfs before packaging.",
+    );
+  }
+}
+
 function tarFilter(relativePath) {
   const [root] = relativePath.split("/");
   return !EXCLUDED_ROOTS.includes(root);
@@ -91,6 +116,7 @@ export async function buildWslBaseTemplate({ rootfs, version, arch, outputDir, n
   const outDir = path.resolve(outputDir);
   await fs.mkdir(outDir, { recursive: true });
   await ensureSystemdBoot(resolvedRootfs);
+  await assertSystemdBootable(resolvedRootfs);
 
   const stem = `${BASE_TEMPLATE_ID}-${version}-${targetArch}`;
   const archivePath = path.join(outDir, `${stem}.tar.gz`);
