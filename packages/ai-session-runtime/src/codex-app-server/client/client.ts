@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
+import { commandInvocation } from "@task-handoff/core/core/command-invocation";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
@@ -127,12 +128,34 @@ export function parseCodexCliVersion(output: string) {
   return output.match(CODEX_VERSION_PATTERN)?.[1];
 }
 
+/**
+ * Every place that probes or starts the Codex CLI resolves it through
+ * `commandInvocation` first. On Windows an npm-installed CLI is a `.cmd` shim:
+ * `CreateProcess` cannot load it and a bare token search never finds it, so a
+ * direct `spawn`/`execFile` of `codex` fails outright instead of running the
+ * CLI. Non-shim commands keep the caller's command so PATH lookup and the
+ * existing process contracts are unchanged.
+ */
+export function codexCliInvocation(
+  command: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+) {
+  const invocation = commandInvocation(command, args, options);
+  return invocation.interpreterWrapped
+    ? { executable: invocation.executable, args: invocation.args, env: invocation.env, interpreterWrapped: true as const }
+    : { executable: command, args: [...args], env: options.env || process.env, interpreterWrapped: false as const };
+}
+
 export function resolveCodexCliVersion(command: string) {
+  const launch = codexCliInvocation(command, ["--version"]);
   return new Promise<string>((resolve, reject) => {
-    execFile(command, ["--version"], {
-      env: process.env,
+    execFile(launch.executable, launch.args, {
+      env: launch.env,
       encoding: "utf8",
-      timeout: 2_000,
+      // A win32 shim launches cmd.exe plus the Node launcher before the native
+      // binary runs, which needs more headroom than the binary alone.
+      timeout: launch.interpreterWrapped ? 10_000 : 2_000,
       maxBuffer: 64 * 1024,
     }, (error, stdout, stderr) => {
       const output = `${stdout || ""}\n${stderr || ""}`;
@@ -253,9 +276,10 @@ export class CodexAppServerClient extends EventEmitter {
       await this.startWebSocket(this.mode.endpoint, this.mode.tokenFile);
       return;
     }
-    const child = spawn(this.mode.command, ["app-server", "--listen", "stdio://"], {
+    const launch = codexCliInvocation(this.mode.command, ["app-server", "--listen", "stdio://"]);
+    const child = spawn(launch.executable, launch.args, {
       stdio: ["pipe", "pipe", "ignore"],
-      env: process.env,
+      env: launch.env,
     });
     this.child = child;
     child.stdout.on("data", (chunk) => this.onData(chunk));
@@ -868,9 +892,10 @@ export class CodexAppServerClient extends EventEmitter {
 
   private startUnixSocket(command: string, socketPath: string) {
     return new Promise<void>((resolve, reject) => {
-      const proxy = spawn(command, ["app-server", "proxy", "--sock", socketPath], {
+      const launch = codexCliInvocation(command, ["app-server", "proxy", "--sock", socketPath]);
+      const proxy = spawn(launch.executable, launch.args, {
         stdio: ["pipe", "pipe", "ignore"],
-        env: process.env,
+        env: launch.env,
       });
       this.proxyChild = proxy;
       const socket = new WebSocket("ws://localhost/rpc", {

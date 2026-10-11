@@ -18,6 +18,7 @@ require.extensions[".ts"] = (module, filename) => {
 
 const {
   CodexAppServerClient,
+  codexCliInvocation,
   codexThreadSettingsUpdateSupported,
   parseCodexCliVersion,
 } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
@@ -34,6 +35,31 @@ test("gates thread settings updates at the verified Codex 0.133.0 boundary", () 
   assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.132.9"), false);
   assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.133.0"), true);
   assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.144.1"), true);
+});
+
+test("probes the Codex CLI through the win32 shim wrapper", (t) => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-invocation-"));
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(bin, "codex.cmd"), "@echo off\r\n", { mode: 0o755 });
+
+  const launch = codexCliInvocation("codex", ["--version"], {
+    env: { PATH: bin, ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    platform: "win32",
+  });
+  assert.equal(launch.interpreterWrapped, true);
+  assert.equal(launch.executable, "C:\\Windows\\System32\\cmd.exe");
+  assert.deepEqual(launch.args.slice(0, 4), ["/d", "/s", "/c", "call"]);
+  assert.equal(path.basename(launch.args[4]).toLowerCase(), "codex.cmd");
+  assert.deepEqual(launch.args.slice(5), ["--version"]);
+});
+
+test("launches the caller's command unchanged when no shim wrapper is needed", () => {
+  const env = { PATH: "/nonexistent" };
+  const launch = codexCliInvocation("codex", ["app-server", "--listen", "stdio://"], { env, platform: "linux" });
+  assert.equal(launch.interpreterWrapped, false);
+  assert.equal(launch.executable, "codex");
+  assert.deepEqual(launch.args, ["app-server", "--listen", "stdio://"]);
+  assert.equal(launch.env, env);
 });
 
 test("initializes Codex app-server with the TUI identity and detected version", async () => {
