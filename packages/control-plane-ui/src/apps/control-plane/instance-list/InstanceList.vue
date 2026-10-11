@@ -120,6 +120,7 @@
                       <span v-if="instance.runtime" class="instance-runtime-icon" role="img" :aria-label="instanceRuntimeLabel(instance)" :title="instanceRuntimeLabel(instance)">
                         <Laptop v-if="instance.runtime.type === 'local'" :size="14" aria-hidden="true" />
                         <Container v-else-if="instance.runtime.type === 'docker'" :size="14" aria-hidden="true" />
+                        <Terminal v-else-if="instance.runtime.type === 'wsl'" :size="14" aria-hidden="true" />
                         <Boxes v-else :size="14" aria-hidden="true" />
                       </span>
                       <strong>{{ instanceDisplayName(instance) }}</strong>
@@ -178,7 +179,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Search, Server } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Search, Server, Terminal } from "@lucide/vue";
 import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";

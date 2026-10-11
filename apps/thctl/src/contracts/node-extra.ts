@@ -3,6 +3,7 @@ import {
   NodeJoinInviteStatusSchema,
   NodeLocalFolderSchema,
   NodeFolderTreeEntrySchema,
+  NodeRuntimeConsumerListSchema,
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
@@ -133,7 +134,8 @@ export const nodeExtraLeaves: readonly CliLeaf[] = [
     summary: "List the container runtimes a node exposes",
     args: [nodeIdArg],
     input: inputOf({ nodeId: z.string() }),
-    output: z.array(NodeRuntimeSchema),
+    // Consumer-side tolerance for additive runtime types (add-wsl-runtime D11).
+    output: NodeRuntimeConsumerListSchema,
     handler: nodeRuntimesList,
   },
   {

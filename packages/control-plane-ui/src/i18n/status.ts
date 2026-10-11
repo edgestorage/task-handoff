@@ -74,6 +74,7 @@ export const runtimeTypeKeys: Record<string, string> = {
   docker: "settings.nodeDetail.runtimeDocker",
   kubernetes: "settings.nodeDetail.runtimeKubernetes",
   local: "settings.nodeDetail.runtimeLocal",
+  wsl: "settings.nodeDetail.runtimeWsl",
 };
 
 export const runtimeAccessStrategyKeys: Record<string, string> = {

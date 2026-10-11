@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import type { NodeAgentStorePaths } from "./paths.ts";
-import { nodeAgentMigrations } from "./migrations.ts";
+import { nodeAgentMigrations, type NodeAgentMigration } from "./migrations.ts";
 import { migrateLegacyP0State } from "./legacy-migration.ts";
 
 const NODE_AGENT_APPLICATION_ID = 0x54484e41;
@@ -62,22 +62,62 @@ function migrate(client: DatabaseSync) {
   client.exec(`CREATE TABLE IF NOT EXISTS na_migration_ledger (
     id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL
   )`);
-  client.exec("BEGIN IMMEDIATE");
+  const find = client.prepare("SELECT checksum FROM na_migration_ledger WHERE id = ?");
+  const insert = client.prepare("INSERT INTO na_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
+  const record = (migration: NodeAgentMigration) => insert.run(
+    migration.id,
+    migration.checksum,
+    new Date().toISOString(),
+    JSON.stringify({ domain: "node-agent-story" }),
+  );
+
+  let inTransaction = false;
+  const begin = () => { client.exec("BEGIN IMMEDIATE"); inTransaction = true; };
+  const commit = () => { client.exec("COMMIT"); inTransaction = false; };
+  const rollbackQuietly = () => {
+    if (!inTransaction) return;
+    try {
+      client.exec("ROLLBACK");
+    } finally {
+      inTransaction = false;
+    }
+  };
+
+  begin();
   try {
-    const find = client.prepare("SELECT checksum FROM na_migration_ledger WHERE id = ?");
-    const insert = client.prepare("INSERT INTO na_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
     for (const migration of nodeAgentMigrations) {
       const current = find.get(migration.id) as { checksum: string } | undefined;
       if (current) {
         if (current.checksum !== migration.checksum) throw new Error(`Migration checksum mismatch for ${migration.id}.`);
         continue;
       }
+      if (migration.foreignKeysOff) {
+        // 表重建必须完全关闭 FK：SQLite 在事务内不接受 `PRAGMA foreign_keys`，而
+        // `ON DELETE RESTRICT` 不能被 defer，因此 DROP/RENAME 只能在 FK 关闭时执行。
+        commit();
+        client.exec("PRAGMA foreign_keys = OFF");
+        if (Number(scalar(client, "PRAGMA foreign_keys")) !== 0) {
+          throw new Error(`foreign_keys could not be disabled for migration ${migration.id}.`);
+        }
+        begin();
+        client.exec(migration.sql);
+        const violations = client.prepare("PRAGMA foreign_key_check").all();
+        if (violations.length) throw new Error(`Migration ${migration.id} left ${violations.length} foreign key violation(s).`);
+        record(migration);
+        commit();
+        client.exec("PRAGMA foreign_keys = ON");
+        if (Number(scalar(client, "PRAGMA foreign_keys")) !== 1) {
+          throw new Error(`foreign_keys could not be restored after migration ${migration.id}.`);
+        }
+        begin();
+        continue;
+      }
       client.exec(migration.sql);
-      insert.run(migration.id, migration.checksum, new Date().toISOString(), JSON.stringify({ domain: "node-agent-story" }));
+      record(migration);
     }
-    client.exec("COMMIT");
+    commit();
   } catch (error) {
-    client.exec("ROLLBACK");
+    rollbackQuietly();
     throw error;
   }
 }

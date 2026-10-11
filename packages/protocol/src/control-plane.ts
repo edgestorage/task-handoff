@@ -2277,12 +2277,28 @@ export function sanitizeStoredNode(input: unknown, onWarning?: (warning: { field
   };
 }
 
+/**
+ * Known runtime types. This set is the write-side contract of `NodeRuntimeSchema` and the
+ * filter used by consumer-side parsing (see `NodeRuntimeConsumerListSchema`).
+ *
+ * `wsl` (add-wsl-runtime) is one distro per instance on a Windows host.
+ */
+export const NODE_RUNTIME_TYPES = ["docker", "kubernetes", "local", "wsl"] as const;
+
+export const NodeRuntimeTypeSchema = z.enum(NODE_RUNTIME_TYPES);
+
+export type NodeRuntimeType = z.infer<typeof NodeRuntimeTypeSchema>;
+
+export function nodeRuntimeTypeIsKnown(type: unknown): type is NodeRuntimeType {
+  return typeof type === "string" && (NODE_RUNTIME_TYPES as readonly string[]).includes(type);
+}
+
 export const NodeRuntimeSchema = z
   .object({
     id: IdSchema,
     nodeId: IdSchema,
     name: z.string().trim().min(1).max(160),
-    type: z.enum(["docker", "kubernetes", "local"]),
+    type: NodeRuntimeTypeSchema,
     status: z.enum(["unknown", "online", "offline", "degraded"]).default("unknown"),
     accessStrategy: z.enum(["node-proxy", "direct-port", "kubernetes-ingress", "kubernetes-port-forward"]).default("node-proxy"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
@@ -2292,8 +2308,57 @@ export const NodeRuntimeSchema = z
   })
   .strict();
 
+/**
+ * Consumer-side parsing for `/runtimes` (add-wsl-runtime D11).
+ *
+ * Node Agent 写入侧是 additively 扩展的：新 Node Agent 会发布旧消费者不认识的 runtime 类型。
+ * 旧消费者若直接 `z.array(NodeRuntimeSchema)` 解析，会因未知枚举值让整表失败，连 Docker/Local
+ * 一并不可见。这里先按已知值过滤，再对剩余条目严格解析；未知类型只被忽略，已知类型的字段
+ * 校验仍然严格。
+ */
+export const NodeRuntimeConsumerListSchema = z.array(z.unknown())
+  .transform((entries) => entries.filter((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return nodeRuntimeTypeIsKnown((entry as Record<string, unknown>).type);
+  }))
+  .pipe(z.array(NodeRuntimeSchema));
+
+export const WSL_RUNTIME_ARTIFACT_KIND = "bundled-runtime-artifact" as const;
+
+export const NodeRuntimeIsolationSchema = z.enum(["none", "process", "distro", "container", "vm"]);
+
+/**
+ * WSL runtime capability shape and normalization defaults (add-wsl-runtime D3/D4/D9).
+ *
+ * 写入侧由 Node Agent 用同一个 schema 归一化后发布；读取侧缺失即取这些默认值：
+ * 不选镜像、隔离级别为 distro、不参与容器生命周期、Git 与 local-folder 供给能力按开关声明。
+ * `baseProfiles` 是可选 base/profile 选择能力，缺失时归一为单一 base（空数组）且不选镜像。
+ */
+export const NodeRuntimeWslCapabilitiesSchema = z.object({
+  requiresImage: z.boolean().default(false),
+  artifactKind: z.enum(["none", WSL_RUNTIME_ARTIFACT_KIND]).default(WSL_RUNTIME_ARTIFACT_KIND),
+  isolation: NodeRuntimeIsolationSchema.default("distro"),
+  supportsControlledInstanceApi: z.boolean().default(true),
+  supportsContainerLifecycle: z.boolean().default(false),
+  supportsAppSessions: z.boolean().default(true),
+  supportsHostSessions: z.boolean().default(false),
+  workspaceProvisioning: z.object({
+    git: z.boolean().default(false),
+    localFolder: z.boolean().default(false),
+  }).strip().default({ git: false, localFolder: false }),
+  baseProfiles: z.array(z.string().trim().min(1).max(120)).max(8).default([]),
+}).strip();
+
+export type NodeRuntimeWslCapabilities = z.infer<typeof NodeRuntimeWslCapabilitiesSchema>;
+
+export function normalizeWslRuntimeCapabilities(capabilities: Record<string, unknown> = {}): NodeRuntimeWslCapabilities {
+  return NodeRuntimeWslCapabilitiesSchema.parse(capabilities);
+}
+
 export const InstanceResourceMetricsSchema = z.object({
   instanceId: IdSchema,
+  // Only the Docker runtime publishes instance resource metrics. WSL deliberately
+  // publishes none (add-wsl-runtime 2.5) instead of mislabeling them as `docker`.
   runtimeKind: z.literal("docker"),
   state: z.enum(["pending", "available", "stopped", "unavailable"]),
   sampledAt: TimestampSchema,

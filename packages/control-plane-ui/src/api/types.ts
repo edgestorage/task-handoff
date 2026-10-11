@@ -578,7 +578,8 @@ export type NodeRuntime = {
   id: string;
   nodeId: string;
   name: string;
-  type: "docker" | "kubernetes" | "local";
+  // Mirrors the protocol runtime types (add-wsl-runtime D1).
+  type: "docker" | "kubernetes" | "local" | "wsl";
   status: "unknown" | "online" | "offline" | "degraded";
   accessStrategy: "node-proxy" | "direct-port" | "kubernetes-ingress" | "kubernetes-port-forward";
   capabilities: Record<string, unknown>;

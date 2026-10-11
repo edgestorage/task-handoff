@@ -27,7 +27,7 @@ export const runtimes = sqliteTable("na_runtimes", {
   id: text("id").primaryKey(),
   nodeId: text("node_id").notNull().references(() => nodeIdentity.nodeId, { onDelete: "restrict", onUpdate: "cascade" }),
   name: text("name").notNull(),
-  type: text("type", { enum: ["docker", "kubernetes", "local"] }).notNull(),
+  type: text("type", { enum: ["docker", "kubernetes", "local", "wsl"] }).notNull(),
   status: text("status", { enum: ["unknown", "online", "offline", "degraded"] }).notNull(),
   accessStrategy: text("access_strategy").notNull(),
   capabilities: text("capabilities_json", { mode: "json" }).$type<JsonObject>().notNull(),

@@ -12,7 +12,11 @@ const RESTORABLE_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>([
   "running",
 ]);
 
-function isDockerRestoreCandidate(instance: ControlledInstance, runtime: { status: string }) {
+/**
+ * 受管 runtime（Docker/WSL）的还原候选：runtime 可用、实例处于可还原状态、且没有未完成的
+ * 镜像/Git 供给前置。WSL 与 Docker 复用同一判据（WSL 无镜像供给，条件天然满足）。
+ */
+function isManagedRestoreCandidate(instance: ControlledInstance, runtime: { status: string }) {
   if (runtime.status === "offline") return false;
   return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
     && !instanceImagePreparationPending(instance)
@@ -187,8 +191,8 @@ export class NodeAgentRecoverySupervisor {
         return (RESTORABLE_INSTANCE_STATUSES.has(instance.status) || instance.status === "failed")
           && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
       }
-      if (runtime.type !== "docker") return false;
-      return isDockerRestoreCandidate(instance, runtime);
+      if (runtime.type !== "docker" && runtime.type !== "wsl") return false;
+      return isManagedRestoreCandidate(instance, runtime);
     });
 
     await Promise.all(candidates.map(async (instance) => {
@@ -250,8 +254,8 @@ export class NodeAgentRecoverySupervisor {
       return (RESTORABLE_INSTANCE_STATUSES.has(instance.status) || instance.status === "failed")
         && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
     }
-    if (runtime.type !== "docker") return false;
-    return isDockerRestoreCandidate(instance, runtime);
+    if (runtime.type !== "docker" && runtime.type !== "wsl") return false;
+    return isManagedRestoreCandidate(instance, runtime);
   }
 
   async recoverManagedInstances() {

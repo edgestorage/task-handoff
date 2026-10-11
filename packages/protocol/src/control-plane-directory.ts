@@ -208,7 +208,9 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   runtime: z.object({
     id: IdSchema,
     name: z.string().trim().min(1).max(160).optional(),
-    type: z.enum(["docker", "kubernetes", "local"]).optional(),
+    // Consumer-side tolerance (add-wsl-runtime D11): 目录投影只发布 runtime 标识，
+    // 新增 runtime 类型不得让整条目录项解析失败。
+    type: z.string().trim().min(1).max(60).optional(),
   }).strict(),
   workspace: z.object({
     status: z.enum(["unknown", "pending", "ready", "failed"]),

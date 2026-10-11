@@ -11,7 +11,7 @@ export type AiSessionMentionContext = {
   sessionId: string;
   provider: string;
   cwd: string;
-  runtimeType?: "docker" | "kubernetes" | "local";
+  runtimeType?: "docker" | "kubernetes" | "local" | "wsl";
   runtimePathAccess?: "desktop-local";
 };
 

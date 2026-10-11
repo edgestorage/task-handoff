@@ -676,7 +676,8 @@ function assertAiSessionAttachmentsWithinLimit(attachments: AiSessionMessageAtta
 
 export function assertAiSessionRuntimePathSupport(
   attachments: AiSessionMessageAttachment[],
-  runtimeType: "docker" | "kubernetes" | "local",
+  // Non-enum runtime types fail closed until their runtime declares support (add-wsl-runtime 2.3).
+  runtimeType: string,
 ) {
   if (!attachments.some((attachment) => attachment.source.type === "runtime-path") || runtimeType === "local") return;
   const error = new Error("Runtime path attachments are currently available only for Local Runtime instances.");

@@ -79,6 +79,8 @@ Chat and AI Session state form a cross-layer path: the Control Plane owns chat c
 
 Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on supported non-Windows nodes for one controlled instance per host user. Runtime capabilities and adapters keep the same model extensible to Kubernetes without creating a separate UI flow.
 
+On Windows nodes, a WSL2 runtime provides a distro-per-instance execution domain alongside Docker and Local. It reuses the same instance API, Node Agent proxy, managed runtime artifact, Git/local-folder workspaces, and recovery path, and is gated behind an explicit node switch for safe rolling upgrades. See [docs/wsl-runtime.md](docs/wsl-runtime.md) for isolation boundaries, the base template build step, and the keep-alive model.
+
 ### Environment templates
 
 An environment template is a node-local Docker image created from an existing instance with `docker commit`. Registry images and environment templates are peer environment sources in the instance creation flow. Workspace selection remains independent, so either source can be combined with a Git project or a local-folder workspace.

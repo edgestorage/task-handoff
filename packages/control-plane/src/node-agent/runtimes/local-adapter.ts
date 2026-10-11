@@ -11,9 +11,9 @@ import {
   type CommandRunner,
   type ExecutorContext,
   type ExecutorStartResult,
+  type RuntimeLiveness,
 } from "./docker.ts";
-import type { RuntimeAdapter } from "./adapters.ts";
-import type { RuntimeLiveness } from "./docker.ts";
+import type { RuntimeAdapter } from "./contracts.ts";
 import {
   LOCAL_PROCESS_NONCE_LABEL,
   LocalProcessSupervisor,
@@ -86,6 +86,8 @@ async function commandVersion(runCommand: CommandRunner, command: string) {
 }
 
 export class LocalhostRuntimeAdapter implements RuntimeAdapter {
+  /** 进程式 Local 实例由本 adapter 持有：Node Agent 退出时必须停止（D5）。 */
+  readonly stopOnShutdown = true;
   private readonly runCommand: CommandRunner;
   private readonly paths: NodeAgentStorePaths;
   private readonly nodeAgentUrl: () => string;
