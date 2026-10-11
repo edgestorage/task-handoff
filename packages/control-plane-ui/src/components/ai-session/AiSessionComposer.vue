@@ -187,6 +187,11 @@ const displayedModelName = computed(() => displayedModelOption.value?.modelName
   || displayedModelSelection.value?.modelName
   || (props.reasoningEffortEnabled ? t("sessions.composer.reasoningEffort") : undefined)
   || t("sessions.composer.modelSelectionUnavailable"));
+// The trigger may fall back to the reasoning-effort label when nothing is
+// selected, but the summary keeps the model row truthful.
+const displayedModelLabel = computed(() => displayedModelOption.value?.modelName
+  || displayedModelSelection.value?.modelName
+  || t("sessions.composer.selectionNotSet"));
 const displayedProviderName = computed(() => displayedModelOption.value?.providerName
   || t("sessions.composer.selectionNotSet"));
 const modelTriggerEl = ref<HTMLButtonElement>();
@@ -200,6 +205,9 @@ const modelMenuDisabled = computed(() => Boolean(
   || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
 ));
 const noModelAvailable = computed(() => modelOptions.value.length === 0 && !props.reasoningEffortEnabled);
+// An empty catalog with nothing selected means no model is configured, so the
+// menu offers a direct path to the instance model settings.
+const noModelConfigured = computed(() => modelOptions.value.length === 0 && !displayedModelSelection.value);
 // An empty catalog means "no model configured" only when the provider actually
 // offers in-session model selection; otherwise the session keeps its current
 // model and the trigger stays read-only.
@@ -578,6 +586,9 @@ function handleInputKeydown(event: KeyboardEvent) {
   }
   if (props.submitHidden) return;
   event.preventDefault();
+  if (editing.value ? !props.modelValue.trim() : !hasDraft.value) {
+    return;
+  }
   submit();
 }
 
@@ -1026,7 +1037,7 @@ watch(() => props.busy, (busy) => {
                   </div>
                   <div>
                     <dt>{{ t("sessions.composer.model") }}</dt>
-                    <dd>{{ displayedModelName }}</dd>
+                    <dd>{{ displayedModelLabel }}</dd>
                   </div>
                   <div>
                     <dt>{{ t("sessions.composer.reasoningEffort") }}</dt>
@@ -1042,10 +1053,12 @@ watch(() => props.busy, (busy) => {
             :model-selection="displayedModelSelection"
             :reasoning-effort="reasoningEffort"
             :reasoning-effort-enabled="reasoningEffortEnabled"
+            :no-model-configured="noModelConfigured"
             side="top"
             align="end"
             @select-model="emit('selectModel', $event)"
             @select-reasoning-effort="emit('selectReasoningEffort', $event)"
+            @open-model-settings="emit('openModelSettings')"
           />
         </DropdownMenu>
         <button

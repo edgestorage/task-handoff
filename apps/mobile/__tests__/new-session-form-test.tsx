@@ -6,7 +6,7 @@ import type { ControlPlaneAiSessionSummary, ControlPlaneAiSessions } from '@task
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 import { initialAiSessionFolderId, storyAiSessionCreationDefaults } from '../src/ai-sessions/new-session-types';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
-import { modelSettingsMenuActions } from '../src/ai-sessions/SessionComposerMenus.ios';
+import { NO_MODEL_HINT_ACTION_ID, modelSettingsMenuActions } from '../src/ai-sessions/SessionComposerMenus.ios';
 import { modelGroupSubtitle } from '../src/ai-sessions/model-settings-menu';
 import { SESSION_COMPOSER_ATTACHMENT_ICON_SIZE, SESSION_COMPOSER_COLLAPSED_INPUT_RIGHT, SESSION_COMPOSER_MODEL_MAX_WIDTH, SESSION_COMPOSER_PERMISSION_HEIGHT, SESSION_COMPOSER_PERMISSION_RADIUS, SESSION_COMPOSER_TOOL_SIZE, SESSION_COMPOSER_TOOLBAR_HEIGHT, SESSION_COMPOSER_TRAILING_TOOL_GAP, sessionComposerCollapsedInputRight, sessionComposerPermissionIconSize } from '../src/ai-sessions/composer-metrics';
 import {
@@ -248,6 +248,21 @@ describe('<NewSessionForm />', () => {
       state: 'off',
       title: 'Provider Two',
     }));
+    // 移动端没有模型设置：空目录时菜单第一项提示回控制面板配置。
+    expect(modelSettingsMenuActions({
+      formatModelGroupSummary,
+      imageColor: '#aeaeb2',
+      selectedImageColor: '#0a84ff',
+      modelGroups: [],
+      provider: 'codex',
+      reasoningEffort: 'medium',
+      reasoningEnabled: true,
+      reasoningTitle: 'Reasoning effort',
+      noModelHint: { label: '未配置模型 · 请在控制面板中设置', description: '移动端不提供模型设置。', dismissLabel: '确认' },
+    })).toEqual([
+      expect.objectContaining({ id: NO_MODEL_HINT_ACTION_ID, image: 'gearshape', title: '未配置模型 · 请在控制面板中设置' }),
+      expect.objectContaining({ displayInline: true, title: '', subactions: [expect.objectContaining({ subtitle: 'medium', title: 'Reasoning effort' })] }),
+    ]);
     expect(newSessionKeyboardAvoidingBehavior('ios')).toBe('padding');
     expect(newSessionKeyboardAvoidingBehavior('android')).toBeUndefined();
     const scroll = screen.getByTestId('new-session-scroll');

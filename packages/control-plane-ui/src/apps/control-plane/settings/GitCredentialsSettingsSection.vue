@@ -182,11 +182,26 @@
                 <p v-else class="git-ssh-key-hint">{{ t("settings.gitCredentials.sshKeyStorageHint") }}</p>
               </div>
               <label><span>{{ t("settings.gitCredentials.passphrase") }}</span><ControlPlaneInput v-model="draft.passphrase" type="password" autocomplete="new-password" /></label>
-              <label>
-                <span>{{ t("settings.gitCredentials.knownHosts") }}</span>
-                <Textarea v-model="draft.knownHosts" autocomplete="off" :placeholder="editing ? t('settings.gitCredentials.keepSecret') : ''" />
-                <small class="git-ssh-key-hint">{{ t("settings.gitCredentials.knownHostsHint") }}</small>
-              </label>
+              <div class="git-known-hosts">
+                <div class="git-known-hosts-head">
+                  <span>{{ t("settings.gitCredentials.knownHosts") }}</span>
+                  <Button type="button" variant="outline" size="sm" :disabled="probingHostKeys || !draft.host.trim()" @click="fetchKnownHosts">
+                    <LoaderCircle v-if="probingHostKeys" :size="13" class="git-known-hosts-spinner" aria-hidden="true" />
+                    <ShieldCheck v-else :size="13" aria-hidden="true" />
+                    <span>{{ probingHostKeys ? t("settings.gitCredentials.knownHostsFetching") : t("settings.gitCredentials.knownHostsFetch") }}</span>
+                  </Button>
+                </div>
+                <Textarea v-model="draft.knownHosts" autocomplete="off" :placeholder="editing ? t('settings.gitCredentials.keepSecret') : t('settings.gitCredentials.knownHostsPlaceholder')" />
+                <p v-if="probeError" class="git-credentials-form-error" role="alert">{{ probeError }}</p>
+                <template v-else-if="probedHostKeys">
+                  <p class="git-ssh-key-hint">{{ t("settings.gitCredentials.knownHostsProbed", { host: probedHostKeys.host, port: probedHostKeys.port }) }}</p>
+                  <ul class="git-known-hosts-fingerprints">
+                    <li v-for="entry in probedHostKeys.entries" :key="entry.keyType"><code>{{ entry.keyType }}</code><code>{{ entry.fingerprint }}</code></li>
+                  </ul>
+                  <p class="git-ssh-key-hint">{{ t("settings.gitCredentials.knownHostsVerifyHint") }}</p>
+                </template>
+                <small v-else class="git-ssh-key-hint">{{ t("settings.gitCredentials.knownHostsHint") }}</small>
+              </div>
             </template>
           </section>
           <p v-if="formError" class="git-credentials-form-error" role="alert">{{ formError }}</p>
@@ -215,11 +230,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, Copy, FolderOpen, KeyRound, LockKeyhole, MoreHorizontal, PencilLine, Plus, Power, Search, Settings, Sparkles, Trash2, X } from "@lucide/vue";
-import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest } from "@task-handoff/protocol/managed-git-credentials";
-import { createGitCredential, deleteGitCredential, updateGitCredential, useGitCredentialsQuery } from "../../../api/queries";
+import { Check, Copy, FolderOpen, KeyRound, LoaderCircle, LockKeyhole, MoreHorizontal, PencilLine, Plus, Power, Search, Settings, ShieldCheck, Sparkles, Trash2, X } from "@lucide/vue";
+import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, GitSshHostKeyProbeResponse } from "@task-handoff/protocol/managed-git-credentials";
+import { createGitCredential, deleteGitCredential, probeGitCredentialSshHostKey, updateGitCredential, useGitCredentialsQuery } from "../../../api/queries";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
@@ -259,6 +274,14 @@ const sshKeyError = ref("");
 const keyFileInput = ref<HTMLInputElement>();
 const keyFileName = ref("");
 const keyFileDragActive = ref(false);
+const probingHostKeys = ref(false);
+const probeError = ref("");
+const probedHostKeys = ref<GitSshHostKeyProbeResponse>();
+
+watch(() => [draft.host, draft.port], () => {
+  probedHostKeys.value = undefined;
+  probeError.value = "";
+});
 
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim()) || kindFilter.value !== "all" || statusFilter.value !== "all");
 const filteredCredentials = computed(() => (credentials.data.value || []).filter((credential) => {
@@ -287,6 +310,9 @@ function resetSshKeyState() {
   sshKeyError.value = "";
   keyFileName.value = "";
   keyFileDragActive.value = false;
+  probingHostKeys.value = false;
+  probeError.value = "";
+  probedHostKeys.value = undefined;
 }
 function setSshKeyInputMode(value: unknown) {
   if (value === "generate" || value === "file" || value === "manual") sshKeyInputMode.value = value;
@@ -348,6 +374,23 @@ async function copyGeneratedPublicKey() {
     window.setTimeout(() => { publicKeyCopied.value = false; }, 2200);
   } catch {
     sshKeyError.value = t("settings.gitCredentials.sshKeyCopyFailed");
+  }
+}
+async function fetchKnownHosts() {
+  const host = draft.host.trim();
+  if (!host || probingHostKeys.value) return;
+  probingHostKeys.value = true;
+  probeError.value = "";
+  probedHostKeys.value = undefined;
+  try {
+    const port = draft.port.trim() ? Number(draft.port.trim()) : undefined;
+    const probed = await probeGitCredentialSshHostKey({ host, ...(port === undefined ? {} : { port }) });
+    draft.knownHosts = probed.knownHosts;
+    probedHostKeys.value = probed;
+  } catch (error) {
+    probeError.value = errorText(error, "knownHostsFetchFailed");
+  } finally {
+    probingHostKeys.value = false;
   }
 }
 function markFormBaseline() { formBaseline.value = JSON.stringify(draft); }
@@ -497,6 +540,15 @@ async function removeCredential() {
 .git-ssh-key-dropzone > small { color: var(--text-subtle); font-size: 11px; }
 .git-ssh-key-file-input { display: none; }
 .git-ssh-key-textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.git-known-hosts { display: grid; gap: 5px; }
+.git-known-hosts-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
+.git-known-hosts-head > span { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.git-known-hosts-fingerprints { display: grid; gap: 3px; list-style: none; margin: 0; padding: 0; }
+.git-known-hosts-fingerprints li { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
+.git-known-hosts-fingerprints code { color: var(--text-subtle); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-known-hosts-fingerprints code:first-child { color: var(--text-muted); flex: none; }
+.git-known-hosts-spinner { animation: git-known-hosts-spin 1s linear infinite; }
+@keyframes git-known-hosts-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) {
   .git-credentials-toolbar { grid-template-columns: 1fr 1fr; }
   .git-credentials-search { grid-column: 1 / -1; }
@@ -504,6 +556,7 @@ async function removeCredential() {
   .git-credential-form-grid,
   .git-scope-fields { grid-template-columns: 1fr; }
   .git-ssh-key-head { align-items: flex-start; flex-direction: column; }
+  .git-known-hosts-head { align-items: flex-start; flex-direction: column; }
   .git-ssh-key-generate-row { align-items: flex-start; flex-direction: column; }
   .git-ssh-key-modes { width: 100%; }
   .git-ssh-key-modes :deep(button) { flex: 1; justify-content: center; }

@@ -40,6 +40,9 @@ function handleInputKeydown(event: KeyboardEvent) {
     return;
   }
   event.preventDefault();
+  if (!hasDraft.value) {
+    return;
+  }
   submit();
 }
 </script>

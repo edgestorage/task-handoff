@@ -56,7 +56,11 @@ export const settings = {
     sshKeyPublicKey: "公钥", sshKeyCopy: "复制", sshKeyCopied: "已复制", sshKeyPublicKeyHint: "请现在复制此公钥并添加到 Git 服务的部署密钥或账号 SSH 密钥。公钥不会保存，保存后无法再次查看。",
     sshKeyFilePrompt: "选择或拖入私钥文件", sshKeyFileHint: "支持 id_ed25519、id_rsa 等 OpenSSH/PEM 私钥。文件仅在浏览器内读取。", sshKeyFileLoaded: "已载入 {name}", sshKeyFileEmpty: "所选文件为空。", sshKeyFileReadFailed: "无法读取所选文件。",
     sshKeyPlaceholder: "-----BEGIN OPENSSH PRIVATE KEY-----", sshKeyStorageHint: "私钥仅在保存时提交，保存后无法再读取。", sshKeyGenerateFailed: "当前浏览器无法生成密钥对，请改为导入或粘贴密钥。", sshKeyCopyFailed: "无法复制公钥。",
-    knownHostsHint: "粘贴来自 ssh-keyscan 或 known_hosts 的主机密钥条目，凭据会据此固定服务器身份。",
+    knownHostsHint: "可点击“获取主机密钥”自动读取服务器身份，或粘贴来自 ssh-keyscan 或 known_hosts 的主机密钥条目。",
+    knownHostsFetch: "获取主机密钥", knownHostsFetching: "正在获取…", knownHostsFetchFailed: "无法获取主机密钥，请检查主机与端口，或手动粘贴。",
+    knownHostsPlaceholder: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…",
+    knownHostsProbed: "已从 {host}:{port} 读取到以下主机密钥，请核对指纹：",
+    knownHostsVerifyHint: "请先与 Git 服务公布的指纹或你自己的记录核对一致，再保存；指纹不一致时不要保存。",
     edit: "编辑 / 轮换", configure: "配置", moreActions: "更多操作", enable: "启用", disable: "停用", delete: "删除", saving: "正在保存", saved: "Git 凭据已保存。", saveFailed: "无法保存 Git 凭据。", deleteFailed: "无法删除 Git 凭据。", deleteTitle: "删除 {name}？", deleteDescription: "已授权给实例的凭据不能删除，请先撤销相应实例授权。", discardTitle: "放弃未保存的更改？", discardDescription: "此 Git 凭据的更改尚未保存。", discard: "放弃更改", status: { enabled: "已启用", disabled: "已停用" },
   },
   cloud: {

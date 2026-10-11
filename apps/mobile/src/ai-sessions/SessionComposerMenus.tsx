@@ -4,7 +4,7 @@ import { Alert } from 'react-native';
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
-import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary } from './model-settings-menu';
+import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary, type ModelSettingsMenuHint } from './model-settings-menu';
 import { modelSelectionFromOption, sameModelSelection } from './model-selection';
 
 type Trigger = (onPress?: () => void) => ReactElement;
@@ -67,6 +67,7 @@ type ModelSettingsMenuProps = {
   reasoningEffort?: AiSessionReasoningEffort;
   provider?: string;
   reasoningEnabled: boolean;
+  noModelHint?: ModelSettingsMenuHint;
   children: Trigger;
   onModelChange(selection: AiSessionModelSelection): void;
   onReasoningChange(effort: AiSessionReasoningEffort): void;
@@ -75,6 +76,12 @@ type ModelSettingsMenuProps = {
 const checkedLabel = (label: string, selected: boolean) => `${selected ? '\u2713 ' : ''}${label}`;
 
 export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
+  const showNoModelHint = () => {
+    if (!props.noModelHint) return;
+    Alert.alert(props.noModelHint.label, props.noModelHint.description, [
+      { text: props.noModelHint.dismissLabel, style: 'cancel' as const },
+    ]);
+  };
   const chooseModel = (group: AiSessionModelGroup) => {
     if (group.models.length === 1) return props.onModelChange(modelSelectionFromOption(group.models[0]));
     Alert.alert(group.providerName, undefined, [
@@ -90,6 +97,7 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
     { text: props.cancelLabel, style: 'cancel' as const },
   ]);
   return props.children(props.disabled ? undefined : () => Alert.alert(props.title, undefined, [
+    ...(props.noModelHint ? [{ text: props.noModelHint.label, onPress: showNoModelHint }] : []),
     ...props.modelGroups.map((group) => ({
       text: `${group.providerName} · ${modelGroupSubtitle(group, props.modelSelection, props.formatModelGroupSummary)}`,
       onPress: () => chooseModel(group),

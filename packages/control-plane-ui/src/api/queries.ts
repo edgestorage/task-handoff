@@ -7,7 +7,7 @@ import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
-import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
+import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, GitSshHostKeyProbeResponse, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 import type { Story, StoryDecision, StoryDecisionDecideInput, StoryDecisionCancelInput } from "@task-handoff/protocol/stories";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput } from "@task-handoff/protocol/agent-definitions";
 import type { AgentOrchestrationCreateInput, AgentOrchestrationUpdateInput } from "@task-handoff/protocol/agent-orchestrations";
@@ -1046,6 +1046,10 @@ export function updateGitCredential(id: string, input: GitCredentialUpdateReques
 
 export function deleteGitCredential(id: string) {
   return deleteApiData<{ deleted: boolean }>(`git-credentials/${id}`);
+}
+
+export function probeGitCredentialSshHostKey(input: { host: string; port?: number }) {
+  return postApiData<GitSshHostKeyProbeResponse>("git-credentials/ssh-host-key-probe", input);
 }
 
 export function authorizeInstanceGitCredential(instanceId: string, credentialId: string) {
