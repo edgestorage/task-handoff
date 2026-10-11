@@ -20,6 +20,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const {
+  codexAppServerTarget,
   CodexAppServerSessionBinding,
   codexAppServerSocketPath,
 } = require("../packages/ai-session-runtime/src/codex-app-server/session/binding.ts");
@@ -36,7 +37,7 @@ test("Codex app-server binding selects a running Codex socket", () => {
 
 test("Codex app-server binding resolves only explicit thread metadata on its active socket", () => {
   const binding = new CodexAppServerSessionBinding();
-  assert.equal(binding.update([
+  assert.deepEqual(binding.update([
     {
       id: "app-one",
       appId: "codex",
@@ -53,7 +54,7 @@ test("Codex app-server binding resolves only explicit thread metadata on its act
       status: "running",
       ai: { threadIds: ["thread-other"], appServer: { socketPath: "/tmp/other.sock" } },
     },
-  ]), "/tmp/codex.sock");
+  ]), { transport: "unix", socketPath: "/tmp/codex.sock" });
 
   assert.equal(binding.command, "/opt/codex/bin/codex");
   assert.equal(binding.appSessionIdForThread("thread-active"), "app-one");
@@ -92,6 +93,47 @@ test("Codex app-server binding safely projects historical runtime values", () =>
   assert.equal(binding.socketPath, undefined);
   assert.equal(binding.command, undefined);
   assert.equal(binding.appSessionIdForThread("thread-before"), undefined);
+});
+
+test("Codex app-server binding selects the Windows websocket endpoint and keeps its thread map", () => {
+  const sessions = [
+    { id: "stopped", appId: "codex", status: "stopped", ai: { appServer: { transport: "ws", endpoint: "ws://127.0.0.1:9002", tokenFile: "/tmp/token" } } },
+    {
+      id: "codex-ws",
+      appId: "codex",
+      status: "running",
+      ai: {
+        activeThreadId: "thread-ws",
+        appServer: { transport: "ws", endpoint: "ws://127.0.0.1:9001", tokenFile: "/tmp/token", command: "codex" },
+      },
+    },
+  ];
+
+  assert.deepEqual(codexAppServerTarget(sessions), { transport: "ws", endpoint: "ws://127.0.0.1:9001", tokenFile: "/tmp/token" });
+  // A websocket endpoint has no filesystem entity, so the socket-only reader
+  // must not invent one.
+  assert.equal(codexAppServerSocketPath(sessions), undefined);
+
+  const binding = new CodexAppServerSessionBinding();
+  binding.update(sessions);
+  assert.deepEqual(binding.target, { transport: "ws", endpoint: "ws://127.0.0.1:9001", tokenFile: "/tmp/token" });
+  assert.equal(binding.socketPath, undefined);
+  assert.equal(binding.targetKey, "ws:ws://127.0.0.1:9001:/tmp/token");
+  assert.equal(binding.appSessionIdForThread("thread-ws"), "codex-ws");
+  assert.equal(binding.appSessionIdForThread("thread-unknown"), undefined);
+});
+
+test("Codex app-server binding reads a pre-transport snapshot by its endpoint shape", () => {
+  const binding = new CodexAppServerSessionBinding();
+  binding.update([
+    { id: "legacy-ws", appId: "codex", status: "running", ai: { threadIds: ["thread-legacy"], appServer: { endpoint: "ws://127.0.0.1:9003" } } },
+    { id: "legacy-unix", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/legacy.sock" } } },
+  ]);
+
+  // The first running session wins; without an explicit transport the endpoint
+  // presence decides, so a bare socket path is still unix.
+  assert.deepEqual(binding.target, { transport: "ws", endpoint: "ws://127.0.0.1:9003" });
+  assert.equal(binding.appSessionIdForThread("thread-legacy"), "legacy-ws");
 });
 
 test("Codex app-server binding tolerates snapshots without command", () => {

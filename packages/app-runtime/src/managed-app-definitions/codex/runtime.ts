@@ -1,22 +1,80 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { CodexAppServerConnectionProxy } from "../../codex-app-server-proxy";
-import { codexAppServerSocketPath } from "../../runtime-utils";
+import { CodexAppServerConnectionProxy, type CodexAppServerUpstream } from "../../codex-app-server-proxy";
+import {
+  codexAppServerSocketPath,
+  codexAppServerHealthUrl,
+  codexAppServerTokenFile,
+  codexAppServerTransport,
+  codexAppServerWsEndpoint,
+  codexAppServerWsListenArgs,
+  createCodexAppServerToken,
+  type CodexAppServerTransport,
+} from "../../runtime-utils";
 import type { AppSession } from "../../types";
 import type { ManagedAppRuntimeExtension, ManagedAppRuntimeHost, ManagedAppTtyLaunchInput } from "../types";
 import { codexStoryMcpArgs } from "./story-mcp-config";
 
 type SharedCodexAppServer = {
   status: "running";
+  transport: CodexAppServerTransport;
   command: string;
   args: string[];
-  socketPath: string;
   endpoint: string;
+  /** AF_UNIX endpoints only. */
+  socketPath?: string;
+  /** Capability token file for the websocket endpoint. */
+  tokenFile?: string;
   logPath: string;
   child: ChildProcessWithoutNullStreams;
   appSessionIds: Set<string>;
 };
+
+function codexAppServerUpstream(appServer: SharedCodexAppServer): CodexAppServerUpstream {
+  return appServer.socketPath
+    ? { transport: "unix", socketPath: appServer.socketPath }
+    : { transport: "ws", endpoint: appServer.endpoint, tokenFile: appServer.tokenFile };
+}
+
+function removeCodexAppServerArtifacts(appServer: SharedCodexAppServer) {
+  if (appServer.socketPath) fs.rmSync(appServer.socketPath, { force: true });
+  if (appServer.tokenFile) fs.rmSync(appServer.tokenFile, { force: true });
+}
+
+function codexAppServerRunning(appServer: SharedCodexAppServer) {
+  if (appServer.child.killed || appServer.child.exitCode !== null) return false;
+  // A unix listener also owns a filesystem entity, and the CLI removes it when
+  // it stops. The loopback listener has no filesystem entity, so the live child
+  // process is the only signal available.
+  return appServer.socketPath ? fs.existsSync(appServer.socketPath) : true;
+}
+
+/** Everything `acquire` needs to spawn and then wait for one app-server. */
+type CodexAppServerListenPlan =
+  | { transport: "unix"; endpoint: string; socketPath: string; listenArgs: string[] }
+  | { transport: "ws"; endpoint: string; tokenFile: string; healthUrl: string; listenArgs: string[] };
+
+function codexAppServerListenPlan(transport: CodexAppServerTransport, allocatePort: () => number, runtimeDir: string): CodexAppServerListenPlan {
+  if (transport === "unix") {
+    const socketPath = codexAppServerSocketPath(runtimeDir);
+    fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
+    fs.rmSync(socketPath, { force: true });
+    const endpoint = `unix://${socketPath}`;
+    return { transport, endpoint, socketPath, listenArgs: ["--listen", endpoint] };
+  }
+  const port = allocatePort();
+  const endpoint = codexAppServerWsEndpoint(port);
+  const tokenFile = codexAppServerTokenFile(runtimeDir);
+  fs.writeFileSync(tokenFile, createCodexAppServerToken(), { mode: 0o600 });
+  return {
+    transport,
+    endpoint,
+    tokenFile,
+    healthUrl: codexAppServerHealthUrl(port),
+    listenArgs: codexAppServerWsListenArgs(endpoint, tokenFile),
+  };
+}
 
 function disabled() {
   return ["1", "true", "yes", "on"].includes(String(process.env.TASK_HANDOFF_CODEX_APP_SERVER_DISABLED || "").toLowerCase());
@@ -58,15 +116,16 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     if (disabled()) return {};
     const appServer = this.acquire(input.command, input.cwd, input.env, input.sessionId);
     const proxyPort = this.host.allocatePort("web");
-    const proxy = new CodexAppServerConnectionProxy(appServer.socketPath, (threadId) => this.bindThread(input.sessionId, threadId));
+    const proxy = new CodexAppServerConnectionProxy(codexAppServerUpstream(appServer), (threadId) => this.bindThread(input.sessionId, threadId));
     proxy.start(proxyPort);
     const proxyEndpoint = proxy.endpoint || appServer.endpoint;
     const ai: NonNullable<AppSession["ai"]> = {
       agent: "codex",
       appServer: {
-        transport: "unix",
+        transport: appServer.transport,
         endpoint: appServer.endpoint,
-        socketPath: appServer.socketPath,
+        ...(appServer.socketPath ? { socketPath: appServer.socketPath } : {}),
+        ...(appServer.tokenFile ? { tokenFile: appServer.tokenFile } : {}),
         proxyEndpoint,
         proxyPort,
         pid: appServer.child.pid,
@@ -90,7 +149,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
       env: {
         ...input.env,
         TASK_HANDOFF_APP_SESSION_ID: input.sessionId,
-        TASK_HANDOFF_CODEX_APP_SERVER_SOCKET: appServer.socketPath,
+        ...(appServer.socketPath ? { TASK_HANDOFF_CODEX_APP_SERVER_SOCKET: appServer.socketPath } : {}),
         TASK_HANDOFF_CODEX_APP_SERVER_URL: appServer.endpoint,
         TASK_HANDOFF_CODEX_APP_SERVER_PROXY_URL: proxyEndpoint,
       },
@@ -108,39 +167,39 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     if (!appServer) return;
     this.shared = undefined;
     this.host.stopProcessTree(appServer.child);
-    fs.rmSync(appServer.socketPath, { force: true });
+    removeCodexAppServerArtifacts(appServer);
   }
 
   acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, appSessionId: string) {
     const existing = this.shared;
-    if (existing && existing.child.exitCode === null && !existing.child.killed && fs.existsSync(existing.socketPath)) {
+    if (existing && codexAppServerRunning(existing)) {
       existing.appSessionIds.add(appSessionId);
       return existing;
     }
-    if (existing) this.host.stopProcessTree(existing.child);
-    if (process.platform === "win32") {
-      throw Object.assign(new Error("Codex shared app-server uses unix sockets, which are unavailable on Windows."), { code: "CODEX_APP_SERVER_UNSUPPORTED" });
+    if (existing) {
+      this.host.stopProcessTree(existing.child);
+      removeCodexAppServerArtifacts(existing);
     }
 
+    const transport = codexAppServerTransport();
     const runtimeDir = path.join(this.host.paths.runtimeDir, "codex-app-server");
     const logDir = path.join(this.host.paths.logDir, "app-sessions", "codex-app-server");
-    const socketPath = codexAppServerSocketPath(runtimeDir);
-    const endpoint = `unix://${socketPath}`;
     const appServerCommand = process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND || command;
     const childEnvironment = { ...env, ...this.privateEnvironment };
-    const args = [...codexStoryMcpArgs(childEnvironment), "app-server", "--listen", endpoint];
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.mkdirSync(logDir, { recursive: true });
-    fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-    fs.rmSync(socketPath, { force: true });
+
+    const plan = codexAppServerListenPlan(transport, () => this.host.allocatePort("web"), runtimeDir);
+    const args = [...codexStoryMcpArgs(childEnvironment), "app-server", ...plan.listenArgs];
 
     const child = this.host.spawnLogged(appServerCommand, args, childEnvironment, logDir, "codex-app-server.log", cwd);
     const appServer: SharedCodexAppServer = {
       status: "running",
+      transport,
       command: appServerCommand,
       args,
-      socketPath,
-      endpoint,
+      endpoint: plan.endpoint,
+      ...(plan.transport === "unix" ? { socketPath: plan.socketPath } : { tokenFile: plan.tokenFile }),
       logPath: path.join(logDir, "codex-app-server.log"),
       child,
       appSessionIds: new Set([appSessionId]),
@@ -155,10 +214,15 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
       this.shared = undefined;
     });
     try {
-      this.host.waitForUnixSocket(socketPath, 5_000, () => spawnError);
+      if (plan.transport === "unix") {
+        this.host.waitForUnixSocket(plan.socketPath, 5_000, () => spawnError);
+      } else {
+        this.host.waitForHttp(plan.healthUrl, {}, 5_000, () => spawnError);
+      }
     } catch (error) {
       this.host.stopProcessTree(child);
       this.shared = undefined;
+      removeCodexAppServerArtifacts(appServer);
       throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "CODEX_APP_SERVER_START_FAILED" });
     }
     return appServer;
@@ -171,16 +235,17 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     if (appServer.appSessionIds.size > 0) return;
     this.shared = undefined;
     this.host.stopProcessTree(appServer.child);
-    fs.rmSync(appServer.socketPath, { force: true });
+    removeCodexAppServerArtifacts(appServer);
   }
 
   appServerInfo() {
     const appServer = this.shared;
-    if (!appServer || appServer.child.killed || appServer.child.exitCode !== null || !fs.existsSync(appServer.socketPath)) return undefined;
+    if (!appServer || !codexAppServerRunning(appServer)) return undefined;
     return {
-      transport: "unix" as const,
+      transport: appServer.transport,
       endpoint: appServer.endpoint,
-      socketPath: appServer.socketPath,
+      ...(appServer.socketPath ? { socketPath: appServer.socketPath } : {}),
+      ...(appServer.tokenFile ? { tokenFile: appServer.tokenFile } : {}),
       pid: appServer.child.pid,
       command: appServer.command,
       args: appServer.args,
@@ -212,9 +277,10 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
       kind: "codex-app-server",
       status: "running" as const,
       details: {
-        transport: "unix",
+        transport: appServer.transport,
         endpoint: appServer.endpoint,
-        socketPath: appServer.socketPath,
+        ...(appServer.socketPath ? { socketPath: appServer.socketPath } : {}),
+        ...(appServer.tokenFile ? { tokenFile: appServer.tokenFile } : {}),
         pid: "child" in appServer ? appServer.child.pid : appServer.pid,
         command: appServer.command,
         args: appServer.args,

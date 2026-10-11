@@ -207,20 +207,22 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private async connect(appSessions: CodexAppSession[] = []) {
-    const previousSocketPath = this.binding.socketPath;
+    const previousTargetKey = this.binding.targetKey;
     const previousCommand = this.binding.command;
-    const socketPath = this.binding.update(appSessions);
+    this.binding.update(appSessions);
+    const target = this.binding.target;
+    const targetKey = this.binding.targetKey;
     const command = this.binding.command;
-    if (!this.injectedClient && !socketPath && !this.options.allowSpawn) {
+    if (!this.injectedClient && !target && !this.options.allowSpawn) {
       this.stop();
       return undefined;
     }
     if (!this.injectedClient && (
       !this.connection.client
-      || previousSocketPath !== socketPath
+      || previousTargetKey !== targetKey
       || previousCommand !== command
     )) {
-      this.connection.configure(socketPath, command);
+      this.connection.configure(target, command);
     } else if (this.injectedClient && !this.connection.client) {
       this.connection.configure();
     }
