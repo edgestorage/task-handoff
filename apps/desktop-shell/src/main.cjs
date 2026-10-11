@@ -18,6 +18,7 @@ const {
   resolveControlPlaneWindowUrl: validateControlPlaneWindowUrl,
   resolveDataDir,
   resolveDesktopProcessCwd,
+  resolveDesktopServiceReadyTimeoutMs,
   resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
@@ -159,6 +160,18 @@ function writeDesktopFileLog(message) {
   }
 }
 
+// Startup diagnostics are the one class of message a user cannot reproduce with
+// the UI toggle on, because the tray and the failure page never open the settings
+// surface that flips it. Record them unconditionally so an install-time
+// auto-launch failure is diagnosable from desktop.log alone.
+function writeDesktopFileLogAlways(message) {
+  try {
+    appendRotatingLog(resolveDesktopLogFile(), `${message}\n`);
+  } catch {
+    // Diagnostics must never be the reason a startup failure becomes a crash.
+  }
+}
+
 function closeDesktopFileLog() {
   // File writes are opened per append so disabling logging has no stream to close.
 }
@@ -174,6 +187,18 @@ function logInfo(message) {
 function logError(message) {
   writeLog(process.stderr, message);
   writeDesktopFileLog(message);
+}
+
+function logStartupDiagnostic(message) {
+  writeLog(process.stderr, message);
+  writeDesktopFileLogAlways(message);
+}
+
+function logStartupProgress(message) {
+  writeLog(process.stdout, message);
+  if (!desktopFileLoggingEnabled()) {
+    writeDesktopFileLogAlways(message);
+  }
 }
 
 function renderFailurePage(title, detail) {
@@ -722,6 +747,23 @@ function parseNodeAgentIpcEndpoint(endpoint) {
     : undefined;
 }
 
+// Readiness probes must never outlive a poll interval: a pipe that accepts the
+// connection but never answers would otherwise stall the whole wait loop.
+const DESKTOP_READINESS_PROBE_TIMEOUT_MS = 2_000;
+const DESKTOP_READINESS_POLL_MS = 250;
+const DESKTOP_READINESS_PROGRESS_INTERVAL_MS = 5_000;
+
+function readinessProbeSignal() {
+  return AbortSignal.timeout(DESKTOP_READINESS_PROBE_TIMEOUT_MS);
+}
+
+function reportReadinessProgress(label, startedAt, nextProgressAt, details) {
+  const elapsedMs = Date.now() - startedAt;
+  if (elapsedMs < nextProgressAt) return nextProgressAt;
+  logStartupProgress(`[desktop-shell] still waiting for ${label} elapsedMs=${elapsedMs} ${details}`);
+  return elapsedMs + DESKTOP_READINESS_PROGRESS_INTERVAL_MS;
+}
+
 function fetchNodeAgentIpcHealth(socketPath) {
   return new Promise((resolve, reject) => {
     const request = http.request({
@@ -749,6 +791,9 @@ function fetchNodeAgentIpcHealth(socketPath) {
         });
       });
     });
+    request.setTimeout(DESKTOP_READINESS_PROBE_TIMEOUT_MS, () => {
+      request.destroy(new Error(`Node agent IPC health probe timed out after ${DESKTOP_READINESS_PROBE_TIMEOUT_MS}ms.`));
+    });
     request.on("error", reject);
     request.end();
   });
@@ -759,7 +804,7 @@ async function fetchNodeAgentHealth(endpoint) {
   if (ipcPath) {
     return fetchNodeAgentIpcHealth(ipcPath);
   }
-  const response = await fetch(`${endpoint.replace(/\/$/, "")}/api/node-agent/health`);
+  const response = await fetch(`${endpoint.replace(/\/$/, "")}/api/node-agent/health`, { signal: readinessProbeSignal() });
   return {
     ok: response.ok,
     status: response.status,
@@ -913,11 +958,13 @@ function startNodeAgent(options = {}) {
 }
 
 async function waitForControlPlane(url, child, options = {}) {
-  const attempts = options.attempts ?? 80;
+  const timeoutMs = options.timeoutMs ?? resolveDesktopServiceReadyTimeoutMs();
   const expectedDataDir = options.dataDir || resolveDataDir();
   const expectedHost = options.host || resolveControlPlaneHost();
   const expectedPort = options.port || resolveControlPlanePort();
-  for (let index = 0; index < attempts; index += 1) {
+  const startedAt = Date.now();
+  let nextProgressAt = startedAt + DESKTOP_READINESS_PROGRESS_INTERVAL_MS;
+  while (Date.now() - startedAt < timeoutMs) {
     const spawnError = childProcessSpawnErrors.get(child);
     if (spawnError) {
       throw new Error(`Control Plane failed to spawn: ${spawnError.message}`);
@@ -926,7 +973,7 @@ async function waitForControlPlane(url, child, options = {}) {
       throw new Error(`Control Plane exited before becoming ready code=${child.exitCode ?? ""} signal=${child.signalCode ?? ""}.`);
     }
     try {
-      const response = await fetch(`${url}/api/health`);
+      const response = await fetch(`${url}/api/health`, { signal: readinessProbeSignal() });
       if (response.ok) {
         const payload = await response.json();
         const health = payload?.data;
@@ -948,13 +995,17 @@ async function waitForControlPlane(url, child, options = {}) {
     } catch {
       // The server is still starting.
     }
-    await delay(250);
+    nextProgressAt = reportReadinessProgress("Control Plane", startedAt, nextProgressAt, `pid=${child.pid} url=${url}`);
+    await delay(DESKTOP_READINESS_POLL_MS);
   }
-  throw new Error(`Control Plane did not become ready at ${url}.`);
+  throw new Error(`Control Plane did not become ready at ${url} within ${timeoutMs}ms (pid=${child.pid}).`);
 }
 
-async function waitForNodeAgent(endpoint, child, attempts = 80) {
-  for (let index = 0; index < attempts; index += 1) {
+async function waitForNodeAgent(endpoint, child, options = {}) {
+  const timeoutMs = options.timeoutMs ?? resolveDesktopServiceReadyTimeoutMs();
+  const startedAt = Date.now();
+  let nextProgressAt = startedAt + DESKTOP_READINESS_PROGRESS_INTERVAL_MS;
+  while (Date.now() - startedAt < timeoutMs) {
     const spawnError = childProcessSpawnErrors.get(child);
     if (spawnError) {
       throw new Error(`Node agent failed to spawn: ${spawnError.message}`);
@@ -970,9 +1021,10 @@ async function waitForNodeAgent(endpoint, child, attempts = 80) {
     } catch {
       // The agent is still starting.
     }
-    await delay(250);
+    nextProgressAt = reportReadinessProgress("node agent", startedAt, nextProgressAt, `pid=${child.pid} endpoint=${endpoint}`);
+    await delay(DESKTOP_READINESS_POLL_MS);
   }
-  throw new Error(`Node agent did not become ready at ${endpoint}.`);
+  throw new Error(`Node agent did not become ready at ${endpoint} within ${timeoutMs}ms (pid=${child.pid}).`);
 }
 
 function stopControlPlane() {
@@ -1067,9 +1119,9 @@ async function boot() {
   } catch (error) {
     const detail = error instanceof Error ? error.stack || error.message : String(error);
     desktopServiceSupervisor.markDegraded(error);
-    logError(`[desktop-shell] desktop services failed to start ${detail}`);
+    logStartupDiagnostic(`[desktop-shell] desktop services failed to start ${detail}`);
     await desktopServiceLifecycle.stop("boot-failure", { nodeAgentReady }).catch((cleanupError) => {
-      logError(`[desktop-shell] failed to roll back desktop services ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
+      logStartupDiagnostic(`[desktop-shell] failed to roll back desktop services ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
     });
     if (nodeAgentReady) {
       bootNodeAgent?.unref?.();
@@ -1384,6 +1436,8 @@ if (!ownsDesktopInstanceLock) {
     });
     desktopUpdater.start();
     void boot().catch((error) => {
+      const detail = error instanceof Error ? error.stack || error.message : String(error);
+      logStartupDiagnostic(`[desktop-shell] desktop boot rejected ${detail}`);
       dialog.showErrorBox("TaskHandoff failed to start", error instanceof Error ? error.message : String(error));
       app.quit();
     });

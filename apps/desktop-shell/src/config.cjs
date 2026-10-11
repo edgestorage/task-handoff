@@ -4,6 +4,14 @@ const path = require("node:path");
 
 const DEFAULT_DESKTOP_CONTROL_PLANE_PORT = 18081;
 const DEFAULT_DESKTOP_NODE_AGENT_PORT = 18091;
+// A packaged Desktop launch that follows an install or update loads the whole
+// Electron/Node module graph and the node-agent SQLite store from cold storage
+// while antivirus scans the freshly written files. The first launch therefore
+// takes far longer to open its listeners than any later launch, so readiness is
+// bounded generously and the child process identity is what fails fast instead.
+const DEFAULT_DESKTOP_SERVICE_READY_TIMEOUT_MS = 120_000;
+const MINIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS = 10_000;
+const MAXIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS = 900_000;
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 const POSIX_DESKTOP_EXECUTABLE_PATHS = {
   darwin: ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
@@ -36,6 +44,15 @@ function resolveControlPlaneHost(env = process.env) {
 function resolveNodeAgentPort(env = process.env) {
   const value = Number(env.TASK_HANDOFF_DESKTOP_NODE_AGENT_PORT || env.TASK_HANDOFF_NODE_AGENT_PORT || DEFAULT_DESKTOP_NODE_AGENT_PORT);
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : DEFAULT_DESKTOP_NODE_AGENT_PORT;
+}
+
+function resolveDesktopServiceReadyTimeoutMs(env = process.env) {
+  const value = Number(env.TASK_HANDOFF_DESKTOP_SERVICE_READY_TIMEOUT_MS);
+  return Number.isFinite(value)
+    && value >= MINIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS
+    && value <= MAXIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS
+    ? value
+    : DEFAULT_DESKTOP_SERVICE_READY_TIMEOUT_MS;
 }
 
 function resolveNodeAgentHost(env = process.env) {
@@ -205,6 +222,7 @@ function validateDesktopInputs(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_DESKTOP_SERVICE_READY_TIMEOUT_MS,
   buildControlPlaneArgs,
   buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
@@ -220,6 +238,7 @@ module.exports = {
   resolveDesktopProcessCwd,
   resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,
+  resolveDesktopServiceReadyTimeoutMs,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,

@@ -1318,13 +1318,37 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   return app;
 }
 
+// Desktop waits for the Control Plane's HTTP listener, and a cold packaged
+// launch can spend a long time loading modules before that listener exists.
+// These breadcrumbs are written before the app logger exists, so they go
+// straight to stdout, which Desktop prefixes with [control-plane].
+function createControlPlaneStartupReporter(startedAt = Date.now()) {
+  return (phase: string, details: Record<string, unknown> = {}) => {
+    try {
+      process.stdout.write(`${JSON.stringify({
+        level: 30,
+        time: Date.now(),
+        pid: process.pid,
+        ...details,
+        elapsedMs: Date.now() - startedAt,
+        msg: `control plane ${phase}`,
+      })}\n`);
+    } catch {
+      // Startup breadcrumbs must never fail the boot.
+    }
+  };
+}
+
 export async function runControlPlaneServer(options: RunControlPlaneServerOptions) {
+  const startup = createControlPlaneStartupReporter();
+  startup("starting", { host: options.host, port: options.port, version: process.env.TASK_HANDOFF_VERSION || "" });
   const paths = controlPlaneStorePaths(options.dataDir);
   const lock = acquireControlPlaneSingletonLock(defaultControlPlaneSingletonLockPath(), {
     dataDir: paths.dataDir,
     host: options.host,
     port: options.port,
   });
+  startup("singleton lease acquired", { lockPath: lock.lockPath });
   try {
     const app = await createControlPlaneApp({
       ...options,
@@ -1337,8 +1361,10 @@ export async function runControlPlaneServer(options: RunControlPlaneServerOption
       lock.release();
     });
     await app.listen({ host: options.host, port: options.port });
+    startup("http listener ready", { host: options.host, port: options.port });
   } catch (error) {
     lock.release();
+    startup("startup failed", { error: error instanceof Error ? error.message : String(error) });
     if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "EADDRINUSE") {
       throw Object.assign(
         new Error(`Control plane port ${options.host}:${options.port} is already in use.`),
