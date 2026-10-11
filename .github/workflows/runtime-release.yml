@@ -226,6 +226,7 @@ jobs:
           set -euo pipefail
           docker build --platform linux/amd64 --target runtime-core -t task-handoff-wsl-base:ci -f Dockerfile .
           container="$(docker create --platform linux/amd64 task-handoff-wsl-base:ci)"
+          mkdir -p "$GITHUB_WORKSPACE/wsl-build"
           docker export "$container" -o "$GITHUB_WORKSPACE/wsl-build/rootfs.tar"
           docker rm "$container"
           mkdir -p "$GITHUB_WORKSPACE/wsl-build/rootfs"
