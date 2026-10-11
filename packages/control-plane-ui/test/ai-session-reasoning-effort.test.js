@@ -33,7 +33,10 @@ test("composer and agent editor share the same model menu", () => {
 });
 
 test("model trigger tooltip summarizes the selected provider, model, and reasoning effort", () => {
-  assert.match(composer, /<TooltipContent class="ai-session-model-summary-tooltip"[\s\S]*displayedProviderName[\s\S]*displayedModelName[\s\S]*reasoningEffort/);
+  // 触发器在没选模型时可以退化成思考档位文案，但摘要里的模型行必须如实显示模型或"未设置"。
+  assert.match(composer, /<TooltipContent class="ai-session-model-summary-tooltip"[\s\S]*displayedProviderName[\s\S]*displayedModelLabel[\s\S]*reasoningEffort/);
+  assert.match(composer, /const displayedModelLabel = computed\(\(\) => displayedModelOption\.value\?\.modelName[\s\S]*sessions\.composer\.selectionNotSet/);
+  assert.match(composer, /props\.reasoningEffortEnabled \? t\("sessions\.composer\.reasoningEffort"\) : undefined/);
   // The stored selection is matched to a catalog option by its stable identity,
   // so a renamed display label still resolves to the same option.
   assert.match(composer, /modelOptions\.value\.find\(\(model\) => sameModelSelectionRef\(model, selection\)\)/);
@@ -43,6 +46,17 @@ test("model trigger tooltip summarizes the selected provider, model, and reasoni
   assert.doesNotMatch(composer, /<TooltipTrigger as-child>[\s\S]{0,120}<DropdownMenuTrigger/);
   assert.match(composer, /@pointerenter="showModelSummaryTooltip"/);
   assert.doesNotMatch(composer, /@focus="showModelSummaryTooltip"/);
+});
+
+test("the model menu guides an empty model configuration to the instance settings", () => {
+  assert.match(modelMenu, /noModelConfigured\?: boolean;/);
+  assert.match(modelMenu, /openModelSettings: \[\];/);
+  assert.match(modelMenu, /v-if="noModelConfigured"[\s\S]*@select="emit\('openModelSettings'\)"/);
+  assert.match(modelMenu, /sessions\.composer\.noModelConfigured[\s\S]*sessions\.composer\.openModelSettings/);
+  // 只在目录为空且没有已选模型时出现，已有回显模型（如只读会话）不再提示去设置。
+  assert.match(composer, /const noModelConfigured = computed\(\(\) => modelOptions\.value\.length === 0 && !displayedModelSelection\.value\)/);
+  assert.match(composer, /:no-model-configured="noModelConfigured"[\s\S]*@open-model-settings="emit\('openModelSettings'\)"/);
+  assert.match(panel, /@open-model-settings="emit\('openSettings', instance\.id, 'models'\)"/);
 });
 
 test("new and existing sessions use the same reasoning effort composer control", () => {

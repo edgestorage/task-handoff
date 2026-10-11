@@ -6,6 +6,7 @@ import type { OperationApprovals } from "../approvals/operation-approvals.ts";
 import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
+import { probeGitSshHostKeys } from "../git-credentials/ssh-host-key-probe.ts";
 
 const IdParamsSchema = z.object({ id: z.string().trim().min(1).max(120) }).strict();
 const AssignmentParamsSchema = z.object({ id: z.string().trim().min(1).max(120), credentialId: z.string().trim().min(1).max(120) }).strict();
@@ -22,6 +23,9 @@ export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, se
     const credential = await service.gitCredentials.create(request.body);
     return reply.code(201).send({ data: credential });
   });
+  app.post("/api/git-credentials/ssh-host-key-probe", async (request) => ({
+    data: await probeGitSshHostKeys(request.body),
+  }));
   app.get("/api/git-credentials/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     const credential = service.gitCredentials.get(id);

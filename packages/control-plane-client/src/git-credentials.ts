@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   GitCredentialListResponseSchema,
   GitCredentialPublicSchema,
+  GitSshHostKeyProbeResponseSchema,
   InstanceGitCredentialAssignmentSchema,
 } from "@task-handoff/protocol/managed-git-credentials";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -27,6 +28,9 @@ export function createControlPlaneGitCredentialsApi(transport: ControlPlaneClien
     },
     createCredential(input: unknown) {
       return requestData("/api/git-credentials", GitCredentialPublicSchema, jsonRequest("POST", input));
+    },
+    probeSshHostKey(input: unknown) {
+      return requestData("/api/git-credentials/ssh-host-key-probe", GitSshHostKeyProbeResponseSchema, jsonRequest("POST", input));
     },
     updateCredential(credentialId: string, input: unknown) {
       return requestData(credentialPath(credentialId), GitCredentialPublicSchema, jsonRequest("PATCH", input));

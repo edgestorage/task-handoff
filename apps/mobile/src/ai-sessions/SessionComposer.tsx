@@ -10,6 +10,7 @@ import { useMobileTheme } from '../components/theme';
 import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n, type Translate } from '../i18n';
 import { modelSelectionLabel } from './model-selection';
+import type { ModelSettingsMenuHint } from './model-settings-menu';
 import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
   SESSION_COMPOSER_ACTION_RADIUS,
@@ -51,6 +52,9 @@ export function SessionComposer(props: SessionComposerProps) {
   const currentPermissionLabel = permissionLabel(effectivePermissionMode, t);
   const modelGroups = props.modelGroups || [];
   const displayedModelName = modelSelectionLabel(modelGroups, props.modelSelection) || t('sessions.model');
+  const noModelHint: ModelSettingsMenuHint | undefined = !modelGroups.length && !props.modelSelection
+    ? { label: t('sessions.noModelHint'), description: t('sessions.noModelHintDescription'), dismissLabel: t('common.confirm') }
+    : undefined;
   const modelControlsVisible = Boolean(modelGroups.length || props.reasoningEffortEnabled);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
   const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
@@ -207,7 +211,7 @@ export function SessionComposer(props: SessionComposerProps) {
           </Text> : null}
         </View>}
         <View style={styles.trailingTools}>
-        {modelControlsVisible ? <ModelSettingsMenu provider={props.provider} cancelLabel={t('common.cancel')} disabled={Boolean(props.actionBusy || props.modelSelectionBusy || props.reasoningEffortBusy)} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
+        {modelControlsVisible ? <ModelSettingsMenu noModelHint={noModelHint} provider={props.provider} cancelLabel={t('common.cancel')} disabled={Boolean(props.actionBusy || props.modelSelectionBusy || props.reasoningEffortBusy)} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
           {(onPress) => <Pressable accessibilityLabel={displayedModelName} accessibilityRole="button" disabled={props.actionBusy || props.modelSelectionBusy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
             {props.modelSelectionBusy || props.reasoningEffortBusy ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text numberOfLines={1} style={[styles.modelText, { color: colors.textMuted }]}>{displayedModelName}</Text>}
             <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />

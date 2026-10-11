@@ -53,7 +53,11 @@ export const settings = {
     sshKeyPublicKey: "Public key", sshKeyCopy: "Copy", sshKeyCopied: "Copied", sshKeyPublicKeyHint: "Copy this public key now and add it to your Git host as a deploy key or account SSH key. It is not stored and cannot be retrieved after saving.",
     sshKeyFilePrompt: "Choose or drop a private key file", sshKeyFileHint: "OpenSSH/PEM private keys such as id_ed25519 or id_rsa. The file is only read in your browser.", sshKeyFileLoaded: "Loaded {name}", sshKeyFileEmpty: "The selected file is empty.", sshKeyFileReadFailed: "Could not read the selected file.",
     sshKeyPlaceholder: "-----BEGIN OPENSSH PRIVATE KEY-----", sshKeyStorageHint: "The private key is only sent when you save and can never be read back.", sshKeyGenerateFailed: "Could not generate a key pair in this browser. Import or paste a key instead.", sshKeyCopyFailed: "Could not copy the public key.",
-    knownHostsHint: "Paste the host key entry from ssh-keyscan or your known_hosts file so the credential can pin the server identity.",
+    knownHostsHint: "Use Fetch host key to read the server identity automatically, or paste the host key entry from ssh-keyscan or your known_hosts file.",
+    knownHostsFetch: "Fetch host key", knownHostsFetching: "Fetching…", knownHostsFetchFailed: "Could not fetch the host key. Check the host and port, or paste it manually.",
+    knownHostsPlaceholder: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…",
+    knownHostsProbed: "Fetched the following host keys from {host}:{port}. Verify the fingerprints:",
+    knownHostsVerifyHint: "Compare these fingerprints with the ones published by your Git host or your own records before saving; do not save on a mismatch.",
     edit: "Edit / rotate", configure: "Configure", moreActions: "More actions", enable: "Enable", disable: "Disable", delete: "Delete", saving: "Saving", saved: "Git credential saved.", saveFailed: "Could not save the Git credential.", deleteFailed: "Could not delete the Git credential.", deleteTitle: "Delete {name}?", deleteDescription: "Credentials assigned to instances cannot be deleted until those assignments are revoked.", discardTitle: "Discard unsaved changes?", discardDescription: "Changes to this Git credential have not been saved.", discard: "Discard changes", status: { enabled: "Enabled", disabled: "Disabled" },
   },
   cloud: {

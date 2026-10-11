@@ -4,6 +4,8 @@ import {
   GitCredentialCreateRequestSchema,
   GitCredentialPublicSchema,
   GitCredentialRetentionSchema,
+  GitSshHostKeyProbeRequestSchema,
+  GitSshHostKeyProbeResponseSchema,
   GitWorkspaceProvisioningInputSchema,
   NodeGitCredentialPayloadSchema,
   normalizeGitCredentialScope,
@@ -25,6 +27,19 @@ import {
 } from "../src/control-plane.ts";
 
 const timestamp = "2026-08-23T00:00:00.000Z";
+
+test("SSH host key probe schemas require at least one entry and reject unknown fields", () => {
+  const entry = { keyType: "ssh-ed25519", fingerprint: "SHA256:abc", publicKey: "AAAA", knownHosts: "git.example.com ssh-ed25519 AAAA" };
+  assert.equal(GitSshHostKeyProbeRequestSchema.safeParse({ host: "git.example.com" }).success, true);
+  assert.equal(GitSshHostKeyProbeRequestSchema.safeParse({ host: "git.example.com", port: 22 }).success, true);
+  assert.equal(GitSshHostKeyProbeRequestSchema.safeParse({ host: "git.example.com", port: 0 }).success, false);
+  assert.equal(GitSshHostKeyProbeRequestSchema.safeParse({ host: "git.example.com", extra: true }).success, false);
+  assert.deepEqual(
+    GitSshHostKeyProbeResponseSchema.parse({ host: "git.example.com", port: 22, fetchedAt: timestamp, knownHosts: entry.knownHosts, entries: [entry] }).entries,
+    [entry],
+  );
+  assert.equal(GitSshHostKeyProbeResponseSchema.safeParse({ host: "git.example.com", port: 22, fetchedAt: timestamp, knownHosts: entry.knownHosts, entries: [] }).success, false);
+});
 
 test("workspace subdirectory is a relative repository path", () => {
   assert.equal(GitCloneOptionsSchema.parse({ subdirectory: "packages/app" }).subdirectory, "packages/app");

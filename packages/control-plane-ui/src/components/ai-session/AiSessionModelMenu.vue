@@ -8,6 +8,19 @@
   >
     <ScrollArea type="auto" :horizontal="false" class="ai-session-model-menu__scroll">
       <div class="ai-session-model-menu__list">
+        <template v-if="noModelConfigured">
+          <DropdownMenuItem
+            class="ai-session-model-menu__item ai-session-model-menu__provider-item"
+            @select="emit('openModelSettings')"
+          >
+            <Settings class="ai-session-model-menu__icon" :size="17" />
+            <span class="ai-session-model-menu__copy">
+              <strong>{{ t("sessions.composer.noModelConfigured") }}</strong>
+              <small>{{ t("sessions.composer.openModelSettings") }}</small>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator v-if="modelGroups.length || reasoningEffortEnabled" />
+        </template>
         <template v-for="group in modelGroups" :key="group.modelEntityId">
           <DropdownMenuSub v-if="group.models.length > 1">
             <DropdownMenuSubTrigger
@@ -79,7 +92,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { BrainCircuit, Check, Waypoints } from "@lucide/vue";
+import { BrainCircuit, Check, Settings, Waypoints } from "@lucide/vue";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "../ui/dropdown-menu";
@@ -96,6 +109,8 @@ const props = withDefaults(defineProps<{
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
   reasoningEffortEnabled?: boolean;
+  /** 目录为空且没有已选模型时，菜单顶部引导用户前往模型设置。 */
+  noModelConfigured?: boolean;
   /** 运行会话的 agent（codex、claude 等）；决定可选的推理档位。 */
   agent?: string;
   side?: "top" | "right" | "bottom" | "left";
@@ -112,6 +127,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   selectModel: [value: AiSessionModelSelection];
   selectReasoningEffort: [value: AiSessionReasoningEffort];
+  openModelSettings: [];
 }>();
 
 const { t } = useI18n();

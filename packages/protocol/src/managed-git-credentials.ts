@@ -165,6 +165,26 @@ export const GitCredentialUpdateRequestSchema = z.object({
 
 export const GitCredentialListResponseSchema = z.object({ items: z.array(GitCredentialPublicSchema).max(10_000) }).strict();
 
+export const GitSshHostKeyProbeRequestSchema = z.object({
+  host: z.string().trim().min(1).max(253),
+  port: z.number().int().min(1).max(65535).optional(),
+}).strict();
+
+export const GitSshHostKeyEntrySchema = z.object({
+  keyType: z.string().trim().min(1).max(64),
+  fingerprint: z.string().trim().min(1).max(256),
+  publicKey: z.string().trim().min(1).max(8192),
+  knownHosts: z.string().min(1).max(8192),
+}).strict();
+
+export const GitSshHostKeyProbeResponseSchema = z.object({
+  host: z.string().trim().min(1).max(253),
+  port: z.number().int().min(1).max(65535),
+  fetchedAt: TimestampSchema,
+  knownHosts: z.string().min(1).max(64 * 1024),
+  entries: z.array(GitSshHostKeyEntrySchema).min(1).max(32),
+}).strict();
+
 export const InstanceGitCredentialAssignmentSchema = z.object({
   instanceId: IdSchema,
   credentialId: IdSchema,
@@ -254,6 +274,9 @@ export type GitCredentialRetention = z.infer<typeof GitCredentialRetentionSchema
 export type GitCredentialCreateRequest = z.infer<typeof GitCredentialCreateRequestSchema>;
 export type GitCredentialUpdateRequest = z.infer<typeof GitCredentialUpdateRequestSchema>;
 export type GitCredentialSecretInput = z.infer<typeof GitCredentialSecretInputSchema>;
+export type GitSshHostKeyProbeRequest = z.infer<typeof GitSshHostKeyProbeRequestSchema>;
+export type GitSshHostKeyEntry = z.infer<typeof GitSshHostKeyEntrySchema>;
+export type GitSshHostKeyProbeResponse = z.infer<typeof GitSshHostKeyProbeResponseSchema>;
 export type InstanceGitCredentialAssignment = z.infer<typeof InstanceGitCredentialAssignmentSchema>;
 export type NodeGitCredentialPayload = z.infer<typeof NodeGitCredentialPayloadSchema>;
 export type NodeGitCredentialAuthorizationSet = z.infer<typeof NodeGitCredentialAuthorizationSetSchema>;

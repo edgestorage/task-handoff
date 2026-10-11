@@ -1,3 +1,4 @@
+import { Alert } from 'react-native';
 import { MenuView, type MenuAction } from '@react-native-menu/menu';
 import { Button, Host, Menu, RNHostView } from '@expo/ui/swift-ui';
 import { disabled as disabledModifier } from '@expo/ui/swift-ui/modifiers';
@@ -6,7 +7,7 @@ import type { AiSessionModelGroup, AiSessionModelOption } from '@task-handoff/co
 
 import { AnchoredSelectMenu } from '../components/AnchoredSelectMenu';
 import { useMobileTheme } from '../components/theme';
-import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary } from './model-settings-menu';
+import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary, type ModelSettingsMenuHint } from './model-settings-menu';
 import { modelSelectionFromOption, sameModelSelection } from './model-selection';
 
 type Trigger = (onPress?: () => void) => React.ReactElement;
@@ -78,18 +79,28 @@ type ModelSettingsMenuProps = {
   reasoningEffort?: AiSessionReasoningEffort;
   provider?: string;
   reasoningEnabled: boolean;
+  noModelHint?: ModelSettingsMenuHint;
   children: Trigger;
   onModelChange(selection: AiSessionModelSelection): void;
   onReasoningChange(effort: AiSessionReasoningEffort): void;
 };
 
 type ModelSettingsMenuActionInput = Pick<ModelSettingsMenuProps,
-  'formatModelGroupSummary' | 'modelGroups' | 'modelSelection' | 'provider' | 'reasoningEffort' | 'reasoningEnabled' | 'reasoningTitle'
+  'formatModelGroupSummary' | 'modelGroups' | 'modelSelection' | 'provider' | 'reasoningEffort' | 'reasoningEnabled' | 'reasoningTitle' | 'noModelHint'
 > & { imageColor: string; selectedImageColor: string };
+
+export const NO_MODEL_HINT_ACTION_ID = 'no-model-hint';
 
 export function modelSettingsMenuActions(input: ModelSettingsMenuActionInput): MenuAction[] {
   const isSelected = (model: AiSessionModelOption) =>
     input.modelSelection ? sameModelSelection(model, input.modelSelection) : false;
+  // 移动端没有模型设置，空目录时把菜单第一项留给"回控制面板配置"的提示。
+  const hintActions: MenuAction[] = input.noModelHint ? [{
+    id: NO_MODEL_HINT_ACTION_ID,
+    image: 'gearshape',
+    imageColor: input.imageColor,
+    title: input.noModelHint.label,
+  }] : [];
   const modelActions = input.modelGroups.map((group, groupIndex): MenuAction => {
     const groupHasSelected = group.models.some(isSelected);
     const common = {
@@ -114,8 +125,8 @@ export function modelSettingsMenuActions(input: ModelSettingsMenuActionInput): M
       })),
     };
   });
-  if (!input.reasoningEnabled) return modelActions;
-  return [...modelActions, {
+  if (!input.reasoningEnabled) return [...hintActions, ...modelActions];
+  return [...hintActions, ...modelActions, {
     displayInline: true,
     subactions: [{
       image: 'brain',
@@ -143,8 +154,16 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
     reasoningEffort: props.reasoningEffort,
     reasoningEnabled: props.reasoningEnabled,
     reasoningTitle: props.reasoningTitle,
+    noModelHint: props.noModelHint,
   });
   const select = (id: string) => {
+    if (id === NO_MODEL_HINT_ACTION_ID) {
+      if (!props.noModelHint) return;
+      Alert.alert(props.noModelHint.label, props.noModelHint.description, [
+        { text: props.noModelHint.dismissLabel, style: 'cancel' },
+      ]);
+      return;
+    }
     if (id.startsWith('reasoning:')) {
       props.onReasoningChange(id.slice('reasoning:'.length) as AiSessionReasoningEffort);
       return;
