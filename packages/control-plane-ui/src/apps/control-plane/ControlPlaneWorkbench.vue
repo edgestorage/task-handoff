@@ -158,24 +158,29 @@
             <ScrollArea
               class="control-plane-instance-menu-scroll"
               :horizontal="false"
-              :style="{ '--instance-menu-items': String(Math.max(switcherInstances.length, 1)) }"
+              :style="{ '--instance-menu-rows': String(Math.max(switcherInstances.length, 1)), '--instance-menu-groups': String(switcherMenuGroupCount), '--instance-menu-row-height': switcherGroupedByNode ? 'var(--instance-menu-row-height-compact)' : undefined }"
             >
               <div class="control-plane-instance-menu-list">
-                <DropdownMenuItem
-                  v-for="instance in switcherInstances"
-                  :key="instance.id"
-                  class="control-plane-instance-menu-item"
-                  :class="{ selected: instance.id === selectedInstanceId }"
-                  :aria-current="instance.id === selectedInstanceId ? 'true' : undefined"
-                  @select="selectInstance(instance.id)"
-                >
-                  <span class="status-dot" :data-state="instance.connectionStatus" />
-                  <span class="control-plane-instance-menu-copy">
-                    <strong>{{ switcherInstanceName(instance) }}</strong>
-                    <small>{{ switcherNodeName(instance) }}</small>
-                  </span>
-                  <Check v-if="instance.id === selectedInstanceId" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
-                </DropdownMenuItem>
+                <template v-for="group in switcherInstanceGroups" :key="group.key">
+                  <DropdownMenuLabel v-if="switcherGroupedByNode" class="control-plane-instance-menu-group">
+                    {{ group.label }}
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    v-for="instance in group.instances"
+                    :key="instance.id"
+                    class="control-plane-instance-menu-item"
+                    :class="{ selected: instance.id === selectedInstanceId }"
+                    :aria-current="instance.id === selectedInstanceId ? 'true' : undefined"
+                    @select="selectInstance(instance.id)"
+                  >
+                    <span class="status-dot" :data-state="instance.connectionStatus" />
+                    <span class="control-plane-instance-menu-copy">
+                      <strong>{{ switcherInstanceName(instance) }}</strong>
+                      <small v-if="!switcherGroupedByNode">{{ switcherNodeName(instance) }}</small>
+                    </span>
+                    <Check v-if="instance.id === selectedInstanceId" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
+                  </DropdownMenuItem>
+                </template>
                 <DropdownMenuLabel v-if="!switcherInstances.length" class="control-plane-instance-menu-empty">
                   {{ t("instances.list.noMatches") }}
                 </DropdownMenuLabel>
@@ -1368,6 +1373,24 @@ const {
     ? { mode: "standalone", activeInstanceId: standaloneInstanceId }
     : { mode: "persistent", directoryComplete: instanceDirectoryComplete },
 });
+const switcherGroupedByNode = computed(() => !standaloneMode.value && groupInstancesByNode.value);
+const switcherInstanceGroups = computed(() => {
+  if (!switcherGroupedByNode.value) {
+    return [{ key: "__all__", label: "", instances: switcherInstances.value }];
+  }
+  const groups = new Map<string, { key: string; label: string; instances: typeof switcherInstances.value }>();
+  for (const instance of switcherInstances.value) {
+    const key = instance.nodeId || "__unknown__";
+    const current = groups.get(key);
+    if (current) {
+      current.instances.push(instance);
+      continue;
+    }
+    groups.set(key, { key, label: switcherNodeName(instance), instances: [instance] });
+  }
+  return [...groups.values()];
+});
+const switcherMenuGroupCount = computed(() => switcherGroupedByNode.value ? switcherInstanceGroups.value.length : 0);
 const selectedInstancePending = computed(() => !standaloneMode.value
   && Boolean(activeInstanceId.value)
   && !activeInstance.value

@@ -453,6 +453,8 @@
   --instance-menu-max-height: 360px;
   --instance-menu-chrome: calc(var(--instance-menu-inset) * 2 + var(--instance-menu-border-width) * 2);
   --instance-menu-row-height: 50px;
+  --instance-menu-row-height-compact: 34px;
+  --instance-menu-group-height: 24px;
   --instance-menu-row-gap: 2px;
   width: max(var(--reka-dropdown-menu-trigger-width), 260px);
   max-width: min(360px, var(--reka-dropdown-menu-content-available-width));
@@ -467,7 +469,7 @@
   flex: 0 1 auto;
   min-height: 0;
   height: min(
-    calc(var(--instance-menu-items, 1) * var(--instance-menu-row-height) + (var(--instance-menu-items, 1) - 1) * var(--instance-menu-row-gap)),
+    calc(var(--instance-menu-rows, 1) * var(--instance-menu-row-height) + var(--instance-menu-groups, 0) * var(--instance-menu-group-height) + (var(--instance-menu-rows, 1) + var(--instance-menu-groups, 0) - 1) * var(--instance-menu-row-gap)),
     calc(var(--instance-menu-max-height) - var(--instance-menu-chrome)),
     calc(var(--reka-dropdown-menu-content-available-height) - var(--instance-menu-chrome))
   );
@@ -495,6 +497,22 @@
   padding-right: 10px;
 }
 
+:global(.control-plane-instance-menu .control-plane-instance-menu-group) {
+  display: flex;
+  align-items: center;
+  min-height: var(--instance-menu-group-height);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, hsl(var(--muted-foreground)));
+  padding: 6px 8px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 :global(.control-plane-instance-menu .control-plane-instance-menu-item) {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) 16px;
@@ -507,7 +525,7 @@
 }
 
 :global(.control-plane-instance-menu .control-plane-instance-menu-item .status-dot) {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 :global(.control-plane-instance-menu-item.selected) {

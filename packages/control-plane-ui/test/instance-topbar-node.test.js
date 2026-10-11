@@ -56,10 +56,10 @@ test("instance title appends the authoritative node name as muted metadata", () 
 });
 
 test("instance switcher menu exposes each instance's node in a portal-safe layout", () => {
-  assert.match(workbench, /<span class="control-plane-instance-menu-copy">[\s\S]*?<strong>\{\{ switcherInstanceName\(instance\) \}\}<\/strong>[\s\S]*?<small>\{\{ switcherNodeName\(instance\) \}\}<\/small>/);
+  assert.match(workbench, /<span class="control-plane-instance-menu-copy">[\s\S]*?<strong>\{\{ switcherInstanceName\(instance\) \}\}<\/strong>[\s\S]*?<small v-if="!switcherGroupedByNode">\{\{ switcherNodeName\(instance\) \}\}<\/small>/);
   assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name[\s\S]*?nodes\.data\.value\?\.find\(\(node\) => node\.id === instance\.nodeId\)\?\.name \|\| instance\.nodeId/);
-  assert.match(workbench, /--instance-menu-items': String\(Math\.max\(switcherInstances\.length, 1\)\)/);
-  assert.match(styles, /control-plane-instance-menu-scroll\) \{[^}]*?height: min\([\s\S]*?calc\(var\(--instance-menu-items, 1\) \* var\(--instance-menu-row-height\) \+ \(var\(--instance-menu-items, 1\) - 1\) \* var\(--instance-menu-row-gap\)\)/);
+  assert.match(workbench, /--instance-menu-rows': String\(Math\.max\(switcherInstances\.length, 1\)\), '--instance-menu-groups': String\(switcherMenuGroupCount\), '--instance-menu-row-height': switcherGroupedByNode \? 'var\(--instance-menu-row-height-compact\)' : undefined/);
+  assert.match(styles, /control-plane-instance-menu-scroll\) \{[^}]*?height: min\([\s\S]*?calc\(var\(--instance-menu-rows, 1\) \* var\(--instance-menu-row-height\) \+ var\(--instance-menu-groups, 0\) \* var\(--instance-menu-group-height\)/);
   assert.match(workbench, /:class="\{ selected: instance\.id === selectedInstanceId \}"[\s\S]*?:aria-current="instance\.id === selectedInstanceId \? 'true' : undefined"/);
   assert.match(styles, /:global\(\.control-plane-instance-menu\.control-plane-instance-menu\) \{[\s\S]*?width: max\(var\(--reka-dropdown-menu-trigger-width\), 260px\);[\s\S]*?var\(--reka-dropdown-menu-content-available-width\)[\s\S]*?border-radius: 12px;/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-copy small\) \{[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 12px;/);
@@ -70,6 +70,17 @@ test("instance switcher menu exposes each instance's node in a portal-safe layou
   assert.doesNotMatch(workbench, /control-plane-instance-menu-item" disabled/);
   assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-empty\) \{[\s\S]*?display: flex;[\s\S]*?min-height: var\(--instance-menu-row-height\);[\s\S]*?color: var\(--text-muted\);/);
   assert.match(styles, /:global\(\.control-plane-instance-menu-item\.selected\) \{[\s\S]*?background: var\(--surface-active\);/);
+});
+
+test("instance switcher follows the group-by-node preference", () => {
+  assert.match(workbench, /const switcherGroupedByNode = computed\(\(\) => !standaloneMode\.value && groupInstancesByNode\.value\);/);
+  assert.match(workbench, /const switcherInstanceGroups = computed\(\(\) => \{[\s\S]*?if \(!switcherGroupedByNode\.value\) \{[\s\S]*?return \[\{ key: "__all__"[\s\S]*?switcherNodeName\(instance\)/);
+  assert.match(workbench, /<DropdownMenuLabel v-if="switcherGroupedByNode" class="control-plane-instance-menu-group">[\s\S]*?\{\{ group\.label \}\}/);
+  assert.match(workbench, /<template v-for="group in switcherInstanceGroups" :key="group\.key">/);
+  assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-group\) \{[\s\S]*?font-size: 11px;[\s\S]*?font-weight: 400;/);
+  assert.match(workbench, /const switcherMenuGroupCount = computed\(\(\) => switcherGroupedByNode\.value \? switcherInstanceGroups\.value\.length : 0\);/);
+  assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-group\) \{[\s\S]*?min-height: var\(--instance-menu-group-height\);/);
+  assert.doesNotMatch(workbench, /:data-grouped/);
 });
 
 test("standalone window identity follows the selected directory entry while scoped detail data loads", () => {
