@@ -223,6 +223,9 @@ jobs:
           node-version: 24.15.0
           registry-url: https://registry.npmjs.org
 
+      - name: Install the npm CLI that supports OIDC dist-tags
+        run: npm install -g npm@^11.21.0
+
       - name: Prepare immutable draft GitHub Release
         if: github.event_name == 'push'
         env:

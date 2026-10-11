@@ -35,15 +35,17 @@ const {
 } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
 const {
   resolveExecutable,
-} = require("../packages/app-runtime/src/executable-resolver.ts");
+} = require("../packages/core/src/core/executable-resolver.ts");
 const {
   resolveAppExecutable,
 } = require("../packages/app-runtime/src/catalog.ts");
 const {
   createCodexRuntime,
+  CODEX_APP_SERVER_READY_TIMEOUT_MS,
 } = require("../packages/app-runtime/src/managed-app-definitions/codex/runtime.ts");
 const {
   codexAppServerSocketPath,
+  codexAppServerTransport,
 } = require("../packages/app-runtime/src/runtime-utils.ts");
 
 function executable(directory, name) {
@@ -189,6 +191,84 @@ test("Codex runtime removes a pre-existing fixed socket and only reuses its own 
   assert.equal(second.details.pid, first.details.pid);
   assert.equal(second.details.socketPath, first.details.socketPath);
   runtime.stopAll();
+});
+
+test("the codex app-server transport stays on unix sockets except on Windows", () => {
+  assert.equal(codexAppServerTransport({}, "darwin"), "unix");
+  assert.equal(codexAppServerTransport({}, "linux"), "unix");
+  assert.equal(codexAppServerTransport({}, "win32"), "ws");
+  // The override keeps both paths exercisable from a single machine.
+  assert.equal(codexAppServerTransport({ TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT: "ws" }, "linux"), "ws");
+  assert.equal(codexAppServerTransport({ TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT: "unix" }, "win32"), "unix");
+  assert.equal(codexAppServerTransport({ TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT: "  WS  " }, "linux"), "ws");
+  assert.equal(codexAppServerTransport({ TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT: "nonsense" }, "linux"), "unix");
+});
+
+test("the websocket app-server transport listens on loopback behind a capability token", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ws-app-server-"));
+  const runtimeDir = path.join(root, "runtime");
+  const logDir = path.join(root, "logs");
+  const previousTransport = process.env.TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT;
+  process.env.TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT = "ws";
+  context.after(() => {
+    if (previousTransport === undefined) delete process.env.TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT;
+    else process.env.TASK_HANDOFF_CODEX_APP_SERVER_TRANSPORT = previousTransport;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const child = new EventEmitter();
+  Object.assign(child, {
+    pid: 5150,
+    killed: false,
+    exitCode: null,
+    kill() {
+      this.killed = true;
+      this.exitCode = 0;
+      return true;
+    },
+  });
+  let readyUrl;
+  let tokenAtSpawn;
+  let tokenFile;
+  let logHeader;
+  const runtime = createCodexRuntime({
+    paths: { runtimeDir, logDir },
+    allocatePort: () => 8107,
+    hasCommand: () => true,
+    spawnLogged: (_command, args, _env, _logDir, _logName, _cwd, header) => {
+      logHeader = header;
+      const listenIndex = args.indexOf("--listen");
+      assert.equal(args[listenIndex + 1], "ws://127.0.0.1:8107");
+      assert.equal(args[args.indexOf("--ws-auth") + 1], "capability-token");
+      tokenFile = args[args.indexOf("--ws-token-file") + 1];
+      assert.equal(path.dirname(tokenFile), path.join(runtimeDir, "codex-app-server"));
+      tokenAtSpawn = fs.readFileSync(tokenFile, "utf8");
+      assert.equal(tokenAtSpawn.length > 20, true);
+      return child;
+    },
+    stopProcessTree: (candidate) => candidate.kill("SIGTERM"),
+    waitForUnixSocket: () => { throw new Error("the websocket transport must not probe a unix socket"); },
+    waitForHttp: (url, headers, timeoutMs) => {
+      readyUrl = url;
+      assert.deepEqual(headers, {});
+      assert.equal(timeoutMs, CODEX_APP_SERVER_READY_TIMEOUT_MS);
+    },
+    patchSession: () => {},
+  });
+
+  const info = runtime.sharedResource.acquire("codex", root, process.env, "consumer-one");
+  // The launch has to stay diagnosable from its own log when it never becomes
+  // ready, which on win32 is the only signal a failed shim leaves behind.
+  assert.equal(logHeader, "codex app-server");
+  assert.equal(readyUrl, "http://127.0.0.1:8107/readyz");
+  assert.equal(info.details.transport, "ws");
+  assert.equal(info.details.endpoint, "ws://127.0.0.1:8107");
+  assert.equal(info.details.socketPath, undefined);
+  assert.equal(info.details.tokenFile, tokenFile);
+  assert.equal(info.details.pid, 5150);
+
+  runtime.stopAll();
+  assert.equal(fs.existsSync(tokenFile), false);
 });
 
 test("managed AI providers own their resume arguments", () => {

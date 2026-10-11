@@ -77,7 +77,7 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 
 聊天与 AI Session 状态构成一条跨层链路：聊天凭据、入口绑定、命令解析和路由由 Control Plane 统一管理，会话状态则以目标实例中的 AI Session 为唯一来源。
 
-Docker 是主要的隔离运行时，支持一个节点运行多个实例。受支持的非 Windows 节点也内置 Local Runtime，同一宿主用户只能运行一个本机受控实例。整体模型仍可通过运行时能力和适配器扩展到 Kubernetes，无需复制 UI 流程。
+Docker 是主要的隔离运行时，支持一个节点运行多个实例。Windows、macOS 和 Linux 节点也内置 Local Runtime，同一宿主用户只能运行一个本机受控实例。整体模型仍可通过运行时能力和适配器扩展到 Kubernetes，无需复制 UI 流程。
 
 ### 环境模板
 

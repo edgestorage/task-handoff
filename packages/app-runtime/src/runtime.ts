@@ -8,9 +8,10 @@ import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import { commandInvocation, resolveCommandExecutable, type CommandInvocation } from "@task-handoff/core/core/command-invocation";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import type { AppProfile } from "@task-handoff/protocol/app-profiles";
-import { AppCatalogRepository, executablePath } from "./catalog";
+import { AppCatalogRepository } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { ManagedAppPreparedTtyLaunch, ManagedAppProfileRecord, ManagedAppProfilesRuntime, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
@@ -81,6 +82,22 @@ function definedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
+/**
+ * A launch that never becomes ready leaves only its log behind, and on win32 a
+ * shim that fails before starting its interpreter prints nothing but cmd.exe's
+ * own complaint. Recording the invocation and the lookup environment next to
+ * the child output keeps that case diagnosable from the log alone.
+ */
+function launchLogHeader(label: string, invocation: CommandInvocation) {
+  return [
+    `# ${new Date().toISOString()} ${label}`,
+    `#   exec: ${[invocation.executable, ...invocation.args].join(" ")}`,
+    `#   PATH: ${invocation.env.PATH || ""}`,
+    `#   PATHEXT: ${invocation.env.PATHEXT || ""} ComSpec: ${invocation.env.ComSpec || ""}`,
+    "",
+  ].join("\n");
+}
+
 const DISPLAY_START = 101;
 const DISPLAY_END = 199;
 const VNC_PORT_START = 6101;
@@ -125,7 +142,7 @@ export class AppRuntimeManager extends EventEmitter {
       paths,
       allocatePort: (kind) => this.allocatePort(kind),
       hasCommand: (command, env, cwd) => this.hasCommand(command, env, cwd),
-      spawnLogged: (command, args, env, logDir, logName, cwd) => this.spawnLogged(command, args, env, logDir, logName, cwd),
+      spawnLogged: (command, args, env, logDir, logName, cwd, logHeader) => this.spawnLogged(command, args, env, logDir, logName, cwd, logHeader),
       stopProcessTree: (child, signal) => this.requestManagedProcessTreeStop(child.pid, signal || "SIGTERM", child),
       waitForUnixSocket: (socketPath, timeoutMs, getError) => this.waitForUnixSocket(socketPath, timeoutMs, getError),
       waitForHttp: (url, headers, timeoutMs, getError) => this.waitForHttp(url, headers, timeoutMs, getError),
@@ -2042,18 +2059,19 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   private hasCommand(command: string, env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()) {
-    return Boolean(executablePath(command, env, cwd));
+    return Boolean(resolveCommandExecutable(command, { env, cwd }));
   }
 
   private spawnTerminalPty(shell: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
     try {
       ensureNodePtySpawnHelperExecutable();
-      const pty = spawnPty(shell, args, {
+      const invocation = commandInvocation(shell, args, { env, cwd });
+      const pty = spawnPty(invocation.executable, invocation.args, {
         name: "xterm-256color",
         cols: 120,
         rows: 32,
         cwd,
-        env,
+        env: invocation.env,
       });
       this.trackManagedProcessTree({ pid: pty.pid, pty, rootExited: false });
       pty.onExit(() => this.markManagedProcessRootExited(pty.pid));
@@ -2063,11 +2081,12 @@ export class AppRuntimeManager extends EventEmitter {
     }
   }
 
-  private spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string) {
+  private spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string, logHeader?: string) {
     const logStream = new RotatingLogWriter(path.join(logDir, logName));
-    const child = spawn(command, args, {
+    const invocation = commandInvocation(command, args, { env, cwd });
+    const child = spawn(invocation.executable, invocation.args, {
       cwd,
-      env,
+      env: invocation.env,
       stdio: ["ignore", "pipe", "pipe"],
       // A separate process group is the ownership boundary for every app tree.
       // It lets the controlled instance terminate launchers and all descendants
@@ -2083,6 +2102,7 @@ export class AppRuntimeManager extends EventEmitter {
       openOutputs -= 1;
       if (openOutputs === 0) logStream.end();
     };
+    if (logHeader) logStream.write(launchLogHeader(logHeader, invocation));
     child.stdout.pipe(logStream, { end: false });
     child.stderr.pipe(logStream, { end: false });
     logStream.on("error", () => {

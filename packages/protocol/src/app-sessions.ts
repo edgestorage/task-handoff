@@ -344,8 +344,12 @@ function legacyAppSessionBindings(session: Record<string, unknown>): AppSessionB
   for (const threadId of [...new Set([activeThreadId, ...threadIds].filter(Boolean))]) {
     bindings.push({ type: "provider-session", agent: "codex", id: threadId });
   }
+  // The endpoint identity is the socket on POSIX and the loopback websocket
+  // address on Windows; both are stable for the lifetime of one app-server.
   const socketPath = stringValue(appServer.socketPath);
-  if (socketPath) bindings.push({ type: "adapter-key", adapter: "codex-app-server", agent: "codex", id: `socket:${socketPath}`, key: `socket:${socketPath}` });
+  const endpoint = stringValue(appServer.endpoint);
+  const appServerKey = socketPath ? `socket:${socketPath}` : endpoint ? `endpoint:${endpoint}` : "";
+  if (appServerKey) bindings.push({ type: "adapter-key", adapter: "codex-app-server", agent: "codex", id: appServerKey, key: appServerKey });
   return bindings;
 }
 
