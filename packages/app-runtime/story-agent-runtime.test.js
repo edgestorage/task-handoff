@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { codexStoryMcpArgs } from "./src/managed-app-definitions/codex/story-mcp-config.ts";
 import { openCodeServerConfig } from "./src/managed-app-definitions/opencode/server-config.ts";
+import { quoteCommandInterpreterArgument } from "@task-handoff/core/core/command-invocation";
 
 test("Codex receives an ephemeral MCP configuration without embedding its token", () => {
   const args = codexStoryMcpArgs({
@@ -14,11 +15,17 @@ test("Codex receives an ephemeral MCP configuration without embedding its token"
 
   assert.deepEqual(args, [
     "-c",
-    "mcp_servers.task_handoff_story.url=\"http://127.0.0.1:8080/api/internal/agent-tools/mcp\"",
+    "mcp_servers.task_handoff_story.url='http://127.0.0.1:8080/api/internal/agent-tools/mcp'",
     "-c",
-    "mcp_servers.task_handoff_story.bearer_token_env_var=\"TASK_HANDOFF_AGENT_TOOLS_TOKEN\"",
+    "mcp_servers.task_handoff_story.bearer_token_env_var='TASK_HANDOFF_AGENT_TOOLS_TOKEN'",
   ]);
   assert.equal(args.join(" ").includes("private-token"), false);
+  // A win32 `.cmd` shim sends these through cmd.exe, which rewrites any value
+  // carrying a double quote; the overrides must stay quote-free to survive.
+  for (const arg of args) {
+    assert.equal(arg.includes('"'), false);
+    assert.equal(quoteCommandInterpreterArgument(arg), arg);
+  }
 });
 
 test("OpenCode merges the managed file plugin with its model configuration", () => {
