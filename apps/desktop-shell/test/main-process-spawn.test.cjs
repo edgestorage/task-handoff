@@ -82,6 +82,34 @@ test("desktop readiness uses health for availability and the singleton lease for
   assert.doesNotMatch(main, /payload\?\.data\?\.dataDir/);
 });
 
+test("desktop readiness waits out a cold first launch instead of failing at a fixed attempt count", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.doesNotMatch(main, /attempts = options\.attempts \?\? 80/);
+  assert.doesNotMatch(main, /async function waitForNodeAgent\(endpoint, child, attempts = 80\)/);
+  assert.match(main, /async function waitForNodeAgent\(endpoint, child, options = \{\}\)/);
+  assert.match(main, /async function waitForControlPlane\(url, child, options = \{\}\)/);
+  assert.match(main, /const timeoutMs = options\.timeoutMs \?\? resolveDesktopServiceReadyTimeoutMs\(\)/);
+  assert.match(main, /while \(Date\.now\(\) - startedAt < timeoutMs\)/);
+  assert.match(main, /within \$\{timeoutMs\}ms \(pid=\$\{child\.pid\}\)/);
+  // A probe that never answers must not stall the poll loop that owns the budget.
+  assert.match(main, /const DESKTOP_READINESS_PROBE_TIMEOUT_MS = 2_000;/);
+  assert.match(main, /request\.setTimeout\(DESKTOP_READINESS_PROBE_TIMEOUT_MS/);
+  assert.match(main, /api\/node-agent\/health`, \{ signal: readinessProbeSignal\(\) \}/);
+  assert.match(main, /api\/health`, \{ signal: readinessProbeSignal\(\) \}/);
+  assert.match(main, /reportReadinessProgress\("node agent"/);
+  assert.match(main, /reportReadinessProgress\("Control Plane"/);
+});
+
+test("desktop records startup failures even when diagnostic file logging is off", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /function writeDesktopFileLogAlways\(message\)/);
+  assert.match(main, /function logStartupDiagnostic\(message\)/);
+  assert.match(main, /function logStartupProgress\(message\)/);
+  assert.match(main, /logStartupDiagnostic\(`\[desktop-shell\] desktop services failed to start \$\{detail\}`\)/);
+  assert.match(main, /logStartupDiagnostic\(`\[desktop-shell\] desktop boot rejected \$\{detail\}`\)/);
+  assert.match(main, /logStartupProgress\(`\[desktop-shell\] still waiting for/);
+});
+
 test("desktop child supervision reports output, spawn failures, and exits", () => {
   const child = fakeChild();
   const info = [];

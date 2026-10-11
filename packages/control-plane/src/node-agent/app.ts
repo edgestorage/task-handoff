@@ -2017,11 +2017,46 @@ export async function listenNodeAgentContainerIpcServer(app: Awaited<ReturnType<
   return server;
 }
 
+// The Desktop shell waits for the node agent's local IPC listener, and a cold
+// packaged launch can spend a long time loading modules and opening SQLite
+// before that listener exists. These breadcrumbs are written before the pino
+// logger exists, so they go straight to stdout, which Desktop redirects into
+// node-agent.out.log.
+function createNodeAgentStartupReporter(startedAt = Date.now()) {
+  return (phase: string, details: Record<string, unknown> = {}) => {
+    try {
+      process.stdout.write(`${JSON.stringify({
+        level: 30,
+        time: Date.now(),
+        pid: process.pid,
+        hostname: os.hostname(),
+        ...details,
+        elapsedMs: Date.now() - startedAt,
+        msg: `node agent ${phase}`,
+      })}\n`);
+    } catch {
+      // Startup breadcrumbs must never fail the boot.
+    }
+  };
+}
+
 export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
-  const paths = nodeAgentStorePaths(options.dataDir);
-  const lock = acquireNodeAgentSingletonLock(defaultNodeAgentSingletonLockPath(), {
-    dataDir: paths.dataDir,
+  const startup = createNodeAgentStartupReporter();
+  startup("starting", {
+    dataDir: options.dataDir || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR || "",
+    version: process.env.TASK_HANDOFF_VERSION || "",
   });
+  const paths = nodeAgentStorePaths(options.dataDir);
+  let lock: ReturnType<typeof acquireNodeAgentSingletonLock>;
+  try {
+    lock = acquireNodeAgentSingletonLock(defaultNodeAgentSingletonLockPath(), {
+      dataDir: paths.dataDir,
+    });
+  } catch (error) {
+    startup("startup failed", { error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
+  startup("singleton lease acquired", { lockPath: lock.lockPath });
   try {
     const defaults = bootstrapExternalListener(options.host, options.port);
     const hadPersistedSettings = fs.existsSync(paths.settingsPath);
@@ -2055,6 +2090,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       containerIpcPath,
     };
     const app = await createNodeAgentApp(effectiveOptions);
+    startup("application initialized", { ipcPath });
     const nodeAgentState = app.nodeAgentState;
     if (!nodeAgentState) {
       throw new Error("Node agent state was not initialized.");
@@ -2118,6 +2154,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     try {
       await app.ready();
       ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
+      startup("ipc listener ready", { ipcPath });
       if (containerIpcPath) containerIpcServer = await listenNodeAgentContainerIpcServer(app, containerIpcPath);
       await listenerManager.start();
       reverseTunnels.connectConfigured();
@@ -2130,6 +2167,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       throw error;
     }
   } catch (error) {
+    startup("startup failed", { error: error instanceof Error ? error.message : String(error) });
     lock.release();
     throw error;
   }

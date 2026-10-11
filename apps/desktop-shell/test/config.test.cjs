@@ -14,6 +14,7 @@ const {
   resolveDesktopProcessCwd,
   resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,
+  resolveDesktopServiceReadyTimeoutMs,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,
@@ -172,6 +173,13 @@ test("desktop config builds control plane cli args", () => {
     "--auth-mode",
     "disabled",
   ]);
+});
+
+test("desktop readiness budget tolerates a cold first launch and stays env-tunable", () => {
+  assert.equal(resolveDesktopServiceReadyTimeoutMs({}), 120_000);
+  assert.equal(resolveDesktopServiceReadyTimeoutMs({ TASK_HANDOFF_DESKTOP_SERVICE_READY_TIMEOUT_MS: "300000" }), 300_000);
+  assert.equal(resolveDesktopServiceReadyTimeoutMs({ TASK_HANDOFF_DESKTOP_SERVICE_READY_TIMEOUT_MS: "120" }), 120_000);
+  assert.equal(resolveDesktopServiceReadyTimeoutMs({ TASK_HANDOFF_DESKTOP_SERVICE_READY_TIMEOUT_MS: "nope" }), 120_000);
 });
 
 test("desktop config builds node agent cli args", () => {
