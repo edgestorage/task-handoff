@@ -263,15 +263,31 @@ async function locateBaseTemplateSource(options: EnsureWslBaseTemplateOptions) {
 }
 
 /**
- * 4.1：定位、校验并缓存 base 模板。缓存命中时不重新读取随附来源；未命中时校验 SHA-256 后再原子写入缓存，
- * 使多个实例复用同一份模板资产。
+ * 4.1：定位、校验并缓存 base 模板。节点可见的模板（随附目录或显式指向）优先于节点级缓存：否则
+ * 升级后随附的新模板会被旧缓存永久遮蔽，新 distro 一直导入旧工具集。命中同一版本时直接复用缓存
+ * 资产（不重复拷贝）；来源不可用时回退到缓存，保证离线节点仍可供给。来源未命中缓存时校验 SHA-256
+ * 后再原子写入缓存，使多个实例复用同一份模板资产。
  */
 export async function ensureWslBaseTemplate(options: EnsureWslBaseTemplateOptions): Promise<ResolvedWslBaseTemplate> {
-  const cached = await readCacheEntry(options.cacheDir, options);
-  if (cached) return cached;
-  const source = await locateBaseTemplateSource(options);
+  const source = await locateBaseTemplateSource(options).catch((error: unknown) => {
+    // Only a missing source may fall back to the cache: an explicitly configured archive path that
+    // does not exist is an operator error and must stay loud.
+    if (!options.archivePath && (error as { code?: string } | undefined)?.code === WSL_BASE_TEMPLATE_MISSING) return undefined;
+    throw error;
+  });
+  if (!source) {
+    const cachedOnly = await readCacheEntry(options.cacheDir, options);
+    if (cachedOnly) return cachedOnly;
+    throw provisioningError(
+      WSL_BASE_TEMPLATE_MISSING,
+      "No cached or bundled WSL base template was found. Build/package one or set TASK_HANDOFF_WSL_BASE_TEMPLATE.",
+      { sourceDirs: options.sourceDirs ?? [] },
+    );
+  }
   const identity = await readManifest(source.manifestPath);
   assertExpectedIdentity(identity, options);
+  const cached = await readCacheEntry(options.cacheDir, { ...options, expectedVersion: identity.version, expectedArch: identity.arch });
+  if (cached) return cached;
   const actualSha256 = await sha256File(source.archivePath);
   if (actualSha256 !== identity.sha256) {
     throw provisioningError(WSL_BASE_TEMPLATE_INVALID, `WSL base template ${identity.id}@${identity.version} failed SHA-256 verification.`, {

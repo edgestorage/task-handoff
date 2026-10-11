@@ -150,6 +150,42 @@ test("base template resolution rejects a tampered archive and reports a missing 
   );
 });
 
+test("a newer visible base template supersedes an older node-level cache entry", async () => {
+  const cacheDir = tmpDir("wsl-base-upgrade-cache-");
+  const olderDir = tmpDir("wsl-base-old-");
+  const newerDir = tmpDir("wsl-base-new-");
+  writeBaseTemplateFixture({ dir: olderDir, version: "1.2.3" });
+  const older = await ensureWslBaseTemplate({ cacheDir, sourceDirs: [olderDir], expectedVersion: "1.2.3", expectedArch: BASE_ARCH });
+  assert.equal(older.cacheHit, false);
+
+  // Same version, same source: the cached asset is reused instead of copied again.
+  const reused = await ensureWslBaseTemplate({ cacheDir, sourceDirs: [olderDir], expectedVersion: "1.2.3", expectedArch: BASE_ARCH });
+  assert.equal(reused.cacheHit, true);
+
+  // A shipped/pointed-at newer template must reach new distros without hand-clearing the cache.
+  writeBaseTemplateFixture({ dir: newerDir, version: "1.3.0" });
+  const upgraded = await ensureWslBaseTemplate({ cacheDir, sourceDirs: [newerDir], expectedArch: BASE_ARCH });
+  assert.equal(upgraded.cacheHit, false);
+  assert.equal(upgraded.identity.version, "1.3.0");
+
+  // The older cached version stays usable when no source is reachable (offline node).
+  fs.rmSync(newerDir, { recursive: true, force: true });
+  const offline = await ensureWslBaseTemplate({ cacheDir, sourceDirs: [newerDir], expectedArch: BASE_ARCH });
+  assert.equal(offline.identity.version, "1.3.0");
+  assert.equal(offline.cacheHit, true);
+});
+
+test("an explicitly configured base template archive stays a hard requirement", async () => {
+  const cacheDir = tmpDir("wsl-base-explicit-cache-");
+  const sourceDir = tmpDir("wsl-base-explicit-src-");
+  writeBaseTemplateFixture({ dir: sourceDir });
+  await ensureWslBaseTemplate({ cacheDir, sourceDirs: [sourceDir], expectedVersion: BASE_VERSION, expectedArch: BASE_ARCH });
+  await assert.rejects(
+    () => ensureWslBaseTemplate({ cacheDir, archivePath: path.join(tmpDir("wsl-base-gone-"), "missing.tar.gz"), expectedArch: BASE_ARCH }),
+    (error: { code?: string }) => error.code === WSL_BASE_TEMPLATE_MISSING,
+  );
+});
+
 test("provision imports a single base template and writes ownership labels, index, and in-distro marker", async () => {
   const sourceDir = tmpDir("wsl-prov-src-");
   const dataDir = tmpDir("wsl-prov-data-");
