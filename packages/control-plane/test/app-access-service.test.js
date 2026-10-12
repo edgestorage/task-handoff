@@ -63,10 +63,12 @@ test("app access service rejects non-GUI, stopped, and mismatched sessions", asy
 });
 
 test("VNC frame URLs retain the lease in the proxy path for relative resources and websockets", () => {
-  assert.equal(
-    vncAccessFrameUrl("lease_token", "gui/session", { vnc: { backend: "kasmvnc" } }),
-    "/apps/access/vnc/lease_token/proxy/api/apps/sessions/gui%2Fsession/web/",
-  );
+  const kasmVnc = new URL(vncAccessFrameUrl("lease_token", "gui/session", { vnc: { backend: "kasmvnc" } }), "https://control.example.test");
+  assert.equal(kasmVnc.pathname, "/apps/access/vnc/lease_token/proxy/api/apps/sessions/gui%2Fsession/web/");
+  assert.equal(kasmVnc.searchParams.get("path"), "apps/access/vnc/lease_token/proxy/api/apps/sessions/gui%2Fsession/web/websockify");
+  assert.equal(kasmVnc.searchParams.get("autoconnect"), "1");
+  assert.equal(kasmVnc.searchParams.get("resize"), "scale");
+  assert.equal(kasmVnc.searchParams.get("show_control_bar"), "1");
   const noVnc = new URL(vncAccessFrameUrl("lease_token", "gui/session", {}), "https://control.example.test");
   assert.equal(noVnc.pathname, "/apps/access/vnc/lease_token/proxy/api/novnc/vnc.html");
   assert.equal(noVnc.searchParams.get("path"), "apps/access/vnc/lease_token/proxy/api/apps/sessions/gui%2Fsession/vnc");

@@ -354,7 +354,14 @@ export function vncAccessFrameUrl(token: string, sessionId: string, session: Rec
   const accessBase = `apps/access/vnc/${encodedToken}/proxy`;
   const vnc = session.vnc && typeof session.vnc === "object" ? session.vnc as Record<string, unknown> : {};
   const backend = typeof vnc.backend === "string" ? vnc.backend : "";
-  return backend === "kasmvnc"
-    ? `/${accessBase}/api/apps/sessions/${encodedSessionId}/web/`
-    : `/${accessBase}/api/novnc/vnc.html?path=${encodeURIComponent(`${accessBase}/api/apps/sessions/${encodedSessionId}/vnc`)}&autoconnect=1&resize=scale`;
+  if (backend === "kasmvnc") {
+    const params = new URLSearchParams({
+      path: `${accessBase}/api/apps/sessions/${encodedSessionId}/web/websockify`,
+      autoconnect: "1",
+      resize: "scale",
+      show_control_bar: "1",
+    });
+    return `/${accessBase}/api/apps/sessions/${encodedSessionId}/web/?${params.toString()}`;
+  }
+  return `/${accessBase}/api/novnc/vnc.html?path=${encodeURIComponent(`${accessBase}/api/apps/sessions/${encodedSessionId}/vnc`)}&autoconnect=1&resize=scale`;
 }
