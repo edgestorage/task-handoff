@@ -43,6 +43,6 @@ test("node settings separates paired control planes from active connections", ()
   assert.match(queries, /listNodeControlPlaneConnections\(nodeId: string\)[\s\S]*sharedControlPlaneClient\.nodeAdmin\.listControlPlaneConnections\(nodeId\)/);
   assert.match(nodeAdminClient, /control-plane-pairings/);
   assert.match(nodeAdminClient, /control-plane-connections/);
-  assert.match(zh, /inventory: "清单", remote: "连接"/);
-  assert.match(en, /inventory: "Inventory", remote: "Connections"/);
+  assert.match(zh, /inventory: "实例", remote: "连接"/);
+  assert.match(en, /inventory: "Instances", remote: "Connections"/);
 });

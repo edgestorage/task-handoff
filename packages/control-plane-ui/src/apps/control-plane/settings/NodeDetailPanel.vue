@@ -257,6 +257,26 @@
                 <NodeResourceEmptyState v-if="!resources.runtimes.length" :icon="Box" :message="t('settings.nodeDetail.noRuntimes')" />
               </div>
             </div>
+
+            <div class="node-detail-section">
+              <div class="section-head has-actions">
+                <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
+                <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
+                  <Monitor :size="14" />
+                  <span>{{ busy.loadingNodeImagesId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
+                </Button>
+              </div>
+              <div class="node-resource-list">
+                <div v-for="image in resources.images" :key="`${selectedNode.id}-${image.reference}-${image.id}`" class="node-resource-row">
+                  <div>
+                    <strong>{{ image.reference }}</strong>
+                    <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
+                  </div>
+                </div>
+                <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
+              </div>
+              <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
+            </div>
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="updates">
@@ -380,26 +400,6 @@
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="inventory">
-            <div class="node-detail-section">
-              <div class="section-head has-actions">
-                <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
-                <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
-                  <Monitor :size="14" />
-                  <span>{{ busy.loadingNodeImagesId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
-                </Button>
-              </div>
-              <div class="node-resource-list">
-                <div v-for="image in resources.images" :key="`${selectedNode.id}-${image.reference}-${image.id}`" class="node-resource-row">
-                  <div>
-                    <strong>{{ image.reference }}</strong>
-                    <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
-                  </div>
-                </div>
-                <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
-              </div>
-              <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
-            </div>
-
             <div class="node-detail-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.instanceCount", { count: resources.instances.length }) }}</span>
