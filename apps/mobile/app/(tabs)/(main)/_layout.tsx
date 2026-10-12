@@ -1,7 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
-import { Platform, type ColorValue } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Platform, View, type ColorValue } from 'react-native';
 
 import { useMobileTheme } from '../../../src/components/theme';
 import { useI18n } from '../../../src/i18n';
@@ -40,7 +39,9 @@ export default function PrimaryTabsLayout() {
     ? dark ? 'systemUltraThinMaterialDark' as const : 'systemUltraThinMaterialLight' as const
     : undefined;
   return (
-    <SafeAreaView edges={Platform.OS === 'ios' ? [] : ['top']} style={{ flex: 1 }} testID="primary-tabs-safe-area">
+    // Native headers and the native tab bar own their own insets; adding a top inset here duplicated
+    // the status-bar padding on Android edge-to-edge builds.
+    <View style={{ flex: 1 }} testID="primary-tabs-root">
       <NativeTabs backgroundColor={Platform.OS === 'android' ? colors.surface : undefined} blurEffect={nativeTabBlur} disableTransparentOnScrollEdge={Platform.OS === 'ios' && !liquidGlassTabs} iconColor={{ default: colors.textMuted, selected: colors.primary }} labelStyle={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }} minimizeBehavior={liquidGlassTabs ? 'onScrollDown' : undefined} tintColor={colors.primary}>
         <NativeTabs.Trigger disableAutomaticContentInsets name="inbox">
           <NativeTabs.Trigger.Icon
@@ -68,6 +69,6 @@ export default function PrimaryTabsLayout() {
           <NativeTabs.Trigger.Label>{t('nav.instances')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
       </NativeTabs>
-    </SafeAreaView>
+    </View>
   );
 }

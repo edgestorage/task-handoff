@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 
+import { OptionMenu, type OptionMenuOption } from '../src/components/OptionMenu';
 import { Screen } from '../src/components/Screen';
 import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
@@ -163,38 +164,30 @@ function LanguageRow({ compact = false }: { compact?: boolean }) {
   const { colors } = useMobileTheme();
   const { preference, setPreference, t } = useI18n();
   const labels: Record<LocalePreference, string> = { system: t('locale.system'), 'en-US': t('locale.english'), 'zh-CN': t('locale.chinese') };
-  const chooseLanguage = () => Alert.alert(t('locale.language'), undefined, [
-    ...(Object.keys(labels) as LocalePreference[]).map((value) => ({
-      text: `${preference === value ? '✓ ' : ''}${labels[value]}`,
-      onPress: () => { void setPreference(value); },
-    })),
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
-  return <Pressable accessibilityRole="button" onPress={chooseLanguage} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
-    <SystemIcon android="language" color={colors.textMuted} ios="globe" size={18} />
-    <Text style={[styles.languageLabel, { color: colors.text }]}>{t('locale.language')}</Text>
-    <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
-    <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
-  </Pressable>;
+  const options: OptionMenuOption<LocalePreference>[] = (Object.keys(labels) as LocalePreference[]).map((value) => ({ label: labels[value], value }));
+  return <OptionMenu cancelLabel={t('common.cancel')} onSelect={(value) => { void setPreference(value); }} options={options} selectedValue={preference} title={t('locale.language')}>
+    {(open) => <Pressable accessibilityRole="button" onPress={open} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <SystemIcon android="language" color={colors.textMuted} ios="globe" size={18} />
+      <Text style={[styles.languageLabel, { color: colors.text }]}>{t('locale.language')}</Text>
+      <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
+      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+    </Pressable>}
+  </OptionMenu>;
 }
 
 function AppearanceRow({ compact = false }: { compact?: boolean }) {
   const { colors, preference, setPreference } = useMobileTheme();
   const { t } = useI18n();
   const labels: Record<AppearancePreference, string> = { system: t('appearance.system'), light: t('appearance.light'), dark: t('appearance.dark') };
-  const chooseAppearance = () => Alert.alert(t('appearance.title'), undefined, [
-    ...(Object.keys(labels) as AppearancePreference[]).map((value) => ({
-      text: `${preference === value ? '✓ ' : ''}${labels[value]}`,
-      onPress: () => { void setPreference(value); },
-    })),
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
-  return <Pressable accessibilityRole="button" onPress={chooseAppearance} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
-    <SystemIcon android="dark_mode" color={colors.textMuted} ios="circle.lefthalf.filled" size={18} />
-    <Text style={[styles.languageLabel, { color: colors.text }]}>{t('appearance.title')}</Text>
-    <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
-    <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
-  </Pressable>;
+  const options: OptionMenuOption<AppearancePreference>[] = (Object.keys(labels) as AppearancePreference[]).map((value) => ({ label: labels[value], systemImage: value === 'light' ? 'sun.max' : value === 'dark' ? 'moon' : 'circle.lefthalf.filled', value }));
+  return <OptionMenu cancelLabel={t('common.cancel')} onSelect={(value) => { void setPreference(value); }} options={options} selectedValue={preference} title={t('appearance.title')}>
+    {(open) => <Pressable accessibilityRole="button" onPress={open} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <SystemIcon android="dark_mode" color={colors.textMuted} ios="circle.lefthalf.filled" size={18} />
+      <Text style={[styles.languageLabel, { color: colors.text }]}>{t('appearance.title')}</Text>
+      <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
+      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+    </Pressable>}
+  </OptionMenu>;
 }
 
 function GuideItem({ colors, icon, title, description }: { colors: ReturnType<typeof useMobileTheme>['colors']; icon: { android: AndroidSymbol; ios: SFSymbol }; title: string; description: string }) {

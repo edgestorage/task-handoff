@@ -1,9 +1,10 @@
 import type { ReactElement } from 'react';
-import { Alert } from 'react-native';
 
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
+import { FloatingMenuTrigger } from '../components/menu/FloatingMenuTrigger';
+import type { FloatingMenuBlock, FloatingMenuPage } from '../components/menu/menu-model';
 import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary, type ModelSettingsMenuHint } from './model-settings-menu';
 import { modelSelectionFromOption, sameModelSelection } from './model-selection';
 
@@ -25,12 +26,13 @@ type AttachmentMenuProps = {
 };
 
 export function AttachmentMenu(props: AttachmentMenuProps) {
-  return props.children(() => Alert.alert(props.title, undefined, [
-    ...(!props.imageDisabled ? [{ text: props.imageLabel, onPress: props.onAddImage }] : []),
-    ...(!props.fileDisabled ? [{ text: props.fileLabel, onPress: props.onAddFile }] : []),
-    ...(!props.runtimeFileDisabled ? [{ text: props.runtimeFileLabel, onPress: props.onAddRuntimeFile }] : []),
-    { text: props.cancelLabel, style: 'cancel' },
-  ]));
+  const blocks: FloatingMenuBlock[] = [
+    { item: { disabled: props.imageDisabled, icon: 'image', key: 'image', label: props.imageLabel, onPress: props.onAddImage }, key: 'image', type: 'item' },
+    { item: { disabled: props.fileDisabled, icon: 'attach_file', key: 'file', label: props.fileLabel, onPress: props.onAddFile }, key: 'file', type: 'item' },
+    { item: { disabled: props.runtimeFileDisabled, icon: 'folder', key: 'runtime-file', label: props.runtimeFileLabel, onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
+  ];
+  const unavailable = props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
+  return <FloatingMenuTrigger disabled={unavailable} page={unavailable ? null : { blocks, title: props.title }}>{props.children}</FloatingMenuTrigger>;
 }
 
 export type PermissionOption = AnchoredSelectOption<AiSessionPermissionMode> & { description: string };
@@ -73,36 +75,48 @@ type ModelSettingsMenuProps = {
   onReasoningChange(effort: AiSessionReasoningEffort): void;
 };
 
-const checkedLabel = (label: string, selected: boolean) => `${selected ? '\u2713 ' : ''}${label}`;
-
 export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
-  const showNoModelHint = () => {
-    if (!props.noModelHint) return;
-    Alert.alert(props.noModelHint.label, props.noModelHint.description, [
-      { text: props.noModelHint.dismissLabel, style: 'cancel' as const },
-    ]);
-  };
-  const chooseModel = (group: AiSessionModelGroup) => {
-    if (group.models.length === 1) return props.onModelChange(modelSelectionFromOption(group.models[0]));
-    Alert.alert(group.providerName, undefined, [
-      ...group.models.map((model) => ({
-        text: checkedLabel(model.modelName, props.modelSelection ? sameModelSelection(model, props.modelSelection) : false),
-        onPress: () => props.onModelChange(modelSelectionFromOption(model)),
+  const { formatModelGroupSummary, modelGroups, modelSelection, noModelHint, reasoningEffort, reasoningEnabled, reasoningTitle, onModelChange, onReasoningChange } = props;
+  const isSelected = (model: AiSessionModelGroup['models'][number]) => (modelSelection ? sameModelSelection(model, modelSelection) : false);
+  const blocks: FloatingMenuBlock[] = [];
+  if (noModelHint) {
+    blocks.push({ item: { disabled: true, icon: 'settings', key: 'no-model-hint', label: noModelHint.label, subtitle: noModelHint.description }, key: 'no-model-hint', type: 'item' });
+  }
+  modelGroups.forEach((group, groupIndex) => {
+    const selectedModel = group.models.find(isSelected);
+    const common = {
+      icon: group.models.length > 1 && selectedModel ? 'check' as const : 'auto_awesome' as const,
+      label: group.providerName,
+      subtitle: modelGroupSubtitle(group, modelSelection, formatModelGroupSummary),
+    };
+    if (group.models.length === 1) {
+      blocks.push({ item: { ...common, key: `model:${groupIndex}:0`, onPress: () => onModelChange(modelSelectionFromOption(group.models[0])), selected: isSelected(group.models[0]) }, key: `model:${groupIndex}:0`, type: 'item' });
+      return;
+    }
+    const submenu: FloatingMenuPage = {
+      blocks: group.models.map((model, modelIndex) => ({
+        item: { key: `model:${groupIndex}:${modelIndex}`, label: model.modelName, onPress: () => onModelChange(modelSelectionFromOption(model)), selected: isSelected(model) },
+        key: `model:${groupIndex}:${modelIndex}`,
+        type: 'item',
       })),
-      { text: props.cancelLabel, style: 'cancel' as const },
-    ]);
-  };
-  const chooseReasoning = () => Alert.alert(props.reasoningTitle, undefined, [
-    ...reasoningEfforts.filter((effort) => props.provider === 'codex' || effort !== 'ultra').map((effort) => ({ text: checkedLabel(effort, props.reasoningEffort === effort), onPress: () => props.onReasoningChange(effort) })),
-    { text: props.cancelLabel, style: 'cancel' as const },
-  ]);
-  return props.children(props.disabled ? undefined : () => Alert.alert(props.title, undefined, [
-    ...(props.noModelHint ? [{ text: props.noModelHint.label, onPress: showNoModelHint }] : []),
-    ...props.modelGroups.map((group) => ({
-      text: `${group.providerName} · ${modelGroupSubtitle(group, props.modelSelection, props.formatModelGroupSummary)}`,
-      onPress: () => chooseModel(group),
-    })),
-    ...(props.reasoningEnabled ? [{ text: `${props.reasoningTitle}${props.reasoningEffort ? ` · ${props.reasoningEffort}` : ''}`, onPress: chooseReasoning }] : []),
-    { text: props.cancelLabel, style: 'cancel' as const },
-  ]));
+      title: group.providerName,
+    };
+    blocks.push({ item: { ...common, key: `model:${groupIndex}`, selected: Boolean(selectedModel), submenu }, key: `model:${groupIndex}`, type: 'item' });
+  });
+  if (reasoningEnabled) {
+    const submenu: FloatingMenuPage = {
+      blocks: reasoningEfforts
+        .filter((effort) => props.provider === 'codex' || effort !== 'ultra')
+        .map((effort) => ({
+          item: { key: `reasoning:${effort}`, label: effort, onPress: () => onReasoningChange(effort), selected: reasoningEffort === effort },
+          key: `reasoning:${effort}`,
+          type: 'item',
+        })),
+      title: reasoningTitle,
+    };
+    if (blocks.length) blocks.push({ key: 'reasoning-divider', type: 'divider' });
+    blocks.push({ item: { icon: 'psychology', key: 'reasoning', label: reasoningTitle, submenu, subtitle: reasoningEffort }, key: 'reasoning', type: 'item' });
+  }
+  const page: FloatingMenuPage = { blocks, title: props.title };
+  return <FloatingMenuTrigger disabled={props.disabled || !blocks.length} page={props.disabled || !blocks.length ? null : page}>{props.children}</FloatingMenuTrigger>;
 }

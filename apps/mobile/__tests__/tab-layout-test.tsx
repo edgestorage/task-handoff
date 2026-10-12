@@ -26,7 +26,7 @@ jest.mock('expo-router/unstable-native-tabs', () => {
 });
 
 describe('<PrimaryTabsLayout />', () => {
-  test('keeps the native tabs below the status-bar safe area', async () => {
+  test('mounts the native tabs without adding its own top inset', async () => {
     const screen = await render(
       <SafeAreaProvider initialMetrics={{
         frame: { x: 0, y: 0, width: 390, height: 844 },
@@ -41,7 +41,7 @@ describe('<PrimaryTabsLayout />', () => {
     expect(screen.getByText('Stories')).toBeTruthy();
     expect(screen.getByText('App Sessions')).toBeTruthy();
     expect(screen.getByText('Instances')).toBeTruthy();
-    expect(screen.getByTestId('primary-tabs-safe-area')).toHaveStyle({ flex: 1 });
+    expect(screen.getByTestId('primary-tabs-root')).toHaveStyle({ flex: 1 });
   });
 
   test('keeps every native tab visible regardless of optional capabilities', async () => {

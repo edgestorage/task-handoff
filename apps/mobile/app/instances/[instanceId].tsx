@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../../src/components/MenuView';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 

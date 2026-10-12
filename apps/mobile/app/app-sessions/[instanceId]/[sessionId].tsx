@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { TerminalView, type TerminalViewRef } from 'expo-libghostty';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../../../src/components/MenuView';
 import { WebView } from 'react-native-webview';
 import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
 

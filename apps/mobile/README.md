@@ -8,6 +8,10 @@ Expo prebuild was selected over a manually maintained Community CLI native proje
 
 Expo SDK 57 targets React Native 0.86, React 19.2.3, Android API 36, iOS 16.4+, Node 22.13+ and Xcode 26.4+. The repository's Node 24 requirement satisfies the Expo minimum. Expo 57 automatically supports pnpm workspaces and isolated dependencies, so no custom monorepo Metro resolution is configured.
 
+## Platform UI adaptation
+
+Menus and single-choice pickers keep the native iOS presentation (SwiftUI `Menu`/`ContextMenu` via `@react-native-menu/menu` and `@expo/ui`) but render an iOS-style floating card on Android through `src/components/menu/` (`FloatingMenu`, `FloatingMenuTrigger`, `menu-actions.ts`). Android screens import the platform-neutral adapters `src/components/MenuView.tsx`, `AnchoredSelectMenu.tsx`, and `OptionMenu.tsx`; the matching `.ios.tsx` files keep the native implementations. Add new menu surfaces through those adapters instead of the Android system dropdown/alert lists.
+
 ## Variants and identity
 
 | Variant | Environment | Display name | iOS bundle / Android package | URL scheme |

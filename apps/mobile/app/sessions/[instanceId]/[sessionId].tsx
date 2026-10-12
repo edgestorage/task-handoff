@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Alert, Pressable, StyleSheet } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../../../src/components/MenuView';
 
 import { SessionWorkspace } from '../../../src/ai-sessions/SessionWorkspace';
 import type { SessionDetailMode } from '../../../src/ai-sessions/SessionDetail';

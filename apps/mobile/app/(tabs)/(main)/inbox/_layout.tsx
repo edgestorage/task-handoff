@@ -1,10 +1,11 @@
 import { router, type NativeStackHeaderItem } from 'expo-router';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../../../../src/components/MenuView';
 import { useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { PrimaryTabStack } from '../../../../src/components/PrimaryTabStack';
 import { SystemIcon } from '../../../../src/components/SystemIcon';
+import { useMobileTheme } from '../../../../src/components/theme';
 import { useI18n } from '../../../../src/i18n';
 import { useInstanceScope } from '../../../../src/instance-scope/use-instance-scope';
 import {
@@ -17,6 +18,7 @@ import {
 const GROUP_MODES = ['none', 'path', 'instance', 'node', 'agent'] as const;
 
 export default function InboxLayout() {
+  const { colors } = useMobileTheme();
   const { t } = useI18n();
   const { scope } = useInstanceScope();
   const preferences = useSyncExternalStore(
@@ -86,11 +88,11 @@ export default function InboxLayout() {
   ] satisfies NativeStackHeaderItem[];
   const headerRight = () => <View style={styles.headerActions}>
     <Pressable accessibilityLabel={t('sessions.newAccessibility')} accessibilityRole="button" hitSlop={6} onPress={openNewSession} style={({ pressed }) => [styles.headerButton, pressed && styles.headerButtonPressed]}>
-      <SystemIcon android="add" color="#ffffff" ios="plus" size={20} />
+      <SystemIcon android="add" color={colors.primary} ios="plus" size={20} />
     </Pressable>
     <MenuView actions={androidMenuActions} onPressAction={({ nativeEvent }) => selectPreference(nativeEvent.event)} title={t('sessions.inbox.options')}>
       <Pressable accessibilityLabel={t('sessions.inbox.options')} accessibilityRole="button" hitSlop={6} style={({ pressed }) => [styles.headerButton, pressed && styles.headerButtonPressed]}>
-        <SystemIcon android="more_horiz" color="#ffffff" ios="ellipsis" size={21} />
+        <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis" size={21} />
       </Pressable>
     </MenuView>
   </View>;
