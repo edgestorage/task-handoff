@@ -85,6 +85,8 @@ test("streaming Markdown uses markstream pacing with independent character revea
   assert.match(animatedText, /:key="segment\.id"/);
   assert.match(animatedText, /animation: ai-session-character-fade 150ms ease-out both/);
   assert.match(animatedText, /@animationend\.stop="settleSegment\(segment\.id\)"/);
+  assert.match(animatedText, /function settlePendingSegments\(\)/);
+  assert.match(animatedText, /settlePendingSegments\(\);\s*\n\s*settledContent\.value \+= value;/);
 });
 
 test("streaming Markdown link context menu only captures anchor context menus", () => {
