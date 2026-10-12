@@ -260,10 +260,38 @@ test("local-folder workspaces map to drvfs symlinks and reject unmappable paths"
 });
 
 test("runtime environment declares WSL identity, private config bridge and git contract", () => {
-  const env = buildWslRuntimeEnvironment(gitContext(), { nodeAgentUrl: "http://172.20.0.1:8091", workspace: "/workspace" });
+  const env = buildWslRuntimeEnvironment(gitContext(), { nodeAgentUrl: "http://172.20.0.1:8091", workspace: "/workspace", port: 19001 });
   assert.equal(env.TASK_HANDOFF_RUNTIME_KIND, "wsl");
   assert.equal(env.TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH, WSL_PRIVATE_CONFIG_PATH);
   assert.equal(env.TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP, "true");
   assert.ok("TASK_HANDOFF_WORKSPACE_GIT_URL" in env);
   assert.ok(Object.keys(env).every((key) => !/secret|token|password/i.test(key)));
+});
+
+test("the instance is told to listen on the node-owned port, not the image default", () => {
+  const env = buildWslRuntimeEnvironment(gitContext(), { nodeAgentUrl: "http://127.0.0.1:18091", workspace: "/workspace", port: 19001 });
+  assert.equal(env.TASK_HANDOFF_WEB_PORT, "19001");
+  assert.equal(env.TASK_HANDOFF_WEB_HOST, "127.0.0.1");
+});
+
+test("a no-image WSL instance reports no image identity to the registration check", () => {
+  // 实例记录没有 imageSelection 时上报 context.image（img_localhost）会被注册校验 403 拒绝。
+  const noImage = buildWslRuntimeEnvironment(gitContext(), { nodeAgentUrl: "http://127.0.0.1:18091", workspace: "/workspace", port: 19001 });
+  assert.ok(!("TASK_HANDOFF_IMAGE_ID" in noImage));
+  assert.ok(!("TASK_HANDOFF_IMAGE_TAG" in noImage));
+
+  const context = gitContext();
+  (context.instance as { imageSelection?: unknown }).imageSelection = { imageId: "market_taskhandoff_codex", tag: "latest" };
+  const withImage = buildWslRuntimeEnvironment(context, { nodeAgentUrl: "http://127.0.0.1:18091", workspace: "/workspace", port: 19001 });
+  assert.equal(withImage.TASK_HANDOFF_IMAGE_ID, "market_taskhandoff_codex");
+  assert.equal(withImage.TASK_HANDOFF_IMAGE_TAG, "latest");
+});
+
+test("start passes the allocated port into the unit environment", async () => {
+  const executor = fakeExecutor();
+  const lifecycle = makeLifecycle(executor, { probeNodeAgent: async () => ({ reachable: true }) });
+  await lifecycle.start(gitContext({ port: 19001 }));
+  const unitWrite = executor.calls.find((call) => call.kind === "execOrThrow" && (call.args?.[2] ?? "").includes("/etc/systemd/system/task-handoff-instance.service"));
+  const unit = Buffer.from((/printf '%s' '([A-Za-z0-9+/=]+)'/.exec(unitWrite?.args?.[2] ?? "")?.[1] ?? ""), "base64").toString("utf8");
+  assert.match(unit, /Environment="TASK_HANDOFF_WEB_PORT=19001"/);
 });

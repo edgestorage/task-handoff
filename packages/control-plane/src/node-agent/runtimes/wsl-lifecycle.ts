@@ -160,8 +160,12 @@ export function renderWslInstanceUnit(environment: Record<string, string>, optio
 /** distro 内实例运行环境。与 Docker 的 runtime env 保持一致语义，新增 WSL 专属键。 */
 export function buildWslRuntimeEnvironment(
   context: ExecutorContext,
-  options: { nodeAgentUrl: string; workspace: string },
+  options: { nodeAgentUrl: string; workspace: string; port: number },
 ) {
+  // 实例记录里没有 imageSelection 时 MUST NOT 上报镜像身份：`wsl` 是无镜像 runtime，注册校验会拿
+  // 上报值与记录比对（`INSTANCE_IMAGE_MISMATCH`），而 `context.image` 只是 CP 的默认快照
+  // （`img_localhost`），把它注入进去会让注册被 403 拒绝（10.5 实机发现）。
+  const imageSelection = context.instance.imageSelection;
   const runtimeEnv: Record<string, string> = {
     TASK_HANDOFF_CONTROL_MODE: "controlled",
     TASK_HANDOFF_NODE_AGENT_URL: options.nodeAgentUrl,
@@ -171,13 +175,18 @@ export function buildWslRuntimeEnvironment(
     TASK_HANDOFF_NODE_ID: context.node?.id || "node_unset",
     TASK_HANDOFF_RUNTIME_ID: context.runtime?.id || "runtime_wsl_host",
     TASK_HANDOFF_RUNTIME_KIND: "wsl",
-    TASK_HANDOFF_IMAGE_ID: context.image.id,
+    ...(imageSelection ? { TASK_HANDOFF_IMAGE_ID: imageSelection.imageId } : {}),
     TASK_HANDOFF_INSTANCE_LAUNCHER: `${WSL_BOOTSTRAP_ROOT}/instance-launcher.sh`,
     TASK_HANDOFF_CHAT_BRIDGES: "none",
+    // WSL 没有 Docker 那样的端口发布：Node Agent 代理写死 `127.0.0.1:<runtime.port>`，而 WSL2
+    // localhost forwarding 按端口号 1:1 映射，所以实例 MUST 监听 Node Agent 分配的端口（10.5 实机
+    // 发现实例默认听 8080、代理指向 19001，导致 proxy 409 与版本收敛 fetch failed）。
+    TASK_HANDOFF_WEB_PORT: String(options.port),
+    TASK_HANDOFF_WEB_HOST: "127.0.0.1",
     TASK_HANDOFF_WORKSPACE: options.workspace,
     TASK_HANDOFF_WORKSPACE_MODE: context.project.workspacePolicy.mode,
     TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: WSL_PRIVATE_CONFIG_PATH,
-    ...(context.image.tag ? { TASK_HANDOFF_IMAGE_TAG: context.image.tag } : {}),
+    ...(imageSelection?.tag ? { TASK_HANDOFF_IMAGE_TAG: imageSelection.tag } : {}),
     ...(context.project.source.type === "local-folder" ? {} : { TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP: "true" }),
   };
   if (context.project.source.type !== "local-folder") {
@@ -402,10 +411,11 @@ export class WslInstanceLifecycle {
     await this.syncPrivateConfig(context, distroName);
     // 先持有保活会话，使 distro 在单元启动与就绪等待期间不会被空闲回收（D13）。
     await this.executor.holdSession(distroName);
-    const nodeAgentUrl = await this.nodeAgentUrl(context, distroName);
-    const environment = buildWslRuntimeEnvironment(context, { nodeAgentUrl, workspace });
-    await this.writeUnit(distroName, environment, workspace, context.instance.id);
+    // 端口必须在写 unit 之前定下来：实例要靠 TASK_HANDOFF_WEB_PORT 监听同一端口（见上方说明）。
     const port = context.instance.runtime.port ?? await this.allocatePort();
+    const nodeAgentUrl = await this.nodeAgentUrl(context, distroName);
+    const environment = buildWslRuntimeEnvironment(context, { nodeAgentUrl, workspace, port });
+    await this.writeUnit(distroName, environment, workspace, context.instance.id);
     await this.executor.systemctl(distroName, ["daemon-reload"]);
     await this.executor.systemctl(distroName, ["enable", WSL_UNIT_NAME]);
     await this.executor.systemctl(distroName, ["restart", WSL_UNIT_NAME]);
