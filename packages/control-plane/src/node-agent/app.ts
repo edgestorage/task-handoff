@@ -1756,7 +1756,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
   app.decorate("nodeAgentStartWslSessionSupervisor", () => wslSessionSupervisor?.start());
   // Docker 式拉取（10.8）：启动后在后台预热期望版本的 base 模板，避免把大体积下载放进创建请求。
-  app.decorate("nodeAgentPrefetchWslBaseTemplate", () => wslProvisioner?.prefetchBaseTemplate());
+  app.decorate("nodeAgentPrefetchWslBaseTemplate", async () => {
+    await wslProvisioner?.prefetchBaseTemplate();
+  });
 
   app.get("/api/node-agent/health", async () => {
     const hostname = os.hostname().trim();

@@ -520,3 +520,20 @@ test("AI session workspace identity is capability-gated for v0.0.21 controlled i
   assert.equal(requests[1].body.cwdFolderId, "folder-1");
   assert.equal(requests[2].route, "/repository/ai-session-workspace/inspect");
 });
+
+test("node agent startup tolerates a host without a WSL runtime when prefetching the base template", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-agent-prefetch-"));
+  const nodeAgent = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_prefetch",
+    token: "agent-secret",
+  });
+  t.after(() => nodeAgent.close());
+
+  // add-wsl-runtime 10.8：启动预热必须始终返回 promise。没有 WSL runtime 时早期实现返回 undefined，
+  // 启动路径的 `.catch` 直接抛 "Cannot read properties of undefined (reading 'catch')" 并让节点启动失败。
+  const prefetch = nodeAgent.nodeAgentPrefetchWslBaseTemplate();
+  assert.equal(typeof prefetch?.then, "function", "startup prefetch must return a promise so the startup path can attach .catch");
+  await prefetch;
+});
