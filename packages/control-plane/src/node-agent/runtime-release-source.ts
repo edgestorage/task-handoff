@@ -9,7 +9,8 @@ export type PublishedRuntimeArtifact = {
   source: RuntimeArtifactSource;
 };
 
-function releaseRoot(version: string) {
+/** 发布通道根：受管 runtime artifact 与 WSL base 模板共用同一条发布链（GitHub release）。 */
+export function runtimeReleaseRoot(version: string) {
   const configured = process.env.TASK_HANDOFF_RUNTIME_RELEASE_BASE_URL?.trim();
   if (configured) return configured.replaceAll("{version}", version).replace(/\/$/, "");
   return `https://github.com/edgestorage/task-handoff/releases/download/v${version}`;
@@ -62,7 +63,7 @@ export async function resolvePublishedRuntimeArtifact(
   const bundled = await resolveBundledRuntimeArtifact(version);
   if (bundled) return bundled;
   const stem = `controlled-instance-runtime-${version}-linux-universal`;
-  const root = releaseRoot(version);
+  const root = runtimeReleaseRoot(version);
   const manifestUrl = `${root}/${stem}.manifest.json`;
   const archiveUrl = `${root}/${stem}.tar.gz`;
   const checksumUrl = `${root}/${stem}.tar.gz.sha256`;

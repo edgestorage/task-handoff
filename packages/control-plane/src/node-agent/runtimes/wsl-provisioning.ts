@@ -1,10 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import writeFileAtomic from "write-file-atomic";
 import { JsonFile } from "../../shared/persistence/store.ts";
+import { runtimeReleaseRoot } from "../runtime-release-source.ts";
 import { WSL_DISTRO_PREFIX, wslDistroNameForInstance, type WslDistro } from "./wsl-executor.ts";
 
 /**
@@ -23,6 +25,7 @@ import { WSL_DISTRO_PREFIX, wslDistroNameForInstance, type WslDistro } from "./w
 
 export const WSL_BASE_TEMPLATE_MISSING = "WSL_BASE_TEMPLATE_MISSING";
 export const WSL_BASE_TEMPLATE_INVALID = "WSL_BASE_TEMPLATE_INVALID";
+export const WSL_BASE_TEMPLATE_UNAVAILABLE = "WSL_BASE_TEMPLATE_UNAVAILABLE";
 export const WSL_DISTRO_OWNERSHIP_CONFLICT = "WSL_DISTRO_OWNERSHIP_CONFLICT";
 
 /** distro 内归属标记（root 可读写；由 `wsl -u root` 写入）。 */
@@ -179,8 +182,16 @@ export type EnsureWslBaseTemplateOptions = {
   sourceDirs?: string[];
   archivePath?: string;
   manifestPath?: string;
+  /**
+   * 期望版本，同时是发布通道的拉取锚点（Node Agent 以自身发布版本为锚，见 app.ts）。
+   * 本地缺失该版本时按 Docker 式拉取从发布通道取模板（10.8）。
+   */
   expectedVersion?: string;
   expectedArch?: string;
+  /** 发布通道根；缺省与受管 runtime artifact 相同（GitHub release，可被
+   *  `TASK_HANDOFF_RUNTIME_RELEASE_BASE_URL` 覆盖）。 */
+  releaseBaseUrl?: string;
+  fetchImpl?: typeof fetch;
   logger?: (message: string, data: Record<string, unknown>) => void;
 };
 
@@ -294,6 +305,13 @@ async function locateBaseTemplateSource(options: EnsureWslBaseTemplateOptions) {
  * 升级后随附的新模板会被旧缓存永久遮蔽，新 distro 一直导入旧工具集。命中同一版本时直接复用缓存
  * 资产（不重复拷贝）；来源不可用时回退到缓存，保证离线节点仍可供给。来源未命中缓存时校验 SHA-256
  * 后再原子写入缓存，使多个实例复用同一份模板资产。
+ *
+ * 解析顺序（10.8，Docker 式拉取）：
+ * 1. 节点可见来源（显式目录/随附目录）命中期望版本 → 物化进缓存并使用；
+ * 2. 节点级缓存命中期望版本 → 直接使用（离线快路径）；
+ * 3. 本地没有期望版本 → 从发布通道拉取该版本（manifest + tar.gz，SHA-256 校验后原子入缓存）；
+ * 4. 拉取不可用（离线/未发布） → 回退到本地任意可用版本，保证既有节点仍能供给实例；
+ * 5. 都没有 → `WSL_BASE_TEMPLATE_MISSING`，并在 details 里带上拉取失败原因。
  */
 export async function ensureWslBaseTemplate(options: EnsureWslBaseTemplateOptions): Promise<ResolvedWslBaseTemplate> {
   const source = await locateBaseTemplateSource(options).catch((error: unknown) => {
@@ -302,15 +320,64 @@ export async function ensureWslBaseTemplate(options: EnsureWslBaseTemplateOption
     if (!options.archivePath && (error as { code?: string } | undefined)?.code === WSL_BASE_TEMPLATE_MISSING) return undefined;
     throw error;
   });
-  if (!source) {
-    const cachedOnly = await readCacheEntry(options.cacheDir, options);
-    if (cachedOnly) return cachedOnly;
-    throw provisioningError(
-      WSL_BASE_TEMPLATE_MISSING,
-      "No cached or bundled WSL base template was found. Build/package one or set TASK_HANDOFF_WSL_BASE_TEMPLATE.",
-      { sourceDirs: options.sourceDirs ?? [] },
-    );
+  if (source) return await materializeBaseTemplateSource(source, options);
+  const cachedExact = await readCacheEntry(options.cacheDir, options);
+  if (cachedExact) return cachedExact;
+  // 本地没有期望版本：像 `docker pull` 一样从发布通道取期望版本。
+  let pullFailure: { code: string; message: string; details?: Record<string, unknown> } | undefined;
+  const pulled = await pullPublishedBaseTemplate(options).catch((error: unknown) => {
+    // 只有"拿不到"（网络/未发布）才允许回退到旧版本；校验失败或配置错误必须显式暴露。
+    if (errorCode(error) !== WSL_BASE_TEMPLATE_UNAVAILABLE) throw error;
+    pullFailure = {
+      code: WSL_BASE_TEMPLATE_UNAVAILABLE,
+      message: error instanceof Error ? error.message : String(error),
+      ...(error && typeof error === "object" && "details" in error ? { details: (error as { details?: Record<string, unknown> }).details } : {}),
+    };
+    options.logger?.("wsl base template pull failed", {
+      version: options.expectedVersion,
+      arch: options.expectedArch,
+      code: pullFailure.code,
+      error: pullFailure.message,
+    });
+    return undefined;
+  });
+  if (pulled) return pulled;
+  // 离线/未发布回退：本地任一可用版本（显式指向目录或缓存），避免既有节点因拉取失败无法供给。
+  const fallback = await readAnyLocalBaseTemplate(options);
+  if (fallback) {
+    options.logger?.("wsl base template fell back to a locally available version", {
+      version: fallback.identity.version,
+      expectedVersion: options.expectedVersion,
+      cacheHit: fallback.cacheHit,
+    });
+    return fallback;
   }
+  throw provisioningError(
+    WSL_BASE_TEMPLATE_MISSING,
+    "No locally available WSL base template was found and the release channel did not provide one. Build/package one, "
+    + "set TASK_HANDOFF_WSL_BASE_TEMPLATE_DIR, or restore the node's access to the runtime release channel.",
+    {
+      sourceDirs: options.sourceDirs ?? [],
+      expectedVersion: options.expectedVersion,
+      expectedArch: options.expectedArch,
+      ...(pullFailure ? { pullError: pullFailure } : {}),
+    },
+  );
+}
+
+function errorCode(error: unknown) {
+  return typeof (error as { code?: unknown })?.code === "string" ? String((error as { code: unknown }).code) : undefined;
+}
+
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 把本地来源（显式目录/随附目录）物化进 node 级缓存；命中同版本缓存时直接复用。 */
+async function materializeBaseTemplateSource(
+  source: { archivePath: string; manifestPath: string },
+  options: EnsureWslBaseTemplateOptions,
+): Promise<ResolvedWslBaseTemplate> {
   const identity = await readManifest(source.manifestPath);
   assertExpectedIdentity(identity, options);
   const cached = await readCacheEntry(options.cacheDir, { ...options, expectedVersion: identity.version, expectedArch: identity.arch });
@@ -323,23 +390,141 @@ export async function ensureWslBaseTemplate(options: EnsureWslBaseTemplateOption
       actualSha256,
     });
   }
-  const entryDir = path.join(options.cacheDir, baseTemplateStem(identity.version, identity.arch));
+  const stem = baseTemplateStem(identity.version, identity.arch);
+  const entryDir = path.join(options.cacheDir, stem);
   await fsp.mkdir(entryDir, { recursive: true });
-  const archivePath = path.join(entryDir, `${baseTemplateStem(identity.version, identity.arch)}.tar.gz`);
+  const stagingPath = path.join(entryDir, `.${stem}.${process.pid}.part`);
+  try {
+    await fsp.copyFile(source.archivePath, stagingPath);
+    const resolved = await commitCachedBaseTemplate(identity, stagingPath, options);
+    options.logger?.("wsl base template cached", {
+      version: identity.version,
+      arch: identity.arch,
+      sourceArchivePath: source.archivePath,
+      cacheArchivePath: resolved.archivePath,
+      sizeBytes: identity.sizeBytes,
+    });
+    return resolved;
+  } finally {
+    await fsp.rm(stagingPath, { force: true });
+  }
+}
+
+/** 原子落盘缓存条目：archive 就位后再写 manifest 与 `.ready` 哨兵，读侧只认带哨兵的条目。 */
+async function commitCachedBaseTemplate(
+  identity: WslBaseTemplateManifest,
+  stagedArchivePath: string,
+  options: EnsureWslBaseTemplateOptions,
+): Promise<ResolvedWslBaseTemplate> {
+  const stem = baseTemplateStem(identity.version, identity.arch);
+  const entryDir = path.join(options.cacheDir, stem);
+  await fsp.mkdir(entryDir, { recursive: true });
+  const archivePath = path.join(entryDir, `${stem}.tar.gz`);
+  await fsp.rename(stagedArchivePath, archivePath);
   const manifestPath = path.join(entryDir, "manifest.json");
-  const stagingPath = `${archivePath}.staging-${process.pid}`;
-  await fsp.copyFile(source.archivePath, stagingPath);
-  await fsp.rename(stagingPath, archivePath);
   writeFileAtomic.sync(manifestPath, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8" });
   writeFileAtomic.sync(path.join(entryDir, ".ready"), "", { encoding: "utf8" });
-  options.logger?.("wsl base template cached", {
-    version: identity.version,
-    arch: identity.arch,
-    sourceArchivePath: source.archivePath,
-    cacheArchivePath: archivePath,
-    sizeBytes: identity.sizeBytes,
-  });
   return { identity, archivePath, manifestPath, cacheHit: false };
+}
+
+/**
+ * 10.8：本地没有期望版本时从发布通道拉取 `wsl-base-<version>-<arch>` 的 manifest 与 tar.gz。
+ * 通道与受管 runtime artifact 相同（`TASK_HANDOFF_RUNTIME_RELEASE_BASE_URL` 可覆盖），
+ * 校验 SHA-256 后原子入 node 级缓存，后续实例复用同一份缓存资产。期望版本或架构缺失时不做拉取。
+ */
+async function pullPublishedBaseTemplate(options: EnsureWslBaseTemplateOptions): Promise<ResolvedWslBaseTemplate | undefined> {
+  const version = options.expectedVersion;
+  const arch = options.expectedArch;
+  if (!version || !arch) return undefined;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const root = (options.releaseBaseUrl?.trim().replaceAll("{version}", version) || runtimeReleaseRoot(version)).replace(/\/+$/, "");
+  const stem = baseTemplateStem(version, arch);
+  const manifestUrl = `${root}/${stem}.manifest.json`;
+  const archiveUrl = `${root}/${stem}.tar.gz`;
+  const unavailable = (message: string, details: Record<string, unknown>, cause?: unknown) =>
+    provisioningError(WSL_BASE_TEMPLATE_UNAVAILABLE, message, { ...details, ...(cause === undefined ? {} : { cause: describeError(cause) }) }, 503);
+
+  let manifestResponse: Response;
+  try {
+    manifestResponse = await fetchImpl(manifestUrl);
+  } catch (cause) {
+    throw unavailable(`Could not reach the WSL base template release manifest ${manifestUrl}.`, { manifestUrl, retryable: true }, cause);
+  }
+  if (!manifestResponse.ok) {
+    throw unavailable(`WSL base template release manifest ${manifestUrl} returned HTTP ${manifestResponse.status}.`, {
+      manifestUrl,
+      status: manifestResponse.status,
+      retryable: manifestResponse.status === 404 || manifestResponse.status >= 500,
+    });
+  }
+  let manifest: unknown;
+  try {
+    manifest = await manifestResponse.json();
+  } catch (cause) {
+    throw provisioningError(WSL_BASE_TEMPLATE_INVALID, `WSL base template release manifest ${manifestUrl} is not valid JSON.`, { manifestUrl, cause: describeError(cause) });
+  }
+  const parsed = WslBaseTemplateManifestSchema.safeParse(manifest);
+  if (!parsed.success) {
+    throw provisioningError(WSL_BASE_TEMPLATE_INVALID, `WSL base template release manifest ${manifestUrl} is invalid.`, { manifestUrl, issues: parsed.error.issues });
+  }
+  const identity = parsed.data;
+  assertExpectedIdentity(identity, options);
+  const entryDir = path.join(options.cacheDir, stem);
+  await fsp.mkdir(entryDir, { recursive: true });
+  const stagingPath = path.join(entryDir, `.${stem}.${randomUUID()}.part`);
+  try {
+    const handle = await fsp.open(stagingPath, "wx");
+    let response: Response;
+    try {
+      response = await fetchImpl(archiveUrl);
+    } catch (cause) {
+      await handle.close();
+      throw unavailable(`Could not download the WSL base template archive ${archiveUrl}.`, { archiveUrl, retryable: true }, cause);
+    }
+    if (!response.ok || !response.body) {
+      await handle.close();
+      throw unavailable(`WSL base template archive ${archiveUrl} returned HTTP ${response.status}.`, {
+        archiveUrl,
+        status: response.status,
+        retryable: response.status === 404 || response.status >= 500,
+      });
+    }
+    await pipeline(response.body, handle.createWriteStream());
+    const actualSha256 = await sha256File(stagingPath);
+    if (actualSha256 !== identity.sha256) {
+      throw provisioningError(WSL_BASE_TEMPLATE_INVALID, `Downloaded WSL base template ${identity.id}@${identity.version} failed SHA-256 verification.`, {
+        archiveUrl,
+        expectedSha256: identity.sha256,
+        actualSha256,
+      });
+    }
+    const resolved = await commitCachedBaseTemplate(identity, stagingPath, options);
+    options.logger?.("wsl base template downloaded", {
+      version: identity.version,
+      arch: identity.arch,
+      manifestUrl,
+      archiveUrl,
+      cacheArchivePath: resolved.archivePath,
+      sizeBytes: identity.sizeBytes,
+    });
+    return resolved;
+  } catch (error) {
+    if (errorCode(error)?.startsWith("WSL_")) throw error;
+    throw unavailable(`Could not download the WSL base template archive ${archiveUrl}.`, { archiveUrl, retryable: true }, error);
+  } finally {
+    await fsp.rm(stagingPath, { force: true });
+  }
+}
+
+/** 离线回退：忽略期望版本，取本地（显式目录或缓存）任意可用模板。 */
+async function readAnyLocalBaseTemplate(options: EnsureWslBaseTemplateOptions): Promise<ResolvedWslBaseTemplate | undefined> {
+  const anyVersion = { ...options, expectedVersion: undefined };
+  const cached = await readCacheEntry(options.cacheDir, anyVersion);
+  if (cached) return cached;
+  if (options.archivePath) return undefined;
+  const source = await locateBaseTemplateSource(anyVersion).catch(() => undefined);
+  if (!source) return undefined;
+  return await materializeBaseTemplateSource(source, anyVersion);
 }
 
 /** 只读索引：distro 名 → 归属。作为快路径避免为所有权检查唤醒 distro。 */
@@ -407,6 +592,8 @@ export type WslDistroProvisionerOptions = {
   expectedBaseTemplateVersion?: string;
   /** 该 runtime 声明的唯一受支持架构（WSL2 与宿主同架构）。 */
   expectedArch?: string;
+  /** 发布通道拉取用的 fetch（缺省为全局 fetch）。 */
+  fetchImpl?: typeof fetch;
   now?: () => Date;
   logger?: (message: string, data: Record<string, unknown>) => void;
 };
@@ -460,6 +647,14 @@ export class WslDistroProvisioner {
     return persisted || wslDistroNameForInstance(instance.id);
   }
 
+  /**
+   * 10.8 预热：在后台把期望版本的 base 模板拉进 node 级缓存，避免首次建实例时把下载塞进
+   * 创建请求的关键路径（命中缓存时不产生网络请求）。失败只做诊断，供给时会再试一次。
+   */
+  async prefetchBaseTemplate(): Promise<void> {
+    await this.ensureBaseTemplate();
+  }
+
   /** 删除实例时同步移除宿主侧索引，避免同一 distro 名在下次供给时被判为冲突。 */
   forgetDistro(distroName: string) {
     this.index.delete(distroName);
@@ -480,6 +675,7 @@ export class WslDistroProvisioner {
       sourceDirs: this.options.baseTemplateSourceDirs ?? defaultWslBaseTemplateSourceDirs(),
       expectedVersion: this.options.expectedBaseTemplateVersion,
       expectedArch: this.options.expectedArch,
+      fetchImpl: this.options.fetchImpl,
       logger: this.options.logger,
     });
   }

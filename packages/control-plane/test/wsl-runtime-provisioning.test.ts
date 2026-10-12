@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   WSL_BASE_TEMPLATE_INVALID,
   WSL_BASE_TEMPLATE_MISSING,
+  WSL_BASE_TEMPLATE_UNAVAILABLE,
   WSL_DISTRO_MARKER_PATH,
   WSL_DISTRO_OWNERSHIP_CONFLICT,
   WSL_OWNERSHIP_BASELINE_MARKER_PATH,
@@ -63,6 +64,40 @@ type FakeExecutor = WslProvisioningExecutor & {
   unregistered: string[];
   ownershipBaselines: string[];
 };
+
+/** 假的发布通道：`/wsl-base-<version>-<arch>.manifest.json` 与 `.tar.gz`。 */
+function fakeReleaseChannel(options: {
+  version: string;
+  arch?: string;
+  archive?: Buffer;
+  manifest?: Record<string, unknown>;
+  status?: number;
+  fail?: boolean;
+}) {
+  const arch = options.arch ?? BASE_ARCH;
+  const archive = options.archive ?? Buffer.from(`base-rootfs-${options.version}-${arch}`);
+  const manifest = options.manifest ?? {
+    id: "wsl-base",
+    version: options.version,
+    platform: "linux",
+    arch,
+    formatVersion: 1,
+    sha256: sha256(archive),
+    sizeBytes: archive.length,
+  };
+  const calls: string[] = [];
+  const fetchImpl = (async (input: unknown) => {
+    const url = String(input);
+    calls.push(url);
+    if (options.fail) throw new Error("release channel unreachable");
+    const status = options.status ?? 200;
+    if (status !== 200) return new Response("release channel error", { status });
+    return url.endsWith(".manifest.json")
+      ? new Response(JSON.stringify(manifest), { status })
+      : new Response(archive, { status });
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls, archive, manifest };
+}
 
 function fakeExecutor(initial: WslDistro[] = []): FakeExecutor {
   const distros = new Map(initial.map((distro) => [distro.name, distro]));
@@ -193,6 +228,147 @@ test("an explicitly configured base template archive stays a hard requirement", 
     () => ensureWslBaseTemplate({ cacheDir, archivePath: path.join(tmpDir("wsl-base-gone-"), "missing.tar.gz"), expectedArch: BASE_ARCH }),
     (error: { code?: string }) => error.code === WSL_BASE_TEMPLATE_MISSING,
   );
+});
+
+test("pulls the expected base template from the release channel when nothing local matches", async () => {
+  const cacheDir = tmpDir("wsl-base-pull-cache-");
+  // 本地只有旧模板（升级前的遗留）：期望版本缺失时必须走发布通道，而不是继续用旧模板。
+  const sourceDir = tmpDir("wsl-base-pull-src-");
+  writeBaseTemplateFixture({ dir: sourceDir, version: "1.2.3" });
+  const channel = fakeReleaseChannel({ version: "1.3.0" });
+
+  const resolved = await ensureWslBaseTemplate({
+    cacheDir,
+    sourceDirs: [sourceDir],
+    expectedVersion: "1.3.0",
+    expectedArch: BASE_ARCH,
+    fetchImpl: channel.fetchImpl,
+  });
+
+  assert.equal(resolved.identity.version, "1.3.0");
+  assert.equal(resolved.cacheHit, false);
+  assert.deepEqual(fs.readFileSync(resolved.archivePath), channel.archive);
+  assert.ok(resolved.archivePath.startsWith(path.join(cacheDir, "wsl-base-1.3.0-x64")));
+  assert.deepEqual(channel.calls, [
+    "https://github.com/edgestorage/task-handoff/releases/download/v1.3.0/wsl-base-1.3.0-x64.manifest.json",
+    "https://github.com/edgestorage/task-handoff/releases/download/v1.3.0/wsl-base-1.3.0-x64.tar.gz",
+  ]);
+
+  // 第二次解析命中 node 级缓存，不再访问发布通道。
+  const reused = await ensureWslBaseTemplate({
+    cacheDir,
+    sourceDirs: [sourceDir],
+    expectedVersion: "1.3.0",
+    expectedArch: BASE_ARCH,
+    fetchImpl: channel.fetchImpl,
+  });
+  assert.equal(reused.cacheHit, true);
+  assert.equal(reused.archivePath, resolved.archivePath);
+  assert.equal(channel.calls.length, 2);
+});
+
+test("a template pointed at by TASK_HANDOFF_WSL_BASE_TEMPLATE_DIR is still pulled when it is a different version", async () => {
+  const cacheDir = tmpDir("wsl-base-pull-pointed-cache-");
+  const sourceDir = tmpDir("wsl-base-pull-pointed-src-");
+  writeBaseTemplateFixture({ dir: sourceDir, version: "1.2.3" });
+  const channel = fakeReleaseChannel({ version: "1.4.0" });
+  const resolved = await ensureWslBaseTemplate({
+    cacheDir,
+    sourceDirs: [sourceDir],
+    expectedVersion: "1.4.0",
+    expectedArch: BASE_ARCH,
+    releaseBaseUrl: "https://mirror.example.test/runtime-artifacts/{version}",
+    fetchImpl: channel.fetchImpl,
+  });
+  assert.equal(resolved.identity.version, "1.4.0");
+  assert.deepEqual(channel.calls, [
+    "https://mirror.example.test/runtime-artifacts/1.4.0/wsl-base-1.4.0-x64.manifest.json",
+    "https://mirror.example.test/runtime-artifacts/1.4.0/wsl-base-1.4.0-x64.tar.gz",
+  ]);
+});
+
+test("falls back to a locally available template when the release channel is unreachable", async () => {
+  const cacheDir = tmpDir("wsl-base-offline-cache-");
+  const sourceDir = tmpDir("wsl-base-offline-src-");
+  writeBaseTemplateFixture({ dir: sourceDir, version: "1.2.3" });
+  await ensureWslBaseTemplate({ cacheDir, sourceDirs: [sourceDir], expectedVersion: "1.2.3", expectedArch: BASE_ARCH });
+  const offline = fakeReleaseChannel({ version: "1.3.0", fail: true });
+  const logs: Array<{ message: string; data: Record<string, unknown> }> = [];
+
+  const resolved = await ensureWslBaseTemplate({
+    cacheDir,
+    sourceDirs: [sourceDir],
+    expectedVersion: "1.3.0",
+    expectedArch: BASE_ARCH,
+    fetchImpl: offline.fetchImpl,
+    logger: (message, data) => logs.push({ message, data }),
+  });
+
+  assert.equal(resolved.identity.version, "1.2.3");
+  assert.equal(resolved.cacheHit, true);
+  assert.ok(logs.some((entry) => entry.message === "wsl base template pull failed"));
+  assert.ok(logs.some((entry) => entry.message === "wsl base template fell back to a locally available version"));
+});
+
+test("reports a missing template with the pull failure when neither local nor release templates exist", async () => {
+  const cacheDir = tmpDir("wsl-base-unavailable-cache-");
+  await assert.rejects(
+    () => ensureWslBaseTemplate({
+      cacheDir,
+      sourceDirs: [tmpDir("wsl-base-unavailable-src-")],
+      expectedVersion: "1.3.0",
+      expectedArch: BASE_ARCH,
+      fetchImpl: fakeReleaseChannel({ version: "1.3.0", status: 404 }).fetchImpl,
+    }),
+    (error: { code?: string; details?: Record<string, unknown> }) => {
+      assert.equal(error.code, WSL_BASE_TEMPLATE_MISSING);
+      assert.equal((error.details?.pullError as { code?: string } | undefined)?.code, WSL_BASE_TEMPLATE_UNAVAILABLE);
+      return true;
+    },
+  );
+});
+
+test("rejects a downloaded template whose SHA-256 does not match the release manifest", async () => {
+  const cacheDir = tmpDir("wsl-base-badtar-cache-");
+  const channel = fakeReleaseChannel({
+    version: "1.3.0",
+    manifest: {
+      id: "wsl-base",
+      version: "1.3.0",
+      platform: "linux",
+      arch: BASE_ARCH,
+      formatVersion: 1,
+      sha256: sha256("expected-something-else"),
+      sizeBytes: 11,
+    },
+  });
+  await assert.rejects(
+    () => ensureWslBaseTemplate({ cacheDir, sourceDirs: [], expectedVersion: "1.3.0", expectedArch: BASE_ARCH, fetchImpl: channel.fetchImpl }),
+    (error: { code?: string }) => error.code === WSL_BASE_TEMPLATE_INVALID,
+  );
+  // 校验失败不留下可用的缓存条目。
+  assert.equal(fs.existsSync(path.join(cacheDir, "wsl-base-1.3.0-x64", ".ready")), false);
+  assert.deepEqual(fs.readdirSync(path.join(cacheDir, "wsl-base-1.3.0-x64")), []);
+});
+
+test("prefetchBaseTemplate warms the node-level cache before any instance exists", async () => {
+  const sourceDir = tmpDir("wsl-prefetch-src-");
+  const dataDir = tmpDir("wsl-prefetch-data-");
+  const executor = fakeExecutor();
+  const channel = fakeReleaseChannel({ version: "1.3.0" });
+  const provisioner = new WslDistroProvisioner({
+    ...provisionerOptions(executor, { sourceDir, dataDir }),
+    expectedBaseTemplateVersion: "1.3.0",
+    fetchImpl: channel.fetchImpl,
+  });
+
+  await provisioner.prefetchBaseTemplate();
+  assert.ok(fs.existsSync(path.join(dataDir, "base-templates", "wsl-base-1.3.0-x64", ".ready")));
+  assert.equal(executor.imports.length, 0);
+
+  // 预热过的版本第二次解析直接命中缓存，不再访问发布通道。
+  await provisioner.prefetchBaseTemplate();
+  assert.equal(channel.calls.length, 2);
 });
 
 test("provision imports a single base template and writes ownership labels, index, and in-distro marker", async () => {
