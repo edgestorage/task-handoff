@@ -251,6 +251,22 @@ export type WslExecutorOptions = {
   sessionCommand?: readonly string[];
 };
 
+/**
+ * 解析 `/proc/net/route` 的默认网关（列：Iface Destination Gateway Flags...）。
+ * 网关是 8 位十六进制、按字节小端（`01C01FAC` → `172.31.192.1`）。找不到默认路由时返回 undefined。
+ */
+export function parseProcNetRouteDefaultGateway(content: string) {
+  for (const line of content.split("\n").slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 3 || fields[1] !== "00000000" || !/^[0-9a-fA-F]{8}$/.test(fields[2])) continue;
+    const gateway = fields[2];
+    return [gateway.slice(6, 8), gateway.slice(4, 6), gateway.slice(2, 4), gateway.slice(0, 2)]
+      .map((octet) => parseInt(octet, 16))
+      .join(".");
+  }
+  return undefined;
+}
+
 export class WslExecutor {
   private readonly wslPath: string;
   private readonly runner: WslCommandRunner;
@@ -444,9 +460,10 @@ export class WslExecutor {
 
   /** distro 内默认网关地址（WSL2 NAT 下即 Windows 宿主），用于实例回连 Node Agent。 */
   async defaultGateway(name: string) {
-    const result = await this.exec(name, ["sh", "-c", "ip -o -4 route show default 2>/dev/null | awk '{print $3; exit}'"]);
-    const gateway = result.stdout.trim().split(/\s+/)[0];
-    return gateway || undefined;
+    // base 模板不含 iproute2（实测 `ip: not found`），因此直接读 /proc/net/route，
+    // 不再依赖 `ip route`；否则网关会静默解析失败并退化成 Docker 专用的宿主别名。
+    const result = await this.exec(name, ["cat", "/proc/net/route"]);
+    return parseProcNetRouteDefaultGateway(result.stdout);
   }
 
   async unitActive(name: string, unit: string) {

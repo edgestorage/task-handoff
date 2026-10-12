@@ -30,6 +30,78 @@ session from an instance crash.
 Stopping an instance stops its systemd unit, releases the keep-alive session, and terminates the
 distro while retaining the distro and its data for the next start.
 
+## Node agent reachability
+
+An instance inside a distro calls back to the Node Agent on the Windows host. A WSL2 distro lives in
+its own network namespace, so `127.0.0.1` inside the distro is the distro itself, and the address the
+instance is told to use cannot simply be assumed. Before an instance starts, the Node Agent probes
+candidates from inside the distro and writes the first reachable one to `TASK_HANDOFF_NODE_AGENT_URL`:
+an explicit override (`TASK_HANDOFF_WSL_NODE_AGENT_URL`, or the `hostAddress` option), then the
+distro's `127.0.0.1` (WSL2 mirrored networking shares the host loopback), then the distro default
+gateway (the Windows host under the default NAT networking), then the legacy `containerUrl` fallback.
+The gateway is read from `/proc/net/route`: the base template ships no `iproute2`, and an
+`ip route` based lookup silently degrades the address to the Docker-only `host.docker.internal`
+alias, which a distro cannot resolve.
+
+A candidate only wins when `GET <url>/api/node-agent/health` answers 2xx with
+`data.role == "node-agent"`, or with a `NODE_AGENT_*` structured error (the external listener requires
+an HMAC signature once the node is paired, so `401 NODE_AGENT_HMAC_SIGNATURE_REQUIRED` also proves the
+address belongs to this node's Node Agent). A process inside the distro that happens to own the same
+port cannot be mistaken for the host Node Agent. When no candidate answers, instance start fails
+immediately with `WSL_NODE_AGENT_UNREACHABLE` — including the per-candidate reasons, the listener host
+and port, and remediation — instead of leaving the instance in `registering` until registration times
+out.
+
+### Host-side allow is required for the distro-to-host direction
+
+Windows filters that traffic by default, in two layers:
+
+- **Windows Defender Firewall.** The `vEthernet (WSL)` adapter is an unidentified network, so it gets
+  the Public profile and inbound connections to host services are dropped unless a rule allows them.
+  A host service that only listens on `127.0.0.1` is never reachable this way. This is the classic
+  WSL behaviour (microsoft/WSL#4139, #4585, #5237) and it is why a distro reaching the node agent port
+  times out while the host itself can reach the same port on loopback.
+- **WSL Hyper-V firewall.** Since WSL 2.0.9 the Hyper-V firewall filters WSL traffic as well. Measured
+  effective policy on a stock Windows 11 25H2 host (WSL `3.0.1.0`):
+  `Enabled=True`, `DefaultInboundAction=Block`, `DefaultOutboundAction=Allow`, `LoopbackEnabled=True`,
+  `AllowHostPolicyMerge=True`, plus inbound allow rules for ICMP and mDNS only. Because host policy is
+  merged (`AllowHostPolicyMerge=True`), an existing Windows Firewall allow rule for the host
+  executable already lets the distro through — measured: a Public-profile `Node.js JavaScript Runtime`
+  allow rule for `node.exe` made a `0.0.0.0`-bound Node listener reachable from the distro at the
+  gateway address.
+
+Pick one of these when a WSL node must be reachable:
+
+- **Mirrored networking (recommended, no administrator rights).** Set `%USERPROFILE%\.wslconfig` to
+  `[wsl2]` / `networkingMode=mirrored` and run `wsl --shutdown`. The distro then shares the host
+  loopback, so the probe's `127.0.0.1` candidate wins and the default loopback listener works with no
+  firewall change. Measured: `wslinfo --networking-mode` reports `mirrored` and the distro reaches the
+  node agent with `GET http://127.0.0.1:18091/api/node-agent/health` →
+  `401 NODE_AGENT_HMAC_SIGNATURE_REQUIRED`. Mirrored mode is the mode Microsoft recommends for WSL
+  networking; it applies to every distro on the machine, and the Node Agent never writes `.wslconfig`
+  itself. Watch for VPN and Docker Desktop compatibility, and delete the file to return to NAT.
+- **NAT plus a Windows Firewall allow rule (administrator rights).** Allow inbound TCP on the listener
+  port for the WSL subnet, and set the node agent external listener bind scope to `all-ipv4`
+  (Control Plane → node settings) so the listener accepts the gateway address. Prefer scoping the rule
+  to the WSL subnet over opening it to the whole LAN:
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "Task Handoff WSL node agent" -Direction Inbound -Action Allow `
+    -Protocol TCP -LocalPort 18091 -RemoteAddress 172.31.192.0/20
+  ```
+
+  If the host policy does not merge as expected, add the matching Hyper-V rule
+  (`New-NetFirewallHyperVRule -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' …`) and inspect the
+  effective state with `Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name
+  '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'` and `Get-NetFirewallHyperVRule -VMCreatorId
+  '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'`.
+- **Or pin an address explicitly** with `TASK_HANDOFF_WSL_NODE_AGENT_URL` to a host address the distro
+  can already reach (for example `http://127.0.0.1:<port>` under mirrored networking).
+
+Do not reach for `[wsl2] firewall=false`: measured on Windows 11 25H2 with WSL `3.0.1.0` it changed
+nothing — `Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore` stayed identical and a
+gateway-bound listener remained unreachable from the distro.
+
 ## Base template
 
 Distros are imported from a single, versioned prebuilt base template produced from the

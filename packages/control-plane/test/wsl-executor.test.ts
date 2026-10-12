@@ -11,6 +11,7 @@ import {
   WslExecutor,
   decodeWslOutput,
   defaultWslExecutablePath,
+  parseProcNetRouteDefaultGateway,
   parseWslDistroList,
   wslDistroNameForInstance,
   type WslCommandOptions,
@@ -36,6 +37,23 @@ function fakeRunner(handler: (args: string[]) => { stdout?: string; stderr?: str
   };
   return { runner, calls };
 }
+
+const PROC_NET_ROUTE = [
+  "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT",
+  "eth0\t00000000\t01C01FAC\t0003\t0\t0\t0\t00000000\t0\t0\t0",
+  "eth0\t00C01FAC\t00000000\t0001\t0\t0\t0\t00F0FFFF\t0\t0\t0",
+].join("\n");
+
+test("default gateway comes from /proc/net/route without iproute2", async () => {
+  // base 模板没有 `ip`，`ip route` 会静默解析失败并把回连地址降级成 Docker 专用别名。
+  const { runner, calls } = fakeRunner((args) => (args[0] === "-d" && args[args.length - 1] === "/proc/net/route" ? { stdout: PROC_NET_ROUTE } : undefined));
+  const executor = new WslExecutor({ runner, platform: "win32", wslPath: "wsl.exe" });
+  assert.equal(await executor.defaultGateway("th-wsl-inst_a"), "172.31.192.1");
+  assert.deepEqual(calls[0].args, ["-d", "th-wsl-inst_a", "-u", "root", "--", "cat", "/proc/net/route"]);
+  assert.equal(parseProcNetRouteDefaultGateway(PROC_NET_ROUTE), "172.31.192.1");
+  assert.equal(parseProcNetRouteDefaultGateway("Iface\tDestination\tGateway\n"), undefined);
+  assert.equal(parseProcNetRouteDefaultGateway(""), undefined);
+});
 
 const LIST_OUTPUT = [
   "  NAME              STATE           VERSION",

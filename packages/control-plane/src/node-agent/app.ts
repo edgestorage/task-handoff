@@ -869,6 +869,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       listenerPort: port,
       bootstrapDir: dockerBootstrapDir,
       fallbackNodeAgentUrl: state.containerUrl,
+      // 回连不可达时把实际绑定地址写进诊断：loopback 绑定下 distro 只能经宿主网关回连。
+      listenerHost: () => app.nodeAgentListenerManager?.current().host,
       logger: (message, data) => app.log.info(data, message),
     }));
   }
