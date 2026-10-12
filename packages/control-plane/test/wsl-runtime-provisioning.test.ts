@@ -9,11 +9,13 @@ import {
   WSL_BASE_TEMPLATE_MISSING,
   WSL_DISTRO_MARKER_PATH,
   WSL_DISTRO_OWNERSHIP_CONFLICT,
+  WSL_OWNERSHIP_BASELINE_MARKER_PATH,
   WSL_RUNTIME_KIND_LABEL,
   WslDistroIndexStore,
   WslDistroProvisioner,
   assertWslRuntimeLabels,
   ensureWslBaseTemplate,
+  wslOwnershipBaselineCommand,
   wslRuntimeLabels,
   type WslProvisioningExecutor,
 } from "../src/node-agent/runtimes/wsl-provisioning.ts";
@@ -59,6 +61,7 @@ type FakeExecutor = WslProvisioningExecutor & {
   markers: Map<string, string>;
   imports: Array<{ name: string; installDir: string; tarballPath: string }>;
   unregistered: string[];
+  ownershipBaselines: string[];
 };
 
 function fakeExecutor(initial: WslDistro[] = []): FakeExecutor {
@@ -66,11 +69,13 @@ function fakeExecutor(initial: WslDistro[] = []): FakeExecutor {
   const markers = new Map<string, string>();
   const imports: FakeExecutor["imports"] = [];
   const unregistered: string[] = [];
+  const ownershipBaselines: string[] = [];
   return {
     distros,
     markers,
     imports,
     unregistered,
+    ownershipBaselines,
     async listDistros() {
       return [...distros.values()];
     },
@@ -92,6 +97,10 @@ function fakeExecutor(initial: WslDistro[] = []): FakeExecutor {
       return { stdout: "", stderr: "", exitCode: 0 };
     },
     async execOrThrow(name: string, argv: readonly string[]) {
+      if (argv[0] === "sh" && typeof argv[2] === "string" && argv[2].includes(WSL_OWNERSHIP_BASELINE_MARKER_PATH)) {
+        // Emulate the in-distro `[ -f <marker> ] || ...` guard: the recursive chown replays once.
+        if (!ownershipBaselines.includes(name)) ownershipBaselines.push(name);
+      }
       if (argv[0] === "sh" && typeof argv[2] === "string") {
         const match = /printf '%s' (\S+) \| base64 -d >/.exec(argv[2]);
         if (match) markers.set(name, Buffer.from(match[1], "base64").toString("utf8"));
@@ -227,6 +236,35 @@ test("provision is idempotent and does not create a second distro", async () => 
   assert.equal(second.distroName, first.distroName);
   assert.equal(executor.imports.length, 1);
   assert.equal([...executor.distros.keys()].filter((name) => name.startsWith(WSL_DISTRO_PREFIX)).length, 1);
+});
+
+test("the agent ownership baseline mirrors the image build chown and replays only once", () => {
+  const command = wslOwnershipBaselineCommand();
+  // Docker parity: task-handoff-images runtime-core runs `chown -R agent:agent /workspace /data /home/agent /app`.
+  assert.match(command, /chown -R agent:agent \/workspace \/data \/home\/agent/);
+  assert.match(command, /\[ ! -d \/app \] \|\| chown -R agent:agent \/app;/);
+  // Guarded by a distro-local marker so a running instance never re-walks /data on every start.
+  assert.ok(command.startsWith(`[ -f ${WSL_OWNERSHIP_BASELINE_MARKER_PATH} ] || {`));
+  assert.match(command, /: > \/var\/lib\/task-handoff\/owner-baseline; \}$/);
+  // No `printf | base64 -d >` shape, so it must not be confused with the ownership marker write.
+  assert.doesNotMatch(command, /base64 -d >/);
+});
+
+test("provision rebuilds the agent ownership baseline because the portable template carries no uid/gid", async () => {
+  const sourceDir = tmpDir("wsl-prov-owner-src-");
+  const dataDir = tmpDir("wsl-prov-owner-data-");
+  writeBaseTemplateFixture({ dir: sourceDir });
+  const executor = fakeExecutor();
+  const provisioner = new WslDistroProvisioner(provisionerOptions(executor, { sourceDir, dataDir }));
+  const instance = { id: "inst_wsl_owner", runtimeId: "runtime_wsl" };
+
+  const first = await provisioner.provision(instance);
+  assert.deepEqual(executor.ownershipBaselines, [first.distroName]);
+
+  // Second provision repairs nothing twice: the in-distro marker is authoritative.
+  await provisioner.provision(instance);
+  assert.deepEqual(executor.ownershipBaselines, [first.distroName]);
+  assert.equal(executor.imports.length, 1);
 });
 
 test("provision repairs a missing in-distro marker from the node index", async () => {
