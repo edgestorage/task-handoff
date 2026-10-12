@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../components/MenuView';
 import * as Crypto from 'expo-crypto';
 import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';

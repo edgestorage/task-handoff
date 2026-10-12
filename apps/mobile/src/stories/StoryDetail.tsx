@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Crypto from 'expo-crypto';
 import { router, Stack, type NativeStackHeaderItem } from 'expo-router';
-import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { MenuView, type MenuAction } from '../components/MenuView';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus, StoryDecision } from '@task-handoff/protocol/stories';
 import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';

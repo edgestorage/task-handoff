@@ -1,6 +1,9 @@
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { SystemIcon } from '../components/SystemIcon';
+import { FloatingMenuTrigger } from '../components/menu/FloatingMenuTrigger';
+import type { FloatingMenuBlock } from '../components/menu/menu-model';
 import { mobileWebType } from '../components/mobile-web-typography';
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
@@ -23,25 +26,28 @@ type ComposerToolbarProps = {
 export function SessionComposerToolbar(props: ComposerToolbarProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const chooseAttachment = () => Alert.alert(t('composer.addAttachment'), undefined, [
-    { text: t('composer.photo'), onPress: props.onAddImage },
-    { text: t('composer.deviceFile'), onPress: props.onAddFile },
-    { text: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile },
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
-  const choosePermissionMode = () => Alert.alert(t('composer.permissionMode'), undefined, [
-    { text: t('composer.askBeforeChanges'), onPress: () => props.onPermissionModeChange('ask') },
-    { text: t('composer.autoReview'), onPress: () => props.onPermissionModeChange('auto-review') },
-    { text: t('composer.fullAccess'), onPress: () => props.onPermissionModeChange('full-access') },
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
+  const attachmentBlocks: FloatingMenuBlock[] = [
+    { item: { disabled: props.imageDisabled, icon: 'image', key: 'image', label: t('composer.photo'), onPress: props.onAddImage }, key: 'image', type: 'item' },
+    { item: { disabled: props.fileDisabled, icon: 'attach_file', key: 'file', label: t('composer.deviceFile'), onPress: props.onAddFile }, key: 'file', type: 'item' },
+    { item: { disabled: props.runtimeFileDisabled, icon: 'folder', key: 'runtime-file', label: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
+  ];
+  const attachmentDisabled = props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
+  const permissionOptions: AnchoredSelectOption<AiSessionPermissionMode>[] = [
+    { description: t('composer.askDescription'), label: t('composer.askBeforeChanges'), systemImage: 'hand.raised', value: 'ask' },
+    { description: t('composer.autoReviewDescription'), label: t('composer.autoReview'), systemImage: 'checkmark.shield', value: 'auto-review' },
+    { danger: true, description: t('composer.fullAccessDescription'), label: t('composer.fullAccess'), systemImage: 'exclamationmark.shield', value: 'full-access' },
+  ];
   return <View style={styles.toolbar}>
-    <IconButton android="add_circle_outline" ios="plus.circle" label={t('composer.addAttachment')} disabled={props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled} onPress={chooseAttachment} />
-    <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={choosePermissionMode} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}>
-      <SystemIcon android="shield" color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} ios={permissionIcon(props.permissionMode)} size={15} />
-      <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode, t)}</Text>
-      <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
-    </Pressable>
+    <FloatingMenuTrigger disabled={attachmentDisabled} page={attachmentDisabled ? null : { blocks: attachmentBlocks, title: t('composer.addAttachment') }}>
+      {(open) => <IconButton android="add_circle_outline" ios="plus.circle" label={t('composer.addAttachment')} disabled={attachmentDisabled} onPress={open} />}
+    </FloatingMenuTrigger>
+    <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onPermissionModeChange} options={permissionOptions} selectedValue={props.permissionMode} title={t('composer.permissionMode')}>
+      {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={open} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}>
+        <SystemIcon android="shield" color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} ios={permissionIcon(props.permissionMode)} size={15} />
+        <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode, t)}</Text>
+        <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+      </Pressable>}
+    </AnchoredSelectMenu>
     {props.showInterrupt ? <IconButton android="stop_circle" ios="stop.circle.fill" label={t('composer.interrupt')} color={colors.error} disabled={props.interruptDisabled} onPress={props.onInterrupt} /> : null}
   </View>;
 }

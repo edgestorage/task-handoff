@@ -51,8 +51,8 @@ export function MobileThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // React Native accepts null to clear an app override even though its current type omits null.
-    Appearance.setColorScheme((preference === 'system' ? null : preference) as ColorSchemeName);
+    // RN 0.86 clears an app override with 'unspecified'; Android rejects null for this non-null parameter.
+    Appearance.setColorScheme(preference === 'system' ? 'unspecified' : preference);
   }, [preference]);
 
   const setPreference = useCallback(async (next: AppearancePreference) => {

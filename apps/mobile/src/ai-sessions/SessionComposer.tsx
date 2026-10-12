@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BlurView } from 'expo-blur';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
 import { SystemIcon } from '../components/SystemIcon';
@@ -17,6 +17,8 @@ import {
   SESSION_COMPOSER_ACTION_SIZE,
   SESSION_COMPOSER_ATTACHMENT_ICON_SIZE,
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
+  SESSION_COMPOSER_COLLAPSED_INPUT_LEFT,
+  SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION,
   SESSION_COMPOSER_EXPANDED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_RADIUS,
   SESSION_COMPOSER_MODEL_MAX_WIDTH,
@@ -90,6 +92,12 @@ export function SessionComposer(props: SessionComposerProps) {
     : estimatedPermissionWidth(effectivePermissionMode);
   const permissionWidth = expansion.interpolate({ inputRange: [0, 1], outputRange: [36, measuredPermissionWidth] });
   const permissionTextOpacity = expansion.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] });
+  // Android's expo-paste-input wrapper stretches children to its own bounds, so collapsed input
+  // offsets must live on the wrapper there instead of on the TextInput.
+  const collapsedInputInset = !props.focused ? {
+    left: permissionOptions.length ? SESSION_COMPOSER_COLLAPSED_INPUT_LEFT : SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION,
+    right: sessionComposerCollapsedInputRight(modelControlsVisible),
+  } : undefined;
   return (
     <Animated.View
       accessibilityState={{ expanded: props.focused }}
@@ -117,7 +125,7 @@ export function SessionComposer(props: SessionComposerProps) {
           else if (payload.type === 'text' && payload.intercepted) props.onPasteText(payload.value);
         }}
         pointerEvents="box-none"
-        style={StyleSheet.absoluteFill}
+        style={[StyleSheet.absoluteFill, Platform.OS === 'android' ? collapsedInputInset : undefined]}
         testID="session-message-paste-input"
       >
         <TextInput
@@ -259,8 +267,8 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   input: { fontSize: 16, lineHeight: 23 },
-  inputCollapsed: { bottom: 0, left: 84, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', top: 0 },
-  inputCollapsedWithoutPermission: { left: 48 },
+  inputCollapsed: { bottom: 0, left: SESSION_COMPOSER_COLLAPSED_INPUT_LEFT, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', top: 0 },
+  inputCollapsedWithoutPermission: { left: SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION },
   inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
