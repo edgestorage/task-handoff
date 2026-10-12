@@ -39,7 +39,36 @@ export const WSL_DEFAULT_WORKSPACE = "/workspace";
 export const WSL_BOOTSTRAP_REVISION_PATH = "/var/lib/task-handoff/bootstrap-revision";
 export const WSL_UNIT_READY_TIMEOUT_MS = 30_000;
 
+/** 回连探测的单次超时：冷启动后的首批连接可能较慢，但超过这个时长即视为不可达。 */
+export const WSL_NODE_AGENT_PROBE_TIMEOUT_MS = 2_000;
+
+export type WslNodeAgentCandidateSource = "explicit" | "loopback" | "gateway" | "fallback";
+
+export type WslNodeAgentCandidate = { url: string; source: WslNodeAgentCandidateSource };
+
+/**
+ * distro 内回连探测脚本（D16/10.5）。做 HTTP 身份校验而不是裸 TCP 连接，避免把碰巧占用同一
+ * 端口的进程误判成宿主 Node Agent；distro 内的 Node 由 base 模板保证存在。
+ *
+ * 命中条件（任一即可）：`GET <url>/api/node-agent/health` 返回 2xx 且 `data.role === "node-agent"`，
+ * 或返回 `NODE_AGENT_*` 结构化错误——外部监听在节点已配对时要求 HMAC 签名，401
+ * `NODE_AGENT_HMAC_SIGNATURE_REQUIRED` 同样证明对面是本节点的 Node Agent（探测不带凭证）。
+ */
+export const WSL_NODE_AGENT_PROBE_SCRIPT = [
+  "const url = process.argv[1];",
+  "const controller = new AbortController();",
+  `const timer = setTimeout(() => controller.abort(), ${WSL_NODE_AGENT_PROBE_TIMEOUT_MS});`,
+  "fetch(`${url}/api/node-agent/health`, { signal: controller.signal }).then(async (response) => {",
+  "  const body = await response.json().catch(() => undefined);",
+  "  clearTimeout(timer);",
+  "  const health = response.ok && body && body.data && body.data.role === 'node-agent';",
+  "  const code = body && body.error && typeof body.error.code === 'string' ? body.error.code : '';",
+  "  process.exit(health || code.startsWith('NODE_AGENT_') ? 0 : 2);",
+  "}).catch((error) => { clearTimeout(timer); console.error(String(error && error.message || error)); process.exit(1); });",
+].join(" ");
+
 export const WSL_LIFECYCLE_FAILED = "WSL_LIFECYCLE_FAILED";
+export const WSL_NODE_AGENT_UNREACHABLE = "WSL_NODE_AGENT_UNREACHABLE";
 export const WSL_WORKSPACE_UNSUPPORTED = "WSL_WORKSPACE_UNSUPPORTED";
 export const WSL_WORKSPACE_PREPARATION_FAILED = "WSL_WORKSPACE_PREPARATION_FAILED";
 
@@ -71,6 +100,12 @@ export type WslLifecycleOptions = {
   /** 宿主可达地址覆盖（`TASK_HANDOFF_WSL_NODE_AGENT_URL` 优先）。缺省从 distro 默认网关推导。 */
   hostAddress?: string;
   fallbackNodeAgentUrl?: string;
+  /** 节点外部监听实际绑定地址（诊断用）：loopback 绑定时 distro 只能经宿主网关回连。 */
+  listenerHost?: () => string | undefined;
+  /** 每个候选地址的探测次数（缺省 2，覆盖冷启动瞬态）。 */
+  probeAttempts?: number;
+  /** 探测注入点；缺省在 distro 内执行 HTTP 探测。 */
+  probeNodeAgent?: (distroName: string, url: string) => Promise<{ reachable: boolean; detail?: string }>;
   /** bootstrap 资源目录（与 Docker 共用），桥接进 distro。 */
   bootstrapDir?: string;
   /** 宿主架构，用于 artifact target。 */
@@ -206,16 +241,89 @@ export class WslInstanceLifecycle {
     return typeof executor.sessionAlive === "function" ? executor.sessionAlive(distroName) : false;
   }
 
-  async nodeAgentUrl(context: ExecutorContext, distroName: string) {
+  /**
+   * 实例回连 Node Agent 的候选地址（D16）。
+   *
+   * 显式覆盖（`hostAddress`/`TASK_HANDOFF_WSL_NODE_AGENT_URL`）唯一且优先；否则依次尝试
+   * distro 内 `127.0.0.1`（WSL 镜像网络模式与宿主共享 localhost）、distro 默认网关（NAT 模式即
+   * Windows 宿主）与既有 containerUrl 兜底。候选顺序即探测顺序，首个可达者胜出。
+   */
+  async nodeAgentUrlCandidates(context: ExecutorContext, distroName: string): Promise<WslNodeAgentCandidate[]> {
     const explicit = this.options.hostAddress?.trim() || process.env.TASK_HANDOFF_WSL_NODE_AGENT_URL?.trim();
-    if (explicit) return normalizeNodeAgentUrl(explicit, this.options.listenerPort);
+    if (explicit) return [{ url: normalizeNodeAgentUrl(explicit, this.options.listenerPort), source: "explicit" }];
+    const candidates: WslNodeAgentCandidate[] = [
+      { url: `http://127.0.0.1:${this.options.listenerPort}`, source: "loopback" },
+    ];
     const gateway = await this.executor.defaultGateway(distroName).catch(() => undefined);
-    if (gateway) return `http://${gateway}:${this.options.listenerPort}`;
-    if (this.options.fallbackNodeAgentUrl) return this.options.fallbackNodeAgentUrl;
-    throw lifecycleError(WSL_LIFECYCLE_FAILED, `Could not resolve a node agent URL reachable from WSL distro ${distroName} for instance ${context.instance.id}.`, {
+    if (gateway) candidates.push({ url: `http://${gateway}:${this.options.listenerPort}`, source: "gateway" });
+    if (this.options.fallbackNodeAgentUrl) candidates.push({ url: this.options.fallbackNodeAgentUrl, source: "fallback" });
+    return candidates;
+  }
+
+  /**
+   * 解析实例回连地址：逐个探测候选地址，取首个可达者。
+   *
+   * 全部不可达时以 `WSL_NODE_AGENT_UNREACHABLE` 快速失败，而不是让实例停在 `registering`
+   * 里等注册超时；错误详情带每个候选的失败原因、宿主监听地址与可操作的处理建议（10.5）。
+   */
+  async nodeAgentUrl(context: ExecutorContext, distroName: string) {
+    const candidates = await this.nodeAgentUrlCandidates(context, distroName);
+    const probe = this.options.probeNodeAgent
+      ?? ((name: string, url: string) => this.probeNodeAgentUrl(name, url));
+    const attempts = Math.max(1, this.options.probeAttempts ?? 2);
+    const failures: Array<{ url: string; source: WslNodeAgentCandidateSource; reason: string }> = [];
+    for (const candidate of candidates) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+        const outcome = await probe(distroName, candidate.url)
+          .catch((error) => ({ reachable: false, detail: error instanceof Error ? error.message : String(error) }));
+        if (outcome.reachable) {
+          this.options.logger?.("wsl node agent url resolved", {
+            instanceId: context.instance.id,
+            distroName,
+            url: candidate.url,
+            source: candidate.source,
+            attempt,
+          });
+          return candidate.url;
+        }
+        failures.push({ url: candidate.url, source: candidate.source, reason: outcome.detail ?? "unreachable" });
+      }
+    }
+    const listenerHost = this.options.listenerHost?.() ?? "127.0.0.1";
+    throw lifecycleError(
+      WSL_NODE_AGENT_UNREACHABLE,
+      `No node agent address is reachable from WSL distro ${distroName} for instance ${context.instance.id}.`,
+      {
+        distroName,
+        instanceId: context.instance.id,
+        listenerHost,
+        listenerPort: this.options.listenerPort,
+        candidates: failures,
+        remediation: [
+          `Windows blocks the distro-to-host direction by default: the vEthernet (WSL) adapter is an unidentified network (Public profile, inbound dropped) and the WSL Hyper-V firewall filters WSL traffic too, so binding the listener beyond loopback is not enough on its own. Enable WSL2 mirrored networking so the distro shares the host loopback (no administrator rights needed), or allow inbound TCP ${this.options.listenerPort} from the WSL subnet in Windows Firewall and set the node agent external listener bind scope to "all-ipv4" (currently ${listenerHost}).`,
+          "Alternatively set TASK_HANDOFF_WSL_NODE_AGENT_URL to an address the distro can already reach.",
+          "See docs/wsl-runtime.md, section Node agent reachability, for the measured setup steps.",
+        ],
+      },
+    );
+  }
+
+  /** distro 内 HTTP 探测：exit 0 表示回连地址可用且确实指向 Node Agent。 */
+  private async probeNodeAgentUrl(distroName: string, url: string) {
+    const result = await this.executor.exec(
       distroName,
-      instanceId: context.instance.id,
-    });
+      ["node", "-e", WSL_NODE_AGENT_PROBE_SCRIPT, url],
+      { timeoutMs: WSL_NODE_AGENT_PROBE_TIMEOUT_MS + 3_000 },
+    );
+    if (result.exitCode === 0) return { reachable: true };
+    const stderr = result.stderr.trim();
+    if (result.exitCode === 127) {
+      return { reachable: false, detail: `the distro could not run node for the reachability probe: ${stderr || "command not found"}` };
+    }
+    // wsl.exe 会在 stderr 前置自己的噪声（例如 systemd user session 警告），真正的探测错误在最后一行。
+    const lastLine = stderr.split("\n").map((line) => line.trim()).filter(Boolean).pop();
+    return { reachable: false, detail: lastLine || result.stdout.trim() || `probe exited with code ${result.exitCode}` };
   }
 
   /** 把 Node Agent 侧 bootstrap 资源桥接进 distro（内容变化时）。 */

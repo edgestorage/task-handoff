@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ExecutorContext } from "../src/node-agent/runtimes/docker.ts";
 import {
   WSL_BOOTSTRAP_ROOT,
+  WSL_NODE_AGENT_PROBE_SCRIPT,
   WSL_PRIVATE_CONFIG_PATH,
   WSL_UNIT_NAME,
   WslInstanceLifecycle,
@@ -161,12 +162,85 @@ test("delete failure retains the business record for idempotent retry", async ()
   assert.equal(result.volumeResults.every((entry) => entry.status === "failed"), true);
 });
 
-test("node agent url prefers an explicit address then falls back to the distro gateway", async () => {
+test("node agent url probes candidates inside the distro and takes the first reachable one", async () => {
   const executor = fakeExecutor();
-  const gatewayLifecycle = makeLifecycle(executor);
-  assert.equal(await gatewayLifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://172.20.0.1:8091");
-  const explicit = makeLifecycle(fakeExecutor(), { hostAddress: "192.168.1.5:9000" });
-  assert.equal(await explicit.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://192.168.1.5:9000");
+  const probed: string[] = [];
+  const lifecycle = makeLifecycle(executor, {
+    probeAttempts: 1,
+    probeNodeAgent: async (_distro: string, url: string) => {
+      probed.push(url);
+      return { reachable: url.startsWith("http://172.20.0.1:") };
+    },
+  });
+  assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://172.20.0.1:8091");
+  assert.deepEqual(probed, ["http://127.0.0.1:8091", "http://172.20.0.1:8091"]);
+});
+
+test("node agent url accepts the distro loopback when WSL shares the host localhost", async () => {
+  const lifecycle = makeLifecycle(fakeExecutor(), { probeNodeAgent: async () => ({ reachable: true }) });
+  assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://127.0.0.1:8091");
+});
+
+test("an explicit host address is the only probed candidate", async () => {
+  const probed: string[] = [];
+  const lifecycle = makeLifecycle(fakeExecutor(), {
+    hostAddress: "192.168.1.5:9000",
+    probeNodeAgent: async (_distro: string, url: string) => { probed.push(url); return { reachable: true }; },
+  });
+  assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://192.168.1.5:9000");
+  assert.deepEqual(probed, ["http://192.168.1.5:9000"]);
+});
+
+test("the default probe runs the identity-checked HTTP probe inside the distro", async () => {
+  const executor = fakeExecutor();
+  const lifecycle = makeLifecycle(executor, { probeAttempts: 1 });
+  assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://127.0.0.1:8091");
+  const probeCall = executor.calls.find((call) => call.kind === "exec" && call.args?.[0] === "node" && call.args?.[2] === WSL_NODE_AGENT_PROBE_SCRIPT);
+  assert.ok(probeCall, "expected the in-distro node probe to run");
+  assert.equal(probeCall.args?.[3], "http://127.0.0.1:8091");
+  assert.match(WSL_NODE_AGENT_PROBE_SCRIPT, /data\.role === 'node-agent'/);
+  // 外部监听在节点已配对时要求 HMAC：401 `NODE_AGENT_*` 也必须算命中，否则探测会误报不可达。
+  assert.match(WSL_NODE_AGENT_PROBE_SCRIPT, /startsWith\('NODE_AGENT_'\)/);
+});
+
+test("an unreachable node agent fails fast with the bind address and remediation", async () => {
+  const lifecycle = makeLifecycle(fakeExecutor(), {
+    probeAttempts: 1,
+    listenerHost: () => "127.0.0.1",
+    probeNodeAgent: async () => ({ reachable: false, detail: "connect ECONNREFUSED 172.20.0.1:8091" }),
+  });
+  await assert.rejects(
+    lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"),
+    (error: Error & { code?: string; details?: Record<string, never> }) => {
+      assert.equal(error.code, "WSL_NODE_AGENT_UNREACHABLE");
+      const details = error.details as unknown as {
+        listenerHost: string;
+        listenerPort: number;
+        candidates: Array<{ url: string; source: string; reason: string }>;
+        remediation: string[];
+      };
+      assert.equal(details.listenerHost, "127.0.0.1");
+      assert.equal(details.listenerPort, 8091);
+      assert.deepEqual(details.candidates.map((entry) => entry.source), ["loopback", "gateway"]);
+      assert.match(details.candidates[1].reason, /ECONNREFUSED/);
+      assert.match(details.remediation[0], /all-ipv4/);
+      assert.match(details.remediation[0], /Hyper-V firewall/);
+      assert.ok(details.remediation.some((line) => line.includes("mirrored")));
+      return true;
+    },
+  );
+});
+
+test("probe failures are retried before a candidate is written off", async () => {
+  let attempts = 0;
+  const lifecycle = makeLifecycle(fakeExecutor(), {
+    probeNodeAgent: async () => {
+      attempts += 1;
+      return { reachable: attempts >= 2 };
+    },
+  });
+  assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://127.0.0.1:8091");
+  assert.equal(attempts, 2);
 });
 
 test("local-folder workspaces map to drvfs symlinks and reject unmappable paths", async () => {

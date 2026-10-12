@@ -45,6 +45,8 @@ export type WslRuntimeAdapterOptions = {
   listenerPort?: number;
   hostAddress?: string;
   fallbackNodeAgentUrl?: string;
+  /** 节点外部监听实际绑定地址（回连不可达诊断用）。 */
+  listenerHost?: () => string | undefined;
   bootstrapDir?: string;
   wslPath?: string;
   allocatePort?: () => Promise<number>;
@@ -67,6 +69,7 @@ export class WslRuntimeAdapter implements ManagedRuntimeAdapter {
         listenerPort: options.listenerPort,
         hostAddress: options.hostAddress,
         fallbackNodeAgentUrl: options.fallbackNodeAgentUrl,
+        listenerHost: options.listenerHost,
         bootstrapDir: options.bootstrapDir,
         hostArch: options.hostArch ?? process.arch,
         allocatePort: options.allocatePort,
