@@ -73,10 +73,17 @@ function clearPendingSegments() {
   pendingSegments.value = [];
 }
 
+function settlePendingSegments() {
+  if (!pendingSegments.value.length) return;
+  settledContent.value += pendingSegments.value.map((segment) => segment.text).join("");
+  clearPendingSegments();
+}
+
 function appendCharacters(value: string) {
   if (!value) return;
   const reducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (reducedMotion || (coordinator && !coordinator.enabled.value)) {
+    settlePendingSegments();
     settledContent.value += value;
     return;
   }
