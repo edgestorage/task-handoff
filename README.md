@@ -277,11 +277,14 @@ They contain system dependencies and developer tools, but not the
 controlled-instance runtime. Node Agent remains the authority for mounting the
 bootstrap bundle and installing the desired runtime artifact.
 
-The Control Plane image market uses the bundled snapshot by default; once a
-verification key is configured it pulls its catalog from
-<https://images.thandoff.com/market/v1/catalog.json> and degrades through
-remote, local cache, then the bundled snapshot; the cache lives at
-`market/catalog-cache.json` inside the data directory. The issued catalog is
+The Control Plane image market uses the bundled snapshot by default; desktop
+releases (GitHub Release installers) pin the official catalog verification key
+(materialized from the `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY` repository
+variable, falling back to the bundled official key) and pull their catalog from
+<https://images.thandoff.com/market/v1/catalog.json> out of the box, while other
+deployments enable remote loading once a verification key is configured. Both
+degrade through remote, local cache, then the bundled snapshot; the cache lives
+at `market/catalog-cache.json` inside the data directory. The issued catalog is
 authoritative for the repositories it references: remote responses must pass
 schema validation and mandatory ed25519 verification, and remote loading stays
 disabled while no public key is configured. Configuration:
@@ -291,7 +294,9 @@ disabled while no public key is configured. Configuration:
 - `TASK_HANDOFF_MARKET_REFRESH_INTERVAL` sets the refresh interval in seconds
   (six hours by default); `0` keeps manual refresh only.
 - `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY` is required to enable remote
-  loading: the ed25519 key (PEM or base64 SPKI). `TASK_HANDOFF_MARKET_CATALOG_KEY_ID`
+  loading: the ed25519 key (PEM or base64 SPKI). Desktop releases ship the
+  official key by default; the GitHub repository variable configures the
+  packaged default and the process environment overrides it at runtime. `TASK_HANDOFF_MARKET_CATALOG_KEY_ID`
   optionally pins the key identifier carried by the catalog signature.
 - `TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES` is an optional comma-separated
   repository allowlist (matched on repository path boundaries) for deployments

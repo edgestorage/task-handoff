@@ -1,6 +1,7 @@
 .DS_Store
 .idea/
 .pnpm-store/
+build/market-catalog-public-key.txt
 .task-handoff/
 .tmp-review/
 node_modules/

@@ -18,6 +18,13 @@ test("desktop passes its authoritative package version to both server child proc
   assert.equal((main.match(/version: app\.getVersion\(\),/g) || []).length, 2);
 });
 
+test("desktop pins the official market catalog key on the control-plane child", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  const injections = main.match(/TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: resolveMarketCatalogPublicKey\(process\.env, \{/g) || [];
+  assert.equal(injections.length, 1);
+  assert.match(main, /TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: resolveMarketCatalogPublicKey\(process\.env, \{\s*packaged: app\.isPackaged,\s*resourcesPath: process\.resourcesPath,\s*\}\)/);
+});
+
 test("desktop allocates ports for all local services and enables Local Runtime reallocation", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /findAvailablePort\(controlPlaneHost, resolveControlPlanePort\(\), 20, "control-plane"\)/);

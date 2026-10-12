@@ -16,6 +16,15 @@ test("desktop releases build the shared official account feature flag into the U
   assert.match(workflow, /TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED \|\| '0' \}\}/);
 });
 
+test("desktop releases materialize the image market public key into the packaged app", () => {
+  assert.match(workflow, /TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: \$\{\{ vars\.TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY \}\}/);
+  assert.match(manifest.scripts["desktop:prepare"], /node scripts\/prepare-desktop-market-key\.mjs$/);
+  assert.deepEqual(
+    manifest.build.extraResources.filter((entry) => String(entry.to).includes("market-catalog-public-key")),
+    [{ from: "build/market-catalog-public-key.txt", to: "market-catalog-public-key.txt" }],
+  );
+});
+
 test("mobile releases pass the Agent Runs build flag through to Expo", () => {
   const mobileWorkflow = fs.readFileSync(path.join(root, ".github/workflows/mobile-release.yml"), "utf8");
   assert.match(mobileWorkflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);

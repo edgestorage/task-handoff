@@ -60,7 +60,7 @@
     "desktop:runtime:verify": "node scripts/prepare-desktop-runtime.mjs verify",
     "desktop:start": "pnpm run build:legacy && pnpm run desktop:runtime:prepare && pnpm --filter @task-handoff/desktop-shell start",
     "desktop:check": "pnpm --filter @task-handoff/desktop-shell check",
-    "desktop:prepare": "pnpm run builtin-projects:sync && pnpm run build:legacy && pnpm run control-plane-ui:build && pnpm run desktop:check && pnpm run desktop:runtime:verify",
+    "desktop:prepare": "pnpm run builtin-projects:sync && pnpm run build:legacy && pnpm run control-plane-ui:build && pnpm run desktop:check && pnpm run desktop:runtime:verify && node scripts/prepare-desktop-market-key.mjs",
     "desktop:dist": "pnpm run desktop:runtime:prepare && pnpm run desktop:prepare && electron-builder --publish never",
     "check": "node bin/check-package-boundaries.js && pnpm run typecheck:legacy && pnpm run build:legacy && node bin/check-dist.js",
     "check:controlled-instance": "node bin/check-package-boundaries.js && pnpm run typecheck:controlled-instance && pnpm run controlled-instance-ui:typecheck && pnpm run build:controlled-instance && node bin/check-dist.js",
@@ -103,16 +103,20 @@
     "directories": {
       "output": "release"
     },
-    "extraResources": [
-      {
-        "from": "build/icon.png",
-        "to": "icon.png"
-      },
-      {
-        "from": "build/tray-icon.png",
-        "to": "tray-icon.png"
-      }
-    ],
+  "extraResources": [
+    {
+      "from": "build/icon.png",
+      "to": "icon.png"
+    },
+    {
+      "from": "build/tray-icon.png",
+      "to": "tray-icon.png"
+    },
+    {
+      "from": "build/market-catalog-public-key.txt",
+      "to": "market-catalog-public-key.txt"
+    }
+  ],
     "files": [
       "apps/desktop-shell/src/**/*",
       "shared/process-start-identity.cjs",

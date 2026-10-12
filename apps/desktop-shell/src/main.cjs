@@ -20,6 +20,7 @@ const {
   resolveDesktopProcessCwd,
   resolveDesktopServiceReadyTimeoutMs,
   resolveDesktopRuntimeRoot,
+  resolveMarketCatalogPublicKey,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,
@@ -872,6 +873,10 @@ function startControlPlane(options = {}) {
           TASK_HANDOFF_CONTROL_PLANE_PORT: String(port),
           TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT: options.nodeAgentControlEndpoint || resolveNodeAgentControlEndpoint(),
           TASK_HANDOFF_NODE_AGENT_ENDPOINT: options.nodeAgentEndpoint || nodeAgentUrl(),
+          TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: resolveMarketCatalogPublicKey(process.env, {
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+          }),
         },
       }),
     },
