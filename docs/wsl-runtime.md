@@ -52,6 +52,15 @@ or the `runtime-artifacts` root, verifies its SHA-256, and caches it at the node
 across instances. The template provides Node, Python, git, and the base system dependencies; it never
 embeds the controlled-instance runtime.
 
+The packaged template is a portable tar, so it carries no uid/gid and `wsl --import` materialises the
+whole rootfs as `root`. Because the Docker image establishes its ownership baseline at build time
+(`chown -R agent:agent /workspace /data /home/agent /app` in the `task-handoff-images` base layer),
+the Node Agent rebuilds the same baseline inside the distro on first provisioning. Without it the
+instance entrypoint cannot create data directories as `agent` (for example
+`mkdir: cannot create directory '/data/task-handoff/events': Permission denied`). The step is guarded
+by `/var/lib/task-handoff/owner-baseline`, so it also repairs distros imported by older builds and
+never re-walks the data directory of a running instance.
+
 The Runtime Package Release workflow builds and attaches this template as a release asset
 (`wsl-base-<version>-x64.tar.gz` plus its manifest) for `linux-x64` nodes, using the pinned
 `task-handoff-images` commit as the tool baseline. Nodes without the bundled directory can download

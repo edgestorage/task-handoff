@@ -31,6 +31,33 @@ export const WSL_BASE_TEMPLATE_FORMAT_VERSION = 1;
 /** base 模板缓存与 distro 安装目录都在 Node Agent 私有数据目录下（见 persistence/paths.ts）。 */
 export const WSL_BASE_TEMPLATE_ID = "wsl-base";
 
+/** 供给后重建 agent 属主基线的标记；存在即跳过，重复供给可安全重放（幂等）。 */
+export const WSL_OWNERSHIP_BASELINE_MARKER_PATH = "/var/lib/task-handoff/owner-baseline";
+/** 与 task-handoff-images `runtime-core` 阶段 `chown -R agent:agent` 的集合一致。 */
+export const WSL_AGENT_OWNED_PATHS = ["/workspace", "/data", "/home/agent"] as const;
+export const WSL_AGENT_USER = "agent";
+
+/**
+ * 契约：base 模板以 portable tar 传输（不含 uid/gid，见 `scripts/build-wsl-base-template.mjs`），
+ * `wsl --import` 后 rootfs 全部归 root。Docker 侧由镜像构建阶段的
+ * `chown -R agent:agent /workspace /data /home/agent /app`（`task-handoff-images` Dockerfile 的
+ * `runtime-core` 阶段）建立属主基线；WSL 侧没有等价步骤，因此供给 MUST 在 distro 内重建同一条
+ * 基线，否则模板里已存在但归 root 的 `/data/task-handoff`、`/home/agent/.codex` 等目录会让
+ * entrypoint 的 `agent` 分支在创建缺失子目录时以 EACCES 失败（alpha.13 实测：
+ * `mkdir: cannot create directory '/data/task-handoff/events': Permission denied`）。
+ *
+ * 只在首次供给时执行一次：`/data` 随实例运行增长后不该在每次启动重放递归 chown。
+ */
+export function wslOwnershipBaselineCommand() {
+  const owned = WSL_AGENT_OWNED_PATHS.join(" ");
+  const chown = `chown -R ${WSL_AGENT_USER}:${WSL_AGENT_USER}`;
+  return `[ -f ${WSL_OWNERSHIP_BASELINE_MARKER_PATH} ] || { mkdir -p ${owned}`
+    + ` && ${chown} ${owned}`
+    + ` && { [ ! -d /app ] || ${chown} /app; }`
+    + ` && mkdir -p ${path.posix.dirname(WSL_OWNERSHIP_BASELINE_MARKER_PATH)}`
+    + ` && : > ${WSL_OWNERSHIP_BASELINE_MARKER_PATH}; }`;
+}
+
 export const WSL_RUNTIME_KIND_LABEL = "task-handoff.runtime-kind";
 export const WSL_RUNTIME_KIND_VALUE = "wsl";
 export const WSL_INSTANCE_ID_LABEL = "task-handoff.instance-id";
@@ -467,6 +494,7 @@ export class WslDistroProvisioner {
     if (existing) {
       const ownership = await this.assertOwnership(distroName, instance);
       await this.ensureMarker(distroName, ownership);
+      await this.ensureAgentOwnershipBaseline(distroName);
       return {
         distroName,
         created: false,
@@ -492,6 +520,7 @@ export class WslDistroProvisioner {
     // 先写宿主侧索引（证明"本节点创建了它"），再写 distro 内标记；标记写失败时重试仍可从索引恢复。
     this.index.put(ownership);
     await this.writeMarker(distroName, ownership);
+    await this.ensureAgentOwnershipBaseline(distroName);
     this.options.logger?.("wsl distro provisioned", {
       distroName,
       instanceId: instance.id,
@@ -568,6 +597,14 @@ export class WslDistroProvisioner {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * 4.2 补充：导入的模板整体归 root，MUST 重建 Docker 镜像的 agent 属主基线。distro 内标记保证
+   * 只重放一次，因此升级后遗留的旧 distro 也会被修复，而运行中实例的 `/data` 不会被反复递归 chown。
+   */
+  async ensureAgentOwnershipBaseline(distroName: string) {
+    await this.executor.execOrThrow(distroName, ["sh", "-c", wslOwnershipBaselineCommand()]);
   }
 
   private async writeMarker(distroName: string, ownership: WslDistroOwnership) {
