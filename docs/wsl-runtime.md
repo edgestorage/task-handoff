@@ -52,6 +52,18 @@ or the `runtime-artifacts` root, verifies its SHA-256, and caches it at the node
 across instances. The template provides Node, Python, git, and the base system dependencies; it never
 embeds the controlled-instance runtime.
 
+Template resolution is Docker-like: the node uses a locally visible template or its node-level cache
+when the version it expects is already there, and otherwise **pulls** that version from the same
+release channel as the managed runtime artifact (`wsl-base-<version>-<arch>.tar.gz` plus its
+manifest, verified against the manifest SHA-256 and written atomically into the cache). The expected
+version is the node agent's own release version, so upgrading the app pulls the matching template
+automatically. The node agent also prefetches it in the background at startup, so the first instance
+creation does not pay for the download. When the channel is unreachable (offline node, or a version
+that was never published) the node falls back to whatever version it has locally and logs the
+downgrade; a checksum or identity mismatch fails loudly instead of silently downgrading. Set
+`TASK_HANDOFF_RUNTIME_RELEASE_BASE_URL` (with a `{version}` placeholder) to point both the runtime
+artifact and the template at a mirror.
+
 The packaged template is a portable tar, so it carries no uid/gid and `wsl --import` materialises the
 whole rootfs as `root`. Because the Docker image establishes its ownership baseline at build time
 (`chown -R agent:agent /workspace /data /home/agent /app` in the `task-handoff-images` base layer),
@@ -63,8 +75,9 @@ never re-walks the data directory of a running instance.
 
 The Runtime Package Release workflow builds and attaches this template as a release asset
 (`wsl-base-<version>-x64.tar.gz` plus its manifest) for `linux-x64` nodes, using the pinned
-`task-handoff-images` commit as the tool baseline. Nodes without the bundled directory can download
-those assets and point `TASK_HANDOFF_WSL_BASE_TEMPLATE_DIR` at the containing folder.
+`task-handoff-images` commit as the tool baseline, and nodes pull it from there automatically. Point
+`TASK_HANDOFF_WSL_BASE_TEMPLATE_DIR` at a folder when you want to pin an air-gapped node to a
+template you distributed yourself.
 
 ## Enabling the runtime
 

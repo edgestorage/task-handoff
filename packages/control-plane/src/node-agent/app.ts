@@ -164,6 +164,7 @@ declare module "fastify" {
     nodeAgentStartRecoverySupervisor?: () => void;
     nodeAgentStartRuntimeAvailabilityMonitor?: () => void;
     nodeAgentStartWslSessionSupervisor?: () => void;
+    nodeAgentPrefetchWslBaseTemplate?: () => Promise<void>;
     nodeAgentResolveInstanceNodeAgentUrl?: (instance: ControlledInstance) => Promise<string>;
     nodeAgentModelRelay?: ModelRelayService;
   }
@@ -853,7 +854,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       baseTemplateCacheDir: paths.wslBaseTemplateCacheDir,
       index: wslIndex,
       baseTemplateSourceDirs: defaultWslBaseTemplateSourceDirs(),
+      // Docker 式拉取（10.8）：以本节点的发布版本为锚，本地没有该版本时从发布通道取 base 模板。
+      expectedBaseTemplateVersion: desiredControlledInstanceVersion(),
       expectedArch: arch,
+      fetchImpl: options.fetchImpl || fetch,
       logger: (message, data) => app.log.info(data, message),
     })
     : undefined;
@@ -1751,6 +1755,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentStartRecoverySupervisor", () => recoverySupervisor.start());
   app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
   app.decorate("nodeAgentStartWslSessionSupervisor", () => wslSessionSupervisor?.start());
+  // Docker 式拉取（10.8）：启动后在后台预热期望版本的 base 模板，避免把大体积下载放进创建请求。
+  app.decorate("nodeAgentPrefetchWslBaseTemplate", () => wslProvisioner?.prefetchBaseTemplate());
 
   app.get("/api/node-agent/health", async () => {
     const hostname = os.hostname().trim();
@@ -2265,6 +2271,10 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       app.nodeAgentStartRuntimeAvailabilityMonitor?.();
       app.nodeAgentStartRecoverySupervisor?.();
       app.nodeAgentStartWslSessionSupervisor?.();
+      // 失败只诊断，实例供给时会按同一解析顺序再试。
+      void app.nodeAgentPrefetchWslBaseTemplate?.().catch((error) => {
+        startup("wsl base template prefetch failed", { error: error instanceof Error ? error.message : String(error) });
+      });
     } catch (error) {
       await app.close();
       throw error;
