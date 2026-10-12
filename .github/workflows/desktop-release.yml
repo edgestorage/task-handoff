@@ -24,6 +24,10 @@ env:
   # Pulls the published Agent Skill into the shipped built-in project at build
   # time; off by default until the rollout variable is turned on.
   TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: ${{ vars.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED || '0' }}
+  # Baked into the packaged desktop app as a resource so released builds pull
+  # the official signed image market catalog; empty falls back to the key that
+  # ships in the desktop shell.
+  TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: ${{ vars.TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY }}
 
 jobs:
   node-pty-prebuilds:

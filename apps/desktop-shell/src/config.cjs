@@ -12,6 +12,9 @@ const DEFAULT_DESKTOP_NODE_AGENT_PORT = 18091;
 const DEFAULT_DESKTOP_SERVICE_READY_TIMEOUT_MS = 120_000;
 const MINIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS = 10_000;
 const MAXIMUM_DESKTOP_SERVICE_READY_TIMEOUT_MS = 900_000;
+// Desktop releases pin the official image market signing key so the store
+// works out of the box; operators can override or disable it through env.
+const DEFAULT_MARKET_CATALOG_PUBLIC_KEY = "MCowBQYDK2VwAyEAy9WaQML4tkszTZJZJvIfMicxfckT9lmGCKRamZsnWbg=";
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 const POSIX_DESKTOP_EXECUTABLE_PATHS = {
   darwin: ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
@@ -101,6 +104,23 @@ function resolveCliEntry(root = repoRoot(), env = process.env) {
 
 function resolveNodeCommand(env = process.env, options = {}) {
   return env.TASK_HANDOFF_NODE || env.NODE || (options.packaged ? options.execPath || process.execPath : "node");
+}
+
+function readBundledMarketCatalogPublicKey(options = {}) {
+  if (options.filePath === null) return undefined;
+  const filePath = options.filePath || (options.packaged && options.resourcesPath
+    ? path.join(options.resourcesPath, "market-catalog-public-key.txt")
+    : path.join(repoRoot(), "build", "market-catalog-public-key.txt"));
+  try {
+    return fs.readFileSync(filePath, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMarketCatalogPublicKey(env = process.env, options = {}) {
+  const override = env.TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY?.trim();
+  return override || readBundledMarketCatalogPublicKey(options) || DEFAULT_MARKET_CATALOG_PUBLIC_KEY;
 }
 
 function resolveDesktopProcessCwd(env = process.env, options = {}) {
@@ -223,6 +243,7 @@ function validateDesktopInputs(options = {}) {
 
 module.exports = {
   DEFAULT_DESKTOP_SERVICE_READY_TIMEOUT_MS,
+  DEFAULT_MARKET_CATALOG_PUBLIC_KEY,
   buildControlPlaneArgs,
   buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
@@ -235,6 +256,7 @@ module.exports = {
   resolveControlPlanePort,
   resolveControlPlaneWindowUrl,
   resolveDataDir,
+  resolveMarketCatalogPublicKey,
   resolveDesktopProcessCwd,
   resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,

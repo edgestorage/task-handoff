@@ -1,7 +1,10 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  DEFAULT_MARKET_CATALOG_PUBLIC_KEY,
   buildControlPlaneArgs,
   buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
@@ -15,6 +18,7 @@ const {
   resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,
   resolveDesktopServiceReadyTimeoutMs,
+  resolveMarketCatalogPublicKey,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,
@@ -63,6 +67,24 @@ test("desktop config honors environment overrides", () => {
   assert.equal(resolveNodeAgentControlEndpoint(env), "ipc://custom");
   assert.equal(resolveControlPlaneAuthMode(env), "password");
   assert.equal(resolveStaticDir("/repo", env), "/tmp/static");
+});
+
+test("desktop config pins the official market catalog public key", () => {
+  const missing = { filePath: path.join(os.tmpdir(), "task-handoff-missing-market-key.txt") };
+  assert.equal(resolveMarketCatalogPublicKey({}, missing), DEFAULT_MARKET_CATALOG_PUBLIC_KEY);
+  assert.equal(resolveMarketCatalogPublicKey({ TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: "  " }, missing), DEFAULT_MARKET_CATALOG_PUBLIC_KEY);
+  assert.equal(resolveMarketCatalogPublicKey({ TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: "custom-key" }, missing), "custom-key");
+});
+
+test("desktop config reads the bundled market catalog key and prefers environment overrides", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-market-key-"));
+  const filePath = path.join(dir, "market-catalog-public-key.txt");
+  fs.writeFileSync(filePath, "bundled-key\n");
+  assert.equal(resolveMarketCatalogPublicKey({}, { filePath }), "bundled-key");
+  assert.equal(resolveMarketCatalogPublicKey({ TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: "env-key" }, { filePath }), "env-key");
+  fs.writeFileSync(filePath, "\n");
+  assert.equal(resolveMarketCatalogPublicKey({}, { filePath }), DEFAULT_MARKET_CATALOG_PUBLIC_KEY);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("desktop config uses the Electron executable as Node in packaged builds", () => {
