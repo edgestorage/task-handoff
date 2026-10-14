@@ -18,7 +18,7 @@ function createGitFixture(options = {}) {
   const root = path.join(base, "repository");
   fs.mkdirSync(root);
   git(root, ["init", "-b", "main"]);
-  git(root, ["config", "user.name", "Task Handoff Test"]);
+  git(root, ["config", "user.name", "TaskHandoff Test"]);
   git(root, ["config", "user.email", "task-handoff@example.invalid"]);
 
   const fixture = {

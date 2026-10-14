@@ -8902,7 +8902,7 @@ test("app runtime ignores persisted sessions by default", () => {
   }
 });
 
-test("controlled instance history routes use trusted Task Handoff entries for resume", async () => {
+test("controlled instance history routes use trusted TaskHandoff entries for resume", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-routes-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths);
