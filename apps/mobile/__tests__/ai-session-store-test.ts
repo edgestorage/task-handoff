@@ -114,9 +114,16 @@ describe('MobileAiSessionStore identity isolation', () => {
     };
     store.replaceSnapshot('cp-detail', compact);
     const refreshed = store.session('cp-detail', 'instance-detail', 'session-detail');
-    expect(refreshed?.queue).toEqual({ revision: 3, pendingCount: 0, items: [] });
+    // The compact summary only carries queue revision/pendingCount and never
+    // item or sub-agent rows, so the cache keeps the last renderable rows
+    // mounted while the detail for revision 3 is still loading.
+    expect(refreshed?.queue).toEqual({
+      revision: 3,
+      pendingCount: 0,
+      items: [expect.objectContaining({ id: 'queue-1', message: 'next' })],
+    });
     expect(refreshed?.turns?.[0]?.lastMessage).toBe('answer');
-    expect(refreshed?.subAgents).toEqual([]);
+    expect(refreshed?.subAgents).toEqual([expect.objectContaining({ threadId: 'sub-1' })]);
   });
 
   test('directory timeline capabilities default old responses to unsupported and remain provider-scoped', () => {
