@@ -51,6 +51,41 @@ test("text fenced code blocks retain their content alongside animated text", asy
   }
 });
 
+test("mermaid fenced code blocks render through the markstream mermaid node", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    root,
+    server: { middlewareMode: true },
+  });
+
+  try {
+    const { default: StreamingMarkdown } = await server.ssrLoadModule(
+      "/src/components/ai-session/AiSessionStreamingMarkdown.vue",
+    );
+    const content = [
+      "```mermaid",
+      "graph TD",
+      "  A[Start] --> B[Done]",
+      "```",
+    ].join("\n");
+    const app = createSSRApp({
+      render: () => h(StreamingMarkdown, {
+        content,
+        instanceId: "instance-test",
+        sessionId: "session-test",
+      }),
+    });
+    app.use(createControlPlaneI18nForTest());
+    const html = await renderToString(app);
+    assert.match(html, /data-markstream-mermaid="1"/);
+    assert.match(html, /graph TD/);
+    assert.doesNotMatch(html, /class="ai-session-highlighted-code"/);
+  } finally {
+    await server.close();
+  }
+});
+
 test("consecutive fenced code blocks keep flow spacing on the code node wrapper", () => {
   const codeBlock = fs.readFileSync(
     new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url),

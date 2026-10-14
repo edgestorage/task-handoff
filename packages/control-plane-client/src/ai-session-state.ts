@@ -4,6 +4,7 @@ import {
   type AiSessionStreamEvent,
   type AiSessionStatus,
   type AiSessionDetail,
+  type AiSessionQueue,
   type AiSessionSummary,
   type AiSessionSummaryTurn,
   type AiSessionTurn,
@@ -150,10 +151,30 @@ export function mergeAiSessionSummaryWithDetail<Summary extends AiSessionSummary
     cwd: detail.cwd,
     error: detail.error,
     providerMeta: detail.providerMeta,
-    queue: detailIsCurrent ? detail.queue : summary.queue,
-    subAgents: detailIsCurrent ? detail.subAgents : summary.subAgents,
+    queue: detailIsCurrent ? detail.queue : mergeLiveQueueWithCachedItems(summary.queue, detail.queue),
+    // The list projection never ships sub-agent rows either, so keep the
+    // cached ones rendered until the newer detail replaces them.
+    subAgents: detail.subAgents,
     turns,
   } as Summary;
+}
+
+/**
+ * The compact list projection deliberately ships queue metadata only: revision,
+ * pause state, and pending count stay live, while the items array is empty and
+ * owned by the HTTP detail. When a mutation bumps the revision, the cached
+ * detail turns stale for one round trip; reusing its items here keeps the queue
+ * list mounted instead of letting the empty list summary unmount it and flash
+ * the whole list. Revision-gated actions still read the live summary revision.
+ */
+function mergeLiveQueueWithCachedItems(live: AiSessionQueue, cached: AiSessionQueue): AiSessionQueue {
+  if (!cached.items.length) return live;
+  return {
+    revision: live.revision,
+    pendingCount: live.pendingCount,
+    ...(live.paused ? { paused: true } : {}),
+    items: cached.items,
+  };
 }
 
 export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
