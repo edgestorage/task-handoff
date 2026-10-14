@@ -16,7 +16,7 @@
 
 TaskHandoff brings Codex and other AI development work into one control plane. It connects AI sessions spread across machines, workspaces, and chat platforms while managing node enrollment, instance lifecycles, sessions, applications, and message routing.
 
-> **Beta:** Task Handoff is under active development. Breaking changes may land between releases.
+> **Beta:** TaskHandoff is under active development. Breaking changes may land between releases.
 
 ## Interface
 

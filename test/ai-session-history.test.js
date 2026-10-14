@@ -76,7 +76,7 @@ test("AI session history store persists atomically and isolates instance data", 
   assert.deepEqual(fs.readdirSync(path.dirname(first.path())).filter((name) => name !== "index.json"), []);
 });
 
-test("AI session history store keeps the newest 50 Task Handoff entries", () => {
+test("AI session history store keeps the newest 50 TaskHandoff entries", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-limit-"));
   const store = new AiSessionHistoryStore({ dataDir: root });
 

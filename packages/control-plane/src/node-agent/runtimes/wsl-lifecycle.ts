@@ -378,7 +378,7 @@ export class WslInstanceLifecycle {
   }
 
   private async writeUnit(distroName: string, environment: Record<string, string>, workspace: string, instanceId: string) {
-    const unit = renderWslInstanceUnit(environment, { workspace, description: `Task Handoff controlled instance ${instanceId}` });
+    const unit = renderWslInstanceUnit(environment, { workspace, description: `TaskHandoff controlled instance ${instanceId}` });
     const encoded = Buffer.from(unit, "utf8").toString("base64");
     await this.executor.execOrThrow(distroName, [
       "sh",
