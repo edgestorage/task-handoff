@@ -1,4 +1,5 @@
 import type {
+  ControlPlaneCurrentAuthorization,
   ControlPlanePermissionId,
   ControlPlaneUserInstanceScope,
   ControlPlaneUserNodeScope,
@@ -117,6 +118,43 @@ function canCloudAccount(action: ControlPlaneAction, resource: ControlPlaneResou
   if (action === "read") return true;
   if (resource.type === "image" || resource.type === "public-directory") return false;
   return ["create", "update", "delete", "start", "stop", "restart", "proxy", "interactive-access", "send-message", "approve", "interrupt", "read-file-content"].includes(action);
+}
+
+export type ControlPlaneCloudAccountActor = Extract<ControlPlaneActor, { type: "cloud-account" }>;
+
+/**
+ * Cloud accounts have no local role or node scope, so the relay projects
+ * `canCloudAccount` into the local permission vocabulary. Clients use the
+ * projection only to gate their own UI; every request is still enforced
+ * through `canCloudAccount` on the Control Plane.
+ */
+export const CLOUD_ACCOUNT_PERMISSION_IDS: readonly ControlPlanePermissionId[] = [
+  "nodes:read",
+  "projects:read", "projects:manage",
+  "runtimes:read", "runtimes:manage",
+  "templates:read", "templates:manage",
+  "instances:read", "instances:manage", "instances:interactive",
+  "app-sessions:read", "app-sessions:manage", "app-sessions:interactive",
+  "ai-sessions:read", "ai-sessions:manage", "ai-sessions:interactive",
+  "triggers:read", "triggers:manage",
+  "repositories:read", "repositories:manage",
+  "attachments:read", "attachments:manage",
+  "models:read", "models:manage",
+  // Reads stay open except for the admin and secret surfaces, mirroring the
+  // `action === "read"` branch of `canCloudAccount`.
+  "images:read", "public-directory:read",
+];
+
+export function cloudAccountAuthorization(actor: ControlPlaneCloudAccountActor): ControlPlaneCurrentAuthorization {
+  return {
+    userId: `cloud-account:${actor.accountId}`,
+    identityId: `cloud-device:${actor.deviceSessionId}`,
+    roleIds: ["role_cloud_account"],
+    permissionIds: [...CLOUD_ACCOUNT_PERMISSION_IDS],
+    nodeScope: { kind: "all" },
+    instanceScope: { kind: "inherit-node-scope" },
+    authorizationRevision: Math.max(1, actor.bindingRevision),
+  };
 }
 
 export function assertCan(actor: ControlPlaneActor, action: ControlPlaneAction, resource: ControlPlaneResource) {

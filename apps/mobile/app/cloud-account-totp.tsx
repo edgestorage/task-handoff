@@ -9,9 +9,9 @@ import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { mobileCloudAccountSession as account, saveActiveCloudAccountReference } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
-import { isMobileFeatureEnabled } from '../src/platform/build-variant';
+import { isMobileFeatureEnabled, mobileAppScheme } from '../src/platform/build-variant';
 
-const REDIRECT_URI = 'taskhandoff://cloud-auth/callback';
+const REDIRECT_URI = `${mobileAppScheme}://official-auth/callback`;
 
 export default function CloudAccountTotpScreen() {
   if (!isMobileFeatureEnabled('officialAccount')) return <Redirect href="/profiles" />;

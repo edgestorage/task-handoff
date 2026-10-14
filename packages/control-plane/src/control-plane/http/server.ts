@@ -41,7 +41,7 @@ import { importLegacyP0Json } from "../persistence/database/legacy-p0-import.ts"
 import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/legacy-identity-provider-import.ts";
 import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
-import { assertCan, assertCanAccessResolvedResource, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
+import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -358,6 +358,22 @@ const ROUTES_WITHOUT_RBAC = new Set([
   "/api/auth/external/callback",
 ]);
 
+// A linked cloud account is its own principal, so a relayed request has no
+// Control Plane session credential to present. These credential-free routes
+// are reachable over the relay because the mobile profile bootstraps and
+// re-verifies itself with them; every other route still needs an RBAC mapping.
+const CLOUD_RELAY_ROUTES_WITHOUT_RBAC = new Set([
+  "/api/auth/session",
+  "/api/access/me",
+  "/api/control-plane/identity",
+  "/api/health",
+]);
+
+export function cloudRelayRouteReachable(method: string, url: string) {
+  if (routeAuthorization(method, url)) return true;
+  return CLOUD_RELAY_ROUTES_WITHOUT_RBAC.has(url.split("?")[0] || "/");
+}
+
 export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
   const path = url.split("?")[0] || "/";
   if (!path.startsWith("/api/")) {
@@ -552,10 +568,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
       const authorization = routeAuthorization(method, requestPath);
-      if (!requestPath.startsWith("/api/") || !authorization || ROUTES_WITHOUT_RBAC.has(requestPath.split("?")[0])) {
+      if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       }
-      assertCan(actor, authorization.action, authorization.resource);
+      if (authorization) assertCan(actor, authorization.action, authorization.resource);
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
       try {
@@ -833,8 +849,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       cloudRelayActors.delete(internalActorToken as string);
       setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
-      if (!authorization) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
-      assertCan(cloudActor, authorization.action, authorization.resource);
+      if (!cloudRelayRouteReachable(request.method, securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      if (authorization) assertCan(cloudActor, authorization.action, authorization.resource);
       return;
     }
     // Machine routes opt out of UI sessions explicitly. Their handlers remain
@@ -1054,6 +1070,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.get("/api/auth/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
+    // A relayed cloud account has no local session; report the official account
+    // as the authenticated principal so relay profiles behave like signed-in clients.
+    const actor = controlPlaneRequestActor(request);
+    if (actor?.type === "cloud-account") {
+      return { data: { ...await auth.state(), authenticated: true, authorization: cloudAccountAuthorization(actor) } };
+    }
     const credential = requestSessionCredential(request);
     return { data: await auth.currentSession(credential.token, credential.clientTypes) };
   });
@@ -1188,6 +1210,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.get("/api/access/me", async (request, reply) => {
+    const actor = controlPlaneRequestActor(request);
+    if (actor?.type === "cloud-account") return { data: cloudAccountAuthorization(actor) };
     const credential = requestSessionCredential(request);
     const access = await auth.currentAccess(credential.token, credential.clientTypes);
     return access ? { data: access } : reply.code(401).send({

@@ -42,8 +42,31 @@ export class CloudRelayConnector {
     await socketOpen(socket);
     socket.send(JSON.stringify({ type: "attach", capability: attach }));
     const attached = await socketMessage(socket, (value) => value?.type === "attached");
-    return establishEncryptedSession(socket, attached.channelId, ticket, this.options.identity, this.options.bridge);
+    return continueEncryptedSession(socket, attached.channelId, ticket, this.options.identity, this.options.bridge);
   }
+}
+
+// The Coordinator hands the client its attach capability only after this Control Plane
+// acknowledges the allocation, while the encrypted handshake can only finish once that
+// client joins the Relay. Acknowledge as soon as the Relay accepted this peer and keep
+// completing the handshake in the background so both sides cannot wait on each other.
+function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge) {
+  let session: { close(reason?: string): Promise<void> | void } | undefined;
+  let closeReason: string | undefined;
+  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge).then((value) => {
+    session = value;
+    if (closeReason !== undefined) void value.close(closeReason);
+    return value;
+  });
+  void established.catch(() => { if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-handshake-failed"); });
+  return {
+    async close(reason = "normal") {
+      closeReason = reason;
+      if (session) return session.close(reason);
+      if (socket.readyState < WebSocket.CLOSING) socket.close(1000, String(reason).slice(0, 120));
+      return undefined;
+    },
+  };
 }
 
 async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge) {
@@ -114,10 +137,11 @@ class EncryptedControlPlaneRelaySession {
 }
 
 function trustedRelayUrl(url: URL, serviceOrigin: string) {
-  if (url.protocol !== "wss:") return false;
-  if (url.hostname === "relay.thandoff.com" || url.hostname.endsWith(".relay.thandoff.com")) return true;
+  if (url.hostname === "relay.thandoff.com" || url.hostname.endsWith(".relay.thandoff.com")) return url.protocol === "wss:";
   const service = new URL(serviceOrigin);
-  return service.hostname !== "cloud.thandoff.com" && url.hostname === service.hostname;
+  if (service.hostname === "cloud.thandoff.com" || url.hostname !== service.hostname) return false;
+  // Local test clouds run over plain HTTP, so their Relay endpoints arrive as ws://.
+  return url.protocol === "wss:" || (url.protocol === "ws:" && service.protocol === "http:");
 }
 function socketOpen(socket: WebSocket) { return new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); socket.once("close", () => reject(relayError("RELAY_SOCKET_CLOSED"))); }); }
 function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) { return new Promise<any>((resolve, reject) => { const onMessage = (raw: WebSocket.RawData) => { try { const value = JSON.parse(raw.toString()); if (predicate(value)) { cleanup(); resolve(value); } } catch (error) { cleanup(); reject(error); } }; const onClose = () => { cleanup(); reject(relayError("RELAY_SOCKET_CLOSED")); }; const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); }; socket.on("message", onMessage); socket.once("close", onClose); }); }

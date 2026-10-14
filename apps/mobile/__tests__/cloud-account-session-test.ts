@@ -1,10 +1,12 @@
 import { MobileCloudAccountSession } from '../src/control-plane/cloud-account';
 import type { SecureValueStore } from '../src/platform/secure-storage';
 
+let mockRandomSourceCounter = 0;
 jest.mock('expo-crypto', () => ({
   CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
   CryptoEncoding: { BASE64: 'base64' },
   digestStringAsync: async () => 'cGtjZS1jaGFsbGVuZ2U=',
+  getRandomValues: (value: Uint8Array) => { value.fill(++mockRandomSourceCounter); return value; },
 }));
 
 function store(initial: Record<string, string> = {}) {
@@ -95,6 +97,30 @@ test('restored account refresh is single-flight and explicit logout removes the 
   expect(storage.values.get(key)).toContain(refreshCredential);
   await session.logout();
   expect(storage.values.has(key)).toBe(false);
+});
+
+test('a session refreshing after another session rotated presents the persisted credential', async () => {
+  const key = 'cloud.account.device_a';
+  const credential = (round: number) => String(round).repeat(48);
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: credential(1), deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  const presented: string[] = [];
+  let currentCredential = credential(1);
+  const request = jest.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    if (!String(url).endsWith('/refresh')) return response({ data: {} });
+    const body = JSON.parse(String(init?.body)) as { refreshCredential: string };
+    presented.push(body.refreshCredential);
+    if (body.refreshCredential !== currentCredential) return response({ error: { code: 'REFRESH_REPLAYED', message: 'Refresh credential replay revoked this device session.' } }, 401);
+    currentCredential = credential(presented.length + 1);
+    return response({ data: { tokenType: 'Bearer', accessToken, accessExpiresAt: new Date(Date.now() + 300_000).toISOString(), refreshCredential: currentCredential, deviceSessionId: 'device_a', accountId: 'account_a' } });
+  }) as unknown as typeof fetch;
+  const options = { request, reference: { id: 'device_a', secureCredentialKey: key } };
+  const first = new MobileCloudAccountSession(storage.value, options);
+  const second = new MobileCloudAccountSession(storage.value, options);
+
+  await first.accessToken();
+  await expect(second.accessToken()).resolves.toBe(accessToken);
+  expect(presented).toEqual([credential(1), credential(2)]);
+  expect(storage.values.get(key)).toContain(credential(3));
 });
 
 test('refresh replay or unauthorized rotation clears device credentials and requires reauthentication', async () => {
