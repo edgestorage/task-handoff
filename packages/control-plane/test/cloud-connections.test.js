@@ -3,7 +3,7 @@ import test from "node:test";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "../src/control-plane/cloud-connectivity/connections.ts";
 import { CloudAuthorityEventConsumer } from "../src/control-plane/cloud-connectivity/authority-events.ts";
-import { verifyCoordinatorRelayAllocation } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
+import { CloudRelayConnector, verifyCoordinatorRelayAllocation } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 
 test("control connection uses background credential, persistent monotonic epoch and bounded retry independent of UI", async () => {
   let epoch = 0;
@@ -50,4 +50,45 @@ test("Control Plane accepts only current Coordinator-delivered allocation identi
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://eu.relay.taskhandoff.com/connect", attach, ticket }, state), { code: "UNTRUSTED_RELAY_URL" });
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://attacker.example/connect", attach, ticket }, state), { code: "UNTRUSTED_RELAY_URL" });
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://eu.relay.thandoff.com/connect", attach: { ...attach, bindingRevision: 1 }, ticket }, state), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
+  const localState = { snapshot: () => ({ ...state.snapshot(), serviceOrigin: "http://localhost:8080" }) };
+  assert.equal(verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "ws://localhost:8080/connect", attach, ticket }, localState).allocationId, "allocation_a");
+  assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "ws://attacker.example/connect", attach, ticket }, localState), { code: "UNTRUSTED_RELAY_URL" });
+});
+
+test("relay attach acknowledges the Coordinator before the client completes the end-to-end handshake", { timeout: 5_000 }, async () => {
+  const sockets = [];
+  class FakeSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = FakeSocket.CONNECTING;
+    sent = [];
+    listeners = new Map();
+    constructor(url) { this.url = url; sockets.push(this); queueMicrotask(() => { this.readyState = FakeSocket.OPEN; this.emit("open"); }); }
+    on(event, listener) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
+    once(event, listener) { const wrapper = (...args) => { this.off(event, wrapper); listener(...args); }; this.on(event, wrapper); }
+    off(event, listener) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
+    emit(event, ...args) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
+    send(data) {
+      const message = JSON.parse(data);
+      this.sent.push(message);
+      if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", channelId: "relay_channel_a" }) }));
+    }
+    close(code, reason) { this.readyState = FakeSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
+    receive(value) { this.emit("message", { toString: () => JSON.stringify(value) }); }
+  }
+  const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
+  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: "allocation_a", relayId: "relay_a", role: "control-plane", controlPlaneId: ticket.controlPlaneId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, bindingId: ticket.bindingId, ticketId: ticket.ticketId, bindingRevision: ticket.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: ticket.issuedAt, expiresAt: ticket.expiresAt, signature: "s".repeat(32) };
+  const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey: new Uint8Array(32) }), publicIdentity: () => ({ publicKey: "c".repeat(43) }) };
+  const connector = new CloudRelayConnector({ identity, bridge: {}, webSocket: FakeSocket });
+  const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, ticket } });
+  assert.deepEqual(sockets[0].sent.map((message) => message.type), ["attach"]);
+  const hello = { ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) };
+  sockets[0].receive({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId: "relay_channel_a", sequence: 0, kind: "handshake", ciphertext: Buffer.from(JSON.stringify(hello)).toString("base64url") } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(sockets[0].sent.some((message) => message.type === "frame" && message.frame.kind === "handshake"), true);
+  await connection.close("test-done");
+  assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
 });

@@ -79,7 +79,7 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
           const name = profile.identity.displayName || t('profiles.defaultName');
           return (
             <Button
-              key={`${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}
+              key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}
               modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('profiles.viewDetails', { name }))]}
               onPress={() => props.onOpen(profile.identity.controlPlaneId)}
             >

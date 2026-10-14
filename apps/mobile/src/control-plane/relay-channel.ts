@@ -1,5 +1,7 @@
+import '../platform/random-values';
 import * as Crypto from 'expo-crypto';
 import nacl from 'tweetnacl';
+import { isMobileTestMode } from '../platform/build-variant';
 import type { EncryptedRelayChannel, RelayChannelFactory } from './relay-transport';
 import { MobileControlPlaneTransportError } from './transport';
 
@@ -10,7 +12,10 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
   return async (input) => {
     const ticket = input.ticket as any;
     const url = new URL(input.relayUrl);
-    if (url.protocol !== 'wss:' || !(options.allowRelayUrl ?? cloudRelayUrl)(url)) throw relayError('UNTRUSTED_RELAY_URL');
+    // Test builds may use the plain-HTTP test cloud stack: allow ws:// there just like
+    // direct Control Plane enrollment allows http://.
+    const insecureAllowed = isMobileTestMode && url.protocol === 'ws:';
+    if ((url.protocol !== 'wss:' && !insecureAllowed) || !(options.allowRelayUrl ?? cloudRelayUrl)(url)) throw relayError('UNTRUSTED_RELAY_URL');
     const socket = (options.webSocketFactory ?? ((target) => new WebSocket(target) as unknown as SocketLike))(url.toString());
     await waitForOpen(socket);
     socket.send(JSON.stringify({ type: 'attach', capability: input.clientAttach }));
@@ -25,9 +30,12 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
     const fingerprint = `sha256:${base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, identityKey)))}`;
     const transcript = await transcriptHash(ticket, hello.clientEphemeralPublicKey, response.serverEphemeralPublicKey);
     if (fingerprint !== input.targetPublicKeyFingerprint || response.transcript !== transcript || !nacl.sign.detached.verify(new TextEncoder().encode(transcript), fromBase64Url(response.signature), identityKey)) throw relayError('RELAY_E2E_IDENTITY_INVALID');
-    const shared = nacl.box.before(fromBase64Url(response.serverEphemeralPublicKey), keyPair.secretKey);
+    // The Control Plane derives the session key from the raw X25519 shared secret
+    // (packages/cloud-contracts/src/e2e.ts). nacl.box.before would apply the NaCl
+    // box HSalsa20 transform on top, so the two sides would never agree.
+    const shared = nacl.scalarMult(keyPair.secretKey, fromBase64Url(response.serverEphemeralPublicKey));
     const sessionKey = new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, concat(shared, new TextEncoder().encode(transcript), new TextEncoder().encode('task-handoff:control-plane-access:e2e:v1'))));
-    return new WebSocketEncryptedRelayChannel(socket, attached.channelId, sessionKey, sendSequence);
+    return new WebSocketEncryptedRelayChannel(socket, attached.channelId, sessionKey, sendSequence, attached.leaseExpiresAt);
   };
 }
 
@@ -40,10 +48,10 @@ export function allowCloudRelayUrlForService(url: URL, serviceOrigin: string, al
 
 class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
   private readonly listeners = new Set<(value: any) => void>(); private readonly closeListeners = new Set<(error?: unknown) => void>(); private sendCounter = 0; private receiveCounter = 0; private receiveSequence = 1;
-  constructor(private readonly socket: SocketLike, private readonly channelId: string, private readonly key: Uint8Array, private sendSequence: number) {
+  constructor(private readonly socket: SocketLike, private readonly channelId: string, private readonly key: Uint8Array, private sendSequence: number, readonly leaseExpiresAt?: string) {
     socket.addEventListener('message', (event) => this.receive(event.data)); socket.addEventListener('error', () => this.closed(relayError('RELAY_SOCKET_ERROR', true))); socket.addEventListener('close', () => this.closed());
   }
-  send(value: any) { if (this.socket.readyState !== 1 || (this.socket.bufferedAmount ?? 0) > 2 * 1024 * 1024) throw relayError('RELAY_BACKPRESSURE_LIMIT', true); const plaintext = new TextEncoder().encode(JSON.stringify(value)); const sealed = nacl.secretbox(plaintext, nonce(1, this.sendCounter++), this.key); this.socket.send(JSON.stringify({ type: 'frame', frame: { protocolVersion: '2026-08-10', channelId: this.channelId, sequence: this.sendSequence++, kind: value.type === 'cancel' ? 'cancel' : 'data', ciphertext: base64Url(sealed) } })); }
+  send(value: any) { if (this.socket.readyState !== 1) throw relayError('RELAY_CHANNEL_CLOSED', true); if ((this.socket.bufferedAmount ?? 0) > 2 * 1024 * 1024) throw relayError('RELAY_BACKPRESSURE_LIMIT', true); const plaintext = new TextEncoder().encode(JSON.stringify(value)); const sealed = nacl.secretbox(plaintext, nonce(1, this.sendCounter++), this.key); this.socket.send(JSON.stringify({ type: 'frame', frame: { protocolVersion: '2026-08-10', channelId: this.channelId, sequence: this.sendSequence++, kind: value.type === 'cancel' ? 'cancel' : 'data', ciphertext: base64Url(sealed) } })); }
   close(code=1000,reason='normal'){this.socket.close(code,reason)}
   subscribe(listener:(value:any)=>void,onClose:(error?:unknown)=>void){this.listeners.add(listener);this.closeListeners.add(onClose);return()=>{this.listeners.delete(listener);this.closeListeners.delete(onClose)}}
   private receive(raw:unknown){try{const value=JSON.parse(String(raw));const frame=value.frame;if(value.type!=='frame'||frame.channelId!==this.channelId||frame.sequence!==this.receiveSequence++)throw relayError('RELAY_FRAME_SEQUENCE_INVALID');const opened=nacl.secretbox.open(fromBase64Url(frame.ciphertext),nonce(2,this.receiveCounter++),this.key);if(!opened)throw relayError('RELAY_E2E_DECRYPT_FAILED');const envelope=JSON.parse(new TextDecoder().decode(opened));for(const listener of this.listeners)listener(envelope)}catch(error){this.closed(error);this.socket.close(4400,'protocol-error')}}

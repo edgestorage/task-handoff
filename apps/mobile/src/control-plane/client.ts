@@ -28,7 +28,7 @@ export function createMobileControlPlaneClient(profile: MobileControlPlaneProfil
     throw Object.assign(new Error('Cloud Relay is disabled in this mobile build.'), { code: 'CLOUD_RELAY_FEATURE_DISABLED' });
   }
   const cloud = profile as MobileCloudRelayControlPlaneProfile;
-  const account = new MobileCloudAccountSession(secureStore, { origin: cloud.access.serviceOrigin, request: options.cloudRequest, allowNonProductionOrigin: options.allowNonProductionOrigin, reference: cloud.access.accountSession });
+  const account = new MobileCloudAccountSession(secureStore, { origin: cloud.access.serviceOrigin, request: options.cloudRequest, allowNonProductionOrigin: options.allowNonProductionOrigin ?? isMobileTestMode, reference: cloud.access.accountSession });
   const allowIsolatedEnvironment = account.origin !== CLOUD_PRODUCTION_ORIGIN;
   const transport = new RelayControlPlaneTransport(cloud, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl: (url) => allowCloudRelayUrlForService(url, cloud.access.serviceOrigin, allowIsolatedEnvironment) }));
   return { transport, api: createControlPlaneClient(transport), account };

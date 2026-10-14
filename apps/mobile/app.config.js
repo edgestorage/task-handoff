@@ -82,6 +82,7 @@ module.exports = () => {
       // Compatibility for v0.0.32: keep the old Expo extra available to N-1 JS bundles.
       cloudRelayEnabled: featureFlags.officialAccount,
       ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
+      ...(variantName === 'development' && process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN ? { cloudServiceOrigin: new URL(process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN).origin } : {}),
     },
   };
 };

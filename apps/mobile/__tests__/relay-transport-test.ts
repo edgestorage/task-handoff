@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 import { RelayControlPlaneTransport, type EncryptedRelayChannel } from '../src/control-plane/relay-transport';
+import { MobileControlPlaneTransportError } from '../src/control-plane/transport';
 import type { MobileCloudRelayControlPlaneProfile } from '../src/control-plane/profile';
 
 const profile: MobileCloudRelayControlPlaneProfile = { version: 1, identity: { controlPlaneId: 'control_plane_a', publicKeyFingerprint: `sha256:${'a'.repeat(43)}` }, access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 2, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } }, capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true, triggers: true }, createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:00.000Z' };
@@ -31,6 +32,17 @@ test('cloud Relay transport multiplexes events, TTY, cancellation and reconnect 
   emit({ type: 'event', event: { v: COMPACT_EVENT_ENVELOPE_VERSION, id: 'event_a', type: 'instance.updated', createdAt: '2026-08-26T00:00:00.000Z', payload: {} } }); emit({ type: 'tty-snapshot', streamId, data: 'restored', pendingEscape: '\u001b[2', cols: 120, rows: 32 }); emit({ type: 'tty-output', streamId, data: 'hello' }); terminal.sendInput('ls\n');
   expect(events).toEqual([expect.objectContaining({ v: 1, id: 'event_a', type: 'instance.updated', topic: 'instances' })]); expect(tty).toEqual(['snapshot:restored:\u001b[2:120x32', 'hello']); expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'tty-input' }));
   await transport.revalidate(); expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 2 }));
+});
+
+test('cloud Relay transport rotates off a channel that can no longer accept frames', async () => {
+  const { channel, open, transport } = harness();
+  const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+  await transport.request('/api/bootstrap', schema);
+  (channel.send as jest.Mock).mockImplementationOnce(() => { throw new MobileControlPlaneTransportError('RELAY_CHANNEL_CLOSED', 'Cloud Relay channel failed.', true); });
+  await expect(transport.request('/api/bootstrap', schema)).rejects.toMatchObject({ code: 'RELAY_CHANNEL_CLOSED' });
+  expect(channel.close).toHaveBeenCalledWith(4000, 'reset');
+  await expect(transport.request('/api/bootstrap', schema)).resolves.toEqual({ data: { ok: true } });
+  expect(open).toHaveBeenCalledTimes(2);
 });
 
 test('cloud Relay transport resets the channel instead of delivering malformed compact events', async () => {
@@ -92,4 +104,67 @@ test('cloud Relay profile cannot inject authorization, cross-origin route or sta
   await expect(first.transport.request('/api/health', z.any(), { headers: { authorization: 'Bearer stolen' } })).rejects.toMatchObject({ code: 'RELAY_AUTH_HEADER_FORBIDDEN' });
   const staleAccount = { issueAccessTicket: async () => ({ bindingId: 'binding_a', bindingRevision: 1, targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint }) } as any;
   await expect(new RelayControlPlaneTransport(profile, staleAccount, jest.fn()).request('/api/health', z.any())).rejects.toMatchObject({ code: 'RELAY_TARGET_IDENTITY_CHANGED' });
+});
+
+function leaseHarness(leaseMs = 30_000) {
+  const channels: Array<{ channel: EncryptedRelayChannel; emit: (value: any) => void; close: () => void }> = [];
+  const account = { issueAccessTicket: jest.fn().mockResolvedValue({ ticketId: 'ticket_a', bindingId: 'binding_a', bindingRevision: 2, targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint }), allocateRelay: jest.fn().mockResolvedValue({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' } }) } as any;
+  const open = jest.fn(async () => {
+    let listener: (value: any) => void = () => undefined;
+    let onClose: (error?: unknown) => void = () => undefined;
+    // Promise callbacks are not part of the fake clock, so responses still settle
+    // while the lease timer is under test control.
+    const channel: EncryptedRelayChannel = { leaseExpiresAt: new Date(Date.now() + leaseMs).toISOString(), send: jest.fn((value: any) => { if (value.type === 'request') void Promise.resolve().then(() => listener({ type: 'response', id: value.id, status: 200, body: { data: { ok: true } } })); }), close: jest.fn(), subscribe(next, closed) { listener = next; onClose = closed; return () => undefined; } };
+    channels.push({ channel, emit: (value) => listener(value), close: () => onClose() });
+    return channel;
+  });
+  return { account, channels, open, transport: new RelayControlPlaneTransport(profile, account, open as any) };
+}
+
+test('cloud Relay transport rotates onto a fresh allocation before the channel lease expires', async () => {
+  jest.useFakeTimers();
+  try {
+    const { channels, open, transport } = leaseHarness();
+    await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+    const events = { topics: ['ai.sessions'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} };
+    transport.connectEvents(events);
+    const terminal = transport.connectAppSessionTty('instance_a', 'session_a', { onOpen() {}, onSnapshot() {}, onOutput() {}, onResize() {}, onExit() {}, onError() {}, onClose() {} });
+    await Promise.resolve(); await Promise.resolve();
+    expect(open).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(25_000);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 2 }));
+    const rotated = channels[1];
+    const streamId = (channels[0].channel.send as jest.Mock).mock.calls.map(([value]) => value).find((value) => value.type === 'tty-open').streamId;
+    expect(rotated.channel.send).toHaveBeenCalledWith({ type: 'event-subscribe', body: expect.objectContaining({ topics: ['ai.sessions'] }) });
+    expect(rotated.channel.send).toHaveBeenCalledWith({ type: 'tty-open', streamId, body: { instanceId: 'instance_a', sessionId: 'session_a' } });
+
+    await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).resolves.toEqual({ data: { ok: true } });
+    expect((rotated.channel.send as jest.Mock).mock.calls.some(([value]) => value.type === 'request')).toBe(true);
+
+    const onError = jest.fn();
+    transport.connectEvents({ onOpen() {}, onEvent() {}, onError, onClose() {} });
+    channels[0].close();
+    await Promise.resolve();
+    expect(onError).not.toHaveBeenCalled();
+    terminal.close();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('cloud Relay transport keeps the current channel when the renewed allocation fails', async () => {
+  jest.useFakeTimers();
+  try {
+    const { account, channels, open, transport } = leaseHarness(10_000);
+    await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+    account.allocateRelay.mockRejectedValueOnce(Object.assign(new Error('Coordinator unavailable.'), { code: 'NO_RELAY_CAPACITY' }));
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(open).toHaveBeenCalledTimes(1);
+    await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).resolves.toEqual({ data: { ok: true } });
+    expect((channels[0].channel.send as jest.Mock).mock.calls.some(([value]) => value.type === 'request')).toBe(true);
+  } finally {
+    jest.useRealTimers();
+  }
 });

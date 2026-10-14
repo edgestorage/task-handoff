@@ -83,7 +83,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           <View style={[styles.profileGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
             {savedProfiles.map((profile, index) => {
               const active = activeId === profile.identity.controlPlaneId;
-              return <View key={`${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}>
+              return <View key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}>
                 {index ? <View style={[styles.profileDivider, { backgroundColor: colors.border }]} /> : null}
                 <Pressable
                   accessibilityLabel={t('profiles.viewDetails', { name: profile.identity.displayName || t('profiles.defaultName') })}
