@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.taskhandoffappearance'
+version = '0.0.1'
+
+android {
+  namespace 'expo.modules.taskhandoffappearance'
+
+  defaultConfig {
+    versionName project.version
+  }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+}

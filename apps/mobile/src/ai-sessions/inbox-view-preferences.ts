@@ -1,3 +1,5 @@
+import { createPersistedPreferenceStore } from '../platform/persisted-preferences';
+
 export type AiSessionInboxGroupBy = 'none' | 'path' | 'instance' | 'node' | 'agent';
 
 export type AiSessionInboxViewPreferences = {
@@ -5,17 +7,32 @@ export type AiSessionInboxViewPreferences = {
   sortByStatus: boolean;
 };
 
-const listeners = new Set<() => void>();
-let preferences: AiSessionInboxViewPreferences = { groupBy: 'none', sortByStatus: false };
+const STORAGE_KEY = 'task-handoff.mobile.ai-session-inbox-view-preferences';
+const STORAGE_VERSION = 1;
+const GROUP_BY_MODES: readonly AiSessionInboxGroupBy[] = ['none', 'path', 'instance', 'node', 'agent'];
+const DEFAULT_PREFERENCES: AiSessionInboxViewPreferences = { groupBy: 'none', sortByStatus: false };
 
-export function getAiSessionInboxViewPreferences() { return preferences; }
-
-export function subscribeAiSessionInboxViewPreferences(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+export function parseAiSessionInboxViewPreferences(raw: string | null | undefined): AiSessionInboxViewPreferences | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (!value || typeof value !== 'object' || value.version !== STORAGE_VERSION) return undefined;
+    return {
+      groupBy: typeof value.groupBy === 'string' && (GROUP_BY_MODES as readonly string[]).includes(value.groupBy) ? value.groupBy as AiSessionInboxGroupBy : 'none',
+      sortByStatus: value.sortByStatus === true,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
-export function updateAiSessionInboxViewPreferences(patch: Partial<AiSessionInboxViewPreferences>) {
-  preferences = { ...preferences, ...patch };
-  for (const listener of listeners) listener();
-}
+const store = createPersistedPreferenceStore<AiSessionInboxViewPreferences>({
+  defaults: DEFAULT_PREFERENCES,
+  parse: parseAiSessionInboxViewPreferences,
+  storageKey: STORAGE_KEY,
+  version: STORAGE_VERSION,
+});
+
+export function getAiSessionInboxViewPreferences() { return store.get(); }
+export function subscribeAiSessionInboxViewPreferences(listener: () => void) { return store.subscribe(listener); }
+export function updateAiSessionInboxViewPreferences(patch: Partial<AiSessionInboxViewPreferences>) { store.update(patch); }
