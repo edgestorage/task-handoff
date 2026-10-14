@@ -80,23 +80,77 @@ Pick one of these when a WSL node must be reachable:
   `401 NODE_AGENT_HMAC_SIGNATURE_REQUIRED`. Mirrored mode is the mode Microsoft recommends for WSL
   networking; it applies to every distro on the machine, and the Node Agent never writes `.wslconfig`
   itself. Watch for VPN and Docker Desktop compatibility, and delete the file to return to NAT.
-- **NAT plus a Windows Firewall allow rule (administrator rights).** Allow inbound TCP on the listener
-  port for the WSL subnet, and set the node agent external listener bind scope to `all-ipv4`
-  (Control Plane → node settings) so the listener accepts the gateway address. Prefer scoping the rule
-  to the WSL subnet over opening it to the whole LAN:
+- **NAT plus a Windows Firewall allow rule (administrator rights).** Two things are needed: the
+  listener must accept the gateway address, and inbound TCP must be allowed on the WSL adapters.
+
+  First switch the node agent external listener bind scope to `all-ipv4`, so it stops binding only
+  `127.0.0.1`. The bind scope lives in the node agent's `runtime-settings.json`
+  (`externalListener.bindScope`), and the supported way to change it is the Control Plane that owns
+  the node as its **built-in local node**: `thctl node settings external-listener set <nodeId>
+  --config <file> --yes`. A Control Plane that only sees the node over the network refuses with
+  `LOCAL_NODE_LISTENER_ONLY`, and when the Control Plane requires a web sign-in to approve CLI
+  operations the CLI stops before sending with `CLI_APPROVAL_UNAVAILABLE` (exit 14) even though
+  `node.external-listener.set` has no approval requirement of its own. In that case call the local
+  route directly, or edit `runtime-settings.json` and restart the node agent. Changing the bind scope
+  currently re-pushes every active instance's node-agent URL, so an active instance whose web
+  endpoint cannot be resolved (for example a Docker instance without `runtime.port`) fails the whole
+  change with `NODE_AGENT_LISTENER_INSTANCE_SYNC_FAILED`; stop that instance, switch, start it again.
+
+  Then allow inbound TCP on the WSL adapters. Anchor the rule on the adapter alias and the executable,
+  not on an address or a network profile: the WSL adapters carry no network category (a profile-scoped
+  rule cannot target them), WSL2 publishes more than one `vEthernet (WSL…)` adapter (on a measured
+  Windows 11 25H2 / WSL `3.0.1.0` host the NAT default gateway `172.31.192.1/20` arrives on
+  `vEthernet (WSL (Hyper-V firewall))`, while `vEthernet (WSL)` is `172.25.64.1/20`), and the
+  distro's subnet changes when WSL is reinstalled or its NAT range is rewritten. `-InterfaceAlias`
+  accepts wildcards, so one rule covers every WSL adapter:
 
   ```powershell
-  New-NetFirewallRule -DisplayName "Task Handoff WSL node agent" -Direction Inbound -Action Allow `
-    -Protocol TCP -LocalPort 18091 -RemoteAddress 172.31.192.0/20
+  New-NetFirewallRule -DisplayName 'TaskHandoff WSL node-agent (TCP 18091)' -Direction Inbound `
+    -Action Allow -Protocol TCP -LocalPort 18091 -Profile Any `
+    -Program "$env:LOCALAPPDATA\Programs\task-handoff-monorepo\TaskHandoff.exe" `
+    -InterfaceAlias 'vEthernet (WSL*)'
   ```
+
+  The `-Program` filter matters: the listener runs as the TaskHandoff executable, so a pre-existing
+  permissive rule for a different program (the `Node.js JavaScript Runtime` rules the Node.js
+  installer writes for `node.exe`) does not cover it, and a rule without `-Program` would also let
+  anything else on the host use that port.
+
+  Measured on Windows 11 25H2 / WSL `3.0.1.0` with a NAT host: with the rule in place the distro
+  reaches `http://172.31.192.1:18091/api/node-agent/health` → `HTTP/1.1 401`,
+  `NODE_AGENT_HMAC_SIGNATURE_REQUIRED`, in ~0.3s, while a port with nothing listening still times out
+  after ~5s. The two states are therefore distinguishable, and no Hyper-V rule was needed — the host
+  rule was merged into the VM policy by `AllowHostPolicyMerge=True`.
+
+  `-InterfaceAlias` wildcards are expanded to the concrete adapter names when the rule is created.
+  The measured rule stores `{vEthernet (WSL), vEthernet (WSL (Hyper-V firewall))}`, so a later WSL
+  version that introduces or renames an adapter is not covered by that rule; re-run the preparation,
+  or recreate the rule, rather than assuming the wildcard keeps widening.
 
   If the host policy does not merge as expected, add the matching Hyper-V rule
   (`New-NetFirewallHyperVRule -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' …`) and inspect the
   effective state with `Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name
   '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'` and `Get-NetFirewallHyperVRule -VMCreatorId
   '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'`.
+
+  Without the rule the symptom is a silent drop, not a refusal: a measured `nc -w 5 <gateway> 18091`
+  from inside the distro timed out after ~5.2s, and so did a control probe against a port with nothing
+  listening, because `DefaultInboundAction=Block` drops the whole VM-to-host direction. Verify with
+  `curl -sS -o /dev/null -w '%{http_code}' http://<gateway>:18091/api/node-agent/health` inside the
+  distro: `401` means the address is reachable and belongs to the node agent.
+  A blunter variant of the same idea, and the fix the community settled on in microsoft/WSL#4139, is to
+  exempt the adapter from the Public profile once:
+  `Set-NetFirewallProfile -Profile Public -DisabledInterfaceAliases 'vEthernet (WSL)'`. It covers every
+  port instead of one and needs the same `all-ipv4` bind scope, but it hides the adapter from Windows
+  Security, which may show a "Restore settings" warning and can be reverted by policy or an update.
 - **Or pin an address explicitly** with `TASK_HANDOFF_WSL_NODE_AGENT_URL` to a host address the distro
   can already reach (for example `http://127.0.0.1:<port>` under mirrored networking).
+
+Microsoft's own guidance for this direction is the first option: the WSL networking page documents
+`networkingMode=mirrored` as the way to "connect to Windows servers from within Linux using the
+localhost address 127.0.0.1", and the WSL maintainer closed microsoft/WSL#4139 by pointing at that
+newer networking model rather than a firewall change. The alternative is therefore a deliberate
+trade-off, not a workaround the runtime failed to find.
 
 Do not reach for `[wsl2] firewall=false`: measured on Windows 11 25H2 with WSL `3.0.1.0` it changed
 nothing — `Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore` stayed identical and a
