@@ -90,7 +90,9 @@
       <div v-if="state === 'preparing' || state === 'error'" class="embedded-browser-state">
         <LoaderCircle v-if="state === 'preparing'" :size="24" />
         <CircleAlert v-else :size="24" />
-        <span>{{ state === "preparing" ? t("sessions.browser.connecting") : error }}</span>
+        <p class="embedded-browser-state-message">{{ state === "preparing" ? t("sessions.browser.connecting") : error }}</p>
+        <p v-if="state === 'error' && errorDetail" class="embedded-browser-state-detail">{{ errorDetail }}</p>
+        <Button v-if="state === 'error'" variant="outline" size="sm" @click="retry"><RotateCw :size="14" />{{ t("sessions.browser.retry") }}</Button>
       </div>
     </div>
   </div>
@@ -124,8 +126,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "../../../components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import { canRenewDesktopBrowserContext, logDesktopBrowserDiagnostic, onDesktopBrowserFocusAddress, prepareDesktopBrowserContext, releaseDesktopBrowserContext, setDesktopBrowserTabThrottled, touchDesktopBrowserContext } from "../../../lib/desktopBridge";
+import { canRenewDesktopBrowserContext, logDesktopBrowserDiagnostic, onDesktopBrowserFocusAddress, onDesktopBrowserLoadFailure, prepareDesktopBrowserContext, releaseDesktopBrowserContext, setDesktopBrowserTabThrottled, touchDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { browserFailureTarget, browserLoadFailureKey } from "./browserLoadFailure";
 import { browserAddressSuggestions, normalizeDesktopBrowserUrl, sanitizeBrowserStartPageData, type BrowserAddressSuggestion, type PinnedBrowserShortcut, type RecentBrowserPage } from "./browserAddressSuggestions";
 
 type GuestWebView = HTMLElement & {
@@ -152,6 +155,7 @@ const addressInput = ref<HTMLInputElement>();
 const context = ref<{ contextId: string; partition: string }>();
 const address = ref("");
 const error = ref("");
+const errorDetail = ref("");
 const state = ref<"preparing" | "ready" | "error">("preparing");
 const loading = ref(false);
 const pinned = ref<PinnedBrowserShortcut[]>([]);
@@ -179,11 +183,50 @@ let guestDomReady = false;
 let stopBrowserFocusAddress: (() => void) | undefined;
 let resolveGuestDomReady: (() => void) | undefined;
 let guestDomReadyPromise: Promise<void>;
+let removeLoadFailureListener: (() => void) | undefined;
+let lastChromiumError: { code?: number; description?: string } | undefined;
+let tunnelFailure: { host?: string; port?: number; code?: string; message?: string } | undefined;
+let lastFailureUrl = "";
 function resetGuestReady() {
   guestDomReady = false;
   guestDomReadyPromise = new Promise<void>((resolve) => { resolveGuestDomReady = resolve; });
 }
 resetGuestReady();
+
+function resetLoadFailure() {
+  lastChromiumError = undefined;
+  tunnelFailure = undefined;
+  lastFailureUrl = "";
+  errorDetail.value = "";
+}
+
+function clearLoadFailure() {
+  resetLoadFailure();
+  error.value = "";
+  if (state.value === "error") state.value = "ready";
+}
+
+function showLoadFailure() {
+  state.value = "error";
+  error.value = t(browserLoadFailureKey({ chromiumCode: lastChromiumError?.code, tunnelCode: tunnelFailure?.code }));
+  const chromium = lastChromiumError?.description
+    ? `${lastChromiumError.description}${typeof lastChromiumError.code === "number" ? ` (${lastChromiumError.code})` : ""}`
+    : "";
+  errorDetail.value = [browserFailureTarget(lastFailureUrl), tunnelFailure?.code || "", chromium].filter(Boolean).join(" · ");
+}
+
+function chromiumCodeFromMessage(message: string) {
+  const match = /\((-?\d+)\)/.exec(message);
+  return match ? Number(match[1]) : undefined;
+}
+
+function handleLoadFailure(input: { instanceId?: string; host?: string; port?: number; code?: string; message?: string }) {
+  if (input?.instanceId && input.instanceId !== props.instanceId) return;
+  tunnelFailure = input;
+  // The webview reports its own failure too; only refine a prompt that is
+  // already on screen so a stray tunnel failure never hijacks the browser.
+  if (state.value === "error") showLoadFailure();
+}
 
 async function establishContext() {
   let result;
@@ -268,6 +311,7 @@ async function recoverContext(lostContextId: string) {
   const oldContextId = context.value?.contextId;
   context.value = undefined;
   await nextTick();
+  resetLoadFailure();
   state.value = "preparing";
   loading.value = false;
   suppressBlankNavigation = false;
@@ -285,6 +329,7 @@ onMounted(async () => {
     if (guest.value?.getWebContentsId?.() !== webContentsId) return;
     focusAddress();
   });
+  removeLoadFailureListener = onDesktopBrowserLoadFailure((input) => handleLoadFailure(input));
   logDesktopBrowserDiagnostic(`browser tab mounted sessionKey=${props.sessionKey || ""}`, props.instanceId);
   await establishContext();
 });
@@ -300,6 +345,7 @@ onBeforeUnmount(() => {
   logDesktopBrowserDiagnostic(`browser tab unmounted sessionKey=${props.sessionKey || ""} contextId=${context.value?.contextId || ""}`, props.instanceId);
   stopContextHeartbeat();
   stopBrowserFocusAddress?.();
+  removeLoadFailureListener?.();
   removeGuestListeners?.();
   if (context.value) void releaseDesktopBrowserContext(context.value.contextId);
 });
@@ -332,6 +378,7 @@ function bindGuest() {
     const title = view.getTitle?.()?.trim();
     if (url && url !== "about:blank") addRecent(url, title || url);
     logDesktopBrowserDiagnostic(`browser finish title=${(title || "").slice(0, 160)}`, props.instanceId);
+    if (state.value === "error") return;
     emit("updateTab", { status: "running", ...(title ? { title } : {}) });
   };
   const stopLoading = () => { finishLoading(); };
@@ -340,11 +387,13 @@ function bindGuest() {
     logDesktopBrowserDiagnostic(`browser title event title=${title.slice(0, 160)}`, props.instanceId);
     if (title) emit("updateTab", { title, status: "running" });
   };
-  const failed = (event: Event & { errorDescription?: string; validatedURL?: string }) => {
+  const failed = (event: Event & { errorCode?: number; errorDescription?: string; validatedURL?: string }) => {
     if (event.validatedURL === "about:blank") return;
     loading.value = false;
     emit("updateTab", { status: "failed" });
-    error.value = event.errorDescription || t("sessions.browser.loadFailed");
+    lastChromiumError = { code: event.errorCode, description: event.errorDescription };
+    lastFailureUrl = event.validatedURL || address.value;
+    showLoadFailure();
   };
   view.addEventListener("did-start-loading", start);
   view.addEventListener("did-stop-loading", stopLoading);
@@ -398,7 +447,7 @@ function handleGuestDomReady() {
 
 function navigate(value: string) {
   try {
-    error.value = "";
+    clearLoadFailure();
     const url = normalizeDesktopBrowserUrl(value);
     // Queue the request until Electron has confirmed the guest is ready. The
     // guest remains mounted while the start page is shown, so this also works
@@ -424,8 +473,11 @@ async function dispatchPendingNavigation(sequence: number) {
     logDesktopBrowserDiagnostic(`browser navigation dispatched url=${url.slice(0, 200)}`, props.instanceId);
   } catch (cause) {
     if (sequence !== navigationSequence) return;
-    logDesktopBrowserDiagnostic(`browser navigation failed url=${url.slice(0, 200)} error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
-    error.value = t("sessions.browser.loadFailed");
+    const message = cause instanceof Error ? cause.message : String(cause);
+    logDesktopBrowserDiagnostic(`browser navigation failed url=${url.slice(0, 200)} error=${message}`, props.instanceId);
+    lastChromiumError = { code: chromiumCodeFromMessage(message), description: message.slice(0, 200) };
+    lastFailureUrl = url;
+    showLoadFailure();
   }
 }
 
@@ -538,10 +590,11 @@ function suggestionOptionId(index: number) {
   return `${suggestionsListId}-option-${index}`;
 }
 
-function goBack() { guest.value?.goBack(); }
-function goForward() { guest.value?.goForward(); }
-function reload() { guest.value?.reload(); }
+function goBack() { clearLoadFailure(); guest.value?.goBack(); }
+function goForward() { clearLoadFailure(); guest.value?.goForward(); }
+function reload() { clearLoadFailure(); guest.value?.reload(); }
 function stop() { guest.value?.stop(); }
+function retry() { reload(); }
 </script>
 
 <style scoped>
@@ -564,7 +617,9 @@ function stop() { guest.value?.stop(); }
 .embedded-browser-surface webview { display: flex; width: 100%; height: 100%; }
 .embedded-browser.start-page-active .embedded-browser-surface webview { visibility: hidden; }
 .embedded-browser-state { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; background: var(--surface); color: var(--text-muted); font-size: 12px; }
-.embedded-browser-state svg { color: var(--status-danger); }
+.embedded-browser-state > svg { color: var(--status-danger); }
+.embedded-browser-state-message { max-width: 420px; margin: 0; text-align: center; color: var(--text); font-size: 13px; }
+.embedded-browser-state-detail { max-width: 440px; margin: 0; overflow-wrap: anywhere; text-align: center; color: var(--text-muted); font-size: 11px; }
 .embedded-browser-start-page { position: absolute; z-index: 1; inset: 0; overflow: auto; pointer-events: auto; background: var(--surface); padding: 34px clamp(20px, 6vw, 80px); }
 .embedded-browser-start-section { max-width: 920px; margin: 0 auto 30px; }
 .embedded-browser-start-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
@@ -586,6 +641,6 @@ function stop() { guest.value?.stop(); }
 .embedded-browser-pinned-form { display: grid; gap: 8px; }
 .embedded-browser-pinned-form > label { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .embedded-browser-pinned-error { margin: 0; color: var(--status-danger); font-size: 12px; }
-.embedded-browser[data-state="preparing"] .embedded-browser-state svg { color: var(--brand-accent); animation: embedded-browser-spin 1s linear infinite; }
+.embedded-browser[data-state="preparing"] .embedded-browser-state > svg { color: var(--brand-accent); animation: embedded-browser-spin 1s linear infinite; }
 @keyframes embedded-browser-spin { to { transform: rotate(360deg); } }
 </style>

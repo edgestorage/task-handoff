@@ -460,7 +460,9 @@ function configureBrowserTabGuests(host) {
       logInfo(`[desktop-shell] browser webview page-title-updated guest=${guest.id} title=${String(title || "").slice(0, 160)} url=${browserDiagnosticUrl(guest.getURL())}`);
     });
     guest.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      logError(`[desktop-shell] browser webview did-fail-load guest=${guest.id} code=${errorCode} description=${String(errorDescription || "").slice(0, 160)} url=${browserDiagnosticUrl(validatedURL)} mainFrame=${Boolean(isMainFrame)}`);
+      const partition = guest.session?.getPartition?.() || "";
+      const instanceId = desktopBrowserContexts?.instanceIdForPartition(host.id, partition);
+      logError(`[desktop-shell] browser webview did-fail-load guest=${guest.id}${instanceId ? ` instanceId=${instanceId}` : ""} code=${errorCode} description=${String(errorDescription || "").slice(0, 160)} url=${browserDiagnosticUrl(validatedURL)} mainFrame=${Boolean(isMainFrame)}`);
     });
     guest.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key?.toLowerCase() !== "l" || (!input.meta && !input.control) || input.alt || input.shift) return;
@@ -493,6 +495,15 @@ function browserTabUrlAllowed(value) {
     return url.href === "about:blank" || url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
+  }
+}
+
+// The renderer only sees Chromium's coarse SOCKS error (-120). Forward the
+// tunnel's own failure so the embedded browser can name the real cause.
+function broadcastBrowserLoadFailure(failure) {
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    if (browserWindow.isDestroyed()) continue;
+    try { browserWindow.webContents.send("task-handoff:browser-load-failure", failure); } catch { /* window is going away */ }
   }
 }
 
@@ -1398,6 +1409,7 @@ if (!ownsDesktopInstanceLock) {
       session,
       logInfo,
       logError,
+      onBrowserFailure: (failure) => broadcastBrowserLoadFailure(failure),
       chooseDownloadPath: (filename) => dialog.showSaveDialogSync({ defaultPath: path.join(app.getPath("downloads"), filename) }),
     });
     setDesktopDockIcon();

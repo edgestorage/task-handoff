@@ -89,6 +89,40 @@ test("browser partitions are stable per authority and isolated across instances"
   assert.notEqual(partitionName("cp_1", "instance_1"), partitionName("cp_2", "instance_1"));
 });
 
+test("SOCKS server reports a refused target with its host, port, and tunnel code", async () => {
+  const failures = [];
+  const logged = [];
+  const channel = {
+    attach() {
+      return Promise.reject(Object.assign(new Error("Target connection failed."), { code: "BROWSER_TUNNEL_CONNECT_FAILED" }));
+    },
+  };
+  const server = new BrowserSocksServer(channel, { logError: (message) => logged.push(message), onFailure: (failure) => failures.push(failure) });
+  const socket = new TestSocket();
+  server.accept(socket);
+  socket.emit("data", Buffer.from([5, 1, 0, 5, 1, 0, 3, 9, ...Buffer.from("localhost"), 0x0b, 0xb8]));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(failures, [{ host: "localhost", port: 3000, code: "BROWSER_TUNNEL_CONNECT_FAILED", message: "Target connection failed." }]);
+  assert.equal(socket.writes.at(-1)[1], 5);
+  assert.match(logged.join("\n"), /browser socks target failed target=localhost:3000 code=BROWSER_TUNNEL_CONNECT_FAILED/);
+});
+
+test("SOCKS server keeps an unusable relay apart from a refused target", async () => {
+  const failures = [];
+  const channel = { attach: () => Promise.reject(new Error("Browser relay is unavailable.")) };
+  const server = new BrowserSocksServer(channel, { onFailure: (failure) => failures.push(failure) });
+  const socket = new TestSocket();
+  server.accept(socket);
+  socket.emit("data", Buffer.from([5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 1, 0, 80]));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].code, "BROWSER_RELAY_UNAVAILABLE");
+  assert.equal(failures[0].host, "127.0.0.1");
+  assert.equal(socket.writes.at(-1)[1], 1);
+});
+
 class TestSocket extends EventEmitter {
   writes = [];
   destroyed = false;
