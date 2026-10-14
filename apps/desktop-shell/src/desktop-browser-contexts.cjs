@@ -12,6 +12,7 @@ class DesktopBrowserContextManager {
     this.BrowserSocksServer = options.BrowserSocksServer || BrowserSocksServer;
     this.logInfo = options.logInfo;
     this.logError = options.logError;
+    this.onBrowserFailure = options.onBrowserFailure;
     this.now = options.now || Date.now;
     this.leaseTimeoutMs = options.leaseTimeoutMs ?? 60_000;
     this.contexts = new Map();
@@ -97,7 +98,12 @@ class DesktopBrowserContextManager {
     let browserSession;
     try {
       await channel.connect();
-      socks = new this.BrowserSocksServer(channel);
+      socks = new this.BrowserSocksServer(channel, {
+        logError: this.logError,
+        onFailure: (failure) => {
+          try { this.onBrowserFailure?.({ instanceId: input.instanceId, ...failure }); } catch { /* the host listener must never break the tunnel */ }
+        },
+      });
       const address = await socks.start();
       const partition = partitionName(input.controlPlaneId, input.instanceId);
       browserSession = this.session.fromPartition(partition, { cache: true });

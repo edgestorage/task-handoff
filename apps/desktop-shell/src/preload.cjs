@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
     ipcRenderer.on("task-handoff:browser-focus-address", handler);
     return () => ipcRenderer.removeListener("task-handoff:browser-focus-address", handler);
   },
+  onBrowserLoadFailure: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-load-failure", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-load-failure", handler);
+  },
   logBrowserDiagnostic: (input) => ipcRenderer.send("task-handoff:browser-diagnostic", input),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
   openInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:open-instance-detail-window", instanceId),

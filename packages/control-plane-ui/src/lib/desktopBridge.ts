@@ -6,6 +6,8 @@ type OpenLocalPathResult = {
 
 export type DesktopBrowserContextResult = { ok: boolean; code?: string; message?: string; contextId?: string; partition?: string };
 
+export type DesktopBrowserLoadFailure = { instanceId?: string; host?: string; port?: number; code?: string; message?: string };
+
 type DesktopBridge = {
   openLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
   revealLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
@@ -16,6 +18,7 @@ type DesktopBridge = {
   setBrowserTabThrottled?: (webContentsId: number, throttled: boolean) => Promise<{ ok: boolean }>;
   onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
+  onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
 };
 
@@ -73,6 +76,10 @@ export function canRenewDesktopBrowserContext() {
 
 export function onDesktopBrowserFocusAddress(listener: (input: { webContentsId?: number }) => void) {
   return desktopBridge()?.onBrowserFocusAddress?.(listener);
+}
+
+export function onDesktopBrowserLoadFailure(listener: (input: DesktopBrowserLoadFailure) => void) {
+  return desktopBridge()?.onBrowserLoadFailure?.(listener);
 }
 
 export function logDesktopBrowserDiagnostic(message: string, instanceId?: string) {

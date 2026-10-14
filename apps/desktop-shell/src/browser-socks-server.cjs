@@ -1,11 +1,32 @@
 const net = require("node:net");
 
+// A rejected tunnel attach is the single failure exit of the SOCKS server. The
+// reply code and the recorded failure keep the two root causes apart: the relay
+// itself is unusable (general failure) versus the target connection on the
+// controlled instance failed (refused/unreachable).
+const SOCKS_FAILURE_REPLY_CODES = {
+  BROWSER_TUNNEL_CONNECT_FAILED: 5,
+  BROWSER_TUNNEL_CONNECT_TIMEOUT: 4,
+};
+
+function classifySocksFailure(error) {
+  const code = typeof error?.code === "string" && error.code ? error.code : "BROWSER_RELAY_UNAVAILABLE";
+  const message = (error instanceof Error ? error.message : String(error ?? "")).trim();
+  return {
+    code,
+    message: message.slice(0, 200),
+    reply: SOCKS_FAILURE_REPLY_CODES[code] ?? 1,
+  };
+}
+
 class BrowserSocksServer {
   constructor(channel, options = {}) {
     this.channel = channel;
     this.createServer = options.createServer || net.createServer;
     this.maxConnections = options.maxConnections || 256;
     this.handshakeTimeout = options.handshakeTimeout || 30_000;
+    this.logError = options.logError || (() => undefined);
+    this.onFailure = options.onFailure || (() => undefined);
     this.server = undefined;
     this.sockets = new Set();
   }
@@ -68,9 +89,14 @@ class BrowserSocksServer {
             socket.setTimeout?.(0);
             socket.write(socksReply(0));
             if (pending.byteLength) socket.emit("data", pending);
-          }).catch(() => {
-            socket.write(socksReply(5));
-            socket.end();
+          }).catch((error) => {
+            const failure = classifySocksFailure(error);
+            this.logError(`[desktop-shell] browser socks target failed target=${request.host}:${request.port} code=${failure.code} message=${failure.message}`);
+            try { this.onFailure({ host: request.host, port: request.port, code: failure.code, message: failure.message }); } catch { /* listeners are best effort */ }
+            try {
+              socket.write(socksReply(failure.reply));
+              socket.end();
+            } catch { socket.destroy(); }
           });
         }
       } catch {
@@ -125,4 +151,4 @@ function socksReply(code) {
   return Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0]);
 }
 
-module.exports = { BrowserSocksServer, parseSocksRequest };
+module.exports = { BrowserSocksServer, classifySocksFailure, parseSocksRequest };

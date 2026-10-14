@@ -133,3 +133,15 @@ test("browser context lease loss rebuilds the guest instead of leaving a dead su
   assert.match(browser, /context\.value = undefined;[\s\S]*?await nextTick\(\);[\s\S]*?await establishContext\(\)/);
   assert.match(browser, /startContextHeartbeat\(result\.contextId\)/);
 });
+
+test("browser load failures show an actionable prompt instead of a silent guest", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /onDesktopBrowserLoadFailure\(\(input\) => handleLoadFailure\(input\)\)/);
+  assert.match(browser, /function showLoadFailure\(\)/);
+  assert.match(browser, /error\.value = t\(browserLoadFailureKey\(\{ chromiumCode: lastChromiumError\?\.code, tunnelCode: tunnelFailure\?\.code \}\)\)/);
+  assert.match(browser, /const failed = \(event: Event & \{ errorCode\?: number;/);
+  assert.match(browser, /did-fail-load", failed as EventListener/);
+  assert.match(browser, /class="embedded-browser-state-detail"/);
+  assert.match(browser, /@click="retry"/);
+  assert.match(browser, /t\("sessions\.browser\.retry"\)/);
+});
