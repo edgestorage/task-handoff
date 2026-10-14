@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { computed, nextTick, provide, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import MarkdownRender, { enableKatex, enableMermaid, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
+import MarkdownRender, { enableKatex, enableMermaid, MermaidBlockNode, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
 import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
 import "markstream-vue/index.css";
 import { messageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
@@ -39,6 +39,9 @@ const markdownScopeId = "ai-session-streaming-markdown";
 setCustomComponents(markdownScopeId, {
   text: AiSessionMarkdownNode,
   code_block: AiSessionMarkdownNode,
+  // The code_block override would otherwise swallow ```mermaid fences in the default
+  // "pre" rendering mode, so route mermaid fences to markstream's mermaid node.
+  mermaid: MermaidBlockNode,
 });
 
 const props = withDefaults(defineProps<{

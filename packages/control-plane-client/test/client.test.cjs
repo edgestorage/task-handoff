@@ -99,7 +99,8 @@ test("conversation cache keeps the last projection visible while independently c
     subAgents: [],
   };
   const firstQueue = { revision: 1, pendingCount: 1, items: [{ id: "queue-1", message: "first" }] };
-  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: firstQueue, subAgents: [] });
+  const firstSubAgents = [{ threadId: "sub-1" }];
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: firstQueue, subAgents: firstSubAgents });
   cache.setTurnIndex("instance-1", summary.turnsRevision, {
     sessionId: summary.id,
     revision: "turns-1",
@@ -124,8 +125,16 @@ test("conversation cache keeps the last projection visible while independently c
   assert.equal(cache.hasRenderableProjection("instance-1", changed.id), true);
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
   assert.equal(cache.projection("instance-1", changed).lastMessage, "live");
-  assert.equal(cache.projection("instance-1", changed).queue, changed.queue);
-  assert.equal(cache.projection("instance-1", changed).subAgents, changed.subAgents);
+  // The list projection ships empty queue items, so a stale detail keeps the
+  // cached items rendered while the live summary owns the revision metadata.
+  assert.deepEqual(cache.projection("instance-1", changed).queue, {
+    revision: 2,
+    pendingCount: 2,
+    items: firstQueue.items,
+  });
+  // Sub-agent rows are also detail-only, so the stale detail keeps them mounted
+  // until the matching detail revision lands.
+  assert.deepEqual(cache.projection("instance-1", changed).subAgents, firstSubAgents);
   const secondQueue = {
     revision: 2,
     pendingCount: 2,
