@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Appearance, useColorScheme, type ColorSchemeName } from 'react-native';
+import { setApplicationNightMode } from '../../modules/task-handoff-appearance/src';
 
 export const mobileLightColors = {
   background: '#f2f2f7', surface: '#ffffff', surfaceMuted: '#e9e9ef', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
@@ -41,19 +42,26 @@ export function resolveThemeDark(preference: AppearancePreference, systemScheme:
 export function MobileThemeProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
   const [preference, setPreferenceState] = useState<AppearancePreference>('system');
+  const [preferenceLoaded, setPreferenceLoaded] = useState(false);
 
   useEffect(() => {
     let live = true;
     void SecureStore.getItemAsync(APPEARANCE_PREFERENCE_KEY).then((stored) => {
-      if (live) setPreferenceState(sanitizeAppearancePreference(stored));
-    }).catch(() => undefined);
+      if (!live) return;
+      setPreferenceState(sanitizeAppearancePreference(stored));
+      setPreferenceLoaded(true);
+    }).catch(() => { if (live) setPreferenceLoaded(true); });
     return () => { live = false; };
   }, []);
 
   useEffect(() => {
+    // Applying the preference before the persisted value is known would briefly override, then restore it.
+    if (!preferenceLoaded) return;
     // RN 0.86 clears an app override with 'unspecified'; Android rejects null for this non-null parameter.
     Appearance.setColorScheme(preference === 'system' ? 'unspecified' : preference);
-  }, [preference]);
+    // Android 12+ persists the app night mode, so the next cold-start splash window matches the preference.
+    setApplicationNightMode(preference);
+  }, [preference, preferenceLoaded]);
 
   const setPreference = useCallback(async (next: AppearancePreference) => {
     setPreferenceState(next);

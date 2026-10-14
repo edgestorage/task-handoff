@@ -12,6 +12,8 @@ Expo SDK 57 targets React Native 0.86, React 19.2.3, Android API 36, iOS 16.4+, 
 
 Menus and single-choice pickers keep the native iOS presentation (SwiftUI `Menu`/`ContextMenu` via `@react-native-menu/menu` and `@expo/ui`) but render an iOS-style floating card on Android through `src/components/menu/` (`FloatingMenu`, `FloatingMenuTrigger`, `menu-actions.ts`). Android screens import the platform-neutral adapters `src/components/MenuView.tsx`, `AnchoredSelectMenu.tsx`, and `OptionMenu.tsx`; the matching `.ios.tsx` files keep the native implementations. Add new menu surfaces through those adapters instead of the Android system dropdown/alert lists.
 
+The appearance preference (`system` / `light` / `dark`) lives in `MobileThemeProvider` (`src/components/theme.ts`) and is persisted with SecureStore. Android 12+ also stores it as the application night mode through the `modules/task-handoff-appearance` local module, so configuration-derived surfaces such as the cold-start splash window match the in-app choice even when the system uses the other theme. Android 11 and below, and iOS, keep the system appearance for the native launch screen while the React Native UI still follows the preference.
+
 ## Variants and identity
 
 | Variant | Environment | Display name | iOS bundle / Android package | URL scheme |
