@@ -11,7 +11,7 @@ import {
   type MobileTokenResponse,
   type TotpEnrollmentResponse,
 } from "./account.ts";
-import { AccessTicketSchema, RelayAllocationSchema, type AccessTicket, type RelayAllocation } from "./relay.ts";
+import { AccessTicketSchema, ConfirmedRelayAllocationSchema, RelayAllocationSchema, RelaySelectionSchema, type AccessTicket, type ConfirmedRelayAllocation, type RelayAllocation, type RelaySelection } from "./relay.ts";
 import { OfficialAccountClient, officialClientError } from "./client.ts";
 
 export type OfficialApiInput = Readonly<Record<string, unknown>>;
@@ -47,6 +47,13 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   unlinkProvider(providerId: OfficialProviderId, input: OfficialApiInput): Promise<unknown> { return this.dataCall(`/api/v1/providers/${encodeURIComponent(providerId)}/unlink`, "POST", z.unknown(), input); }
   issueAccessTicket(input: OfficialApiInput): Promise<AccessTicket> { return this.dataCall("/api/v1/access-tickets", "POST", AccessTicketSchema.strip(), input); }
   allocateRelay(input: OfficialApiInput): Promise<RelayAllocation> { return this.dataCall("/api/v1/relay-allocations", "POST", RelayAllocationSchema, input); }
+  /**
+   * Requests a multi-candidate selection. Legacy `allocateRelay` stays available
+   * for clients that never learned to probe, so the two shapes are separate
+   * methods rather than one union the caller has to discriminate.
+   */
+  allocateRelaySelection(input: OfficialApiInput): Promise<RelaySelection> { return this.dataCall("/api/v1/relay-allocations", "POST", RelaySelectionSchema, { ...input, maxCandidates: input.maxCandidates ?? 3 }); }
+  confirmRelaySelection(selectionId: string, input: OfficialApiInput): Promise<ConfirmedRelayAllocation> { return this.dataCall(`/api/v1/relay-selections/${encodeURIComponent(selectionId)}/confirm`, "POST", ConfirmedRelayAllocationSchema, input); }
 
   private async dataCall<T>(path: string, method: string, schema: z.ZodType<T>, input?: OfficialApiInput): Promise<T> {
     const body = await this.call<unknown>(path, { method, ...(input ? { body: JSON.stringify(input) } : method === "GET" ? {} : { body: "{}" }) });

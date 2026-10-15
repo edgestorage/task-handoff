@@ -61,7 +61,7 @@ test("a binding request while signed in keeps the session and resolves back to s
   assert.equal(resolved.pendingRequest, undefined);
 });
 
-function runtimeHarness({ fetchImpl } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -90,7 +90,7 @@ function runtimeHarness({ fetchImpl } = {}) {
     activate: () => ({ status: "active" }), consumeChallenge: () => ({ challengeId: "challenge_a" }),
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
-    state, accountSession, identity, webSocket: FakeSocket,
+    state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs,
     fetch: async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return fetchImpl ? fetchImpl(url, init) : { ok: false, status: 500 }; },
   });
   runtime.start();
@@ -120,7 +120,7 @@ test("the runtime records a created request and completes the local session from
 
 test("concurrent credential refreshes share one rotation and read the official response envelope", async () => {
   const { runtime, accountSession, fetchCalls } = runtimeHarness({
-    fetchImpl: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return { ok: true, status: 200, json: async () => ({ data: { accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"b".repeat(40)}`, accessToken: "access_token_value", accessExpiresIn: 300 } }) }; },
+    fetchImpl: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return { ok: true, status: 200, json: async () => ({ data: { accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"b".repeat(40)}`, accessToken: "access_token_value", accessExpiresIn: 300, sessionExpiresAt: "2026-09-09T00:00:00.000Z" } }) }; },
   });
   accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, email: "owner@example.test" });
   await Promise.all([runtime.refreshAccountCredential(), runtime.refreshAccountCredential(), runtime.refreshAccountCredential()]);
@@ -130,6 +130,29 @@ test("concurrent credential refreshes share one rotation and read the official r
   assert.equal(accountSession.refreshCredential(), `${"b".repeat(40)}`);
   assert.equal(accountSession.snapshot().signedIn, true);
   assert.equal(accountSession.snapshot().email, "owner@example.test");
+  assert.equal(accountSession.snapshot().sessionExpiresAt, "2026-09-09T00:00:00.000Z");
+});
+
+test("a rotation response without a session expiry keeps the stored one", async () => {
+  const { runtime, accountSession } = runtimeHarness({
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: { accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"b".repeat(40)}`, accessExpiresIn: 300 } }) }),
+  });
+  accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, sessionExpiresAt: "2026-09-01T00:00:00.000Z" });
+  await runtime.refreshAccountCredential();
+  assert.equal(accountSession.refreshCredential(), `${"b".repeat(40)}`);
+  assert.equal(accountSession.snapshot().sessionExpiresAt, "2026-09-01T00:00:00.000Z");
+});
+
+test("the runtime renews the account credential on its timer and adopts the new expiry", async () => {
+  const { accountSession, fetchCalls } = runtimeHarness({
+    accountRenewalIntervalMs: 5,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: { accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"b".repeat(40)}`, accessToken: "access_token_value", accessExpiresIn: 300, sessionExpiresAt: "2026-10-01T00:00:00.000Z" } }) }),
+  });
+  accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, sessionExpiresAt: "2026-09-01T00:00:00.000Z" });
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 100 && accountSession.snapshot().sessionExpiresAt !== "2026-10-01T00:00:00.000Z"; attempt += 1) await wait(10);
+  assert.equal(fetchCalls.length > 0, true);
+  assert.equal(accountSession.snapshot().sessionExpiresAt, "2026-10-01T00:00:00.000Z");
 });
 
 test("a delivered credential suppresses the reconnect rotation", async () => {
@@ -155,6 +178,17 @@ test("a replayed refresh credential signs the local session out", async () => {
   await runtime.refreshAccountCredential();
   assert.equal(accountSession.snapshot().signedIn, false);
   assert.equal(accountSession.refreshCredential(), undefined);
+});
+
+test("a lapsed stored session is signed out by the next renewal attempt", async () => {
+  const { runtime, accountSession, fetchCalls } = runtimeHarness({ fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ error: { code: "REFRESH_INVALID" } }) }) });
+  accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, sessionExpiresAt: "2026-08-01T00:00:00.000Z" });
+  // Renewal cannot revive a window that already lapsed: the cloud refuses it and the client signs out.
+  runtime.start();
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 100 && accountSession.snapshot().signedIn; attempt += 1) await wait(10);
+  assert.equal(fetchCalls.length > 0, true);
+  assert.equal(accountSession.snapshot().signedIn, false);
 });
 
 test("a transient refresh failure keeps the local session", async () => {

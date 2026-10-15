@@ -31,6 +31,25 @@ test("relay data connection verifies signed allocation and rejects old/double ep
   assert.deepEqual(closed, ["replaced-by-new-epoch"]);
 });
 
+test("relay data connection never dials an allocation the Coordinator did not just confirm", async () => {
+  // The Coordinator only pushes the confirmed winner, so anything that does not verify — a
+  // leftover loser allocation, an expired notification, a foreign binding — must die before a
+  // socket is opened.
+  const connects = [];
+  const manager = new CloudRelayDataConnectionManager({
+    verifyAllocation: async (allocation) => {
+      if (allocation?.winner !== true) throw Object.assign(new Error("Cloud Relay session is invalid."), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
+      return allocation;
+    },
+    connector: { async connect(input) { connects.push(input); return { async close() {} }; } },
+  });
+  await assert.rejects(() => manager.attach({ allocationId: "allocation_loser", winner: false }), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
+  assert.deepEqual(connects, []);
+  await manager.attach({ allocationId: "allocation_a", winner: true, epoch: 5 });
+  assert.equal(connects.length, 1);
+  assert.equal(connects[0].allocation.allocationId, "allocation_a");
+});
+
 test("authoritative revocation and clone events close both connection planes; stale revision is ignored", async () => {
   const calls = [];
   const state = { beginRevocation() { calls.push("pending"); }, confirmRevocation() { calls.push("revoked"); }, setRemoteAccess() {}, markCloneConflict() { calls.push("clone"); } };

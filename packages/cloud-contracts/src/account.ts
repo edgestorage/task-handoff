@@ -21,9 +21,13 @@ export const AccountPublicProfileSchema = z.strictObject({
   createdAt: DateTimeSchema,
 });
 
+// Control Planes sign in to the account as their own device session, so the public
+// device list carries a third kind next to browser and mobile sessions.
+export const DeviceSessionKindSchema = z.enum(["browser", "mobile", "control-plane"]);
+
 export const DeviceSessionSchema = z.strictObject({
   id: IdSchema,
-  kind: z.enum(["browser", "mobile"]),
+  kind: DeviceSessionKindSchema,
   deviceName: z.string().trim().min(1).max(160),
   platform: z.string().trim().min(1).max(80).optional(),
   createdAt: DateTimeSchema,
@@ -52,6 +56,8 @@ export const MobileTokenResponseSchema = z.object({
   refreshCredential: OpaqueSecretSchema,
   accountId: IdSchema,
   deviceSessionId: IdSchema,
+  // Sliding account-session expiry; every rotation inside the window pushes it forward.
+  sessionExpiresAt: DateTimeSchema.optional(),
 });
 
 export const TotpEnrollmentResponseSchema = z.strictObject({

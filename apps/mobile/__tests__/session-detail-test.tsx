@@ -79,6 +79,72 @@ test('timeline activity groups stay collapsed until explicitly expanded', async 
   await screen.unmount();
 });
 
+test('expanded command activities render the Web command card with copy support', async () => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: 'command-1',
+    turnId: 'turn-1',
+    type: 'activity',
+    activityKind: 'commandExecution',
+    title: 'Command',
+    status: 'completed',
+    input: 'pnpm test',
+    output: 'passed',
+    exitCode: 0,
+  }]} />);
+
+  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
+  await fireEvent.press(screen.getByRole('button', { name: /Ran command/ }));
+  screen.getByText('Shell');
+  screen.getByText('$ pnpm test\npassed');
+  expect(StyleSheet.flatten(screen.getByTestId('timeline-command-result-content').props.style).height).toBe(Math.ceil(2 * mobileWebMetric(12 * 1.55) * PixelRatio.getFontScale() + mobileWebMetric(9) + mobileWebMetric(18)));
+  expect(screen.queryByText('Input')).toBeNull();
+  expect(screen.queryByText('Output')).toBeNull();
+  expect(screen.queryByText('Exit code: 0')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Copy output' }));
+  await waitFor(() => expect(write).toHaveBeenCalledWith('$ pnpm test\npassed'));
+  await waitFor(() => screen.getByRole('button', { name: 'Copied' }));
+  write.mockRestore();
+  await screen.unmount();
+});
+
+test('failed command activities keep the exit code in the command card header', async () => {
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: 'failed-command',
+    turnId: 'turn-1',
+    type: 'activity',
+    activityKind: 'commandExecution',
+    title: 'Command',
+    status: 'failed',
+    input: 'pnpm test',
+    exitCode: 1,
+  }]} />);
+
+  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
+  await fireEvent.press(screen.getByRole('button', { name: /Command failed/ }));
+  screen.getByText('Exit code: 1');
+  screen.getByText('$ pnpm test');
+  await screen.unmount();
+});
+
+test('command cards without command or output show the Web empty state', async () => {
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: 'status-only-command',
+    turnId: 'turn-1',
+    type: 'activity',
+    activityKind: 'commandExecution',
+    title: 'Command',
+    status: 'completed',
+    exitCode: 0,
+  }]} />);
+
+  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
+  await fireEvent.press(screen.getByRole('button', { name: /Ran command/ }));
+  screen.getByText('No output');
+  expect(screen.queryByRole('button', { name: 'Copy output' })).toBeNull();
+  await screen.unmount();
+});
+
 test('mobile detail scales Web typography, spacing, and icon metrics upward from 14px to 16px', () => {
   expect(mobileWebType.body).toBe(16);
   expect(mobileWebMetric(5)).toBe(6);

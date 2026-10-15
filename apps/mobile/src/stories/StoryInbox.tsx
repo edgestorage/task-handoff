@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { ActivityIndicator, Alert, Animated, Easing, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MenuView, type MenuAction } from '../components/MenuView';
 import * as Crypto from 'expo-crypto';
 import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
@@ -227,20 +227,16 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           testID={`story-row-${key}`}
         >
         <View style={[styles.storyRow, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}>
-          <Pressable
+          <StoryDisclosure
             accessibilityLabel={t(expanded ? 'stories.collapse' : 'stories.expand', { name: story.title })}
-            accessibilityRole="button"
-            accessibilityState={{ expanded }}
-            hitSlop={8}
+            color={colors.textMuted}
+            expanded={expanded}
             onPress={() => setExpandedStoryKeys((current) => {
               const next = new Set(current);
               if (next.has(key)) next.delete(key); else next.add(key);
               return next;
             })}
-            style={({ pressed }) => [styles.disclosure, pressed && styles.pressed]}
-          >
-            <SystemIcon android={expanded ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expanded ? 'chevron.down' : 'chevron.right'} size={17} />
-          </Pressable>
+          />
           <MenuView
             actions={[
               { id: 'new-session', image: 'plus.bubble', title: t('sessions.new'), attributes: { disabled: Boolean(story.archivedAt) || !newSessionDefaults.instanceId } },
@@ -267,7 +263,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             title={story.title}
           >
           <Pressable accessibilityRole="button" onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={[styles.storyIcon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="menu_book" color={colors.primary} ios="book" size={19} /></View>
+            <View style={styles.storyIcon}><SystemIcon android="menu_book" color={colors.primary} ios="book" size={21} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{story.title}</Text>
@@ -292,7 +288,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             testID="story-drag-handle"
           /> : null}
         </View>
-        {expanded ? <View style={styles.children}>
+        <StoryChildren expanded={expanded}>
           {documents.map((document) => <MenuView actions={[
             { id: 'open', image: 'doc.text', title: t('common.open') },
             { id: 'rename', image: 'pencil', title: t('common.rename'), attributes: { disabled: Boolean(story.archivedAt) } },
@@ -339,7 +335,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             </Pressable></MenuView>;
           })}
           {!storySessions.length ? <Text style={[styles.emptyChild, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text> : null}
-        </View> : null}
+        </StoryChildren>
       </View>;
     }}
   />
@@ -360,13 +356,14 @@ const styles = StyleSheet.create({
   emptyState: { minHeight: 180 },
   storyGroup: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
   storyGroupDragging: { opacity: 0.72 },
-  storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 62, paddingRight: 6 },
+  storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
-  disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 30 },
-  storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 11, minHeight: 60, paddingRight: 5, paddingVertical: 8 },
-  storyIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
-  children: { marginBottom: 8, marginLeft: 41, marginTop: 2, paddingHorizontal: 6, paddingTop: 6 },
+  disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 34 },
+  storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 10, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
+  storyIcon: { alignItems: 'center', height: 26, justifyContent: 'center', width: 28 },
+  children: { marginBottom: 8, marginLeft: 31, marginTop: 2, overflow: 'hidden' },
+  childrenInner: { paddingHorizontal: 6, paddingTop: 6 },
   childRow: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 10, minHeight: 44, paddingHorizontal: 0, paddingVertical: 4 },
   childMenu: { alignSelf: 'stretch' },
   moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40 },
@@ -396,4 +393,65 @@ const styles = StyleSheet.create({
 
 function sameStringOrder(left: readonly string[] | undefined, right: readonly string[] | undefined) {
   return left?.length === right?.length && left?.every((value, index) => value === right?.[index]);
+}
+
+const DISCLOSURE_ROTATION_DURATION = 200;
+const STORY_CHILDREN_EXPAND_DURATION = 220;
+const STORY_CHILDREN_COLLAPSE_DURATION = 170;
+
+function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
+  accessibilityLabel: string;
+  color: string;
+  expanded: boolean;
+  onPress(): void;
+}) {
+  const [rotation] = useState(() => new Animated.Value(expanded ? 1 : 0));
+  useEffect(() => {
+    const animation = Animated.timing(rotation, {
+      duration: DISCLOSURE_ROTATION_DURATION,
+      easing: Easing.out(Easing.cubic),
+      toValue: expanded ? 1 : 0,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [expanded, rotation]);
+  return <Pressable
+    accessibilityLabel={accessibilityLabel}
+    accessibilityRole="button"
+    accessibilityState={{ expanded }}
+    hitSlop={8}
+    onPress={onPress}
+    style={({ pressed }) => [styles.disclosure, pressed && styles.pressed]}
+  >
+    <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
+      <SystemIcon android="chevron_right" color={color} ios="chevron.right" size={22} />
+    </Animated.View>
+  </Pressable>;
+}
+
+function StoryChildren({ children, expanded }: { children: ReactNode; expanded: boolean }) {
+  const [progress] = useState(() => new Animated.Value(expanded ? 1 : 0));
+  const [contentHeight, setContentHeight] = useState<number>();
+  const [keepMounted, setKeepMounted] = useState(expanded);
+  useEffect(() => {
+    if (expanded && contentHeight === undefined) return;
+    const animation = Animated.timing(progress, {
+      duration: expanded ? STORY_CHILDREN_EXPAND_DURATION : STORY_CHILDREN_COLLAPSE_DURATION,
+      easing: expanded ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      toValue: expanded ? 1 : 0,
+      useNativeDriver: false,
+    });
+    animation.start(({ finished }) => {
+      if (finished) setKeepMounted(expanded);
+    });
+    return () => animation.stop();
+  }, [contentHeight, expanded, progress]);
+  if (!expanded && !keepMounted) return null;
+  return <Animated.View style={[styles.children, { height: progress.interpolate({ inputRange: [0, 1], outputRange: [0, contentHeight ?? 0] }), opacity: progress }]}>
+    <View onLayout={(event) => {
+      const next = event.nativeEvent.layout.height;
+      setContentHeight((current) => (current !== undefined && Math.abs(current - next) < 0.5 ? current : next));
+    }} style={styles.childrenInner}>{children}</View>
+  </Animated.View>;
 }

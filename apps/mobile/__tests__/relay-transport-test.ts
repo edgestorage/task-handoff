@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 import { RelayControlPlaneTransport, type EncryptedRelayChannel } from '../src/control-plane/relay-transport';
+import { RelayWinnerCache } from '../src/control-plane/relay-winner-cache';
 import { MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError } from '../src/control-plane/transport';
+import type { ValueStore } from '../src/platform/secure-storage';
 import type { MobileCloudRelayControlPlaneProfile } from '../src/control-plane/profile';
 
 const profile: MobileCloudRelayControlPlaneProfile = { version: 1, identity: { controlPlaneId: 'control_plane_a', publicKeyFingerprint: `sha256:${'a'.repeat(43)}` }, access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 2, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } }, capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true, triggers: true }, createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:00.000Z' };
@@ -13,12 +15,46 @@ function eventSubscribe(topics: string[] | undefined, extra: Record<string, unkn
   return { type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, metricInstanceIds: [], topics, ...extra } };
 }
 
-function harness() {
+const candidates = [
+  { allocationId: 'allocation_a', relayId: 'relay_a', relayRegion: 'eu-west', relayUrl: 'wss://eu.relay.thandoff.com/connect', serverScore: 0.1, clientAttach: { role: 'client' } },
+  { allocationId: 'allocation_b', relayId: 'relay_b', relayRegion: 'us-east', relayUrl: 'wss://us.relay.thandoff.com/connect', serverScore: 0.4, clientAttach: { role: 'client' } },
+];
+
+function selection(overrides: Record<string, unknown> = {}) {
+  return { selectionId: 'relay_selection_a', expiresAt: '2026-08-10T00:00:15.000Z', preferredHonored: false, candidates, ...overrides };
+}
+
+/** Both candidates answer, with `allocation_a` measurably ahead. */
+function fastestProbe(winner = 'allocation_a'): jest.Mock {
+  return jest.fn(async (targets: Array<{ allocationId: string }>) => targets.map((target) => ({ allocationId: target.allocationId, sampleCount: 2, failureCount: 0, mobileRttMs: target.allocationId === winner ? 10 : 50 })));
+}
+
+function accountStub(probe: jest.Mock = fastestProbe()) {
+  return {
+    issueAccessTicket: jest.fn().mockResolvedValue({ ticketId: 'ticket_a', bindingId: 'binding_a', bindingRevision: 2, targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint }),
+    allocateRelaySelection: jest.fn().mockResolvedValue(selection()),
+    confirmRelaySelection: jest.fn(async (_selectionId: string, input: { winnerAllocationId: string }) => {
+      const candidate = candidates.find((entry) => entry.allocationId === input.winnerAllocationId) ?? candidates[0];
+      return { allocationId: candidate.allocationId, relayId: candidate.relayId, relayRegion: candidate.relayRegion, relayUrl: candidate.relayUrl, clientAttach: candidate.clientAttach, expiresAt: '2026-08-10T00:10:00.000Z' };
+    }),
+    probe,
+  };
+}
+
+function memoryStore(): ValueStore & { values: Map<string, string> } {
+  const values = new Map<string, string>();
+  return { values, async available() { return true; }, async get(key) { return values.get(key); }, async set(key, value) { values.set(key, value); }, async remove(key) { values.delete(key); } };
+}
+
+function harness(probeOrOptions: jest.Mock | { probe?: jest.Mock; winnerCache?: RelayWinnerCache } = fastestProbe()) {
+  const probe = typeof probeOrOptions === 'function' ? probeOrOptions : probeOrOptions.probe ?? fastestProbe();
+  const winnerCache = typeof probeOrOptions === 'function' ? undefined : probeOrOptions.winnerCache;
   let listener: (value: any) => void = () => undefined;
   const channel: EncryptedRelayChannel = { send: jest.fn((value: any) => { if (value.type === 'request') queueMicrotask(() => listener({ type: 'response', id: value.id, status: 200, body: { data: { ok: true } } })); }), close: jest.fn(), subscribe(next) { listener = next; return () => undefined; } };
-  const account = { issueAccessTicket: jest.fn().mockResolvedValue({ ticketId: 'ticket_a', bindingId: 'binding_a', bindingRevision: 2, targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint }), allocateRelay: jest.fn().mockResolvedValue({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' } }) } as any;
-  const open = jest.fn().mockResolvedValue(channel); const transport = new RelayControlPlaneTransport(profile, account, open);
-  return { account, channel, open, transport, emit: (value: any) => listener(value) };
+  const account = accountStub(probe) as any;
+  const open = jest.fn().mockResolvedValue(channel);
+  const transport = new RelayControlPlaneTransport(profile, account, open, { probeRelayCandidates: probe as any, ...(winnerCache ? { winnerCache } : {}) });
+  return { account, channel, open, probe, transport, emit: (value: any) => listener(value) };
 }
 
 test('cloud Relay transport rotates ticket, validates target identity and serves the shared business client', async () => {
@@ -137,7 +173,8 @@ test('cloud Relay profile cannot inject authorization, cross-origin route or sta
 
 function leaseHarness(leaseMs = 30_000) {
   const channels: Array<{ channel: EncryptedRelayChannel; emit: (value: any) => void; close: () => void }> = [];
-  const account = { issueAccessTicket: jest.fn().mockResolvedValue({ ticketId: 'ticket_a', bindingId: 'binding_a', bindingRevision: 2, targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint }), allocateRelay: jest.fn().mockResolvedValue({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' } }) } as any;
+  const probe = fastestProbe();
+  const account = accountStub(probe) as any;
   const open = jest.fn(async () => {
     let listener: (value: any) => void = () => undefined;
     let onClose: (error?: unknown) => void = () => undefined;
@@ -147,7 +184,7 @@ function leaseHarness(leaseMs = 30_000) {
     channels.push({ channel, emit: (value) => listener(value), close: () => onClose() });
     return channel;
   });
-  return { account, channels, open, transport: new RelayControlPlaneTransport(profile, account, open as any) };
+  return { account, channels, open, transport: new RelayControlPlaneTransport(profile, account, open as any, { probeRelayCandidates: probe as any }) };
 }
 
 test('cloud Relay transport rotates onto a fresh allocation before the channel lease expires', async () => {
@@ -188,7 +225,7 @@ test('cloud Relay transport keeps the current channel when the renewed allocatio
   try {
     const { account, channels, open, transport } = leaseHarness(10_000);
     await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
-    account.allocateRelay.mockRejectedValueOnce(Object.assign(new Error('Coordinator unavailable.'), { code: 'NO_RELAY_CAPACITY' }));
+    account.allocateRelaySelection.mockRejectedValueOnce(Object.assign(new Error('Coordinator unavailable.'), { code: 'NO_RELAY_CAPACITY' }));
     await jest.advanceTimersByTimeAsync(5_000);
     expect(open).toHaveBeenCalledTimes(1);
     await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).resolves.toEqual({ data: { ok: true } });
@@ -196,4 +233,134 @@ test('cloud Relay transport keeps the current channel when the renewed allocatio
   } finally {
     jest.useRealTimers();
   }
+});
+
+test('cloud Relay transport probes every candidate in parallel and confirms the fastest one', async () => {
+  const { account, open, probe, transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(account.issueAccessTicket).toHaveBeenCalledWith({ controlPlaneId: 'control_plane_a', trafficClasses: ['interactive', 'stream'] });
+  expect(account.allocateRelaySelection).toHaveBeenCalledWith(expect.objectContaining({ maxCandidates: 3, trafficClass: 'interactive' }));
+  expect(account.allocateRelaySelection).toHaveBeenCalledWith(expect.not.objectContaining({ preferredRelayId: expect.anything() }));
+  expect(probe.mock.calls[0][0]).toEqual(candidates.map(({ allocationId, relayUrl }) => ({ allocationId, relayUrl })));
+  expect(account.confirmRelaySelection).toHaveBeenCalledWith('relay_selection_a', expect.objectContaining({
+    winnerAllocationId: 'allocation_a',
+    rankedAllocationIds: ['allocation_a', 'allocation_b'],
+    fallback: 'none',
+    measurements: [
+      { allocationId: 'allocation_a', relayId: 'relay_a', mobileRttMs: 10, sampleCount: 2, failureCount: 0 },
+      { allocationId: 'allocation_b', relayId: 'relay_b', mobileRttMs: 50, sampleCount: 2, failureCount: 0 },
+    ],
+  }));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ relayUrl: 'wss://eu.relay.thandoff.com/connect' }));
+});
+
+test('cloud Relay transport remembers the winner and validates it with a single sample next time', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  const first = harness({ winnerCache });
+  await first.transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(store.values.get(RelayWinnerCache.key('control_plane_a'))).toEqual(expect.stringContaining('"relayId":"relay_a"'));
+
+  const probe = fastestProbe();
+  const second = harness({ winnerCache, probe });
+  second.account.allocateRelaySelection.mockResolvedValue(selection({ preferredHonored: true }));
+  await second.transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(second.account.allocateRelaySelection).toHaveBeenCalledWith(expect.objectContaining({ preferredRelayId: 'relay_a' }));
+  // One target, one sample: the fast path must not re-run the whole probe round.
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(probe.mock.calls[0][0]).toEqual([{ allocationId: 'allocation_a', relayUrl: 'wss://eu.relay.thandoff.com/connect' }]);
+  expect(probe.mock.calls[0][1]).toEqual(expect.objectContaining({ samples: 1, budgetMs: 400 }));
+  expect(second.account.confirmRelaySelection).toHaveBeenCalledWith('relay_selection_a', expect.objectContaining({ winnerAllocationId: 'allocation_a', fallback: 'none' }));
+});
+
+test('cloud Relay transport keeps the remembered winner across a reconnect', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  const probe = fastestProbe();
+  const { account, transport } = harness({ winnerCache, probe });
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(store.values.get(RelayWinnerCache.key('control_plane_a'))).toEqual(expect.stringContaining('"relayId":"relay_a"'));
+
+  // Reconnecting is not a network change: the app calls revalidate() on every attempt, so
+  // clearing the cache here would make the cached-winner fast path dead code on device.
+  account.allocateRelaySelection.mockResolvedValue(selection({ preferredHonored: true }));
+  await transport.revalidate();
+  expect(store.values.get(RelayWinnerCache.key('control_plane_a'))).toEqual(expect.stringContaining('"relayId":"relay_a"'));
+  expect(account.allocateRelaySelection).toHaveBeenLastCalledWith(expect.objectContaining({ preferredRelayId: 'relay_a' }));
+});
+
+test('cloud Relay transport forgets a cached winner that now answers far more slowly than measured', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  await winnerCache.write('control_plane_a', { relayId: 'relay_a', relayUrl: 'wss://eu.relay.thandoff.com/connect', rttMs: 10, networkFingerprint: 'default' });
+  // Same Relay, same network, six times the latency: the hint is no longer true.
+  const probe = jest.fn(async (targets: Array<{ allocationId: string }>) => targets.map((target) => ({ allocationId: target.allocationId, sampleCount: 1, failureCount: 0, mobileRttMs: 60 })));
+  const { account, transport } = harness({ winnerCache, probe });
+  account.allocateRelaySelection.mockResolvedValue(selection({ preferredHonored: true }));
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(account.confirmRelaySelection).toHaveBeenCalledWith('relay_selection_a', expect.objectContaining({ winnerAllocationId: 'allocation_a' }));
+  expect(store.values.has(RelayWinnerCache.key('control_plane_a'))).toBe(false);
+});
+
+test('cloud Relay transport falls back to a full probe when the remembered winner stops answering', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  await winnerCache.write('control_plane_a', { relayId: 'relay_a', relayUrl: 'wss://eu.relay.thandoff.com/connect', rttMs: 11, networkFingerprint: 'default' });
+  const probe = jest.fn(async (targets: Array<{ allocationId: string }>, options?: { samples?: number }) => targets.map((target) => (options?.samples === 1
+    ? { allocationId: target.allocationId, sampleCount: 1, failureCount: 1 }
+    : { allocationId: target.allocationId, sampleCount: 2, failureCount: 0, mobileRttMs: target.allocationId === 'allocation_b' ? 20 : 60 })));
+  const { account, open, transport } = harness({ winnerCache, probe });
+  account.allocateRelaySelection.mockResolvedValue(selection({ preferredHonored: true }));
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(probe).toHaveBeenCalledTimes(2);
+  expect(probe.mock.calls[1][0]).toEqual(candidates.map(({ allocationId, relayUrl }) => ({ allocationId, relayUrl })));
+  expect(account.confirmRelaySelection).toHaveBeenCalledWith('relay_selection_a', expect.objectContaining({ winnerAllocationId: 'allocation_b' }));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ relayUrl: 'wss://us.relay.thandoff.com/connect' }));
+});
+
+test('cloud Relay transport defers to the Coordinator ranking when nothing answers', async () => {
+  const probe = jest.fn(async (targets: Array<{ allocationId: string }>) => targets.map((target) => ({ allocationId: target.allocationId, sampleCount: 2, failureCount: 2 })));
+  const { account, open, transport } = harness({ probe });
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(account.confirmRelaySelection).toHaveBeenCalledWith('relay_selection_a', expect.objectContaining({ winnerAllocationId: 'allocation_a', rankedAllocationIds: ['allocation_a', 'allocation_b'], fallback: 'server-order' }));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ relayUrl: 'wss://eu.relay.thandoff.com/connect' }));
+});
+
+test('cloud Relay transport drops the remembered winner when the attach itself fails', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  await winnerCache.write('control_plane_a', { relayId: 'relay_a', relayUrl: 'wss://eu.relay.thandoff.com/connect', rttMs: 11, networkFingerprint: 'default' });
+  const probe = fastestProbe();
+  let attempt = 0;
+  const account = accountStub(probe) as any;
+  account.allocateRelaySelection.mockImplementation(async () => selection({ preferredHonored: attempt === 0 }));
+  let listener: (value: any) => void = () => undefined;
+  const open = jest.fn(async () => {
+    attempt += 1;
+    if (attempt === 1) throw new MobileControlPlaneTransportError('RELAY_SOCKET_FAILED', 'Cloud Relay channel failed.', true);
+    return {
+      send: jest.fn((value: any) => { if (value.type === 'request') queueMicrotask(() => listener({ type: 'response', id: value.id, status: 200, body: { data: { ok: true } } })); }),
+      close: jest.fn(),
+      subscribe(next: (value: any) => void) { listener = next; return () => undefined; },
+    } as unknown as EncryptedRelayChannel;
+  });
+  const transport = new RelayControlPlaneTransport(profile, account, open as any, { probeRelayCandidates: probe as any, winnerCache });
+  // The first attach fails, so the transport discards the cache and retries once
+  // from scratch instead of repeating a winner it just watched break.
+  await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).resolves.toEqual({ data: { ok: true } });
+  expect(open).toHaveBeenCalledTimes(2);
+  expect(account.allocateRelaySelection).toHaveBeenLastCalledWith(expect.not.objectContaining({ preferredRelayId: expect.anything() }));
+});
+
+test('cloud Relay transport forgets the measured winner when it cannot connect', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  const { account, transport } = harness({ winnerCache });
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(store.values.has(RelayWinnerCache.key('control_plane_a'))).toBe(true);
+  account.allocateRelaySelection.mockRejectedValueOnce(Object.assign(new Error('Coordinator unavailable.'), { code: 'NO_RELAY_CAPACITY' }));
+  await expect(transport.revalidate()).rejects.toMatchObject({ code: 'RELAY_CONNECTION_FAILED' });
+  // The winner did not survive a connection that failed, and the failed attempt
+  // did not quietly write it back.
+  expect(store.values.has(RelayWinnerCache.key('control_plane_a'))).toBe(false);
 });

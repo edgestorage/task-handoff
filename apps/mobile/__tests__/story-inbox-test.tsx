@@ -234,6 +234,9 @@ describe('<StoryInbox />', () => {
     expect(onOpenDocument).toHaveBeenCalledWith(story, story.documents[0]);
     expect(onOpenSession).toHaveBeenCalledWith('instance-a', 'session-a');
     expect(onOpen).toHaveBeenCalledWith(story);
+
+    await fireEvent.press(screen.getByLabelText('Collapse Alpha'));
+    await waitFor(() => expect(screen.queryByText('Plan')).toBeNull());
     await screen.unmount();
   });
 

@@ -34,8 +34,8 @@ describe('mobile native feature variants', () => {
       'expo-splash-screen',
       expect.objectContaining({
         backgroundColor: '#f2f2f7',
-        dark: expect.objectContaining({ backgroundColor: '#000000', image: './assets/icon.png' }),
-        image: './assets/icon.png',
+        dark: expect.objectContaining({ backgroundColor: '#000000', image: './assets/splash-icon-dark.png' }),
+        image: './assets/splash-icon-light.png',
         imageWidth: 100,
       }),
     ]);

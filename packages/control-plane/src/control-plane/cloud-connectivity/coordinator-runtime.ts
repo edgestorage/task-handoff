@@ -7,6 +7,7 @@ import type { CloudAccountSessionService } from "./account-session.ts";
 import type { CloudConnectivityService } from "./service.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import { CloudRelayConnector, verifyCoordinatorRelayAllocation, type RelaySessionBridge } from "./relay-connector.ts";
+import { RelayLinkProbeLoop } from "./relay-link-probe.ts";
 import { RelayTraceRecorder } from "./relay-trace.ts";
 
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
@@ -14,6 +15,10 @@ type CloudAccountScope = "account:sign-in" | "control-plane:bind";
 type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
 const ACCOUNT_REQUEST_POLL_MS = 3_000;
 const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
+// Renewing inside the sliding window keeps the account session alive without user action, and
+// surfaces a remote revocation without waiting for the next reconnect. A lapse (the Control Plane
+// was offline longer than the window) still requires a fresh sign-in.
+const ACCOUNT_RENEWAL_INTERVAL_MS = 12 * 60 * 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
@@ -61,11 +66,14 @@ export class CloudConnectivityBackgroundRuntime {
   readonly dataConnections: CloudRelayDataConnectionManager;
   /** Decoded relay traffic capture; disabled recorder unless the host injects one. */
   readonly relayTrace: RelayTraceRecorder;
+  /** Background Control Plane -> Relay RTT measurements, reported as selection hints. */
+  readonly relayLinks: RelayLinkProbeLoop;
   private readonly connector: CloudCoordinatorConnector;
   private readonly control: CloudControlConnectionManager;
   private readonly events: CloudAuthorityEventConsumer;
   private timer?: ReturnType<typeof setTimeout>;
   private accountTimer?: ReturnType<typeof setTimeout>;
+  private accountRenewalTimer?: ReturnType<typeof setInterval>;
   private running = false;
   private connecting?: Promise<unknown>;
   private reconciling?: Promise<void>;
@@ -83,14 +91,43 @@ export class CloudConnectivityBackgroundRuntime {
     this.dataConnections = new CloudRelayDataConnectionManager({ verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)), connector: relayConnector });
     this.events = new CloudAuthorityEventConsumer({ state: options.state, connections: { stop: (reason) => this.control.stop(reason) }, dataConnections: this.dataConnections });
     this.control = new CloudControlConnectionManager({ state: options.state, connector: this.connector, onEvent: async (event) => { await this.events.apply(event as any); } });
+    this.relayLinks = options.relayLinks ?? new RelayLinkProbeLoop({
+      serviceOrigin: () => options.state.snapshot().serviceOrigin,
+      // Hints only matter once the Control Plane is bound and reachable.
+      enabled: () => { const snapshot = options.state.snapshot(); return snapshot.status === "active" && snapshot.remoteAccessEnabled; },
+      report: (links) => this.request("report-relay-links", { links }),
+      fetch: this.options.fetch,
+      clock: this.clock,
+      intervalMs: options.relayLinkProbeIntervalMs,
+    });
     this.lifecycle = new CloudConnectivityLifecycle({ state: options.state, connections: this.control, remote: {
       revoke: async ({ bindingId }) => this.connector.request("revoke-binding", { bindingId }) as Promise<{ status: "revoked" }>,
       setRemoteAccess: async ({ bindingId, enabled }) => { await this.connector.request("set-remote-access", { bindingId, enabled }); },
     } });
   }
 
-  start() { this.running = true; if (this.options.state.snapshot().status === "active") this.schedule(0); }
-  async stop() { this.running = false; if (this.timer) clearTimeout(this.timer); if (this.accountTimer) clearTimeout(this.accountTimer); this.relayTrace.close(); await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping")]); }
+  start() {
+    this.running = true;
+    this.relayLinks.start();
+    if (!this.accountRenewalTimer) {
+      this.accountRenewalTimer = setInterval(() => { void this.renewAccountCredential().catch(() => undefined); }, this.options.accountRenewalIntervalMs ?? ACCOUNT_RENEWAL_INTERVAL_MS);
+      this.accountRenewalTimer.unref();
+    }
+    // The stored access token is normally stale after a restart, so rotating once at boot keeps
+    // the sliding expiry fresh and surfaces a remote revocation without waiting for the interval.
+    void this.renewAccountCredential().catch(() => undefined);
+    if (this.options.state.snapshot().status === "active") this.schedule(0);
+  }
+  async stop() {
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
+    if (this.accountTimer) clearTimeout(this.accountTimer);
+    if (this.accountRenewalTimer) clearInterval(this.accountRenewalTimer);
+    this.accountRenewalTimer = undefined;
+    this.relayLinks.stop();
+    this.relayTrace.close();
+    await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping")]);
+  }
 
   /**
    * Asks the Coordinator for a browser-approvable authorization request and remembers it
@@ -143,7 +180,13 @@ export class CloudConnectivityBackgroundRuntime {
       if (requestId && payload?.status === "denied") this.options.accountSession.resolveRequest({ requestId, status: "denied" });
       return { accepted: true };
     }
-    if (operation === "relay-allocation") return this.dataConnections.attach(payload);
+    if (operation === "relay-allocation") {
+      // The declared Relay hosts are an allowlist suffix; this is the first time the
+      // Control Plane learns a host under it that actually resolves, so let the
+      // background prober measure it for the next selection.
+      this.relayLinks.observe(payload?.relayUrl);
+      return this.dataConnections.attach(payload);
+    }
     throw runtimeError("CLOUD_CONTROL_OPERATION_UNSUPPORTED");
   }
 
@@ -212,7 +255,12 @@ export class CloudConnectivityBackgroundRuntime {
     }
     if (!tokens?.refreshCredential || !tokens?.accountId || !tokens?.deviceSessionId) return;
     this.accessToken = typeof tokens.accessToken === "string" ? { value: tokens.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(tokens.accessExpiresIn) * 1_000 } : undefined;
-    session.complete({ accountId: tokens.accountId, email: credentials.email, deviceSessionId: tokens.deviceSessionId, refreshCredential: tokens.refreshCredential, sessionExpiresAt: credentials.sessionExpiresAt }, { preservePending: true });
+    session.complete({ accountId: tokens.accountId, email: credentials.email, deviceSessionId: tokens.deviceSessionId, refreshCredential: tokens.refreshCredential, sessionExpiresAt: typeof tokens.sessionExpiresAt === "string" ? tokens.sessionExpiresAt : credentials.sessionExpiresAt }, { preservePending: true });
+  }
+
+  private async renewAccountCredential() {
+    if (!this.running || !this.options.accountSession.refreshCredential() || this.hasFreshAccessToken()) return;
+    await this.refreshAccountCredential();
   }
 
   private scheduleAccountPoll(delay = ACCOUNT_REQUEST_POLL_MS) {
@@ -270,6 +318,9 @@ type CloudRuntimeOptions = {
   relayBridge?: RelaySessionBridge;
   relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
   relayTrace?: RelayTraceRecorder;
+  relayLinks?: RelayLinkProbeLoop;
+  relayLinkProbeIntervalMs?: number;
+  accountRenewalIntervalMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
   webSocket?: typeof WebSocket;
   fetch?: typeof fetch;

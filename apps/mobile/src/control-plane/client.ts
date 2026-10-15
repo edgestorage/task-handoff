@@ -7,8 +7,9 @@ import { isDirectMobileControlPlaneProfile, type MobileControlPlaneProfile, type
 import { MobileCloudAccountSession, CLOUD_PRODUCTION_ORIGIN } from './cloud-account';
 import { allowCloudRelayUrlForService, createMobileRelayChannelFactory } from './relay-channel';
 import { RelayControlPlaneTransport, type RelayChannelFactory } from './relay-transport';
+import { RelayWinnerCache } from './relay-winner-cache';
 
-type MobileClientOptions = { relayChannelFactory?: RelayChannelFactory; cloudRequest?: typeof fetch; allowNonProductionOrigin?: boolean };
+type MobileClientOptions = { relayChannelFactory?: RelayChannelFactory; cloudRequest?: typeof fetch; allowNonProductionOrigin?: boolean; relayWinnerCache?: RelayWinnerCache };
 
 const clientsByStore = new WeakMap<SecureValueStore, Map<string, ReturnType<typeof directClient>>>();
 const cloudClientsByStore = new WeakMap<SecureValueStore, Map<string, ReturnType<typeof cloudClient>>>();
@@ -28,7 +29,7 @@ export function createMobileControlPlaneClient(profile: MobileControlPlaneProfil
   // session and Relay transport for the same binding. Requests flow through the shared transport,
   // so the account session must be shared with it. Calls that inject transport dependencies stay
   // uncached: those are tests that need their own transport instance.
-  if (options.relayChannelFactory || options.cloudRequest || options.allowNonProductionOrigin !== undefined) return cloudClient(cloud, secureStore, options);
+  if (options.relayChannelFactory || options.cloudRequest || options.allowNonProductionOrigin !== undefined || options.relayWinnerCache) return cloudClient(cloud, secureStore, options);
   return cachedClient(cloudClientsByStore, secureStore, clientCacheKey(cloud), () => cloudClient(cloud, secureStore, {}));
 }
 
@@ -49,7 +50,11 @@ function clientCacheKey(profile: MobileControlPlaneProfile) {
 function cloudClient(profile: MobileCloudRelayControlPlaneProfile, secureStore: SecureValueStore, options: MobileClientOptions) {
   const account = new MobileCloudAccountSession(secureStore, { origin: profile.access.serviceOrigin, request: options.cloudRequest, allowNonProductionOrigin: options.allowNonProductionOrigin ?? isMobileTestMode, reference: profile.access.accountSession });
   const allowIsolatedEnvironment = account.origin !== CLOUD_PRODUCTION_ORIGIN;
-  const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl: (url) => allowCloudRelayUrlForService(url, profile.access.serviceOrigin, allowIsolatedEnvironment) }));
+  // The remembered winner is what turns the second connection into a single
+  // validation sample, so the cache lives with the client and shares its store.
+  const winnerCache = options.relayWinnerCache ?? new RelayWinnerCache({ store: secureStore });
+  const allowRelayUrl = (url: URL) => allowCloudRelayUrlForService(url, profile.access.serviceOrigin, allowIsolatedEnvironment);
+  const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl }), { winnerCache, allowRelayUrl });
   return { transport, api: createControlPlaneClient(transport), account };
 }
 

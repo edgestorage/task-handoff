@@ -1,15 +1,18 @@
-import { createElement, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { createElement, useEffect, useRef, useState } from 'react';
+import { PixelRatio, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import type { AiSessionTimelineActivity } from '@task-handoff/protocol/ai-sessions';
 import {
   Bot,
   BookOpen,
   Brain,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
   Clock3,
+  Copy,
   FilePenLine,
   FileSearch,
   Image as ImageIcon,
@@ -89,10 +92,55 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
     {hasDetails ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.activityHeader}>{content}</Pressable>
       : <View style={styles.activityHeader}>{content}</View>}
     {expanded ? <View style={[styles.details, { borderTopColor: colors.border }]}>
-      {activity.input ? <TimelineActivityDetail label={t('sessions.timelineInput')} text={activity.input} /> : null}
-      {activity.output ? <TimelineActivityDetail label={t('sessions.timelineOutput')} text={activity.output} /> : null}
-      {activity.exitCode !== undefined ? <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{t('sessions.timelineExitCode', { code: activity.exitCode })}</Text> : null}
+      {activity.activityKind === 'commandExecution'
+        ? <TimelineCommandResult command={activity.input} exitCode={activity.exitCode} output={activity.output} />
+        : <>
+          {activity.input ? <TimelineActivityDetail label={t('sessions.timelineInput')} text={activity.input} /> : null}
+          {activity.output ? <TimelineActivityDetail label={t('sessions.timelineOutput')} text={activity.output} /> : null}
+          {activity.exitCode !== undefined ? <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{t('sessions.timelineExitCode', { code: activity.exitCode })}</Text> : null}
+        </>}
     </View> : null}
+  </View>;
+}
+
+function TimelineCommandResult({ command, exitCode, output }: { command?: string; exitCode?: number; output?: string }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+  const content = [command ? `$ ${command}` : '', output || ''].filter(Boolean).join('\n');
+  const failed = exitCode !== undefined && exitCode !== 0;
+  const copyOutput = async () => {
+    try {
+      await Clipboard.setStringAsync(content);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 1_500);
+  };
+  // A horizontal ScrollView needs an explicit height inside the virtualized timeline, mirroring Web's non-wrapping pre.
+  const contentHeight = Math.ceil(
+    Math.max(1, content.split('\n').length) * mobileWebMetric(12 * 1.55) * PixelRatio.getFontScale()
+      + mobileWebMetric(9) + mobileWebMetric(18),
+  );
+  return <View style={[styles.commandResult, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <View style={[styles.commandResultHeader, { borderBottomColor: colors.border }]}>
+      <Text style={[styles.commandResultHeaderText, { color: colors.textMuted }]}>{t('sessions.timelineCommandShell')}</Text>
+      {failed ? <Text style={[styles.commandResultHeaderText, { color: colors.error }]}>{t('sessions.timelineExitCode', { code: exitCode })}</Text> : null}
+      {content ? <Pressable accessibilityLabel={copied ? t('sessions.codeCopied') : t('sessions.timelineCopyOutput')} accessibilityRole="button" hitSlop={6} onPress={() => void copyOutput()} style={({ pressed }) => [styles.commandResultCopy, pressed && { backgroundColor: colors.surfaceMuted }]}>
+        {copied ? <Check color={colors.textMuted} size={mobileWebMetric(14)} /> : <Copy color={colors.textMuted} size={mobileWebMetric(14)} />}
+      </Pressable> : null}
+    </View>
+    {content
+      ? <ScrollView nestedScrollEnabled style={[styles.commandResultBody, { maxHeight: mobileWebMetric(320) }]} testID="timeline-command-result">
+        <ScrollView contentContainerStyle={styles.commandResultContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: contentHeight }} testID="timeline-command-result-content">
+          <Text selectable style={[styles.commandResultText, { color: colors.text }]}>{content}</Text>
+        </ScrollView>
+      </ScrollView>
+      : <Text style={[styles.commandResultEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoCommandOutput')}</Text>}
   </View>;
 }
 
@@ -160,4 +208,12 @@ const styles = StyleSheet.create({
   detailLabel: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
   detailScroll: { borderLeftWidth: StyleSheet.hairlineWidth, maxHeight: mobileWebMetric(280), paddingLeft: mobileWebMetric(10) },
   detailText: { fontFamily: 'monospace', fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingVertical: mobileWebMetric(7) },
+  commandResult: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, minWidth: 0, overflow: 'hidden' },
+  commandResultHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: mobileWebMetric(6), minHeight: mobileWebMetric(30), paddingLeft: mobileWebMetric(10), paddingRight: mobileWebMetric(6) },
+  commandResultHeaderText: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  commandResultCopy: { alignItems: 'center', borderRadius: mobileWebMetric(4), height: mobileWebMetric(24), justifyContent: 'center', marginLeft: 'auto', width: mobileWebMetric(24) },
+  commandResultBody: { minWidth: 0 },
+  commandResultContent: { paddingBottom: mobileWebMetric(18), paddingHorizontal: mobileWebMetric(12), paddingTop: mobileWebMetric(9) },
+  commandResultText: { fontFamily: 'monospace', fontSize: mobileWebType.small, lineHeight: mobileWebMetric(12 * 1.55) },
+  commandResultEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingHorizontal: mobileWebMetric(11), paddingVertical: mobileWebMetric(13) },
 });

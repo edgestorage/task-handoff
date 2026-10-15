@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { canonicalJson, DateTimeSchema, IdSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
-import { OUTBOUND_CONNECTION_PROTOCOL_VERSION, OfficialAudience, RELAY_FRAMING_PROTOCOL_VERSION } from "./versions.ts";
+import { OUTBOUND_CONNECTION_PROTOCOL_VERSION, OfficialAudience, RELAY_FRAMING_PROTOCOL_VERSION, RELAY_MAX_CANDIDATES } from "./versions.ts";
 
 export const TrafficClassSchema = z.enum(["interactive", "stream", "bulk"]);
 
@@ -111,6 +111,72 @@ export const RelayAllocationSchema = z.object({
   expiresAt: DateTimeSchema,
 });
 
+/**
+ * A control-plane's own last measurement of the direct link to one Relay. The
+ * Coordinator caches these and hands them to clients as advice; clients may
+ * ignore them entirely, and a stale hint is reported with its `updatedAt`
+ * instead of being dropped or replaced.
+ */
+export const RelayControlPlaneHintSchema = z.strictObject({
+  relayId: IdSchema,
+  rttMs: z.number().nonnegative(),
+  updatedAt: DateTimeSchema,
+});
+
+/**
+ * One Relay the client may connect to. Every candidate carries its own
+ * `allocationId` and pre-signed `clientAttach`: Relay nodes key channels by
+ * `allocationId`, so candidates cannot share one, and a losing candidate simply
+ * expires. Only the confirmed winner ever gets a control-plane attach.
+ */
+export const RelayCandidateSchema = z.strictObject({
+  allocationId: IdSchema,
+  relayId: IdSchema,
+  relayRegion: z.string().trim().min(1).max(80),
+  relayUrl: z.string().url(),
+  clientAttach: RelayAttachCapabilitySchema,
+  /** Coordinator-side ranking input; lower is better. */
+  serverScore: z.number().nonnegative(),
+  cpHint: RelayControlPlaneHintSchema.optional(),
+});
+
+export const RelaySelectionSchema = z.strictObject({
+  selectionId: IdSchema,
+  expiresAt: DateTimeSchema,
+  /** True when a cached `preferredRelayId` was still eligible and ranked first. */
+  preferredHonored: z.boolean(),
+  candidates: z.array(RelayCandidateSchema).min(1).max(RELAY_MAX_CANDIDATES),
+});
+
+export const RelayCandidateMeasurementSchema = z.strictObject({
+  allocationId: IdSchema,
+  relayId: IdSchema,
+  mobileRttMs: z.number().nonnegative().optional(),
+  sampleCount: z.number().int().nonnegative(),
+  failureCount: z.number().int().nonnegative(),
+});
+
+/**
+ * Why the client confirmed what it confirmed, recorded with the selection so
+ * degraded paths are observable instead of being invisible fallbacks.
+ */
+export const RelaySelectionFallbackSchema = z.enum(["none", "server-order", "partial-probe", "preferred-miss"]);
+
+export const RelaySelectionConfirmationSchema = z.strictObject({
+  winnerAllocationId: IdSchema,
+  /** The client's full ranking, so the Coordinator can fall back in the same order. */
+  rankedAllocationIds: z.array(IdSchema).max(RELAY_MAX_CANDIDATES).optional(),
+  measurements: z.array(RelayCandidateMeasurementSchema).max(RELAY_MAX_CANDIDATES).optional(),
+  fallback: RelaySelectionFallbackSchema.optional(),
+});
+
+/** The final, reserved allocation: the selection's winner with its control-plane peer attached. */
+export const ConfirmedRelayAllocationSchema = RelayAllocationSchema.extend({
+  fallback: RelaySelectionFallbackSchema.optional(),
+  /** The Coordinator could not reserve the requested winner and booked another candidate instead. */
+  substituted: z.boolean().optional(),
+});
+
 export const RelayChannelSchema = z.strictObject({
   channelId: IdSchema,
   allocationId: IdSchema,
@@ -155,5 +221,12 @@ export const RelayRevocationSchema = z.strictObject({
 
 export type AccessTicket = z.infer<typeof AccessTicketSchema>;
 export type RelayAllocation = z.infer<typeof RelayAllocationSchema>;
+export type ConfirmedRelayAllocation = z.infer<typeof ConfirmedRelayAllocationSchema>;
+export type RelayCandidate = z.infer<typeof RelayCandidateSchema>;
+export type RelayControlPlaneHint = z.infer<typeof RelayControlPlaneHintSchema>;
+export type RelaySelection = z.infer<typeof RelaySelectionSchema>;
+export type RelaySelectionConfirmation = z.infer<typeof RelaySelectionConfirmationSchema>;
+export type RelaySelectionFallback = z.infer<typeof RelaySelectionFallbackSchema>;
+export type RelayCandidateMeasurement = z.infer<typeof RelayCandidateMeasurementSchema>;
 export type RelayAttachCapability = z.infer<typeof RelayAttachCapabilitySchema>;
 export type RelayFrame = z.infer<typeof RelayFrameSchema>;

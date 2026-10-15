@@ -41,6 +41,10 @@ test("account API projections contain only client-visible fields", () => {
   const device = { id: "session_a", kind: "mobile", deviceName: "Phone", createdAt: at, expiresAt: at };
   assert.deepEqual(DeviceSessionSchema.parse(device), device);
   assert.equal(DeviceSessionSchema.safeParse({ ...device, accountId: "account_a", tokenFamilyId: "family_a" }).success, false);
+  // Control Planes sign in as their own device session, so the public device list must
+  // keep accepting the kind the cloud service returns for them.
+  assert.equal(DeviceSessionSchema.safeParse({ ...device, kind: "control-plane", platform: "control-plane" }).success, true);
+  assert.equal(DeviceSessionSchema.safeParse({ ...device, kind: "cli" }).success, false);
 });
 
 test("public package does not export Cloud persistence or credential models", () => {

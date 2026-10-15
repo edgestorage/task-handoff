@@ -1,7 +1,10 @@
 import type { z } from 'zod';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
-import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient } from '@task-handoff/cloud-contracts/mobile';
+import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient, type RelaySelection as CloudRelaySelection } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
+import { probeRelayCandidates, RELAY_PROBE_FAST_BUDGET_MS, RELAY_PROBE_FAST_SAMPLES, type RelayProbeTarget } from './relay-prober';
+import { selectRelayCandidate, type RelayProbeResult, type RelayScoringCandidate, type RelaySelectionFallback } from './relay-scorer';
+import { RelayWinnerCache, type RelayWinnerEntry } from './relay-winner-cache';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 import { MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 
@@ -22,6 +25,22 @@ const LEASE_RENEWAL_MINIMUM_MS = 1_000;
 // legacy default of "everything".
 const MOBILE_RESOURCE_METRIC_SCOPE = { metricInstanceIds: [] as string[] };
 
+/**
+ * How many Relays one connection attempt evaluates. Three is enough to route
+ * around a bad region without making the probe phase a fleet-wide sweep.
+ */
+const RELAY_CANDIDATE_COUNT = 3;
+/** Used when the client cannot tell one network from another (no reachability module on this platform). */
+const DEFAULT_NETWORK_FINGERPRINT = 'default';
+
+export interface RelayTransportOptions {
+  /** Injected by tests and by the app so the transport does not reach for platform APIs. */
+  winnerCache?: RelayWinnerCache;
+  probeRelayCandidates?: typeof probeRelayCandidates;
+  allowRelayUrl?: (url: URL) => boolean;
+  networkFingerprint?: () => string;
+}
+
 export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileCloudRelayControlPlaneProfile;
   readonly currentCapabilities: ControlPlanePublicCapabilities | undefined = undefined;
@@ -36,7 +55,17 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private readonly tty = new Map<string, MobileAppSessionTtyHandlers>();
   private readonly ttyStreams = new Map<string, { instanceId: string; sessionId: string }>();
 
-  constructor(profile: MobileCloudRelayControlPlaneProfile, private readonly account: CloudMobileAccountClient, private readonly openChannel: RelayChannelFactory) { this.profile = profile; }
+  private readonly winnerCache: RelayWinnerCache | undefined;
+  private readonly probe: typeof probeRelayCandidates;
+  private readonly allowRelayUrl: ((url: URL) => boolean) | undefined;
+  private readonly networkFingerprint: () => string;
+  constructor(profile: MobileCloudRelayControlPlaneProfile, private readonly account: CloudMobileAccountClient, private readonly openChannel: RelayChannelFactory, options: RelayTransportOptions = {}) {
+    this.profile = profile;
+    this.winnerCache = options.winnerCache;
+    this.probe = options.probeRelayCandidates ?? probeRelayCandidates;
+    this.allowRelayUrl = options.allowRelayUrl;
+    this.networkFingerprint = options.networkFingerprint ?? (() => DEFAULT_NETWORK_FINGERPRINT);
+  }
 
   async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, _onUploadProgress?: (progress: number) => void) {
     if (!path.startsWith('/') || path.startsWith('//')) throw transportError('RELAY_ROUTE_INVALID');
@@ -117,7 +146,14 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     return { sendInput: (data) => { if (this.channelValue) this.sendOrReset(this.channelValue, { type: 'tty-input', streamId, data }); }, resize: (cols, rows) => { if (this.channelValue) this.sendOrReset(this.channelValue, { type: 'tty-resize', streamId, body: { cols, rows } }); }, close: () => { if (this.channelValue) this.sendOrReset(this.channelValue, { type: 'tty-close', streamId }); this.tty.delete(streamId); this.ttyStreams.delete(streamId); } };
   }
 
-  async revalidate() { this.reset(transportError('RELAY_NETWORK_CHANGED', true)); await this.ensureChannel(); }
+  async revalidate() {
+    this.reset(transportError('RELAY_NETWORK_CHANGED', true));
+    // Callers use revalidate() to reconnect, not to report that the network changed, so
+    // the remembered winner survives it: dropping it here made the fast path unreachable.
+    // A device that really moved is caught by the network fingerprint inside the cache,
+    // and every genuine failure (confirm error, substitution, refused attach) clears it.
+    await this.ensureChannel();
+  }
 
   private ensureChannel() {
     if (this.channel) return this.channel;
@@ -125,13 +161,119 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     return this.channel;
   }
 
-  private async establishChannel() {
+  private async establishChannel(allowCachedWinner = true): Promise<EncryptedRelayChannel> {
+    try {
+      return await this.runSelection(allowCachedWinner);
+    } catch (error) {
+      // "Reuse the winner until it stops working": a failed attempt is that evidence, so
+      // the next connection measures again instead of trusting the cache. This is the only
+      // place a reconnect invalidates it, which is what keeps the fast path reachable.
+      await this.winnerCache?.clear(this.profile.identity.controlPlaneId);
+      throw error;
+    }
+  }
+
+  private async runSelection(allowCachedWinner: boolean): Promise<EncryptedRelayChannel> {
     const ticket = await this.account.issueAccessTicket({ controlPlaneId: this.profile.identity.controlPlaneId, trafficClasses: ['interactive', 'stream'] });
     if (ticket.targetPublicKeyFingerprint !== this.profile.identity.publicKeyFingerprint || ticket.bindingId !== this.profile.access.bindingId || ticket.bindingRevision !== this.profile.access.bindingRevision) throw transportError('RELAY_TARGET_IDENTITY_CHANGED');
-    const allocation = await this.account.allocateRelay({ ticket, preferredRegion: undefined, trafficClass: 'interactive' });
-    const channel = await this.openChannel({ relayUrl: allocation.relayUrl, clientAttach: allocation.clientAttach, ticket, targetPublicKeyFingerprint: this.profile.identity.publicKeyFingerprint, epoch: ++this.epoch });
-    this.installChannel(channel);
-    return channel;
+    const controlPlaneId = this.profile.identity.controlPlaneId;
+    const networkFingerprint = this.networkFingerprint();
+    const cached = allowCachedWinner ? await this.winnerCache?.read(controlPlaneId, networkFingerprint) : undefined;
+    const selection = await this.account.allocateRelaySelection({
+      ticket, trafficClass: 'interactive', preferredRegion: undefined,
+      maxCandidates: RELAY_CANDIDATE_COUNT,
+      ...(cached ? { preferredRelayId: cached.relayId } : {}),
+    });
+    const winner = await this.chooseWinner(selection, cached, networkFingerprint);
+    let confirmed;
+    try {
+      confirmed = await this.account.confirmRelaySelection(selection.selectionId, winner.confirmation);
+    } catch (error) {
+      // The Coordinator could not hold any candidate: a fresh selection is the only
+      // recovery, and retrying the same one would replay a spent reservation.
+      throw error;
+    }
+    if (confirmed.substituted || confirmed.relayId !== winner.relayId) {
+      // The Coordinator had to book something other than what was asked for, so the
+      // cached winner is stale information rather than a fact about this network.
+      await this.winnerCache?.clear(controlPlaneId);
+    }
+    try {
+      const channel = await this.openChannel({ relayUrl: confirmed.relayUrl, clientAttach: confirmed.clientAttach, ticket, targetPublicKeyFingerprint: this.profile.identity.publicKeyFingerprint, epoch: ++this.epoch });
+      this.installChannel(channel);
+      await this.rememberWinner(controlPlaneId, confirmed, winner.measurements, networkFingerprint, cached);
+      return channel;
+    } catch (error) {
+      // A Relay that hands out a good probe but refuses the attach is exactly the
+      // case the cache must not learn from; retry once with a full selection.
+      if (allowCachedWinner && cached) return this.establishChannel(false);
+      throw error;
+    }
+  }
+
+  /**
+   * Probes the candidates and decides which one to confirm. The cached winner
+   * only needs a single validating sample; anything else falls back to probing
+   * the whole set, and if every sample fails the client defers to the
+   * Coordinator's own ranking instead of guessing.
+   */
+  private async chooseWinner(selection: CloudRelaySelection, cached: RelayWinnerEntry | undefined, networkFingerprint: string) {
+    const trust = this.allowRelayUrl;
+    const targets: RelayProbeTarget[] = selection.candidates.map((candidate) => ({ allocationId: candidate.allocationId, relayUrl: candidate.relayUrl }));
+    const cachedCandidate = cached ? selection.candidates.find((candidate) => candidate.relayId === cached.relayId) : undefined;
+    const fastPath = cachedCandidate !== undefined && cached !== undefined && selection.preferredHonored;
+    const probeOptions = trust ? { allowRelayUrl: trust } : {};
+    let probes = await this.probe(
+      fastPath ? targets.filter((target) => target.allocationId === cachedCandidate!.allocationId) : targets,
+      fastPath ? { ...probeOptions, samples: RELAY_PROBE_FAST_SAMPLES, budgetMs: RELAY_PROBE_FAST_BUDGET_MS } : probeOptions,
+    );
+    if (fastPath && !probes.some((probe) => probe.mobileRttMs !== undefined)) {
+      // The remembered winner did not answer, so this is a full selection after all.
+      probes = await this.probe(targets, probeOptions);
+    }
+    const scored = selectRelayCandidate({
+      candidates: selection.candidates,
+      probes,
+      serverOrder: selection.candidates.map((candidate) => candidate.allocationId),
+      preferredRelayId: cached?.relayId,
+      preferredHonored: selection.preferredHonored,
+    });
+    // A successful fast path deliberately measured one candidate out of several,
+    // so the scorer's "some candidates went unmeasured" signal does not apply.
+    const fallback: RelaySelectionFallback = fastPath && probes.some((probe) => probe.mobileRttMs !== undefined) ? 'none' : scored.fallback;
+    const winnerCandidate = selection.candidates.find((candidate) => candidate.allocationId === scored.winner)!;
+    const measurements = probes.filter((probe) => probe.sampleCount > 0).map((probe) => ({
+      allocationId: probe.allocationId,
+      relayId: selection.candidates.find((candidate) => candidate.allocationId === probe.allocationId)!.relayId,
+      ...(probe.mobileRttMs === undefined ? {} : { mobileRttMs: probe.mobileRttMs }),
+      sampleCount: probe.sampleCount,
+      failureCount: probe.failureCount,
+    }));
+    return {
+      relayId: winnerCandidate.relayId,
+      measurements: probes,
+      confirmation: {
+        winnerAllocationId: scored.winner,
+        rankedAllocationIds: scored.ranked,
+        // The reason travels with the measurement so a degraded connection is
+        // visible in operations instead of looking like a normal selection.
+        fallback,
+        ...(measurements.length ? { measurements } : {}),
+      },
+    };
+  }
+
+  private async rememberWinner(controlPlaneId: string, confirmed: { relayId: string; relayUrl: string }, measurements: readonly RelayProbeResult[], networkFingerprint: string, cached?: RelayWinnerEntry) {
+    if (!this.winnerCache) return;
+    const measured = measurements.find((probe) => probe.mobileRttMs !== undefined);
+    // The winner still answers, but far slower than the measurement the cache was
+    // built from: this network (or that Relay) changed underneath us, so forget the
+    // hint and let the next connection run a full selection.
+    if (cached && measured?.mobileRttMs !== undefined && cached.rttMs > 0 && measured.mobileRttMs > cached.rttMs * 2) {
+      await this.winnerCache.clear(controlPlaneId);
+      return;
+    }
+    await this.winnerCache.write(controlPlaneId, { relayId: confirmed.relayId, relayUrl: confirmed.relayUrl, rttMs: measured?.mobileRttMs ?? cached?.rttMs ?? 0, networkFingerprint });
   }
 
   private installChannel(channel: EncryptedRelayChannel) {
