@@ -199,6 +199,29 @@ export function useCloudConnectivityQuery() {
   return useQuery({ queryKey: controlPlaneQueryKeys.cloudConnectivity, queryFn: () => sharedControlPlaneClient.admin.cloudConnectivity(), retry: false });
 }
 
+export function useCloudAccountQuery() {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cloudAccount,
+    queryFn: () => sharedControlPlaneClient.admin.cloudAccount(),
+    retry: false,
+    // While a browser approval is outstanding the Control Plane refreshes the decision in the
+    // background, so the UI only needs to mirror it.
+    refetchInterval: (query) => (query.state.data?.pendingRequest ? 3_000 : false),
+  });
+}
+
+export function createCloudSignInRequest() {
+  return sharedControlPlaneClient.admin.createCloudSignInRequest();
+}
+
+export function signOutCloudAccount() {
+  return sharedControlPlaneClient.admin.signOutCloudAccount();
+}
+
+export function createCloudBindingRequest() {
+  return sharedControlPlaneClient.admin.createCloudBindingRequest();
+}
+
 export function createCloudBindingChallenge() {
   return sharedControlPlaneClient.admin.createCloudChallenge();
 }

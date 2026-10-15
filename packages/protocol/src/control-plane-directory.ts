@@ -103,14 +103,70 @@ export const ControlPlaneInstanceActionSchema = z.enum([
   "retry-git",
 ]);
 
+const ControlPlaneInstanceStatusSchema = z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "deleting", "failed", "unhealthy"]);
+const ControlPlaneInstanceConnectionStatusSchema = z.enum(["unknown", "online", "offline", "endpoint-unreachable"]);
+const ControlPlaneInstanceAccessStatusSchema = z.enum(["reachable", "endpoint-unreachable"]);
+
+/**
+ * Action availability depends on lifecycle fields only, so the Control Plane and the
+ * mobile directory derive it from one rule instead of keeping a second implementation
+ * that drifts. A directory client can therefore recompute the actions from a lifecycle
+ * snapshot instead of re-fetching the board whenever an instance revision moves.
+ */
+export function instanceDirectoryAvailableActions(input: {
+  status: z.infer<typeof ControlPlaneInstanceStatusSchema>;
+  connectionStatus: z.infer<typeof ControlPlaneInstanceConnectionStatusSchema>;
+  accessStatus?: z.infer<typeof ControlPlaneInstanceAccessStatusSchema> | "unknown";
+  imageProvisioningPhase?: string;
+  gitProvisioningPhase?: string;
+}): ControlPlaneInstanceAction[] {
+  const { status, connectionStatus } = input;
+  const running = status === "running" || connectionStatus === "online" || input.accessStatus === "reachable";
+  const connecting = !["failed", "stopped", "stopping", "unhealthy"].includes(status)
+    && connectionStatus !== "online"
+    && ["provisioning", "starting", "registering", "registered"].includes(status);
+  return [
+    !running && !["provisioning", "starting", "registering", "registered", "stopping"].includes(status) ? "start" as const : undefined,
+    !["failed", "stopped", "stopping", "unhealthy"].includes(status) && (running || connecting) ? "stop" as const : undefined,
+    running ? "restart" as const : undefined,
+    status === "failed" && input.imageProvisioningPhase === "failed" ? "retry-image" as const : undefined,
+    status === "failed" && input.gitProvisioningPhase === "failed" ? "retry-git" as const : undefined,
+  ].filter((action): action is ControlPlaneInstanceAction => Boolean(action));
+}
+
+/**
+ * The Relay publishes the full node-agent lifecycle snapshot on the `instances` topic,
+ * so this directory event keeps the provisioning phases it needs to derive the actions
+ * above locally. Unknown keys stay stripped.
+ */
+const ControlPlaneInstanceLifecycleProvisioningSchema = z.object({
+  phase: z.string().trim().min(1).max(80).optional(),
+}).strip();
+
 export const ControlPlaneInstanceLifecycleDirectoryEventSchema = z.object({
   instanceId: IdSchema,
   revision: z.number().int().nonnegative(),
   updatedAt: TimestampSchema,
-  status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "deleting", "failed", "unhealthy"]),
+  status: ControlPlaneInstanceStatusSchema,
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
-  connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
+  connectionStatus: ControlPlaneInstanceConnectionStatusSchema,
+  accessStatus: ControlPlaneInstanceAccessStatusSchema.optional(),
+  imageProvisioning: ControlPlaneInstanceLifecycleProvisioningSchema.optional(),
+  workspace: z.object({ gitProvisioning: ControlPlaneInstanceLifecycleProvisioningSchema.optional() }).strip().optional(),
   ready: z.boolean(),
+  lastHeartbeatAt: TimestampSchema.optional(),
+}).strip();
+
+/**
+ * Liveness-only projection of the lifecycle stream. The node agent republishes an
+ * instance on every heartbeat observation, and only the observation timestamps move;
+ * this frame keeps the heartbeat clock fresh without repeating the directory fields a
+ * consumer already holds, so it must never be treated as a full snapshot.
+ */
+export const ControlPlaneInstanceLifecycleHeartbeatDirectoryEventSchema = z.object({
+  instanceId: IdSchema,
+  revision: z.number().int().nonnegative(),
+  updatedAt: TimestampSchema,
   lastHeartbeatAt: TimestampSchema.optional(),
 }).strip();
 
@@ -236,6 +292,7 @@ export type ControlPlaneInstanceDirectoryEntry = z.infer<typeof ControlPlaneInst
 export type ControlPlaneNodeConnectionPhase = z.infer<typeof ControlPlaneNodeConnectionPhaseSchema>;
 export type ControlPlaneInstanceAction = z.infer<typeof ControlPlaneInstanceActionSchema>;
 export type ControlPlaneInstanceLifecycleDirectoryEvent = z.infer<typeof ControlPlaneInstanceLifecycleDirectoryEventSchema>;
+export type ControlPlaneInstanceLifecycleHeartbeatDirectoryEvent = z.infer<typeof ControlPlaneInstanceLifecycleHeartbeatDirectoryEventSchema>;
 export type ControlPlaneFleetResource = z.infer<typeof ControlPlaneFleetResourceSchema>;
 export type ControlPlaneFleetResourcePhase = z.infer<typeof ControlPlaneFleetResourcePhaseSchema>;
 export type ControlPlaneNodeFleetState = z.infer<typeof ControlPlaneNodeFleetStateSchema>;

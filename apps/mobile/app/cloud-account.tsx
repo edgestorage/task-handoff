@@ -30,6 +30,12 @@ function CloudAccountContent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [availableProviders, setAvailableProviders] = useState<string[]>([]);
+
+  // Sign in with Apple must be present for any third-party option to be shown at all.
+  const thirdPartyProviders = availableProviders.includes('apple') ? availableProviders.filter((id) => ['apple', 'google', 'github'].includes(id)) : [];
+  const providerLabel = (id: string) => id === 'apple' ? t('cloudAccount.signInApple') : id === 'google' ? 'Google' : id === 'github' ? 'GitHub' : id;
+  const providerMark = (id: string) => id === 'apple' ? '' : id === 'google' ? 'G' : id === 'github' ? '⌘' : '•';
 
   const complete = useCallback(async (url: string) => {
     const parsed = new URL(url);
@@ -52,7 +58,17 @@ function CloudAccountContent() {
   }, [complete]);
   useEffect(() => { void hasActiveCloudAccount().then((active) => { if (active) router.replace('/cloud-control-planes' as never); }); }, []);
 
-  async function authenticate(providerId: 'email' | 'google' | 'github') {
+  useEffect(() => {
+    let cancelled = false;
+    // App Store guideline 4.8: third-party sign-in may only be offered next to Sign in with Apple,
+    // so the directory decides what the login screen may show.
+    void account.client.publicProviders()
+      .then((providers) => { if (!cancelled) setAvailableProviders(providers.map((provider) => provider.id)); })
+      .catch(() => { if (!cancelled) setAvailableProviders([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function authenticate(providerId: 'email' | 'google' | 'github' | 'apple') {
     Keyboard.dismiss(); setBusy(true); setError(undefined); setNotice(undefined);
     try {
       const result = await account.beginLogin({
@@ -138,11 +154,10 @@ function CloudAccountContent() {
           : <NativeActionButton disabled={busy || !verification.trim()} label={busy ? t('cloudAccount.verifying') : t('cloudAccount.verify')} onPress={() => void verify()}/>}
       </View>
 
-      {mode === 'login' ? <>
+      {mode === 'login' && thirdPartyProviders.length ? <>
         <AuthDivider label={t('cloudAccount.orContinue')}/>
         <View style={styles.providers}>
-          <ProviderButton disabled={busy} label="Google" mark="G" onPress={() => void authenticate('google')}/>
-          <ProviderButton disabled={busy} label="GitHub" mark="⌘" onPress={() => void authenticate('github')}/>
+          {thirdPartyProviders.map((providerId) => <ProviderButton key={providerId} disabled={busy} label={providerLabel(providerId)} mark={providerMark(providerId)} onPress={() => void authenticate(providerId as 'apple' | 'google' | 'github')}/>)}
         </View>
       </> : null}
 

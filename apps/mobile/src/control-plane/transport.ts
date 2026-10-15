@@ -28,6 +28,18 @@ export type MobileControlPlaneEvent = {
   scope?: { instanceId?: string; nodeId?: string };
 };
 
+/**
+ * Idle event streams are exactly what an intermediate reverse proxy or Relay
+ * edge reaps, and the reaped stream comes back as a full directory bootstrap.
+ * The Control Plane event transport answers this ping with a pong, matching
+ * what the Control Plane web console already sends.
+ */
+export const MOBILE_EVENT_KEEPALIVE_INTERVAL_MS = 20_000;
+
+export function mobileEventKeepaliveFrame(now: () => Date = () => new Date()) {
+  return { v: 1 as const, type: 'ping' as const, sentAt: now().toISOString() };
+}
+
 export function normalizeMobileControlPlaneEvent(input: unknown, fallbackScope?: EventScope): MobileControlPlaneEvent | undefined {
   const parsed = EventWireEnvelopeSchema.safeParse(input);
   return parsed.success ? normalizeEventEnvelope(parsed.data, fallbackScope) : undefined;

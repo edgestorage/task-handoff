@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ControlPlaneEventBus } from "../src/control-plane/events/bus.ts";
+import { acceptsResourceMetricInstance, ControlPlaneEventBus } from "../src/control-plane/events/bus.ts";
 
 function socket() {
   const listeners = {};
@@ -130,6 +130,18 @@ test("new metric-scoped clients receive no snapshots before their subscription f
   client.listeners.message(JSON.stringify({ type: "subscribe", metricInstanceIds: ["a"] }));
   events.publish("instance.metrics.snapshot", { instanceId: "a" }, { scope: { instanceId: "a" } });
   assert.equal(client.sent.length, 1);
+});
+
+test("a resource-metric scope narrows only metrics, so a Relay subscription keeps its directory topics", () => {
+  const metrics = (instanceId) => ({ type: "instance.metrics.snapshot", scope: { instanceId } });
+  assert.equal(acceptsResourceMetricInstance(undefined, metrics("a")), true);
+  assert.equal(acceptsResourceMetricInstance(new Set(), metrics("a")), false);
+  assert.equal(acceptsResourceMetricInstance(new Set(["a"]), metrics("a")), true);
+  assert.equal(acceptsResourceMetricInstance(new Set(["a"]), metrics("b")), false);
+  // An unscoped metrics event cannot belong to any scoped subscriber, so it must
+  // not reach every scoped client through the Relay fan-out.
+  assert.equal(acceptsResourceMetricInstance(new Set(["a"]), { type: "instance.metrics.snapshot" }), false);
+  assert.equal(acceptsResourceMetricInstance(new Set(["a"]), { type: "instance.lifecycle.snapshot", scope: { instanceId: "b" } }), true);
 });
 
 test("global events without instance scope remain visible to scoped clients", () => {

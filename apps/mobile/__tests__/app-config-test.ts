@@ -57,11 +57,15 @@ describe('mobile native feature variants', () => {
     expect(config.plugins).toContain('./plugins/with-task-handoff-android-release');
   });
 
-  test('production does not expose an override while staging pins an explicit HTTPS origin', () => {
+  test('production does not expose an override while staging bakes in the test domains', () => {
     process.env.TASK_HANDOFF_MOBILE_VARIANT = 'production';
     process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = 'https://ignored.example.test';
     expect(require('../app.config.js')().extra.cloudServiceOrigin).toBeUndefined();
+    expect(require('../app.config.js')().extra.cloudEnvironment).toEqual(expect.objectContaining({ id: 'production', serviceOrigin: 'https://cloud.thandoff.com' }));
     process.env.TASK_HANDOFF_MOBILE_VARIANT = 'staging';
+    delete process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
+    expect(require('../app.config.js')().extra.cloudServiceOrigin).toBe('https://th.aaasu.com');
+    expect(require('../app.config.js')().extra.cloudEnvironment).toEqual(expect.objectContaining({ id: 'staging', serviceOrigin: 'https://th.aaasu.com', relayHosts: ['relay.aaasu.com'], allowInsecureRelay: false }));
     process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = 'https://staging.cloud.example.test/path';
     expect(require('../app.config.js')().extra.cloudServiceOrigin).toBe('https://staging.cloud.example.test');
     process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = 'http://staging.cloud.example.test';

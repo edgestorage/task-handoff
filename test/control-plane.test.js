@@ -3821,6 +3821,98 @@ test("control plane forwards lifecycle snapshots only for instances owned by the
   assert.deepEqual(published[0].scope, { nodeId: "node_lifecycle", instanceId: "inst_owned" });
 });
 
+test("control plane projects unchanged lifecycle snapshots to coalesced liveness frames", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  const applied = [];
+  const heartbeats = [];
+  // A zero interval would coalesce nothing, so the fan-out window stays at the default
+  // and the instance proves the projection by republishing only a liveness frame.
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async (nodeId, instanceId) => nodeId === "node_lifecycle" && instanceId === "inst_owned",
+    onInstanceLifecycle: async (nodeId, lifecycle) => { applied.push([nodeId, lifecycle.revision]); return true; },
+    onInstanceHeartbeat: async (nodeId, heartbeat) => { heartbeats.push([nodeId, heartbeat.revision]); return true; },
+    instanceHeartbeatForwardIntervalMs: 0,
+  });
+  const lifecycle = (revision, overrides = {}) => ({
+    instanceId: "inst_owned",
+    revision,
+    updatedAt: `2026-07-25T00:00:0${revision % 10}.000Z`,
+    lastHeartbeatAt: `2026-07-25T00:00:0${revision % 10}.000Z`,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    ready: true,
+    workspace: { status: "ready" },
+    runtime: { labels: {} },
+    ...overrides,
+  });
+  const forwardSnapshot = (payload) => tunnel.handleMessage("node_lifecycle", {
+    type: "node-agent.event.forwarded",
+    event: { type: InstanceLifecycleEventType.Snapshot, topic: "instances", payload, scope: { instanceId: "inst_owned" } },
+  });
+  const forwardHeartbeat = (payload) => tunnel.handleMessage("node_lifecycle", {
+    type: "node-agent.event.forwarded",
+    event: { type: InstanceLifecycleEventType.Heartbeat, topic: "instances", payload, scope: { instanceId: "inst_owned" } },
+  });
+
+  // The first snapshot is the state a consumer has never seen, so it stays a snapshot.
+  forwardSnapshot(lifecycle(2));
+  // A heartbeat observation that moves only the timestamps repeats nothing.
+  forwardSnapshot(lifecycle(3));
+  // A directory-relevant change must always come back as a full snapshot.
+  forwardSnapshot(lifecycle(4, { status: "stopped", connectionStatus: "offline", ready: false }));
+  // A node agent that already publishes the liveness frame is forwarded as one.
+  forwardHeartbeat({ instanceId: "inst_owned", revision: 5, updatedAt: "2026-07-25T00:00:05.000Z", lastHeartbeatAt: "2026-07-25T00:00:05.000Z" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(applied, [["node_lifecycle", 2], ["node_lifecycle", 3], ["node_lifecycle", 4]]);
+  assert.deepEqual(heartbeats, [["node_lifecycle", 5]]);
+  assert.deepEqual(published.map((event) => event.type), [
+    InstanceLifecycleEventType.Snapshot,
+    InstanceLifecycleEventType.Heartbeat,
+    InstanceLifecycleEventType.Snapshot,
+    InstanceLifecycleEventType.Heartbeat,
+  ]);
+  assert.deepEqual(published[1].payload, {
+    instanceId: "inst_owned",
+    revision: 3,
+    updatedAt: "2026-07-25T00:00:03.000Z",
+    lastHeartbeatAt: "2026-07-25T00:00:03.000Z",
+  });
+  assert.equal(published[2].payload.status, "stopped");
+  assert.equal(published[2].payload.workspace.status, "ready");
+  assert.deepEqual(published[3].scope, { nodeId: "node_lifecycle", instanceId: "inst_owned" });
+});
+
+test("control plane coalesces liveness fan-out inside the heartbeat window", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => true,
+    onInstanceHeartbeat: async () => true,
+    instanceHeartbeatForwardIntervalMs: 60_000,
+  });
+  const forward = (revision) => tunnel.handleMessage("node_coalesce", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: InstanceLifecycleEventType.Heartbeat,
+      topic: "instances",
+      payload: { instanceId: "inst_owned", revision, updatedAt: "2026-07-25T00:00:00.000Z", lastHeartbeatAt: "2026-07-25T00:00:00.000Z" },
+      scope: { instanceId: "inst_owned" },
+    },
+  });
+
+  forward(2);
+  forward(3);
+  forward(4);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(published.map((event) => event.payload.revision), [2]);
+});
+
 test("control plane subscribes to direct node agent websocket events", async (t) => {
   let instanceEventSocket;
   const instanceReadRequests = [];

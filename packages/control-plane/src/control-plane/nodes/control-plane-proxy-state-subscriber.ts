@@ -19,7 +19,9 @@ type EventSocket = {
   on(event: "message", listener: (data: unknown) => void): unknown;
   on(event: "close", listener: (code?: number, reason?: unknown) => void): unknown;
   on(event: "error", listener: (error: unknown) => void): unknown;
-  close(): void;
+  on(event: "pong", listener: () => void): unknown;
+  ping?(): void;
+  close(code?: number, reason?: string): void;
 };
 
 export type ControlPlaneProxyStateSubscriberService = {
@@ -46,6 +48,12 @@ export type ControlPlaneProxyStateSubscriberOptions = {
    * 宽限期内下次快照/事件流恢复成功就不发布降级，避免链路抖动让节点和整个 Story 被判为离线。
    */
   unavailableGraceMs?: number;
+  /**
+   * 事件流保活的发送间隔与静默判定窗口。默认值远小于常见反向代理的
+   * 空闲超时；调小只用于测试，生产不需要修改。
+   */
+  eventStreamPingIntervalMs?: number;
+  eventStreamLivenessTimeoutMs?: number;
 };
 
 type UnavailableGrace = {
@@ -58,6 +66,7 @@ type Subscription = {
   generation: number;
   identity: string;
   socket?: EventSocket;
+  keepalive?: ReturnType<typeof setInterval>;
   reconnect?: ReturnType<typeof setTimeout>;
   unavailable?: UnavailableGrace;
   unavailablePublished?: boolean;
@@ -65,6 +74,14 @@ type Subscription = {
 };
 
 const DEFAULT_UNAVAILABLE_GRACE_MS = 5_000;
+
+// A proxy event stream is silent whenever the target node is quiet, and an idle
+// WebSocket is precisely what an intermediate reverse proxy reaps — the
+// subscription then reconnects and refetches a full target snapshot, over and
+// over. Ping well inside any plausible idle timeout, and treat silence beyond
+// the liveness window as a dead link so recovery does not wait for TCP.
+const PROXY_EVENT_STREAM_PING_INTERVAL_MS = 20_000;
+const PROXY_EVENT_STREAM_LIVENESS_TIMEOUT_MS = 60_000;
 
 const unavailableError = (message: string): ControlPlaneProxyError => ControlPlaneProxyErrorSchema.parse({
   code: ControlPlaneProxyErrorCode.Unavailable,
@@ -80,6 +97,8 @@ export class ControlPlaneProxyStateSubscriber {
   private readonly onStateChanged: (node: Node) => void;
   private readonly logger: ControlPlaneProxyStateSubscriberOptions["logger"];
   private readonly unavailableGraceMs: number;
+  private readonly eventStreamPingIntervalMs: number;
+  private readonly eventStreamLivenessTimeoutMs: number;
   private running = false;
 
   constructor(service: ControlPlaneProxyStateSubscriberService, options: ControlPlaneProxyStateSubscriberOptions = {}) {
@@ -89,6 +108,8 @@ export class ControlPlaneProxyStateSubscriber {
     this.onStateChanged = options.onStateChanged ?? (() => undefined);
     this.logger = options.logger;
     this.unavailableGraceMs = options.unavailableGraceMs ?? DEFAULT_UNAVAILABLE_GRACE_MS;
+    this.eventStreamPingIntervalMs = options.eventStreamPingIntervalMs ?? PROXY_EVENT_STREAM_PING_INTERVAL_MS;
+    this.eventStreamLivenessTimeoutMs = options.eventStreamLivenessTimeoutMs ?? PROXY_EVENT_STREAM_LIVENESS_TIMEOUT_MS;
   }
 
   start() {
@@ -124,9 +145,16 @@ export class ControlPlaneProxyStateSubscriber {
     if (!subscription) return;
     subscription.generation += 1;
     if (subscription.reconnect) clearTimeout(subscription.reconnect);
+    this.stopKeepalive(subscription);
     this.cancelUnavailable(subscription);
     subscription.socket?.close();
     this.subscriptions.delete(nodeId);
+  }
+
+  private stopKeepalive(subscription: Subscription) {
+    const active = subscription.keepalive;
+    subscription.keepalive = undefined;
+    if (active) clearInterval(active);
   }
 
   private async connect(nodeId: string, generation: number) {
@@ -196,6 +224,28 @@ export class ControlPlaneProxyStateSubscriber {
     const socket = this.openWebSocket(eventsUrl(credential, snapshot.revision), controlPlaneProxyAuthenticationHeaders(credential));
     subscription.socket = socket;
     let failed = false;
+    let lastActivity = Date.now();
+    const stopKeepalive = () => {
+      const active = subscription.keepalive;
+      subscription.keepalive = undefined;
+      if (active) clearInterval(active);
+    };
+    subscription.keepalive = setInterval(() => {
+      if (!this.current(nodeId, generation)) {
+        stopKeepalive();
+        return;
+      }
+      if (Date.now() - lastActivity > this.eventStreamLivenessTimeoutMs) {
+        socket.close(4000, "Proxy event stream is unresponsive.");
+        return;
+      }
+      try {
+        socket.ping?.();
+      } catch {
+        // The error/close path owns recovery.
+      }
+    }, this.eventStreamPingIntervalMs);
+    subscription.keepalive.unref?.();
     const fail = (message: string, context: Record<string, unknown>) => {
       if (failed) return;
       failed = true;
@@ -203,6 +253,7 @@ export class ControlPlaneProxyStateSubscriber {
     };
     socket.on("message", (raw) => {
       if (!this.current(nodeId, generation)) return;
+      lastActivity = Date.now();
       try {
         const parsed = parseResponse(ProxyEventStreamMessageSchema, JSON.parse(String(raw)));
         if (parsed.bindingId !== credential.proxyBindingId
@@ -227,7 +278,9 @@ export class ControlPlaneProxyStateSubscriber {
       }
     });
     socket.on("error", () => fail("Control-plane proxy event stream failed.", { trigger: "event-stream-error" }));
+    socket.on("pong", () => { lastActivity = Date.now(); });
     socket.on("close", (code, reason) => {
+      lastActivity = Date.now();
       const reasonText = closeReasonText(reason);
       fail("Control-plane proxy event stream disconnected.", {
         trigger: "event-stream-close",
@@ -255,6 +308,7 @@ export class ControlPlaneProxyStateSubscriber {
   ) {
     const subscription = this.current(nodeId, generation);
     if (!subscription) return;
+    this.stopKeepalive(subscription);
     if (!retry) {
       this.cancelUnavailable(subscription);
       this.publishUnavailable(nodeId, subscription, error, context);

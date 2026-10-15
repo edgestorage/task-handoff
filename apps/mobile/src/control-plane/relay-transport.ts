@@ -3,7 +3,7 @@ import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/cont
 import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
-import { MobileControlPlaneTransportError, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
+import { MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export interface EncryptedRelayChannel { readonly leaseExpiresAt?: string; send(value: RelayEnvelope): void; close(code?: number, reason?: string): void; subscribe(listener: (value: RelayEnvelope) => void, onClose: (error?: unknown) => void): () => void; }
@@ -15,12 +15,20 @@ export type RelayChannelFactory = (input: { relayUrl: string; clientAttach: unkn
 const LEASE_RENEWAL_LEAD_MS = 5_000;
 const LEASE_RENEWAL_MINIMUM_MS = 1_000;
 
+// The mobile app renders no instance resource metrics. The Control Plane
+// otherwise streams one `instance.metrics.snapshot` per instance on every
+// sampler tick, and that stream shares the `instances` topic with real
+// directory changes, so it is scoped away explicitly rather than left to the
+// legacy default of "everything".
+const MOBILE_RESOURCE_METRIC_SCOPE = { metricInstanceIds: [] as string[] };
+
 export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileCloudRelayControlPlaneProfile;
   readonly currentCapabilities: ControlPlanePublicCapabilities | undefined = undefined;
   private channel?: Promise<EncryptedRelayChannel>;
   private channelValue?: EncryptedRelayChannel;
   private leaseTimer?: ReturnType<typeof setTimeout>;
+  private keepaliveTimer?: ReturnType<typeof setInterval>;
   private epoch = 0;
   private nextId = 0;
   private readonly pending = new Map<string, { resolve(value: unknown): void; reject(error: unknown): void; schema: z.ZodType<any>; abort?: () => void }>();
@@ -47,6 +55,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
     let closed = false;
     this.events.add(handlers);
+    this.startKeepalive();
     void this.ensureChannel().then((channel) => {
       if (closed) return;
       this.sendEventSubscription(channel);
@@ -57,6 +66,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
         if (closed) return;
         closed = true;
         this.events.delete(handlers);
+        if (!this.events.size) this.stopKeepalive();
         this.sendEventSubscription();
       },
       updateAiSessionTransient: (subscription) => {
@@ -78,7 +88,25 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       for (const topic of subscriber.topics) topics.add(topic);
     }
     const aiSessionTransient = wildcard ? undefined : aggregateTransientDemand(this.events, topics);
-    this.sendOrReset(channel, { type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
+    this.sendOrReset(channel, { type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: wildcard ? undefined : [...topics].sort(), ...MOBILE_RESOURCE_METRIC_SCOPE, ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
+  }
+
+  private startKeepalive() {
+    if (this.keepaliveTimer) return;
+    const timer = setInterval(() => {
+      if (!this.events.size || !this.channelValue) return;
+      try { this.sendOrReset(this.channelValue, mobileEventKeepaliveFrame()); }
+      catch { /* the failed send already reset the transport */ }
+    }, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS);
+    // A keepalive must never be the reason a process stays alive; React Native
+    // returns a numeric handle and simply ignores the call.
+    (timer as unknown as { unref?(): void }).unref?.();
+    this.keepaliveTimer = timer;
+  }
+
+  private stopKeepalive() {
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = undefined;
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

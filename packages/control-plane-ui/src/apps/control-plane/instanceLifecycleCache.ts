@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/vue-query";
-import type { InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
+import type { InstanceLifecycleHeartbeat, InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type { InstanceBoardItem, InstanceBoardPayload } from "../../api/types";
 import type { Node } from "../../api/types";
@@ -41,6 +41,9 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
   queryClient.setQueryData<ControlPlaneInstanceResourceEntry[]>(controlPlaneQueryKeys.instanceDirectory, (current) => current?.map((instance) => {
     if (instance.id !== lifecycle.instanceId) return instance;
     matched = true;
+    // The directory entry carries no revision, so the observation clock is the
+    // staleness guard: a replayed snapshot must not overwrite a newer board.
+    if (instance.observedAt && lifecycle.updatedAt < instance.observedAt) return instance;
     return {
       ...instance,
       status: lifecycle.status,
@@ -50,6 +53,36 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
       lastHeartbeatAt: lifecycle.lastHeartbeatAt,
       observedAt: lifecycle.updatedAt,
       workspace: { ...instance.workspace, ...lifecycle.workspace },
+    };
+  }));
+  return matched;
+}
+
+/**
+ * A lifecycle heartbeat only moves the observation timestamps, so it refreshes the
+ * heartbeat clock in place and never re-derives the fields a snapshot owns.
+ */
+export function applyInstanceLifecycleHeartbeat(queryClient: QueryClient, heartbeat: InstanceLifecycleHeartbeat) {
+  let matched = false;
+  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
+    if (instance.id !== heartbeat.instanceId) return instance;
+    matched = true;
+    if ((instance.stateRevision || 0) >= heartbeat.revision) return instance;
+    return {
+      ...instance,
+      stateRevision: heartbeat.revision,
+      updatedAt: heartbeat.updatedAt,
+      ...(heartbeat.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: heartbeat.lastHeartbeatAt }),
+    };
+  }));
+  queryClient.setQueryData<ControlPlaneInstanceResourceEntry[]>(controlPlaneQueryKeys.instanceDirectory, (current) => current?.map((instance) => {
+    if (instance.id !== heartbeat.instanceId) return instance;
+    matched = true;
+    if (instance.observedAt && heartbeat.updatedAt < instance.observedAt) return instance;
+    return {
+      ...instance,
+      observedAt: heartbeat.updatedAt,
+      ...(heartbeat.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: heartbeat.lastHeartbeatAt }),
     };
   }));
   return matched;

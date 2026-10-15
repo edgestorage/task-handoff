@@ -15,7 +15,10 @@ import { AccessTicketSchema, RelayAllocationSchema, type AccessTicket, type Rela
 import { OfficialAccountClient, officialClientError } from "./client.ts";
 
 export type OfficialApiInput = Readonly<Record<string, unknown>>;
-export type OfficialProviderId = "email" | "google" | "github" | (string & {});
+export type OfficialProviderId = "email" | "google" | "github" | "apple" | (string & {});
+
+export const OfficialProviderSummarySchema = z.strictObject({ id: z.string(), displayName: z.string(), icon: z.string().optional() });
+export type OfficialProviderSummary = z.infer<typeof OfficialProviderSummarySchema>;
 
 export class OfficialMobileAccountClient extends OfficialAccountClient {
   register(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/register", input, z.unknown()); }
@@ -23,6 +26,12 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   exchangeAuthorizationCode(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/token", input, MobileTokenResponseSchema); }
   refresh(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/refresh", input, MobileTokenResponseSchema); }
   verifyEmail(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/verify-email", input, z.unknown()); }
+  async publicProviders(): Promise<OfficialProviderSummary[]> {
+    const response = await this.request(`${this.origin}/api/v1/auth/providers`, { method: "GET", credentials: "omit", redirect: "error" });
+    const body: unknown = await response.json();
+    if (!response.ok) throw officialClientError(body, response.status);
+    return responseData(z.array(OfficialProviderSummarySchema), body);
+  }
   stepUp(input: OfficialApiInput): Promise<unknown> { return this.dataCall("/api/v1/auth/step-up", "POST", z.unknown(), input); }
   logout() { return this.call("/api/v1/auth/logout", { method: "POST", body: "{}" }); }
   profile(): Promise<AccountPublicProfile> { return this.dataCall("/api/v1/account", "GET", AccountPublicProfileSchema.strip()); }

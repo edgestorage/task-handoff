@@ -29,7 +29,7 @@ import {
   DEFAULT_MARKET_CATALOG_URL,
 } from "../catalog/remote-market.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
-import { ControlPlaneEventBus } from "../events/bus.ts";
+import { acceptsResourceMetricInstance, ControlPlaneEventBus } from "../events/bus.ts";
 import { OperationApprovals, type OperationApprovalPolicy } from "../approvals/operation-approvals.ts";
 import { registerOperationApprovalRoutes } from "./operation-approval-routes.ts";
 import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
@@ -63,16 +63,20 @@ import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy
 import { registerControlPlaneUserRoutes } from "./user-routes.ts";
 import { registerControlPlaneGitCredentialRoutes } from "./git-credential-routes.ts";
 import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
+import { proxyStateProjectionSignature } from "../proxy/state-projection.ts";
 import { ControlPlaneIdentityService } from "../identity/service.ts";
 import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from "../diagnostics/logs.ts";
 import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
+import { relayTraceFromEnvironment } from "../cloud-connectivity/relay-trace.ts";
+import { CloudAccountSessionService } from "../cloud-connectivity/account-session.ts";
 import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
 import { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
+import { CLOUD_ENVIRONMENTS, isTrustedCloudServiceOrigin, resolveCloudEnvironment, type CloudEnvironment } from "../../../../../shared/cloud-environments.cjs";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -85,6 +89,7 @@ export type CreateControlPlaneAppOptions = {
   cloudServiceOrigin?: string;
   allowNonProductionCloudOrigin?: boolean;
   cloudConnectivityEnabled?: boolean;
+  cloudAccountFetch?: typeof fetch;
   cloudConnectivityLifecycle?: (state: CloudConnectivityService) => CloudConnectivityLifecycle;
   publishCloudBindingChallenge?: (challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => Promise<void>;
 };
@@ -107,12 +112,18 @@ export const ControlPlaneHttpErrorResponseSchema = z.object({
   error: ControlPlaneHttpErrorSchema,
 }).strict();
 
-const CLOUD_PRODUCTION_ORIGIN = "https://cloud.thandoff.com";
+const CLOUD_PRODUCTION_ORIGIN = CLOUD_ENVIRONMENTS.production.serviceOrigin;
 
-export function trustedCloudServiceOrigin(value: string | undefined, options: { production?: boolean; allowNonProduction?: boolean } = {}) {
-  const origin = new URL(value || CLOUD_PRODUCTION_ORIGIN).origin;
-  if (origin === CLOUD_PRODUCTION_ORIGIN) return origin;
-  if (options.production || options.allowNonProduction !== true) throw Object.assign(new Error("Non-production cloud service origin is not trusted by this build."), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+// The selected cloud environment decides which service origin this build trusts.
+// `allowNonProduction` remains an explicit development escape hatch for ad-hoc
+// local clouds; it never widens what a production process accepts.
+export function trustedCloudServiceOrigin(value: string | undefined, options: { production?: boolean; allowNonProduction?: boolean; environment?: CloudEnvironment } = {}) {
+  // A production process always keeps the production environment, even when a
+  // non-production environment was requested through configuration.
+  const environment = options.production === true ? CLOUD_ENVIRONMENTS.production : (options.environment ?? CLOUD_ENVIRONMENTS.production);
+  if (options.allowNonProduction === true && options.production !== true) return new URL(value || environment.serviceOrigin).origin;
+  const origin = new URL(value || environment.serviceOrigin).origin;
+  if (!isTrustedCloudServiceOrigin(environment, origin)) throw Object.assign(new Error("Non-production cloud service origin is not trusted by this build."), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
   return origin;
 }
 
@@ -390,6 +401,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/session-streams/diagnostics") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
+  if (path === "/api/control-plane/relay-trace" || path.startsWith("/api/control-plane/relay-trace/")) {
+    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
+  }
   if (path.startsWith("/api/control-plane/settings")) {
     return { action: method === "GET" ? "read" : "manage-settings", resource: { type: "control-plane-settings" } };
   }
@@ -557,11 +571,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     () => service.proxyPrivateStore.controlPlaneId(),
     (message, details) => app.log.warn(details, message),
   );
-  const cloudConnectivity = new CloudConnectivityService({
-    statePath: paths.cloudConnectivityPath,
-    identity,
-    serviceOrigin: trustedCloudServiceOrigin(options.cloudServiceOrigin || process.env.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN, { production: process.env.NODE_ENV === "production", allowNonProduction: options.allowNonProductionCloudOrigin === true || process.env.TASK_HANDOFF_CLOUD_ENV === "staging" }),
+  const cloudServiceOrigin = trustedCloudServiceOrigin(options.cloudServiceOrigin || process.env.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN, {
+    production: process.env.NODE_ENV === "production",
+    allowNonProduction: options.allowNonProductionCloudOrigin === true,
+    environment: resolveCloudEnvironment(process.env.TASK_HANDOFF_CLOUD_ENV),
   });
+  const cloudConnectivity = new CloudConnectivityService({ statePath: paths.cloudConnectivityPath, identity, serviceOrigin: cloudServiceOrigin });
+  const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin });
   const cloudRelayActors = new Map<string, ControlPlaneActor>();
   const cloudRelayBridge = {
     async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown }) {
@@ -584,15 +600,21 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         return { status: response.statusCode, body };
       } finally { cloudRelayActors.delete(token); }
     },
-    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription) {
+    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription, resourceMetricInstanceIds?: string[]) {
       if (actor.type !== "cloud-account") throw Object.assign(new Error("Cloud account actor required."), { code: "CLOUD_ACTOR_REQUIRED" });
       // The relay decoder supplies ["*"] when the legacy field is absent.
       // An explicit empty list means the last consumer has unsubscribed.
       const selected = new Set(topics);
       if (!selected.size) return () => undefined;
+      // Resource metrics share the `instances` topic with real directory
+      // changes, so they carry their own scope in the subscribe envelope. The
+      // relay actor is already authorized for the whole binding; this can only
+      // narrow the stream, never widen it.
+      const metricScope = resourceMetricInstanceIds === undefined ? undefined : new Set(resourceMetricInstanceIds);
       // Compatibility for v0.0.21 cloud clients: absence of the additive model
       // retains topic-derived legacy demand. Current mobile clients are precise.
       const stopEvents = events.on((event) => {
+        if (!acceptsResourceMetricInstance(metricScope, event)) return;
         if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
       });
       // Install delivery before publishing upstream demand so a synchronous
@@ -622,7 +644,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       return { send(data: string) { if (!closed) emit("message", Buffer.from(JSON.stringify({ type: "input", data }))); }, resize(cols: number, rows: number) { if (!closed && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) emit("message", Buffer.from(JSON.stringify({ type: "resize", cols, rows }))); }, close() { socket.close(); } };
     },
   };
-  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, identity, relayBridge: cloudRelayBridge });
+  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge, fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir) });
   const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
@@ -676,6 +698,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     connectionRuntime: nodeConnectionRuntime,
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
     onInstanceLifecycle: (nodeId, lifecycle) => service.applyInstanceLifecycle(nodeId, lifecycle),
+    onInstanceHeartbeat: (nodeId, heartbeat) => service.applyInstanceLifecycleHeartbeat(nodeId, heartbeat),
     onStreamsHello: (instanceId, hello) => {
       for (const descriptor of hello.streams) {
         if (descriptor.topic === "ai.sessions") aiSessionAggregator.advertiseStream(instanceId, descriptor);
@@ -715,14 +738,19 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       return target ? publicControlPlaneProxyTarget(target) : undefined;
     },
   });
+  // Only a semantic change is a reason to notify subscribers; see
+  // proxyStateProjectionSignature for why.
+  const publishedProxyStates = new Map<string, string>();
   const proxyStateSubscriber = new ControlPlaneProxyStateSubscriber(service, {
     fetchImpl: options.service?.fetchImpl,
     logger: diagnosticLogger,
-    onStateChanged: (node) => events.publish(
-      "node.proxy-state.updated",
-      nodeStateProjection(node),
-      { topic: "node.state", scope: { nodeId: node.id } },
-    ),
+    onStateChanged: (node) => {
+      const projection = nodeStateProjection(node);
+      const signature = proxyStateProjectionSignature(projection);
+      if (publishedProxyStates.get(node.id) === signature) return;
+      publishedProxyStates.set(node.id, signature);
+      events.publish("node.proxy-state.updated", projection, { topic: "node.state", scope: { nodeId: node.id } });
+    },
   });
   events.on((event) => {
     if (event.type === "node.created" || event.type === "node.updated" || event.type === "node.deleted") {
@@ -739,6 +767,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         ? String((event.payload as { nodeId?: unknown }).nodeId || "")
         : "";
       if (nodeId) {
+        publishedProxyStates.delete(nodeId);
         nodeAgentTunnel.invalidateInstanceScope({ nodeId });
         const revoked = proxy.revokeTarget(nodeId);
         for (const binding of revoked.bindings) {
@@ -754,6 +783,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
   cloudConnectivity.init();
+  cloudAccountSession.init();
   if (cloudConnectivityEnabled) cloudConnectivityRuntime.start();
   let pairingRecoveryInFlight: Promise<void> | undefined;
   let pairingRecoveryTimer: ReturnType<typeof setInterval> | undefined;
@@ -946,12 +976,40 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return { data: cloudConnectivity.snapshot() };
   });
 
+  // Compatibility alias for Control Plane builds that still copy a one-time code by hand.
+  // New builds use POST /api/cloud-connectivity/binding-requests, which never exposes the code.
   app.post("/api/cloud-connectivity/challenges", async (request, reply) => {
     await requireCloudConnectivityAdmin(request);
     reply.header("cache-control", "no-store");
     const challenge = cloudConnectivity.createChallenge();
     await publishCloudBindingChallenge(challenge);
     return { data: challenge };
+  });
+
+  app.get("/api/cloud-account", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: cloudAccountSession.snapshot() };
+  });
+
+  app.post("/api/cloud-account/sign-in-requests", async (request, reply) => {
+    await requireCloudConnectivityAdmin(request);
+    reply.header("cache-control", "no-store");
+    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "account:sign-in" }) };
+  });
+
+  app.post("/api/cloud-account/sign-out", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: await cloudConnectivityRuntime.signOutAccount() };
+  });
+
+  // The binding challenge is created and registered internally; the browser only ever sees
+  // the approval URL, and the Cloud Coordinator consumes the challenge server-side.
+  app.post("/api/cloud-connectivity/binding-requests", async (request, reply) => {
+    await requireCloudConnectivityAdmin(request);
+    reply.header("cache-control", "no-store");
+    const challenge = cloudConnectivity.createChallenge();
+    await publishCloudBindingChallenge(challenge);
+    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "control-plane:bind", challengeCode: challenge.challengeCode }) };
   });
 
   app.post("/api/cloud-connectivity/remote-access", async (request) => {
@@ -965,6 +1023,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.disconnect() : cloudConnectivity.beginRevocation() };
   });
 
+  // Relay payload capture is opt-in through its own flag and lands in its own JSONL files,
+  // never in the log stream; this route only reports whether it is on and where it writes.
+  app.get("/api/control-plane/relay-trace", async () => ({ data: cloudConnectivityRuntime.relayTrace.status() }));
   app.get("/api/session-streams/diagnostics", async () => ({
     data: {
       aiSessions: aiSessionAggregator.diagnostics(),

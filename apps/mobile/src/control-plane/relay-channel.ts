@@ -1,7 +1,7 @@
 import '../platform/random-values';
 import * as Crypto from 'expo-crypto';
 import nacl from 'tweetnacl';
-import { isMobileTestMode } from '../platform/build-variant';
+import { isMobileTestMode, isTrustedMobileCloudRelayHost, mobileCloudEnvironment } from '../platform/build-variant';
 import type { EncryptedRelayChannel, RelayChannelFactory } from './relay-transport';
 import { MobileControlPlaneTransportError } from './transport';
 
@@ -53,7 +53,9 @@ export function allowCloudRelayUrlForService(url: URL, serviceOrigin: string, al
   if (cloudRelayUrl(url)) return true;
   if (!allowIsolatedEnvironment) return false;
   const service = new URL(serviceOrigin);
-  return service.hostname !== 'cloud.thandoff.com' && url.hostname === service.hostname;
+  // Registered environments only ever reach the Relay hosts they declare.
+  if (service.origin === mobileCloudEnvironment.serviceOrigin) return false;
+  return url.hostname === service.hostname;
 }
 
 class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
@@ -71,7 +73,7 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
   private closed(error?:unknown){if(this.closedFlag)return;this.closedFlag=true;this.detachSocket();for(const listener of this.closeListeners)listener(error);this.listeners.clear();this.closeListeners.clear()}
 }
 
-function cloudRelayUrl(url:URL){return url.hostname==='relay.thandoff.com'||url.hostname.endsWith('.relay.thandoff.com')}
+function cloudRelayUrl(url:URL){return isTrustedMobileCloudRelayHost(url)}
 function waitForOpen(socket:SocketLike){return new Promise<void>((resolve,reject)=>{const cleanup=()=>{socket.removeEventListener?.('open',opened);socket.removeEventListener?.('error',failed);socket.removeEventListener?.('close',closed)};const opened=()=>{cleanup();resolve()};const failed=()=>{cleanup();reject(relayError('RELAY_SOCKET_FAILED',true))};const closed=()=>{cleanup();reject(relayError('RELAY_SOCKET_CLOSED',true))};socket.addEventListener('open',opened);socket.addEventListener('error',failed);socket.addEventListener('close',closed)})}
 // A one-shot wait must stop listening the moment it settles: a long-lived channel would
 // otherwise keep parsing every incoming frame once per completed wait.

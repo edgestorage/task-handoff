@@ -34,6 +34,7 @@ const storyTabIconFamily = {
 export default function PrimaryTabsLayout() {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
+  const android = Platform.OS === 'android';
   const liquidGlassTabs = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
   const nativeTabBlur = Platform.OS === 'ios' && !liquidGlassTabs
     ? dark ? 'systemUltraThinMaterialDark' as const : 'systemUltraThinMaterialLight' as const
@@ -42,7 +43,20 @@ export default function PrimaryTabsLayout() {
     // Native headers and the native tab bar own their own insets; adding a top inset here duplicated
     // the status-bar padding on Android edge-to-edge builds.
     <View style={{ flex: 1 }} testID="primary-tabs-root">
-      <NativeTabs backgroundColor={Platform.OS === 'android' ? colors.surface : undefined} blurEffect={nativeTabBlur} disableTransparentOnScrollEdge={Platform.OS === 'ios' && !liquidGlassTabs} iconColor={{ default: colors.textMuted, selected: colors.primary }} labelStyle={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }} minimizeBehavior={liquidGlassTabs ? 'onScrollDown' : undefined} tintColor={colors.primary}>
+      {/* Material 3 hides the unselected labels and tints the active pill with a muted grey that
+          reads oddly next to the brand blue, so every Android destination stays labeled and the
+          pill uses the theme's soft primary instead. */}
+      <NativeTabs
+        backgroundColor={android ? colors.surface : undefined}
+        blurEffect={nativeTabBlur}
+        disableTransparentOnScrollEdge={Platform.OS === 'ios' && !liquidGlassTabs}
+        iconColor={{ default: colors.textMuted, selected: colors.primary }}
+        indicatorColor={android ? colors.primarySoft : undefined}
+        labelStyle={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }}
+        labelVisibilityMode={android ? 'labeled' : undefined}
+        minimizeBehavior={liquidGlassTabs ? 'onScrollDown' : undefined}
+        tintColor={colors.primary}
+      >
         <NativeTabs.Trigger disableAutomaticContentInsets name="inbox">
           <NativeTabs.Trigger.Icon
             renderingMode="template"

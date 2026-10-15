@@ -79,20 +79,39 @@ test("control-plane admin cloud routes", async () => {
         },
       };
     }
+    if (path === "/api/cloud-account") {
+      return { data: { signedIn: false, pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: `https://cloud.example.com/authorize/control-plane?request=request_a` } } };
+    }
+    if (path === "/api/cloud-account/sign-in-requests") return { data: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a" } };
+    if (path === "/api/cloud-connectivity/binding-requests") return { data: { requestId: "request_b", scope: "control-plane:bind", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_b" } };
+    if (path === "/api/cloud-account/sign-out") return { data: { signedIn: false } };
     return { data: cloud() };
   });
+
+  const account = {
+    signedIn: false,
+    pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a" },
+  };
 
   await api.cloudConnectivity();
   const challenge = await api.createCloudChallenge();
   assert.equal(challenge.challengeCode, "code");
   await api.setCloudRemoteAccess(false);
   await api.disconnectCloud();
+  assert.equal((await api.cloudAccount()).pendingRequest?.scope, "account:sign-in");
+  assert.equal((await api.createCloudSignInRequest()).scope, "account:sign-in");
+  assert.equal((await api.createCloudBindingRequest()).scope, "control-plane:bind");
+  assert.equal((await api.signOutCloudAccount()).signedIn, false);
 
   assert.deepEqual(requests.map((entry) => [entry.path, entry.init?.method]), [
     ["/api/cloud-connectivity", undefined],
     ["/api/cloud-connectivity/challenges", "POST"],
     ["/api/cloud-connectivity/remote-access", "POST"],
     ["/api/cloud-connectivity/disconnect", "POST"],
+    ["/api/cloud-account", undefined],
+    ["/api/cloud-account/sign-in-requests", "POST"],
+    ["/api/cloud-connectivity/binding-requests", "POST"],
+    ["/api/cloud-account/sign-out", "POST"],
   ]);
 });
 

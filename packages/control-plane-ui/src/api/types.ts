@@ -112,6 +112,21 @@ export type CloudConnectivity = {
   remoteResult?: "confirmed" | "unknown";
 };
 
+export type CloudAccountRequest = {
+  requestId: string;
+  scope: string;
+  expiresAt: string;
+  authorizationUrl: string;
+};
+
+export type CloudAccountSession = {
+  signedIn: boolean;
+  accountId?: string;
+  email?: string;
+  sessionExpiresAt?: string;
+  pendingRequest?: { requestId: string; authorizationUrl?: string; scope?: string; expiresAt?: string };
+};
+
 export type CloudBindingChallenge = {
   challengeCode: string;
   authorizationUrl: string;

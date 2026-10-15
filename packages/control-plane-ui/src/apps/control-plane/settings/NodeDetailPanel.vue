@@ -937,9 +937,13 @@ watch(
   white-space: nowrap;
 }
 
-.node-detail-inline-meta > code {
+.node-detail-header .node-detail-inline-meta > code {
+  display: block;
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-detail-inline-meta:focus-visible {

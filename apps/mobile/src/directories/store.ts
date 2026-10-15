@@ -1,10 +1,13 @@
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
+import type { NodeStateProjectionEvent } from '@task-handoff/protocol/control-plane';
 import type {
   ControlPlaneInstanceLifecycleDirectoryEvent,
+  ControlPlaneInstanceLifecycleHeartbeatDirectoryEvent,
   ControlPlaneNodeConnectionPhase,
   ControlPlaneNodeDirectoryEntry,
   ControlPlaneNodeFleetState,
 } from '@task-handoff/protocol/control-plane-directory';
+import { instanceDirectoryAvailableActions } from '@task-handoff/protocol/control-plane-directory';
 
 export type MobileDirectoryProfileState = {
   controlPlaneId: string;
@@ -105,7 +108,73 @@ export class MobileDirectoryStore {
         ready: snapshot.ready,
         observedAt: snapshot.updatedAt,
         lastHeartbeatAt: snapshot.lastHeartbeatAt,
-        availableActions: [],
+        // The snapshot carries the provisioning phases the action rule reads, so the
+        // buttons stay correct without trading a directory re-fetch for every heartbeat.
+        availableActions: instanceDirectoryAvailableActions({
+          status: snapshot.status,
+          connectionStatus: snapshot.connectionStatus,
+          accessStatus: snapshot.accessStatus,
+          imageProvisioningPhase: snapshot.imageProvisioning?.phase,
+          gitProvisioningPhase: snapshot.workspace?.gitProvisioning?.phase,
+        }),
+      } : instance),
+    });
+    return true;
+  }
+  hasNode(controlPlaneId: string, nodeId: string) {
+    return this.profile(controlPlaneId).nodes.some((node) => node.id === nodeId);
+  }
+  /**
+   * Writes a Control Plane node state projection over the node the directory
+   * already holds. The projection is a complete projection of the fields it
+   * owns, so a client that has the node does not need to re-fetch the node
+   * board to see the change. `connectionDiagnostics` and `proxyState` describe
+   * the Control Plane proxy link and stay outside this client's node model.
+   *
+   * Ordering is the Control Plane's business: an event stream is single
+   * ordered, and a node connection observation that disagrees is applied on
+   * its own monotonic `changedAt` when it arrives.
+   */
+  applyNodeStateProjection(controlPlaneId: string, projection: Pick<
+    NodeStateProjectionEvent,
+    'nodeId' | 'status' | 'health' | 'lastSeenAt' | 'connectionPhase'
+  >) {
+    const current = this.profile(controlPlaneId);
+    const target = current.nodes.find((node) => node.id === projection.nodeId);
+    if (!target) return false;
+    const lastSeenAt = projection.lastSeenAt ?? undefined;
+    const connectionPhase = projection.connectionPhase ?? undefined;
+    if (target.status === projection.status
+      && target.health === projection.health
+      && (target.lastSeenAt ?? undefined) === lastSeenAt
+      && (target.connectionPhase ?? undefined) === connectionPhase) return false;
+    this.set(controlPlaneId, {
+      nodes: current.nodes.map((node) => node.id === projection.nodeId
+        ? { ...node, status: projection.status, health: projection.health, lastSeenAt, connectionPhase }
+        : node),
+    });
+    return true;
+  }
+  hasInstance(controlPlaneId: string, instanceId: string) {
+    return this.profile(controlPlaneId).instances.some((instance) => instance.id === instanceId);
+  }
+  /**
+   * A lifecycle heartbeat only moves the observation timestamps. It refreshes the
+   * heartbeat clock in place: the directory entry's own fields, including the
+   * provisioning phases the available-action rule reads, stay owned by the snapshot.
+   */
+  applyInstanceLifecycleHeartbeat(controlPlaneId: string, heartbeat: ControlPlaneInstanceLifecycleHeartbeatDirectoryEvent) {
+    const revisionKey = `${controlPlaneId}\u0000${heartbeat.instanceId}`;
+    if ((this.lifecycleRevisions.get(revisionKey) ?? -1) >= heartbeat.revision) return false;
+    const current = this.profile(controlPlaneId);
+    const target = current.instances.find((instance) => instance.id === heartbeat.instanceId);
+    if (!target || heartbeat.updatedAt < target.observedAt) return false;
+    this.lifecycleRevisions.set(revisionKey, heartbeat.revision);
+    this.set(controlPlaneId, {
+      instances: current.instances.map((instance) => instance.id === heartbeat.instanceId ? {
+        ...instance,
+        observedAt: heartbeat.updatedAt,
+        ...(heartbeat.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: heartbeat.lastHeartbeatAt }),
       } : instance),
     });
     return true;

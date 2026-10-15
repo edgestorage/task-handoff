@@ -215,6 +215,10 @@ void _allAiSessionBusinessKeysCovered;
 
 export function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionStatus) {
   for (const key of AI_SESSION_BUSINESS_KEYS) {
+    if (key === "turns") {
+      if (!sameAiSessionTurnContent(current.turns, next.turns)) return false;
+      continue;
+    }
     const currentValue = current[key];
     const nextValue = next[key];
     if (Object.is(currentValue, nextValue)) continue;
@@ -224,6 +228,30 @@ export function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSes
     if (!samePersistedValue(currentValue, nextValue)) return false;
   }
   return true;
+}
+
+// A Turn's observation metadata is not Turn body content. Provider discovery
+// re-stamps `observedAt`/`snapshotVersion` on every scan, and adapters advance
+// the internal `revision` clock on passes that rewrite nothing else. Comparing
+// them as business state made every Idle Session look dirty once per scan:
+// `reduceAiSessionSnapshot` returned the rewritten Session, `updatedAt` moved to
+// the scan timestamp, and the whole summary was re-published to Relay
+// subscribers. Every field a client renders stays in the comparison, so a real
+// edit still advances the Session.
+const AI_SESSION_TURN_OBSERVATION_KEYS = ["observedAt", "snapshotVersion", "revision"] as const;
+
+function aiSessionTurnContentValue(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
+  const content: Record<string, unknown> = { ...turn };
+  for (const key of AI_SESSION_TURN_OBSERVATION_KEYS) delete content[key];
+  return content;
+}
+
+function sameAiSessionTurnContent(left: AiSessionStatus["turns"], right: AiSessionStatus["turns"]) {
+  const currentTurns = left || [];
+  const nextTurns = right || [];
+  return currentTurns.length === nextTurns.length && currentTurns.every((turn, index) => (
+    samePersistedValue(aiSessionTurnContentValue(turn), aiSessionTurnContentValue(nextTurns[index]))
+  ));
 }
 
 function samePersistedValue(left: unknown, right: unknown): boolean {

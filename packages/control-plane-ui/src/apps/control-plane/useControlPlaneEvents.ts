@@ -4,12 +4,14 @@ import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import { COMPACT_EVENT_ENVELOPE_VERSION, EventKeepalivePongSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, normalizeEventEnvelope } from "@task-handoff/protocol/events";
 import {
   InstanceLifecycleEventType,
+  InstanceLifecycleHeartbeatSchema,
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
   NodeStateProjectionEventSchema,
   NodeJoinedEventSchema,
   type InstanceLifecycleSnapshot,
+  type InstanceLifecycleHeartbeat,
   type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemDeltaEventSchema, AiSessionTimelineItemEventSchema, normalizeAiSessionMessageDeltaEvent, normalizeAiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
@@ -26,7 +28,7 @@ import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
 import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
 import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
-import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
 import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
@@ -323,6 +325,11 @@ export function useControlPlaneEvents(input: {
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       input.gitProvisioningProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
+    }
+    if (event.type === InstanceLifecycleEventType.Heartbeat) {
+      const heartbeat = safeParseResponse(InstanceLifecycleHeartbeatSchema, event.payload);
+      if (!heartbeat.success || event.scope?.instanceId !== heartbeat.data.instanceId) return false;
+      return applyInstanceLifecycleHeartbeat(queryClient, heartbeat.data as InstanceLifecycleHeartbeat);
     }
     if (event.type === "node.connection.updated" || event.type === "node.proxy-state.updated") {
       const state = safeParseResponse(NodeStateProjectionEventSchema, event.payload);

@@ -1,10 +1,17 @@
 import { z } from 'zod';
 import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 import { RelayControlPlaneTransport, type EncryptedRelayChannel } from '../src/control-plane/relay-transport';
-import { MobileControlPlaneTransportError } from '../src/control-plane/transport';
+import { MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError } from '../src/control-plane/transport';
 import type { MobileCloudRelayControlPlaneProfile } from '../src/control-plane/profile';
 
 const profile: MobileCloudRelayControlPlaneProfile = { version: 1, identity: { controlPlaneId: 'control_plane_a', publicKeyFingerprint: `sha256:${'a'.repeat(43)}` }, access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 2, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } }, capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true, triggers: true }, createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:00.000Z' };
+
+// The mobile client declares an empty resource-metric scope on every
+// subscription: it renders no instance metrics, and that stream shares the
+// `instances` topic with real directory changes.
+function eventSubscribe(topics: string[] | undefined, extra: Record<string, unknown> = {}) {
+  return { type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, metricInstanceIds: [], topics, ...extra } };
+}
 
 function harness() {
   let listener: (value: any) => void = () => undefined;
@@ -75,16 +82,38 @@ test('cloud Relay transport aggregates event topics and sends an explicit empty 
   const transient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
   const ai = transport.connectEvents(handlers(['ai.sessions'], transient));
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions'], aiSessionTransient: transient } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe(['ai.sessions'], { aiSessionTransient: transient }));
 
   const nodes = transport.connectEvents(handlers(['nodes']));
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions', 'nodes'], aiSessionTransient: transient } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe(['ai.sessions', 'nodes'], { aiSessionTransient: transient }));
 
   ai.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'] } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe(['nodes']));
   nodes.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [] } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe([]));
+});
+
+test('cloud Relay transport keeps an idle event stream warm so the Relay cannot reap it', async () => {
+  jest.useFakeTimers();
+  try {
+    const { channel, transport } = harness();
+    const connection = transport.connectEvents({ topics: ['instances'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    (channel.send as jest.Mock).mockClear();
+
+    await jest.advanceTimersByTimeAsync(MOBILE_EVENT_KEEPALIVE_INTERVAL_MS);
+    expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'ping' }));
+
+    // The Relay closes an idle channel, so the keepalive must stop the moment
+    // the last consumer releases the stream instead of holding it open.
+    connection.close();
+    (channel.send as jest.Mock).mockClear();
+    await jest.advanceTimersByTimeAsync(MOBILE_EVENT_KEEPALIVE_INTERVAL_MS * 3);
+    expect((channel.send as jest.Mock).mock.calls.filter(([value]) => value.type === 'ping')).toEqual([]);
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('cloud Relay transport preserves wildcard semantics while any consumer omits topics', async () => {
@@ -93,9 +122,9 @@ test('cloud Relay transport preserves wildcard semantics while any consumer omit
   const wildcard = transport.connectEvents({ onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
   const nodes = transport.connectEvents({ topics: ['nodes'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: undefined } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe(undefined));
   wildcard.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'] } });
+  expect(channel.send).toHaveBeenLastCalledWith(eventSubscribe(['nodes']));
   nodes.close();
 });
 

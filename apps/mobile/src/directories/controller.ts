@@ -1,6 +1,7 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetUpdatedEventSchema } from '@task-handoff/protocol/control-plane-directory';
+import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneInstanceLifecycleHeartbeatDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetUpdatedEventSchema } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
+import { NodeStateProjectionEventSchema } from '@task-handoff/protocol/control-plane';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 import { z } from 'zod';
 
@@ -19,6 +20,18 @@ const NodeConnectionObservationSchema = z.object({
   health: z.enum(['unknown', 'ok', 'degraded', 'failed']).optional(),
 }).strip();
 const INSTANCE_LIFECYCLE_SNAPSHOT_EVENT = 'instance.lifecycle.snapshot';
+const INSTANCE_LIFECYCLE_HEARTBEAT_EVENT = 'instance.lifecycle.heartbeat';
+const INSTANCE_RESOURCE_METRICS_EVENT = 'instance.metrics.snapshot';
+const NODE_PROXY_STATE_EVENT = 'node.proxy-state.updated';
+// Lifecycle command receipts. The node agent already publishes the resulting
+// state as an `instance.lifecycle.snapshot`, so reading the receipt as an
+// `instances` change re-fetched the whole board after every start/stop/restart.
+const LIFECYCLE_COMMAND_NOTIFICATIONS = new Set([
+  'instance.started',
+  'instance.stopped',
+  'instance.restarted',
+  'instance.image-provisioning-retried',
+]);
 type DirectoryRefreshDomain = 'nodes' | 'instances';
 const ALL_DIRECTORY_DOMAINS: readonly DirectoryRefreshDomain[] = ['nodes', 'instances'];
 
@@ -198,13 +211,31 @@ export class MobileDirectoryController {
         parsed.data.lastSeenAt,
         status !== undefined && health !== undefined ? { status, health } : undefined,
       );
+      // A connection observation only patches a node the directory already
+      // holds, and the Control Plane web console recovers its authoritative
+      // node topic for a node it has never seen. Do the same instead of letting
+      // a brand-new node stay invisible until the next unrelated refresh.
+      if (!this.store.hasNode(this.controlPlaneId, parsed.data.nodeId)) this.scheduleRefresh(['nodes']);
       return true;
     }
     if (event.type === INSTANCE_LIFECYCLE_SNAPSHOT_EVENT) {
       const parsed = safeParseResponse(ControlPlaneInstanceLifecycleDirectoryEventSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       const applied = this.store.applyInstanceLifecycle(this.controlPlaneId, parsed.data);
-      if (applied) this.scheduleRefresh(['instances']);
+      // The snapshot already carries every directory field it changes, and the node agent
+      // republishes one per instance heartbeat. Re-fetching the whole board for each of them
+      // spent the relay budget on state the client had just been handed, so only an instance
+      // the directory has never seen is worth a recovery fetch.
+      if (!this.store.hasInstance(this.controlPlaneId, parsed.data.instanceId)) this.scheduleRefresh(['instances']);
+      return applied;
+    }
+    if (event.type === INSTANCE_LIFECYCLE_HEARTBEAT_EVENT) {
+      const parsed = safeParseResponse(ControlPlaneInstanceLifecycleHeartbeatDirectoryEventSchema, event.payload);
+      if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
+      // Liveness only: the frame carries the observation timestamps and nothing the
+      // directory derives state from, so it must never fall through to a board refetch.
+      const applied = this.store.applyInstanceLifecycleHeartbeat(this.controlPlaneId, parsed.data);
+      if (!this.store.hasInstance(this.controlPlaneId, parsed.data.instanceId)) this.scheduleRefresh(['instances']);
       return applied;
     }
     if (event.type === 'node.fleet.updated') {
@@ -222,7 +253,27 @@ export class MobileDirectoryController {
       if (contentChanged !== false && fleetState.resource === 'instances') this.scheduleRefresh(['instances']);
       return true;
     }
+    if (event.type === NODE_PROXY_STATE_EVENT) {
+      const parsed = safeParseResponse(NodeStateProjectionEventSchema, event.payload);
+      if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
+      // The Control Plane republishes this whole projection whenever the target
+      // node's state changes, and the projection carries every directory field
+      // it can change. Applying it in place is what the Control Plane web
+      // console does; re-fetching the node board instead turned the proxy state
+      // stream into a continuous full-directory poll. Only a node the directory
+      // has never seen needs the authoritative board.
+      if (!this.store.hasNode(this.controlPlaneId, parsed.data.nodeId)) {
+        this.scheduleRefresh(['nodes']);
+        return false;
+      }
+      this.store.applyNodeStateProjection(this.controlPlaneId, parsed.data);
+      return true;
+    }
     if (event.type.startsWith('instance.ai-session.') || event.type.startsWith('instance.app-session.')) return true;
+    if (LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) return true;
+    // Resource metrics are telemetry: every sampled instance publishes one
+    // snapshot every few seconds and none of them describe the directory.
+    if (event.type === INSTANCE_RESOURCE_METRICS_EVENT) return true;
     if (event.topic === 'nodes' || event.topic === 'node.state') {
       this.scheduleRefresh(['nodes']);
       return true;

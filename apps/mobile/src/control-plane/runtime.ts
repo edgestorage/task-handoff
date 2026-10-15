@@ -12,7 +12,7 @@ import type { MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
 import { attemptRemoteMobileSessionRevocation } from './profile-removal';
 import { MobileCloudAccountSession } from './cloud-account';
-import { isMobileTestMode, mobileCloudServiceOrigin } from '../platform/build-variant';
+import { isMobileTestMode, mobileCloudEnvironment } from '../platform/build-variant';
 
 export const mobileSecureStore = new ExpoSecureValueStore();
 export const mobileFileStore = new ExpoFileValueStore();
@@ -20,7 +20,7 @@ export const mobileProfileStore = new MobileControlPlaneProfileStore(mobileFileS
   mobileMetrics.record('profile.warning', { reason: warning.code === 'PROFILE_UNKNOWN_FIELDS' ? 'unknown-fields' : 'invalid-profile' });
 }, mobileSecureStore);
 export const mobileCloudAccountSession = new MobileCloudAccountSession(mobileSecureStore, {
-  origin: mobileCloudServiceOrigin,
+  origin: mobileCloudEnvironment.serviceOrigin,
   allowNonProductionOrigin: isMobileTestMode,
 });
 const ACTIVE_CLOUD_ACCOUNT_KEY = 'cloud.account.active';

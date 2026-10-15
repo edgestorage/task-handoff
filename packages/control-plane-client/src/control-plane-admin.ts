@@ -43,6 +43,21 @@ const CloudConnectivitySchema = z.object({
   remoteResult: z.enum(["confirmed", "unknown"]).optional(),
 }).strict();
 
+const CloudAccountRequestSchema = z.object({
+  requestId: z.string(),
+  scope: z.string(),
+  expiresAt: z.string(),
+  authorizationUrl: z.string(),
+}).strict();
+
+const CloudAccountSessionSchema = z.object({
+  signedIn: z.boolean(),
+  accountId: z.string().optional(),
+  email: z.string().optional(),
+  sessionExpiresAt: z.string().optional(),
+  pendingRequest: z.object({ requestId: z.string(), authorizationUrl: z.string().optional(), scope: z.string().optional(), expiresAt: z.string().optional() }).strict().optional(),
+}).strict();
+
 const CloudBindingChallengeSchema = z.object({
   challengeCode: z.string(),
   authorizationUrl: z.string(),
@@ -90,6 +105,18 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     },
     createCloudChallenge() {
       return requestData("/api/cloud-connectivity/challenges", CloudBindingChallengeSchema, jsonRequest("POST", {}));
+    },
+    cloudAccount(signal?: AbortSignal) {
+      return requestData("/api/cloud-account", CloudAccountSessionSchema, { signal });
+    },
+    createCloudSignInRequest() {
+      return requestData("/api/cloud-account/sign-in-requests", CloudAccountRequestSchema, jsonRequest("POST", {}));
+    },
+    signOutCloudAccount() {
+      return requestData("/api/cloud-account/sign-out", CloudAccountSessionSchema, jsonRequest("POST", {}));
+    },
+    createCloudBindingRequest() {
+      return requestData("/api/cloud-connectivity/binding-requests", CloudAccountRequestSchema, jsonRequest("POST", {}));
     },
     setCloudRemoteAccess(enabled: boolean) {
       return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { enabled }));

@@ -2858,6 +2858,13 @@ export const NodeAgentInstanceLifecycleResultSchema = z.preprocess((input) => {
 
 export const InstanceLifecycleEventType = {
   Snapshot: "instance.lifecycle.snapshot",
+  /**
+   * Liveness-only projection of a lifecycle snapshot. A node agent republishes an
+   * instance on every heartbeat observation, but an observation that changes nothing
+   * a directory consumer can act on must not re-send the provisioning, workspace, and
+   * runtime payload it already holds.
+   */
+  Heartbeat: "instance.lifecycle.heartbeat",
 } as const;
 
 export const InstanceLifecycleSnapshotSchema = z.object({
@@ -2877,6 +2884,49 @@ export const InstanceLifecycleSnapshotSchema = z.object({
 }).strict();
 
 export type InstanceLifecycleSnapshot = z.infer<typeof InstanceLifecycleSnapshotSchema>;
+
+export const InstanceLifecycleHeartbeatSchema = z.object({
+  instanceId: ControlledInstanceSchema.shape.id,
+  revision: z.number().int().min(0),
+  updatedAt: TimestampSchema,
+  lastHeartbeatAt: TimestampSchema.optional(),
+}).strict();
+
+export type InstanceLifecycleHeartbeat = z.infer<typeof InstanceLifecycleHeartbeatSchema>;
+
+/**
+ * Snapshot fields a directory consumer acts on. Any change here needs the full
+ * snapshot; everything else is heartbeat-only liveness. `revision`, `updatedAt`, and
+ * `lastHeartbeatAt` are deliberately excluded: an observation that only moves those
+ * three is exactly what the heartbeat frame carries.
+ */
+export const instanceLifecycleSignalFields = [
+  "status",
+  "health",
+  "connectionStatus",
+  "accessStatus",
+  "imageProvisioning",
+  "workspace",
+  "runtime",
+  "runtimeVersion",
+  "ready",
+] as const;
+
+/** Stable fingerprint of the fields that force a full lifecycle snapshot. */
+export function instanceLifecycleSignalKey(snapshot: InstanceLifecycleSnapshot): string {
+  const signal: Record<string, unknown> = {};
+  for (const field of instanceLifecycleSignalFields) signal[field] = snapshot[field];
+  return JSON.stringify(signal);
+}
+
+export function instanceLifecycleHeartbeat(snapshot: InstanceLifecycleSnapshot): InstanceLifecycleHeartbeat {
+  return InstanceLifecycleHeartbeatSchema.parse({
+    instanceId: snapshot.instanceId,
+    revision: snapshot.revision,
+    updatedAt: snapshot.updatedAt,
+    ...(snapshot.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: snapshot.lastHeartbeatAt }),
+  });
+}
 
 export function parseStoredControlledInstance(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void) {
   return ControlledInstanceSchema.parse(sanitizeStoredControlledInstance(input, onWarning));
