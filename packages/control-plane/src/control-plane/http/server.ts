@@ -649,12 +649,22 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
   const gitProvisioningProgress = new GitProvisioningProgressProjector(events);
+  // A recovered Session snapshot has no tunnel behind it, so its scope is rebuilt from the
+  // instance it belongs to. Without this the bus derives a scope from the payload alone,
+  // which drops the nodeId every tunnel-forwarded Session event carries.
+  const publishRecoveredSessionEvent = (event: { type: string; payload: unknown }) => {
+    const meta = (event.payload as { meta?: { instanceId?: unknown } } | undefined)?.meta;
+    const instanceId = typeof meta?.instanceId === "string" && meta.instanceId ? meta.instanceId : undefined;
+    if (!instanceId) return events.publish(event.type, event.payload);
+    const nodeId = service.nodeIdForInstance(instanceId);
+    return events.publish(event.type, event.payload, { scope: { instanceId, ...(nodeId ? { nodeId } : {}) } });
+  };
   const aiSessionAggregator = new ControlPlaneAiSessionAggregator({
     bootstrap: () => service.bootstrapAiSessionsFromInstances(),
     logger: diagnosticLogger,
     recoverDelta: (instanceId, streamId, sinceRevision) => service.recoverAiSessionDelta(instanceId, streamId, sinceRevision),
     recoverSnapshot: (instanceId) => service.recoverAiSessionSnapshot(instanceId),
-    onRecoveredEvent: (event) => events.publish(event.type, event.payload),
+    onRecoveredEvent: publishRecoveredSessionEvent,
   });
   const storySessionIndex = new StorySessionIndex();
   aiSessionAggregator.onSnapshot((update) => {
@@ -665,7 +675,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     logger: diagnosticLogger,
     recoverDelta: (instanceId, streamId, sinceRevision) => service.recoverAppSessionDelta(instanceId, streamId, sinceRevision),
     recoverSnapshot: (instanceId) => service.recoverAppSessionSnapshot(instanceId),
-    onRecoveredEvent: (event) => events.publish(event.type, event.payload),
+    onRecoveredEvent: publishRecoveredSessionEvent,
   });
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));

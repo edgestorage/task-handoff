@@ -596,7 +596,10 @@ export class ControlPlaneNodeAgentGateway {
     if (index < 0) return "missing";
     const current = snapshot.items[index];
     if (current.nodeId !== node.id) return "missing";
-    if (current.stateRevision >= lifecycle.revision) return "ignored";
+    // Only a strictly older observation is stale. Replaying the revision the gateway already
+    // holds is the authoritative current state: a consumer that has not seen this instance yet
+    // only learns about it from this event, and it costs nothing for one that has.
+    if (current.stateRevision > lifecycle.revision) return "ignored";
 
     const next = ControlledInstanceSchema.parse({
       ...current,
@@ -629,7 +632,9 @@ export class ControlPlaneNodeAgentGateway {
     if (index < 0) return "missing";
     const current = snapshot.items[index];
     if (current.nodeId !== node.id) return "missing";
-    if (current.stateRevision >= heartbeat.revision) return "ignored";
+    // As with a snapshot replay, an observation at the revision the gateway already holds still
+    // carries the newest liveness clock and stays publishable; only a strictly older one is stale.
+    if (current.stateRevision > heartbeat.revision) return "ignored";
 
     const next = ControlledInstanceSchema.parse({
       ...current,

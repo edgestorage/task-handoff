@@ -3638,7 +3638,9 @@ test("control plane forwards node agent websocket events with instance scope", a
   });
 
   const forwardedEvent = withTimeout(
-    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === AiSessionEventType.Snapshot),
+    // A recovered Session snapshot for another instance can share this socket, so the wait
+    // matches the instance this test owns rather than whichever snapshot arrives first.
+    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === AiSessionEventType.Snapshot && event.scope?.instanceId === "inst_events"),
     "forwarded ai session event",
   );
   tunnel.send(JSON.stringify({
@@ -4135,12 +4137,17 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   const hello = await waitForCondition(() => receivedEvents.find((entry) => entry.type === "streams.hello"), "control plane streams hello");
   assert.equal(hello.type, "streams.hello");
 
-  const lifecycle = await waitForCondition(() => receivedEvents.find((entry) => entry.type === InstanceLifecycleEventType.Snapshot), "direct node agent lifecycle snapshot", 7000);
+  // This Control Plane also adopts the local Node Agent of the machine it runs on, so the
+  // socket carries that node's lifecycle too; the wait matches the node built here.
+  const lifecycle = await waitForCondition(() => receivedEvents.find((entry) => entry.type === InstanceLifecycleEventType.Snapshot && entry.scope?.nodeId === directNodeId), "direct node agent lifecycle snapshot", 7000);
   assert.equal(lifecycle.topic, "instances");
   assert.equal(lifecycle.scope.nodeId, directNodeId);
   assert.equal(lifecycle.scope.instanceId, "inst_direct_events");
   assert.equal(lifecycle.payload.instanceId, "inst_direct_events");
   assert.ok(lifecycle.payload.revision >= 1);
+  assert.equal(lifecycle.payload.status, "running");
+  assert.equal(lifecycle.payload.health, "ok");
+  assert.equal(lifecycle.payload.accessStatus, "reachable");
 
   const heartbeat = await nodeAgent.inject({
     method: "POST",
@@ -4159,13 +4166,17 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(heartbeatState.ready, true);
   assert.equal(heartbeatState.runtimeVersion?.desiredVersion, desiredRuntimeVersion);
   assert.equal(heartbeatState.target.api, `http://127.0.0.1:${instanceEventsAddress.port}`);
-  const runningLifecycle = await waitForCondition(() => receivedEvents.find((entry) => (
-    entry.type === InstanceLifecycleEventType.Snapshot
-    && entry.payload.status === "running"
+  // This observation changes nothing a directory consumer acts on, so it is projected to a
+  // liveness frame instead of repeating the snapshot payload; the clock still advances to the
+  // revision and heartbeat the node agent now holds.
+  const runningLiveness = await waitForCondition(() => receivedEvents.find((entry) => (
+    entry.type === InstanceLifecycleEventType.Heartbeat
+    && entry.scope?.nodeId === directNodeId
+    && entry.scope?.instanceId === "inst_direct_events"
     && entry.payload.revision > lifecycle.payload.revision
   )), "live node agent lifecycle update", 7000);
-  assert.equal(runningLifecycle.payload.health, "ok");
-  assert.equal(runningLifecycle.payload.accessStatus, "reachable");
+  assert.equal(runningLiveness.payload.revision, heartbeatState.stateRevision);
+  assert.equal(runningLiveness.payload.lastHeartbeatAt, heartbeatState.lastHeartbeatAt);
 
   await waitForCondition(
     () => nodeAgent.nodeAgentEventForwarder.diagnostics().activeConnections === 1,

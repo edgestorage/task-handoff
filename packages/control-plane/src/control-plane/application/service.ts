@@ -1351,6 +1351,15 @@ export class ControlPlaneService {
     return instances.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
   }
 
+  /**
+   * Resolves the node that owns an instance from the cached fleet snapshots. A Session
+   * snapshot recovered by an aggregator has no tunnel behind it, so its event scope is
+   * rebuilt from here instead of being derived from the payload alone.
+   */
+  nodeIdForInstance(instanceId: string) {
+    return this.nodeAgentGateway.instanceFromSnapshot(this.nodes.list(), instanceId)?.nodeId;
+  }
+
   async applyInstanceLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot) {
     const node = this.requireNode(nodeId);
     const initial = this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
