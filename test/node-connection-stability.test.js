@@ -516,6 +516,68 @@ test("instance lifecycle events converge a fresh fleet snapshot by revision", as
   assert.equal(requests, 1);
 });
 
+test("a lifecycle replay at the revision the gateway already holds stays publishable", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_replay",
+    name: "Replay instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_replay",
+    runtimeId: "runtime_replay",
+    stateRevision: 4,
+    status: "running",
+    connectionStatus: "online",
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_replay" },
+    connectionPhase: "healthy",
+  };
+  const snapshot = (revision) => ({
+    instanceId: instance.id,
+    revision,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    workspace: { status: "ready", path: "/workspace" },
+    runtime: { pid: 42, labels: {} },
+    ready: true,
+  });
+  const heartbeat = (revision) => ({
+    instanceId: instance.id,
+    revision,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    lastHeartbeatAt: "2026-08-21T00:00:01.000Z",
+  });
+  await gateway.listFleetInstances([node]);
+
+  // A node agent replays its current state whenever a Control Plane reconnects. That replay
+  // carries the revision the gateway already holds, and a consumer that has not seen the
+  // instance yet only learns about it from this event, so it stays publishable.
+  assert.equal(gateway.applyInstanceLifecycle(node, snapshot(4)), "applied");
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(4)), "applied");
+  // Only a strictly older observation is stale enough to suppress.
+  assert.equal(gateway.applyInstanceLifecycle(node, snapshot(3)), "ignored");
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(3)), "ignored");
+  assert.equal(gateway.instanceFromSnapshot([node], instance.id).stateRevision, 4);
+});
+
 test("instance lifecycle heartbeats refresh the board clock without rewriting snapshot fields", async () => {
   const timestamp = "2026-08-21T00:00:00.000Z";
   const instance = ControlledInstanceSchema.parse({
