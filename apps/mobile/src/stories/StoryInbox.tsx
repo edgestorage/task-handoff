@@ -16,6 +16,7 @@ import { useMobileTheme } from '../components/theme';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
+import { nodeDisplayName } from '../directories/presentation';
 import { useI18n } from '../i18n';
 import {
   groupStoryTreeSessions,
@@ -65,7 +66,11 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
-  const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
+  const nodesById = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node])), [directory.nodes]);
+  const nodeLabel = useCallback((nodeId: string) => {
+    const node = nodesById.get(nodeId);
+    return node ? nodeDisplayName(node, t) : nodeId;
+  }, [nodesById, t]);
   const visibleStories = useMemo(() => stories.filter((story) => nodeIsVisible(nodeFilter, story.ownerNodeId)), [nodeFilter, stories]);
   const visibleUnavailableNodeIds = useMemo(() => unavailableNodeIds.filter((nodeId) => nodeIsVisible(nodeFilter, nodeId)), [nodeFilter, unavailableNodeIds]);
   const sessionsByStory = useMemo(
@@ -218,7 +223,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         const newSessionDefaults = storyAiSessionCreationDefaults(directory.instances, sessions, story.id, story.ownerNodeId);
         return <View
           onLayout={(event) => storyRowHeights.current.set(key, event.nativeEvent.layout.height)}
-          style={[styles.storyGroup, { borderColor: colors.border }, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
+          style={[styles.storyGroup, { backgroundColor: colors.surface, borderColor: colors.border }, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
           testID={`story-row-${key}`}
         >
         <View style={[styles.storyRow, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}>
@@ -262,13 +267,13 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             title={story.title}
           >
           <Pressable accessibilityRole="button" onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.nodeIcon}><SystemIcon android="menu_book" color={colors.primary} ios="book" size={18} /></View>
+            <View style={[styles.storyIcon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="menu_book" color={colors.primary} ios="book" size={19} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{story.title}</Text>
                 {story.archivedAt ? <Text style={[styles.archived, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{t('stories.archived')}</Text> : null}
               </View>
-              {preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{nodeNames.get(story.ownerNodeId) || story.ownerNodeId}</Text> : null}
+              {preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{nodeLabel(story.ownerNodeId)}</Text> : null}
               {unavailable ? <Text style={[styles.unavailable, { color: colors.noticeText }]}>{t('stories.nodeUnavailable')}</Text> : null}
             </View>
           </Pressable>
@@ -350,31 +355,32 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
 
 const styles = StyleSheet.create({
   loading: { flex: 1 },
-  content: { paddingBottom: 24, paddingHorizontal: 12, paddingTop: 8 },
+  content: { paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
-  storyGroup: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
+  storyGroup: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
   storyGroupDragging: { opacity: 0.72 },
-  storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 51 },
+  storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 62, paddingRight: 6 },
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
-  disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 32 },
-  storyLink: { alignItems: 'center', borderRadius: 7, flex: 1, flexDirection: 'row', gap: 10, minHeight: 49, paddingRight: 5, paddingVertical: 5 },
-  children: { marginBottom: 6, marginLeft: 16, marginTop: 4, paddingLeft: 16, paddingRight: 8 },
-  childRow: { alignItems: 'center', borderRadius: 7, flexDirection: 'row', gap: 10, minHeight: 44, paddingHorizontal: 0, paddingVertical: 5 },
+  disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 30 },
+  storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 11, minHeight: 60, paddingRight: 5, paddingVertical: 8 },
+  storyIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
+  children: { marginBottom: 8, marginLeft: 41, marginTop: 2, paddingHorizontal: 6, paddingTop: 6 },
+  childRow: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 10, minHeight: 44, paddingHorizontal: 0, paddingVertical: 4 },
   childMenu: { alignSelf: 'stretch' },
   moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40 },
-  emptyChild: { fontSize: 14, lineHeight: 40, minHeight: 40 },
+  emptyChild: { fontSize: 13, lineHeight: 40, minHeight: 40 },
   nodeIcon: { alignItems: 'center', height: 20, justifyContent: 'center', width: 22 },
   rowCopy: { flex: 1, gap: 1, justifyContent: 'center', minWidth: 0 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   sessionTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  title: { flexShrink: 1, fontSize: 17, fontWeight: '500', lineHeight: 24 },
-  childTitle: { flexShrink: 1, fontSize: 16, fontWeight: '400', lineHeight: 22 },
-  archived: { borderRadius: 5, fontSize: 14, overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 2 },
-  meta: { fontSize: 14, lineHeight: 18 },
-  unavailable: { fontSize: 14, lineHeight: 18 },
-  moreText: { fontSize: 15, lineHeight: 20 },
+  title: { flexShrink: 1, fontSize: 16, fontWeight: '700', lineHeight: 21 },
+  childTitle: { flexShrink: 1, fontSize: 15, fontWeight: '500', lineHeight: 20 },
+  archived: { borderRadius: 6, fontSize: 11, fontWeight: '600', overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 2 },
+  meta: { fontSize: 12, lineHeight: 16 },
+  unavailable: { fontSize: 12, lineHeight: 16 },
+  moreText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   unread: { borderRadius: 4, height: 8, width: 8 },
   sessionIcon: { alignItems: 'center', height: 20, justifyContent: 'center', position: 'relative', width: 22 },
   sessionIconStatus: { bottom: -4, position: 'absolute', right: -3, transform: [{ scale: 0.62 }] },

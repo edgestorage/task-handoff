@@ -186,6 +186,74 @@ test('offline and provider errors include a desktop remediation path', () => {
   expect(lifecycleGuidance({ code: 'PROVIDER_UNAVAILABLE', message: 'Missing key' }).message).toMatch(/desktop app/);
 });
 
+test('directory controller treats resource metrics and unchanged proxy state as telemetry, not directory changes', async () => {
+  const store = new MobileDirectoryStore();
+  const node = ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: 'node-1', name: 'Node', status: 'online', health: 'ok', connectionMode: 'control-plane-proxy',
+    lastSeenAt: '2026-08-05T00:00:00.000Z', observedAt: '2026-08-05T00:00:00.000Z', capabilities: [],
+  });
+  const nodes = jest.fn().mockResolvedValue([node]);
+  const instanceBoard = jest.fn().mockResolvedValue([instance]);
+  const api = { resources: { nodes, instanceBoard } } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-telemetry', api, store);
+  await controller.start();
+
+  const proxyState = {
+    nodeId: node.id, status: 'online', health: 'ok', lastSeenAt: '2026-08-05T00:00:00.000Z',
+    connectionPhase: null, connectionDiagnostics: null, proxyState: null,
+  };
+  expect(controller.applyEvent({
+    type: 'instance.metrics.snapshot', topic: 'instances', scope: { instanceId: instance.id },
+    payload: { instanceId: instance.id, runtimeKind: 'docker', state: 'available', sampledAt: '2026-08-05T00:00:01.000Z' },
+  })).toBe(true);
+  expect(controller.applyEvent({ type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: node.id }, payload: proxyState })).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+  expect(nodes).toHaveBeenCalledTimes(1);
+
+  expect(controller.applyEvent({
+    type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: node.id },
+    payload: { ...proxyState, health: 'degraded' },
+  })).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  // The projection carries the field it changed, so the node board is written
+  // through instead of re-fetched.
+  expect(store.profile('cp-telemetry').nodes[0].health).toBe('degraded');
+  expect(nodes).toHaveBeenCalledTimes(1);
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+  controller.stop();
+});
+
+test('directory controller treats lifecycle command receipts as notifications, not directory changes', async () => {
+  const store = new MobileDirectoryStore();
+  const nodes = jest.fn().mockResolvedValue([]);
+  const instanceBoard = jest.fn().mockResolvedValue([instance]);
+  const api = { resources: { nodes, instanceBoard } } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-lifecycle', api, store);
+  await controller.start();
+
+  for (const type of ['instance.started', 'instance.stopped', 'instance.restarted', 'instance.image-provisioning-retried']) {
+    expect(controller.applyEvent({
+      type, topic: 'instances', scope: { instanceId: instance.id }, payload: { instanceId: instance.id },
+    })).toBe(true);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+
+  // The resulting state still lands: the node agent publishes one lifecycle
+  // snapshot per instance state change.
+  expect(controller.applyEvent({
+    type: 'instance.lifecycle.snapshot', topic: 'instances', scope: { instanceId: instance.id },
+    payload: {
+      instanceId: instance.id, revision: 2, status: 'stopped', health: 'ok', connectionStatus: 'offline',
+      ready: false, updatedAt: '2026-08-05T00:00:05.000Z',
+    },
+  })).toBe(true);
+  expect(store.profile('cp-lifecycle').instances[0].status).toBe('stopped');
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+  controller.stop();
+});
+
 test('directory controller marks cache offline and refreshes authoritative snapshots on resume', async () => {
   const store = new MobileDirectoryStore();
   const updated = { ...instance, status: 'stopped' as const, connectionStatus: 'offline' as const };
@@ -255,7 +323,112 @@ test('directory controller applies node connection and instance lifecycle events
     },
   });
   expect(store.profile('cp-a').instances[0].status).toBe('stopping');
-  expect(store.profile('cp-a').instances[0].availableActions).toEqual([]);
+  // The snapshot carries the fields the server projects actions from, so a known instance
+  // is patched in place instead of trading every heartbeat for a full directory re-fetch.
+  expect(store.profile('cp-a').instances[0].availableActions).toEqual(['restart']);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(api.resources.instanceBoard).toHaveBeenCalledTimes(1);
+  controller.stop();
+});
+
+test('node projection events recover the board for a node the directory has never seen', async () => {
+  const store = new MobileDirectoryStore();
+  let handlers: { onEvent(event: unknown): void } | undefined;
+  const nodes = jest.fn().mockResolvedValue([]);
+  const api = { resources: { nodes, instanceBoard: jest.fn().mockResolvedValue([]) } } as unknown as ControlPlaneClient;
+  const transport = {
+    revalidate: jest.fn().mockResolvedValue(undefined),
+    connectEvents: jest.fn((next) => { handlers = next; return { close: jest.fn() }; }),
+  } as never;
+  const controller = new MobileDirectoryController('cp-new-node', api, store, transport);
+  await controller.start();
+  expect(nodes).toHaveBeenCalledTimes(1);
+
+  // Neither projection can create a directory entry, so both must fall back to
+  // the authoritative node topic exactly like the Control Plane web console.
+  handlers!.onEvent({
+    type: 'node.connection.updated', topic: 'node.state', scope: { nodeId: 'node-connection-new' },
+    payload: { nodeId: 'node-connection-new', phase: 'healthy', changedAt: '2026-08-05T00:00:02.000Z' },
+  });
+  handlers!.onEvent({
+    type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: 'node-proxy-new' },
+    payload: {
+      nodeId: 'node-proxy-new', status: 'online', health: 'ok', lastSeenAt: null,
+      connectionPhase: null, connectionDiagnostics: null, proxyState: null,
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(nodes).toHaveBeenCalledTimes(2);
+  controller.stop();
+});
+
+test('lifecycle heartbeats refresh the heartbeat clock without a directory re-fetch', async () => {
+  const store = new MobileDirectoryStore();
+  const running = { ...instance, availableActions: ['stop', 'restart'] as const };
+  let handlers: { onEvent(event: unknown): void } | undefined;
+  const instanceBoard = jest.fn().mockResolvedValue([running]);
+  const api = { resources: { nodes: jest.fn().mockResolvedValue([]), instanceBoard } } as unknown as ControlPlaneClient;
+  const transport = {
+    revalidate: jest.fn().mockResolvedValue(undefined),
+    connectEvents: jest.fn((next) => { handlers = next; return { close: jest.fn() }; }),
+  } as never;
+  const controller = new MobileDirectoryController('cp-heartbeat', api, store, transport);
+  await controller.start();
+  const observedAt = store.profile('cp-heartbeat').instances[0].observedAt;
+
+  handlers!.onEvent({
+    type: 'instance.lifecycle.heartbeat', topic: 'instances', scope: { instanceId: instance.id },
+    payload: {
+      instanceId: instance.id, revision: 9, updatedAt: '2026-08-05T00:00:09.000Z',
+      lastHeartbeatAt: '2026-08-05T00:00:09.000Z',
+    },
+  });
+  const patched = store.profile('cp-heartbeat').instances[0];
+  expect(patched.lastHeartbeatAt).toBe('2026-08-05T00:00:09.000Z');
+  expect(patched.observedAt).toBe('2026-08-05T00:00:09.000Z');
+  expect(patched.observedAt).not.toBe(observedAt);
+  // Liveness carries no provisioning phases, so it must not touch the derived actions.
+  expect(patched.availableActions).toEqual(['stop', 'restart']);
+  expect(patched.status).toBe('running');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+  controller.stop();
+});
+
+test('lifecycle snapshots derive retry and start availability and recover only unknown instances', async () => {
+  const store = new MobileDirectoryStore();
+  const running = { ...instance, availableActions: ['stop', 'restart'] as const };
+  let handlers: { onEvent(event: unknown): void } | undefined;
+  const instanceBoard = jest.fn().mockResolvedValue([running]);
+  const api = { resources: { nodes: jest.fn().mockResolvedValue([]), instanceBoard } } as unknown as ControlPlaneClient;
+  const transport = {
+    revalidate: jest.fn().mockResolvedValue(undefined),
+    connectEvents: jest.fn((next) => { handlers = next; return { close: jest.fn() }; }),
+  } as never;
+  const controller = new MobileDirectoryController('cp-a', api, store, transport);
+  await controller.start();
+  expect(store.profile('cp-a').instances[0].availableActions).toEqual(['stop', 'restart']);
+
+  handlers!.onEvent({
+    type: 'instance.lifecycle.snapshot', topic: 'instances', scope: { instanceId: instance.id },
+    payload: {
+      instanceId: instance.id, revision: 3, updatedAt: '2026-08-05T00:00:04.000Z',
+      status: 'failed', health: 'failed', connectionStatus: 'offline', ready: false,
+      imageProvisioning: { phase: 'failed' },
+      workspace: { status: 'failed', gitProvisioning: { phase: 'failed' } },
+    },
+  });
+  expect(store.profile('cp-a').instances[0].availableActions).toEqual(['start', 'retry-image', 'retry-git']);
+
+  handlers!.onEvent({
+    type: 'instance.lifecycle.snapshot', topic: 'instances', scope: { instanceId: 'instance-2' },
+    payload: {
+      instanceId: 'instance-2', revision: 1, updatedAt: '2026-08-05T00:00:05.000Z',
+      status: 'running', health: 'ok', connectionStatus: 'online', ready: true,
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(instanceBoard).toHaveBeenCalledTimes(2);
   controller.stop();
 });
 

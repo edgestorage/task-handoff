@@ -9,6 +9,8 @@ import {
   GitProvisioningTerminalFinishedSchema,
   GitProvisioningTerminalOutputSchema,
   controlledInstanceAcceptsTraffic,
+  instanceLifecycleHeartbeat,
+  instanceLifecycleSignalKey,
   type GitProvisioningTerminalFinished,
   type GitProvisioningTerminalOutput,
   type ImagePullTerminalFinished,
@@ -109,6 +111,10 @@ export class NodeAgentInstanceEventForwarder {
   private eventTransportCongestion?: EventTransportCongestionIncident;
   private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
   private readonly gitProvisioningTerminalByInstance = new Map<string, { output: GitProvisioningTerminalOutput; tail: string; finished?: GitProvisioningTerminalFinished }>();
+  // Fingerprint of the last lifecycle payload published per instance. The node agent
+  // republishes every observation, and an observation that only moves the timestamps
+  // must not repeat the provisioning/workspace/runtime payload consumers already hold.
+  private readonly lifecycleSignalKeyByInstance = new Map<string, string>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
   private readonly logger?: Logger;
@@ -173,6 +179,7 @@ export class NodeAgentInstanceEventForwarder {
     this.appSessionProjectionByInstance.clear();
     this.sessionStreamsHelloByInstance.clear();
     this.sessionAuthorityReplayedOutputs.clear();
+    this.lifecycleSignalKeyByInstance.clear();
   }
 
   addOutput(socket: WebSocket, options: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number } = {}) {
@@ -327,11 +334,23 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   publishInstanceLifecycle(instance: ControlledInstance) {
-    this.publish(
-      InstanceLifecycleEventType.Snapshot,
-      instanceLifecycleSnapshot(instance),
-      { instanceId: instance.id },
-    );
+    const snapshot = instanceLifecycleSnapshot(instance);
+    const signalKey = instanceLifecycleSignalKey(snapshot);
+    const previousSignalKey = this.lifecycleSignalKeyByInstance.get(instance.id);
+    this.lifecycleSignalKeyByInstance.set(instance.id, signalKey);
+    if (previousSignalKey === signalKey) {
+      this.publish(
+        InstanceLifecycleEventType.Heartbeat,
+        instanceLifecycleHeartbeat(snapshot),
+        { instanceId: instance.id },
+      );
+    } else {
+      this.publish(
+        InstanceLifecycleEventType.Snapshot,
+        snapshot,
+        { instanceId: instance.id },
+      );
+    }
     const terminal = this.imagePullTerminalByInstance.get(instance.id);
     if (instance.imageProvisioning?.phase === "ready" && terminal?.finished?.outcome === "succeeded") {
       this.imagePullTerminalByInstance.delete(instance.id);

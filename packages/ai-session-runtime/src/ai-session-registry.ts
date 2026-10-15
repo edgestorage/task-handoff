@@ -161,10 +161,17 @@ const aiSessionTurnsRevisionCache = new WeakMap<AiSessionStatus, string>();
 // the session-wide updated time — so hashing it in would keep reporting a new
 // revision for Turns whose content is unchanged. Clients then reject their
 // freshly fetched body and history navigation deadlocks on the latest Turn.
+//
+// `revision` is the Turn's internal content clock, not body content: adapters
+// bump it on observation passes that rewrite nothing else, and a body revision
+// that follows the clock re-publishes an Idle Session's summary (and forces a
+// body refetch) on every discovery scan. Every field a client renders stays in
+// the hash, so a real edit still moves it.
 function aiSessionTurnBodyRevisionValue(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
   const body: Record<string, unknown> = { ...turn };
   delete body.observedAt;
   delete body.snapshotVersion;
+  delete body.revision;
   return body;
 }
 

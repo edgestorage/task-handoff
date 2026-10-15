@@ -177,13 +177,37 @@ describe('DirectControlPlaneTransport', () => {
     transport.connectEvents({ onOpen: jest.fn(), onEvent, onError: jest.fn(), onClose: jest.fn() });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events?aiSessionTransient=1', { authorization: 'Bearer msess_test.secret' });
+    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events?aiSessionTransient=1&resourceMetricsScope=1', { authorization: 'Bearer msess_test.secret' });
     listeners.get('open')?.({});
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"subscribe"'));
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining(`"eventEnvelopeVersion":"${COMPACT_EVENT_ENVELOPE_VERSION}"`));
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"node.state"'));
     listeners.get('message')?.({ data: JSON.stringify({ v: COMPACT_EVENT_ENVELOPE_VERSION, id: 'event-1', type: 'streams.hello', createdAt: '2026-08-26T00:00:00.000Z', payload: {} }) });
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'streams.hello' }));
+  });
+
+  test('ignores keepalive pongs instead of failing the event stream', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      readyState: 0,
+      addEventListener: jest.fn((type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener)),
+      close: jest.fn(),
+      send: jest.fn(),
+    };
+    const onEvent = jest.fn();
+    const onError = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      webSocketFactory: jest.fn((_url: string, _headers: Record<string, string>) => socket),
+    });
+    transport.connectEvents({ onOpen: jest.fn(), onEvent, onError, onClose: jest.fn() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    listeners.get('open')?.({});
+
+    listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'pong', sentAt: '2026-08-26T00:00:00.000Z', receivedAt: '2026-08-26T00:00:00.500Z' }) });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   test('rejects compact event envelopes that omit required wire fields', async () => {
@@ -239,13 +263,13 @@ describe('DirectControlPlaneTransport', () => {
 
     expect(factory).toHaveBeenCalledTimes(1);
     listeners.get('open')?.({});
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions', 'nodes'], aiSessionTransient }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions', 'nodes'], metricInstanceIds: [], aiSessionTransient }));
     listeners.get('message')?.({ data: JSON.stringify({ v: 1, id: 'event-2', seq: 2, type: 'streams.hello', topic: 'system', createdAt: '2026-08-26T00:00:01.000Z', payload: {} }) });
     expect(firstEvent).toHaveBeenCalledTimes(1);
     expect(secondEvent).toHaveBeenCalledTimes(1);
     first.close();
     expect(socket.close).not.toHaveBeenCalled();
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'] }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'], metricInstanceIds: [] }));
     second.close();
     expect(socket.close).toHaveBeenCalledTimes(1);
   });

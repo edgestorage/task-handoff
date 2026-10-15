@@ -516,6 +516,54 @@ test("instance lifecycle events converge a fresh fleet snapshot by revision", as
   assert.equal(requests, 1);
 });
 
+test("instance lifecycle heartbeats refresh the board clock without rewriting snapshot fields", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_heartbeat",
+    name: "Heartbeat instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_heartbeat",
+    runtimeId: "runtime_heartbeat",
+    stateRevision: 1,
+    status: "starting",
+    connectionStatus: "offline",
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_heartbeat" },
+    connectionPhase: "healthy",
+  };
+  const heartbeat = (revision, at) => ({ instanceId: instance.id, revision, updatedAt: at, lastHeartbeatAt: at });
+
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(2, "2026-08-21T00:00:01.000Z")), "missing");
+
+  await gateway.listFleetInstances([node]);
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(2, "2026-08-21T00:00:01.000Z")), "applied");
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(3, "2026-08-21T00:00:11.000Z")), "applied");
+  assert.equal(gateway.applyInstanceLifecycleHeartbeat(node, heartbeat(1, timestamp)), "ignored");
+
+  const converged = gateway.instanceFromSnapshot([node], instance.id);
+  assert.equal(converged.stateRevision, 3);
+  assert.equal(converged.lastHeartbeatAt, "2026-08-21T00:00:11.000Z");
+  // A heartbeat never rewrites the directory fields a snapshot owns.
+  assert.equal(converged.status, "starting");
+  assert.equal(converged.connectionStatus, "offline");
+});
+
 test("fleet snapshots expose each node as soon as that node finishes", async () => {
   const timestamp = "2026-08-22T00:00:00.000Z";
   const runtime = (nodeId) => ({
@@ -775,6 +823,65 @@ test("event-owned instance projections do not publish fleet content changes", as
   await gateway.refreshFleetInstances([node]);
   observed.length = 0;
   heartbeat += 1;
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed, []);
+
+  instanceName = "Renamed instance";
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed.map((state) => ({ resource: state.resource, contentChanged: state.contentChanged })), [
+    { resource: "instances", contentChanged: true },
+  ]);
+});
+
+test("reachability probe observations do not publish fleet content changes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let probeAnswered = false;
+  let instanceName = "Probed instance";
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_probe",
+    name: instanceName,
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_probe",
+    runtimeId: "runtime_probe",
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    // A v1.0.0 node agent keeps the stored probe fields at `unknown` while its
+    // lifecycle projection derives `reachable` from the connection status, so the
+    // two observations disagree on every revalidation. None of the probe fields
+    // reach a client: publicInstance() drops them and the directory reads the
+    // access status from the lifecycle projection instead.
+    agentStatus: probeAnswered ? "online" : "unknown",
+    targetStatus: probeAnswered ? "reachable" : "unknown",
+    uiAccessStatus: probeAnswered ? "reachable" : "unknown",
+    target: { strategy: "node-proxy", status: probeAnswered ? "reachable" : "unknown", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_probe",
+    connectionMode: "direct-http",
+    endpoint: "http://node-probe.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_probe" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  observed.length = 0;
+  probeAnswered = true;
   await gateway.refreshFleetInstances([node]);
   assert.deepEqual(observed, []);
 

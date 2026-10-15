@@ -8,6 +8,7 @@ import { CloudConnectivityService } from "../src/control-plane/cloud-connectivit
 import { can } from "../src/control-plane/auth/authorization.ts";
 import { CloudConnectivityLifecycle } from "../src/control-plane/cloud-connectivity/lifecycle.ts";
 import { createControlPlaneApp, trustedCloudServiceOrigin } from "../src/control-plane/http/server.ts";
+import { CLOUD_ENVIRONMENTS } from "../../../shared/cloud-environments.cjs";
 
 function fixture(now = Date.parse("2026-08-10T00:00:00Z")) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-connectivity-"));
@@ -100,6 +101,25 @@ test("production Control Plane pins the cloud service origin while isolated buil
   assert.throws(() => trustedCloudServiceOrigin("https://self-hosted.example", { production: true, allowNonProduction: true }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
   assert.throws(() => trustedCloudServiceOrigin("https://staging.example"), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
   assert.equal(trustedCloudServiceOrigin("https://staging.example/path", { allowNonProduction: true }), "https://staging.example");
+});
+
+test("staging Control Plane trusts only the test environment domains", () => {
+  const environment = CLOUD_ENVIRONMENTS.staging;
+  assert.equal(trustedCloudServiceOrigin(undefined, { environment }), "https://th.aaasu.com");
+  assert.equal(trustedCloudServiceOrigin("https://th.aaasu.com/path", { environment }), "https://th.aaasu.com");
+  assert.throws(() => trustedCloudServiceOrigin("https://staging.example", { environment }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  assert.throws(() => trustedCloudServiceOrigin("https://cloud.thandoff.com", { environment }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  assert.throws(() => trustedCloudServiceOrigin("https://th.aaasu.com", { environment, production: true }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+});
+
+test("a persisted binding authority rejects a different environment service origin", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-origin-change-"));
+  const identity = new ControlPlaneIdentityService(path.join(root, "identity.json"), () => "control_plane_a");
+  identity.init();
+  const statePath = path.join(root, "binding.json");
+  new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://cloud.thandoff.com" }).init();
+  assert.throws(() => new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://th.aaasu.com" }).init(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
+  new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://cloud.thandoff.com/path" }).init();
 });
 
 test("cloud connectivity feature flag disables only cloud routes", async () => {

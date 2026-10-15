@@ -32,6 +32,7 @@ import {
   nodeAgentCapabilitiesFromPublicNode,
   safeParseStoredControlledInstance,
   type ControlledInstance,
+  type InstanceLifecycleHeartbeat,
   type InstanceLifecycleSnapshot,
   type Node,
   type NodeLocalFolder,
@@ -98,6 +99,33 @@ const DEFAULT_FLEET_REQUEST_TIMEOUT_MS = 2_000;
 const DEFAULT_FLEET_SNAPSHOT_FRESH_MS = 15_000;
 const DEFAULT_FLEET_RETRY_BASE_MS = 1_000;
 const DEFAULT_FLEET_RETRY_MAX_MS = 30_000;
+
+function describeProjectionDiff(left: unknown, right: unknown, path = "", out: string[] = [], limit = 6): string[] {
+  if (out.length >= limit || left === right) return out;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) out.push(`${path}.length ${left.length} -> ${right.length}`);
+    for (let index = 0; index < Math.min(left.length, right.length) && out.length < limit; index += 1) {
+      describeProjectionDiff(left[index], right[index], `${path}[${index}]`, out, limit);
+    }
+    return out;
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    const keys = new Set([...Object.keys(left as object), ...Object.keys(right as object)]);
+    for (const key of keys) {
+      describeProjectionDiff(
+        (left as Record<string, unknown>)[key],
+        (right as Record<string, unknown>)[key],
+        `${path}.${key}`,
+        out,
+        limit,
+      );
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+  out.push(`${path} ${JSON.stringify(left)} -> ${JSON.stringify(right)}`);
+  return out;
+}
 
 export class ControlPlaneNodeAgentGateway {
   private readonly client: ControlPlaneNodeAgentClient;
@@ -589,6 +617,30 @@ export class ControlPlaneNodeAgentGateway {
     return "applied";
   }
 
+  /**
+   * Applies a liveness-only observation. The gateway snapshot must keep the newest
+   * `lastHeartbeatAt` because the authoritative board derives heartbeat age and the
+   * offline projection from it.
+   */
+  applyInstanceLifecycleHeartbeat(node: Node, heartbeat: InstanceLifecycleHeartbeat): InstanceLifecycleApplyResult {
+    const snapshot = this.instanceSnapshots.get(node.id);
+    if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return "missing";
+    const index = snapshot.items.findIndex((instance) => instance.id === heartbeat.instanceId);
+    if (index < 0) return "missing";
+    const current = snapshot.items[index];
+    if (current.nodeId !== node.id) return "missing";
+    if (current.stateRevision >= heartbeat.revision) return "ignored";
+
+    const next = ControlledInstanceSchema.parse({
+      ...current,
+      stateRevision: heartbeat.revision,
+      updatedAt: heartbeat.updatedAt,
+      ...(heartbeat.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: heartbeat.lastHeartbeatAt }),
+    });
+    snapshot.items = snapshot.items.map((instance, itemIndex) => itemIndex === index ? next : instance);
+    return "applied";
+  }
+
   async createInstance(node: Node, input: unknown) {
     const instance = await this.client.requestSchema(node, "/instances", ControlledInstanceSchema, {
       method: "POST",
@@ -803,6 +855,20 @@ export class ControlPlaneNodeAgentGateway {
         };
         snapshots.set(node.id, ready);
         const contentChanged = !previous || !this.sameFleetItems(resource, previous, ready);
+        if (contentChanged) {
+          this.client.logger?.warn?.({
+            nodeId: node.id,
+            resource,
+            reason: !previous ? "no-previous-snapshot" : "projection-changed",
+            diff: previous
+              ? describeProjectionDiff(
+                this.fleetItemsForComparison(resource, previous.items),
+                this.fleetItemsForComparison(resource, ready.items),
+              )
+              : undefined,
+            previousPhase: previous?.phase,
+          }, "node fleet content changed");
+        }
         if (invalidPayloadError) {
           if (!this.sameFleetState(resource, loading, ready)) this.emitFleetState(node.id, resource, ready, { contentChanged });
           this.scheduleFleetRetry(key, () => this.refreshFleetNode(node, resource, route, {}, snapshots, load, true));
@@ -916,6 +982,9 @@ export class ControlPlaneNodeAgentGateway {
         status: _status,
         health: _health,
         connectionStatus: _connectionStatus,
+        agentStatus: _agentStatus,
+        targetStatus: _targetStatus,
+        uiAccessStatus: _uiAccessStatus,
         imageProvisioning: _imageProvisioning,
         workspace: _workspace,
         runtime: _runtime,
@@ -926,20 +995,28 @@ export class ControlPlaneNodeAgentGateway {
         triggers: _triggers,
         appInventory,
         access,
+        target,
         ...semantic
       } = item as Record<string, unknown>;
       // Lifecycle, AI/App Session, and trigger events own their respective
       // projections. Fleet comparison only detects directory/config changes;
       // heartbeat observations must not request another authoritative snapshot.
+      // The probe statuses never leave the control plane (publicInstance() drops
+      // them), so a reachability probe answering differently must not fan out a
+      // directory refetch either.
       const comparableAppInventory = appInventory && typeof appInventory === "object" && !Array.isArray(appInventory)
         ? (({ observedAt: _observedAt, ...inventory }) => inventory)(appInventory as Record<string, unknown>)
         : appInventory;
       const comparableAccess = access && typeof access === "object" && !Array.isArray(access)
         ? (({ status: _status, ...topology }) => topology)(access as Record<string, unknown>)
         : access;
+      const comparableTarget = target && typeof target === "object" && !Array.isArray(target)
+        ? (({ status: _targetProbe, ...topology }) => topology)(target as Record<string, unknown>)
+        : target;
       return {
         ...semantic,
         ...(comparableAccess ? { access: comparableAccess } : {}),
+        ...(comparableTarget ? { target: comparableTarget } : {}),
         ...(comparableAppInventory ? { appInventory: comparableAppInventory } : {}),
       };
     });
@@ -1004,10 +1081,27 @@ export class ControlPlaneNodeAgentGateway {
       error: result.nodeErrors[0],
     };
     snapshots.set(node.id, snapshot);
+    const targetedContentChanged = !previous
+      || previous.connectionKey !== snapshot.connectionKey
+      || !this.sameFleetItems(resource, previous, snapshot);
+    if (targetedContentChanged) {
+      this.client.logger?.warn?.({
+        nodeId: node.id,
+        resource,
+        source: "targeted",
+        reason: !previous
+          ? "no-previous-snapshot"
+          : previous.connectionKey !== snapshot.connectionKey ? "connection-changed" : "projection-changed",
+        diff: previous && previous.connectionKey === snapshot.connectionKey
+          ? describeProjectionDiff(
+            this.fleetItemsForComparison(resource, previous.items),
+            this.fleetItemsForComparison(resource, snapshot.items),
+          )
+          : undefined,
+      }, "node fleet content changed");
+    }
     this.emitFleetState(node.id, resource, snapshot, {
-      contentChanged: !previous
-        || previous.connectionKey !== snapshot.connectionKey
-        || !this.sameFleetItems(resource, previous, snapshot),
+      contentChanged: targetedContentChanged,
     });
   }
 

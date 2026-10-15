@@ -451,30 +451,39 @@ export function updateTurns(
       }
       const nextStatus = turnStatusFromSessionStatus(patch.status);
       const nextPhase = (patch.phase as AiSessionPhase | undefined) || promptTurn.phase || "thinking";
-      const changed = promptTurn.userPrompt !== prompt
+      const contentChanged = promptTurn.userPrompt !== prompt
         || promptTurn.status !== nextStatus
-        || promptTurn.phase !== nextPhase
-        || Object.entries(meta).some(([key, value]) => promptTurn[key as keyof typeof promptTurn] !== value);
-      if (changed) {
+        || promptTurn.phase !== nextPhase;
+      const observedChanged = Object.entries(meta)
+        .some(([key, value]) => promptTurn[key as keyof typeof promptTurn] !== value);
+      if (contentChanged || observedChanged) {
         promptTurn.userPrompt = prompt;
-        promptTurn.updatedAt = updatedAt;
         promptTurn.status = nextStatus;
         promptTurn.phase = nextPhase;
         Object.assign(promptTurn, meta);
-        promptTurn.revision += 1;
+        // Observation metadata (observedAt/snapshotVersion) is rewritten on every
+        // discovery scan, so it must not move the body clock. Letting it bump the
+        // revision re-published the whole Session summary to every subscriber on
+        // every scan even when the Turn body was untouched.
+        if (contentChanged) {
+          promptTurn.updatedAt = updatedAt;
+          promptTurn.revision += 1;
+        }
       }
     } else if (last && !last.lastMessage && !last.summary && last.userPrompt === prompt) {
       const nextStatus = turnStatusFromSessionStatus(patch.status);
       const nextPhase = (patch.phase as AiSessionPhase | undefined) || last.phase || "thinking";
-      const changed = last.status !== nextStatus
-        || last.phase !== nextPhase
-        || Object.entries(meta).some(([key, value]) => last[key as keyof typeof last] !== value);
-      if (changed) {
-        last.updatedAt = updatedAt;
+      const contentChanged = last.status !== nextStatus || last.phase !== nextPhase;
+      const observedChanged = Object.entries(meta)
+        .some(([key, value]) => last[key as keyof typeof last] !== value);
+      if (contentChanged || observedChanged) {
         last.status = nextStatus;
         last.phase = nextPhase;
         Object.assign(last, meta);
-        last.revision += 1;
+        if (contentChanged) {
+          last.updatedAt = updatedAt;
+          last.revision += 1;
+        }
       }
     } else if (!promptAlreadyRepresented) {
       turns.push({

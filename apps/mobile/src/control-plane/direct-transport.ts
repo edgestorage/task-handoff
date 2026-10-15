@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
 import {
   COMPACT_EVENT_ENVELOPE_VERSION,
+  EventKeepalivePongSchema,
   type AiSessionTransientSubscription,
 } from '@task-handoff/protocol/events';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
@@ -10,7 +11,9 @@ import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
 import type { MobileDirectControlPlaneProfile } from './profile';
 import {
+  MOBILE_EVENT_KEEPALIVE_INTERVAL_MS,
   MobileControlPlaneTransportError,
+  mobileEventKeepaliveFrame,
   normalizeMobileControlPlaneEvent,
   type MobileAppSessionTtyConnection,
   type MobileAppSessionTtyHandlers,
@@ -80,7 +83,7 @@ function websocketRouteUrl(origin: string, route: string) {
 }
 
 function websocketUrl(origin: string) {
-  return websocketRouteUrl(origin, '/api/events?aiSessionTransient=1');
+  return websocketRouteUrl(origin, '/api/events?aiSessionTransient=1&resourceMetricsScope=1');
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
@@ -91,6 +94,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
   private eventSocket?: WebSocketLike;
   private eventConnecting?: Promise<void>;
   private eventOpen = false;
+  private eventKeepaliveTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     profile: MobileDirectControlPlaneProfile,
@@ -178,12 +182,17 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
           if (this.eventSocket !== socket) return;
           this.eventOpen = true;
           this.sendEventSubscription();
+          this.startEventKeepalive(socket);
           for (const subscriber of [...this.eventSubscribers]) subscriber.onOpen();
         });
         socket.addEventListener('message', (event) => {
           if (this.eventSocket !== socket) return;
           try {
-            const normalized = normalizeIncomingEvent(JSON.parse(String(event.data)));
+            const raw = JSON.parse(String(event.data));
+            // The keepalive answer is not an event envelope; the web console drops it
+            // the same way instead of treating it as a protocol violation.
+            if (EventKeepalivePongSchema.safeParse(raw).success) return;
+            const normalized = normalizeIncomingEvent(raw);
             if (!normalized) throw new Error('Event envelope did not match the protocol.');
             for (const subscriber of [...this.eventSubscribers]) subscriber.onEvent(normalized);
           } catch {
@@ -201,6 +210,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
           if (this.eventSocket !== socket) return;
           this.eventSocket = undefined;
           this.eventOpen = false;
+          this.stopEventKeepalive();
           for (const subscriber of [...this.eventSubscribers]) subscriber.onClose();
         });
       } catch (cause) {
@@ -217,7 +227,31 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     const socket = this.eventSocket;
     this.eventSocket = undefined;
     this.eventOpen = false;
+    this.stopEventKeepalive();
     socket?.close(1000, 'Client closed');
+  }
+
+  /**
+   * A silent event stream is what an intermediate reverse proxy reaps, and the
+   * reaped stream comes back as a full directory bootstrap. The Control Plane
+   * event transport answers this ping with a pong.
+   */
+  private startEventKeepalive(socket: WebSocketLike) {
+    this.stopEventKeepalive();
+    const timer = setInterval(() => {
+      if (this.eventSocket !== socket || !this.eventOpen || socket.readyState !== 1) return;
+      try { socket.send(JSON.stringify(mobileEventKeepaliveFrame())); }
+      catch { /* the socket close/error path owns reconnect */ }
+    }, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS);
+    // A keepalive must never be the reason a process stays alive; React Native
+    // returns a numeric handle and simply ignores the call.
+    (timer as unknown as { unref?(): void }).unref?.();
+    this.eventKeepaliveTimer = timer;
+  }
+
+  private stopEventKeepalive() {
+    if (this.eventKeepaliveTimer) clearInterval(this.eventKeepaliveTimer);
+    this.eventKeepaliveTimer = undefined;
   }
 
   private sendEventSubscription() {
@@ -228,7 +262,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
       for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
     }
     const aiSessionTransient = aggregateTransientDemand(this.eventSubscribers, topics);
-    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [...topics].sort(), metricInstanceIds: [], ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

@@ -6,10 +6,14 @@ import {
   GitProvisioningTerminalFinishedSchema,
   GitProvisioningTerminalOutputSchema,
   InstanceLifecycleEventType,
+  InstanceLifecycleHeartbeatSchema,
   InstanceLifecycleSnapshotSchema,
+  instanceLifecycleHeartbeat,
+  instanceLifecycleSignalKey,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
   type InstanceLifecycleSnapshot,
+  type InstanceLifecycleHeartbeat,
 } from "@task-handoff/protocol/control-plane";
 import {
   AiSessionEventType,
@@ -63,12 +67,16 @@ type TunnelEventRouterOptions = {
   onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   onSessionEvent?: (event: EventEnvelope) => boolean;
   onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
+  onInstanceHeartbeat?: (nodeId: string, heartbeat: InstanceLifecycleHeartbeat) => boolean | Promise<boolean>;
   validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
   onAgentEvent?: (nodeId: string, type: string, payload: unknown) => unknown | undefined;
   onCapabilitiesChanged?: (nodeId: string) => void | Promise<void>;
+  instanceHeartbeatForwardIntervalMs?: number;
   scopeTtlMs?: number;
   logger?: Logger;
 };
+
+const DEFAULT_INSTANCE_HEARTBEAT_FORWARD_INTERVAL_MS = 60_000;
 
 type SessionEventDiagnostic = {
   nodeId: string;
@@ -85,9 +93,21 @@ export class NodeTunnelEventRouter {
   private readonly validatingScopes = new Map<string, Promise<boolean>>();
   private readonly eventQueues = new Map<string, Promise<void>>();
   private readonly scopeEpochs = new Map<string, object>();
+  /**
+   * Fingerprint of the lifecycle payload a node agent last published per instance, plus
+   * the last time its liveness frame was let through. A node agent republishes an
+   * instance on every heartbeat observation; the fingerprint decides whether that frame
+   * still carries anything a consumer acts on.
+   */
+  private readonly instanceLifecycleSignalKeys = new Map<string, string>();
+  private readonly instanceHeartbeatForwardedAt = new Map<string, number>();
+  private readonly instanceHeartbeatForwardIntervalMs: number;
 
   constructor(options: TunnelEventRouterOptions = {}) {
     this.options = options;
+    this.instanceHeartbeatForwardIntervalMs = Number.isFinite(options.instanceHeartbeatForwardIntervalMs) && Number(options.instanceHeartbeatForwardIntervalMs) >= 0
+      ? Number(options.instanceHeartbeatForwardIntervalMs)
+      : DEFAULT_INSTANCE_HEARTBEAT_FORWARD_INTERVAL_MS;
   }
 
   setLogger(logger: Logger | undefined) {
@@ -130,11 +150,21 @@ export class NodeTunnelEventRouter {
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
       this.enqueue(nodeId, parsed.data.instanceId, async () => {
         if (this.options.onInstanceLifecycle && !(await this.options.onInstanceLifecycle(nodeId, parsed.data))) return;
+        this.publishInstanceLiveness(nodeId, scope, parsed.data);
+      }, undefined, !this.options.onInstanceLifecycle);
+      return true;
+    }
+    if (eventType === InstanceLifecycleEventType.Heartbeat) {
+      const parsed = safeParseResponse(InstanceLifecycleHeartbeatSchema, payload);
+      if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
+      this.enqueue(nodeId, parsed.data.instanceId, async () => {
+        if (this.options.onInstanceHeartbeat && !(await this.options.onInstanceHeartbeat(nodeId, parsed.data))) return;
+        if (!this.instanceHeartbeatFanOutDue(nodeId, parsed.data)) return;
         this.options.events?.publish(eventType, parsed.data, {
           topic: "instances",
           scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
         });
-      }, undefined, !this.options.onInstanceLifecycle);
+      }, undefined, !this.options.onInstanceHeartbeat);
       return true;
     }
     if (eventType === ImagePullTerminalEventType.Output || eventType === ImagePullTerminalEventType.Finished) {
@@ -286,6 +316,42 @@ export class NodeTunnelEventRouter {
       queuedScopes: this.eventQueues.size,
       scopeEpochs: this.scopeEpochs.size,
     };
+  }
+
+  /**
+   * Republishes an instance observation without repeating a payload the consumers already
+   * hold. Only `revision`/`updatedAt`/`lastHeartbeatAt` move on an ordinary heartbeat
+   * observation, so an unchanged fingerprint is projected to the liveness-only frame —
+   * and even that frame is coalesced, because the board reads the heartbeat clock as an
+   * absolute timestamp and only needs it to stay fresh, not to be exact.
+   */
+  private publishInstanceLiveness(nodeId: string, scope: Record<string, unknown>, snapshot: InstanceLifecycleSnapshot) {
+    const key = scopeKey(nodeId, snapshot.instanceId);
+    const signalKey = instanceLifecycleSignalKey(snapshot);
+    const changed = this.instanceLifecycleSignalKeys.get(key) !== signalKey;
+    this.instanceLifecycleSignalKeys.set(key, signalKey);
+    if (changed) {
+      this.instanceHeartbeatForwardedAt.delete(key);
+      this.options.events?.publish(InstanceLifecycleEventType.Snapshot, snapshot, {
+        topic: "instances",
+        scope: { ...scope, nodeId, instanceId: snapshot.instanceId },
+      });
+      return;
+    }
+    if (!this.instanceHeartbeatFanOutDue(nodeId, snapshot)) return;
+    this.options.events?.publish(InstanceLifecycleEventType.Heartbeat, instanceLifecycleHeartbeat(snapshot), {
+      topic: "instances",
+      scope: { ...scope, nodeId, instanceId: snapshot.instanceId },
+    });
+  }
+
+  private instanceHeartbeatFanOutDue(nodeId: string, heartbeat: { instanceId: string }) {
+    const key = scopeKey(nodeId, heartbeat.instanceId);
+    const now = Date.now();
+    const forwardedAt = this.instanceHeartbeatForwardedAt.get(key);
+    if (forwardedAt !== undefined && forwardedAt > now - this.instanceHeartbeatForwardIntervalMs) return false;
+    this.instanceHeartbeatForwardedAt.set(key, now);
+    return true;
   }
 
   private enqueue(

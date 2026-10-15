@@ -4,6 +4,7 @@ import {
   encodeNodeTunnelRequestBody,
   type Node,
   type InstanceLifecycleSnapshot,
+  type InstanceLifecycleHeartbeat,
 } from "@task-handoff/protocol/control-plane";
 import { COMPACT_EVENT_ENVELOPE_VERSION, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
@@ -230,9 +231,11 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
     onSessionEvent?: (event: EventEnvelope) => boolean;
     onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
+    onInstanceHeartbeat?: (nodeId: string, heartbeat: InstanceLifecycleHeartbeat) => boolean | Promise<boolean>;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
     onAgentEvent?: (nodeId: string, type: string, payload: unknown) => unknown | undefined;
     onCapabilitiesChanged?: (nodeId: string) => void | Promise<void>;
+    instanceHeartbeatForwardIntervalMs?: number;
     httpStreamHeaderTimeoutMs?: number;
     requestTimeoutMs?: number;
     auxiliaryAttachTimeoutMs?: number;
@@ -248,9 +251,11 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       onStreamsHello: options.onStreamsHello,
       onSessionEvent: options.onSessionEvent,
       onInstanceLifecycle: options.onInstanceLifecycle,
+      onInstanceHeartbeat: options.onInstanceHeartbeat,
       validateInstanceScope: options.validateInstanceScope,
       onAgentEvent: options.onAgentEvent,
       onCapabilitiesChanged: options.onCapabilitiesChanged,
+      instanceHeartbeatForwardIntervalMs: options.instanceHeartbeatForwardIntervalMs,
     });
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;

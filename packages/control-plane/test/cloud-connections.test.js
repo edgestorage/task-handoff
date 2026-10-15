@@ -53,6 +53,11 @@ test("Control Plane accepts only current Coordinator-delivered allocation identi
   const localState = { snapshot: () => ({ ...state.snapshot(), serviceOrigin: "http://localhost:8080" }) };
   assert.equal(verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "ws://localhost:8080/connect", attach, ticket }, localState).allocationId, "allocation_a");
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "ws://attacker.example/connect", attach, ticket }, localState), { code: "UNTRUSTED_RELAY_URL" });
+  // A Control Plane bound to the test environment reaches that environment's Relay hosts only.
+  const stagingState = { snapshot: () => ({ ...state.snapshot(), serviceOrigin: "https://th.aaasu.com" }) };
+  assert.equal(verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://relay1.relay.aaasu.com/connect", attach, ticket }, stagingState).allocationId, "allocation_a");
+  assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://relay.thandoff.com/connect", attach, ticket }, stagingState), { code: "UNTRUSTED_RELAY_URL" });
+  assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://relay1.relay.aaasu.com/connect", attach, ticket }, state), { code: "UNTRUSTED_RELAY_URL" });
 });
 
 test("relay attach acknowledges the Coordinator before the client completes the end-to-end handshake", { timeout: 5_000 }, async () => {

@@ -32,6 +32,7 @@ import {
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
   type InstanceLifecycleSnapshot,
+  type InstanceLifecycleHeartbeat,
   type CustomImageProfile,
   type ModelConfig,
   type Node,
@@ -1353,13 +1354,27 @@ export class ControlPlaneService {
   async applyInstanceLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot) {
     const node = this.requireNode(nodeId);
     const initial = this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
-    if (initial !== "missing") return true;
+    // An ignored observation is older than the gateway snapshot, so reporting it as
+    // handled would fan a stale payload out to every subscriber.
+    if (initial === "applied") return true;
+    if (initial === "ignored") return false;
 
     await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
     const instance = this.nodeAgentGateway.instanceFromSnapshot([node], lifecycle.instanceId);
     if (!instance || instance.nodeId !== nodeId) return false;
-    this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
-    return true;
+    return this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle) === "applied";
+  }
+
+  async applyInstanceLifecycleHeartbeat(nodeId: string, heartbeat: InstanceLifecycleHeartbeat) {
+    const node = this.requireNode(nodeId);
+    const initial = this.nodeAgentGateway.applyInstanceLifecycleHeartbeat(node, heartbeat);
+    if (initial === "applied") return true;
+    if (initial === "ignored") return false;
+
+    await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+    const instance = this.nodeAgentGateway.instanceFromSnapshot([node], heartbeat.instanceId);
+    if (!instance || instance.nodeId !== nodeId) return false;
+    return this.nodeAgentGateway.applyInstanceLifecycleHeartbeat(node, heartbeat) === "applied";
   }
 
   createControlledInstance(input: unknown) {

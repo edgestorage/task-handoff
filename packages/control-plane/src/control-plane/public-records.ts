@@ -20,6 +20,7 @@ import {
 import {
   ControlPlaneInstanceDirectoryEntrySchema,
   ControlPlaneNodeDirectoryEntrySchema,
+  instanceDirectoryAvailableActions,
 } from "@task-handoff/protocol/control-plane-directory";
 import type { InstanceBoardResult } from "./instances/board-reader.ts";
 
@@ -99,17 +100,13 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     item.protocolCompatible ? undefined : `Instance protocol ${item.protocolVersion || "unknown"} differs from this Control Plane.`,
     nodeProtocolCompatible ? undefined : `Node protocol ${nodeProtocolVersion} differs from this Control Plane.`,
   ].filter((warning): warning is string => Boolean(warning));
-  const running = item.status === "running" || item.connectionStatus === "online" || item.access.status === "reachable";
-  const connecting = !["failed", "stopped", "stopping", "unhealthy"].includes(item.status)
-    && item.connectionStatus !== "online"
-    && ["provisioning", "starting", "registering", "registered"].includes(item.status);
-  const availableActions = [
-    !running && !["provisioning", "starting", "registering", "registered", "stopping"].includes(item.status) ? "start" as const : undefined,
-    !["failed", "stopped", "stopping", "unhealthy"].includes(item.status) && (running || connecting) ? "stop" as const : undefined,
-    running ? "restart" as const : undefined,
-    item.status === "failed" && item.imageProvisioning?.phase === "failed" ? "retry-image" as const : undefined,
-    item.status === "failed" && item.workspace.gitProvisioning?.phase === "failed" ? "retry-git" as const : undefined,
-  ].filter((action): action is "start" | "stop" | "restart" | "retry-image" | "retry-git" => Boolean(action));
+  const availableActions = instanceDirectoryAvailableActions({
+    status: item.status,
+    connectionStatus: item.connectionStatus,
+    accessStatus: item.access.status,
+    imageProvisioningPhase: item.imageProvisioning?.phase,
+    gitProvisioningPhase: item.workspace.gitProvisioning?.phase,
+  });
   return ControlPlaneInstanceDirectoryEntrySchema.parse({
     id: item.id,
     name: item.name,

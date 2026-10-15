@@ -137,6 +137,38 @@ test("subscriber applies snapshot before opening WSS and then consumes contiguou
   assert.equal(fetches, 1);
 });
 
+test("a quiet proxy event stream is pinged and recycled once it stops answering", async (t) => {
+  const service = await fixture(t);
+  const sockets = [];
+  let fetches = 0;
+  const subscriber = new ControlPlaneProxyStateSubscriber(service, {
+    eventStreamPingIntervalMs: 5,
+    eventStreamLivenessTimeoutMs: 30,
+    async fetchImpl() { fetches += 1; return Response.json({ data: snapshot(4) }); },
+    openWebSocket() {
+      const socket = new Socket();
+      socket.pings = 0;
+      socket.ping = () => { socket.pings += 1; };
+      sockets.push(socket);
+      return socket;
+    },
+  });
+  t.after(() => subscriber.stop());
+  subscriber.start();
+  await waitFor(() => sockets.length === 1);
+
+  // An idle stream still carries traffic, so a reverse proxy between the two
+  // Control Planes cannot reap the subscription for being quiet.
+  await waitFor(() => sockets[0].pings >= 2);
+  assert.equal(sockets[0].closed, undefined);
+
+  // Silence past the liveness window is recycled instead of waiting for TCP.
+  await waitFor(() => sockets[0].closed === true);
+  sockets[0].disconnect(1006, "stream closed");
+  await waitFor(() => sockets.length === 2);
+  assert.equal(fetches, 2);
+});
+
 test("event stream disconnect inside the grace period keeps the last projection and reboots from the next snapshot", async (t) => {
   const service = await fixture(t);
   const sockets = [];

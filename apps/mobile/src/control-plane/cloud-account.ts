@@ -1,9 +1,9 @@
 import { OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
 import * as Crypto from 'expo-crypto';
 import type { SecureValueStore } from '../platform/secure-storage';
-import { isMobileStagingMode, isMobileTestMode, mobileCloudServiceOrigin } from '../platform/build-variant';
+import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, MOBILE_PRODUCTION_CLOUD_ORIGIN } from '../platform/build-variant';
 
-export const CLOUD_PRODUCTION_ORIGIN = 'https://cloud.thandoff.com';
+export const CLOUD_PRODUCTION_ORIGIN = MOBILE_PRODUCTION_CLOUD_ORIGIN;
 type TokenSet = Omit<MobileTokenResponse, 'tokenType'>;
 type PendingEmailSecondFactor = { createdAt: number; email: string; password: string; redirectUri: string };
 type LoginResult = { authorizationUrl?: string; code?: string; state?: string };
@@ -26,8 +26,8 @@ export class MobileCloudAccountSession {
   constructor(private readonly secureStore: SecureValueStore, options: { origin?: string; request?: typeof fetch; allowNonProductionOrigin?: boolean; reference?: { id: string; secureCredentialKey: string } } = {}) {
     this.origin = new URL(options.origin ?? CLOUD_PRODUCTION_ORIGIN).origin;
     const trustedDevelopment = isMobileTestMode && options.allowNonProductionOrigin === true;
-    const trustedStaging = isMobileStagingMode && Boolean(mobileCloudServiceOrigin) && this.origin === mobileCloudServiceOrigin;
-    if (this.origin !== CLOUD_PRODUCTION_ORIGIN && !trustedDevelopment && !trustedStaging) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
+    const trustedEnvironment = isTrustedMobileCloudServiceOrigin(this.origin);
+    if (this.origin !== CLOUD_PRODUCTION_ORIGIN && !trustedDevelopment && !trustedEnvironment) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
     this.client = new CloudMobileAccountClient({ origin: this.origin, request: options.request, accessToken: () => this.accessToken() });
     if (options.reference) this.restoration = this.restore(options.reference);
   }
@@ -35,7 +35,7 @@ export class MobileCloudAccountSession {
   register(input: { email: string; password: string; termsVersion: string; acceptTerms: true }) { return this.client.register(input); }
   verifyEmail(input: { capability: string }) { return this.client.verifyEmail(input); }
 
-  async beginLogin(input: { providerId: 'email' | 'google' | 'github'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
+  async beginLogin(input: { providerId: 'email' | 'google' | 'github' | 'apple'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
     if (input.providerId === 'email' && !input.totpCode && !input.recoveryCode) this.pendingEmailSecondFactor = undefined;
     try {
       return await this.authorize(input);
@@ -74,7 +74,7 @@ export class MobileCloudAccountSession {
     }
   }
 
-  private async authorize(input: { providerId: 'email' | 'google' | 'github'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
+  private async authorize(input: { providerId: 'email' | 'google' | 'github' | 'apple'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
     const state = randomUrlSafe(24); const verifier = randomUrlSafe(48);
     const challenge = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, { encoding: Crypto.CryptoEncoding.BASE64 });
     this.prunePending(); this.pending.set(state, { verifier, createdAt: Date.now() });

@@ -1,5 +1,6 @@
 const baseConfig = require('./app.json').expo;
 const { resolveFeatureFlags } = require('../../shared/feature-flags.cjs');
+const { CLOUD_ENVIRONMENTS, cloudEnvironmentForServiceOrigin } = require('../../shared/cloud-environments.cjs');
 
 const variants = {
   development: {
@@ -28,6 +29,7 @@ module.exports = () => {
   const taskStatusWidgetsEnabled = process.env.TASK_HANDOFF_WIDGETS_ENABLED !== '0';
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
   const featureFlags = resolveFeatureFlags(process.env);
+  const cloudEnvironment = resolveCloudEnvironmentForVariant(variantName);
   const plugins = [
     ...(baseConfig.plugins || []),
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
@@ -81,16 +83,24 @@ module.exports = () => {
       featureFlags,
       // Compatibility for v0.0.32: keep the old Expo extra available to N-1 JS bundles.
       cloudRelayEnabled: featureFlags.officialAccount,
-      ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
-      ...(variantName === 'development' && process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN ? { cloudServiceOrigin: new URL(process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN).origin } : {}),
+      ...(cloudEnvironment ? { cloudEnvironment } : {}),
+      ...(cloudEnvironment && variantName !== 'production' ? { cloudServiceOrigin: cloudEnvironment.serviceOrigin } : {}),
     },
   };
 };
 
-function requiredEnv(name) {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required for the staging mobile build`);
-  const url = new URL(value);
-  if (url.protocol !== 'https:') throw new Error(`${name} must use HTTPS`);
-  return value;
+// The registered staging environment carries the test domains, so a staging build
+// needs no environment variables. An explicit HTTPS origin still overrides it for
+// ad-hoc clouds, and production ignores overrides entirely.
+function resolveCloudEnvironmentForVariant(variantName) {
+  if (variantName === 'production') return CLOUD_ENVIRONMENTS.production;
+  if (variantName === 'staging') {
+    const override = process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
+    if (!override) return CLOUD_ENVIRONMENTS.staging;
+    const url = new URL(override);
+    if (url.protocol !== 'https:') throw new Error('TASK_HANDOFF_CLOUD_STAGING_ORIGIN must use HTTPS');
+    return cloudEnvironmentForServiceOrigin(url.origin);
+  }
+  const developmentOrigin = process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN;
+  return developmentOrigin ? cloudEnvironmentForServiceOrigin(new URL(developmentOrigin).origin) : undefined;
 }

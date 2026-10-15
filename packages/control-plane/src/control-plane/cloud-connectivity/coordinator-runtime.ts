@@ -3,11 +3,17 @@ import WebSocket from "ws";
 import { CloudAuthorityEventConsumer } from "./authority-events.ts";
 import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "./connections.ts";
 import { CloudConnectivityLifecycle } from "./lifecycle.ts";
+import type { CloudAccountSessionService } from "./account-session.ts";
 import type { CloudConnectivityService } from "./service.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import { CloudRelayConnector, verifyCoordinatorRelayAllocation, type RelaySessionBridge } from "./relay-connector.ts";
+import { RelayTraceRecorder } from "./relay-trace.ts";
 
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
+type CloudAccountScope = "account:sign-in" | "control-plane:bind";
+type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
+const ACCOUNT_REQUEST_POLL_MS = 3_000;
+const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
@@ -53,18 +59,27 @@ export class CloudCoordinatorConnector {
 export class CloudConnectivityBackgroundRuntime {
   readonly lifecycle: CloudConnectivityLifecycle;
   readonly dataConnections: CloudRelayDataConnectionManager;
+  /** Decoded relay traffic capture; disabled recorder unless the host injects one. */
+  readonly relayTrace: RelayTraceRecorder;
   private readonly connector: CloudCoordinatorConnector;
   private readonly control: CloudControlConnectionManager;
   private readonly events: CloudAuthorityEventConsumer;
   private timer?: ReturnType<typeof setTimeout>;
+  private accountTimer?: ReturnType<typeof setTimeout>;
   private running = false;
   private connecting?: Promise<unknown>;
-  private readonly options: { state: CloudConnectivityService; identity: ControlPlaneIdentityService; relayBridge?: RelaySessionBridge; relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> }; verifyAllocation?: (allocation: unknown) => any; webSocket?: typeof WebSocket };
+  private reconciling?: Promise<void>;
+  private rotatingCredentials?: Promise<void>;
+  private accessToken?: { value: string; expiresAt: number };
+  private readonly options: CloudRuntimeOptions;
+  private readonly clock: () => number;
 
-  constructor(options: { state: CloudConnectivityService; identity: ControlPlaneIdentityService; relayBridge?: RelaySessionBridge; relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> }; verifyAllocation?: (allocation: unknown) => any; webSocket?: typeof WebSocket }) {
-    this.options = options;
+  constructor(options: CloudRuntimeOptions) {
+    this.options = { ...options, fetch: options.fetch ?? globalThis.fetch };
+    this.clock = options.clock ?? Date.now;
     this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
-    const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, webSocket: options.webSocket }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
+    this.relayTrace = options.relayTrace ?? new RelayTraceRecorder();
+    const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
     this.dataConnections = new CloudRelayDataConnectionManager({ verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)), connector: relayConnector });
     this.events = new CloudAuthorityEventConsumer({ state: options.state, connections: { stop: (reason) => this.control.stop(reason) }, dataConnections: this.dataConnections });
     this.control = new CloudControlConnectionManager({ state: options.state, connector: this.connector, onEvent: async (event) => { await this.events.apply(event as any); } });
@@ -75,7 +90,31 @@ export class CloudConnectivityBackgroundRuntime {
   }
 
   start() { this.running = true; if (this.options.state.snapshot().status === "active") this.schedule(0); }
-  async stop() { this.running = false; if (this.timer) clearTimeout(this.timer); await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping")]); }
+  async stop() { this.running = false; if (this.timer) clearTimeout(this.timer); if (this.accountTimer) clearTimeout(this.accountTimer); this.relayTrace.close(); await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping")]); }
+
+  /**
+   * Asks the Coordinator for a browser-approvable authorization request and remembers it
+   * locally, so the Control Plane UI can show "waiting for approval" without ever seeing a
+   * code the user would have to copy.
+   */
+  async beginAccountRequest(input: { scope: CloudAccountScope; challengeCode?: string }) {
+    const result = await this.request("create-control-plane-request", { scope: input.scope, ...(input.challengeCode ? { challengeCode: input.challengeCode } : {}) }) as CreateRequestResult;
+    this.options.accountSession.beginRequest({ requestId: result.requestId, authorizationUrl: result.authorizationUrl, scope: result.scope, expiresAt: result.expiresAt });
+    this.scheduleAccountPoll();
+    return result;
+  }
+
+  /** Sign-out clears the local account session; an existing relay binding is a separate concern. */
+  async signOutAccount() {
+    try { await this.request("revoke-account-session", {}); } catch { /* the local session is cleared regardless */ }
+    return this.options.accountSession.signOut();
+  }
+
+  /** Serialized so two callers share one credential rotation instead of replaying each other. */
+  refreshAccountCredential() {
+    if (!this.rotatingCredentials) this.rotatingCredentials = this.rotateAccountCredential().finally(() => { this.rotatingCredentials = undefined; });
+    return this.rotatingCredentials;
+  }
 
   async publishBindingChallenge(challenge: { payload: unknown; signature: string }) {
     await this.ensureConnected();
@@ -93,7 +132,16 @@ export class CloudConnectivityBackgroundRuntime {
       return this.options.state.consumeChallenge({ challengeCode: payload?.challengeCode, controlPlaneId: identity.controlPlaneId, fingerprint: identity.fingerprint });
     }
     if (operation === "deliver-binding-credential") {
-      return this.options.state.activate(payload);
+      const snapshot = this.options.state.activate(payload);
+      const pending = this.options.accountSession.pendingRequest();
+      if (pending) this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "delivered" });
+      return snapshot;
+    }
+    if (operation === "deliver-account-credential") return this.acceptAccountCredential(payload);
+    if (operation === "control-plane-request-resolved") {
+      const requestId = String(payload?.requestId ?? "");
+      if (requestId && payload?.status === "denied") this.options.accountSession.resolveRequest({ requestId, status: "denied" });
+      return { accepted: true };
     }
     if (operation === "relay-allocation") return this.dataConnections.attach(payload);
     throw runtimeError("CLOUD_CONTROL_OPERATION_UNSUPPORTED");
@@ -101,8 +149,77 @@ export class CloudConnectivityBackgroundRuntime {
 
   private async ensureConnected() {
     if (!this.connecting) this.connecting = this.control.connectOnce().finally(() => { this.connecting = undefined; });
-    const result = await this.connecting as { status: string };
+    const result = await this.connecting as { status: string; reused?: boolean };
     if (result.status !== "connected") throw runtimeError("CLOUD_CONTROL_CONNECTION_DISABLED");
+    if (!result.reused && !this.reconciling) this.reconciling = this.reconcileAccount().catch(() => undefined).finally(() => { this.reconciling = undefined; });
+  }
+
+  /**
+   * Runs on every fresh connection: picks up a decision the Control Plane missed while it was
+   * offline and keeps the account credential rotated. Consumers degrade to polling, so a lost
+   * push never leaves the UI stuck on "waiting for approval".
+   */
+  private async reconcileAccount() {
+    const pending = this.options.accountSession.pendingRequest();
+    if (pending) {
+      try {
+        const result = await this.request("poll-control-plane-request", { requestId: pending.requestId }) as { status?: string } | undefined;
+        if (result?.status === "denied") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "denied" });
+        else if (result?.status === "expired") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "expired" });
+        else if (result?.status === "delivered") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "delivered" });
+      } catch { /* the request keeps its own TTL and the UI can retry */ }
+    }
+    if (this.options.accountSession.refreshCredential() && !this.hasFreshAccessToken()) await this.refreshAccountCredential();
+    this.scheduleAccountPoll();
+  }
+
+  private acceptAccountCredential(payload: any) {
+    const requestId = String(payload?.requestId ?? "");
+    if (!payload?.accountId || !payload?.deviceSessionId || !payload?.refreshCredential) throw runtimeError("CLOUD_ACCOUNT_CREDENTIAL_INVALID");
+    const snapshot = this.options.accountSession.complete({
+      accountId: payload.accountId, email: typeof payload.email === "string" ? payload.email : undefined,
+      deviceSessionId: payload.deviceSessionId, refreshCredential: payload.refreshCredential,
+      sessionExpiresAt: typeof payload.expiresAt === "string" ? payload.expiresAt : undefined,
+    });
+    if (typeof payload.accessToken === "string") this.accessToken = { value: payload.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(payload.accessExpiresIn) * 1_000 };
+    if (requestId) this.options.accountSession.resolveRequest({ requestId, status: "delivered" });
+    this.scheduleAccountPoll();
+    return snapshot;
+  }
+
+  private hasFreshAccessToken() {
+    return Boolean(this.accessToken && this.accessToken.expiresAt > this.clock() + 30_000);
+  }
+
+  private async rotateAccountCredential() {
+    const session = this.options.accountSession;
+    const credentials = session.credentials();
+    if (!credentials) return;
+    const response = await this.options.fetch(`${session.origin}/api/v1/auth/refresh`, {
+      method: "POST", headers: { "content-type": "application/json", "x-task-handoff-client": "mobile" },
+      body: JSON.stringify({ refreshCredential: credentials.refreshCredential, deviceSessionId: credentials.deviceSessionId, scopes: ACCOUNT_REQUEST_SCOPES }),
+    }).catch(() => undefined);
+    // A network failure or a server fault must not throw away a working session; the stored
+    // credential is still current and rotation can be retried on the next connection.
+    if (!response) return;
+    const body = await response.json().catch(() => undefined) as any;
+    // The official API wraps every success in `{ data: ... }`.
+    const tokens = body?.data ?? body;
+    if (!response.ok) {
+      // Rotation is the only authoritative "your session is gone" signal we can get here.
+      if (response.status === 401 || response.status === 403 || response.status === 400) session.signOut();
+      return;
+    }
+    if (!tokens?.refreshCredential || !tokens?.accountId || !tokens?.deviceSessionId) return;
+    this.accessToken = typeof tokens.accessToken === "string" ? { value: tokens.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(tokens.accessExpiresIn) * 1_000 } : undefined;
+    session.complete({ accountId: tokens.accountId, email: credentials.email, deviceSessionId: tokens.deviceSessionId, refreshCredential: tokens.refreshCredential, sessionExpiresAt: credentials.sessionExpiresAt }, { preservePending: true });
+  }
+
+  private scheduleAccountPoll(delay = ACCOUNT_REQUEST_POLL_MS) {
+    if (!this.running || this.accountTimer) return;
+    if (!this.options.accountSession.hasPendingRequest()) return;
+    this.accountTimer = setTimeout(() => { this.accountTimer = undefined; void this.reconcileAccount().catch(() => undefined).finally(() => this.scheduleAccountPoll()); }, delay);
+    this.accountTimer.unref();
   }
 
   private schedule(delay = this.control.reconnectDelay()) {
@@ -144,6 +261,23 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
     socket.on("error", (error) => fail(error));
     socket.on("close", () => { if (heartbeat) clearInterval(heartbeat); fail(runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED")); if (!intentional) options.onDisconnected(); });
   });
+}
+
+type CloudRuntimeOptions = {
+  state: CloudConnectivityService;
+  accountSession: CloudAccountSessionService;
+  identity: ControlPlaneIdentityService;
+  relayBridge?: RelaySessionBridge;
+  relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
+  relayTrace?: RelayTraceRecorder;
+  verifyAllocation?: (allocation: unknown) => any;
+  webSocket?: typeof WebSocket;
+  fetch?: typeof fetch;
+  clock?: () => number;
+};
+
+function accessTokenLifetimeSeconds(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 300;
 }
 
 function runtimeError(code: string) { return Object.assign(new Error("Cloud background connection is unavailable."), { code, retryable: true }); }

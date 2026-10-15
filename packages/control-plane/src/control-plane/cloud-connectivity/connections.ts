@@ -25,7 +25,10 @@ export class CloudControlConnectionManager {
   async connectOnce() {
     const credential = this.options.state.backgroundCredential();
     const snapshot = this.options.state.snapshot();
-    const canRegister = snapshot.remoteAccessEnabled && (snapshot.status === "pending-claim" || (snapshot.status === "active" && Boolean(credential)));
+    // An unbound Control Plane still registers so it can sign in to a Thandoff account; the
+    // Coordinator rejects it if the account already holds a live binding. An active binding
+    // keeps its remote-access gate.
+    const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim" || (snapshot.status === "active" && snapshot.remoteAccessEnabled && Boolean(credential));
     if (!canRegister) return { status: "disabled" as const };
     if (this.connection) return { status: "connected" as const, reused: true as const };
     const epoch = this.options.state.nextConnectionEpoch();

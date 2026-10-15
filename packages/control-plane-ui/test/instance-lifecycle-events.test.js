@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
 import { markInstanceTriggerProjectionAuthoritative, mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
-import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 import { applyInstanceBoardTargetSnapshot } from "../src/apps/control-plane/instanceBoardCache.ts";
 
@@ -69,6 +69,46 @@ test("instance lifecycle snapshots patch one board item and reject stale revisio
   assert.equal(registering.status, "registering");
   assert.equal(registering.access.status, "reachable");
   assert.equal(registering.ready, false);
+});
+
+test("instance lifecycle heartbeats refresh the heartbeat clock without rewriting snapshot fields", () => {
+  const queryClient = new QueryClient();
+  const target = boardInstance("inst_target", 1, "running");
+  const untouched = boardInstance("inst_other", 4, "running");
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [target, untouched] });
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceDirectory, [{
+    id: "inst_target",
+    status: "running",
+    connectionStatus: "online",
+    ready: true,
+    observedAt: "2026-07-25T00:00:01.000Z",
+    workspace: { status: "ready" },
+  }]);
+
+  assert.equal(applyInstanceLifecycleHeartbeat(queryClient, {
+    instanceId: "inst_target",
+    revision: 2,
+    updatedAt: "2026-07-25T00:00:30.000Z",
+    lastHeartbeatAt: "2026-07-25T00:00:30.000Z",
+  }), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard);
+  assert.equal(updated.data[0].updatedAt, "2026-07-25T00:00:30.000Z");
+  assert.equal(updated.data[0].lastHeartbeatAt, "2026-07-25T00:00:30.000Z");
+  assert.equal(updated.data[0].stateRevision, 2);
+  // Liveness must never rewrite the directory fields only a snapshot owns.
+  assert.equal(updated.data[0].status, "running");
+  assert.equal(updated.data[0].workspace.status, "unknown");
+  assert.equal(updated.data[1], untouched);
+  assert.deepEqual(queryClient.getQueryData(controlPlaneQueryKeys.instanceDirectory)[0].workspace, { status: "ready" });
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceDirectory)[0].observedAt, "2026-07-25T00:00:30.000Z");
+
+  // A stale or unknown instance stays untouched instead of resurrecting a projection.
+  assert.equal(applyInstanceLifecycleHeartbeat(queryClient, {
+    instanceId: "inst_missing",
+    revision: 2,
+    updatedAt: "2026-07-25T00:00:31.000Z",
+  }), false);
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].stateRevision, 2);
 });
 
 test("instance lifecycle snapshots patch both global and scoped board caches", () => {

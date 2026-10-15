@@ -296,11 +296,21 @@ function subscribedInstance(instanceIds: Set<string> | undefined, scope: EventSc
 }
 
 function subscribedResourceMetrics(client: EventSocket, event: EventEnvelope) {
-  if (event.type !== "instance.metrics.snapshot") return true;
   // Compatibility for v0.0.23: legacy subscribers did not send this field and
   // continue to receive the full metrics stream.
-  if (!client.metricInstanceIds) return true;
-  return Boolean(event.scope?.instanceId && client.metricInstanceIds.has(event.scope.instanceId));
+  return acceptsResourceMetricInstance(client.metricInstanceIds, event);
+}
+
+/**
+ * Resource metrics ride the `instances` topic even though they are telemetry,
+ * so a subscriber that wants them scoped cannot filter by topic. Absence of a
+ * scope keeps the legacy full stream; an explicit scope — including an empty
+ * one — narrows it to the listed instances. Every other event is unaffected.
+ */
+export function acceptsResourceMetricInstance(metricInstanceIds: ReadonlySet<string> | undefined, event: EventEnvelope) {
+  if (event.type !== "instance.metrics.snapshot") return true;
+  if (!metricInstanceIds) return true;
+  return Boolean(event.scope?.instanceId && metricInstanceIds.has(event.scope.instanceId));
 }
 
 function subscribedAiSessionTransient(client: EventSocket, event: EventEnvelope) {

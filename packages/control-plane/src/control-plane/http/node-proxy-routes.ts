@@ -24,6 +24,9 @@ import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "../..
 
 const BindingParamsSchema = z.object({ bindingId: z.string().trim().min(1).max(160) }).passthrough();
 const WebSocketQuerySchema = z.object({ route: NodeAgentProxyRouteSchema }).strict();
+// Mirrors the Control Plane event transport keepalive: well below the shortest
+// idle timeout an intermediate reverse proxy is likely to enforce.
+const PROXY_EVENT_STREAM_KEEPALIVE_INTERVAL_MS = 20_000;
 const EventsQuerySchema = z.object({ sinceRevision: z.coerce.number().int().nonnegative() }).strict();
 const FORBIDDEN_REQUEST_HEADERS = new Set([
   "connection", "cookie", "host", "keep-alive", "proxy-authorization",
@@ -209,6 +212,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     let wrapped: NodeAgentWebSocket | undefined;
     let closeSubscription: (() => void) | undefined;
     let unregisterRuntimeCleanup: (() => void) | undefined;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
     try {
       const bindingId = BindingParamsSchema.parse(request.params).bindingId;
       const binding = authenticateRequest(authority, bindingId, request);
@@ -232,9 +236,25 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
       const cleanup = () => {
         closeSubscription?.();
         unregisterRuntimeCleanup?.();
+        if (keepalive) clearInterval(keepalive);
+        keepalive = undefined;
       };
       wrapped.on("close", cleanup);
       wrapped.on("error", cleanup);
+      // A proxy event stream is silent whenever the target node is quiet, and an
+      // idle WebSocket is exactly what an intermediate reverse proxy reaps: the
+      // subscription then reconnects and refetches a full target snapshot every
+      // time. Ping the subscriber so the tunnel always carries traffic, matching
+      // the keepalive the Control Plane event transport already relies on.
+      keepalive = setInterval(() => {
+        if (socket.readyState !== socket.OPEN) return;
+        try {
+          socket.ping();
+        } catch {
+          // The close/error path owns cleanup.
+        }
+      }, PROXY_EVENT_STREAM_KEEPALIVE_INTERVAL_MS);
+      keepalive.unref?.();
       if (subscription.kind === "snapshot-required") {
         closeSubscription();
         wrapped.close(1008, "Proxy target snapshot is required.");

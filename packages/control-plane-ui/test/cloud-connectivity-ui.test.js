@@ -16,17 +16,33 @@ test("cloud connectivity settings are visible only with settings management perm
   assert.match(sections, /access\.manageSettings && isFeatureEnabled\("officialAccount"\)/);
 });
 
-test("cloud binding challenge stays in component memory and mutations use the existing settings API", () => {
+test("sign-in and binding both open the official approval page without a copied code", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
   const queries = read("src/api/queries.ts");
-  assert.match(component, /const challenge = ref<CloudBindingChallenge>/);
-  assert.match(component, /window\.open\(challenge\.value\.authorizationUrl/);
-  assert.match(component, /navigator\.clipboard\?\.writeText\(challenge\.value\.challengeCode\)/);
+  assert.doesNotMatch(component, /challengeCode/);
+  assert.doesNotMatch(component, /clipboard/);
+  assert.doesNotMatch(component, /CloudBindingChallenge/);
+  assert.match(component, /createCloudSignInRequest\(\)/);
+  assert.match(component, /createCloudBindingRequest\(\)/);
+  assert.match(component, /reopen\(request\.authorizationUrl\)/);
+  assert.match(component, /window\.open\(url, "_blank", "noopener,noreferrer"\)/);
   assert.doesNotMatch(component, /localStorage|sessionStorage|setQueryData/);
   assert.match(queries, /useCloudConnectivityQuery[\s\S]*sharedControlPlaneClient\.admin\.cloudConnectivity\(\)/);
-  assert.match(queries, /createCloudBindingChallenge\(\)[\s\S]*sharedControlPlaneClient\.admin\.createCloudChallenge\(\)/);
+  assert.match(queries, /useCloudAccountQuery[\s\S]*sharedControlPlaneClient\.admin\.cloudAccount\(\)/);
   assert.match(queries, /updateCloudRemoteAccess\(enabled: boolean\)[\s\S]*sharedControlPlaneClient\.admin\.setCloudRemoteAccess\(enabled\)/);
   assert.match(queries, /disconnectCloudAccount\(\)[\s\S]*sharedControlPlaneClient\.admin\.disconnectCloud\(\)/);
+});
+
+test("account state decides which relay action is offered", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  assert.match(component, /const signedIn = computed/);
+  assert.match(component, /v-if="!signedIn && !waitingForSignIn"/);
+  assert.match(component, /v-if="!signedIn && \(state\.status === 'unbound' \|\| state\.status === 'pending-claim'\)" class="cloud-warning"/);
+  assert.match(component, /settings\.cloud\.boundAccount/);
+  assert.match(component, /settings\.cloud\.relayTitle/);
+  assert.match(component, /v-if="signedIn && \(state\.status === 'unbound' \|\| state\.status === 'pending-claim'\)"/);
+  assert.match(component, /waitingForBinding/);
+  assert.match(component, /settings\.cloud\.signInFirst/);
 });
 
 test("cloud settings explain background ownership and expose structured non-color states", () => {
