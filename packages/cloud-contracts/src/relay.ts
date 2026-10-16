@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalJson, DateTimeSchema, IdSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
+import { canonicalJson, DateTimeSchema, IdSchema, LocaleTextSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
 import { OUTBOUND_CONNECTION_PROTOCOL_VERSION, OfficialAudience, RELAY_FRAMING_PROTOCOL_VERSION, RELAY_MAX_CANDIDATES } from "./versions.ts";
 
 export const TrafficClassSchema = z.enum(["interactive", "stream", "bulk"]);
@@ -80,6 +80,10 @@ export const OfficialIdentityAssertionSchema = z.strictObject({
 });
 
 export const RelayAttachRoleSchema = z.enum(["client", "control-plane"]);
+export const RelayRateLimitSchema = z.strictObject({
+  bytesPerSecond: z.number().int().positive(),
+  burstBytes: z.number().int().positive(),
+});
 export const RelayAttachCapabilitySchema = z.strictObject({
   protocolVersion: z.literal(RELAY_FRAMING_PROTOCOL_VERSION),
   audience: z.enum([OfficialAudience.RelayClientAttach, OfficialAudience.RelayControlPlaneAttach]),
@@ -93,6 +97,10 @@ export const RelayAttachCapabilitySchema = z.strictObject({
   ticketId: IdSchema,
   bindingRevision: z.number().int().positive(),
   trafficClass: TrafficClassSchema,
+  /** Optional per-account rate limit; the Relay enforces it locally on this node. */
+  rateLimit: RelayRateLimitSchema.optional(),
+  /** Optional per-account channel cap carried by the plan; the Relay enforces it on this node. */
+  maxConcurrentChannels: z.number().int().positive().optional(),
   nonce: z.string().min(16).max(256),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
@@ -190,15 +198,6 @@ export const RelayChannelSchema = z.strictObject({
   leaseExpiresAt: DateTimeSchema,
 });
 
-export const RelayFrameSchema = z.strictObject({
-  protocolVersion: z.literal(RELAY_FRAMING_PROTOCOL_VERSION),
-  channelId: IdSchema,
-  sequence: z.number().int().nonnegative(),
-  kind: z.enum(["handshake", "data", "cancel", "window-update", "close"]),
-  ciphertext: z.string().max(1_398_102).optional(),
-  creditBytes: z.number().int().positive().optional(),
-});
-
 export const RelayCloseSchema = z.strictObject({
   channelId: IdSchema,
   code: z.enum(["normal", "expired", "revoked", "quota-exceeded", "idle-timeout", "slow-consumer", "protocol-error", "peer-disconnected"]),
@@ -219,6 +218,36 @@ export const RelayRevocationSchema = z.strictObject({
   signature: OpaqueSecretSchema,
 }).refine((value) => [value.allocationId, value.accountId, value.deviceSessionId, value.bindingId].some(Boolean), "revocation target is required");
 
+/**
+ * One traffic allowance window, measured in bytes. `limitBytes === null` means the
+ * plan is unlimited for this window, and `percentage === null` follows from it.
+ * Counts are wire bytes (frame header plus sealed payload) in both directions.
+ */
+export const RelayPlanWindowProgressSchema = z.strictObject({
+  window: z.enum(["daily", "weekly", "monthly"]),
+  limitBytes: z.number().int().nonnegative().nullable(),
+  usedBytes: z.number().int().nonnegative(),
+  remainingBytes: z.number().int().nonnegative().nullable(),
+  percentage: z.number().min(0).nullable(),
+  windowStart: DateTimeSchema.nullable(),
+  resetsAt: DateTimeSchema.nullable(),
+  resetsInSeconds: z.number().int().nonnegative().nullable(),
+});
+
+/** The account's own view of its relay plan: catalog identity plus window progress. */
+export const RelayPlanProgressSchema = z.strictObject({
+  planKey: IdSchema,
+  planName: LocaleTextSchema,
+  /** True when the resolved plan was reached through the fallback chain. */
+  degraded: z.boolean(),
+  expiresAt: DateTimeSchema.nullable(),
+  expiresInSeconds: z.number().int().nonnegative().nullable(),
+  windows: z.array(RelayPlanWindowProgressSchema).length(3),
+});
+
+export type RelayPlanWindowProgress = z.infer<typeof RelayPlanWindowProgressSchema>;
+export type RelayPlanProgress = z.infer<typeof RelayPlanProgressSchema>;
+
 export type AccessTicket = z.infer<typeof AccessTicketSchema>;
 export type RelayAllocation = z.infer<typeof RelayAllocationSchema>;
 export type ConfirmedRelayAllocation = z.infer<typeof ConfirmedRelayAllocationSchema>;
@@ -229,4 +258,4 @@ export type RelaySelectionConfirmation = z.infer<typeof RelaySelectionConfirmati
 export type RelaySelectionFallback = z.infer<typeof RelaySelectionFallbackSchema>;
 export type RelayCandidateMeasurement = z.infer<typeof RelayCandidateMeasurementSchema>;
 export type RelayAttachCapability = z.infer<typeof RelayAttachCapabilitySchema>;
-export type RelayFrame = z.infer<typeof RelayFrameSchema>;
+export type RelayRateLimit = z.infer<typeof RelayRateLimitSchema>;
