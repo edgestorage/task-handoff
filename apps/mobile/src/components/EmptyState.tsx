@@ -1,10 +1,7 @@
-import type { ComponentProps } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { SystemIcon } from './SystemIcon';
+import { Icon, type IconName } from './Icon';
 import { useMobileTheme } from './theme';
-
-type EmptyStateIcon = Pick<ComponentProps<typeof SystemIcon>, 'android' | 'ios'>;
 
 export function EmptyState({
   icon,
@@ -13,7 +10,7 @@ export function EmptyState({
   message,
   style,
 }: {
-  icon: EmptyStateIcon;
+  icon: IconName;
   iconColor?: string;
   iconSize?: number;
   message: string;
@@ -23,7 +20,7 @@ export function EmptyState({
   return (
     <View style={[styles.container, style]}>
       <View testID="empty-state-icon">
-        <SystemIcon android={icon.android} color={iconColor || colors.textMuted} ios={icon.ios} size={iconSize} />
+        <Icon color={iconColor || colors.textMuted} name={icon} size={iconSize} />
       </View>
       <Text style={[styles.message, { color: colors.textMuted }]}>{message}</Text>
     </View>

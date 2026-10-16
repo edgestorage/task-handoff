@@ -8,7 +8,7 @@ export default function StoriesRoute() {
   const runtime = useMobileControlPlaneRuntime();
   const { t } = useI18n();
   if (!runtime.storyCapability) {
-    return <EmptyState icon={{ android: 'menu_book', ios: 'book' }} message={t('stories.unsupported')} style={{ flex: 1 }} />;
+    return <EmptyState icon="book-outline" message={t('stories.unsupported')} style={{ flex: 1 }} />;
   }
   return <StoryInbox
     onAddAction={(story) => router.push({ pathname: '/stories/[storyId]/actions/new' as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}

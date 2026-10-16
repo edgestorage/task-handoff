@@ -4,7 +4,7 @@ import { useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { PrimaryTabStack } from '../../../../src/components/PrimaryTabStack';
-import { SystemIcon } from '../../../../src/components/SystemIcon';
+import { Icon } from '../../../../src/components/Icon';
 import { useMobileTheme } from '../../../../src/components/theme';
 import { useI18n } from '../../../../src/i18n';
 import { useInstanceScope } from '../../../../src/instance-scope/use-instance-scope';
@@ -88,11 +88,11 @@ export default function InboxLayout() {
   ] satisfies NativeStackHeaderItem[];
   const headerRight = () => <View style={styles.headerActions}>
     <Pressable accessibilityLabel={t('sessions.newAccessibility')} accessibilityRole="button" hitSlop={6} onPress={openNewSession} style={({ pressed }) => [styles.headerButton, pressed && styles.headerButtonPressed]}>
-      <SystemIcon android="add" color={colors.primary} ios="plus" size={20} />
+      <Icon color={colors.primary} name="add" size={20} />
     </Pressable>
     <MenuView actions={androidMenuActions} onPressAction={({ nativeEvent }) => selectPreference(nativeEvent.event)} title={t('sessions.inbox.options')}>
       <Pressable accessibilityLabel={t('sessions.inbox.options')} accessibilityRole="button" hitSlop={6} style={({ pressed }) => [styles.headerButton, pressed && styles.headerButtonPressed]}>
-        <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis" size={21} />
+        <Icon color={colors.primary} name="ellipsis-horizontal" size={21} />
       </Pressable>
     </MenuView>
   </View>;

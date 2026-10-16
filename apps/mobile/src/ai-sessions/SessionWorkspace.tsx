@@ -17,7 +17,7 @@ import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimel
 import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
 import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableQueueEditRefs, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { SessionComposer } from './SessionComposer';
 import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } from './composer-metrics';
 import { useI18n, type Translate } from '../i18n';
@@ -773,14 +773,14 @@ export function SessionWorkspace({
       <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: composerBottomInset }]} testID="session-actions">
         {!authoritativeActionsEnabled ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
-            <SystemIcon android="cloud_off" color={colors.noticeText} ios="icloud.slash" size={16} />
+            <Icon color={colors.noticeText} name="cloud-offline-outline" size={16} />
             <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('workspace.offline')}</Text>
           </View>
         ) : null}
         {isLatestTurn && approvalPending && approvalDecisions.length ? (
           <View style={[styles.approval, { backgroundColor: colors.notice }]}> 
             <View style={styles.approvalTitleRow}>
-              <SystemIcon android="approval" color={colors.noticeText} ios="hand.raised.fill" size={17} />
+              <Icon color={colors.noticeText} name="hand-left" size={17} />
               <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text>
             </View>
             <View style={styles.actionRow}>
@@ -900,7 +900,7 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
-          <SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : attachment.textPresentation ? 'doc.plaintext' : 'doc'} size={17} />
+          <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
             <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
             {attachment.textPresentation ? <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text> : null}
@@ -911,7 +911,7 @@ export function SessionWorkspace({
           </View>
           {attachment.phase === 'uploading' ? <View style={styles.attachmentProgress}><ActivityIndicator color={colors.primary} size="small" /></View> : null}
           {attachment.retryLocal && attachment.phase !== 'uploading' ? <Pressable accessibilityLabel={t('common.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void retryAttachment(attachment); }}><RotateCcw color={colors.primary} size={16} /></Pressable> : null}
-          <Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => removeAttachment(attachment)}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>
+          <Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => removeAttachment(attachment)}><Icon color={colors.textMuted} name="close-circle" size={17} /></Pressable>
         </View>)}</View> : null}
         <SessionComposer
           provider={session.agent}
@@ -975,11 +975,7 @@ export function composerBottomBackdropGeometry(bottomInset: number) {
 function ApprovalButton({ label, decision, disabled, onPress }: { label: string; decision: 'allow' | 'skip' | 'deny'; disabled?: boolean; onPress(): void }) {
   const { colors } = useMobileTheme();
   const color = decision === 'deny' ? colors.error : decision === 'allow' ? colors.primary : colors.textMuted;
-  const icon = decision === 'allow'
-    ? { android: 'check' as const, ios: 'checkmark' as const }
-    : decision === 'skip'
-      ? { android: 'block' as const, ios: 'nosign' as const }
-      : { android: 'close' as const, ios: 'xmark' as const };
+  const icon: IconName = decision === 'allow' ? 'checkmark' : decision === 'skip' ? 'ban-outline' : 'close';
   return (
     <Pressable
       accessibilityRole="button"
@@ -988,7 +984,7 @@ function ApprovalButton({ label, decision, disabled, onPress }: { label: string;
       onPress={onPress}
       style={({ pressed }) => [styles.approvalButton, { backgroundColor: colors.surface, borderColor: colors.border }, disabled && styles.disabled, pressed && styles.pressed]}
     >
-      <SystemIcon android={icon.android} color={color} ios={icon.ios} size={14} />
+      <Icon color={color} name={icon} size={14} />
       <Text style={[styles.approvalButtonText, { color }]}>{label}</Text>
     </Pressable>
   );

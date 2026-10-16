@@ -7,7 +7,7 @@ import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPendi
 import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { activeMobileStreamingMessage, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
@@ -210,7 +210,7 @@ export function SessionDetail({
   if (!session) return (
     <Profiler id="detail" onRender={recordDetailRender}>
       <View style={[styles.empty, { backgroundColor: colors.background }]}>
-        <SystemIcon android="chat_bubble_outline" color={colors.textMuted} ios="bubble.left.and.bubble.right" size={30} />
+        <Icon color={colors.textMuted} name="chatbubbles-outline" size={30} />
         <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('sessions.unavailable')}</Text>
         <Text style={[styles.muted, styles.emptyText, { color: colors.textMuted }]}>{t('sessions.unavailableDescription')}</Text>
       </View>
@@ -225,9 +225,9 @@ export function SessionDetail({
         <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
       </View>
       {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator} testID="session-turn-navigator">
-        <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
+        <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><Icon color={colors.primary} name="chevron-back" size={14} /></Pressable>
         <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
-        <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex >= latestIndex }} disabled={navigationIndex >= latestIndex} hitSlop={8} onPress={() => selectTurn(navigationIndex + 1)} style={[styles.turnButton, navigationIndex >= latestIndex && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
+        <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex >= latestIndex }} disabled={navigationIndex >= latestIndex} hitSlop={8} onPress={() => selectTurn(navigationIndex + 1)} style={[styles.turnButton, navigationIndex >= latestIndex && styles.turnButtonDisabled]}><Icon color={colors.primary} name="chevron-forward" size={14} /></Pressable>
       </View> : null}
     </View>
   </View>;
@@ -274,7 +274,7 @@ export function SessionDetail({
           } : undefined}
           onStartReachedThreshold={0.5}
           scrollEventThrottle={16}
-          ListEmptyComponent={contentLoading ? null : <EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
+          ListEmptyComponent={contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
           ListFooterComponent={listFooter}
           ListHeaderComponent={selectedMode !== 'conversation' || conversationStart === 0 ? listHeader : null}
           maxToRenderPerBatch={6}
@@ -308,7 +308,7 @@ export function SessionDetail({
             ]}
             testID="session-scroll-to-bottom"
           >
-            <SystemIcon android="keyboard_arrow_down" color="#ffffff" ios="arrow.down" size={21} />
+            <Icon color="#ffffff" name="chevron-down" size={21} />
           </Pressable>
         ) : null}
       </ScrollViewMarker>
@@ -493,8 +493,8 @@ function DetailItemContent({
   if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'warning') return <View style={[styles.errorBlock, { backgroundColor: colors.notice }]}><SystemIcon android="warning" color={colors.noticeText} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.noticeText }]}>{t('sessions.retryWarning')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
-  return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
+  if (item.role === 'warning') return <View style={[styles.errorBlock, { backgroundColor: colors.notice }]}><Icon color={colors.noticeText} name="warning" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.noticeText }]}>{t('sessions.retryWarning')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
+  return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
 }
 
 function MessageActions({ item, onContinueFromTurn }: { item: DetailItem; onContinueFromTurn?(turn: DetailTurn): void }) {

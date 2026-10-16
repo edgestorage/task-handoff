@@ -7,7 +7,7 @@ import { NewWorktreeDialog } from '../ai-sessions/NewWorktreeDialog';
 import type { BranchPickerBranch } from '../ai-sessions/NewSessionBranchPicker';
 import { aiSessionFolderOptions, defaultAiSessionFolderId } from '../ai-sessions/new-session-types';
 import { useMobileToast } from '../components/MobileToast';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { createMobileControlPlaneClient } from '../control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
@@ -216,10 +216,10 @@ export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, wor
         <Text style={[styles.description, { color: colors.textMuted }]}>{worktrees ? t('repository.worktrees.count', { count: worktrees.items.length }) : t('repository.worktrees.sectionDescription')}</Text>
       </View>
       <Pressable accessibilityLabel={t('repository.worktrees.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void refresh(); }} style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
-        <SystemIcon android="refresh" color={colors.textMuted} ios="arrow.clockwise" size={16} />
+        <Icon color={colors.textMuted} name="refresh" size={16} />
       </Pressable>
       <Pressable accessibilityLabel={t('repository.worktrees.new')} accessibilityRole="button" disabled={status !== 'ready'} hitSlop={8} onPress={() => setDialogOpen(true)} style={({ pressed }) => [styles.iconButton, status !== 'ready' && styles.disabled, pressed && styles.pressed]}>
-        <SystemIcon android="add" color={colors.primary} ios="plus" size={18} />
+        <Icon color={colors.primary} name="add" size={18} />
       </Pressable>
     </View>
 

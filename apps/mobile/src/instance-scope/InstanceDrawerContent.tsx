@@ -4,7 +4,7 @@ import { router, usePathname } from 'expo-router';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { allNodesVisible, nodeIsSelected, toggleNodeVisibility } from '@task-handoff/control-plane-client';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { useMobileTheme } from '../components/theme';
 import { useActiveDirectories } from '../directories/use-directories';
@@ -56,7 +56,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
               onPress={() => setStoryNodeFilter(toggleNodeVisibility(storyNodeFilter, node.id, !selected, state.nodes.map((candidate) => candidate.id)))}
               style={({ pressed }) => [styles.nodeRow, selected && { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
             >
-              <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={16} />
+              <Icon color={colors.textMuted} name="server-outline" size={16} />
               <View style={styles.nodeCopy}>
                 <Text numberOfLines={1} style={[styles.nodeLabel, { color: colors.text }]}>{nodeDisplayName(node, t)}</Text>
                 {status ? <View style={styles.nodeStatusRow}>
@@ -64,7 +64,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                   <Text style={[styles.nodeStatus, { color: connecting ? colors.primary : colors.textMuted }]}>{status}</Text>
                 </View> : null}
               </View>
-              <SystemIcon android={selected ? 'check_circle' : 'circle'} color={selected ? colors.primary : colors.border} ios={selected ? 'checkmark.circle.fill' : 'circle'} size={20} />
+              <Icon color={selected ? colors.primary : colors.border} name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={20} />
             </Pressable>;
           })}
         </View>
@@ -84,7 +84,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                 onPress={() => setCollapsed((current) => ({ ...current, [node.id]: !isCollapsed }))}
                 style={({ pressed }) => [styles.nodeRow, pressed && styles.pressed]}
               >
-                <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={16} />
+                <Icon color={colors.textMuted} name="server-outline" size={16} />
                 <View style={styles.nodeCopy}>
                   <Text numberOfLines={1} style={[styles.nodeLabel, { color: colors.text }]}>{nodeDisplayName(node, t)}</Text>
                   {status ? <View style={styles.nodeStatusRow}>
@@ -93,7 +93,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                   </View> : null}
                 </View>
                 <Text style={[styles.count, { color: colors.textMuted }]}>{instances.length}</Text>
-                <SystemIcon android={isCollapsed ? 'expand_more' : 'expand_less'} color={colors.textMuted} ios={isCollapsed ? 'chevron.down' : 'chevron.up'} size={12} />
+                <Icon color={colors.textMuted} name={isCollapsed ? 'chevron-down' : 'chevron-up'} size={12} />
               </Pressable>
               {!isCollapsed ? <View style={styles.instanceList}>{instances.map((instance) =>
                 <DrawerRow
@@ -111,7 +111,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </>}
       {triggerCapability ? <DrawerRow icon="triggers" label={t('triggers.title')} onPress={() => { props.navigation.closeDrawer(); router.push('/triggers' as never); }} /> : null}
-      {!state.nodes.length && state.phase !== 'loading' ? <EmptyState icon={{ android: 'dns', ios: 'server.rack' }} iconSize={24} message={t('directories.noEntries')} style={styles.empty} /> : null}
+      {!state.nodes.length && state.phase !== 'loading' ? <EmptyState icon="server-outline" iconSize={24} message={t('directories.noEntries')} style={styles.empty} /> : null}
     </DrawerContentScrollView>
     <View style={styles.footer}>
       {isMobileFeatureEnabled('officialAccount') ? <Pressable
@@ -128,7 +128,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         <View style={[styles.accountAvatar, { backgroundColor: colors.surfaceMuted }]}>
           {cloudAccount.phase === 'signed-in' && cloudAccount.profile?.email
             ? <Text style={[styles.accountInitial, { color: colors.text }]}>{cloudAccount.profile.email.slice(0, 1).toUpperCase()}</Text>
-            : <SystemIcon android="person" color={colors.textMuted} ios="person" size={20} />}
+            : <Icon color={colors.textMuted} name="person-outline" size={20} />}
         </View>
         <View style={styles.accountCopy}>
           <Text numberOfLines={1} style={[styles.accountLabel, { color: colors.text }]}>
@@ -138,7 +138,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
             {cloudAccount.phase === 'signed-in' ? t('cloudAccount.settings') : t('cloudAccount.optional')}
           </Text>
         </View>
-        <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+        <Icon color={colors.textMuted} name="chevron-forward" size={13} />
       </Pressable> : null}
       <Pressable
         accessibilityLabel={t('nav.settings')}
@@ -146,7 +146,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         onPress={() => { props.navigation.closeDrawer(); router.push('/profiles'); }}
         style={({ pressed }) => [styles.settingsButton, { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
       >
-        <SystemIcon android="settings" color={colors.text} ios="gearshape" size={23} />
+        <Icon color={colors.text} name="settings-outline" size={23} />
       </Pressable>
     </View>
   </View>;
@@ -154,10 +154,10 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
 
 function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'nodes' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string }) {
   const { colors } = useMobileTheme();
-  const icons = icon === 'all' ? { android: 'select_all' as const, ios: 'square.grid.2x2' as const } : icon === 'nodes' ? { android: 'dns' as const, ios: 'server.rack' as const } : icon === 'settings' ? { android: 'settings' as const, ios: 'gearshape' as const } : icon === 'triggers' ? { android: 'bolt' as const, ios: 'bolt' as const } : { android: 'deployed_code' as const, ios: 'shippingbox' as const };
+  const iconName: IconName = icon === 'all' ? 'grid-outline' : icon === 'nodes' ? 'server-outline' : icon === 'settings' ? 'settings-outline' : icon === 'triggers' ? 'flash' : 'layers-outline';
   return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.row, active && { backgroundColor: colors.surfaceMuted }, pressed && !active && styles.pressed]}>
     <View style={[styles.rowContent, nested && styles.nestedRowContent]}>
-      <SystemIcon android={icons.android} color={active ? colors.text : colors.textMuted} ios={icons.ios} size={18} />
+      <Icon color={active ? colors.text : colors.textMuted} name={iconName} size={18} />
       <View style={styles.rowCopy}>
         <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.text }, active && styles.activeLabel]}>{label}</Text>
         {subtitle ? <Text numberOfLines={1} style={[styles.rowSubtitle, { color: colors.textMuted }]}>{subtitle}</Text> : null}

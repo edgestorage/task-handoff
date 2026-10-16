@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { MobileNewWorktreeSelection } from '../repository/worktree-selection';
@@ -58,7 +58,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.text }]}>{props.title}</Text>
           <Pressable accessibilityLabel={t('common.cancel')} accessibilityRole="button" hitSlop={8} onPress={props.onCancel}>
-            <SystemIcon android="close" color={colors.textMuted} ios="xmark" size={17} />
+            <Icon color={colors.textMuted} name="close" size={17} />
           </Pressable>
         </View>
         <Text style={[styles.description, { color: colors.textMuted }]}>{props.description}</Text>
@@ -71,7 +71,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
             onPress={() => setMode(candidate)}
             style={[styles.mode, mode === candidate && { backgroundColor: colors.surface }]}
           >
-            <SystemIcon android={candidate === 'existing-branch' ? 'account_tree' : 'add'} color={mode === candidate ? colors.text : colors.textMuted} ios={candidate === 'existing-branch' ? 'arrow.triangle.branch' : 'plus'} size={14} />
+            <Icon color={mode === candidate ? colors.text : colors.textMuted} name={candidate === 'existing-branch' ? 'git-branch-outline' : 'add'} size={14} />
             <Text style={[styles.modeLabel, { color: mode === candidate ? colors.text : colors.textMuted }]}>{t(candidate === 'existing-branch' ? 'sessions.existingBranch' : 'sessions.newBranch')}</Text>
           </Pressable>)}
         </View>
@@ -90,7 +90,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
               >
                 {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surfaceMuted, borderColor: colors.border }]}>
                   <Text numberOfLines={1} style={[styles.inputText, { color: branchName ? colors.text : colors.textMuted }]}>{branchName || t('sessions.selectBranch')}</Text>
-                  <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
+                  <Icon color={colors.textMuted} name="chevron-down" size={12} />
                 </Pressable>}
               </NewSessionBranchPicker>
               {selectedBranch?.worktreeCheckout === 'detached' ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('sessions.worktreeDetachedHint')}</Text> : null}
@@ -124,7 +124,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
               >
                 {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surfaceMuted, borderColor: colors.border }]} testID="new-worktree-start-ref">
                   <Text numberOfLines={1} style={[styles.inputText, { color: colors.text }]}>{startRef}</Text>
-                  <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
+                  <Icon color={colors.textMuted} name="chevron-down" size={12} />
                 </Pressable>}
               </NewSessionBranchPicker>
             </View>

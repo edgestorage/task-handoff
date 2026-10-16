@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useActiveDirectories } from '../directories/use-directories';
 import { nodeDisplayName } from '../directories/presentation';
@@ -21,9 +21,9 @@ export function StoryNodeFilterHeaderButton() {
       ? t('controlPlane.selectedNodes', { count: filter.nodeIds.length })
       : selectedNode ? nodeDisplayName(selectedNode, t) : filter.nodeIds[0] || t('directories.allNodes');
   return <Pressable accessibilityRole="button" onPress={openDrawer} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
-    <SystemIcon android="dns" color={colors.primary} ios="server.rack" size={17} />
+    <Icon color={colors.primary} name="server-outline" size={17} />
     <Text numberOfLines={1} style={[styles.label, { color: colors.primary }]}>{label}</Text>
-    <SystemIcon android="expand_more" color={colors.primary} ios="chevron.down" size={10} />
+    <Icon color={colors.primary} name="chevron-down" size={10} />
   </Pressable>;
 }
 

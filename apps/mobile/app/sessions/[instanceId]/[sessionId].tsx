@@ -12,7 +12,7 @@ import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecu
 import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
 import { useMobileTheme } from '../../../src/components/theme';
-import { SystemIcon } from '../../../src/components/SystemIcon';
+import { Icon } from '../../../src/components/Icon';
 import { SessionRenameModal } from '../../../src/components/SessionRenameModal';
 import { useI18n } from '../../../src/i18n';
 import { useTaskStatusSettings } from '../../../src/task-status/settings';
@@ -144,7 +144,7 @@ export default function SessionDetailRoute() {
           title={t('sessions.sessionView')}
         >
           <Pressable accessibilityLabel={t('sessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
-            <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis.circle" size={23} />
+            <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
           </Pressable>
         </MenuView>
       ),

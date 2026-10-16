@@ -6,11 +6,12 @@ import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/cont
 import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
+import { sfSymbolForIcon } from '../components/sf-symbols';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { instanceSelectOptions } from '../directories/instance-select-options';
-import { appLaunchSystemIcon } from './app-launch-icon';
+import { appLaunchIcon } from './app-launch-icon';
 
 const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
 
@@ -42,7 +43,7 @@ export function NewAppSessionForm(props: Props) {
   const instanceOptions = instanceSelectOptions(props.instances, props.nodes);
   const appOptions: AnchoredSelectOption[] = apps.map((app) => ({
     label: app.name,
-    systemImage: appLaunchSystemIcon(app.id).ios,
+    systemImage: sfSymbolForIcon(appLaunchIcon(app.id)),
     value: app.id,
   }));
   const folderOptions: AnchoredSelectOption[] = [
@@ -64,7 +65,7 @@ export function NewAppSessionForm(props: Props) {
       <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
         {(onPress) => <SelectionRow
           disabled={!instanceOptions.length}
-          icon={{ android: 'dns', ios: 'server.rack' }}
+          icon="server-outline"
           label={t('sessions.instance')}
           value={props.selectedInstance?.name || t('sessions.selectInstance')}
           width={selectionRowWidth}
@@ -75,7 +76,7 @@ export function NewAppSessionForm(props: Props) {
       <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onAppChange} options={appOptions} selectedValue={props.selectedAppId} title={t('appSessions.app')}>
         {(onPress) => <SelectionRow
           disabled={!appOptions.length}
-          icon={appLaunchSystemIcon(selectedApp?.id)}
+          icon={appLaunchIcon(selectedApp?.id)}
           label={t('appSessions.app')}
           value={selectedApp?.name || t('appSessions.selectApp')}
           width={selectionRowWidth}
@@ -92,7 +93,7 @@ export function NewAppSessionForm(props: Props) {
           title={t('sessions.folder')}
         >
           {(onPress) => <SelectionRow
-            icon={{ android: 'folder', ios: 'folder' }}
+            icon="folder-outline"
             label={t('sessions.folder')}
             value={selectedFolder?.name || t('appSessions.defaultWorkspace')}
             width={selectionRowWidth}
@@ -110,13 +111,13 @@ export function NewAppSessionForm(props: Props) {
       onPress={props.onCreate}
       style={({ pressed }) => [styles.createButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
     >
-      <SystemIcon android={props.busy ? 'hourglass_top' : 'play_arrow'} color="#fff" ios={props.busy ? 'hourglass' : 'play.fill'} size={18} />
+      <Icon color="#fff" name={props.busy ? 'hourglass-outline' : 'play'} size={18} />
       <Text style={styles.createLabel}>{props.busy ? t('appSessions.creating') : t('appSessions.create')}</Text>
     </Pressable>
   </Screen>;
 }
 
-function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: Pick<Parameters<typeof SystemIcon>[0], 'android' | 'ios'>; label: string; value: string; width?: number; onPress?: () => void }) {
+function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: IconName; label: string; value: string; width?: number; onPress?: () => void }) {
   const { colors } = useMobileTheme();
   return <Pressable
     accessibilityLabel={`${label}: ${value}`}
@@ -126,12 +127,12 @@ function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabl
     onPress={onPress}
     style={({ pressed }) => [styles.row, width === undefined ? styles.rowBeforeLayout : { width }, disabled && styles.disabled, pressed && styles.pressed]}
   >
-    <View style={[styles.icon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={icon.android} color={colors.primary} ios={icon.ios} size={19} /></View>
+    <View style={[styles.icon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.primary} name={icon} size={19} /></View>
     <View style={styles.rowText}>
       <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
       <Text numberOfLines={1} style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
     </View>
-    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={13} />
+    <Icon color={colors.textMuted} name="chevron-down" size={13} />
   </Pressable>;
 }
 

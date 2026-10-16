@@ -1,11 +1,12 @@
 import type { ReactElement } from 'react';
+import type { SFSymbol } from 'expo-symbols';
 
 export type AnchoredSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
   groupLabel?: string;
   description?: string;
-  systemImage?: 'server.rack' | 'app' | 'folder' | 'arrow.triangle.branch' | 'sparkles' | 'terminal' | 'globe' | 'play.fill' | 'hand.raised' | 'checkmark.shield' | 'exclamationmark.shield' | 'circle.lefthalf.filled' | 'moon' | 'sun.max';
+  systemImage?: SFSymbol;
   danger?: boolean;
 };
 

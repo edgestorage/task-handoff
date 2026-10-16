@@ -5,7 +5,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import type { ControlPlaneTriggerTemplateInput } from '@task-handoff/protocol/triggers';
 
 import { Screen } from '../components/Screen';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
 import { emptyTriggerDraft, triggerDraftCanSubmit, triggerInput, type TriggerFormDraft, type TriggerScheduleKind, type TriggerSourceType } from './model';
@@ -133,12 +133,12 @@ export function TriggerForm({ initial = emptyTriggerDraft(), submitLabel, onSubm
             onPress={() => setAdvancedOpen((value) => !value)}
             style={({ pressed }) => [styles.advancedHeader, pressed && styles.pressed]}
           >
-            <View style={[styles.advancedIcon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="tune" color={colors.primary} ios="slider.horizontal.3" size={18} /></View>
+            <View style={[styles.advancedIcon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.primary} name="options-outline" size={18} /></View>
             <View style={styles.advancedCopy}>
               <Text style={[styles.advancedTitle, { color: colors.text }]}>{t('triggers.form.advanced')}</Text>
               <Text style={[styles.advancedDescription, { color: colors.textMuted }]}>{t('triggers.form.advancedDescription')}</Text>
             </View>
-            <SystemIcon android={advancedOpen ? 'expand_less' : 'expand_more'} color={colors.textMuted} ios={advancedOpen ? 'chevron.up' : 'chevron.down'} size={14} />
+            <Icon color={colors.textMuted} name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={14} />
           </Pressable>
           {advancedOpen ? <View style={[styles.advancedFields, { borderTopColor: colors.border }]}>
             <Field keyboard="number-pad" label={t('triggers.form.cooldown')} onChange={(value) => set('cooldownMs', value)} value={draft.cooldownMs} />
@@ -172,7 +172,7 @@ export function TriggerForm({ initial = emptyTriggerDraft(), submitLabel, onSubm
             onPress={() => { void submit(); }}
             style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, !canSubmit && styles.disabled, pressed && styles.pressed]}
           >
-            {saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="bolt" color="#fff" ios="bolt.fill" size={17} /><Text style={styles.submitText}>{submitLabel}</Text></>}
+            {saving ? <ActivityIndicator color="#fff" /> : <><Icon color="#fff" name="flash" size={17} /><Text style={styles.submitText}>{submitLabel}</Text></>}
           </Pressable>
         </SafeAreaView>
       </View>
@@ -221,11 +221,7 @@ function Field({ autoCapitalize, compact, keyboard, label, maxLength, multiline,
 
 function SourceChoice({ active, description, label, last, onPress, type }: { active: boolean; description: string; label: string; last: boolean; onPress(): void; type: TriggerSourceType }) {
   const { colors } = useMobileTheme();
-  const icon = type === 'schedule'
-    ? { android: 'schedule' as const, ios: 'clock' as const }
-    : type === 'file-change'
-      ? { android: 'folder' as const, ios: 'folder.badge.gearshape' as const }
-      : { android: 'auto_awesome' as const, ios: 'sparkles' as const };
+  const icon: IconName = type === 'schedule' ? 'time-outline' : type === 'file-change' ? 'folder-outline' : 'sparkles';
   return <>
     <Pressable
       accessibilityLabel={label}
@@ -234,9 +230,9 @@ function SourceChoice({ active, description, label, last, onPress, type }: { act
       onPress={onPress}
       style={({ pressed }) => [styles.sourceChoice, pressed && { backgroundColor: colors.surfaceMuted }]}
     >
-      <View style={[styles.sourceIcon, { backgroundColor: active ? colors.primarySoft : colors.surfaceMuted }]}><SystemIcon {...icon} color={active ? colors.primary : colors.textMuted} size={19} /></View>
+      <View style={[styles.sourceIcon, { backgroundColor: active ? colors.primarySoft : colors.surfaceMuted }]}><Icon color={active ? colors.primary : colors.textMuted} name={icon} size={19} /></View>
       <View style={styles.sourceCopy}><Text style={[styles.sourceLabel, { color: active ? colors.primary : colors.text }]}>{label}</Text><Text style={[styles.sourceDescription, { color: colors.textMuted }]}>{description}</Text></View>
-      <SystemIcon android={active ? 'check_circle' : 'circle'} color={active ? colors.primary : colors.border} ios={active ? 'checkmark.circle.fill' : 'circle'} size={20} />
+      <Icon color={active ? colors.primary : colors.border} name={active ? 'checkmark-circle' : 'ellipse-outline'} size={20} />
     </Pressable>
     {!last ? <View style={[styles.sourceDivider, { backgroundColor: colors.border }]} /> : null}
   </>;

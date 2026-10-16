@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 
-import { SystemIcon } from './SystemIcon';
+import { Icon } from './Icon';
 import { useMobileTheme } from './theme';
 
 export function SwipeToClose({ children, containerStyle, disabled = false, label, onClose }: {
@@ -28,7 +28,7 @@ export function SwipeToClose({ children, containerStyle, disabled = false, label
         }}
         style={({ pressed }) => [styles.action, { backgroundColor: colors.error }, pressed && styles.pressed]}
       >
-        <SystemIcon android="close" color="#ffffff" ios="xmark" size={18} />
+        <Icon color="#ffffff" name="close" size={18} />
         <Text style={styles.label}>{label}</Text>
       </Pressable>}
     rightThreshold={36}

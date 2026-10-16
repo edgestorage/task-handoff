@@ -5,7 +5,7 @@ import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-na
 import { ActivityIndicator, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n, type Translate } from '../i18n';
@@ -203,7 +203,7 @@ export function SessionComposer(props: SessionComposerProps) {
                     {currentPermissionLabel}
                   </Animated.Text>
                   <Animated.View pointerEvents="none" style={[styles.permissionChevron, { opacity: permissionTextOpacity }]} testID="session-permission-chevron">
-                    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+                    <Icon color={colors.textMuted} name="chevron-down" size={10} />
                   </Animated.View>
                 </Pressable>
               </Animated.View>}
@@ -222,7 +222,7 @@ export function SessionComposer(props: SessionComposerProps) {
         {modelControlsVisible ? <ModelSettingsMenu noModelHint={noModelHint} provider={props.provider} cancelLabel={t('common.cancel')} disabled={Boolean(props.actionBusy || props.modelSelectionBusy || props.reasoningEffortBusy)} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
           {(onPress) => <Pressable accessibilityLabel={displayedModelName} accessibilityRole="button" disabled={props.actionBusy || props.modelSelectionBusy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
             {props.modelSelectionBusy || props.reasoningEffortBusy ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text numberOfLines={1} style={[styles.modelText, { color: colors.textMuted }]}>{displayedModelName}</Text>}
-            <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+            <Icon color={colors.textMuted} name="chevron-down" size={10} />
           </Pressable>}
         </ModelSettingsMenu> : null}
         <Pressable
@@ -236,7 +236,7 @@ export function SessionComposer(props: SessionComposerProps) {
         >
           {props.actionBusy
             ? <ActivityIndicator color="#ffffff" size="small" testID="session-composer-action-loading" />
-            : <SystemIcon android={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'check' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : props.action === 'save' ? 'checkmark' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />}
+            : <Icon color="#ffffff" name={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'checkmark' : 'arrow-up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />}
         </Pressable>
         </View>
       </View>

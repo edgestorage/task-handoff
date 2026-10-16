@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { Stack, useLocalSearchParams } from 'expo-router';
 
 import { Screen } from '../../../../src/components/Screen';
-import { SystemIcon } from '../../../../src/components/SystemIcon';
+import { Icon } from '../../../../src/components/Icon';
 import { useMobileTheme } from '../../../../src/components/theme';
 import { useI18n } from '../../../../src/i18n';
 import { triggerSourceSummary } from '../../../../src/triggers/model';
@@ -26,7 +26,7 @@ export default function SessionTriggersRoute() {
   return <><Stack.Screen options={{ title: t('triggers.sessionTitle') }} /><Screen>
     {!triggers.state.snapshot.triggers.length ? <Text style={[styles.empty, { color: colors.textMuted }]}>{t('triggers.empty')}</Text> : null}
     {error ? <Text style={[styles.empty, { color: colors.error }]}>{error}</Text> : null}
-    {triggers.state.snapshot.triggers.map((item) => { const checked = bound(item.configHash); const enabled = triggers.state.canMutate && item.ownedByControlPlane && !busy; return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked, disabled: !enabled }} disabled={!enabled} key={item.configHash} onPress={() => toggle(item.configHash)} style={({ pressed }) => [styles.row, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.pressed]}><View style={styles.copy}><Text style={[styles.title, { color: colors.text }]}>{item.config.name}</Text><Text numberOfLines={2} style={[styles.summary, { color: colors.textMuted }]}>{triggerSourceSummary(item.config.source)}</Text></View>{busy === item.configHash ? <ActivityIndicator color={colors.primary} /> : <SystemIcon android={checked ? 'check_box' : 'check_box_outline_blank'} color={checked ? colors.primary : colors.textMuted} ios={checked ? 'checkmark.circle.fill' : 'circle'} size={24} />}</Pressable>; })}
+    {triggers.state.snapshot.triggers.map((item) => { const checked = bound(item.configHash); const enabled = triggers.state.canMutate && item.ownedByControlPlane && !busy; return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked, disabled: !enabled }} disabled={!enabled} key={item.configHash} onPress={() => toggle(item.configHash)} style={({ pressed }) => [styles.row, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.pressed]}><View style={styles.copy}><Text style={[styles.title, { color: colors.text }]}>{item.config.name}</Text><Text numberOfLines={2} style={[styles.summary, { color: colors.textMuted }]}>{triggerSourceSummary(item.config.source)}</Text></View>{busy === item.configHash ? <ActivityIndicator color={colors.primary} /> : <Icon color={checked ? colors.primary : colors.textMuted} name={checked ? 'checkmark-circle' : 'ellipse-outline'} size={24} />}</Pressable>; })}
   </Screen></>;
 }
 const styles = StyleSheet.create({ row: { alignItems: 'center', borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 68, padding: 13 }, copy: { flex: 1, gap: 4 }, title: { fontSize: 16, fontWeight: '600' }, summary: { fontSize: 13, lineHeight: 18 }, empty: { fontSize: 14, padding: 20, textAlign: 'center' }, pressed: { opacity: 0.62 } });

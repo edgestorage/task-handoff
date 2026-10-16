@@ -9,7 +9,7 @@ import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/pro
 
 import { SafeMarkdown } from '../../../src/components/SafeMarkdown';
 import { Screen } from '../../../src/components/Screen';
-import { SystemIcon } from '../../../src/components/SystemIcon';
+import { Icon, type IconName } from '../../../src/components/Icon';
 import { EmptyState } from '../../../src/components/EmptyState';
 import { useMobileToast } from '../../../src/components/MobileToast';
 import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
@@ -85,7 +85,7 @@ export default function HistoryDetailRoute() {
     {detail ? <>
       <View style={styles.header}>
         <View style={[styles.historyIcon, { backgroundColor: colors.primarySoft }]}>
-          <SystemIcon android="history" color={colors.primary} ios="clock.arrow.circlepath" size={22} />
+          <Icon color={colors.primary} name="time-outline" size={22} />
         </View>
         <View style={styles.headerText}>
           <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{detail.item.title || detail.item.userPrompt || t('nav.sessionHistory')}</Text>
@@ -93,9 +93,9 @@ export default function HistoryDetailRoute() {
         </View>
       </View>
       <View style={[styles.infoCard, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-        <InfoRow icon="folder" label={t('history.workspace')} value={detail.item.cwd} />
+        <InfoRow icon="folder-outline" label={t('history.workspace')} value={detail.item.cwd} />
         <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <InfoRow icon="number" label={t('history.providerSession')} value={detail.item.providerSessionId} />
+        <InfoRow icon="pricetag-outline" label={t('history.providerSession')} value={detail.item.providerSessionId} />
       </View>
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('history.conversation')}</Text>
@@ -103,10 +103,10 @@ export default function HistoryDetailRoute() {
       </View>
       {detail.turns.length ? detail.turns.map((turn) => <View key={turn.id} style={styles.turn}>
         {turn.userPrompt ? <View style={styles.userMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{t('history.you')}</Text><View style={[styles.bubble, styles.userBubble, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{turn.userPrompt}</SafeMarkdown></View></View> : null}
-        {turn.lastMessage || turn.summary ? <View style={styles.assistantRow}><View style={[styles.avatar, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="auto_awesome" color={colors.primary} ios="sparkles" size={15} /></View><View style={styles.assistantMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{detail.item.agent}</Text><View style={[styles.bubble, styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}><SafeMarkdown trimEnd>{turn.lastMessage || turn.summary!}</SafeMarkdown></View></View></View> : null}
-      </View>) : <EmptyState icon={{ android: 'history', ios: 'clock.arrow.circlepath' }} iconSize={26} message={t('history.empty')} style={styles.empty} />}
+        {turn.lastMessage || turn.summary ? <View style={styles.assistantRow}><View style={[styles.avatar, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.primary} name="sparkles" size={15} /></View><View style={styles.assistantMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{detail.item.agent}</Text><View style={[styles.bubble, styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}><SafeMarkdown trimEnd>{turn.lastMessage || turn.summary!}</SafeMarkdown></View></View></View> : null}
+      </View>) : <EmptyState icon="time-outline" iconSize={26} message={t('history.empty')} style={styles.empty} />}
     </> : <View style={styles.loading}><ActivityIndicator /><Text style={[styles.meta, { color: colors.textMuted }]}>{error ? t('history.loadError') : t('history.loading')}</Text></View>}
-    {!detail && error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
+    {!detail && error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
   </Screen>
   {detail ? <View
     onLayout={(event) => setActionsHeight(event.nativeEvent.layout.height)}
@@ -127,20 +127,20 @@ export default function HistoryDetailRoute() {
       reasoningTitle={t('sessions.reasoningEffort')}
       title={modelGroups.length ? t('sessions.model') : t('sessions.reasoningEffort')}
     >{(onPress) => <Pressable accessibilityRole="button" disabled={!onPress} onPress={onPress} style={[styles.modelButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <SystemIcon android="tune" color={colors.primary} ios="slider.horizontal.3" size={16} />
+      <Icon color={colors.primary} name="options-outline" size={16} />
       <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{resolvedModelSelection?.modelName || t('sessions.reasoningEffort')}</Text>
-      <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
+      <Icon color={colors.textMuted} name="chevron-down" size={12} />
     </Pressable>}</ModelSettingsMenu> : null}
-    <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
+    <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} icon="play" onPress={() => { void resume(); }} />
   </View> : null}
   </View>
   </>;
 }
 
-function InfoRow({ icon, label, value }: { icon: 'folder' | 'number'; label: string; value: string }) {
+function InfoRow({ icon, label, value }: { icon: IconName; label: string; value: string }) {
   const { colors } = useMobileTheme();
   return <View style={styles.infoRow}>
-    <SystemIcon android={icon === 'folder' ? 'folder' : 'tag'} color={colors.textMuted} ios={icon} size={17} />
+    <Icon color={colors.textMuted} name={icon} size={17} />
     <View style={styles.infoText}><Text style={[styles.infoLabel, { color: colors.textMuted }]}>{label}</Text><Text numberOfLines={2} selectable style={[styles.infoValue, { color: colors.text }]}>{value}</Text></View>
   </View>;
 }

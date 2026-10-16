@@ -1,5 +1,6 @@
-import type { AndroidSymbol } from 'expo-symbols';
 import type { ImageSourcePropType } from 'react-native';
+
+import type { IconName } from '../Icon';
 
 /**
  * Platform-neutral description of a floating (iOS style) menu. Android renders it
@@ -9,7 +10,7 @@ export type FloatingMenuItem = {
   key: string;
   label: string;
   subtitle?: string;
-  icon?: AndroidSymbol;
+  icon?: IconName;
   iconSource?: ImageSourcePropType;
   iconColor?: string;
   destructive?: boolean;

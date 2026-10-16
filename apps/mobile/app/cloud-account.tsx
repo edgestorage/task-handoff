@@ -4,7 +4,7 @@ import { Redirect, router, Stack } from 'expo-router';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
-import { SystemIcon } from '../src/components/SystemIcon';
+import { Icon } from '../src/components/Icon';
 import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, mobileCloudAccountSession as account, saveActiveCloudAccountReference } from '../src/control-plane/runtime';
@@ -110,7 +110,7 @@ function CloudAccountContent() {
   return <>
     <Stack.Screen options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
     <CloudAuthScaffold description={description} error={error} title={title}>
-      {notice ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><SystemIcon android="check_circle" color={colors.primary} ios="checkmark.circle.fill" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{notice}</Text></View> : null}
+      {notice ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="checkmark-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{notice}</Text></View> : null}
       <View style={styles.form}>
         {mode === 'verify' ? <>
           <CloudAuthLabel>{t('cloudAccount.verificationToken')}</CloudAuthLabel>
@@ -133,7 +133,7 @@ function CloudAccountContent() {
             <View
               style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
-              <SystemIcon android="mail" color={colors.textMuted} ios="envelope" size={18}/>
+              <Icon color={colors.textMuted} name="mail-outline" size={18}/>
               <TextInput accessibilityLabel={t('cloudAccount.email')} autoCapitalize="none" autoCorrect={false} editable={!busy} inputMode="email" keyboardType="email-address" onChangeText={(value) => { setEmail(value); setError(undefined); }} placeholder={t('cloudAccount.emailPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType="next" style={[styles.input, { color: colors.text }]} textContentType="emailAddress" value={email}/>
             </View>
           </View>
@@ -142,9 +142,9 @@ function CloudAccountContent() {
             <View
               style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
-              <SystemIcon android="lock" color={colors.textMuted} ios="lock" size={18}/>
+              <Icon color={colors.textMuted} name="lock-closed" size={18}/>
               <TextInput accessibilityLabel={t('cloudAccount.password')} editable={!busy} onChangeText={(value) => { setPassword(value); setError(undefined); }} onSubmitEditing={() => { if (mode === 'login' && email.trim() && password && !busy) void authenticate('email'); }} placeholder={t('cloudAccount.passwordPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType={mode === 'login' ? 'go' : 'done'} secureTextEntry={!passwordVisible} style={[styles.input, { color: colors.text }]} textContentType={mode === 'login' ? 'password' : 'newPassword'} value={password}/>
-              <Pressable accessibilityLabel={t(passwordVisible ? 'cloudAccount.hidePassword' : 'cloudAccount.showPassword')} accessibilityRole="button" hitSlop={10} onPress={() => setPasswordVisible((value) => !value)}><SystemIcon android={passwordVisible ? 'visibility_off' : 'visibility'} color={colors.textMuted} ios={passwordVisible ? 'eye.slash' : 'eye'} size={18}/></Pressable>
+              <Pressable accessibilityLabel={t(passwordVisible ? 'cloudAccount.hidePassword' : 'cloudAccount.showPassword')} accessibilityRole="button" hitSlop={10} onPress={() => setPasswordVisible((value) => !value)}><Icon color={colors.textMuted} name={passwordVisible ? 'eye-off-outline' : 'eye-outline'} size={18}/></Pressable>
             </View>
             {mode === 'register' ? <Text style={[styles.passwordHint, { color: password.length >= 12 ? colors.sessionActive : colors.textMuted }]}>{t('cloudAccount.passwordHint')}</Text> : null}
           </View>

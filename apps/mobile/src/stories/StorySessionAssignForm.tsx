@@ -5,7 +5,7 @@ import type { Story } from '@task-handoff/protocol/stories';
 import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import { useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { ContextPill } from '../components/ContextPill';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
@@ -69,12 +69,12 @@ export function StorySessionAssignForm({ nodeId, onSaved, storyId }: { nodeId?: 
   return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
     <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('stories.assignSession')}</Text>{!candidates.length ? <Text style={[styles.help, { color: colors.textMuted }]}>{t('stories.noUnassignedSessions')}</Text> : null}
       <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={saving || !candidates.length} onSelect={setSelectedValue} options={candidates.map((candidate) => ({ value: candidate.value, label: candidate.label, description: candidate.instanceName, systemImage: 'terminal' as const }))} selectedValue={selected?.value || ''} title={t('stories.assignSession')}>
-        {(onPress) => <ContextPill disabled={saving || !candidates.length} icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} label={selected ? `${selected.label} · ${selected.instanceName}` : t('stories.noUnassignedSessions')} onPress={onPress} />}
+        {(onPress) => <ContextPill disabled={saving || !candidates.length} icon="chatbubble-outline" label={selected ? `${selected.label} · ${selected.instanceName}` : t('stories.noUnassignedSessions')} onPress={onPress} />}
       </NewSessionContextMenu>
     </View>
     {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{error}</Text> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ disabled: !selected || Boolean(story.archivedAt) || saving }} disabled={!selected || Boolean(story.archivedAt) || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!selected || story.archivedAt || saving) && styles.disabled, pressed && styles.pressed]}>
-      {saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="link" color="#fff" ios="link" size={18} /><Text style={styles.submitText}>{t('stories.assignSession')}</Text></>}
+      {saving ? <ActivityIndicator color="#fff" /> : <><Icon color="#fff" name="link" size={18} /><Text style={styles.submitText}>{t('stories.assignSession')}</Text></>}
     </Pressable>
   </ScrollView>;
 }

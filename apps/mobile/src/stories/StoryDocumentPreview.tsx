@@ -58,7 +58,7 @@ export function StoryDocumentPreview({ storyId, nodeId, storyPath, title }: { st
     }
   }, [extension, preview]);
   if (!preview && !error) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
-  if (!preview) return <EmptyState icon={{ android: 'error_outline', ios: 'exclamationmark.circle' }} iconColor={colors.error} message={error || t('stories.previewError')} style={styles.loading} />;
+  if (!preview) return <EmptyState icon="alert-circle-outline" iconColor={colors.error} message={error || t('stories.previewError')} style={styles.loading} />;
   const header = <View style={styles.header}><Text style={[styles.title, { color: colors.text }]}>{title || storyPath}</Text><Text numberOfLines={2} style={[styles.meta, { color: colors.textMuted }]}>{storyPath} · {preview.size} B · {preview.revision.slice(0, 10)}</Text></View>;
   if (isHtmlStoryPath(storyPath)) return <View style={[styles.htmlScreen, { backgroundColor: colors.background }]}><View style={styles.htmlHeader}>{header}</View><WebView
     allowFileAccess={false}

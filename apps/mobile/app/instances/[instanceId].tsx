@@ -10,7 +10,7 @@ import { useActiveAiSessions } from '../../src/ai-sessions/use-active-sessions';
 import { Screen } from '../../src/components/Screen';
 import { EmptyState } from '../../src/components/EmptyState';
 import { useMobileToast } from '../../src/components/MobileToast';
-import { SystemIcon } from '../../src/components/SystemIcon';
+import { Icon } from '../../src/components/Icon';
 import { useMobileTheme } from '../../src/components/theme';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { InstanceOverview } from '../../src/instances/InstanceNativeSections';
@@ -39,7 +39,7 @@ export default function InstanceDirectoryDetailRoute() {
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
   useFocusEffect(useCallback(() => { setWorktreeRefreshToken((current) => current + 1); }, []));
   if (!instance) {
-    return <Screen contentContainerStyle={styles.emptyScreen}><EmptyState icon={{ android: 'deployed_code', ios: 'shippingbox' }} message={t('instance.notFound')} /></Screen>;
+    return <Screen contentContainerStyle={styles.emptyScreen}><EmptyState icon="layers-outline" message={t('instance.notFound')} /></Screen>;
   }
 
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
@@ -158,7 +158,7 @@ export default function InstanceDirectoryDetailRoute() {
         title={t('instance.moreActions')}
       >
         <Pressable accessibilityLabel={t('instance.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}>
-          <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis.circle" size={23} />
+          <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
         </Pressable>
       </MenuView>,
     }} />
@@ -183,10 +183,9 @@ export default function InstanceDirectoryDetailRoute() {
           >
             {lifecycleAction === action
               ? <ActivityIndicator color={colors.primary} size="small" />
-              : <SystemIcon
-                android={action === 'start' ? 'play_circle' : action === 'stop' ? 'stop_circle' : 'refresh'}
+              : <Icon
                 color={enabled ? destructive ? colors.error : colors.primary : colors.textMuted}
-                ios={action === 'start' ? 'play.circle.fill' : action === 'stop' ? 'stop.circle.fill' : 'arrow.clockwise.circle.fill'}
+                name={action === 'start' ? 'play-circle' : action === 'stop' ? 'stop-circle' : 'refresh'}
                 size={22}
               />}
             <Text style={[styles.lifecycleButtonText, { color: enabled ? destructive ? colors.error : colors.primary : colors.textMuted }]}>{lifecycleActionLabel(action)}</Text>
@@ -200,7 +199,7 @@ export default function InstanceDirectoryDetailRoute() {
           onPress={() => requestLifecycleAction(retryAction)}
           style={({ pressed }) => [styles.lifecycleButton, (Boolean(lifecycleAction) || state.phase !== 'ready') && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
         >
-          {lifecycleAction === retryAction ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="refresh" color={colors.primary} ios="arrow.clockwise.circle.fill" size={22} />}
+          {lifecycleAction === retryAction ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="refresh" size={22} />}
           <Text style={[styles.lifecycleButtonText, { color: colors.primary }]}>{lifecycleActionLabel(retryAction)}</Text>
         </Pressable> : null}
       </View>
@@ -261,7 +260,7 @@ export default function InstanceDirectoryDetailRoute() {
 function Notice({ error, text }: { error?: boolean; text: string }) {
   const { colors } = useMobileTheme();
   return <View style={[styles.notice, { backgroundColor: error ? colors.errorSoft : colors.notice }]}>
-    <SystemIcon android={error ? 'error' : 'warning'} color={error ? colors.error : colors.noticeText} ios={error ? 'xmark.circle.fill' : 'exclamationmark.triangle.fill'} size={17} />
+    <Icon color={error ? colors.error : colors.noticeText} name={error ? 'alert-circle' : 'warning'} size={17} />
     <Text style={[styles.noticeText, { color: error ? colors.error : colors.noticeText }]}>{text}</Text>
   </View>;
 }

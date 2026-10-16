@@ -4,7 +4,7 @@ import type { Story, StoryAction, StoryAutomationStatus } from '@task-handoff/pr
 
 import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import { ContextPill } from '../components/ContextPill';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useI18n, type Translate } from '../i18n';
@@ -88,7 +88,7 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
       <FormSection title={t('stories.automationAction')}>
         {!automationId ? <SegmentedChoices onSelect={(value) => setActionMode(value as 'existing' | 'new')} options={[{ value: 'existing', label: t('stories.selectAction') }, { value: 'new', label: t('stories.newAction') }]} selected={actionMode} /> : null}
         {actionMode !== 'new' || automationId ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={Boolean(automationId) || saving || !actions.length} onSelect={(value) => set('actionId', value)} options={actions.map((action) => ({ value: action.id, label: action.title, description: action.promptTemplate, systemImage: 'play.fill' }))} selectedValue={draft.actionId} title={t('stories.automationAction')}>
-          {(onPress) => <ContextPill disabled={Boolean(automationId) || saving || !actions.length} icon={{ android: 'bolt', ios: 'bolt' }} label={selectedAction?.title || t('stories.selectAction')} onPress={onPress} />}
+          {(onPress) => <ContextPill disabled={Boolean(automationId) || saving || !actions.length} icon="flash" label={selectedAction?.title || t('stories.selectAction')} onPress={onPress} />}
         </NewSessionContextMenu> : null}
       </FormSection>
 
@@ -113,7 +113,7 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
 
       {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{error}</Text> : null}
       {!(actionMode === 'new' ? configValid : valid) ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('stories.automationRequiredHint')}</Text> : null}
-      {actionMode !== 'new' || automationId ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!valid || saving) && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="schedule" color="#fff" ios="calendar.badge.clock" size={18} /><Text style={styles.submitText}>{t(automationId ? 'common.save' : 'stories.addAutomation')}</Text></>}</Pressable> : null}
+      {actionMode !== 'new' || automationId ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!valid || saving) && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#fff" /> : <><Icon color="#fff" name="time-outline" size={18} /><Text style={styles.submitText}>{t(automationId ? 'common.save' : 'stories.addAutomation')}</Text></>}</Pressable> : null}
     </ScrollView>
   </KeyboardAvoidingView>;
 }

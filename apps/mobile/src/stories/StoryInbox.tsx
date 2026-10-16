@@ -11,7 +11,7 @@ import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types
 import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
@@ -205,7 +205,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     data={sortedStories}
     keyExtractor={storyTreeKey}
     ListEmptyComponent={<EmptyState
-      icon={emptyError ? { android: 'error_outline', ios: 'exclamationmark.circle' } : { android: 'menu_book', ios: 'book' }}
+      icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
       iconColor={emptyError ? colors.error : undefined}
       message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
       style={styles.emptyState}
@@ -263,7 +263,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             title={story.title}
           >
           <Pressable accessibilityRole="button" onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.storyIcon}><SystemIcon android="menu_book" color={colors.primary} ios="book" size={21} /></View>
+            <View style={styles.storyIcon}><Icon color={colors.primary} name="book-outline" size={21} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{story.title}</Text>
@@ -299,7 +299,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             else if (nativeEvent.event === 'delete') removeDocument(story, document);
           }} shouldOpenOnLongPress style={styles.childMenu} title={document.title}>
           <Pressable accessibilityRole="button" onPress={() => onOpenDocument(story, document)} style={({ pressed }) => [styles.childRow, pressed && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.nodeIcon}><SystemIcon android="description" color={colors.textMuted} ios="doc.text" size={18} /></View>
+            <View style={styles.nodeIcon}><Icon color={colors.textMuted} name="document-text-outline" size={18} /></View>
             <View style={styles.rowCopy}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{document.title}</Text>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{document.storyPath}</Text> : null}</View>
           </Pressable></MenuView>)}
           {story.documents.length > STORY_TREE_DOCUMENT_LIMIT && !expandedDocumentKeys.has(key) ? <Pressable accessibilityRole="button" onPress={() => setExpandedDocumentKeys((current) => new Set(current).add(key))} style={({ pressed }) => [styles.moreRow, pressed && styles.pressed]}><Text style={[styles.moreText, { color: colors.primary }]}>{t('stories.moreDocuments')}</Text></Pressable> : null}
@@ -328,9 +328,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
                 }}
                 style={styles.nodeIcon}
                 testID="story-session-disclosure"
-              ><SystemIcon android={expandedSessionIds.has(entry.session.id) ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expandedSessionIds.has(entry.session.id) ? 'chevron.down' : 'chevron.right'} size={18} /></Pressable> : entry.session.status === 'running'
+              ><Icon color={colors.textMuted} name={expandedSessionIds.has(entry.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : entry.session.status === 'running'
                 ? <View style={styles.nodeIcon}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={18} /></View>
-                : <View style={styles.sessionIcon}><SystemIcon android="chat_bubble_outline" color={colors.textMuted} ios="bubble.left" size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
+                : <View style={styles.sessionIcon}><Icon color={colors.textMuted} name="chatbubble-outline" size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
               <View style={styles.rowCopy}><View style={styles.sessionTitleRow}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{entry.session.title || entry.session.userPrompt || entry.session.id}</Text>{entry.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={[styles.unread, { backgroundColor: colors.primary }]} /> : null}</View>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.instanceName} · {mobileAiSessionStatusLabel(entry.session, t)}</Text> : null}</View>
             </Pressable></MenuView>;
           })}
@@ -425,7 +425,7 @@ function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
     style={({ pressed }) => [styles.disclosure, pressed && styles.pressed]}
   >
     <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
-      <SystemIcon android="chevron_right" color={color} ios="chevron.right" size={22} />
+      <Icon color={color} name="chevron-forward" size={17} />
     </Animated.View>
   </Pressable>;
 }

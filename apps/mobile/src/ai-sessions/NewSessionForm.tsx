@@ -7,7 +7,7 @@ import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/contro
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { ContextPill } from '../components/ContextPill';
 import { Screen } from '../components/Screen';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n } from '../i18n';
@@ -86,22 +86,22 @@ export function NewSessionForm(props: NewSessionFormProps) {
       <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.contextRow}>
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstanceId} title={t('sessions.instance')}>
-            {(onPress) => <ContextPill disabled={props.busy || !instanceOptions.length} icon={{ android: 'dns', ios: 'server.rack' }} label={props.selectedInstance?.name || t('sessions.selectInstance')} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || !instanceOptions.length} icon="server-outline" label={props.selectedInstance?.name || t('sessions.selectInstance')} onPress={onPress} />}
           </NewSessionContextMenu>
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onFolderChange} options={folderOptions} selectedValue={props.selectedFolderId ?? ''} title={t('sessions.folder')}>
-            {(onPress) => <ContextPill disabled={props.busy || !folderOptions.length} icon={{ android: 'folder', ios: 'folder' }} label={folderName} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || !folderOptions.length} icon="folder-outline" label={folderName} onPress={onPress} />}
           </NewSessionContextMenu>
           {gitWorkspace ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onWorkspaceModeChange?.(value)} options={workspaceModeOptions} selectedValue={workspaceMode} title={t('sessions.workspaceMode')}>
-            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={workspaceMode === 'worktree' ? t('sessions.worktreeMode') : t('sessions.currentFolderMode')} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading} icon="git-branch-outline" label={workspaceMode === 'worktree' ? t('sessions.worktreeMode') : t('sessions.currentFolderMode')} onPress={onPress} />}
           </NewSessionContextMenu> : null}
           {gitWorkspace && workspaceMode === 'current-folder' ? <NewSessionBranchPicker branches={gitWorkspace.branches} disabled={props.busy || props.workspaceLoading} mode={workspaceMode} onSelect={(value) => props.onBranchChange?.(value)} selectedValue={props.selectedBranch || ''} title={t('sessions.branch')}>
-            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !branchOptions.length} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedBranchLabel} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !branchOptions.length} icon="git-branch-outline" label={selectedBranchLabel} onPress={onPress} />}
           </NewSessionBranchPicker> : null}
           {gitWorkspace && workspaceMode === 'worktree' ? <NewSessionWorktreePicker busy={props.busy} disabled={props.busy || props.workspaceLoading || (!worktrees.length && !gitWorkspace.snapshotId)} newWorktreeLabel={t('sessions.newWorktree')} onNewWorktree={() => props.onNewWorktree?.()} onSelect={(value) => props.onWorktreeChange?.(value)} selectedValue={props.selectedWorktree || ''} title={t('sessions.worktreeMode')} worktrees={worktrees}>
-            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || (!worktrees.length && !gitWorkspace.snapshotId)} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedWorktreeLabel} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || (!worktrees.length && !gitWorkspace.snapshotId)} icon="git-branch-outline" label={selectedWorktreeLabel} onPress={onPress} />}
           </NewSessionWorktreePicker> : null}
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onAgentChange} options={agentOptions} selectedValue={props.selectedAgent} title={t('sessions.agent')}>
-            {(onPress) => <ContextPill disabled={props.busy || !agentOptions.length} icon={{ android: 'auto_awesome', ios: 'sparkles' }} label={selectedAgentName || t('sessions.selectAgent')} onPress={onPress} />}
+            {(onPress) => <ContextPill disabled={props.busy || !agentOptions.length} icon="sparkles" label={selectedAgentName || t('sessions.selectAgent')} onPress={onPress} />}
           </NewSessionContextMenu>
         </View>
 
@@ -128,7 +128,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
 
         {props.attachments.length ? <View style={styles.attachments}>
           {props.attachments.map((attachment) => <View key={attachment.id} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
-            <SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : attachment.textPresentation ? 'doc.plaintext' : 'doc'} size={15} />
+            <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={15} />
             <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size || 0, locale)}` : attachment.name} style={styles.attachmentCopy}>
               <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
               {attachment.textPresentation ? <>
@@ -137,7 +137,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
               </> : null}
             </View>
             <Pressable accessibilityLabel={t('workspace.removeAttachment', { name: attachment.name })} accessibilityRole="button" accessibilityState={{ disabled: props.busy }} disabled={props.busy} hitSlop={8} onPress={() => props.onRemoveAttachment(attachment.id)} style={props.busy ? styles.disabled : undefined}>
-              <SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} />
+              <Icon color={colors.textMuted} name="close-circle" size={17} />
             </Pressable>
           </View>)}
         </View> : null}
@@ -175,7 +175,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
             {modelGroups.length || props.reasoningEffortEnabled ? <ModelSettingsMenu noModelHint={noModelHint} provider={props.selectedAgent} cancelLabel={t('common.cancel')} disabled={props.busy} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
               {(onPress) => <Pressable accessibilityLabel={displayedModelName} accessibilityRole="button" disabled={props.busy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
                 <Text numberOfLines={1} style={[styles.modelLabel, { color: colors.textMuted }]}>{displayedModelName}</Text>
-                <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+                <Icon color={colors.textMuted} name="chevron-down" size={10} />
               </Pressable>}
             </ModelSettingsMenu> : null}
             <Pressable
@@ -186,7 +186,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
               onPress={props.onCreate}
               style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
             >
-              <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
+              <Icon color="#fff" name={props.busy ? 'hourglass-outline' : 'arrow-up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
             </Pressable>
           </View>
         </View>
@@ -229,7 +229,7 @@ function PermissionButton({ disabled, mode, modes, onChange }: { disabled?: bool
       </View>
       <Text style={[styles.permissionLabel, { color: selected.danger ? colors.error : colors.textMuted }]}>{selected.label}</Text>
       <View style={styles.permissionChevron}>
-        <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE} />
+        <Icon color={colors.textMuted} name="chevron-down" size={SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE} />
       </View>
     </Pressable>}
   </AnchoredSelectMenu>;

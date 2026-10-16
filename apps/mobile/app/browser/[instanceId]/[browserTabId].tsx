@@ -9,7 +9,7 @@ import { mobileBrowserTabStore, type MobileBrowserTab } from '../../../src/brows
 import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTransportAddress } from '../../../src/browser/url';
 import { NewSessionContextMenu } from '../../../src/ai-sessions/NewSessionContextMenu';
 import type { AnchoredSelectOption } from '../../../src/components/AnchoredSelectMenu';
-import { SystemIcon } from '../../../src/components/SystemIcon';
+import { Icon } from '../../../src/components/Icon';
 import { useMobileTheme } from '../../../src/components/theme';
 import { useMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../src/i18n';
@@ -150,7 +150,7 @@ export default function MobileBrowserRoute() {
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.content}>
       <View style={[styles.addressRow, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
         <View style={[styles.addressField, { backgroundColor: colors.surfaceMuted }]}>
-          <SystemIcon android="language" color={colors.textMuted} ios="globe" size={16} />
+          <Icon color={colors.textMuted} name="globe-outline" size={16} />
           <TextInput
             accessibilityLabel={t('browser.address')}
             autoCapitalize="none"
@@ -168,11 +168,11 @@ export default function MobileBrowserRoute() {
             value={address}
           />
           {addressFocused && address ? <Pressable accessibilityLabel={t('browser.address')} accessibilityRole="button" hitSlop={8} onPress={() => setTabAddress(tab.id, '')} style={styles.clearButton}>
-            <SystemIcon android="cancel" color={colors.textMuted} ios="xmark.circle.fill" size={16} />
+            <Icon color={colors.textMuted} name="close-circle" size={16} />
           </Pressable> : null}
         </View>
         <Pressable accessibilityLabel={loading ? t('browser.stop') : t('browser.reload')} accessibilityRole="button" hitSlop={8} onPress={() => loading ? activeView()?.stopLoading() : activeView()?.reload()} style={styles.iconButton}>
-          <SystemIcon android={loading ? 'close' : 'refresh'} color={colors.primary} ios={loading ? 'xmark' : 'arrow.clockwise'} size={19} />
+          <Icon color={colors.primary} name={loading ? 'close' : 'refresh'} size={19} />
         </Pressable>
       </View>
       {loading ? <View accessibilityLiveRegion="polite" style={[styles.loadingTrack, { backgroundColor: colors.border }]}><View style={[styles.loadingIndicator, { backgroundColor: colors.primary }]} /></View> : null}
@@ -210,9 +210,9 @@ export default function MobileBrowserRoute() {
         }) : <ActivityIndicator style={styles.loading} />}
       </View>
       <View style={[styles.toolbar, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
-        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.back')} onPress={() => activeView()?.goBack()}><SystemIcon android="arrow_back" color={colors.text} ios="chevron.left" /></ToolbarButton></View>
-        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.forward')} onPress={() => activeView()?.goForward()}><SystemIcon android="arrow_forward" color={colors.text} ios="chevron.right" /></ToolbarButton></View>
-        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.new')} onPress={() => { void newTab(); }}><SystemIcon android="add" color={colors.text} ios="plus" /></ToolbarButton></View>
+        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.back')} onPress={() => activeView()?.goBack()}><Icon color={colors.text} name="arrow-back" /></ToolbarButton></View>
+        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.forward')} onPress={() => activeView()?.goForward()}><Icon color={colors.text} name="arrow-forward" /></ToolbarButton></View>
+        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.new')} onPress={() => { void newTab(); }}><Icon color={colors.text} name="add" /></ToolbarButton></View>
         <View style={styles.toolbarSlot}><NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={(value) => {
             const candidate = instanceTabs.find((entry) => entry.id === value);
             if (candidate) selectTab(candidate);
@@ -221,7 +221,7 @@ export default function MobileBrowserRoute() {
               <View style={[styles.tabCount, { borderColor: colors.text, backgroundColor: colors.surface }]}><Text style={[styles.tabCountText, { color: colors.text }]}>{instanceTabs.length}</Text></View>
             </ToolbarButton>}
           </NewSessionContextMenu></View>
-        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.close')} onPress={() => { void close(); }}><SystemIcon android="close" color={colors.text} ios="xmark" /></ToolbarButton></View>
+        <View style={styles.toolbarSlot}><ToolbarButton label={t('browser.close')} onPress={() => { void close(); }}><Icon color={colors.text} name="close" /></ToolbarButton></View>
       </View>
     </KeyboardAvoidingView>
   </SafeAreaView>;

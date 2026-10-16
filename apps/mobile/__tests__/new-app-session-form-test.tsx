@@ -4,7 +4,7 @@ import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-pl
 import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { NewAppSessionForm } from '../src/app-sessions/NewAppSessionForm';
-import { appLaunchSystemIcon } from '../src/app-sessions/app-launch-icon';
+import { appLaunchIcon } from '../src/app-sessions/app-launch-icon';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
 import { instanceSelectOptions } from '../src/directories/instance-select-options';
 
@@ -62,11 +62,11 @@ test('new App session instance options carry node group labels without subtitles
 });
 
 test('new App session icons follow the desktop App launch categories', () => {
-  expect(appLaunchSystemIcon('codex')).toEqual({ android: 'auto_awesome', ios: 'sparkles' });
-  expect(appLaunchSystemIcon('claude')).toEqual({ android: 'auto_awesome', ios: 'sparkles' });
-  expect(appLaunchSystemIcon('terminal')).toEqual({ android: 'terminal', ios: 'terminal' });
-  expect(appLaunchSystemIcon('terminal-tty')).toEqual({ android: 'terminal', ios: 'terminal' });
-  expect(appLaunchSystemIcon('gui-terminal')).toEqual({ android: 'terminal', ios: 'terminal' });
-  expect(appLaunchSystemIcon('embedded-browser')).toEqual({ android: 'language', ios: 'globe' });
-  expect(appLaunchSystemIcon('opencode')).toEqual({ android: 'play_arrow', ios: 'play.fill' });
+  expect(appLaunchIcon('codex')).toBe('sparkles');
+  expect(appLaunchIcon('claude')).toBe('sparkles');
+  expect(appLaunchIcon('terminal')).toBe('terminal-outline');
+  expect(appLaunchIcon('terminal-tty')).toBe('terminal-outline');
+  expect(appLaunchIcon('gui-terminal')).toBe('terminal-outline');
+  expect(appLaunchIcon('embedded-browser')).toBe('globe-outline');
+  expect(appLaunchIcon('opencode')).toBe('play');
 });

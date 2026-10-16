@@ -2,15 +2,14 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 
 import { OptionMenu, type OptionMenuOption } from '../src/components/OptionMenu';
+import { Icon, type IconName } from '../src/components/Icon';
 import { Screen } from '../src/components/Screen';
 import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
 import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
 import { isMobileTestMode } from '../src/platform/build-variant';
-import { SystemIcon } from '../src/components/SystemIcon';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { useI18n, type LocalePreference } from '../src/i18n';
@@ -92,16 +91,16 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                   style={({ pressed }) => [styles.profileRow, pressed && { backgroundColor: colors.surfaceMuted }]}
                 >
                   <View style={[styles.profileIcon, { backgroundColor: colors.surfaceMuted }]}> 
-                    <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={19} />
+                    <Icon color={colors.textMuted} name="server-outline" size={19} />
                   </View>
                   <View style={styles.profileIdentity}>
                     <View style={styles.profileNameRow}>
                       <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || t('profiles.defaultName')}</Text>
-                      {active ? <SystemIcon android="check_circle" color={colors.primary} ios="checkmark.circle.fill" size={16} /> : null}
+                      {active ? <Icon color={colors.primary} name="checkmark-circle" size={16} /> : null}
                     </View>
                     <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{mobileControlPlaneProfileAddress(profile)}</Text>
                   </View>
-                  <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+                  <Icon color={colors.textMuted} name="chevron-forward" size={13} />
                 </Pressable>
               </View>
             })}
@@ -112,10 +111,10 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
               style={({ pressed }) => [styles.addRow, pressed && { backgroundColor: colors.surfaceMuted }]}
             >
               <View style={[styles.addIcon, { backgroundColor: colors.primarySoft }]}> 
-                <SystemIcon android="add" color={colors.primary} ios="plus" size={17} />
+                <Icon color={colors.primary} name="add" size={17} />
               </View>
               <Text style={[styles.addRowText, { color: colors.primary }]}>{t('profiles.add')}</Text>
-              <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+              <Icon color={colors.textMuted} name="chevron-forward" size={13} />
             </Pressable>
           </View>
           <LanguageRow />
@@ -142,11 +141,11 @@ export function ProfilesWelcome({ onAdd }: { onAdd: () => void }) {
 
       <View style={styles.guide}>
         <View style={[styles.guideCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <GuideItem colors={colors} icon={{ android: 'lock', ios: 'lock' }} title={t('profiles.secureTitle')} description={t('profiles.secureDescription')} />
+          <GuideItem colors={colors} icon="lock-closed" title={t('profiles.secureTitle')} description={t('profiles.secureDescription')} />
           <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-          <GuideItem colors={colors} icon={{ android: 'sync', ios: 'arrow.triangle.2.circlepath' }} title={t('profiles.syncTitle')} description={t('profiles.syncDescription')} />
+          <GuideItem colors={colors} icon="sync-outline" title={t('profiles.syncTitle')} description={t('profiles.syncDescription')} />
           <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-          <GuideItem colors={colors} icon={{ android: 'visibility', ios: 'eye' }} title={t('profiles.controlTitle')} description={t('profiles.controlDescription')} />
+          <GuideItem colors={colors} icon="eye-outline" title={t('profiles.controlTitle')} description={t('profiles.controlDescription')} />
         </View>
         <NativeActionButton label={t('profiles.connect')} onPress={onAdd} />
       </View>
@@ -167,10 +166,10 @@ function LanguageRow({ compact = false }: { compact?: boolean }) {
   const options: OptionMenuOption<LocalePreference>[] = (Object.keys(labels) as LocalePreference[]).map((value) => ({ label: labels[value], value }));
   return <OptionMenu cancelLabel={t('common.cancel')} onSelect={(value) => { void setPreference(value); }} options={options} selectedValue={preference} title={t('locale.language')}>
     {(open) => <Pressable accessibilityRole="button" onPress={open} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <SystemIcon android="language" color={colors.textMuted} ios="globe" size={18} />
+      <Icon color={colors.textMuted} name="globe-outline" size={18} />
       <Text style={[styles.languageLabel, { color: colors.text }]}>{t('locale.language')}</Text>
       <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={12} />
     </Pressable>}
   </OptionMenu>;
 }
@@ -182,19 +181,19 @@ function AppearanceRow({ compact = false }: { compact?: boolean }) {
   const options: OptionMenuOption<AppearancePreference>[] = (Object.keys(labels) as AppearancePreference[]).map((value) => ({ label: labels[value], systemImage: value === 'light' ? 'sun.max' : value === 'dark' ? 'moon' : 'circle.lefthalf.filled', value }));
   return <OptionMenu cancelLabel={t('common.cancel')} onSelect={(value) => { void setPreference(value); }} options={options} selectedValue={preference} title={t('appearance.title')}>
     {(open) => <Pressable accessibilityRole="button" onPress={open} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <SystemIcon android="dark_mode" color={colors.textMuted} ios="circle.lefthalf.filled" size={18} />
+      <Icon color={colors.textMuted} name="contrast-outline" size={18} />
       <Text style={[styles.languageLabel, { color: colors.text }]}>{t('appearance.title')}</Text>
       <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={12} />
     </Pressable>}
   </OptionMenu>;
 }
 
-function GuideItem({ colors, icon, title, description }: { colors: ReturnType<typeof useMobileTheme>['colors']; icon: { android: AndroidSymbol; ios: SFSymbol }; title: string; description: string }) {
+function GuideItem({ colors, icon, title, description }: { colors: ReturnType<typeof useMobileTheme>['colors']; icon: IconName; title: string; description: string }) {
   return (
     <View style={styles.guideItem}>
       <View style={styles.guideIcon}>
-        <SystemIcon android={icon.android} color={colors.primary} ios={icon.ios} size={21} />
+        <Icon color={colors.primary} name={icon} size={21} />
       </View>
       <View style={styles.guideCopy}>
         <Text style={[styles.guideTitle, { color: colors.text }]}>{title}</Text>

@@ -1,5 +1,5 @@
 import type { MenuAction } from '@expo/ui/community/menu';
-import { androidSymbolForSfSymbol } from './menu-icons';
+import { menuIconForSfSymbol } from './menu-icons';
 import type { FloatingMenuBlock, FloatingMenuItem, FloatingMenuPage } from './menu-model';
 
 /** `@react-native-menu/menu` (and the iOS screen builders) attach a subtitle to actions. */
@@ -18,7 +18,7 @@ function itemFromAction(
   return {
     disabled: action.attributes?.disabled,
     destructive: action.attributes?.destructive,
-    icon: androidSymbolForSfSymbol(typeof image === 'string' ? image : undefined),
+    icon: menuIconForSfSymbol(typeof image === 'string' ? image : undefined),
     iconColor: typeof action.imageColor === 'string' ? action.imageColor : undefined,
     iconSource: typeof image === 'string' || image === undefined ? undefined : image,
     key: actionId(action),

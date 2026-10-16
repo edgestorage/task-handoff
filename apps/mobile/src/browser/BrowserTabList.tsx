@@ -7,7 +7,7 @@ import { useMobileTheme } from '../components/theme';
 import { EmptyState } from '../components/EmptyState';
 import { SwipeActionList } from '../components/SwipeActionList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import type { AiSessionScope } from '../ai-sessions/store';
 import { useI18n } from '../i18n';
@@ -44,7 +44,7 @@ export function BrowserTabList({ directory, scope, header }: Props) {
     data={tabs}
     itemContainerStyle={styles.cardContainer}
     keyExtractor={(tab) => tab.id}
-    ListEmptyComponent={<EmptyState icon={{ android: 'language', ios: 'globe' }} message={t('browser.empty')} style={styles.empty} />}
+    ListEmptyComponent={<EmptyState icon="globe-outline" message={t('browser.empty')} style={styles.empty} />}
     ListHeaderComponent={header}
     onRefresh={pullToRefresh.onRefresh}
     refreshing={pullToRefresh.refreshing}
@@ -64,7 +64,7 @@ export function BrowserTabList({ directory, scope, header }: Props) {
           >
             <View style={styles.titleRow}>
               <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{title}</Text>
-              {tab.loading ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="language" color={colors.textMuted} ios="globe" size={15} />}
+              {tab.loading ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.textMuted} name="globe-outline" size={15} />}
             </View>
             <Text numberOfLines={1} style={[styles.url, { color: colors.textMuted }]}>{tab.currentUrl}</Text>
             <Text numberOfLines={1} style={[styles.instance, { color: colors.textMuted }]}>{instance?.name || tab.instanceId}</Text>

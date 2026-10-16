@@ -3,8 +3,8 @@ import { ActivityIndicator, Keyboard, Linking, Pressable, StyleSheet, Text, Text
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 
 import { Screen } from '../../src/components/Screen';
+import { Icon, type IconName } from '../../src/components/Icon';
 import { NativeActionButton } from '../../src/components/NativeActionButton';
-import { SystemIcon } from '../../src/components/SystemIcon';
 import { useMobileTheme } from '../../src/components/theme';
 import {
   DirectEnrollmentError,
@@ -109,7 +109,7 @@ export default function AddControlPlaneScreen() {
 
         {reauthenticate ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}>
-            <SystemIcon android="lock_clock" color={colors.noticeText} ios="clock.badge.exclamationmark" size={17} />
+            <Icon color={colors.noticeText} name="time-outline" size={17} />
             <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('enroll.sessionExpired')}</Text>
           </View>
         ) : null}
@@ -123,7 +123,7 @@ export default function AddControlPlaneScreen() {
             <SectionLabel label={t('enroll.connection')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
               <View style={styles.inputRow}>
-                <SystemIcon android="language" color={colors.textMuted} ios="network" size={19} />
+                <Icon color={colors.textMuted} name="globe-outline" size={19} />
                 <TextInput
                   accessibilityLabel={t('enroll.address')}
                   autoCapitalize="none"
@@ -138,19 +138,19 @@ export default function AddControlPlaneScreen() {
                   style={[styles.input, { color: colors.text }]}
                   value={address}
                 />
-                {address ? <Pressable accessibilityLabel="Clear address" hitSlop={10} onPress={() => setAddress('')}><SystemIcon android="cancel" color={colors.textMuted} ios="xmark.circle.fill" size={18} /></Pressable> : null}
+                {address ? <Pressable accessibilityLabel="Clear address" hitSlop={10} onPress={() => setAddress('')}><Icon color={colors.textMuted} name="close-circle" size={18} /></Pressable> : null}
               </View>
             </View>
             <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('enroll.verifyHelp')}</Text>
 
             {isMobileTestMode ? (
               <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
-                <SystemIcon android="warning" color={colors.noticeText} ios="exclamationmark.triangle.fill" size={17} />
+                <Icon color={colors.noticeText} name="warning" size={17} />
                 <Text style={[styles.noticeText, { color: colors.noticeText }]}><Text style={styles.noticeStrong}>{t('enroll.testMode')}</Text>{t('enroll.testModeHelp')}</Text>
               </View>
             ) : null}
 
-            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon={{ android: 'verified_user', ios: 'checkmark.shield' }} label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
+            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon="shield-checkmark-outline" label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
             {isMobileFeatureEnabled('officialAccount') ? <NativeActionButton compact disabled={busy} label={t('enroll.cloudAccount')} onPress={() => { void openCloudAccount(); }} /> : null}
           </>
         ) : null}
@@ -159,18 +159,18 @@ export default function AddControlPlaneScreen() {
           <>
             <SectionLabel label={t('enroll.verifiedIdentity')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-              <IdentityRow icon="network" label={t('controlPlane.address')} value={target.origin} />
+              <IdentityRow icon="globe-outline" label={t('controlPlane.address')} value={target.origin} />
               <Divider color={colors.border} />
-              <IdentityRow icon="server.rack" label={t('controlPlane.id')} value={target.identity.controlPlaneId} />
+              <IdentityRow icon="server-outline" label={t('controlPlane.id')} value={target.identity.controlPlaneId} />
               <Divider color={colors.border} />
-              <IdentityRow icon="key.horizontal" label={t('enroll.signingKey')} value={target.identity.publicKey.fingerprint} monospace />
+              <IdentityRow icon="key-outline" label={t('enroll.signingKey')} value={target.identity.publicKey.fingerprint} monospace />
             </View>
             <View style={styles.verifiedNote}>
-              <SystemIcon android="verified_user" color="#34c759" ios="checkmark.seal.fill" size={20} />
+              <Icon color="#34c759" name="shield-checkmark" size={20} />
               <Text style={[styles.verifiedText, { color: colors.textMuted }]}>{t('enroll.verifiedHelp')}</Text>
             </View>
             {existing ? <View style={[styles.notice, { backgroundColor: colors.notice }]}><Text style={[styles.noticeText, { color: colors.noticeText }]}>{t('enroll.existing')}</Text></View> : null}
-            <View style={styles.primaryAction}><NativeActionButton icon={{ android: 'arrow_forward', ios: 'arrow.right' }} label={t('enroll.continueSignIn')} onPress={() => { setError(undefined); setStep('credentials'); }} /></View>
+            <View style={styles.primaryAction}><NativeActionButton icon="arrow-forward" label={t('enroll.continueSignIn')} onPress={() => { setError(undefined); setStep('credentials'); }} /></View>
             <NativeActionButton compact label={t('enroll.differentAddress')} onPress={() => { setError(undefined); setTarget(undefined); setStep('address'); }} />
           </>
         ) : null}
@@ -180,7 +180,7 @@ export default function AddControlPlaneScreen() {
             <SectionLabel label={t('enroll.signIn')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
               <View style={styles.inputRow}>
-                <SystemIcon android="person" color={colors.textMuted} ios="person" size={19} />
+                <Icon color={colors.textMuted} name="person-outline" size={19} />
                 <TextInput
                   accessibilityLabel={t('enroll.username')}
                   autoCapitalize="none"
@@ -197,7 +197,7 @@ export default function AddControlPlaneScreen() {
               </View>
               <Divider color={colors.border} inset />
               <View style={styles.inputRow}>
-                <SystemIcon android="lock" color={colors.textMuted} ios="lock" size={19} />
+                <Icon color={colors.textMuted} name="lock-closed" size={19} />
                 <TextInput
                   accessibilityLabel={t('enroll.password')}
                   editable={!busy}
@@ -214,13 +214,13 @@ export default function AddControlPlaneScreen() {
               </View>
             </View>
             <Text numberOfLines={1} style={[styles.footnote, { color: colors.textMuted }]}>{t('enroll.signingInto', { address: target.origin })}</Text>
-            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !username.trim() || !password} icon={{ android: 'login', ios: 'person.badge.key' }} label={existing ? t('enroll.signInUpdate') : t('enroll.connectControlPlane')} onPress={() => { void connect(); }} /></View>
+            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !username.trim() || !password} icon="log-in-outline" label={existing ? t('enroll.signInUpdate') : t('enroll.connectControlPlane')} onPress={() => { void connect(); }} /></View>
             <NativeActionButton compact disabled={busy} label={t('enroll.backIdentity')} onPress={() => { setError(undefined); setStep('identity'); }} />
           </>
         ) : null}
 
         {busy ? <View style={styles.busyRow}><ActivityIndicator accessibilityLabel={step === 'address' ? t('enroll.verifying') : t('enroll.connecting')} /><Text style={[styles.busyText, { color: colors.textMuted }]}>{step === 'address' ? t('enroll.verifyingIdentity') : t('enroll.signingIn')}</Text></View> : null}
-        {error ? <View style={[styles.errorGroup, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.circle.fill" size={18} /><View style={styles.errorContent}><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text>{passwordChangeRequired && target ? <NativeActionButton compact label={t('enroll.openPasswordChange')} onPress={() => { void Linking.openURL(target.origin).catch((cause) => setError(messageFor(cause, t))); }} /> : null}</View></View> : null}
+        {error ? <View style={[styles.errorGroup, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={18} /><View style={styles.errorContent}><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text>{passwordChangeRequired && target ? <NativeActionButton compact label={t('enroll.openPasswordChange')} onPress={() => { void Linking.openURL(target.origin).catch((cause) => setError(messageFor(cause, t))); }} /> : null}</View></View> : null}
       </Screen>
     </>
   );
@@ -234,11 +234,11 @@ function Divider({ color, inset = false }: { color: string; inset?: boolean }) {
   return <View style={[styles.divider, inset && styles.dividerInset, { backgroundColor: color }]} />;
 }
 
-function IdentityRow({ icon, label, monospace, value }: { icon: 'network' | 'server.rack' | 'key.horizontal'; label: string; monospace?: boolean; value: string }) {
+function IdentityRow({ icon, label, monospace, value }: { icon: IconName; label: string; monospace?: boolean; value: string }) {
   const { colors } = useMobileTheme();
   return (
     <View style={styles.identityRow}>
-      <SystemIcon android={icon === 'network' ? 'language' : icon === 'server.rack' ? 'dns' : 'key'} color={colors.textMuted} ios={icon} size={18} />
+      <Icon color={colors.textMuted} name={icon} size={18} />
       <View style={styles.identityCopy}>
         <Text style={[styles.identityLabel, { color: colors.textMuted }]}>{label}</Text>
         <Text selectable numberOfLines={2} style={[styles.identityValue, monospace && styles.monospace, { color: colors.text }]}>{value}</Text>

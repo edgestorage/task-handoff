@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n } from '../i18n';
@@ -16,9 +16,9 @@ export function InstanceScopeHeaderButton() {
   const selected = scope.kind === 'instance' ? state.instances.find((instance) => instance.id === scope.instanceId) : undefined;
   const label = selected?.name || (scope.kind === 'instance' ? scope.instanceId : t('scope.allInstances'));
   return <Pressable accessibilityRole="button" onPress={openDrawer} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
-    <SystemIcon android={scope.kind === 'all' ? 'select_all' : 'deployed_code'} color={colors.primary} ios={scope.kind === 'all' ? 'square.grid.2x2' : 'shippingbox'} size={17} />
+    <Icon color={colors.primary} name={scope.kind === 'all' ? 'grid-outline' : 'layers-outline'} size={17} />
     <Text numberOfLines={1} style={[styles.label, { color: colors.primary }]}>{label}</Text>
-    <SystemIcon android="expand_more" color={colors.primary} ios="chevron.down" size={10} />
+    <Icon color={colors.primary} name="chevron-down" size={10} />
   </Pressable>;
 }
 

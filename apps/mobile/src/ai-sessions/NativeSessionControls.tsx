@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { FloatingMenuTrigger } from '../components/menu/FloatingMenuTrigger';
 import type { FloatingMenuBlock } from '../components/menu/menu-model';
 import { mobileWebType } from '../components/mobile-web-typography';
@@ -27,9 +27,9 @@ export function SessionComposerToolbar(props: ComposerToolbarProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const attachmentBlocks: FloatingMenuBlock[] = [
-    { item: { disabled: props.imageDisabled, icon: 'image', key: 'image', label: t('composer.photo'), onPress: props.onAddImage }, key: 'image', type: 'item' },
-    { item: { disabled: props.fileDisabled, icon: 'attach_file', key: 'file', label: t('composer.deviceFile'), onPress: props.onAddFile }, key: 'file', type: 'item' },
-    { item: { disabled: props.runtimeFileDisabled, icon: 'folder', key: 'runtime-file', label: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
+    { item: { disabled: props.imageDisabled, icon: 'image-outline', key: 'image', label: t('composer.photo'), onPress: props.onAddImage }, key: 'image', type: 'item' },
+    { item: { disabled: props.fileDisabled, icon: 'attach-outline', key: 'file', label: t('composer.deviceFile'), onPress: props.onAddFile }, key: 'file', type: 'item' },
+    { item: { disabled: props.runtimeFileDisabled, icon: 'folder-outline', key: 'runtime-file', label: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
   ];
   const attachmentDisabled = props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
   const permissionOptions: AnchoredSelectOption<AiSessionPermissionMode>[] = [
@@ -39,23 +39,23 @@ export function SessionComposerToolbar(props: ComposerToolbarProps) {
   ];
   return <View style={styles.toolbar}>
     <FloatingMenuTrigger disabled={attachmentDisabled} page={attachmentDisabled ? null : { blocks: attachmentBlocks, title: t('composer.addAttachment') }}>
-      {(open) => <IconButton android="add_circle_outline" ios="plus.circle" label={t('composer.addAttachment')} disabled={attachmentDisabled} onPress={open} />}
+      {(open) => <IconButton disabled={attachmentDisabled} label={t('composer.addAttachment')} name="add-circle-outline" onPress={open} />}
     </FloatingMenuTrigger>
     <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onPermissionModeChange} options={permissionOptions} selectedValue={props.permissionMode} title={t('composer.permissionMode')}>
       {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={open} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}>
-        <SystemIcon android="shield" color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} ios={permissionIcon(props.permissionMode)} size={15} />
+        <Icon color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} name={permissionIcon(props.permissionMode)} size={15} />
         <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode, t)}</Text>
-        <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+        <Icon color={colors.textMuted} name="chevron-down" size={10} />
       </Pressable>}
     </AnchoredSelectMenu>
-    {props.showInterrupt ? <IconButton android="stop_circle" ios="stop.circle.fill" label={t('composer.interrupt')} color={colors.error} disabled={props.interruptDisabled} onPress={props.onInterrupt} /> : null}
+    {props.showInterrupt ? <IconButton color={colors.error} disabled={props.interruptDisabled} label={t('composer.interrupt')} name="stop-circle" onPress={props.onInterrupt} /> : null}
   </View>;
 }
 
-export function NativePrimaryButton({ busy, disabled, label, systemImage, onPress }: { busy?: boolean; disabled?: boolean; label: string; systemImage: Parameters<typeof SystemIcon>[0]['ios']; onPress(): void }) {
+export function NativePrimaryButton({ busy, disabled, label, icon, onPress }: { busy?: boolean; disabled?: boolean; label: string; icon: IconName; onPress(): void }) {
   const { colors } = useMobileTheme();
   return <Pressable accessibilityRole="button" accessibilityState={{ busy, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primaryButton }, disabled && styles.disabled, pressed && styles.pressed]}>
-    <SystemIcon android="play_arrow" color="#ffffff" ios={systemImage} size={15} />
+    <Icon color="#ffffff" name={icon} size={15} />
     <Text style={styles.primaryButtonText}>{label}</Text>
   </Pressable>;
 }
@@ -64,13 +64,13 @@ export function permissionLabel(mode: AiSessionPermissionMode, t: Translate) {
   return mode === 'ask' ? t('composer.ask') : mode === 'auto-review' ? t('composer.autoReview') : t('composer.fullAccess');
 }
 
-function permissionIcon(mode: AiSessionPermissionMode): Parameters<typeof SystemIcon>[0]['ios'] {
-  return mode === 'ask' ? 'hand.raised' : mode === 'auto-review' ? 'checkmark.shield' : 'exclamationmark.shield';
+function permissionIcon(mode: AiSessionPermissionMode): IconName {
+  return mode === 'ask' ? 'hand-left-outline' : mode === 'auto-review' ? 'shield-checkmark-outline' : 'warning-outline';
 }
 
-function IconButton({ android, ios, label, color, disabled, onPress }: { android: Parameters<typeof SystemIcon>[0]['android']; ios: Parameters<typeof SystemIcon>[0]['ios']; label: string; color?: string; disabled?: boolean; onPress(): void }) {
+function IconButton({ name, label, color, disabled, onPress }: { name: IconName; label: string; color?: string; disabled?: boolean; onPress(): void }) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.iconButton, disabled && styles.disabled, pressed && styles.pressed]}><SystemIcon android={android} color={color || colors.primary} ios={ios} size={20} /></Pressable>;
+  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.iconButton, disabled && styles.disabled, pressed && styles.pressed]}><Icon color={color || colors.primary} name={name} size={20} /></Pressable>;
 }
 
 const styles = StyleSheet.create({

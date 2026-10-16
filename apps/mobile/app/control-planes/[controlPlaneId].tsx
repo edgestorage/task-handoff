@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 
-import { SystemIcon } from '../../src/components/SystemIcon';
+import { Icon } from '../../src/components/Icon';
 import { useMobileTheme } from '../../src/components/theme';
 import { ControlPlaneDetailContent } from '../../src/control-plane/ControlPlaneDetailContent';
 import type { MobileControlPlaneProfile } from '../../src/control-plane/profile';
@@ -93,7 +93,7 @@ export default function ControlPlaneDetailScreen() {
       <>
         <Stack.Screen options={{ title: t('nav.controlPlane') }} />
         <View style={[styles.empty, { backgroundColor: colors.background }]}>
-          <SystemIcon android="error_outline" color={colors.textMuted} ios="exclamationmark.circle" size={30} />
+          <Icon color={colors.textMuted} name="alert-circle-outline" size={30} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('controlPlane.notFound')}</Text>
           <Text style={[styles.emptyText, { color: colors.textMuted }]}>{t('controlPlane.maybeRemoved')}</Text>
         </View>

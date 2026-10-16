@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { RepositoryAiSessionWorkspaceBranch } from '@task-handoff/protocol/repository';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 
@@ -75,11 +75,11 @@ export function NewSessionBranchPicker(props: {
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.text }]}>{props.title}</Text>
             <Pressable accessibilityLabel={t('common.cancel')} accessibilityRole="button" hitSlop={8} onPress={() => setOpen(false)}>
-              <SystemIcon android="close" color={colors.textMuted} ios="xmark" size={17} />
+              <Icon color={colors.textMuted} name="close" size={17} />
             </Pressable>
           </View>
           <View style={[styles.search, { backgroundColor: colors.surfaceMuted }]}>
-            <SystemIcon android="search" color={colors.textMuted} ios="magnifyingglass" size={15} />
+            <Icon color={colors.textMuted} name="search" size={15} />
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
@@ -105,18 +105,16 @@ export function NewSessionBranchPicker(props: {
                 style={({ pressed }) => [styles.row, { paddingLeft: 12 + item.depth * 18 }, disabled && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
               >
                 <View style={styles.toggleSlot}>
-                  {item.kind === 'folder' ? <SystemIcon
-                    android="chevron_right"
+                  {item.kind === 'folder' ? <Icon
                     color={colors.textMuted}
-                    ios="chevron.right"
+                    name="chevron-forward"
                     size={9}
                     style={item.expanded ? styles.expanded : undefined}
                   /> : null}
                 </View>
-                <SystemIcon
-                  android={item.kind === 'folder' ? (item.expanded ? 'folder_open' : 'folder') : 'account_tree'}
+                <Icon
                   color={item.kind === 'folder' ? colors.textMuted : colors.text}
-                  ios={item.kind === 'folder' ? (item.expanded ? 'folder.fill' : 'folder') : 'arrow.triangle.branch'}
+                  name={item.kind === 'folder' ? (item.expanded ? 'folder-open' : 'folder-outline') : 'git-branch-outline'}
                   size={16}
                 />
                 <Text numberOfLines={1} style={[styles.rowLabel, { color: item.kind === 'folder' ? colors.textMuted : colors.text }]}>{item.label}</Text>
@@ -125,7 +123,7 @@ export function NewSessionBranchPicker(props: {
                   ? <Text style={[styles.meta, { color: colors.textMuted }]}>{t('sessions.detached')}</Text>
                   : null}
                 {item.kind === 'branch' && item.branch.name === props.selectedValue
-                  ? <SystemIcon android="check" color={colors.primary} ios="checkmark" size={15} />
+                  ? <Icon color={colors.primary} name="checkmark" size={15} />
                   : null}
               </Pressable>;
             }}

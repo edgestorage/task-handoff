@@ -5,7 +5,7 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import type { MobileDirectoryProfileState } from './store';
 import { useMobileTheme } from '../components/theme';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenFlatList } from '../components/ScreenFlatList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
@@ -15,7 +15,7 @@ import { useI18n, type Translate } from '../i18n';
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList emptyIcon={{ android: 'dns', ios: 'server.rack' }} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => {
+  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList emptyIcon="server-outline" state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => {
     const fleetState = state.nodeStates.find((entry) => entry.nodeId === node.id && entry.resource === 'instances');
     return (
     <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node, t)} subtitle={connectionModeLabel(node.connectionMode, t)}>
@@ -68,7 +68,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state
         <FilterPill label={t('directories.ai')} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} options={aiOptions} title={t('directories.ai')} value={selectedAi} />
       </ScrollView>
     </View>
-    <DirectoryListContent emptyIcon={{ android: 'deployed_code', ios: 'shippingbox' }} state={state} data={instances} keyOf={(instance) => instance.id} onRefresh={pullToRefresh.onRefresh} refreshing={pullToRefresh.refreshing} render={(instance) => (
+    <DirectoryListContent emptyIcon="layers-outline" state={state} data={instances} keyOf={(instance) => instance.id} onRefresh={pullToRefresh.onRefresh} refreshing={pullToRefresh.refreshing} render={(instance) => (
       <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{!nodeId ? `${nodeLabel(state, instance.nodeId, t)} · ` : ''}{runtimeSummary(instance)}</Text>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt, t) : t('directories.heartbeatMissing')}</Text>
@@ -80,7 +80,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state
   </View>;
 }
 
-type DirectoryEmptyIcon = Pick<React.ComponentProps<typeof SystemIcon>, 'android' | 'ios'>;
+type DirectoryEmptyIcon = IconName;
 
 function DirectoryList<T>({ state, data, emptyIcon, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; emptyIcon: DirectoryEmptyIcon; keyOf(item: T): string; render(item: T): React.ReactElement }) {
   const { colors } = useMobileTheme();
@@ -106,7 +106,7 @@ function DirectoryListContent<T>({ state, data, emptyIcon, keyOf, onRefresh, ref
 function DirectoryBanner({ error, text }: { error?: boolean; text: string }) {
   const { colors } = useMobileTheme();
   return <View style={[styles.banner, { backgroundColor: error ? colors.errorSoft : colors.notice }]}>
-    <SystemIcon android={error ? 'error' : 'warning'} color={error ? colors.error : colors.noticeText} ios={error ? 'xmark.circle.fill' : 'exclamationmark.triangle.fill'} size={17} />
+    <Icon color={error ? colors.error : colors.noticeText} name={error ? 'alert-circle' : 'warning'} size={17} />
     <Text style={[styles.bannerText, { color: error ? colors.error : colors.noticeText }]}>{text}</Text>
   </View>;
 }
@@ -138,7 +138,7 @@ function FilterPill({ label, onChange, options, title, value }: { label: string;
     {(onPress) => <Pressable accessibilityLabel={`${label}: ${valueLabel}`} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.filterPill, { backgroundColor: active ? colors.primarySoft : colors.surface, borderColor: active ? colors.primary : colors.border }, pressed && styles.pressed]}>
       <Text style={[styles.filterPillLabel, { color: active ? colors.primary : colors.textMuted }]}>{label}</Text>
       <Text numberOfLines={1} style={[styles.filterPillValue, { color: active ? colors.primary : colors.text }]}>{valueLabel}</Text>
-      <SystemIcon android="expand_more" color={active ? colors.primary : colors.textMuted} ios="chevron.down" size={11} />
+      <Icon color={active ? colors.primary : colors.textMuted} name="chevron-down" size={11} />
     </Pressable>}
   </AnchoredSelectMenu>;
 }
@@ -172,13 +172,13 @@ function DirectoryCard({ title, subtitle, children, icon, onPress }: React.Props
   return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.cardPressed]}>
     <View style={styles.cardHeader}>
       <View style={[styles.cardIcon, { backgroundColor: colors.surfaceMuted }]}>
-        <SystemIcon android={icon === 'node' ? 'dns' : 'deployed_code'} color={colors.textMuted} ios={icon === 'node' ? 'server.rack' : 'shippingbox'} size={20} />
+        <Icon color={colors.textMuted} name={icon === 'node' ? 'server-outline' : 'layers-outline'} size={20} />
       </View>
       <View style={styles.cardHeading}>
         <Text numberOfLines={1} style={[styles.cardTitle, { color: colors.text }]}>{title}</Text>
         <Text style={[styles.subtitle, { color: colors.textMuted }]}>{subtitle}</Text>
       </View>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={14} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
     </View>
     <View style={styles.cardBody}>{children}</View>
   </Pressable>;

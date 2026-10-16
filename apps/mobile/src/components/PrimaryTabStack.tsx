@@ -3,7 +3,7 @@ import type { NativeStackHeaderItem } from 'expo-router';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import type { ReactNode } from 'react';
 
-import { SystemIcon } from './SystemIcon';
+import { Icon } from './Icon';
 import { iosTransparentHeaderOptions } from './navigation-header';
 import { useMobileTheme } from './theme';
 import { InstanceScopeHeaderButton } from '../instance-scope/InstanceScopeHeaderButton';
@@ -48,7 +48,7 @@ export function PrimaryTabStack({
     } : {
       headerStyle: { backgroundColor: colors.surface },
       headerLeft: () => <View style={styles.androidHeaderLeft}>{scopeButton}</View>,
-      ...(headerRight ? { headerRight } : addItem ? { headerRight: () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><SystemIcon android="add" color={colors.primary} ios="plus" size={20} /></Pressable> } : undefined),
+      ...(headerRight ? { headerRight } : addItem ? { headerRight: () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><Icon color={colors.primary} name="add" size={20} /></Pressable> } : undefined),
     }),
   }} />;
 }

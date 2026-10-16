@@ -63,9 +63,7 @@ export function AppSessionList({ state, directory, onCloseSession, onRefresh, sc
     keyExtractor={(entry) => `${entry.instanceId}:${entry.session.id}`}
     ListHeaderComponent={<>{header}{statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}</>}
     ListEmptyComponent={<EmptyState
-      icon={state.sync.phase === 'error'
-        ? { android: 'error_outline', ios: 'exclamationmark.circle' }
-        : { android: 'deployed_code', ios: 'shippingbox' }}
+      icon={state.sync.phase === 'error' ? 'alert-circle-outline' : 'layers-outline'}
       iconColor={state.sync.phase === 'error' ? colors.error : undefined}
       message={state.sync.phase === 'error' ? t('appSessions.loadError') : t('appSessions.empty')}
       style={styles.empty}

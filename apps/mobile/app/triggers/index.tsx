@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { router, Stack } from 'expo-router';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { SystemIcon } from '../../src/components/SystemIcon';
+import { Icon } from '../../src/components/Icon';
 import { useMobileTheme } from '../../src/components/theme';
 import { useI18n } from '../../src/i18n';
 import { triggerSourceSummary } from '../../src/triggers/model';
@@ -22,7 +22,7 @@ export default function TriggerListRoute() {
   return <>
     <Stack.Screen options={{
       title: t('triggers.title'),
-      headerRight: triggers.state.canMutate ? () => <Pressable accessibilityLabel={t('triggers.create')} hitSlop={10} onPress={() => router.push('/triggers/new' as never)}><SystemIcon android="add_circle" color={colors.primary} ios="plus.circle" size={23} /></Pressable> : undefined,
+      headerRight: triggers.state.canMutate ? () => <Pressable accessibilityLabel={t('triggers.create')} hitSlop={10} onPress={() => router.push('/triggers/new' as never)}><Icon color={colors.primary} name="add-circle-outline" size={23} /></Pressable> : undefined,
     }} />
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.screen} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />} style={{ backgroundColor: colors.background }}>
       <View style={styles.stats}>
@@ -37,7 +37,7 @@ export default function TriggerListRoute() {
       {!items.length && triggers.state.phase !== 'loading' ? <Text style={[styles.message, { color: colors.textMuted }]}>{t('triggers.empty')}</Text> : null}
       {items.map((item) => <Pressable key={item.configHash} onPress={() => router.push({ pathname: '/triggers/[configHash]' as never, params: { configHash: item.configHash } })} style={({ pressed }) => [styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.pressed]}>
         <View style={styles.cardHead}><View style={styles.cardCopy}><Text numberOfLines={1} style={[styles.cardTitle, { color: colors.text }]}>{item.config.name}</Text>{item.config.description ? <Text numberOfLines={2} style={[styles.description, { color: colors.textMuted }]}>{item.config.description}</Text> : null}</View><StatusBadge error={item.errorCount > 0} label={item.errorCount ? t('triggers.statusError') : item.runningCount ? t('triggers.statusRunning') : item.deploymentCount ? t('triggers.statusActive') : t('triggers.statusUndeployed')} /></View>
-        <View style={styles.source}><SystemIcon android={item.config.source.type === 'schedule' ? 'schedule' : item.config.source.type === 'file-change' ? 'folder' : 'auto_awesome'} color={colors.textMuted} ios={item.config.source.type === 'schedule' ? 'clock' : item.config.source.type === 'file-change' ? 'folder.badge.gearshape' : 'sparkles'} size={15} /><Text numberOfLines={2} style={[styles.sourceText, { color: colors.textMuted }]}>{triggerSourceSummary(item.config.source)}</Text></View>
+        <View style={styles.source}><Icon color={colors.textMuted} name={item.config.source.type === 'schedule' ? 'time-outline' : item.config.source.type === 'file-change' ? 'folder-outline' : 'sparkles'} size={15} /><Text numberOfLines={2} style={[styles.sourceText, { color: colors.textMuted }]}>{triggerSourceSummary(item.config.source)}</Text></View>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{t('triggers.bindingSummary', { deployments: item.deploymentCount, enabled: item.enabledCount })}</Text>
       </Pressable>)}
     </ScrollView>

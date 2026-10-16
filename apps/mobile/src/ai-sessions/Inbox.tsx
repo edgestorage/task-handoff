@@ -11,7 +11,7 @@ import type { AiSessionScope, MobileAiSessionProfileState } from './store';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { SwipeActionList } from '../components/SwipeActionList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
@@ -132,8 +132,8 @@ export function AiSessionInbox({
           </View>}
           ListEmptyComponent={<EmptyState
             icon={state.sync.phase === 'error'
-              ? { android: 'error_outline', ios: 'exclamationmark.circle' }
-              : { android: 'chat_bubble_outline', ios: 'bubble.left.and.bubble.right' }}
+              ? 'alert-circle-outline'
+              : 'chatbubbles-outline'}
             iconColor={state.sync.phase === 'error' ? colors.error : undefined}
             message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
             style={styles.empty}
@@ -185,7 +185,7 @@ export function AiSessionInbox({
                       }}
                       style={styles.disclosure}
                       testID="session-disclosure"
-                    ><SystemIcon android={expandedSessionIds.has(item.session.id) ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expandedSessionIds.has(item.session.id) ? 'chevron.down' : 'chevron.right'} size={18} /></Pressable> : <View style={styles.leadingIcon}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View>}
+                    ><Icon color={colors.textMuted} name={expandedSessionIds.has(item.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : <View style={styles.leadingIcon}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View>}
                     <View style={styles.sessionIdentityText}>
                       <Text numberOfLines={1} style={[styles.instanceName, { color: colors.text }]}>{instanceName}</Text>
                       <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{identity}</Text>
@@ -194,9 +194,9 @@ export function AiSessionInbox({
                 </View>
                 <Text numberOfLines={2} style={[styles.promptPreview, { color: colors.text }]}>{markdownPlainText(content.prompt)}</Text>
                 <Text numberOfLines={3} style={[styles.responsePreview, { color: colors.textMuted }]}>{markdownPlainText(content.response)}</Text>
-                {approvalPending ? <View style={styles.activity}><SystemIcon android="approval" color={colors.noticeText} ios="hand.raised.fill" size={13} /><Text style={[styles.activityText, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text></View> : null}
+                {approvalPending ? <View style={styles.activity}><Icon color={colors.noticeText} name="hand-left" size={13} /><Text style={[styles.activityText, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text></View> : null}
                 <View style={styles.footerRow} testID="session-card-footer-row">
-                  {activityText ? <View style={styles.footerActivity} testID="session-card-footer-activity"><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={13} /><ToolActivityText containerStyle={styles.activityTextContainer} running={item.session.status === 'running'} textStyle={styles.footerActivityText}>{activityText}</ToolActivityText></View> : null}
+                  {activityText ? <View style={styles.footerActivity} testID="session-card-footer-activity"><Icon color={colors.textMuted} name="sparkles" size={13} /><ToolActivityText containerStyle={styles.activityTextContainer} running={item.session.status === 'running'} textStyle={styles.footerActivityText}>{activityText}</ToolActivityText></View> : null}
                   <Text style={[styles.time, { color: colors.textMuted }]}>{formatSessionUpdatedTime(aiSessionLastUserMessageAt(item.session) || item.session.startedAt, locale, t('sessions.yesterday'))}</Text>
                 </View>
                 {error ? <Text numberOfLines={3} style={[styles.error, { color: colors.error }]}>{error}</Text> : null}

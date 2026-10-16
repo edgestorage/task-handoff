@@ -19,7 +19,7 @@ test('native menu actions flatten into a titled iOS style floating page', () => 
   expect(page).toMatchObject({
     blocks: [
       { key: 'title', label: 'Options', type: 'title' },
-      { item: { destructive: true, icon: 'delete', key: 'delete', label: 'Delete', selected: false }, key: 'delete', type: 'item' },
+      { item: { destructive: true, icon: 'trash-outline', key: 'delete', label: 'Delete', selected: false }, key: 'delete', type: 'item' },
       { key: 'section:group', label: 'Group', type: 'section' },
       { item: { key: 'inline', label: 'Inline' }, key: 'inline', type: 'item' },
       { item: { key: 'models', label: 'Models', selected: false, submenu: { blocks: [{ item: { key: 'model-a', label: 'Model A' }, key: 'model-a', type: 'item' }], title: 'Models' } }, key: 'models', type: 'item' },

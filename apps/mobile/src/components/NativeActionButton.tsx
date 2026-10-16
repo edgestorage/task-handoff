@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 
-import { SystemIcon } from './SystemIcon';
+import { Icon } from './Icon';
 import { useMobileTheme } from './theme';
 import type { NativeActionButtonProps } from './NativeActionButton.ios';
 
@@ -8,7 +8,7 @@ export function NativeActionButton({ compact, destructive, disabled, icon, label
   const { colors } = useMobileTheme();
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, compact && styles.compact, { backgroundColor: destructive ? colors.errorSoft : colors.primaryButton }, disabled && styles.disabled, pressed && styles.pressed]}>
-      {icon ? <SystemIcon android={icon.android} color={destructive ? colors.error : '#ffffff'} ios={icon.ios} size={16} /> : null}
+      {icon ? <Icon color={destructive ? colors.error : '#ffffff'} name={icon} size={16} /> : null}
       <Text style={[styles.text, destructive && { color: colors.error }]}>{label}</Text>
     </Pressable>
   );

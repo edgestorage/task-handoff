@@ -1,7 +1,6 @@
-import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { InstanceHistoryProps, InstanceOverviewProps } from './instance-section-types';
@@ -11,33 +10,33 @@ export function InstanceOverview(props: InstanceOverviewProps) {
   const { t } = useI18n();
   return <>
     <View style={[styles.group, { backgroundColor: colors.surface }]}>
-      <InfoRow android="dns" ios="server.rack" label={t('nav.node')} value={props.nodeName} />
+      <InfoRow label={t('nav.node')} name="server-outline" value={props.nodeName} />
       <Separator />
-      <InfoRow android="memory" ios="shippingbox" label={t('instance.runtime')} value={props.runtime} />
+      <InfoRow label={t('instance.runtime')} name="hardware-chip-outline" value={props.runtime} />
       <Separator />
-      <InfoRow android="folder" ios="folder" label={t('instance.workspace')} value={props.workspace} monospace />
+      <InfoRow label={t('instance.workspace')} monospace name="folder-outline" value={props.workspace} />
       <Separator />
-      <InfoRow android="schedule" ios="clock" label={t('instance.heartbeat')} value={props.heartbeat} />
+      <InfoRow label={t('instance.heartbeat')} name="time-outline" value={props.heartbeat} />
       <Separator />
-      <InfoRow android={props.protocolCompatible ? 'check_circle' : 'warning'} ios={props.protocolCompatible ? 'checkmark.seal' : 'exclamationmark.triangle'} label={t('instance.protocol')} value={props.protocol} tone={props.protocolCompatible ? 'normal' : 'warning'} />
+      <InfoRow label={t('instance.protocol')} name={props.protocolCompatible ? 'checkmark-circle-outline' : 'warning-outline'} tone={props.protocolCompatible ? 'normal' : 'warning'} value={props.protocol} />
     </View>
     <Pressable accessibilityRole="button" onPress={props.onCreateSession} style={({ pressed }) => [styles.createLink, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
-      <SystemIcon android="edit_square" color={colors.primary} ios="square.and.pencil" size={20} />
+      <Icon color={colors.primary} name="create-outline" size={20} />
       <Text style={[styles.createLinkText, { color: colors.primary }]}>{t('nav.newSession')}</Text>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={14} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
     </Pressable>
     <Pressable accessibilityRole="button" onPress={props.onShowSessions} style={({ pressed }) => [styles.sessionLink, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
-      <View style={[styles.linkIcon, { backgroundColor: colors.primarySoft }]}><SystemIcon android="chat" color={colors.primary} ios="bubble.left.and.bubble.right.fill" size={21} /></View>
+      <View style={[styles.linkIcon, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="chatbubbles" size={21} /></View>
       <View style={styles.linkText}>
         <Text style={[styles.linkTitle, { color: colors.text }]}>{t('nav.aiSessions')}</Text>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{t('instance.sessionSummary', { active: props.activeSessionCount, problem: props.problemSessionCount })}</Text>
       </View>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={14} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
     </Pressable>
     <Pressable accessibilityRole="button" onPress={props.onShowHistory} style={({ pressed }) => [styles.createLink, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
-      <SystemIcon android="history" color={colors.primary} ios="clock.arrow.circlepath" size={20} />
+      <Icon color={colors.primary} name="time-outline" size={20} />
       <Text style={[styles.createLinkText, { color: colors.primary }]}>{t('nav.history')}</Text>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={14} />
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
     </Pressable>
   </>;
 }
@@ -50,20 +49,20 @@ export function InstanceHistory({ items, loading, onOpen, standalone = false }: 
     {!loading && items.map((item, index) => <View key={item.id}>
       {index ? <Separator /> : null}
       <Pressable accessibilityRole="button" onPress={() => onOpen(item)} style={({ pressed }) => [styles.history, pressed && styles.pressed]}>
-        <View style={[styles.historyIcon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="history" color={colors.textMuted} ios="clock.arrow.circlepath" size={18} /></View>
+        <View style={[styles.historyIcon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.textMuted} name="time-outline" size={18} /></View>
         <View style={styles.historyText}><Text numberOfLines={2} style={[styles.historyTitle, { color: colors.text }]}>{item.title || item.userPrompt || t('instance.archivedSession')}</Text><Text style={[styles.meta, { color: colors.textMuted }]}>{item.agent} · {new Date(item.lastActiveAt).toLocaleString(locale)}</Text></View>
-        <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+        <Icon color={colors.textMuted} name="chevron-forward" size={13} />
       </Pressable>
     </View>)}
-    {!loading && !items.length ? <View style={styles.emptyHistory}><SystemIcon android="history" color={colors.textMuted} ios="clock.arrow.circlepath" size={25} /><Text style={[styles.meta, { color: colors.textMuted }]}>{t('instance.archivedEmpty')}</Text></View> : null}
+    {!loading && !items.length ? <View style={styles.emptyHistory}><Icon color={colors.textMuted} name="time-outline" size={25} /><Text style={[styles.meta, { color: colors.textMuted }]}>{t('instance.archivedEmpty')}</Text></View> : null}
   </View>;
   return standalone ? <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.historyPage} style={[styles.historyScroll, { backgroundColor: colors.background }]}>{content}</ScrollView> : content;
 }
 
-function InfoRow({ android, ios, label, monospace, tone = 'normal', value }: { android: AndroidSymbol; ios: SFSymbol; label: string; monospace?: boolean; tone?: 'normal' | 'warning'; value: string }) {
+function InfoRow({ label, monospace, name, tone = 'normal', value }: { label: string; monospace?: boolean; name: IconName; tone?: 'normal' | 'warning'; value: string }) {
   const { colors } = useMobileTheme();
   const color = tone === 'warning' ? colors.noticeText : colors.textMuted;
-  return <View style={styles.infoRow}><SystemIcon android={android} color={color} ios={ios} size={18} /><Text style={[styles.infoLabel, { color: colors.text }]}>{label}</Text><Text numberOfLines={2} style={[styles.infoValue, monospace && styles.monospace, { color }]}>{value}</Text></View>;
+  return <View style={styles.infoRow}><Icon color={color} name={name} size={18} /><Text style={[styles.infoLabel, { color: colors.text }]}>{label}</Text><Text numberOfLines={2} style={[styles.infoValue, monospace && styles.monospace, { color }]}>{value}</Text></View>;
 }
 
 function Separator() {

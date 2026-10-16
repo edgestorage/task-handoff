@@ -1,7 +1,7 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '../components/Screen';
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon, type IconName } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from './profile';
@@ -49,10 +49,10 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
         <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('controlPlane.actions')}</Text>
         <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           {!props.active ? <>
-            <ActionRow disabled={props.busy} icon={{ android: 'check_circle', ios: 'checkmark.circle' }} label={t('controlPlane.makeActive')} onPress={props.onMakeActive} tint={colors.primary} />
+            <ActionRow disabled={props.busy} icon="checkmark-circle-outline" label={t('controlPlane.makeActive')} onPress={props.onMakeActive} tint={colors.primary} />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
           </> : null}
-          <ActionRow disabled={props.busy} icon={{ android: 'delete', ios: 'trash' }} label={t('controlPlane.remove')} onPress={props.onRemove} tint={colors.error} />
+          <ActionRow disabled={props.busy} icon="trash-outline" label={t('controlPlane.remove')} onPress={props.onRemove} tint={colors.error} />
         </View>
         <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('controlPlane.removeHelp')}</Text>
       </View>
@@ -72,10 +72,10 @@ function DetailRow({ label, value, valueColor }: { label: string; value: string;
   );
 }
 
-function ActionRow({ disabled, icon, label, onPress, tint }: { disabled: boolean; icon: { android: 'check_circle' | 'delete'; ios: 'checkmark.circle' | 'trash' }; label: string; onPress(): void; tint: string }) {
+function ActionRow({ disabled, icon, label, onPress, tint }: { disabled: boolean; icon: IconName; label: string; onPress(): void; tint: string }) {
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionRow, disabled && styles.disabled, pressed && styles.pressed]}>
-      <SystemIcon android={icon.android} color={tint} ios={icon.ios} size={18} />
+      <Icon color={tint} name={icon} size={18} />
       <Text style={[styles.actionLabel, { color: tint }]}>{label}</Text>
     </Pressable>
   );

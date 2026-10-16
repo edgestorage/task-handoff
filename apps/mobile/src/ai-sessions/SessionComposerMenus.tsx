@@ -27,9 +27,9 @@ type AttachmentMenuProps = {
 
 export function AttachmentMenu(props: AttachmentMenuProps) {
   const blocks: FloatingMenuBlock[] = [
-    { item: { disabled: props.imageDisabled, icon: 'image', key: 'image', label: props.imageLabel, onPress: props.onAddImage }, key: 'image', type: 'item' },
-    { item: { disabled: props.fileDisabled, icon: 'attach_file', key: 'file', label: props.fileLabel, onPress: props.onAddFile }, key: 'file', type: 'item' },
-    { item: { disabled: props.runtimeFileDisabled, icon: 'folder', key: 'runtime-file', label: props.runtimeFileLabel, onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
+    { item: { disabled: props.imageDisabled, icon: 'image-outline', key: 'image', label: props.imageLabel, onPress: props.onAddImage }, key: 'image', type: 'item' },
+    { item: { disabled: props.fileDisabled, icon: 'attach-outline', key: 'file', label: props.fileLabel, onPress: props.onAddFile }, key: 'file', type: 'item' },
+    { item: { disabled: props.runtimeFileDisabled, icon: 'folder-outline', key: 'runtime-file', label: props.runtimeFileLabel, onPress: props.onAddRuntimeFile }, key: 'runtime-file', type: 'item' },
   ];
   const unavailable = props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
   return <FloatingMenuTrigger disabled={unavailable} page={unavailable ? null : { blocks, title: props.title }}>{props.children}</FloatingMenuTrigger>;
@@ -80,12 +80,12 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
   const isSelected = (model: AiSessionModelGroup['models'][number]) => (modelSelection ? sameModelSelection(model, modelSelection) : false);
   const blocks: FloatingMenuBlock[] = [];
   if (noModelHint) {
-    blocks.push({ item: { disabled: true, icon: 'settings', key: 'no-model-hint', label: noModelHint.label, subtitle: noModelHint.description }, key: 'no-model-hint', type: 'item' });
+    blocks.push({ item: { disabled: true, icon: 'settings-outline', key: 'no-model-hint', label: noModelHint.label, subtitle: noModelHint.description }, key: 'no-model-hint', type: 'item' });
   }
   modelGroups.forEach((group, groupIndex) => {
     const selectedModel = group.models.find(isSelected);
     const common = {
-      icon: group.models.length > 1 && selectedModel ? 'check' as const : 'auto_awesome' as const,
+      icon: group.models.length > 1 && selectedModel ? 'checkmark' as const : 'sparkles' as const,
       label: group.providerName,
       subtitle: modelGroupSubtitle(group, modelSelection, formatModelGroupSummary),
     };
@@ -115,7 +115,7 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
       title: reasoningTitle,
     };
     if (blocks.length) blocks.push({ key: 'reasoning-divider', type: 'divider' });
-    blocks.push({ item: { icon: 'psychology', key: 'reasoning', label: reasoningTitle, submenu, subtitle: reasoningEffort }, key: 'reasoning', type: 'item' });
+    blocks.push({ item: { icon: 'bulb-outline', key: 'reasoning', label: reasoningTitle, submenu, subtitle: reasoningEffort }, key: 'reasoning', type: 'item' });
   }
   const page: FloatingMenuPage = { blocks, title: props.title };
   return <FloatingMenuTrigger disabled={props.disabled || !blocks.length} page={props.disabled || !blocks.length ? null : page}>{props.children}</FloatingMenuTrigger>;

@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { RepositoryWorktree } from '@task-handoff/protocol/repository';
 
-import { SystemIcon } from '../components/SystemIcon';
+import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { repositoryWorktreeCreateBlockers, repositoryWorktreeLabel, repositoryWorktreeMeta, repositoryWorktreeSearchText } from '../repository/worktree-presentation';
@@ -38,11 +38,11 @@ export function NewSessionWorktreePicker(props: {
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.text }]}>{props.title}</Text>
             <Pressable accessibilityLabel={t('common.cancel')} accessibilityRole="button" hitSlop={8} onPress={close}>
-              <SystemIcon android="close" color={colors.textMuted} ios="xmark" size={17} />
+              <Icon color={colors.textMuted} name="close" size={17} />
             </Pressable>
           </View>
           <View style={[styles.search, { backgroundColor: colors.surfaceMuted }]}>
-            <SystemIcon android="search" color={colors.textMuted} ios="magnifyingglass" size={15} />
+            <Icon color={colors.textMuted} name="search" size={15} />
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
@@ -59,7 +59,7 @@ export function NewSessionWorktreePicker(props: {
             keyboardShouldPersistTaps="handled"
             ListEmptyComponent={<Text style={[styles.empty, { color: colors.textMuted }]}>{t('sessions.noWorktrees')}</Text>}
             ListFooterComponent={<Pressable accessibilityRole="button" onPress={() => { close(); props.onNewWorktree(); }} style={({ pressed }) => [styles.row, styles.newRow, { borderTopColor: colors.border }, pressed && { backgroundColor: colors.surfaceMuted }]}>
-              <SystemIcon android="add" color={colors.primary} ios="plus" size={16} />
+              <Icon color={colors.primary} name="add" size={16} />
               <Text style={[styles.rowLabel, { color: colors.primary }]}>{props.newWorktreeLabel}</Text>
             </Pressable>}
             renderItem={({ item }) => {
@@ -73,13 +73,13 @@ export function NewSessionWorktreePicker(props: {
                 onPress={() => { close(); props.onSelect(item.id); }}
                 style={({ pressed }) => [styles.row, disabled && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
               >
-                <SystemIcon android="account_tree" color={colors.text} ios="arrow.triangle.branch" size={16} />
+                <Icon color={colors.text} name="git-branch-outline" size={16} />
                 <View style={styles.rowCopy}>
                   <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.text }]}>{repositoryWorktreeLabel(item, t)}</Text>
                   <Text numberOfLines={1} style={[styles.rowMeta, { color: colors.textMuted }]}>{repositoryWorktreeMeta(item, t)}</Text>
                   {blockers.length ? <Text numberOfLines={1} style={[styles.rowBlocker, { color: colors.error }]}>{blockers.join(' · ')}</Text> : null}
                 </View>
-                {selected ? <SystemIcon android="check" color={colors.primary} ios="checkmark" size={15} /> : null}
+                {selected ? <Icon color={colors.primary} name="checkmark" size={15} /> : null}
               </Pressable>;
             }}
           />

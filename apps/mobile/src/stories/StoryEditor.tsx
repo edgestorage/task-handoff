@@ -148,7 +148,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
     {!storyId ? <View style={styles.field}>
       <Text style={[styles.label, { color: colors.text }]}>{t('stories.ownerNode')}</Text>
       <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={!nodes.length} onSelect={setOwnerNodeId} options={nodes.map((node) => ({ value: node.id, label: node.name, description: node.id, systemImage: 'server.rack' }))} selectedValue={selectedOwnerNodeId} title={t('stories.ownerNode')}>
-        {(onPress) => <ContextPill disabled={!nodes.length} icon={{ android: 'dns', ios: 'server.rack' }} label={nodes.find((node) => node.id === selectedOwnerNodeId)?.name || t('stories.selectNode')} onPress={onPress} />}
+        {(onPress) => <ContextPill disabled={!nodes.length} icon="server-outline" label={nodes.find((node) => node.id === selectedOwnerNodeId)?.name || t('stories.selectNode')} onPress={onPress} />}
       </NewSessionContextMenu>
     </View> : null}
     <View style={styles.field}>

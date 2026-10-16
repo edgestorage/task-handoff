@@ -1,12 +1,14 @@
 import { Button, Host } from '@expo/ui/swift-ui';
 import { buttonStyle, controlSize, disabled as disabledModifier, frame, tint } from '@expo/ui/swift-ui/modifiers';
-import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
+
+import type { IconName } from './Icon';
+import { sfSymbolForIcon } from './sf-symbols';
 
 export type NativeActionButtonProps = {
   compact?: boolean;
   destructive?: boolean;
   disabled?: boolean;
-  icon?: { android: AndroidSymbol; ios: SFSymbol };
+  icon?: IconName;
   label: string;
   onPress(): void;
 };
@@ -31,7 +33,7 @@ export function NativeActionButton({ compact, destructive, disabled, icon, label
         modifiers={modifiers}
         onPress={onPress}
         role={destructive ? 'destructive' : 'default'}
-        systemImage={icon?.ios}
+        systemImage={icon ? sfSymbolForIcon(icon) : undefined}
       />
     </Host>
   );

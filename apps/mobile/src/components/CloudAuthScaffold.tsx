@@ -2,7 +2,7 @@ import type { PropsWithChildren, ReactNode } from 'react';
 import { Image, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from './Screen';
-import { SystemIcon } from './SystemIcon';
+import { Icon } from './Icon';
 import { useMobileTheme } from './theme';
 
 export function CloudAuthScaffold({ children, description, error, title }: PropsWithChildren<{ description: string; error?: string; title: string }>) {
@@ -20,7 +20,7 @@ export function CloudAuthScaffold({ children, description, error, title }: Props
         </View>
         {error ? (
           <View accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
-            <SystemIcon android="error" color={colors.error} ios="exclamationmark.circle.fill" size={18} />
+            <Icon color={colors.error} name="alert-circle" size={18} />
             <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
           </View>
         ) : null}

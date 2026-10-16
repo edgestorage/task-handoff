@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 import type { AnchoredSelectMenuProps } from './anchored-select-menu-types';
-import { androidSymbolForSfSymbol } from './menu/menu-icons';
+import { menuIconForSfSymbol } from './menu/menu-icons';
 import { FloatingMenuTrigger } from './menu/FloatingMenuTrigger';
 import type { FloatingMenuBlock } from './menu/menu-model';
 
@@ -22,7 +22,7 @@ export function AnchoredSelectMenu<Value extends string>({ children, disabled, o
       result.push({
         item: {
           destructive: option.danger,
-          icon: androidSymbolForSfSymbol(option.systemImage),
+          icon: menuIconForSfSymbol(option.systemImage),
           key: option.value,
           label: option.label,
           onPress: () => onSelect(option.value),

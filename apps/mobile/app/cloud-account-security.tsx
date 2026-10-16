@@ -1,12 +1,10 @@
 import type { ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Redirect, router, Stack } from 'expo-router';
-import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
-
+import { Icon, type IconName } from '../src/components/Icon';
 import { Screen } from '../src/components/Screen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
-import { SystemIcon } from '../src/components/SystemIcon';
 import { useMobileTheme } from '../src/components/theme';
 import { NativeCloudAccountSecurityScreen } from '../src/control-plane/NativeCloudAccountSecurityScreen';
 import type { DeviceSession } from '@task-handoff/cloud-contracts/mobile';
@@ -14,8 +12,6 @@ import { useCloudAccountSecurity, type CloudAccountSecurityController } from '..
 import { useI18n } from '../src/i18n';
 import type { MessageKey } from '../src/i18n/messages';
 import { isMobileFeatureEnabled } from '../src/platform/build-variant';
-
-type Icon = { android: AndroidSymbol; ios: SFSymbol };
 
 export default function CloudAccountSecurityScreen() {
   if (!isMobileFeatureEnabled('officialAccount')) return <Redirect href="/profiles" />;
@@ -57,18 +53,18 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
         {message ? <Text accessibilityLiveRegion="polite" style={[styles.message, { color: colors.error }]}>{message}</Text> : null}
 
         <SettingsSection title={t('cloudAccount.accountInformation')}>
-          <ValueRow icon={{ android: 'mail', ios: 'envelope' }} label={t('cloudAccount.email')} value={profile?.email ?? '—'}/>
+          <ValueRow icon="mail-outline" label={t('cloudAccount.email')} value={profile?.email ?? '—'}/>
           <Divider/>
           <ValueRow
             color={profile?.emailVerified ? colors.sessionActive : colors.textMuted}
-            icon={{ android: 'verified_user', ios: 'checkmark.shield' }}
+            icon="shield-checkmark-outline"
             label={t('cloudAccount.emailStatus')}
             value={profile?.emailVerified ? t('cloudAccount.emailVerified') : t('cloudAccount.emailPending')}
           />
         </SettingsSection>
 
         <SettingsSection footer={t('cloudAccount.cloudControlPlanesHelp')} title={t('cloudAccount.cloudControlPlanes')}>
-          <ActionRow icon={{ android: 'dns', ios: 'server.rack' }} label={t('cloudAccount.manageControlPlanes')} onPress={() => router.push('/cloud-control-planes' as never)}/>
+          <ActionRow icon="server-outline" label={t('cloudAccount.manageControlPlanes')} onPress={() => router.push('/cloud-control-planes' as never)}/>
         </SettingsSection>
 
         {devices.length ? <SettingsSection title={t('cloudAccount.devices')}>
@@ -95,7 +91,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
         <SettingsSection title={t('cloudAccount.totpTitle')}>
           {!enrollment && !recoveryCodes.length ? <>
             {profile?.totpEnabled ? <>
-              <FieldRow icon={{ android: 'lock', ios: 'lock' }}>
+              <FieldRow icon="lock-closed">
                 <TextInput
                   accessibilityLabel={t('cloudAccount.stepUpPassword')}
                   editable={!busy}
@@ -108,7 +104,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
                 />
               </FieldRow>
               <Divider/>
-              <FieldRow icon={{ android: 'shield_lock', ios: 'lock.shield' }}>
+              <FieldRow icon="lock-closed-outline">
                 <TextInput
                   accessibilityLabel={t('cloudAccount.stepUpCode')}
                   autoCapitalize="characters"
@@ -124,7 +120,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
             </> : null}
             <ActionRow
               disabled={busy || Boolean(profile?.totpEnabled && !controller.stepUp)}
-              icon={{ android: 'shield_lock', ios: 'lock.shield' }}
+              icon="lock-closed-outline"
               label={profile?.totpEnabled ? t('cloudAccount.replaceAuthenticator') : t('cloudAccount.enableAuthenticator')}
               onPress={controller.beginTotp}
             />
@@ -133,7 +129,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
               <ActionRow
                 destructive
                 disabled={busy || !controller.stepUp}
-                icon={{ android: 'lock_open', ios: 'lock.open' }}
+                icon="lock-open"
                 label={t('cloudAccount.disableAuthenticator')}
                 onPress={controller.disableTotp}
               />
@@ -146,7 +142,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
             <NativeActionButton
               compact
               disabled={busy || controller.totpCode.length !== 6}
-              icon={{ android: 'verified_user', ios: 'checkmark.shield' }}
+              icon="shield-checkmark-outline"
               label={t('cloudAccount.confirmAuthenticator')}
               onPress={controller.confirmTotp}
             />
@@ -184,7 +180,7 @@ function SettingsSection({ children, footer, title }: { children: ReactNode; foo
   );
 }
 
-function ValueRow({ color, icon, label, value }: { color?: string; icon: Icon; label: string; value: string }) {
+function ValueRow({ color, icon, label, value }: { color?: string; icon: IconName; label: string; value: string }) {
   const { colors } = useMobileTheme();
   return (
     <View style={styles.row}>
@@ -195,7 +191,7 @@ function ValueRow({ color, icon, label, value }: { color?: string; icon: Icon; l
   );
 }
 
-function ActionRow({ destructive = false, disabled = false, icon, label, onPress }: { destructive?: boolean; disabled?: boolean; icon: Icon; label: string; onPress(): void }) {
+function ActionRow({ destructive = false, disabled = false, icon, label, onPress }: { destructive?: boolean; disabled?: boolean; icon: IconName; label: string; onPress(): void }) {
   const { colors } = useMobileTheme();
   const tint = disabled ? colors.textMuted : destructive ? colors.error : colors.primary;
   return (
@@ -208,30 +204,30 @@ function ActionRow({ destructive = false, disabled = false, icon, label, onPress
     >
       <RowIcon icon={icon} tint={tint}/>
       <Text style={[styles.rowLabel, styles.grow, { color: tint }]}>{label}</Text>
-      <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12}/>
+      <Icon color={colors.textMuted} name="chevron-forward" size={12}/>
     </Pressable>
   );
 }
 
-function FieldRow({ children, icon }: { children: ReactNode; icon: Icon }) {
+function FieldRow({ children, icon }: { children: ReactNode; icon: IconName }) {
   const { colors } = useMobileTheme();
   return (
     <View style={styles.fieldRow}>
-      <SystemIcon android={icon.android} color={colors.textMuted} ios={icon.ios} size={19}/>
+      <Icon color={colors.textMuted} name={icon} size={19}/>
       {children}
     </View>
   );
 }
 
-function RowIcon({ icon, tint }: { icon: Icon; tint?: string }) {
+function RowIcon({ icon, tint }: { icon: IconName; tint?: string }) {
   const { colors } = useMobileTheme();
-  return <View style={styles.rowIcon}><SystemIcon android={icon.android} color={tint ?? colors.textMuted} ios={icon.ios} size={18}/></View>;
+  return <View style={styles.rowIcon}><Icon color={tint ?? colors.textMuted} name={icon} size={18}/></View>;
 }
 
-const DEVICE_KINDS: Record<DeviceSession['kind'], { icon: Icon; label: MessageKey }> = {
-  browser: { icon: { android: 'language', ios: 'globe' }, label: 'cloudAccount.deviceKind.browser' },
-  'control-plane': { icon: { android: 'dns', ios: 'server.rack' }, label: 'cloudAccount.deviceKind.controlPlane' },
-  mobile: { icon: { android: 'smartphone', ios: 'smartphone' }, label: 'cloudAccount.deviceKind.mobile' },
+const DEVICE_KINDS: Record<DeviceSession['kind'], { icon: IconName; label: MessageKey }> = {
+  browser: { icon: 'globe-outline', label: 'cloudAccount.deviceKind.browser' },
+  'control-plane': { icon: 'server-outline', label: 'cloudAccount.deviceKind.controlPlane' },
+  mobile: { icon: 'phone-portrait-outline', label: 'cloudAccount.deviceKind.mobile' },
 };
 
 function deviceKind(kind: DeviceSession['kind']) { return DEVICE_KINDS[kind]; }

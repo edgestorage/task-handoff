@@ -87,7 +87,7 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
   if (stack.length) {
     rows.push(separator('back-divider'));
     rows.push(<Pressable accessibilityRole="button" key="back" onPress={() => setStack((current) => current.slice(0, -1))} style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surfaceMuted }]}>
-      <View style={styles.iconSlot}><MenuIcon color={colors.primary} size={18} symbol="chevron_left" /></View>
+      <View style={styles.iconSlot}><MenuIcon color={colors.primary} name="chevron-back" size={18} /></View>
       <Text numberOfLines={1} style={[styles.menuTitle, styles.rowLabel, { color: colors.text }]}>{page.title || initialPage.title || ''}</Text>
     </Pressable>);
   }
@@ -139,16 +139,16 @@ function renderItem(item: FloatingMenuItem, colors: MobileThemeColors, leading: 
   >
     {leading ? <View style={styles.iconSlot}>
       {item.selected
-        ? <MenuIcon color={item.disabled ? colors.textMuted : item.destructive ? colors.error : colors.primary} size={18} symbol="check" />
+        ? <MenuIcon color={item.disabled ? colors.textMuted : item.destructive ? colors.error : colors.primary} name="checkmark" size={18} />
         : item.iconSource
           ? <Image resizeMode="contain" source={item.iconSource} style={styles.iconImage} tintColor={tint} />
-          : item.icon ? <MenuIcon color={tint} size={20} symbol={item.icon} /> : null}
+          : item.icon ? <MenuIcon color={tint} name={item.icon} size={20} /> : null}
     </View> : null}
     <View style={styles.copy}>
       <Text numberOfLines={2} style={[styles.rowLabel, { color: item.disabled ? colors.textMuted : item.destructive ? colors.error : colors.text, opacity: item.disabled ? 0.55 : 1 }]}>{item.label}</Text>
       {item.subtitle ? <Text numberOfLines={2} style={[styles.subtitle, { color: colors.textMuted }]}>{item.subtitle}</Text> : null}
     </View>
-    {item.submenu ? <MenuIcon color={colors.textMuted} size={18} symbol="chevron_right" /> : null}
+    {item.submenu ? <MenuIcon color={colors.textMuted} name="chevron-forward" size={18} /> : null}
   </Pressable>;
 }
 

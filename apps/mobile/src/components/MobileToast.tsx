@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SystemIcon } from './SystemIcon';
+import { Icon } from './Icon';
 import { useMobileTheme } from './theme';
 
 export type MobileToastInput = {
@@ -50,10 +50,10 @@ export function MobileToastProvider({ children }: { children: ReactNode }) {
   const foreground = tone === 'error' ? colors.error : tone === 'warning' ? colors.noticeText : colors.sessionActive;
   const background = tone === 'error' ? colors.errorSoft : tone === 'warning' ? colors.notice : colors.sessionActiveSoft;
   const icon = tone === 'error'
-    ? { android: 'error' as const, ios: 'xmark.circle.fill' as const }
+    ? 'close-circle' as const
     : tone === 'warning'
-      ? { android: 'warning' as const, ios: 'exclamationmark.triangle.fill' as const }
-      : { android: 'check_circle' as const, ios: 'checkmark.circle.fill' as const };
+      ? 'warning' as const
+      : 'checkmark-circle' as const;
 
   return <Context.Provider value={value}>
     <View style={styles.root}>
@@ -76,7 +76,7 @@ export function MobileToastProvider({ children }: { children: ReactNode }) {
             style={[styles.toast, { backgroundColor: background, borderColor: foreground }]}
             testID="mobile-toast"
           >
-            <SystemIcon android={icon.android} color={foreground} ios={icon.ios} size={20} />
+            <Icon color={foreground} name={icon} size={20} />
             <View style={styles.copy}>
               <Text style={[styles.title, { color: foreground }]}>{toast.title}</Text>
               {toast.detail ? <Text numberOfLines={3} style={[styles.detail, { color: colors.text }]}>{toast.detail}</Text> : null}

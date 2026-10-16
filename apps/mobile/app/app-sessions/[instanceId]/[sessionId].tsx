@@ -12,7 +12,7 @@ import { AppSessionAccessLeaseController, shouldRenewAppSessionAccessAfterHttpSt
 import { canCloseAppSession } from '../../../src/app-sessions/status';
 import { AppSessionTerminalInputNormalizer } from '../../../src/app-sessions/terminal-input';
 import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from '../../../src/app-sessions/terminal-layout';
-import { SystemIcon } from '../../../src/components/SystemIcon';
+import { Icon } from '../../../src/components/Icon';
 import { SessionRenameModal } from '../../../src/components/SessionRenameModal';
 import { useMobileTheme } from '../../../src/components/theme';
 import { useMobileToast } from '../../../src/components/MobileToast';
@@ -202,7 +202,7 @@ export default function AppSessionRoute() {
       title={t('appSessions.moreActions')}
     >
       <Pressable accessibilityLabel={t('appSessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
-        <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis.circle" size={23} />
+        <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
       </Pressable>
     </MenuView> : undefined,
   }} />;
