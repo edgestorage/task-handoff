@@ -15,7 +15,7 @@ jest.mock('expo-router/drawer', () => {
   const { View } = jest.requireActual<typeof import('react-native')>('react-native');
   return { DrawerContentScrollView: ({ children }: { children: React.ReactNode }) => React.createElement(View, null, children) };
 });
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/control-plane/use-cloud-account-state', () => ({ useCloudAccountState: jest.fn() }));
 jest.mock('../src/platform/build-variant', () => ({
   isMobileFeatureEnabled: () => mockCloudRelayEnabled,

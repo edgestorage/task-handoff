@@ -248,6 +248,34 @@ export class MobileAiSessionStore {
     return next;
   }
 
+  // Reconnect sync applies only the instances the Control Plane reported as moved:
+  // snapshot entries replace the stored instance wholesale, deltas are applied through
+  // applyStreamEvent by the caller, and removed instance ids disappear from the profile.
+  replaceInstances(
+    controlPlaneId: string,
+    entries: ReadonlyArray<ControlPlaneAiSessions['instances'][number]>,
+    removedInstanceIds: readonly string[],
+    updatedAt: string,
+  ) {
+    const current = this.profile(controlPlaneId);
+    let instances = current.snapshot?.instances ?? [];
+    if (removedInstanceIds.length) {
+      const removed = new Set(removedInstanceIds);
+      instances = instances.filter((entry) => !removed.has(entry.instanceId));
+    }
+    for (const entry of entries) {
+      const index = instances.findIndex((candidate) => candidate.instanceId === entry.instanceId);
+      instances = index < 0
+        ? [...instances, entry]
+        : instances.map((candidate, candidateIndex) => (candidateIndex === index ? entry : candidate));
+    }
+    if (!entries.length && !removedInstanceIds.length) {
+      this.setSyncState(controlPlaneId, { phase: 'ready', lastSyncedAt: updatedAt });
+      return current.snapshot;
+    }
+    return this.replaceSnapshot(controlPlaneId, { updatedAt, instances });
+  }
+
   setSyncState(controlPlaneId: string, sync: MobileAiSessionProfileState['sync']) {
     const current = this.profile(controlPlaneId);
     this.profiles.set(controlPlaneId, { ...current, sync });

@@ -157,3 +157,124 @@ test("a terminal authority event releases retained message replay", () => {
   }));
   assert.equal(client.sent.length, 0);
 });
+
+function transcriptSubscription(sessionId, replaySince) {
+  return JSON.stringify({
+    type: "subscribe",
+    topics: ["ai.sessions"],
+    aiSessionTransient: {
+      ...(replaySince ? { replaySince } : {}),
+      messageDeltas: { allInstances: true, instanceIds: [] },
+      timelineAllSessions: false,
+      timelineSessions: [{ instanceId: "instance-a", sessionId }],
+    },
+  });
+}
+
+test("a settled timeline activity never enters the transient replay buffer", () => {
+  const events = new WebEventBus();
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-a", turnId: "turn-a", type: "activity", activityKind: "commandExecution", title: "Command", status: "running", input: "ls" },
+  });
+  events.publish("ai-session.timeline-item-delta", { instanceId: "instance-a", sessionId: "session-a", turnId: "turn-a", itemId: "item-a", delta: "more output" });
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-a", turnId: "turn-a", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed", output: "done" },
+  });
+  const client = socket();
+  events.connect(client.value, { expectsTransientSubscription: true });
+  client.listeners.message(transcriptSubscription("session-a"));
+  assert.deepEqual(client.sent, []);
+});
+
+test("transient replay only covers the recent recovery window", () => {
+  let now = Date.parse("2026-08-25T00:00:00.000Z");
+  const events = new WebEventBus(() => now);
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-old", turnId: "turn-a", type: "activity", activityKind: "commandExecution", title: "Command", status: "running" },
+  });
+  const staleClient = socket();
+  events.connect(staleClient.value, { expectsTransientSubscription: true });
+  staleClient.listeners.message(transcriptSubscription("session-a", new Date(now - 1_000).toISOString()));
+  assert.equal(staleClient.sent.length, 1);
+  assert.equal(staleClient.sent[0].replay, true);
+
+  // A cursor that stayed connected long enough to age past the recovery window
+  // must not drag finished history over the Relay again.
+  const staleCursor = new Date(now - 10 * 60_000).toISOString();
+  now += 10 * 60_000;
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-new", turnId: "turn-b", type: "activity", activityKind: "commandExecution", title: "Command", status: "running" },
+  });
+  const freshClient = socket();
+  events.connect(freshClient.value, { expectsTransientSubscription: true });
+  freshClient.listeners.message(transcriptSubscription("session-a", staleCursor));
+  assert.deepEqual(freshClient.sent.map((event) => event.payload.item.id), ["item-new"]);
+});
+
+test("a settled turn releases retained timeline replay but keeps the running turn", () => {
+  const events = new WebEventBus();
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-settled", turnId: "turn-done", type: "ai-message", text: "finished" },
+  });
+  events.publish("ai-session.timeline-item", {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-running", turnId: "turn-live", type: "activity", activityKind: "commandExecution", title: "Command", status: "running" },
+  });
+  events.publish("ai-session.patch", {
+    meta: { instanceId: "instance-a" },
+    upserted: [{ id: "session-a", status: "running", turns: [{ id: "turn-done", status: "completed" }, { id: "turn-live", status: "running" }] }],
+    removed: [],
+  });
+  const client = socket();
+  events.connect(client.value, { expectsTransientSubscription: true });
+  client.listeners.message(transcriptSubscription("session-a", new Date(Date.now() - 1_000).toISOString()));
+  assert.deepEqual(client.sent.map((event) => event.payload.item.id), ["item-running"]);
+});
+
+test("a replayed timeline item is retained once per item, not once per publish", () => {
+  const events = new WebEventBus();
+  const userMessage = () => ({
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-user", turnId: "turn-a", type: "user-message", text: "hello" },
+  });
+  events.publish("ai-session.timeline-item", userMessage());
+  events.publish("ai-session.timeline-item", userMessage());
+  events.publish("ai-session.timeline-item", userMessage());
+  const client = socket();
+  events.connect(client.value, { expectsTransientSubscription: true });
+  client.listeners.message(transcriptSubscription("session-a", new Date(Date.now() - 1_000).toISOString()));
+  assert.equal(client.sent.length, 1);
+  assert.equal(client.sent[0].payload.item.id, "item-user");
+});
+
+test("a snapshot under a streamed delta is kept while the snapshot that follows it is collapsed", () => {
+  const events = new WebEventBus();
+  const snapshot = (output) => ({
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    item: { id: "item-a", turnId: "turn-a", type: "activity", activityKind: "commandExecution", title: "Command", status: "running", output },
+  });
+  events.publish("ai-session.timeline-item", snapshot("partial"));
+  events.publish("ai-session.timeline-item-delta", { instanceId: "instance-a", sessionId: "session-a", turnId: "turn-a", itemId: "item-a", delta: "more" });
+  events.publish("ai-session.timeline-item", snapshot("partial more"));
+  events.publish("ai-session.timeline-item", snapshot("partial more again"));
+  const client = socket();
+  events.connect(client.value, { expectsTransientSubscription: true });
+  client.listeners.message(transcriptSubscription("session-a", new Date(Date.now() - 1_000).toISOString()));
+  assert.deepEqual(
+    client.sent.map((event) => event.payload.item?.output ?? event.payload.delta),
+    ["partial", "more", "partial more again"],
+  );
+});

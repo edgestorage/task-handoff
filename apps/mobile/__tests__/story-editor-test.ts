@@ -6,7 +6,7 @@ import { parseStoryMaxIdleAiSessions, resolveStoryOwnerNodeId, StoryEditor } fro
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 
 const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);

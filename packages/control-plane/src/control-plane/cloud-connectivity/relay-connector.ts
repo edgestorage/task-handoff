@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import nacl from "tweetnacl";
-import { AccessTicketSchema, RelayAttachCapabilitySchema } from "@task-handoff/cloud-contracts";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { AccessTicketSchema, RELAY_FRAME_HEADER_BYTES, RelayAttachCapabilitySchema, decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
@@ -92,12 +93,12 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
 }
 
 async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, trace?: RelayTraceRecorder) {
-  const handshake = await socketMessage(socket, (value) => value?.type === "frame" && value.frame?.kind === "handshake");
-  if (handshake.frame.channelId !== channelId || handshake.frame.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
-  const hello = JSON.parse(Buffer.from(handshake.frame.ciphertext, "base64url").toString("utf8"));
+  const handshake = await socketFrame(socket, (frame) => frame.kind === "handshake");
+  if (handshake.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
+  const hello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
   const accepted = identity.acceptCloudAccessHandshake(ticket, hello);
   const response = { ...accepted.response, controlPlanePublicKey: identity.publicIdentity().publicKey };
-  socket.send(JSON.stringify({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId, sequence: 0, kind: "handshake", ciphertext: Buffer.from(JSON.stringify(response)).toString("base64url") } }));
+  socket.send(Buffer.from(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(response)) })));
   const actor: ControlPlaneActor = { type: "cloud-account", accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision };
   const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, bridge, trace);
   session.start();
@@ -121,7 +122,7 @@ export class EncryptedControlPlaneRelaySession {
   private readonly trace?: RelayTraceRecorder;
   constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; }
   start() {
-    this.socket.on("message", (raw) => { void this.receive(raw).catch(() => this.socket.close(4400, "encrypted-protocol-error")); });
+    this.socket.on("message", (raw, isBinary) => { void this.receive(raw, isBinary).catch(() => this.socket.close(4400, "encrypted-protocol-error")); });
     this.socket.once("close", (code, reason) => {
       this.trace?.record({
         channelId: this.channelId,
@@ -138,15 +139,17 @@ export class EncryptedControlPlaneRelaySession {
     });
   }
   async close(reason: string) { this.unsubscribe?.(); for (const tty of this.ttys.values()) tty.close(); this.ttys.clear(); if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, reason.slice(0, 120)); }
-  private async receive(raw: WebSocket.RawData) {
-    const message = JSON.parse(raw.toString()); const frame = message?.frame;
-    if (message?.type !== "frame" || frame?.channelId !== this.channelId || frame.sequence !== this.receiveSequence++) throw relayError("RELAY_FRAME_SEQUENCE_INVALID");
-    const sealed = Buffer.from(frame.ciphertext, "base64url");
-    const opened = nacl.secretbox.open(sealed, nonce(1, this.receiveCounter++), this.key);
+  private async receive(raw: WebSocket.RawData, isBinary: boolean) {
+    // Everything after attach is a binary frame; there is no text frame path.
+    if (!isBinary) throw relayError("RELAY_FRAME_ENCODING_INVALID");
+    const frame = decodeRelayFrame(rawBytes(raw));
+    if (frame.sequence !== this.receiveSequence++) throw relayError("RELAY_FRAME_SEQUENCE_INVALID");
+    const opened = nacl.secretbox.open(frame.payload, nonce(1, this.receiveCounter++), this.key);
     if (!opened) throw relayError("RELAY_E2E_DECRYPT_FAILED");
-    const envelope = JSON.parse(Buffer.from(opened).toString("utf8"));
+    const plaintext = unpackRelayPayload(Buffer.from(opened), frame.flags ?? 0, (input) => inflateRawSync(input));
+    const envelope = JSON.parse(Buffer.from(plaintext).toString("utf8"));
     // Captured before dispatch so a failing handler still leaves the evidence behind.
-    this.trace?.record({ channelId: this.channelId, direction: "in", kind: typeof envelope?.type === "string" ? envelope.type : "unknown", plaintext: opened, sealedBytes: sealed.byteLength, wireBytes: typeof frame.ciphertext === "string" ? frame.ciphertext.length : 0, detail: envelopeDetail(envelope) });
+    this.trace?.record({ channelId: this.channelId, direction: "in", kind: typeof envelope?.type === "string" ? envelope.type : "unknown", plaintext, sealedBytes: frame.payload.byteLength, wireBytes: RELAY_FRAME_HEADER_BYTES + frame.payload.byteLength, detail: envelopeDetail(envelope) });
     await this.dispatch(envelope);
   }
   private async dispatch(value: RelayEnvelope) {
@@ -183,12 +186,13 @@ export class EncryptedControlPlaneRelaySession {
   private send(value: RelayEnvelope) {
     if (this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2 * 1024 * 1024) throw relayError("RELAY_BACKPRESSURE_LIMIT");
     const plaintext = Buffer.from(JSON.stringify(value));
-    const sealed = nacl.secretbox(plaintext, nonce(2, this.sendCounter++), this.key);
-    const ciphertext = Buffer.from(sealed).toString("base64url");
+    const packed = packRelayPayload(plaintext, (input) => deflateRawSync(input));
+    const sealed = nacl.secretbox(packed.payload, nonce(2, this.sendCounter++), this.key);
+    const wire = encodeRelayFrame({ kind: value.type === "cancel" ? "cancel" : "data", sequence: this.sendSequence++, payload: sealed, flags: packed.flags });
     // plaintextBytes against wireBytes is the point of the trace: every relayed byte
-    // pays secretbox MAC plus base64 expansion before it reaches the Relay.
-    this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: sealed.byteLength, wireBytes: ciphertext.length, detail: envelopeDetail(value) });
-    this.socket.send(JSON.stringify({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId: this.channelId, sequence: this.sendSequence++, kind: value.type === "cancel" ? "cancel" : "data", ciphertext } }));
+    // pays the secretbox MAC and the fixed frame header before it reaches the Relay.
+    this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: sealed.byteLength, wireBytes: wire.byteLength, detail: envelopeDetail(value) });
+    this.socket.send(Buffer.from(wire));
   }
 }
 
@@ -200,6 +204,21 @@ function trustedRelayUrl(url: URL, serviceOrigin: string) {
 }
 function socketOpen(socket: WebSocket) { return new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); socket.once("close", () => reject(relayError("RELAY_SOCKET_CLOSED"))); }); }
 function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) { return new Promise<any>((resolve, reject) => { const onMessage = (raw: WebSocket.RawData) => { try { const value = JSON.parse(raw.toString()); if (predicate(value)) { cleanup(); resolve(value); } } catch (error) { cleanup(); reject(error); } }; const onClose = () => { cleanup(); reject(relayError("RELAY_SOCKET_CLOSED")); }; const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); }; socket.on("message", onMessage); socket.once("close", onClose); }); }
+function socketFrame(socket: WebSocket, predicate: (frame: RelayFramePayload) => boolean) {
+  return new Promise<RelayFramePayload>((resolve, reject) => {
+    const onMessage = (raw: WebSocket.RawData, isBinary: boolean) => {
+      try {
+        if (!isBinary) throw relayError("RELAY_FRAME_ENCODING_INVALID");
+        const frame = decodeRelayFrame(rawBytes(raw));
+        if (predicate(frame)) { cleanup(); resolve(frame); }
+      } catch (error) { cleanup(); reject(error); }
+    };
+    const onClose = () => { cleanup(); reject(relayError("RELAY_SOCKET_CLOSED")); };
+    const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); };
+    socket.on("message", onMessage); socket.once("close", onClose);
+  });
+}
+function rawBytes(raw: WebSocket.RawData) { return Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer); }
 // Only shape metadata is captured here; the payload itself becomes the trace entry body.
 function envelopeDetail(value: any): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") return undefined;

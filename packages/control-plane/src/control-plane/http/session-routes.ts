@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import { PROXY_HOP_BY_HOP_HEADERS } from "@task-handoff/core/core/http-proxy";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, AiSessionsSyncRequestSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer, type AiSessionsSyncResponse } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
@@ -740,6 +740,53 @@ export function registerSessionRoutes({
     return { data: {
       ...view,
       instances: view.instances.map((entry) => ({ ...entry, aiSessions: projectAiSessionsSnapshotForConsumer(entry.aiSessions, hierarchy) })),
+    } };
+  });
+
+  app.post("/api/ai-sessions/sync", async (request) => {
+    const query = request.query as { hierarchy?: string };
+    const hierarchy = { subagents: query.hierarchy === "subagents" };
+    const input = AiSessionsSyncRequestSchema.parse(request.body || {});
+    const descriptors = await aiSessionAggregator.streamDescriptors();
+    const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
+    const known = new Map(input.instances.map((entry) => [entry.instanceId, entry]));
+    const instances: AiSessionsSyncResponse["instances"] = [];
+    const descriptorInstanceIds = new Set<string>();
+    const snapshotOf = async (instanceId: string) => {
+      const view = await aiSessionAggregator.list({ instanceId });
+      const entry = view.instances.find((candidate) => candidate.instanceId === instanceId);
+      if (!entry) return undefined;
+      return {
+        instanceId: entry.instanceId,
+        streamId: entry.streamId,
+        aiSessions: projectAiSessionsSnapshotForConsumer(entry.aiSessions, hierarchy),
+        revision: entry.revision,
+        lastEventAt: entry.lastEventAt,
+      };
+    };
+    for (const descriptor of descriptors) {
+      if (!visibleInstanceIds.has(descriptor.instanceId)) continue;
+      descriptorInstanceIds.add(descriptor.instanceId);
+      const knownEntry = known.get(descriptor.instanceId);
+      // A missing or incompatible/broken checkpoint always falls back to the full instance.
+      if (!knownEntry || knownEntry.streamId !== descriptor.streamId || knownEntry.revision > descriptor.latestRevision) {
+        const snapshot = await snapshotOf(descriptor.instanceId);
+        if (snapshot) instances.push(snapshot);
+        continue;
+      }
+      if (knownEntry.revision === descriptor.latestRevision) continue;
+      const delta = await aiSessionAggregator.delta({ instanceId: descriptor.instanceId, streamId: descriptor.streamId, sinceRevision: knownEntry.revision });
+      if (delta.syncRequired) {
+        const snapshot = await snapshotOf(descriptor.instanceId);
+        if (snapshot) instances.push(snapshot);
+        continue;
+      }
+      instances.push({ instanceId: descriptor.instanceId, streamId: delta.streamId, delta: projectAiSessionDeltaForConsumer(delta, hierarchy) });
+    }
+    return { data: {
+      updatedAt: new Date().toISOString(),
+      instances,
+      removedInstanceIds: [...known.keys()].filter((instanceId) => !descriptorInstanceIds.has(instanceId)),
     } };
   });
 

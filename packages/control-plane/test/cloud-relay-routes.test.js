@@ -6,7 +6,7 @@ import {
   cloudAccountAuthorization,
   permissionForControlPlaneOperation,
 } from "../src/control-plane/auth/authorization.ts";
-import { cloudRelayRouteReachable } from "../src/control-plane/http/server.ts";
+import { cloudRelayRouteReachable, routeAuthorization } from "../src/control-plane/http/server.ts";
 
 const ACTIONS = [
   "read", "read-file-content", "create", "update", "delete", "start", "stop", "restart",
@@ -78,6 +78,11 @@ test("relayed cloud accounts reach credential-free client bootstrap routes but n
   ]) {
     assert.equal(cloudRelayRouteReachable("GET", path), true, `${path} must stay reachable`);
   }
+  // The mobile reconnect path posts its checkpoints to the sync route; it must be
+  // reachable to cloud accounts or every reconnect fails with CONTROL_PLANE_FORBIDDEN.
+  assert.equal(cloudRelayRouteReachable("POST", "/api/ai-sessions/sync?hierarchy=subagents"), true);
+  assert.deepEqual(routeAuthorization("POST", "/api/ai-sessions/sync"), { action: "read", resource: { type: "public-directory" } });
+  assert.deepEqual(routeAuthorization("GET", "/api/ai-sessions"), { action: "read", resource: { type: "public-directory" } });
   for (const [method, path] of [
     ["GET", "/api/auth/login"],
     ["POST", "/api/auth/login"],

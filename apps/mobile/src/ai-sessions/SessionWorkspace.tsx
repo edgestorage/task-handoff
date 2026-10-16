@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { CircleHelp, CornerDownRight, GripVertical, Pause, Pencil, Play, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
@@ -9,7 +9,7 @@ import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
-import type { StoryDecision } from '@task-handoff/protocol/stories';
+import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
@@ -26,6 +26,7 @@ import { useMobileToast } from '../components/MobileToast';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { StoryDecisionAnswer } from '../stories/StoryDecisionAnswer';
+import { useStoryEvents } from '../stories/use-story-events';
 import { isStoryDecisionResumePending, pendingStoryDecisionsForSession, type StoryDecisionAnswerInput } from '../stories/story-decision';
 
 export function SessionWorkspace({
@@ -117,7 +118,7 @@ export function SessionWorkspace({
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
   const [queueDragOffsetY, setQueueDragOffsetY] = useState(0);
-  const [storyDecisions, setStoryDecisions] = useState<readonly StoryDecision[]>([]);
+  const [storyDecisionList, setStoryDecisionList] = useState<readonly StoryDecision[]>([]);
   const [decisionBusyId, setDecisionBusyId] = useState('');
   const [decisionError, setDecisionError] = useState<{ decisionId: string; message: string }>();
   const [decisionResume, setDecisionResume] = useState<{ decisionId: string; input: StoryDecisionAnswerInput }>();
@@ -341,23 +342,28 @@ export function SessionWorkspace({
     setQueueDragOffsetY(0);
     queueDrag.current = undefined;
   }, [session?.queue.revision, sessionId]);
-  // 决策的权威归属是 sessionId：只拉取当前会话自己的待决策，随会话快照更新重新对齐。
+  // 决策的权威归属是 sessionId：只拉取当前会话自己的待决策。列表在打开会话/切换故事
+  // 时拉取，之后只在故事决策事件到达时刷新，不再跟着会话快照的每次更新重拉。
   const decisionsSessionId = session?.id;
   const decisionsStoryId = session?.storyId;
-  const decisionsRevision = `${session?.updatedAt || ''}:${session?.turnCount ?? 0}`;
-  useEffect(() => {
-    if (!client || !nodeId || !decisionsStoryId || !decisionsSessionId) {
-      setStoryDecisions([]);
+  const refreshStoryDecisions = useCallback(async (signal: AbortSignal) => {
+    if (!client || !nodeId || !decisionsStoryId) {
+      setStoryDecisionList([]);
       return;
     }
-    const abort = new AbortController();
-    void client.stories.listDecisions(decisionsStoryId, nodeId, abort.signal).then((list) => {
-      if (!abort.signal.aborted) setStoryDecisions(pendingStoryDecisionsForSession(list.decisions, decisionsSessionId));
-    }).catch(() => {
-      if (!abort.signal.aborted) setStoryDecisions([]);
-    });
-    return () => abort.abort();
-  }, [client, decisionsRevision, decisionsSessionId, decisionsStoryId, nodeId]);
+    try {
+      const list = await client.stories.listDecisions(decisionsStoryId, nodeId, signal);
+      if (!signal.aborted) setStoryDecisionList(list.decisions);
+    } catch (error) {
+      if (!signal.aborted) setStoryDecisionList([]);
+      throw error;
+    }
+  }, [client, decisionsStoryId, nodeId]);
+  useStoryEvents(refreshStoryDecisions, decisionsStoryId, (event) => event.type === StoryDecisionChangedEventType);
+  const storyDecisions = useMemo(
+    () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
+    [decisionsSessionId, storyDecisionList],
+  );
   if (!session) return <SessionDetail messages={messages} session={session} />;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
@@ -412,7 +418,7 @@ export function SessionWorkspace({
         ...input,
         ...(retry ? { retry: true } : {}),
       });
-      setStoryDecisions((current) => current
+      setStoryDecisionList((current) => current
         .map((candidate) => (candidate.id === updated.id ? updated : candidate))
         .filter((candidate) => candidate.status === 'pending'));
       setDecisionResume(undefined);
@@ -429,7 +435,7 @@ export function SessionWorkspace({
     setDecisionError(undefined);
     try {
       const updated = await client.stories.cancelDecision(session.storyId, decision.id, nodeId, { expectedRevision: decision.revision });
-      setStoryDecisions((current) => current.filter((candidate) => candidate.id !== updated.id));
+      setStoryDecisionList((current) => current.filter((candidate) => candidate.id !== updated.id));
       setDecisionResume(undefined);
     } catch (cause) {
       setDecisionError({ decisionId: decision.id, message: cause instanceof Error ? cause.message : String(cause) });

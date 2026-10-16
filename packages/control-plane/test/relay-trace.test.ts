@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import nacl from "tweetnacl";
+import { decodeRelayFrame, encodeRelayFrame, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { CloudRelayConnector } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 import { RelayTraceRecorder, relayTraceEnabled, relayTraceFromEnvironment } from "../src/control-plane/cloud-connectivity/relay-trace.ts";
 
@@ -130,19 +131,21 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     static CLOSED = 3;
     readyState = FakeSocket.CONNECTING;
     sent: any[] = [];
+    frames: RelayFramePayload[] = [];
     listeners = new Map<string, ((...args: any[]) => void)[]>();
     constructor(url: string) { (this as any).url = url; sockets.push(this); queueMicrotask(() => { this.readyState = FakeSocket.OPEN; this.emit("open"); }); }
     on(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
     once(event: string, listener: (...args: any[]) => void) { const wrapper = (...args: any[]) => { this.off(event, wrapper); listener(...args); }; this.on(event, wrapper); }
     off(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
     emit(event: string, ...args: any[]) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
-    send(data: string) {
+    send(data: string | Uint8Array) {
+      if (typeof data !== "string") { this.frames.push(decodeRelayFrame(data)); return; }
       const message = JSON.parse(data);
       this.sent.push(message);
       if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", channelId: "relay_channel_a" }) }));
     }
     close(code?: number, reason?: string) { this.readyState = FakeSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
-    receive(value: unknown) { this.emit("message", { toString: () => JSON.stringify(value) }); }
+    receive(frame: RelayFramePayload) { this.emit("message", Buffer.from(encodeRelayFrame(frame)), true); }
   }
 
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
@@ -160,17 +163,17 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
   });
 
   const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, ticket } });
-  sockets[0].receive({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId: "relay_channel_a", sequence: 0, kind: "handshake", ciphertext: Buffer.from(JSON.stringify({ ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) })).toString("base64url") } });
+  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify({ ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) })) });
   // The data frame can only be consumed once the encrypted session has registered its
   // listener, which happens after the handshake response goes back over the socket.
-  await waitFor(() => sockets[0].sent.some((message) => message.type === "frame" && message.frame.kind === "handshake"));
+  await waitFor(() => sockets[0].frames.some((frame) => frame.kind === "handshake"));
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   const request = Buffer.from(JSON.stringify({ type: "request", id: "request_1", body: { path: "/instances", method: "GET", headers: {} } }));
   const clientNonce = new Uint8Array(24);
   clientNonce[0] = 1;
   const sealed = nacl.secretbox(request, clientNonce, sessionKey);
-  sockets[0].receive({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId: "relay_channel_a", sequence: 1, kind: "data", ciphertext: Buffer.from(sealed).toString("base64url") } });
+  sockets[0].receive({ kind: "data", sequence: 1, payload: sealed });
 
   // The attach handshake records its own `channel-opened` entry first, so the decoded
   // request/response pair arrives as the second and third entries.
@@ -183,8 +186,8 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
   assert.deepEqual([inbound.detail.path, inbound.detail.method], ["/instances", "GET"]);
   assert.equal(inbound.plaintextBytes, request.byteLength);
   assert.equal(inbound.sealedBytes, request.byteLength + 16);
-  // Base64 expansion is exactly what the capture has to make visible: the Relay and every
-  // hop in between carry the wire size, not the plaintext size.
+  // The capture has to make the wire overhead visible: sealed bytes plus the fixed
+  // frame header are what the Relay and every hop in between carry.
   assert.ok(inbound.wireBytes > inbound.sealedBytes, `${inbound.wireBytes} <= ${inbound.sealedBytes}`);
   assert.equal(outbound.kind, "response");
   assert.equal(outbound.detail.status, 200);

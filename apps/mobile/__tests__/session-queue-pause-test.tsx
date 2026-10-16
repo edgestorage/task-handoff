@@ -8,6 +8,14 @@ import { StoryDecisionSchema } from '@task-handoff/protocol/stories';
 import { queuePauseIcon, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import type { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { MobileToastProvider } from '../src/components/MobileToast';
+import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
+
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => {
+  const useMobileControlPlaneRuntime = jest.fn();
+  return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime };
+});
+
+const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1',
@@ -58,12 +66,16 @@ function actions(pauseQueue: jest.Mock) {
 }
 
 async function renderWorkspace(props: Partial<Parameters<typeof SessionWorkspace>[0]> = {}) {
-  return render(
+  return render(workspaceTree(props));
+}
+
+function workspaceTree(props: Partial<Parameters<typeof SessionWorkspace>[0]> = {}) {
+  return (
     <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
       <MobileToastProvider>
         <SessionWorkspace controlPlaneId="cp" instanceId="instance" messages={[]} session={session} {...props} />
       </MobileToastProvider>
-    </SafeAreaProvider>,
+    </SafeAreaProvider>
   );
 }
 
@@ -129,4 +141,32 @@ test('keeps a decision out of the session prompt when the node cannot resolve it
   await waitFor(() => expect(screen.queryByText('Approve deployment?')).toBeNull());
   expect(decideStory).not.toHaveBeenCalled();
   await screen.unmount();
+});
+
+test('refreshes pending decisions from story decision events instead of every session snapshot revision', async () => {
+  const listDecisions = jest.fn().mockResolvedValue({ decisions: [] });
+  const domains: { onEvent(event: unknown): void; start(signal: AbortSignal): Promise<unknown> }[] = [];
+  mockRuntime.mockReturnValue({
+    coordinator: {
+      register: (domain: { onEvent(event: unknown): void; start(signal: AbortSignal): Promise<unknown> }) => {
+        domains.push(domain);
+        void domain.start(new AbortController().signal);
+        return () => undefined;
+      },
+    },
+  } as never);
+  const screen = await render(workspaceTree({ client: client({ listDecisions }), nodeId: 'node-1' }));
+  await waitFor(() => expect(listDecisions).toHaveBeenCalledTimes(1));
+
+  // A new session snapshot revision no longer re-fetches a story-wide decision list.
+  await screen.rerender(workspaceTree({ client: client({ listDecisions }), nodeId: 'node-1', session: ControlPlaneAiSessionSummarySchema.parse({ ...session, updatedAt: '2026-08-05T00:02:00.000Z', turnCount: 3 }) }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(listDecisions).toHaveBeenCalledTimes(1);
+
+  // The story decision event is the authoritative refresh trigger, debounced by the hook.
+  expect(domains).toHaveLength(1);
+  domains[0]!.onEvent({ topic: 'stories', type: 'story.decision.changed', payload: { storyId: 'story-1', decisionId: 'decision-9', revision: 2, change: 'created' } });
+  await waitFor(() => expect(listDecisions).toHaveBeenCalledTimes(2));
+  await screen.unmount();
+  mockRuntime.mockReset();
 });

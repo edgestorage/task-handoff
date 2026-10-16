@@ -18,7 +18,7 @@ jest.mock('expo-router', () => ({
   Stack: { Screen: ({ options }: { options: { headerRight?: () => unknown } }) => options.headerRight?.() ?? null },
   useFocusEffect: (callback: () => void | (() => void)) => require('react').useEffect(callback, [callback]),
 }));
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessions: jest.fn(), useActiveAiSessionsSnapshot: jest.fn() }));
 

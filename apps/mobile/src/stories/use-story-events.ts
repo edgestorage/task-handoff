@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef } from 'react';
 import {
+  StoryDecisionChangedEventSchema,
+  StoryDecisionChangedEventType,
   StoryAutomationChangedEventSchema,
   StoryAutomationChangedEventType,
   StoryChangedEventSchema,
@@ -7,17 +9,25 @@ import {
 } from '@task-handoff/protocol/stories';
 
 import type { MobileControlPlaneEvent } from '../control-plane/transport';
-import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
+import { useOptionalMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 
 const STORY_REFRESH_DEBOUNCE_MS = 100;
 
-export function useStoryEvents(refresh: (signal: AbortSignal) => Promise<unknown>, storyId?: string) {
-  const runtime = useMobileControlPlaneRuntime();
+export function useStoryEvents(
+  refresh: (signal: AbortSignal) => Promise<unknown>,
+  storyId?: string,
+  acceptsEvent?: (event: MobileControlPlaneEvent) => boolean,
+) {
+  const runtime = useOptionalMobileControlPlaneRuntime();
   const domainId = useId();
   const refreshRef = useRef(refresh);
+  const acceptsRef = useRef(acceptsEvent);
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+  useEffect(() => {
+    acceptsRef.current = acceptsEvent;
+  }, [acceptsEvent]);
 
   useEffect(() => {
     let stopped = false;
@@ -62,11 +72,12 @@ export function useStoryEvents(refresh: (signal: AbortSignal) => Promise<unknown
     };
     const accepts = (event: MobileControlPlaneEvent) => {
       if (event.topic !== 'stories') return false;
+      if (acceptsRef.current && !acceptsRef.current(event)) return false;
       const eventStoryId = storyEventStoryId(event);
       return !storyId || !eventStoryId || eventStoryId === storyId;
     };
 
-    if (!runtime.coordinator) {
+    if (!runtime?.coordinator) {
       void runRefresh().catch(() => undefined);
       return stop;
     }
@@ -84,7 +95,7 @@ export function useStoryEvents(refresh: (signal: AbortSignal) => Promise<unknown
       },
       onConnectionError: () => undefined,
     });
-  }, [domainId, runtime.coordinator, storyId]);
+  }, [domainId, runtime?.coordinator, storyId]);
 }
 
 function storyEventStoryId(event: MobileControlPlaneEvent) {
@@ -94,6 +105,10 @@ function storyEventStoryId(event: MobileControlPlaneEvent) {
   }
   if (event.type === StoryAutomationChangedEventType) {
     const parsed = StoryAutomationChangedEventSchema.safeParse(event.payload);
+    return parsed.success ? parsed.data.storyId : undefined;
+  }
+  if (event.type === StoryDecisionChangedEventType) {
+    const parsed = StoryDecisionChangedEventSchema.safeParse(event.payload);
     return parsed.success ? parsed.data.storyId : undefined;
   }
   return undefined;

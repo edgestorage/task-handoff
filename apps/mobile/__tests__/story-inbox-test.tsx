@@ -10,7 +10,7 @@ import { useActiveDirectories } from '../src/directories/use-directories';
 import { useStoryNodeFilter } from '../src/stories/use-story-node-filter';
 import { updateStoryViewPreferences } from '../src/stories/story-view-preferences';
 
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessionsRuntime: () => ({}), useActiveAiSessionsSnapshot: jest.fn() }));
 jest.mock('../src/stories/use-story-node-filter', () => ({ useStoryNodeFilter: jest.fn() }));

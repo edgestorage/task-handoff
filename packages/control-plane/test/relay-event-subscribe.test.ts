@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import nacl from "tweetnacl";
+import { encodeRelayFrame } from "@task-handoff/cloud-contracts";
 import { EncryptedControlPlaneRelaySession } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 
 // Mirrors `nonce()` in relay-connector.ts: direction byte followed by a big-endian
@@ -20,11 +21,11 @@ function harness() {
     readyState: 1,
     OPEN: 1,
     bufferedAmount: 0,
-    sent: [] as string[],
+    sent: [] as (string | Uint8Array)[],
     on(event: string, listener: (value?: unknown) => void) { listeners.set(event, listener); },
     once(event: string, listener: (value?: unknown) => void) { listeners.set(event, listener); },
     off() { return undefined; },
-    send(value: string) { socket.sent.push(value); },
+    send(value: string | Uint8Array) { socket.sent.push(value); },
     ping() { return undefined; },
     close() { return undefined; },
   };
@@ -39,7 +40,7 @@ function harness() {
   session.start();
   const deliver = (envelope: unknown, sequence = 1, counter = 0) => {
     const sealed = nacl.secretbox(new TextEncoder().encode(JSON.stringify(envelope)), clientNonce(counter), key);
-    listeners.get("message")?.(Buffer.from(JSON.stringify({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId, sequence, kind: "data", ciphertext: Buffer.from(sealed).toString("base64url") } })));
+    listeners.get("message")?.(Buffer.from(encodeRelayFrame({ kind: "data", sequence, payload: sealed })), true);
   };
   return { deliver, subscriptions };
 }

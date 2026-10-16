@@ -1,23 +1,21 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { ReactNode } from 'react';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Redirect, router, Stack } from 'expo-router';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 
-import type { AccountPublicProfile, DeviceSession, OfficialMobileAccountClient, TotpEnrollmentResponse } from '@task-handoff/cloud-contracts/mobile';
-
+import { Screen } from '../src/components/Screen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
-import { Screen } from '../src/components/Screen';
 import { SystemIcon } from '../src/components/SystemIcon';
 import { useMobileTheme } from '../src/components/theme';
-import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
-import { hasActiveCloudAccount, logoutActiveCloudAccount, restoreActiveCloudAccountSession } from '../src/control-plane/runtime';
+import { NativeCloudAccountSecurityScreen } from '../src/control-plane/NativeCloudAccountSecurityScreen';
+import type { DeviceSession } from '@task-handoff/cloud-contracts/mobile';
+import { useCloudAccountSecurity, type CloudAccountSecurityController } from '../src/control-plane/use-cloud-account-security';
 import { useI18n } from '../src/i18n';
 import type { MessageKey } from '../src/i18n/messages';
 import { isMobileFeatureEnabled } from '../src/platform/build-variant';
 
 type Icon = { android: AndroidSymbol; ios: SFSymbol };
-type CloudAccountClient = OfficialMobileAccountClient;
 
 export default function CloudAccountSecurityScreen() {
   if (!isMobileFeatureEnabled('officialAccount')) return <Redirect href="/profiles" />;
@@ -25,86 +23,27 @@ export default function CloudAccountSecurityScreen() {
 }
 
 function CloudAccountSecurityContent() {
+  const { t } = useI18n();
+  const controller = useCloudAccountSecurity();
+
+  if (Platform.OS === 'ios') {
+    return <>
+      <Stack.Screen options={{ title: t('cloudAccount.settings') }}/>
+      <NativeCloudAccountSecurityScreen controller={controller} onOpenControlPlanes={() => router.push('/cloud-control-planes' as never)}/>
+    </>;
+  }
+  return <CloudAccountSecurityForm controller={controller}/>;
+}
+
+function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecurityController }) {
   const { colors } = useMobileTheme();
-  const { locale, t } = useI18n();
-  const zh = locale === 'zh-CN';
-  const [profile, setProfile] = useState<AccountPublicProfile>();
-  const [devices, setDevices] = useState<DeviceSession[]>([]);
-  const [currentDeviceId, setCurrentDeviceId] = useState<string>();
-  const [stepUp, setStepUp] = useState('');
-  const [stepCode, setStepCode] = useState('');
-  const [enrollment, setEnrollment] = useState<TotpEnrollmentResponse>();
-  const [totpCode, setTotpCode] = useState('');
-  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string>();
-
-  const load = useCallback(async () => {
-    try {
-      const session = await restoreActiveCloudAccountSession();
-      setCurrentDeviceId(session.reference().id);
-      // A projection this app version cannot read (for example a device kind added by a
-      // newer cloud service) must not hide the projections that did load, so the two
-      // account reads settle independently.
-      const [profileResult, devicesResult] = await Promise.allSettled([session.client.profile(), session.client.devices()]);
-      if (profileResult.status === 'fulfilled') setProfile(profileResult.value);
-      if (devicesResult.status === 'fulfilled') setDevices(devicesResult.value);
-      const failure = profileResult.status === 'rejected' ? profileResult.reason : devicesResult.status === 'rejected' ? devicesResult.reason : undefined;
-      setMessage(failure ? cloudMobileErrorMessage(failure, zh) : undefined);
-    } catch (error) {
-      setMessage(cloudMobileErrorMessage(error, zh));
-    }
-  }, [zh]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => void load(), 0);
-    return () => clearTimeout(timer);
-  }, [load]);
-
-  async function stepUpToken(client: CloudAccountClient) {
-    return client.stepUp({ password: stepUp, ...(stepCode.includes('-') ? { recoveryCode: stepCode } : stepCode ? { totpCode: stepCode } : {}) });
-  }
-
-  async function action(operation: (client: CloudAccountClient) => Promise<unknown>, done?: (result: unknown) => void) {
-    setBusy(true);
-    setMessage(undefined);
-    try {
-      const session = await restoreActiveCloudAccountSession();
-      const result = await operation(session.client);
-      done?.(result);
-      await load();
-    } catch (error) {
-      setMessage(cloudMobileErrorMessage(error, zh));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function logout() {
-    setBusy(true);
-    setMessage(undefined);
-    try {
-      await logoutActiveCloudAccount();
-      router.back();
-    } catch (error) {
-      if (!await hasActiveCloudAccount().catch(() => false)) router.back();
-      else setMessage(cloudMobileErrorMessage(error, zh));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function confirmLogout() {
-    Alert.alert(t('cloudAccount.signOutTitle'), t('cloudAccount.signOutDescription'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      { text: t('cloudAccount.signOutConfirm'), style: 'destructive', onPress: () => void logout() },
-    ]);
-  }
+  const { t } = useI18n();
+  const { busy, currentDeviceId, devices, enrollment, message, profile, recoveryCodes } = controller;
 
   return <>
     <Stack.Screen options={{ title: t('cloudAccount.settings') }}/>
     <Screen>
-      {!profile && !message ? (
+      {!controller.loaded ? (
         <View style={styles.loading}>
           <ActivityIndicator accessibilityLabel={t('cloudAccount.loadingProfile')}/>
           <Text style={[styles.loadingText, { color: colors.textMuted }]}>{t('cloudAccount.loadingProfile')}</Text>
@@ -145,7 +84,7 @@ function CloudAccountSecurityContent() {
                   <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.text }]}>{device.deviceName || device.id}</Text>
                   <Text numberOfLines={1} style={[styles.rowDetail, { color: colors.textMuted }]}>{detail}</Text>
                 </View>
-                {current ? null : <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => void action((client) => client.revokeDevice(device.id))}>
+                {current ? null : <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => controller.revokeDevice(device.id)}>
                   <Text style={[styles.rowCommand, { color: colors.error }]}>{t('cloudAccount.revoke')}</Text>
                 </Pressable>}
               </View>
@@ -160,12 +99,12 @@ function CloudAccountSecurityContent() {
                 <TextInput
                   accessibilityLabel={t('cloudAccount.stepUpPassword')}
                   editable={!busy}
-                  onChangeText={setStepUp}
+                  onChangeText={controller.setStepUp}
                   placeholder={t('cloudAccount.stepUpPasswordPlaceholder')}
                   placeholderTextColor={colors.textPlaceholder}
                   secureTextEntry
                   style={[styles.input, { color: colors.text }]}
-                  value={stepUp}
+                  value={controller.stepUp}
                 />
               </FieldRow>
               <Divider/>
@@ -174,48 +113,42 @@ function CloudAccountSecurityContent() {
                   accessibilityLabel={t('cloudAccount.stepUpCode')}
                   autoCapitalize="characters"
                   editable={!busy}
-                  onChangeText={setStepCode}
+                  onChangeText={controller.setStepCode}
                   placeholder={t('cloudAccount.stepUpCodePlaceholder')}
                   placeholderTextColor={colors.textPlaceholder}
                   style={[styles.input, { color: colors.text }]}
-                  value={stepCode}
+                  value={controller.stepCode}
                 />
               </FieldRow>
               <Divider/>
             </> : null}
             <ActionRow
-              disabled={busy || Boolean(profile?.totpEnabled && !stepUp)}
+              disabled={busy || Boolean(profile?.totpEnabled && !controller.stepUp)}
               icon={{ android: 'shield_lock', ios: 'lock.shield' }}
               label={profile?.totpEnabled ? t('cloudAccount.replaceAuthenticator') : t('cloudAccount.enableAuthenticator')}
-              onPress={() => void action(
-                async (client) => client.beginTotp(profile?.totpEnabled ? { replace: true, stepUp: await stepUpToken(client) } : {}),
-                (result) => setEnrollment(result as TotpEnrollmentResponse),
-              )}
+              onPress={controller.beginTotp}
             />
             {profile?.totpEnabled ? <>
               <Divider/>
               <ActionRow
                 destructive
-                disabled={busy || !stepUp}
+                disabled={busy || !controller.stepUp}
                 icon={{ android: 'lock_open', ios: 'lock.open' }}
                 label={t('cloudAccount.disableAuthenticator')}
-                onPress={() => void action(async (client) => client.disableTotp({ stepUp: await stepUpToken(client) }))}
+                onPress={controller.disableTotp}
               />
             </> : null}
           </> : null}
           {enrollment ? <View style={styles.form}>
             <Text style={[styles.fieldLabel, { color: colors.textMuted }]}>{t('cloudAccount.totpSecret')}</Text>
             <Text selectable style={[styles.secret, { color: colors.text }]}>{enrollment.secret}</Text>
-            <OneTimeCodeInput accessibilityLabel={t('cloudAccount.totpCode')} disabled={busy} onChangeText={setTotpCode} value={totpCode}/>
+            <OneTimeCodeInput accessibilityLabel={t('cloudAccount.totpCode')} disabled={busy} onChangeText={controller.setTotpCode} value={controller.totpCode}/>
             <NativeActionButton
               compact
-              disabled={busy || totpCode.length !== 6}
+              disabled={busy || controller.totpCode.length !== 6}
               icon={{ android: 'verified_user', ios: 'checkmark.shield' }}
               label={t('cloudAccount.confirmAuthenticator')}
-              onPress={() => void action(
-                (client) => client.confirmTotp({ enrollmentToken: enrollment.enrollmentToken, code: totpCode }),
-                (result) => { setRecoveryCodes((result as { recoveryCodes?: string[] })?.recoveryCodes ?? []); setEnrollment(undefined); },
-              )}
+              onPress={controller.confirmTotp}
             />
           </View> : null}
           {recoveryCodes.length ? <View style={styles.form}>
@@ -229,7 +162,7 @@ function CloudAccountSecurityContent() {
             accessibilityRole="button"
             accessibilityState={{ disabled: busy }}
             disabled={busy}
-            onPress={confirmLogout}
+            onPress={controller.signOut}
             style={({ pressed }) => [styles.signOutRow, busy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
           >
             <Text style={[styles.signOutLabel, { color: colors.error }]}>{t('cloudAccount.signOutAction')}</Text>

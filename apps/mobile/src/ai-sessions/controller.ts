@@ -1,4 +1,4 @@
-import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import type { ControlPlaneAiSessions, ControlPlaneClient } from '@task-handoff/control-plane-client';
 import {
   AiSessionEventType,
   AiSessionMessageDeltaEventSchema,
@@ -138,10 +138,59 @@ export class MobileAiSessionController {
   }
 
   async refreshSnapshot(signal?: AbortSignal, epoch = this.epoch) {
+    const current = this.store.profile(this.controlPlaneId).snapshot;
+    if (current?.instances.length) {
+      const synced = await this.syncFromCheckpoint(current, signal, epoch);
+      if (synced !== undefined) return synced;
+    }
+    return this.refreshSnapshotFromList(signal, epoch);
+  }
+
+  private async refreshSnapshotFromList(signal: AbortSignal | undefined, epoch: number) {
     const snapshot = await this.client.aiSessions.list(signal);
-    if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
+    if (!this.isCurrent(epoch)) return false;
     this.store.replaceSnapshot(this.controlPlaneId, snapshot);
     return true;
+  }
+
+  // A reconnect asks the Control Plane only for the instances that moved since the
+  // stored checkpoint instead of re-downloading every instance snapshot. Returns
+  // undefined when the Control Plane cannot serve the sync route — it predates the
+  // route (404) or its relay policy forbids it (403) — so the caller falls back to
+  // the authoritative full list instead of looping on a reconnect error.
+  private async syncFromCheckpoint(current: ControlPlaneAiSessions, signal: AbortSignal | undefined, epoch: number): Promise<boolean | undefined> {
+    let response;
+    try {
+      response = await this.client.aiSessions.sync(
+        current.instances.map((entry) => ({ instanceId: entry.instanceId, streamId: entry.streamId, revision: entry.revision ?? 0 })),
+        signal,
+      );
+    } catch (cause) {
+      if (cause instanceof MobileControlPlaneTransportError && (cause.status === 404 || cause.status === 403)) return undefined;
+      throw cause;
+    }
+    if (!this.isCurrent(epoch)) return false;
+    this.store.replaceInstances(
+      this.controlPlaneId,
+      response.instances.filter((entry) => 'aiSessions' in entry),
+      response.removedInstanceIds,
+      response.updatedAt,
+    );
+    for (const entry of response.instances) {
+      if (!('delta' in entry)) continue;
+      let appliedRevision = entry.delta.sinceRevision;
+      for (const event of entry.delta.events) {
+        const result = this.store.applyStreamEvent(this.controlPlaneId, event);
+        if (result.kind === 'gap' || result.kind === 'snapshot-required') return this.refreshSnapshotFromList(signal, epoch);
+        appliedRevision = Math.max(appliedRevision, event.payload.meta.revision);
+      }
+      if (appliedRevision < entry.delta.latestRevision) return this.refreshSnapshotFromList(signal, epoch);
+    }
+    return true;
+  }
+
+  private isCurrent(epoch: number) {
+    return epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration);
   }
 
   async refresh() {

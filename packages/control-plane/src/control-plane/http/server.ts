@@ -449,6 +449,12 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/node-join/invites") {
     return { action: "manage-node-auth", resource: { type: "node" } };
   }
+  // AI session aggregates are read surfaces: the reconnect sync route posts its
+  // known checkpoints but only reads the directory, so it shares the list route's
+  // non-sensitive directory policy and filters by visible instances in the handler.
+  if (path === "/api/ai-sessions" || path === "/api/ai-sessions/sync") {
+    return { action: "read", resource: { type: "public-directory" } };
+  }
   if (path.startsWith("/api/control-plane-proxy")) {
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }

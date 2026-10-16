@@ -1273,6 +1273,58 @@ export const AiSessionDeltaResponseSchema = z
   })
   .strict();
 
+export const AiSessionInstanceSnapshotSchema = z
+  .object({
+    instanceId: z.string().trim().min(1).max(160),
+    streamId: z.string().trim().min(1).max(240),
+    aiSessions: AiSessionsSnapshotSchema,
+    revision: z.number().int().min(0),
+    lastEventAt: z.string().datetime(),
+  })
+  .strict();
+
+// Reconnect sync: the client states the stream it already holds per instance and the
+// server answers with only what moved. Instances the client never mentions come back
+// as full snapshots; unchanged instances are omitted entirely, so an idle reconnect is
+// a few dozen bytes instead of the whole snapshot tree.
+export const AiSessionsSyncRequestSchema = z
+  .object({
+    instances: z
+      .array(
+        z
+          .object({
+            instanceId: z.string().trim().min(1).max(160),
+            streamId: z.string().trim().min(1).max(240),
+            revision: z.number().int().min(0),
+          })
+          .strict(),
+      )
+      .max(200)
+      .default([]),
+  })
+  .strict();
+
+export const AiSessionsSyncResponseSchema = z
+  .object({
+    updatedAt: z.string().datetime(),
+    instances: z
+      .array(
+        z.union([
+          AiSessionInstanceSnapshotSchema,
+          z
+            .object({
+              instanceId: z.string().trim().min(1).max(160),
+              streamId: z.string().trim().min(1).max(240),
+              delta: AiSessionDeltaResponseSchema,
+            })
+            .strict(),
+        ]),
+      )
+      .default([]),
+    removedInstanceIds: z.array(z.string().trim().min(1).max(160)).default([]),
+  })
+  .strict();
+
 type AiSessionHierarchyConsumer = { subagents?: boolean } | undefined;
 
 function projectSessionLineageForConsumer<T extends { lineage?: z.infer<typeof AiSessionLineageSchema> }>(
@@ -1658,6 +1710,9 @@ export type AiSessionTimelineItemEvent = z.infer<typeof AiSessionTimelineItemEve
 export type AiSessionTimelineItemDeltaEvent = z.infer<typeof AiSessionTimelineItemDeltaEventSchema>;
 export type AiSessionTimelineItemDeltaCompactEvent = z.infer<typeof AiSessionTimelineItemDeltaCompactEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
+export type AiSessionInstanceSnapshot = z.infer<typeof AiSessionInstanceSnapshotSchema>;
+export type AiSessionsSyncRequest = z.infer<typeof AiSessionsSyncRequestSchema>;
+export type AiSessionsSyncResponse = z.infer<typeof AiSessionsSyncResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;
 export type AiSessionRealtimeInput = z.infer<typeof AiSessionRealtimeInputSchema>;
 export type AiSessionReducerInput = z.infer<typeof AiSessionReducerInputSchema>;

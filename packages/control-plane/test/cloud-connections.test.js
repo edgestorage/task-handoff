@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
+import { decodeRelayFrame, encodeRelayFrame } from "@task-handoff/cloud-contracts";
 import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "../src/control-plane/cloud-connectivity/connections.ts";
 import { CloudAuthorityEventConsumer } from "../src/control-plane/cloud-connectivity/authority-events.ts";
 import { CloudRelayConnector, verifyCoordinatorRelayAllocation } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
@@ -88,6 +89,7 @@ test("relay attach acknowledges the Coordinator before the client completes the 
     static CLOSED = 3;
     readyState = FakeSocket.CONNECTING;
     sent = [];
+    frames = [];
     listeners = new Map();
     constructor(url) { this.url = url; sockets.push(this); queueMicrotask(() => { this.readyState = FakeSocket.OPEN; this.emit("open"); }); }
     on(event, listener) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
@@ -95,12 +97,13 @@ test("relay attach acknowledges the Coordinator before the client completes the 
     off(event, listener) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
     emit(event, ...args) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
     send(data) {
+      if (typeof data !== "string") { this.frames.push(decodeRelayFrame(data)); return; }
       const message = JSON.parse(data);
       this.sent.push(message);
       if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", channelId: "relay_channel_a" }) }));
     }
     close(code, reason) { this.readyState = FakeSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
-    receive(value) { this.emit("message", { toString: () => JSON.stringify(value) }); }
+    receive(frame) { this.emit("message", Buffer.from(encodeRelayFrame(frame)), true); }
   }
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
   const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
@@ -110,9 +113,9 @@ test("relay attach acknowledges the Coordinator before the client completes the 
   const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, ticket } });
   assert.deepEqual(sockets[0].sent.map((message) => message.type), ["attach"]);
   const hello = { ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) };
-  sockets[0].receive({ type: "frame", frame: { protocolVersion: "2026-08-10", channelId: "relay_channel_a", sequence: 0, kind: "handshake", ciphertext: Buffer.from(JSON.stringify(hello)).toString("base64url") } });
+  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(hello)) });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(sockets[0].sent.some((message) => message.type === "frame" && message.frame.kind === "handshake"), true);
+  assert.equal(sockets[0].frames.some((frame) => frame.kind === "handshake"), true);
   await connection.close("test-done");
   assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
 });

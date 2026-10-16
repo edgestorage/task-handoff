@@ -13,7 +13,6 @@ import {
   tint,
 } from '@expo/ui/swift-ui/modifiers';
 import { View } from 'react-native';
-import { router } from 'expo-router';
 import type { SFSymbol } from 'expo-symbols';
 
 import type { DeviceSession } from '@task-handoff/cloud-contracts/mobile';
@@ -29,7 +28,7 @@ const DEVICE_KINDS: Record<DeviceSession['kind'], { icon: SFSymbol; label: Messa
   mobile: { icon: 'iphone', label: 'cloudAccount.deviceKind.mobile' },
 };
 
-export function NativeCloudAccountSecurityScreen({ controller }: NativeCloudAccountSecurityScreenProps) {
+export function NativeCloudAccountSecurityScreen({ controller, onOpenControlPlanes }: NativeCloudAccountSecurityScreenProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const { busy, currentDeviceId, devices, enrollment, message, profile, recoveryCodes } = controller;
@@ -68,7 +67,7 @@ export function NativeCloudAccountSecurityScreen({ controller }: NativeCloudAcco
               <Button
                 label={t('cloudAccount.manageControlPlanes')}
                 systemImage="server.rack"
-                onPress={() => router.push('/cloud-control-planes' as never)}
+                onPress={onOpenControlPlanes}
               />
             </Section>
 

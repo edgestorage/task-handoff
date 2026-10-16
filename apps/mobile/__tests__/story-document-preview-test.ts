@@ -5,7 +5,7 @@ import { StoryDocumentPreview, htmlPreviewNavigationDisposition, isHtmlStoryPath
 import { useMobileControlPlaneRuntime, type MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 
 jest.mock('react-native-webview', () => ({ WebView: 'WebView' }));
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/components/theme', () => ({ useMobileTheme: () => ({ colors: { background: '#fff', error: '#f00', text: '#111', textMuted: '#666' } }) }));
 jest.mock('../src/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 

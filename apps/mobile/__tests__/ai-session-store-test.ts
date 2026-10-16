@@ -7,7 +7,7 @@ import {
 } from '@task-handoff/control-plane-client';
 import { AiSessionDetailSchema, AiSessionEventType, AiSessionStatusSchema, AiSessionTurnIndexSchema, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
 import { supportsDirectoryAiSessionTimelineCapability } from '@task-handoff/protocol/control-plane-directory';
-import type { MobileControlPlaneEventHandlers, MobileControlPlaneTransport } from '../src/control-plane/transport';
+import { MobileControlPlaneTransportError, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from '../src/control-plane/transport';
 
 function snapshot(instanceId: string, sessionId: string): ControlPlaneAiSessions {
   const updatedAt = '2026-08-05T00:00:00.000Z';
@@ -250,7 +250,7 @@ describe('MobileAiSessionStore identity isolation', () => {
     const delta = jest.fn();
     const client = {
       auth: { session: jest.fn().mockResolvedValue({ mode: 'password', enabled: true, requiresBootstrap: false, authenticated: true }) },
-      aiSessions: { list: jest.fn().mockResolvedValue(initial), delta },
+      aiSessions: { list: jest.fn().mockResolvedValue(initial), delta, sync: jest.fn().mockResolvedValue({ updatedAt: initial.updatedAt, instances: [], removedInstanceIds: [] }) },
     } as unknown as ControlPlaneClient;
     let handlers: MobileControlPlaneEventHandlers | undefined;
     const transport = {
@@ -625,8 +625,10 @@ describe('MobileAiSessionStore identity isolation', () => {
     jest.useFakeTimers();
     try {
       const store = new MobileAiSessionStore();
-      const list = jest.fn().mockResolvedValue(snapshot('instance-reconnect', 'session-reconnect'));
-      const client = { auth: { session: jest.fn().mockResolvedValue({ mode: 'password', enabled: true, requiresBootstrap: false, authenticated: true }) }, aiSessions: { list } } as unknown as ControlPlaneClient;
+      const initial = snapshot('instance-reconnect', 'session-reconnect');
+      const list = jest.fn().mockResolvedValue(initial);
+      const sync = jest.fn().mockResolvedValue({ updatedAt: initial.updatedAt, instances: [], removedInstanceIds: [] });
+      const client = { auth: { session: jest.fn().mockResolvedValue({ mode: 'password', enabled: true, requiresBootstrap: false, authenticated: true }) }, aiSessions: { list, sync } } as unknown as ControlPlaneClient;
       const handlers: MobileControlPlaneEventHandlers[] = [];
       const transport = {
         revalidate: jest.fn().mockResolvedValue(undefined),
@@ -637,7 +639,9 @@ describe('MobileAiSessionStore identity isolation', () => {
       handlers[0].onClose();
       expect(store.profile('cp-reconnect').sync.phase).toBe('stale');
       await jest.advanceTimersByTimeAsync(1_000);
-      expect(list).toHaveBeenCalledTimes(2);
+      // The reconnect syncs from its checkpoint instead of re-downloading the full list.
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledTimes(1);
       expect(handlers).toHaveLength(2);
       expect(transport.revalidate).toHaveBeenCalledTimes(2);
       controller.stop();
@@ -646,20 +650,102 @@ describe('MobileAiSessionStore identity isolation', () => {
     }
   });
 
-  test('explicitly refreshes AI Sessions from the authoritative list snapshot', async () => {
+  test('explicitly refreshes AI Sessions from the authoritative sync checkpoint', async () => {
     const store = new MobileAiSessionStore();
     const initial = snapshot('instance-refresh', 'session-before');
     const refreshed = snapshot('instance-refresh', 'session-after');
-    const list = jest.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
-    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list } } as unknown as ControlPlaneClient;
+    const list = jest.fn().mockResolvedValue(initial);
+    const sync = jest.fn().mockResolvedValue({ updatedAt: refreshed.updatedAt, instances: refreshed.instances, removedInstanceIds: [] });
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, sync } } as unknown as ControlPlaneClient;
     const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
     const controller = new MobileAiSessionController('cp-refresh', client, transport, store);
 
     await controller.start();
     await controller.refresh();
 
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith([{ instanceId: 'instance-refresh', streamId: 'stream-instance-refresh', revision: 1 }], undefined);
     expect(store.session('cp-refresh', 'instance-refresh', 'session-after')).toBeDefined();
+    controller.stop();
+  });
+
+  test('reconnect sync applies only changed instances, drops removed ones, and never re-downloads the list', async () => {
+    const store = new MobileAiSessionStore();
+    const endedAt = '2026-08-05T00:02:00.000Z';
+    const current = { ...snapshot('instance-a', 'session-a').instances[0], aiSessions: { ...snapshot('instance-a', 'session-a').instances[0].aiSessions } };
+    const initial: ControlPlaneAiSessions = { updatedAt: '2026-08-05T00:00:00.000Z', instances: [current, snapshot('instance-b', 'session-b').instances[0]] };
+    const list = jest.fn().mockResolvedValue(initial);
+    const sync = jest.fn().mockResolvedValue({
+      updatedAt: endedAt,
+      instances: [{
+        instanceId: 'instance-a',
+        streamId: 'stream-instance-a',
+        delta: {
+          streamId: 'stream-instance-a',
+          instanceId: 'instance-a',
+          sinceRevision: 1,
+          latestRevision: 2,
+          earliestRetainedRevision: 1,
+          syncRequired: false,
+          events: [{
+            type: AiSessionEventType.Patch,
+            payload: {
+              meta: { streamId: 'stream-instance-a', instanceId: 'instance-a', revision: 2, previousRevision: 1, traceId: 'sync-patch', generatedAt: endedAt, reason: 'provider-event' },
+              upserted: [{ ...current.aiSessions.sessions[0]!, status: 'failed' as const, updatedAt: endedAt }],
+              removed: [],
+            },
+          }],
+        },
+      }],
+      removedInstanceIds: ['instance-b'],
+    });
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, sync } } as unknown as ControlPlaneClient;
+    const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+    const controller = new MobileAiSessionController('cp-sync', client, transport, store);
+
+    await controller.start();
+    await controller.refresh();
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(store.session('cp-sync', 'instance-a', 'session-a')?.status).toBe('failed');
+    expect(store.profile('cp-sync').snapshot?.instances.map((entry) => entry.instanceId)).toEqual(['instance-a']);
+    expect(store.profile('cp-sync').snapshot?.instances[0]?.revision).toBe(2);
+    controller.stop();
+  });
+
+  test('falls back to the full list when the Control Plane predates the sync route', async () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-legacy', 'session-legacy');
+    const list = jest.fn().mockResolvedValue(initial);
+    const sync = jest.fn().mockRejectedValue(new MobileControlPlaneTransportError('DIRECT_HTTP_ERROR', 'Control Plane request failed with HTTP 404.', false, 404));
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, sync } } as unknown as ControlPlaneClient;
+    const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+    const controller = new MobileAiSessionController('cp-legacy', client, transport, store);
+
+    await controller.start();
+    await controller.refresh();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.session('cp-legacy', 'instance-legacy', 'session-legacy')).toBeDefined();
+    controller.stop();
+  });
+
+  test('falls back to the full list when the relay policy forbids the sync route', async () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-forbidden', 'session-forbidden');
+    const list = jest.fn().mockResolvedValue(initial);
+    const sync = jest.fn().mockRejectedValue(new MobileControlPlaneTransportError('DIRECT_HTTP_ERROR', 'Control Plane request failed with HTTP 403.', false, 403));
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, sync } } as unknown as ControlPlaneClient;
+    const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+    const controller = new MobileAiSessionController('cp-forbidden', client, transport, store);
+
+    await controller.start();
+    await controller.refresh();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.session('cp-forbidden', 'instance-forbidden', 'session-forbidden')).toBeDefined();
     controller.stop();
   });
 });

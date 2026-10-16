@@ -2,6 +2,7 @@ import type { CloudAccountSecurityController } from './use-cloud-account-securit
 
 export type NativeCloudAccountSecurityScreenProps = {
   controller: CloudAccountSecurityController;
+  onOpenControlPlanes(): void;
 };
 
 export function NativeCloudAccountSecurityScreen(_props: NativeCloudAccountSecurityScreenProps) {

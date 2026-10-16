@@ -8,7 +8,7 @@ import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-co
 import { useActiveDirectories } from '../src/directories/use-directories';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-uuid' }));
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const useMobileControlPlaneRuntime = jest.fn(); return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime }; });
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 
 const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({

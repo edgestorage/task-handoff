@@ -7,9 +7,10 @@ import { updateStoryViewPreferences } from '../src/stories/story-view-preference
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 
-jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({
-  useMobileControlPlaneRuntime: jest.fn(),
-}));
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => {
+  const useMobileControlPlaneRuntime = jest.fn();
+  return { useMobileControlPlaneRuntime, useOptionalMobileControlPlaneRuntime: useMobileControlPlaneRuntime };
+});
 
 jest.mock('../src/stories/StoryInbox', () => {
   const React = jest.requireActual<typeof import('react')>('react');

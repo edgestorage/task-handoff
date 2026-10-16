@@ -28,8 +28,53 @@ type WebEventClient = {
 const MAX_EVENT_CLIENT_BUFFERED_BYTES = 16 * 1024 * 1024;
 const MAX_TRANSIENT_REPLAY_BYTES = 32 * 1024 * 1024;
 const MAX_TRANSIENT_REPLAY_EVENTS = 20_000;
+// The transient cursor covers the subscribe window and short connection blips.
+// Session history is re-readable over HTTP, so a cursor that is older than this
+// window (a client that stayed connected while its request aged) must not drag
+// the whole retained buffer over the Relay again.
+const TRANSIENT_REPLAY_LOOKBACK_MS = 5 * 60_000;
+const SETTLED_TIMELINE_ACTIVITY_STATUSES = new Set(["completed", "failed"]);
 
 type RetainedTransientEvent = { event: WebEvent; encoded: string; bytes: number };
+
+type TransientEventIdentity = {
+  sessionId: string;
+  itemId?: string;
+  turnId?: string;
+  settledTimelineItem: boolean;
+};
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Identity of one retained transient event. Timeline items and their streaming
+ * deltas carry the same session/item/turn triple, which is what lets a settled
+ * item release everything retained for it.
+ */
+function transientEventIdentity(event: WebEvent): TransientEventIdentity | undefined {
+  if (event.type !== AiSessionEventType.MessageDelta && event.type !== AiSessionEventType.TimelineItem && event.type !== AiSessionEventType.TimelineItemDelta) return undefined;
+  const payload = record(event.payload);
+  if (typeof payload?.sessionId !== "string") return undefined;
+  const item = record(payload.item);
+  const status = typeof item?.status === "string" ? item.status : undefined;
+  const timelineItem = event.type !== AiSessionEventType.MessageDelta;
+  return {
+    sessionId: payload.sessionId,
+    itemId: typeof item?.id === "string" ? item.id : typeof payload.itemId === "string" ? payload.itemId : undefined,
+    turnId: typeof item?.turnId === "string" ? item.turnId : typeof payload.turnId === "string" ? payload.turnId : undefined,
+    settledTimelineItem: timelineItem && status !== undefined && SETTLED_TIMELINE_ACTIVITY_STATUSES.has(status),
+  };
+}
+
+function transientItemKey(identity: TransientEventIdentity | undefined) {
+  return identity?.itemId ? `${identity.sessionId}\0${identity.itemId}` : undefined;
+}
+
+function transientTurnKey(identity: TransientEventIdentity | undefined) {
+  return identity?.turnId ? `${identity.sessionId}\0${identity.turnId}` : undefined;
+}
 
 function eventId() {
   return `evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
@@ -38,8 +83,13 @@ function eventId() {
 export class WebEventBus {
   private readonly clients = new Set<WebEventClient>();
   private readonly transientReplay: RetainedTransientEvent[] = [];
+  private readonly now: () => number;
   private transientReplayBytes = 0;
   private seq = 0;
+
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
 
   connect(socket: { readyState: number; OPEN: number; send: (value: string) => void; on: (event: "close" | "message", listener: (value?: unknown) => void) => void }, options: { expectsTransientSubscription?: boolean; aiSessionHierarchy?: unknown } = {}) {
     const client = socket as WebEventClient;
@@ -83,20 +133,74 @@ export class WebEventBus {
 
   private retainTransient(event: WebEvent, encoded: string, bytes: number) {
     if (event.type !== AiSessionEventType.MessageDelta && event.type !== AiSessionEventType.TimelineItem && event.type !== AiSessionEventType.TimelineItemDelta) return;
+    // A settled activity is complete: its final body is in Timeline history and
+    // its summary is in the authority snapshot, so retaining it only made every
+    // reconnect re-send entire finished turns over the Relay.
+    const identity = transientEventIdentity(event);
+    const itemKey = transientItemKey(identity);
+    if (identity?.settledTimelineItem) {
+      this.dropRetainedTransientItem(itemKey);
+      return;
+    }
     this.transientReplay.push({ event, encoded, bytes });
     this.transientReplayBytes += bytes;
+    if (itemKey && event.type === AiSessionEventType.TimelineItem) this.dropSupersededItemSnapshots(itemKey);
     while (this.transientReplay.length > MAX_TRANSIENT_REPLAY_EVENTS || this.transientReplayBytes > MAX_TRANSIENT_REPLAY_BYTES) {
       this.transientReplayBytes -= this.transientReplay.shift()!.bytes;
     }
   }
 
+  /**
+   * A Timeline item snapshot replaces the item it names, so the older snapshots of
+   * that item are dead weight on the next reconnect. Providers re-publish the same
+   * item on every discovery scan, status change, and tool-call counter tick - one
+   * `user-message` item was retained ten times in a single reconnect - and a client
+   * that reconnects only needs the newest copy.
+   *
+   * Snapshots that have a streamed delta after them stay: that delta arrives before
+   * the item is known again and is applied on top of the snapshot the client already
+   * holds, so dropping the snapshot under it would re-append the streamed text.
+   */
+  private dropSupersededItemSnapshots(key: string) {
+    let lastSnapshotIndex = -1;
+    let lastDeltaIndex = -1;
+    for (let index = 0; index < this.transientReplay.length; index += 1) {
+      const entry = this.transientReplay[index];
+      if (transientItemKey(transientEventIdentity(entry.event)) !== key) continue;
+      if (entry.event.type === AiSessionEventType.TimelineItem) lastSnapshotIndex = index;
+      else lastDeltaIndex = index;
+    }
+    if (lastSnapshotIndex <= lastDeltaIndex) return;
+    const retained = this.transientReplay.filter((entry, index) => {
+      if (index <= lastDeltaIndex || index >= lastSnapshotIndex) return true;
+      return entry.event.type !== AiSessionEventType.TimelineItem
+        || transientItemKey(transientEventIdentity(entry.event)) !== key;
+    });
+    if (retained.length === this.transientReplay.length) return;
+    this.replaceTransientReplay(retained);
+  }
+
+  private dropRetainedTransientItem(key: string | undefined) {
+    if (!key) return;
+    const retained = this.transientReplay.filter((entry) => transientItemKey(transientEventIdentity(entry.event)) !== key);
+    if (retained.length === this.transientReplay.length) return;
+    this.replaceTransientReplay(retained);
+  }
+
+  private replaceTransientReplay(retained: RetainedTransientEvent[]) {
+    this.transientReplay.splice(0, this.transientReplay.length, ...retained);
+    this.transientReplayBytes = retained.reduce((total, entry) => total + entry.bytes, 0);
+  }
+
   private replayTransient(client: WebEventClient, replaySince: string) {
+    const requestedAt = Date.parse(replaySince);
+    const cutoff = new Date(Math.max(Number.isFinite(requestedAt) ? requestedAt : 0, this.now() - TRANSIENT_REPLAY_LOOKBACK_MS)).toISOString();
     for (const retained of this.transientReplay) {
       // A running message snapshot does not necessarily contain its streamed
       // prefix. Retain/replay the whole active item until a terminal authority
       // event settles it; Timeline history is recoverable over HTTP and uses
       // the connection-scoped cursor.
-      if (retained.event.type !== "ai-session.message-delta" && retained.event.createdAt < replaySince) continue;
+      if (retained.event.type !== "ai-session.message-delta" && retained.event.createdAt < cutoff) continue;
       if (!subscribed(client.topics, retained.event.topic, retained.event.type)) continue;
       if (!aiSessionTransientSubscriptionAccepts(client.aiSessionTransient, retained.event)) continue;
       const projected = client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION
@@ -141,18 +245,20 @@ export class WebEventBus {
     }
     if (!removedSessionIds.size && !settledTurns.size && !settledItems.size) return;
     const retained = this.transientReplay.filter((entry) => {
-      if (entry.event.type !== "ai-session.message-delta") return true;
-      const eventPayload = entry.event.payload && typeof entry.event.payload === "object" && !Array.isArray(entry.event.payload)
-        ? entry.event.payload as Record<string, unknown>
-        : {};
-      const sessionId = String(eventPayload.sessionId || "");
-      return !removedSessionIds.has(sessionId)
-        && !settledTurns.has(`${sessionId}\0${String(eventPayload.turnId || "")}`)
-        && !settledItems.has(`${sessionId}\0${String(eventPayload.itemId || "")}`);
+      // An authority event settles the transient stream of the session, turn,
+      // and item it describes: everything retained for them is already
+      // reproducible from the snapshot and the Timeline history read.
+      const identity = transientEventIdentity(entry.event);
+      if (!identity) return true;
+      if (identity.settledTimelineItem) return false;
+      if (removedSessionIds.has(identity.sessionId)) return false;
+      const turnKey = transientTurnKey(identity);
+      if (turnKey && settledTurns.has(turnKey)) return false;
+      const itemKey = transientItemKey(identity);
+      return !(itemKey && settledItems.has(itemKey));
     });
     if (retained.length === this.transientReplay.length) return;
-    this.transientReplay.splice(0, this.transientReplay.length, ...retained);
-    this.transientReplayBytes = retained.reduce((total, entry) => total + entry.bytes, 0);
+    this.replaceTransientReplay(retained);
   }
 
   private sendClient(client: WebEventClient, encoded: string, bytes: number) {
@@ -185,7 +291,7 @@ export class WebEventBus {
       seq: ++this.seq,
       type,
       topic: eventTopic(type),
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(this.now()).toISOString(),
       payload,
     };
   }
