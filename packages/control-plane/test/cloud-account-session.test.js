@@ -61,7 +61,7 @@ test("a binding request while signed in keeps the session and resolves back to s
   assert.equal(resolved.pendingRequest, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -85,8 +85,15 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs } = {}) {
   }
   const identity = { publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "key", fingerprint: "sha256:fingerprint" }), signCloudOutboundRegistration: () => "signature" };
   const state = {
-    snapshot: () => ({ status: "unbound", remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", identity: identity.publicIdentity() }),
-    backgroundCredential: () => undefined, nextConnectionEpoch: () => 1,
+    snapshot: () => ({
+      status: bindingId ? "active" : "unbound",
+      scopes: { deviceAccess: true, nodeRelay: Boolean(bindingId) },
+      remoteAccessEnabled: true,
+      serviceOrigin: "https://cloud.example.test",
+      identity: identity.publicIdentity(),
+      ...(bindingId ? { accountId: "account_a", bindingId, bindingRevision: 1 } : {}),
+    }),
+    backgroundCredential: () => bindingId ? "c".repeat(43) : undefined, nextConnectionEpoch: () => 1,
     activate: () => ({ status: "active" }), consumeChallenge: () => ({ challengeId: "challenge_a" }),
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
@@ -96,6 +103,26 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs } = {}) {
   runtime.start();
   return { runtime, accountSession, sockets, fetchCalls };
 }
+
+test("node relay RPCs carry the active Control Plane binding", async () => {
+  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const cases = [
+    ["issue-node-relay-binding-token", () => runtime.issueNodeBindingToken({ displayName: "Test node" }), { tokenId: "token_a", expiresAt: new Date(Date.now() + 60_000).toISOString(), command: "cloud-bind" }],
+    ["cancel-node-relay-binding-token", () => runtime.cancelNodeBindingToken("token_a"), { tokenId: "token_a", cancelled: true }],
+    ["claim-node-relay-node", () => runtime.claimAccountNode("node_a"), { status: "pending" }],
+    ["revoke-node-relay-claim", () => runtime.revokeAccountNodeClaim("node_a"), { revoked: true }],
+  ];
+  for (const [operation, call, response] of cases) {
+    const pending = call();
+    await new Promise((resolve) => setImmediate(resolve));
+    const request = sockets[0].sent.filter((message) => message.type === "request" && message.operation === operation).at(-1);
+    assert.ok(request, `missing ${operation} request`);
+    assert.equal(request.payload.bindingId, "binding_a");
+    sockets[0].respond(request.requestId, response);
+    await pending;
+  }
+});
 
 test("the runtime records a created request and completes the local session from the delivered credential", async () => {
   const { runtime, accountSession, sockets } = runtimeHarness();

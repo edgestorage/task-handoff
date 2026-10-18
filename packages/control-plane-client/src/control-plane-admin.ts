@@ -33,15 +33,79 @@ const CloudConnectivitySchema = z.object({
   version: z.literal(1),
   serviceOrigin: z.string(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
+  // Two independent scopes: device access (account devices reach this Control
+  // Plane) and node relay (this Control Plane claims account nodes). Only both
+  // being off stops the cloud connection.
+  scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean() }),
   remoteAccessEnabled: z.boolean(),
   accountId: z.string().optional(),
   bindingId: z.string().optional(),
   bindingRevision: z.number().int().optional(),
   updatedAt: z.string(),
   identity: CloudIdentitySchema,
+  cloudControlPlaneId: z.string().optional(),
   hasBackgroundCredential: z.boolean(),
   remoteResult: z.enum(["confirmed", "unknown"]).optional(),
 }).strict();
+
+/** Account node directory projection: only allowlisted identity fields, never endpoints or business data. */
+const CloudAccountNodeSchema = z.object({
+  nodeHandle: z.string(),
+  displayName: z.string().optional(),
+  publicKeyFingerprint: z.string(),
+  status: z.enum(["active", "suspended", "revoked"]),
+  revision: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).strict();
+
+const CloudNodeRelayStateSchema = z.object({
+  channels: z.array(z.object({ nodeHandle: z.string(), nodeId: z.string(), allocationId: z.string(), connectedAt: z.string(), connected: z.boolean() }).strict()),
+  claims: z.array(z.object({ nodeHandle: z.string(), requestedAt: z.string() }).strict()),
+  errors: z.array(z.object({ nodeHandle: z.string(), code: z.string(), message: z.string(), at: z.string() }).strict()),
+  onboarding: z.array(z.object({ nodeHandle: z.string(), tokenId: z.string().optional(), at: z.string() }).strict()),
+}).strict();
+
+const CloudAccountNodesSchema = z.object({
+  signedIn: z.boolean(),
+  nodeRelay: CloudNodeRelayStateSchema,
+  items: z.array(CloudAccountNodeSchema),
+}).strict();
+
+const CloudNodeClaimSchema = z.object({
+  claimed: z.boolean(),
+  nodeHandle: z.string(),
+  controlPlaneId: z.string(),
+  status: z.string(),
+  revision: z.number().int().nonnegative(),
+}).passthrough();
+
+const CloudNodeClaimRevocationSchema = z.object({
+  nodeHandle: z.string(),
+  status: z.string(),
+  revision: z.number().int().nonnegative().optional(),
+}).passthrough();
+
+/**
+ * Both node-side commands rendered from one token, shown exactly once: the CLI
+ * bind for a machine that already runs an agent, and the installer command for
+ * a machine with nothing deployed.
+ */
+const CloudRelayNodeBindingSchema = z.object({
+  bound: z.boolean(),
+  nodeHandle: z.string().trim().min(1).max(160).optional(),
+  tokenId: z.string().trim().min(1).max(160).optional(),
+  expiresAt: z.string().datetime().optional(),
+}).passthrough();
+
+const CloudNodeBindingTokenSchema = z.object({
+  tokenId: z.string(),
+  expiresAt: z.string(),
+  command: z.string(),
+  installCommand: z.string(),
+}).strict();
+
+const CloudNodeBindingTokenCancelSchema = z.object({ tokenId: z.string(), cancelled: z.literal(true) }).strict();
 
 const CloudAccountRequestSchema = z.object({
   requestId: z.string(),
@@ -121,8 +185,32 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     setCloudRemoteAccess(enabled: boolean) {
       return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { enabled }));
     },
+    setCloudScopes(scopes: { deviceAccess: boolean; nodeRelay: boolean }) {
+      return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { scopes }));
+    },
     disconnectCloud() {
       return requestData("/api/cloud-connectivity/disconnect", CloudConnectivitySchema, jsonRequest("POST", {}));
+    },
+    cloudAccountNodes(signal?: AbortSignal) {
+      return requestData("/api/cloud-connectivity/account-nodes", CloudAccountNodesSchema, { signal });
+    },
+    claimCloudAccountNode(nodeHandle: string) {
+      return requestData(`/api/cloud-connectivity/account-nodes/${encodeURIComponent(nodeHandle)}/claim`, CloudNodeClaimSchema, jsonRequest("POST", {}));
+    },
+    releaseCloudAccountNodeClaim(nodeHandle: string) {
+      return requestData(`/api/cloud-connectivity/account-nodes/${encodeURIComponent(nodeHandle)}/claim`, CloudNodeClaimRevocationSchema, jsonRequest("DELETE"));
+    },
+    createCloudNodeBindingToken(input: { displayName?: string } = {}) {
+      return requestData("/api/cloud-connectivity/node-binding-tokens", CloudNodeBindingTokenSchema, jsonRequest("POST", input));
+    },
+    cancelCloudNodeBindingToken(tokenId: string) {
+      return requestData(`/api/cloud-connectivity/node-binding-tokens/${encodeURIComponent(tokenId)}`, CloudNodeBindingTokenCancelSchema, jsonRequest("DELETE"));
+    },
+    cloudNodeRelayState(signal?: AbortSignal) {
+      return requestData("/api/cloud-connectivity/node-relay", CloudNodeRelayStateSchema, { signal });
+    },
+    bindCloudRelayNode(nodeId: string) {
+      return requestData(`/api/nodes/${encodeURIComponent(nodeId)}/cloud-relay-binding`, CloudRelayNodeBindingSchema, jsonRequest("POST", {}));
     },
     proxyInvites(signal?: AbortSignal) {
       return requestData("/api/control-plane-proxy/invites", z.array(PublicProxyInviteSchema), { signal });

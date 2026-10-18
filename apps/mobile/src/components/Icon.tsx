@@ -9,6 +9,6 @@ import type { StyleProp, TextStyle } from 'react-native';
  */
 export type IconName = ComponentProps<typeof Ionicons>['name'];
 
-export function Icon({ color, name, size = 20, style }: { color: string; name: IconName; size?: number; style?: StyleProp<TextStyle> }) {
-  return <Ionicons accessibilityElementsHidden accessible={false} aria-hidden color={color} importantForAccessibility="no-hide-descendants" name={name} size={size} style={style} />;
+export function Icon({ color, name, size = 20, style, testID }: { color: string; name: IconName; size?: number; style?: StyleProp<TextStyle>; testID?: string }) {
+  return <Ionicons accessibilityElementsHidden accessible={false} aria-hidden color={color} importantForAccessibility="no-hide-descendants" name={name} size={size} style={style} testID={testID} />;
 }

@@ -5,6 +5,8 @@ import {
   MobileControlPlaneProfileSchema,
   normalizeMobileControlPlaneCapabilities,
   parseStoredMobileControlPlaneProfile,
+  sameMobileControlPlaneProfileIdentity,
+  selectMobileControlPlaneProfile,
 } from '../src/control-plane/profile';
 import { MobileControlPlaneProfileStore } from '../src/control-plane/profile-store';
 import type { SecureValueStore } from '../src/platform/secure-storage';
@@ -180,6 +182,44 @@ describe('MobileControlPlaneProfile', () => {
     expect(await sessionStorage.get(second.access.secureSessionKey)).toBe('second-token');
     expect(onProfileChanged).toHaveBeenCalledTimes(4);
     unsubscribe();
+  });
+
+  test('keeps direct and cloud Relay profiles for one Control Plane distinct when switching', async () => {
+    const values = new Map<string, string>();
+    const secrets = new Map<string, string>();
+    const storage: SecureValueStore = { available: async () => true, get: async (key) => values.get(key), set: async (key, value) => { values.set(key, value); }, remove: async (key) => { values.delete(key); } };
+    const secure: SecureValueStore = { available: async () => true, get: async (key) => secrets.get(key), set: async (key, value) => { secrets.set(key, value); }, remove: async (key) => { secrets.delete(key); } };
+    const store = new MobileControlPlaneProfileStore(storage, () => undefined, secure);
+    const direct = MobileDirectControlPlaneProfileSchema.parse(baseProfile);
+    const relay = MobileCloudRelayControlPlaneProfileSchema.parse({
+      ...baseProfile,
+      access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } },
+    });
+    await store.put(direct);
+    await store.put(relay);
+    expect((await store.list()).map((entry) => entry.access.kind).sort()).toEqual(['cloud-relay', 'direct']);
+    expect(sameMobileControlPlaneProfileIdentity(direct, relay)).toBe(false);
+    expect(direct.identity.controlPlaneId).toBe(relay.identity.controlPlaneId);
+    await store.setActive(relay);
+    expect((await store.active())?.access.kind).toBe('cloud-relay');
+    await store.setActive(direct);
+    expect((await store.active())?.access.kind).toBe('direct');
+    expect((await store.list()).length).toBe(2);
+  });
+
+  test('selects the direct or Relay profile a detail route points at', () => {
+    const direct = MobileDirectControlPlaneProfileSchema.parse(baseProfile);
+    const relay = MobileCloudRelayControlPlaneProfileSchema.parse({
+      ...baseProfile,
+      access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } },
+    });
+    const candidates = [direct, relay];
+    expect(selectMobileControlPlaneProfile(candidates, { kind: 'cloud-relay' }, direct)?.access.kind).toBe('cloud-relay');
+    expect(selectMobileControlPlaneProfile(candidates, { kind: 'direct' }, relay)?.access.kind).toBe('direct');
+    expect(selectMobileControlPlaneProfile(candidates, { fingerprint: relay.identity.publicKeyFingerprint, kind: 'cloud-relay' }, undefined)?.access.kind).toBe('cloud-relay');
+    expect(selectMobileControlPlaneProfile(candidates, {}, relay)?.access.kind).toBe('cloud-relay');
+    expect(selectMobileControlPlaneProfile(candidates, {}, direct)?.access.kind).toBe('direct');
+    expect(selectMobileControlPlaneProfile(candidates, {}, undefined)?.access.kind).toBe('direct');
   });
 
   test('removing a cloud Relay profile never logs out or deletes the shared cloud account session', async () => {

@@ -12,8 +12,9 @@ async function fixture() {
   const identity = new ControlPlaneIdentityService(path.join(directory, "identity.json"), () => "control_plane_a"); identity.init();
   const state = new CloudConnectivityService({ statePath: path.join(directory, "cloud.json"), identity, serviceOrigin: "https://cloud.example.test" }); state.init();
   const challenge = state.createChallenge(); state.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
+  state.setCloudControlPlaneId("cp_cloud_a");
   state.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 4, backgroundCredential: "x".repeat(48) });
-  const assertion = { accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: challenge.payload.controlPlaneId, bindingId: "binding_a", bindingRevision: 4, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const assertion = { accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a", bindingRevision: 4, expiresAt: new Date(Date.now() + 60_000).toISOString() };
   return { state, assertion };
 }
 

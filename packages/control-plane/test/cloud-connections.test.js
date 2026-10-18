@@ -10,7 +10,7 @@ test("control connection uses background credential, persistent monotonic epoch 
   let epoch = 0;
   const connects = [];
   const closed = [];
-  const state = { backgroundCredential: () => "credential", snapshot: () => ({ status: "active", remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", identity: { controlPlaneId: "control_plane_a" } }), nextConnectionEpoch: () => ++epoch };
+  const state = { backgroundCredential: () => "credential", snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", cloudControlPlaneId: "cp_cloud_a", identity: { controlPlaneId: "control_plane_a" } }), nextConnectionEpoch: () => ++epoch };
   const manager = new CloudControlConnectionManager({ state, connector: { async connect(input) { connects.push(input); return { async close(reason) { closed.push(reason); } }; } }, onEvent: async () => undefined, backoff: new StandardReconnectBackoff(() => 0.5) });
   assert.equal((await manager.connectOnce()).epoch, 1);
   assert.equal((await manager.connectOnce()).reused, true);
@@ -19,6 +19,7 @@ test("control connection uses background credential, persistent monotonic epoch 
   assert.equal((await manager.connectOnce()).epoch, 2);
   assert.deepEqual(closed, []);
   assert.equal(connects[0].credential, "credential");
+  assert.equal(connects[0].cloudControlPlaneId, "cp_cloud_a");
   assert.equal(connects[0].processInstanceId, connects[1].processInstanceId);
   assert.deepEqual([manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay()], [0, 250, 500, 1_000]);
 });
@@ -63,9 +64,9 @@ test("authoritative revocation and clone events close both connection planes; st
 
 test("Control Plane accepts only current Coordinator-delivered allocation identity and trusted Relay origin", () => {
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
-  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
+  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
   const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: "allocation_a", relayId: "relay_a", role: "control-plane", controlPlaneId: ticket.controlPlaneId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, bindingId: ticket.bindingId, ticketId: ticket.ticketId, bindingRevision: ticket.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: ticket.issuedAt, expiresAt: ticket.expiresAt, signature: "s".repeat(32) };
-  const state = { snapshot: () => ({ status: "active", remoteAccessEnabled: true, serviceOrigin: "https://cloud.thandoff.com", accountId: "account_a", bindingId: "binding_a", bindingRevision: 2, identity: { controlPlaneId: "control_plane_a", fingerprint } }) };
+  const state = { snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.thandoff.com", accountId: "account_a", bindingId: "binding_a", bindingRevision: 2, cloudControlPlaneId: "cp_cloud_a", identity: { controlPlaneId: "control_plane_a", fingerprint } }) };
   assert.equal(verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://eu.relay.thandoff.com/connect", attach, ticket }, state).allocationId, "allocation_a");
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://eu.relay.taskhandoff.com/connect", attach, ticket }, state), { code: "UNTRUSTED_RELAY_URL" });
   assert.throws(() => verifyCoordinatorRelayAllocation({ type: "relay-allocation", allocationId: "allocation_a", relayUrl: "wss://attacker.example/connect", attach, ticket }, state), { code: "UNTRUSTED_RELAY_URL" });
@@ -106,7 +107,7 @@ test("relay attach acknowledges the Coordinator before the client completes the 
     receive(frame) { this.emit("message", Buffer.from(encodeRelayFrame(frame)), true); }
   }
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
-  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
+  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
   const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: "allocation_a", relayId: "relay_a", role: "control-plane", controlPlaneId: ticket.controlPlaneId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, bindingId: ticket.bindingId, ticketId: ticket.ticketId, bindingRevision: ticket.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: ticket.issuedAt, expiresAt: ticket.expiresAt, signature: "s".repeat(32) };
   const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey: new Uint8Array(32) }), publicIdentity: () => ({ publicKey: "c".repeat(43) }) };
   const connector = new CloudRelayConnector({ identity, bridge: {}, webSocket: FakeSocket });

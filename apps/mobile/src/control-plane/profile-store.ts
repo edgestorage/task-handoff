@@ -1,5 +1,5 @@
 import type { SecureValueStore, ValueStore } from '../platform/secure-storage';
-import { MobileControlPlaneProfileSchema, parseStoredMobileControlPlaneProfile, storedMobileControlPlaneProfileUnknownFields, type MobileControlPlaneProfile } from './profile';
+import { MobileControlPlaneProfileSchema, parseStoredMobileControlPlaneProfile, sameMobileControlPlaneProfileIdentity, storedMobileControlPlaneProfileUnknownFields, type MobileControlPlaneProfile } from './profile';
 
 const PROFILE_INDEX_KEY = 'profiles.index';
 const ACTIVE_PROFILE_KEY = 'profiles.active';
@@ -59,7 +59,7 @@ export class MobileControlPlaneProfileStore {
         });
       }
     }
-    const existingEntries = entries.filter((entry) => sameIdentity(entry.profile, parsed));
+    const existingEntries = entries.filter((entry) => sameMobileControlPlaneProfileIdentity(entry.profile, parsed));
     const existing = existingEntries[0]?.profile;
     const key = profileStorageKey(parsed);
     await this.storage.set(key, JSON.stringify(existing ? { ...parsed, createdAt: existing.createdAt } : parsed));
@@ -89,7 +89,7 @@ export class MobileControlPlaneProfileStore {
 
   async setActive(profile: MobileControlPlaneProfile) {
     const parsed = MobileControlPlaneProfileSchema.parse(profile);
-    const stored = (await this.entries()).find((entry) => sameIdentity(entry.profile, parsed));
+    const stored = (await this.entries()).find((entry) => sameMobileControlPlaneProfileIdentity(entry.profile, parsed));
     if (!stored) throw new Error('Control Plane profile is not stored on this device.');
     await this.storage.set(ACTIVE_PROFILE_KEY, stored.key);
     this.emit();
@@ -98,7 +98,7 @@ export class MobileControlPlaneProfileStore {
 
   async remove(profile: MobileControlPlaneProfile) {
     const parsed = MobileControlPlaneProfileSchema.parse(profile);
-    const matchingEntries = (await this.entries()).filter((entry) => sameIdentity(entry.profile, parsed));
+    const matchingEntries = (await this.entries()).filter((entry) => sameMobileControlPlaneProfileIdentity(entry.profile, parsed));
     const keys = new Set(matchingEntries.map((entry) => entry.key));
     if (!keys.size) keys.add(profileStorageKey(parsed));
     const index = await this.index();
@@ -149,10 +149,4 @@ export class MobileControlPlaneProfileStore {
   private emit() {
     for (const listener of this.listeners) listener();
   }
-}
-
-function sameIdentity(left: MobileControlPlaneProfile, right: MobileControlPlaneProfile) {
-  return left.identity.controlPlaneId === right.identity.controlPlaneId
-    && left.identity.publicKeyFingerprint === right.identity.publicKeyFingerprint
-    && left.access.kind === right.access.kind;
 }

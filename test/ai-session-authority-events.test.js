@@ -321,6 +321,31 @@ test("node agent collapses backpressured AI authority events into the latest sna
   forwarder.stop();
 });
 
+test("node agent reports numeric event transport bytes when an output omits bufferedAmount", () => {
+  class TestSocket extends EventEmitter {
+    constructor(readyState = WebSocket.OPEN) {
+      super();
+      this.readyState = readyState;
+    }
+    send() {}
+    close() {}
+  }
+
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [] },
+    undefined,
+    { createSocket: () => { throw new Error("unexpected event socket"); } },
+  );
+  const output = new TestSocket();
+  forwarder.addOutput(output);
+
+  const health = forwarder.eventTransportHealth();
+  assert.equal(health.activeOutputs, 1);
+  assert.equal(health.bufferedBytes, 0);
+  assert.equal(health.peakBufferedBytes, 0);
+  forwarder.stop();
+});
+
 test("node agent rejects an authority snapshot above the hard event budget", () => {
   class TestSocket extends EventEmitter {
     constructor(readyState = WebSocket.CONNECTING) {

@@ -72,6 +72,8 @@ import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
 import { relayTraceFromEnvironment } from "../cloud-connectivity/relay-trace.ts";
 import { CloudAccountSessionService } from "../cloud-connectivity/account-session.ts";
+import { CloudRelayNodeAgentTransport } from "../nodes/cloud-relay-transport.ts";
+import { nodeRelayInstallCommand } from "../cloud-connectivity/node-install-command.ts";
 import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
@@ -556,14 +558,20 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       });
     },
   });
-  nodeConnectionRuntime.onChange((observation) => events.publish(
-    "node.connection.updated",
-    nodeStateProjection(service.requirePublicNode(observation.nodeId)),
-    {
-      topic: "node.state",
-      scope: { nodeId: observation.nodeId },
-    },
-  ));
+  nodeConnectionRuntime.onChange((observation) => {
+    // Deletion and an in-flight connection observation can race. The
+    // `node.deleted` event is authoritative, so a stale observation must never
+    // turn into an uncaught NODE_NOT_FOUND failure.
+    if (!service.nodes.get(observation.nodeId)) return;
+    events.publish(
+      "node.connection.updated",
+      nodeStateProjection(service.requirePublicNode(observation.nodeId)),
+      {
+        topic: "node.state",
+        scope: { nodeId: observation.nodeId },
+      },
+    );
+  });
   const auth = new ControlPlaneAuth(paths, {
     ...options.auth,
     onUserAuthorizationChanged: (change) => {
@@ -650,7 +658,31 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       return { send(data: string) { if (!closed) emit("message", Buffer.from(JSON.stringify({ type: "input", data }))); }, resize(cols: number, rows: number) { if (!closed && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) emit("message", Buffer.from(JSON.stringify({ type: "resize", cols, rows }))); }, close() { socket.close(); } };
     },
   };
-  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge, fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir) });
+  // Account-bound node agents reach this Control Plane over a cloud relay
+  // channel that reuses the reverse-tunnel transport verbatim. The transport
+  // itself is created after the shared tunnel it delegates to, so the runtime
+  // only receives a lazy resolver; the local node record stays the single
+  // mapping between a cloud handle and business code.
+  let cloudRelayNodeTransport: CloudRelayNodeAgentTransport | undefined;
+  const publishCloudRelayNodeState = (nodeId: string) => events.publish("node.checked", { nodeId }, { topic: "node.state", scope: { nodeId } });
+  const cloudRelayNodeRelay = {
+    transport: () => cloudRelayNodeTransport,
+    nodes: {
+      resolve: (nodeHandle: string) => {
+        const node = service.findCloudRelayNode(nodeHandle);
+        if (!node) return undefined;
+        const pairing = node.auth.mode === "paired-hmac" && node.auth.keyId && node.auth.secret
+          ? { keyId: node.auth.keyId, secret: node.auth.secret }
+          : undefined;
+        return { nodeId: node.id, ...(pairing ? { pairing } : {}) };
+      },
+      ensure: (input: { nodeHandle: string; displayName?: string }) => service.ensureCloudRelayNode(input),
+      savePairing: async (nodeId: string, pairing: { keyId: string; secret: string }) => { await service.saveCloudRelayNodePairing(nodeId, pairing); },
+      connected: async (nodeId: string) => { await service.setCloudRelayNodeConnection(nodeId, true); publishCloudRelayNodeState(nodeId); },
+      disconnected: async (nodeId: string, input: { reason: string }) => { await service.setCloudRelayNodeConnection(nodeId, false, input.reason); publishCloudRelayNodeState(nodeId); },
+    },
+  };
+  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge, fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir), ...(cloudConnectivityEnabled ? { nodeRelay: cloudRelayNodeRelay } : {}) });
   const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
@@ -794,6 +826,16 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
+  if (cloudConnectivityEnabled) {
+    cloudRelayNodeTransport = new CloudRelayNodeAgentTransport({
+      tunnel: nodeAgentTunnel,
+      onIdentified: async (nodeId) => {
+        await service.checkNode(nodeId);
+        publishCloudRelayNodeState(nodeId);
+      },
+    });
+    service.setCloudRelayNodeAgentTransport(cloudRelayNodeTransport);
+  }
   await auth.init();
   await service.init();
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
@@ -1030,13 +1072,110 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   app.post("/api/cloud-connectivity/remote-access", async (request) => {
     await requireCloudConnectivityAdmin(request);
-    const input = z.object({ enabled: z.boolean() }).strict().parse(request.body);
-    return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.setRemoteAccess(input.enabled) : cloudConnectivity.setRemoteAccess(input.enabled) };
+    // New clients send both scopes; the legacy `enabled` field remains the
+    // device-access switch so older callers keep their exact meaning.
+    const input = z.object({
+      enabled: z.boolean().optional(),
+      scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean() }).strict().optional(),
+    }).strict().refine((value) => value.enabled !== undefined || value.scopes !== undefined, { message: "scopes or enabled is required" }).parse(request.body);
+    const scopes = input.scopes ?? { deviceAccess: input.enabled === true, nodeRelay: false };
+    return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.setRemoteAccess(scopes) : cloudConnectivity.setScopes(scopes) };
   });
 
   app.post("/api/cloud-connectivity/disconnect", async (request) => {
     await requireCloudConnectivityAdmin(request);
     return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.disconnect() : cloudConnectivity.beginRevocation() };
+  });
+
+  // The account node directory backs the "add node from account" flow. It is
+  // read through the signed-in account session (never the binding credential)
+  // and degrades to `signedIn: false` so the UI can show sign-in guidance
+  // instead of an error.
+  app.get("/api/cloud-connectivity/account-nodes", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const nodeRelay = cloudConnectivityRuntime.nodeRelayState();
+    if (!cloudConnectivityEnabled) return { data: { signedIn: false, nodeRelay, items: [] } };
+    try {
+      return { data: { signedIn: true, nodeRelay, items: await cloudConnectivityRuntime.listAccountNodes() } };
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "CLOUD_ACCOUNT_SIGNED_OUT") return { data: { signedIn: false, nodeRelay, items: [] } };
+      throw error;
+    }
+  });
+
+  app.post("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
+    return { data: await cloudConnectivityRuntime.claimAccountNode(nodeHandle) };
+  });
+
+  // Revoking one claim leaves every other Control Plane's channel untouched.
+  app.delete("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
+    return { data: await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle) };
+  });
+
+  // Two commands from one token: the cloud-rendered CLI bind for a machine that
+  // already runs a node agent, and the installer command for a machine with
+  // nothing deployed yet. Both are shown once; only the token id is retained.
+  app.post("/api/cloud-connectivity/node-binding-tokens", async (request, reply) => {
+    await requireCloudConnectivityAdmin(request);
+    reply.header("cache-control", "no-store");
+    const input = z.object({ displayName: z.string().trim().max(120).optional() }).strict().parse(request.body ?? {});
+    const issued = await cloudConnectivityRuntime.issueNodeBindingToken(input.displayName ? { displayName: input.displayName } : {});
+    const bindingToken = typeof issued.bindingToken === "string" ? issued.bindingToken : "";
+    const installCommand = bindingToken
+      ? nodeRelayInstallCommand({
+        controlPlaneUrl: controlPlanePublicOrigin(service, request),
+        cloudOrigin: cloudConnectivity.snapshot().serviceOrigin,
+        bindingToken,
+      })
+      : "";
+    // `command` (already rendered cloud-side) is the CLI bind; the install
+    // command is rendered here because only this Control Plane serves the
+    // installer. The plaintext token is never stored or echoed again.
+    return { data: { tokenId: issued.tokenId, expiresAt: issued.expiresAt, command: issued.command, installCommand } };
+  });
+
+  app.delete("/api/cloud-connectivity/node-binding-tokens/:tokenId", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const tokenId = String((request.params as { tokenId?: unknown }).tokenId ?? "");
+    return { data: await cloudConnectivityRuntime.cancelNodeBindingToken(tokenId) };
+  });
+
+  // Guided binding (path one): a signed-in Control Plane hands one of its
+  // already-managed nodes a one-time binding token over the existing tunnel.
+  // The node redeems it directly with the cloud; this Control Plane only
+  // delivers the command, so it gains no privilege and no registry field.
+  app.post("/api/nodes/:id/cloud-relay-binding", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const nodeId = String((request.params as { id?: unknown }).id ?? "");
+    const node = service.requireNode(nodeId);
+    const issued = await cloudConnectivityRuntime.issueNodeBindingToken({ displayName: node.name });
+    const bindingToken = typeof issued.bindingToken === "string" ? issued.bindingToken : "";
+    if (!bindingToken) {
+      throw Object.assign(new Error("The cloud did not return a binding token."), { statusCode: 502, code: "CLOUD_NODE_BINDING_TOKEN_UNAVAILABLE" });
+    }
+    try {
+      const result = await service.bindNodeCloudRelay(nodeId, {
+        cloudOrigin: cloudConnectivity.snapshot().serviceOrigin,
+        bindingToken,
+        ...(node.name ? { displayName: node.name } : {}),
+      });
+      events.publish("node.cloud-relay.bound", { nodeId, tokenId: issued.tokenId });
+      return { data: { ...result, tokenId: issued.tokenId, expiresAt: issued.expiresAt } };
+    } catch (error) {
+      // Delivery failed (node offline, older node agent, ...): cancel the
+      // one-time token so it cannot linger, and leave every local record as is.
+      await cloudConnectivityRuntime.cancelNodeBindingToken(issued.tokenId).catch(() => undefined);
+      throw error;
+    }
+  });
+
+  app.get("/api/cloud-connectivity/node-relay", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: cloudConnectivityRuntime.nodeRelayState() };
   });
 
   // Relay payload capture is opt-in through its own flag and lands in its own JSONL files,

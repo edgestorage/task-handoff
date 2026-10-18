@@ -14,6 +14,7 @@ import {
   OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION,
   CONTROL_PLANE_BINDING_PROTOCOL_VERSION,
   OUTBOUND_CONNECTION_PROTOCOL_VERSION,
+  CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION,
   RELAY_FRAMING_PROTOCOL_VERSION,
   RelayAttachCapabilitySchema,
   RelayChannelSchema,
@@ -27,7 +28,7 @@ const at = "2026-08-10T00:00:00.000Z";
 const fingerprint = `sha256:${"a".repeat(43)}`;
 
 test("public protocol versions use independent YYYY-MM-DD constants", () => {
-  for (const version of [OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION, CONTROL_PLANE_BINDING_PROTOCOL_VERSION, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION]) {
+  for (const version of [OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION, CONTROL_PLANE_BINDING_PROTOCOL_VERSION, CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION]) {
     assert.match(version, /^\d{4}-\d{2}-\d{2}$/);
   }
   assert.equal(AccountApiContextSchema.safeParse({ protocolVersion: OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION, audience: OfficialAudience.AccountApi }).success, true);
@@ -86,7 +87,7 @@ test("ticket, registration, and relay contracts bind authority identities", () =
   assert.equal(RelayAttachCapabilitySchema.safeParse({ ...attach, audience: OfficialAudience.RelayControlPlaneAttach }).success, false);
   assert.equal(RelayChannelSchema.safeParse({ channelId: "channel_a", allocationId: "allocation_a", controlPlaneId: "control_plane_a", bindingRevision: 2, trafficClass: "interactive", state: "waiting-for-peer", clientAttached: true, controlPlaneAttached: false, leaseExpiresAt: at }).success, true);
 
-  const registration = { protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION, audience: OfficialAudience.CoordinatorControl, connectionId: "connection_a", processInstanceId: "process_a", controlPlaneId: "control_plane_a", publicKey: "p".repeat(43), publicKeyFingerprint: fingerprint, epoch: 1, capabilities: ["request", "stream", "websocket"], issuedAt: at, expiresAt: at, signature: "s".repeat(32) };
+  const registration = { protocolVersion: CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, audience: OfficialAudience.CoordinatorControl, connectionId: "connection_a", processInstanceId: "process_a", reportedControlPlaneId: "control_plane_a", publicKey: "p".repeat(43), publicKeyFingerprint: fingerprint, epoch: 1, capabilities: ["request", "stream", "websocket"], issuedAt: at, expiresAt: at, signature: "s".repeat(32) };
   assert.equal(OutboundConnectionRegistrationSchema.safeParse(registration).success, true);
   assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, bindingId: "binding_a" }).success, false);
 });

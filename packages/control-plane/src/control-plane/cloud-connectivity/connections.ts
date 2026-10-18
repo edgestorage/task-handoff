@@ -27,13 +27,14 @@ export class CloudControlConnectionManager {
     const snapshot = this.options.state.snapshot();
     // An unbound Control Plane still registers so it can sign in to a Thandoff account; the
     // Coordinator rejects it if the account already holds a live binding. An active binding
-    // keeps its remote-access gate.
-    const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim" || (snapshot.status === "active" && snapshot.remoteAccessEnabled && Boolean(credential));
+    // keeps the cloud connection while either cloud-relay scope is on; only turning both off
+    // stops it.
+    const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim" || (snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay) && Boolean(credential));
     if (!canRegister) return { status: "disabled" as const };
     if (this.connection) return { status: "connected" as const, reused: true as const };
     const epoch = this.options.state.nextConnectionEpoch();
     const previous = this.connection;
-    this.connection = await this.options.connector.connect({ serviceOrigin: snapshot.serviceOrigin, credential, bindingId: snapshot.bindingId, bindingRevision: snapshot.bindingRevision, controlPlaneId: snapshot.identity.controlPlaneId, processInstanceId: this.processInstanceId, epoch, onEvent: this.options.onEvent });
+    this.connection = await this.options.connector.connect({ serviceOrigin: snapshot.serviceOrigin, credential, bindingId: snapshot.bindingId, bindingRevision: snapshot.bindingRevision, scopes: snapshot.scopes, cloudControlPlaneId: snapshot.cloudControlPlaneId, processInstanceId: this.processInstanceId, epoch, onEvent: this.options.onEvent });
     await previous?.close("replaced-by-new-epoch");
     this.backoff.reset();
     return { status: "connected" as const, epoch };
@@ -51,8 +52,8 @@ export class CloudControlConnectionManager {
 }
 
 export class CloudRelayDataConnectionManager {
-  private readonly connections = new Map<string, { epoch: number; connection: ManagedConnection }>();
-  private readonly options: { verifyAllocation(allocation: unknown): Promise<{ allocationId: string; relayUrl: string; epoch: number }> | { allocationId: string; relayUrl: string; epoch: number }; connector: { connect(input: Record<string, unknown>): Promise<ManagedConnection> } };
+  private readonly connections = new Map<string, { epoch: number; channelKind: "access" | "node"; connection: ManagedConnection }>();
+  private readonly options: { verifyAllocation(allocation: unknown): Promise<{ allocationId: string; relayUrl: string; epoch: number; channelKind?: "access" | "node" }> | { allocationId: string; relayUrl: string; epoch: number; channelKind?: "access" | "node" }; connector: { connect(input: Record<string, unknown>): Promise<ManagedConnection> } };
   constructor(options: CloudRelayDataConnectionManager["options"]) { this.options = options; }
 
   async attach(allocation: unknown) {
@@ -61,7 +62,7 @@ export class CloudRelayDataConnectionManager {
     if (current && verified.epoch <= current.epoch) throw connectionError("STALE_CONNECTION_EPOCH");
     const connection = await this.options.connector.connect({ relayUrl: verified.relayUrl, allocation, epoch: verified.epoch });
     await current?.connection.close("replaced-by-new-epoch");
-    this.connections.set(verified.allocationId, { epoch: verified.epoch, connection });
+    this.connections.set(verified.allocationId, { epoch: verified.epoch, channelKind: verified.channelKind ?? "access", connection });
     return { status: "attached" as const, allocationId: verified.allocationId, epoch: verified.epoch };
   }
 
@@ -69,6 +70,13 @@ export class CloudRelayDataConnectionManager {
     const active = [...this.connections.values()];
     this.connections.clear();
     await Promise.allSettled(active.map(({ connection }) => connection.close(reason)));
+  }
+
+  /** Scope narrowing closes exactly the channels of that kind. */
+  async closeByKind(channelKind: "access" | "node", reason: string) {
+    const matching = [...this.connections.entries()].filter(([, entry]) => entry.channelKind === channelKind);
+    for (const [allocationId] of matching) this.connections.delete(allocationId);
+    await Promise.allSettled(matching.map(([, entry]) => entry.connection.close(reason)));
   }
 }
 

@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import nacl from "tweetnacl";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
-import { AccessTicketSchema, RELAY_FRAME_HEADER_BYTES, RelayAttachCapabilitySchema, decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, type RelayFramePayload } from "@task-handoff/cloud-contracts";
+import { AccessTicketSchema, NodeRelayAllocationEventSchema, RELAY_FRAME_HEADER_BYTES, RelayAttachCapabilitySchema, decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
@@ -25,11 +25,43 @@ export function verifyCoordinatorRelayAllocation(raw: unknown, state: { snapshot
   if (event?.type !== "relay-allocation" || event?.allocationId !== attach.allocationId || attach.role !== "control-plane" ||
       attach.ticketId !== ticket.ticketId || attach.controlPlaneId !== ticket.controlPlaneId || attach.accountId !== ticket.accountId ||
       attach.deviceSessionId !== ticket.deviceSessionId || attach.bindingId !== ticket.bindingId || attach.bindingRevision !== ticket.bindingRevision ||
-      current.status !== "active" || !current.remoteAccessEnabled || current.identity.controlPlaneId !== ticket.controlPlaneId ||
+      current.status !== "active" || current.scopes.deviceAccess !== true || current.cloudControlPlaneId !== ticket.controlPlaneId ||
       current.accountId !== ticket.accountId || current.bindingId !== ticket.bindingId || current.bindingRevision !== ticket.bindingRevision ||
       ticket.targetPublicKeyFingerprint !== current.identity.fingerprint || Date.parse(attach.expiresAt) <= Date.now()) throw relayError("RELAY_ALLOCATION_AUTHORITY_INVALID");
   if (!trustedRelayUrl(relayUrl, current.serviceOrigin)) throw relayError("UNTRUSTED_RELAY_URL");
-  return { allocationId: attach.allocationId, relayUrl: relayUrl.href, epoch: Date.parse(attach.issuedAt), attach, ticket };
+  return { allocationId: attach.allocationId, relayUrl: relayUrl.href, epoch: Date.parse(attach.issuedAt), channelKind: "access" as const, attach, ticket };
+}
+
+/**
+ * Node-relay allocation pushed to this Control Plane. The node-relay scope and
+ * the local binding identity gate it exactly like the device-access path; the
+ * claim grant itself is verified by the node agent, never here.
+ */
+export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snapshot(): any }) {
+  const event = NodeRelayAllocationEventSchema.parse(raw);
+  const attach = event.controlPlaneAttach;
+  const current = state.snapshot();
+  const relayUrl = new URL(event.relayUrl);
+  if (current.status !== "active" || current.scopes.nodeRelay !== true || current.cloudControlPlaneId !== event.controlPlaneId ||
+      attach.channelKind !== "node" || attach.role !== "control-plane" || attach.controlPlaneId !== event.controlPlaneId ||
+      attach.bindingId !== event.bindingId || attach.bindingRevision !== event.bindingRevision ||
+      current.accountId !== attach.accountId || current.bindingId !== event.bindingId || current.bindingRevision !== event.bindingRevision ||
+      // The fingerprint is what pins the node's handshake key to the claimed
+      // registry entry; an event without it cannot be authenticated end to end.
+      typeof event.nodePublicKeyFingerprint !== "string" ||
+      Date.parse(attach.expiresAt) <= Date.now() || Date.parse(event.expiresAt) <= Date.now()) throw relayError("RELAY_ALLOCATION_AUTHORITY_INVALID");
+  if (!trustedRelayUrl(relayUrl, current.serviceOrigin)) throw relayError("UNTRUSTED_RELAY_URL");
+  return {
+    allocationId: event.allocationId,
+    relayUrl: relayUrl.href,
+    epoch: Date.parse(attach.issuedAt),
+    channelKind: "node" as const,
+    attach,
+    event,
+    nodeHandle: event.nodeHandle,
+    nodePublicKeyFingerprint: event.nodePublicKeyFingerprint,
+    displayName: event.displayName,
+  };
 }
 
 export class CloudRelayConnector {
@@ -199,7 +231,7 @@ export class EncryptedControlPlaneRelaySession {
 // Relay trust follows the environment bound to the persisted service origin:
 // registered environments use their declared Relay hosts, ad-hoc local clouds keep
 // the legacy "same host, plain ws allowed over HTTP" behaviour.
-function trustedRelayUrl(url: URL, serviceOrigin: string) {
+export function trustedRelayUrl(url: URL, serviceOrigin: string) {
   return isTrustedCloudRelayUrl(cloudEnvironmentForServiceOrigin(serviceOrigin), url);
 }
 function socketOpen(socket: WebSocket) { return new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); socket.once("close", () => reject(relayError("RELAY_SOCKET_CLOSED"))); }); }

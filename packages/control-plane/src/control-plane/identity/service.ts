@@ -145,6 +145,14 @@ export class ControlPlaneIdentityService {
     return crypto.sign(null, Buffer.from(outboundConnectionRegistrationSigningInput(payload)), this.privateKey()).toString("base64url");
   }
 
+  /**
+   * Signs the node-relay handshake accept. The caller passes the exact signing
+   * input text so both sides of the channel derive it from the same schema.
+   */
+  signNodeRelayHandshake(input: string) {
+    return crypto.sign(null, Buffer.from(input), this.privateKey()).toString("base64url");
+  }
+
   acceptCloudAccessHandshake(ticket: unknown, clientHello: unknown) {
     const identity = this.publicIdentity();
     return acceptControlPlaneHandshake({

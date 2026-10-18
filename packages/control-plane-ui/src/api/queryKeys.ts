@@ -11,6 +11,8 @@ export const controlPlaneQueryKeys = {
   externalIdentityApprovals: ["control-plane-external-identity-approvals"] as const,
   cloudConnectivity: ["cloud-connectivity"] as const,
   cloudAccount: ["cloud-account"] as const,
+  cloudAccountNodes: ["cloud-account-nodes"] as const,
+  cloudNodeRelay: ["cloud-node-relay"] as const,
   projects: ["control-plane-projects"] as const,
   models: ["control-plane-models"] as const,
   gitCredentials: ["control-plane-git-credentials"] as const,

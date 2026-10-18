@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { OptionMenu, type OptionMenuOption } from '../src/components/OptionMenu';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Screen } from '../src/components/Screen';
-import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from '../src/control-plane/profile';
+import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity, type MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
 import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
 import { isMobileTestMode } from '../src/platform/build-variant';
@@ -19,7 +19,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   const { t } = useI18n();
   const [error, setError] = useState<string>();
   const [savedProfiles, setSavedProfiles] = useState<MobileControlPlaneProfile[]>([]);
-  const [activeId, setActiveId] = useState<string>();
+  const [activeProfile, setActiveProfile] = useState<MobileControlPlaneProfile>();
   const [profilesLoaded, setProfilesLoaded] = useState(false);
 
   useEffect(() => {
@@ -27,7 +27,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
     const load = () => Promise.all([profiles.list(), profiles.active()]).then(([stored, active]) => {
       if (!live) return;
       setSavedProfiles(stored);
-      setActiveId(active?.identity.controlPlaneId);
+      setActiveProfile(active);
       setProfilesLoaded(true);
     }).catch((cause) => {
       if (!live) return;
@@ -61,13 +61,13 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
 
   if (Platform.OS === 'ios') {
     return <><Stack.Screen options={{ headerShown: true, title: t('nav.settings') }} /><NativeProfilesScreen
-      activeId={activeId}
+      activeProfile={activeProfile}
       error={error}
       profiles={savedProfiles}
       profilesLoaded={profilesLoaded}
       testMode={isMobileTestMode}
       onAdd={() => router.push('/control-planes/add')}
-      onOpen={(controlPlaneId) => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId } })}
+      onOpen={(profile) => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId, fingerprint: profile.identity.publicKeyFingerprint, kind: profile.access.kind } })}
     /></>;
   }
 
@@ -81,13 +81,13 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           </View> : null}
           <View style={[styles.profileGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
             {savedProfiles.map((profile, index) => {
-              const active = activeId === profile.identity.controlPlaneId;
+              const active = Boolean(activeProfile && sameMobileControlPlaneProfileIdentity(activeProfile, profile));
               return <View key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}>
                 {index ? <View style={[styles.profileDivider, { backgroundColor: colors.border }]} /> : null}
                 <Pressable
                   accessibilityLabel={t('profiles.viewDetails', { name: profile.identity.displayName || t('profiles.defaultName') })}
                   accessibilityRole="button"
-                  onPress={() => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId } })}
+                  onPress={() => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId, fingerprint: profile.identity.publicKeyFingerprint, kind: profile.access.kind } })}
                   style={({ pressed }) => [styles.profileRow, pressed && { backgroundColor: colors.surfaceMuted }]}
                 >
                   <View style={[styles.profileIcon, { backgroundColor: colors.surfaceMuted }]}> 
@@ -96,7 +96,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                   <View style={styles.profileIdentity}>
                     <View style={styles.profileNameRow}>
                       <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || t('profiles.defaultName')}</Text>
-                      {active ? <Icon color={colors.primary} name="checkmark-circle" size={16} /> : null}
+                      {active ? <Icon color={colors.primary} name="checkmark-circle" size={16} testID="profile-active-marker" /> : null}
                     </View>
                     <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{mobileControlPlaneProfileAddress(profile)}</Text>
                   </View>

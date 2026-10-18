@@ -7,6 +7,7 @@ import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./
 import { NodeAgentIdentityStore } from "./store.ts";
 import type { NodeAgentControlPlaneConnection, NodeAgentControlPlanePairing, NodeAgentIdentity, PublicNodeAgentControlPlanePairing } from "./types.ts";
 import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "../cloud-relay/types.ts";
 import type { AccessRepository } from "../persistence/access-repository.ts";
 import { createNodeAgentRepository } from "../persistence/repository.ts";
 import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
@@ -316,6 +317,89 @@ export class NodeAgentIdentityService {
     if (nextConnections.length === (current.controlPlaneConnections || []).length) return false;
     this.store.write({ ...current, controlPlaneConnections: nextConnections });
     return true;
+  }
+
+  /**
+   * Cloud relay binding (account-level). The credential and relay private key
+   * live only here; every relay channel, pairing and credential write goes
+   * through this service so the identity tables stay the single source.
+   */
+  cloudRelayBinding() {
+    return this.repository.readCloudRelayBinding();
+  }
+
+  saveCloudRelayBinding(binding: Omit<NodeAgentCloudRelayBinding, "updatedAt"> & { updatedAt?: string }) {
+    const current = this.repository.readCloudRelayBinding();
+    return this.repository.writeCloudRelayBinding({
+      ...binding,
+      pairedControlPlaneIds: binding.pairedControlPlaneIds ?? current?.pairedControlPlaneIds ?? [],
+      updatedAt: now(),
+    });
+  }
+
+  clearCloudRelayBinding() {
+    this.repository.deleteCloudRelayBinding();
+  }
+
+  updateCloudRelayBinding(mutate: (current: NodeAgentCloudRelayBinding) => NodeAgentCloudRelayBinding) {
+    const current = this.repository.readCloudRelayBinding();
+    if (!current) return undefined;
+    return this.repository.writeCloudRelayBinding({ ...mutate(current), updatedAt: now() });
+  }
+
+  markCloudRelayRebindRequired(error: NodeAgentCloudRelayStoredError) {
+    return this.updateCloudRelayBinding((current) => ({ ...current, status: "rebind-required", lastError: error }));
+  }
+
+  /** The pairing created when this Control Plane first claimed the node over the relay. */
+  cloudRelayPairing(controlPlaneId: string) {
+    const pairing = (this.store.read()?.controlPlanePairings || [])
+      .find((candidate) => candidate.id === controlPlaneId && !candidate.revokedAt);
+    return pairing ? { keyId: pairing.keyId, secret: pairing.secret } : undefined;
+  }
+
+  /** Stores (or replaces) the relay pairing for one Control Plane without touching direct/reverse pairings. */
+  saveCloudRelayPairing(input: { controlPlaneId: string; keyId: string; secret: string; name?: string }) {
+    const current = this.store.read() || this.newIdentity();
+    const pairedControlPlaneIds = new Set(this.cloudRelayBinding()?.pairedControlPlaneIds || []);
+    pairedControlPlaneIds.add(input.controlPlaneId);
+    const existing = (current.controlPlanePairings || []).find((candidate) => candidate.id === input.controlPlaneId);
+    const timestamp = now();
+    const pairing: NodeAgentControlPlanePairing = {
+      id: input.controlPlaneId,
+      keyId: input.keyId,
+      ...(input.name || existing?.name ? { name: input.name || existing?.name } : {}),
+      secret: input.secret,
+      pairedAt: existing?.pairedAt || timestamp,
+      updatedAt: timestamp,
+    };
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((candidate) => candidate.id !== input.controlPlaneId && candidate.keyId !== input.keyId),
+          pairing,
+        ],
+      });
+      const binding = this.repository.readCloudRelayBinding();
+      if (binding) {
+        this.repository.writeCloudRelayBinding({ ...binding, pairedControlPlaneIds: [...pairedControlPlaneIds], updatedAt: timestamp });
+      }
+    });
+    return pairing;
+  }
+
+  /** Removes exactly the pairings a relay claim created, leaving direct/reverse pairings intact. */
+  clearCloudRelayPairings() {
+    const binding = this.repository.readCloudRelayBinding();
+    const relayPairingIds = new Set(binding?.pairedControlPlaneIds || []);
+    if (!relayPairingIds.size) return 0;
+    const current = this.store.read();
+    if (!current) return 0;
+    const next = (current.controlPlanePairings || []).filter((candidate) => !relayPairingIds.has(candidate.id));
+    const removed = (current.controlPlanePairings || []).length - next.length;
+    this.store.write({ ...current, controlPlanePairings: next });
+    return removed;
   }
 
   remoteSecrets(overrideSecret?: string, overrideKeyId?: string, includeRevoked = false) {

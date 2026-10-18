@@ -114,6 +114,8 @@ import { NodeAgentRecoverySupervisor } from "./recovery-supervisor.ts";
 import { RuntimeAvailabilityMonitor, runtimeAvailabilityIntervalMs } from "./runtime-availability.ts";
 import { connectReverseTunnel } from "./reverse-tunnel/client.ts";
 import { createReverseTunnelManager } from "./reverse-tunnel/manager.ts";
+import { NodeAgentCloudRelayClient } from "./cloud-relay/client.ts";
+import { registerNodeAgentCloudRelayRoutes } from "./cloud-relay/routes.ts";
 import {
   DockerRuntimeAdapter,
   RuntimeAdapterRegistry,
@@ -158,6 +160,7 @@ declare module "fastify" {
     nodeAgentEventForwarder?: NodeAgentInstanceEventForwarder;
     nodeAgentRuntimeMetrics?: DockerRuntimeMetricsCollector;
     nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
+    nodeAgentCloudRelay?: NodeAgentCloudRelayClient;
     nodeAgentListenerManager?: NodeAgentExternalListenerManager;
     nodeAgentRestoreManagedInstances?: () => Promise<void>;
     nodeAgentRecoverManagedInstances?: () => Promise<void>;
@@ -218,6 +221,8 @@ export type CreateNodeAgentAppOptions = {
   /** Test-only managed-update capability override. */
   managedUpdateSupport?: (selection: { packageName: string; installPrefix: string }) => { supported: boolean; reason?: string };
   fetchImpl?: typeof fetch;
+  /** Test-only Relay socket injection for the cloud relay client. */
+  webSocket?: typeof import("ws").default;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
   /** Test-only built-in project catalog override. Production always reads the shipped bundle. */
@@ -1156,6 +1161,22 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  // The account relay client owns every node-side relay channel; it starts
+  // only after a binding exists and never touches local instances.
+  const cloudRelay = new NodeAgentCloudRelayClient({
+    identity,
+    nodeId,
+    host: {
+      log: app.log,
+      inject: (input) => app.inject(input),
+      nodeAgentEventForwarder: eventForwarder,
+      currentListenerPort: () => state.currentListenerPort,
+    },
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.webSocket ? { webSocket: options.webSocket } : {}),
+  });
+  app.decorate("nodeAgentCloudRelay", cloudRelay);
+  registerNodeAgentCloudRelayRoutes(app, { client: cloudRelay });
   const agentOrchestrations = new AgentOrchestrationService(
     storyRepository.agents.orchestrations,
     storyRepository.agents.definitions,
@@ -2255,6 +2276,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     let containerIpcServer: http.Server | undefined;
     installGracefulShutdown(app, () => {
       reverseTunnels.closeAll();
+      app.nodeAgentCloudRelay?.stop();
       ipcServer?.close();
       containerIpcServer?.close();
     });
@@ -2270,6 +2292,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       if (containerIpcPath) containerIpcServer = await listenNodeAgentContainerIpcServer(app, containerIpcPath);
       await listenerManager.start();
       reverseTunnels.connectConfigured();
+      app.nodeAgentCloudRelay?.start();
       // Probe runtime availability first so instance recovery does not start from
       // a stale runtime record and drive instance phases while the runtime is gone.
       app.nodeAgentStartRuntimeAvailabilityMonitor?.();

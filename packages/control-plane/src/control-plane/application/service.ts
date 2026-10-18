@@ -149,7 +149,7 @@ import {
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { ControlPlanePersistenceMaintenance } from "../persistence/maintenance.ts";
-import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
+import { JsonCollection, JsonFile, createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import {
@@ -224,6 +224,12 @@ function isControlPlaneLocalNode(node: Node) {
 
 function isControlPlaneBuiltinNode(node: Node) {
   return node.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true";
+}
+
+/** The stored pairing of a cloud-relay node, if the first claim already pinned one. */
+function cloudRelayPairingOf(node: Node): { keyId: string; secret: string } | undefined {
+  if (node.auth.mode !== "paired-hmac" || !node.auth.keyId || !node.auth.secret) return undefined;
+  return { keyId: node.auth.keyId, secret: node.auth.secret };
 }
 
 function nodeAgentCapabilityDocument(node: Node) {
@@ -485,6 +491,73 @@ export class ControlPlaneService {
 
   setNodeAgentTransport(transport: NodeAgentTransport) {
     this.nodeAgentTransportResolver.setTunnel(transport);
+  }
+
+  setCloudRelayNodeAgentTransport(transport: NodeAgentTransport) {
+    this.nodeAgentTransportResolver.setCloudRelay(transport);
+  }
+
+  /** The local record for an account-bound node, matched by its opaque cloud handle. */
+  findCloudRelayNode(nodeHandle: string) {
+    return this.listNodes().find((node) => node.connectionPath.kind === "cloud-relay" && node.connectionPath.nodeHandle === nodeHandle);
+  }
+
+  /**
+   * Creates the local `cloud-relay` record on first claim. The node handle is
+   * the only cloud identity stored; no endpoint or credential ever arrives.
+   */
+  async ensureCloudRelayNode(input: { nodeHandle: string; displayName?: string }) {
+    const existing = this.findCloudRelayNode(input.nodeHandle);
+    if (existing) return { nodeId: existing.id, pairing: cloudRelayPairingOf(existing) };
+    const timestamp = now();
+    const node = NodeSchema.parse({
+      id: createId("node"),
+      name: input.displayName || input.nodeHandle,
+      connectionMode: "cloud-relay",
+      connectionPath: { kind: "cloud-relay", nodeHandle: input.nodeHandle },
+      connectionEnabled: true,
+      auth: { mode: "paired-hmac", pairing: { status: "pending" } },
+      status: "unknown",
+      health: "unknown",
+      capabilities: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await this.nodes.put(node);
+    return { nodeId: node.id };
+  }
+
+  /** Pins or rotates the pairing the node must prove on every reconnect. */
+  async saveCloudRelayNodePairing(nodeId: string, pairing: { keyId: string; secret: string }) {
+    const current = this.requireNode(nodeId);
+    const updated = NodeSchema.parse({
+      ...current,
+      auth: {
+        mode: "paired-hmac",
+        keyId: pairing.keyId,
+        secret: pairing.secret,
+        pairedAt: now(),
+        pairing: { status: "paired" },
+      },
+      updatedAt: now(),
+    });
+    return await this.nodes.put(updated);
+  }
+
+  /** Channel connectivity projects onto the same node status the UI already renders. */
+  async setCloudRelayNodeConnection(nodeId: string, connected: boolean, reason?: string) {
+    const current = this.requireNode(nodeId);
+    const timestamp = now();
+    const updated = NodeSchema.parse({
+      ...current,
+      status: connected ? "online" : "offline",
+      health: connected ? "ok" : current.health === "ok" ? "unknown" : current.health,
+      lastSeenAt: connected ? timestamp : current.lastSeenAt,
+      ...(connected ? {} : reason ? { labels: { ...current.labels, cloudRelayLastError: reason.slice(0, 200) } } : {}),
+      updatedAt: timestamp,
+    });
+    return await this.nodes.put(updated);
   }
 
   resolveNodeAgentTransport(node: Node) {
@@ -991,16 +1064,20 @@ export class ControlPlaneService {
     const data = await this.nodeAgentGateway.health(node);
     const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
     const agentNodeId = typeof record.nodeId === "string" && record.nodeId.trim() ? record.nodeId.trim() : node.id;
+    // A cloud-relay node keeps the locally generated record ID. The machine has
+    // its own node-agent ID and intentionally appears under several Control
+    // Planes, so the remote value must never re-key this local record.
+    const identityNodeId = node.connectionPath.kind === "cloud-relay" ? node.id : agentNodeId;
     const updated = NodeSchema.parse({
       ...node,
-      id: agentNodeId,
+      id: identityNodeId,
       status: "online",
       health: "ok",
       capabilities: typeof data === "object" && data ? { ...node.capabilities, agent: publicNodeAgentCapabilities(data) } : node.capabilities,
       lastSeenAt: now(),
       updatedAt: now(),
     });
-    if (agentNodeId !== node.id) {
+    if (identityNodeId !== node.id) {
       await this.nodes.delete(node.id);
     }
     this.observeNode(updated);
@@ -1139,6 +1216,11 @@ export class ControlPlaneService {
     const node = this.requireNode(id);
     const parsedInput = CreateNodeControlPlaneConnectionInputSchema.parse(input);
     return this.nodeAgentGateway.createControlPlaneConnection(node, parsedInput);
+  }
+
+  async bindNodeCloudRelay(id: string, input: unknown) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.bindNodeCloudRelay(node, input);
   }
 
   async listNodeControlPlanePairings(id: string) {

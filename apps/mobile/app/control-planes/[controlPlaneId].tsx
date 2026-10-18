@@ -5,7 +5,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Icon } from '../../src/components/Icon';
 import { useMobileTheme } from '../../src/components/theme';
 import { ControlPlaneDetailContent } from '../../src/control-plane/ControlPlaneDetailContent';
-import type { MobileControlPlaneProfile } from '../../src/control-plane/profile';
+import { sameMobileControlPlaneProfileIdentity, selectMobileControlPlaneProfile, type MobileControlPlaneProfile } from '../../src/control-plane/profile';
 import { deleteMobileControlPlaneProfile, mobileProfileStore as profiles, mobileSecureStore } from '../../src/control-plane/runtime';
 import { createDirectControlPlaneClient } from '../../src/control-plane/client';
 import { loadMobileCurrentAccess } from '../../src/control-plane/current-access';
@@ -14,7 +14,7 @@ import { useI18n, type Translate } from '../../src/i18n';
 import { useMobileToast } from '../../src/components/MobileToast';
 
 export default function ControlPlaneDetailScreen() {
-  const { controlPlaneId } = useLocalSearchParams<{ controlPlaneId: string }>();
+  const { controlPlaneId, kind, fingerprint } = useLocalSearchParams<{ controlPlaneId: string; kind?: string; fingerprint?: string }>();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const toast = useMobileToast();
@@ -28,9 +28,13 @@ export default function ControlPlaneDetailScreen() {
     let live = true;
     void Promise.all([profiles.list(), profiles.active()]).then(([stored, current]) => {
       if (!live) return;
-      const match = stored.find((candidate) => candidate.identity.controlPlaneId === controlPlaneId);
+      const match = selectMobileControlPlaneProfile(
+        stored.filter((candidate) => candidate.identity.controlPlaneId === controlPlaneId),
+        { fingerprint, kind },
+        current,
+      );
       setProfile(match);
-      setActive(Boolean(match && current?.identity.controlPlaneId === match.identity.controlPlaneId));
+      setActive(Boolean(match && current && sameMobileControlPlaneProfileIdentity(match, current)));
       if (match) {
         void loadMobileCurrentAccess(
           match,
@@ -47,7 +51,7 @@ export default function ControlPlaneDetailScreen() {
       setLoading(false);
     });
     return () => { live = false; };
-  }, [controlPlaneId, t]);
+  }, [controlPlaneId, kind, fingerprint, t]);
 
   const makeActive = async () => {
     if (!profile) return;

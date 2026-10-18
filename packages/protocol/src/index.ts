@@ -18,6 +18,7 @@ export * from "./browser-tunnel.ts";
 export * from "./control-plane-access.ts";
 export * from "./control-plane-directory.ts";
 export * from "./control-plane.ts";
+export * from "./node-relay-channel.ts";
 export * from "./control-plane-proxy.ts";
 export * from "./config-sync.ts";
 export * from "./events.ts";

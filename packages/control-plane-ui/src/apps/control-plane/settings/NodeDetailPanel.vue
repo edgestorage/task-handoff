@@ -428,6 +428,10 @@
               v-if="selectedNode.connectionMode === 'control-plane-proxy'"
               :selected-node="selectedNode"
             />
+            <CloudRelayNodePanel
+              v-else-if="selectedNode.connectionMode === 'cloud-relay'"
+              :selected-node="selectedNode"
+            />
             <template v-else>
             <div class="node-remote-panel">
               <div class="section-head has-actions">
@@ -493,6 +497,7 @@
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
               </p>
             </div>
+            <CloudRelayBindPanel :selected-node="selectedNode" />
             <div class="node-remote-panel">
               <div class="node-detail-section-body">
               <ControlPlaneProxyManagementPanel :node-id="selectedNode.id" :node-name="selectedNode.name" />
@@ -584,6 +589,8 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel.vue";
 import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
+import CloudRelayNodePanel from "./CloudRelayNodePanel.vue";
+import CloudRelayBindPanel from "./CloudRelayBindPanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeResourceEmptyState from "./NodeResourceEmptyState.vue";
 import { nodeLocalFolderDisplayName } from "../nodePath";

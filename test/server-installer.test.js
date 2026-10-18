@@ -344,7 +344,7 @@ test("standalone node-agent CLI can create pairing invites over local IPC", () =
 
   assert.match(runtimeCli, /\.command\("invite"\)/);
   assert.match(runtimeCli, /fetchNodeAgentIpc/);
-  assert.match(runtimeCli, /options\.endpoint\s*\? undefined\s*:\s*explicitIpcPath \|\| nodeAgentIpcPath/);
+  assert.match(runtimeCli, /options\.endpoint\s*\? undefined\s*:\s*resolveNodeAgentIpcPath\(explicitIpcPath, dataDir\)/);
   assert.match(runtimeCli, /Join token:/);
   assert.match(runtimeCli, /\.option\("--json"/);
   assert.match(remoteInstaller, /TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc/);
@@ -370,6 +370,64 @@ test("standalone node-agent CLI can uninstall while preserving data by default",
   assert.match(uninstaller, /\["disable", "--now", NODE_AGENT_SERVICE\]/);
   assert.match(uninstaller, /await dependencies\.confirmDeleteData\(dataDir\)/);
   assert.match(uninstaller, /Docker volumes are preserved\. \[y\/N\]/);
+});
+
+test("node-agent installer binds the machine to a cloud account after install", async () => {
+  const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
+  const installer = nodeAgentInstallScript();
+
+  assert.match(installer, /--cloud-relay-origin <url>/);
+  assert.match(installer, /--cloud-relay-bind-token <token>/);
+  assert.match(installer, /--cloud-relay-origin\) CLOUD_RELAY_ORIGIN="\$\{2:-\}"/);
+  assert.match(installer, /--cloud-relay-bind-token\) CLOUD_RELAY_BIND_TOKEN="\$\{2:-\}"/);
+  assert.match(installer, /Either --control-plane or --cloud-relay-bind-token is required\./);
+  assert.match(installer, /--cloud-relay-origin is required with --cloud-relay-bind-token\./);
+  assert.match(installer, /--cloud-relay-bind-token is required with --cloud-relay-origin\./);
+  // The post-install step talks to the local node agent over its IPC socket,
+  // never to the cloud with the token on the command line.
+  assert.match(installer, /--unix-socket "\$IPC_PATH"/);
+  assert.match(installer, /"http:\/\/localhost\/api\/node-agent\/cloud-relay\/bind"/);
+  assert.match(installer, /retry with: sudo task-handoff-node-agent cloud-bind --cloud-origin \$CLOUD_RELAY_ORIGIN --binding-token <token>/);
+  assert.match(installer, /Node agent bound to the cloud platform account; waiting for the first claim\./);
+
+  // Argument validation runs before any installation step, so a mixed-up pair
+  // fails fast on a real host without touching the machine.
+  const guarded = installer
+    .replace(/^need_root$/m, "true")
+    .replace("\nif ! command -v systemctl", "\nexit 0\nif ! command -v systemctl");
+  for (const [args, expected] of [
+    [["--cloud-relay-bind-token", "thnb_test"], /--cloud-relay-origin is required/],
+    [["--cloud-relay-origin", "https://cloud.example.com"], /--cloud-relay-bind-token is required/],
+    [[], /Either --control-plane or --cloud-relay-bind-token is required/],
+  ]) {
+    const result = spawnSync("/bin/sh", ["-s", "--", ...args], { input: guarded, encoding: "utf8" });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(result.stderr, expected);
+  }
+});
+
+test("standalone node-agent CLI can bind and unbind the cloud relay over local IPC", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  assert.match(runtimeCli, /\.command\("cloud-bind"\)/);
+  assert.match(runtimeCli, /\.requiredOption\("--cloud-origin <url>"/);
+  assert.match(runtimeCli, /\.requiredOption\("--binding-token <token>"/);
+  assert.match(runtimeCli, /INSTALLED_NODE_AGENT_IPC_PATH = "\/run\/task-handoff\/node-agent\.sock"/);
+  assert.match(runtimeCli, /statSync\(INSTALLED_NODE_AGENT_IPC_PATH\)\.isSocket\(\)/);
+  assert.match(runtimeCli, /fetchNodeAgentIpc\(options\.ipcPath!, "\/cloud-relay\/bind"/);
+  assert.match(runtimeCli, /\.command\("cloud-unbind"\)/);
+  assert.match(runtimeCli, /fetchNodeAgentIpc\(options\.ipcPath!, "\/cloud-relay", \{ method: "DELETE"/);
+  const unbind = runtimeCli.slice(runtimeCli.indexOf("async function unbindCloudRelay"), runtimeCli.indexOf("async function main"));
+  assert.doesNotMatch(unbind, /"content-type": "application\/json"/, "bodyless DELETE must not advertise a JSON body");
+});
+
+test("test deployment switches the global command symlinks with the server runtime", () => {
+  const deployment = fs.readFileSync(path.join(root, "scripts", "update-test-control-plane.sh"), "utf8");
+  assert.match(deployment, /NODE_AGENT_LINK="\$BIN_DIR\/task-handoff-node-agent"/);
+  assert.match(deployment, /CONTROL_PLANE_LINK="\$BIN_DIR\/task-handoff-control-plane"/);
+  assert.match(deployment, /atomic_command_link "\$NODE_AGENT_LINK"/);
+  assert.match(deployment, /atomic_command_link "\$CONTROL_PLANE_LINK"/);
+  assert.match(deployment, /install_command_links\n(?:.*\n)*?systemctl start task-handoff-node-agent\.service/);
+  assert.match(deployment, /test "\$\(\/usr\/local\/bin\/task-handoff-node-agent --version\)" = "\$VERSION"/);
 });
 
 test("node-agent installer honors an explicit npm package before an ambient binary", () => {

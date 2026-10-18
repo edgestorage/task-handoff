@@ -13,6 +13,9 @@ HOST=${TASK_HANDOFF_TEST_HOST:-testuser@192.0.2.10}
 SSH_PORT=${TASK_HANDOFF_TEST_SSH_PORT:-}
 REUSE_ARTIFACTS=${TASK_HANDOFF_TEST_REUSE_ARTIFACTS:-0}
 BASE_VERSION=${TASK_HANDOFF_TEST_BASE_VERSION:-0.0.25}
+# 成功部署后保留的 `.server-*-backup-*` 数量；旧备份自动删除，超过 7 天的
+# `-failed-` / `-stage` 残留目录一并清理。0 表示不保留备份。
+BACKUP_KEEP=${TASK_HANDOFF_TEST_BACKUP_KEEP:-3}
 # 测试环境默认打开 Agent 运行能力：feature flag 在构建期烧进 Control Plane UI
 # （packages/control-plane-ui/vite.config.ts 读取 TASK_HANDOFF_AGENT_RUNS_ENABLED），
 # 未开启时部署出来的界面不会出现 Agent/编排入口。可用同名环境变量显式覆盖。
@@ -86,6 +89,9 @@ fi
 
 case "$VERSION" in
   *[!0-9A-Za-z.+-]*|'') printf 'Unsafe version: %s\n' "$VERSION" >&2; exit 1 ;;
+esac
+case "$BACKUP_KEEP" in
+  *[!0-9]*|'') printf 'Unsafe backup keep count: %s\n' "$BACKUP_KEEP" >&2; exit 1 ;;
 esac
 node -e 'if (!require("semver").valid(process.argv[1])) throw new Error(`Invalid semver: ${process.argv[1]}`)' "$VERSION"
 
@@ -238,6 +244,9 @@ set -eu
 BASE=/usr/local/lib/node_modules/@task-handoff
 CURRENT="$BASE/server"
 NEW="$BASE/.server-$VERSION-stage"
+BIN_DIR=/usr/local/bin
+NODE_AGENT_LINK="$BIN_DIR/task-handoff-node-agent"
+CONTROL_PLANE_LINK="$BIN_DIR/task-handoff-control-plane"
 OLD_VERSION=$(node -p "require('$CURRENT/package.json').version")
 STAMP=$(date +%Y%m%d%H%M%S)
 BACKUP="$BASE/.server-$OLD_VERSION-backup-$STAMP"
@@ -247,6 +256,18 @@ test -d "$NEW"
 NODE_PID_BEFORE=$(systemctl show task-handoff-node-agent.service -p MainPID --value)
 CONTROL_PID_BEFORE=$(systemctl show task-handoff-control-plane.service -p MainPID --value)
 SWITCHED=0
+atomic_command_link() {
+  link="$1"
+  target="$2"
+  temporary="$link.tmp.$$"
+  rm -f "$temporary"
+  ln -s "$target" "$temporary"
+  mv -Tf "$temporary" "$link"
+}
+install_command_links() {
+  atomic_command_link "$NODE_AGENT_LINK" "$CURRENT/node_modules/@task-handoff/node-agent/bin/task-handoff-node-agent"
+  atomic_command_link "$CONTROL_PLANE_LINK" "$CURRENT/node_modules/@task-handoff/control-plane/bin/task-handoff-control-plane"
+}
 rollback() {
   systemctl stop task-handoff-control-plane.service || true
   systemctl stop task-handoff-node-agent.service || true
@@ -254,6 +275,7 @@ rollback() {
     if [ -d "$CURRENT" ]; then mv "$CURRENT" "$FAILED"; fi
     if [ -d "$BACKUP" ]; then mv "$BACKUP" "$CURRENT"; fi
   fi
+  install_command_links || true
   systemctl start task-handoff-node-agent.service
   systemctl start task-handoff-control-plane.service
   echo "Deployment failed; previous server runtime restored." >&2
@@ -264,6 +286,7 @@ systemctl stop task-handoff-node-agent.service
 mv "$CURRENT" "$BACKUP"
 mv "$NEW" "$CURRENT"
 SWITCHED=1
+install_command_links
 systemctl start task-handoff-node-agent.service
 for attempt in $(seq 1 30); do
   [ -S /run/task-handoff/node-agent.sock ] && break
@@ -290,6 +313,8 @@ test "$NODE_PID_AFTER" != "$NODE_PID_BEFORE"
 test "$CONTROL_PID_AFTER" != "$CONTROL_PID_BEFORE"
 trap - ERR
 printf 'backup=%s\n' "$BACKUP"
+printf 'node_agent_command=%s\n' "$(readlink "$NODE_AGENT_LINK")"
+printf 'control_plane_command=%s\n' "$(readlink "$CONTROL_PLANE_LINK")"
 printf 'node_agent_pid=%s -> %s\n' "$NODE_PID_BEFORE" "$NODE_PID_AFTER"
 printf 'control_plane_pid=%s -> %s\n' "$CONTROL_PID_BEFORE" "$CONTROL_PID_AFTER"
 REMOTE
@@ -300,6 +325,8 @@ log "Validate runtime and controlled-instance convergence"
 ssh "${SSH_ARGS[@]}" "$HOST" "sudo -n env VERSION='$VERSION' bash -s" <<'REMOTE'
 set -eu
 test "$(node -p 'require("/usr/local/lib/node_modules/@task-handoff/server/package.json").version')" = "$VERSION"
+test "$(/usr/local/bin/task-handoff-node-agent --version)" = "$VERSION"
+test "$(/usr/local/bin/task-handoff-control-plane --version)" = "$VERSION"
 systemctl is-active --quiet task-handoff-node-agent.service
 systemctl is-active --quiet task-handoff-control-plane.service
 test -S /run/task-handoff/node-agent.sock
@@ -333,8 +360,27 @@ curl -fsS http://127.0.0.1:8081/ | grep -oE 'assets/[^" ]+\.(js|css)' | sort -u 
 printf '\n'
 REMOTE
 
+log "Prune old deployment backups (keep newest $BACKUP_KEEP)"
+ssh "${SSH_ARGS[@]}" "$HOST" "sudo -n env BACKUP_KEEP='$BACKUP_KEEP' bash -s" <<'REMOTE'
+set -eu
+BASE=/usr/local/lib/node_modules/@task-handoff
+ls -dt "$BASE"/.server-*-backup-* 2>/dev/null | {
+  index=0
+  while IFS= read -r backup; do
+    if [ "$index" -lt "$BACKUP_KEEP" ]; then
+      printf 'kept_backup=%s\n' "$backup"
+    elif [ -d "$backup" ]; then
+      rm -rf -- "$backup"
+      printf 'pruned_backup=%s\n' "$backup"
+    fi
+    index=$((index + 1))
+  done
+}
+find "$BASE" -maxdepth 1 -type d \( -name '.server-*-failed-*' -o -name '.server-*-stage' \) -mtime +7 -print -exec rm -rf -- {} +
+REMOTE
+
 log "Deployment complete"
 printf 'version=%s\n' "$VERSION"
 printf '%s\n' "$SWITCH_OUTPUT"
 printf 'remote_stage=%s\n' "$REMOTE_STAGE"
-printf 'Keep the backup until feature acceptance is complete.\n'
+printf 'Kept the newest %s server backup(s); older backups and stale failed/stage dirs were pruned.\n' "$BACKUP_KEEP"

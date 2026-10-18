@@ -313,6 +313,7 @@ export class ControlledInstanceCreator {
       throw publicError("Localhost runtime currently supports local folder sources only.", 400, "LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER");
     }
     if (source.type !== "local-folder") return { value: projectSourceWithoutGitCredential(source), configured: source, snapshot };
+    const sourcePath = source.path;
     if (source.ownerNodeId && source.ownerNodeId !== input.node.id) {
       throw publicError(
         `Local folder ${source.path} belongs to node ${source.ownerNodeId}, not ${input.node.id}.`,
@@ -322,14 +323,18 @@ export class ControlledInstanceCreator {
     }
     const folder = source.localFolderId
       ? await this.options.requireLocalFolder(input.node, source.localFolderId)
-      : await this.options.gateway.createLocalFolder(input.node, {
+      : (await this.options.gateway.listLocalFolders(input.node)).find((candidate) => candidate.path === sourcePath)
+        || await this.options.gateway.createLocalFolder(input.node, {
           name: typeof snapshot.name === "string" ? snapshot.name : "Local folder",
-          path: source.path,
+          path: sourcePath,
           defaultImageSelection: input.imageOption
             ? { imageId: input.imageOption.id, tag: input.imageOption.tag }
             : undefined,
         });
-    source = { ...source, localFolderId: folder.id, ownerNodeId: folder.nodeId, path: folder.path };
+    // Keep the node-side identifier out of the request. A cloud-relay Control
+    // Plane projects response records onto its local node ID, but the target
+    // Node Agent still validates ownership against its own machine identity.
+    source = { type: "local-folder", localFolderId: folder.id, path: folder.path };
     snapshot = folder as unknown as Record<string, unknown>;
     return { value: source, configured: source, snapshot };
   }

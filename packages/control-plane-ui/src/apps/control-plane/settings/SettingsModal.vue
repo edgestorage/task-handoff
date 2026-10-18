@@ -137,6 +137,13 @@
                       </span>
                       <Badge class="node-onboarding-menu-badge" variant="secondary">{{ t("settings.nodeOnboarding.recommended") }}</Badge>
                     </DropdownMenuItem>
+                    <DropdownMenuItem v-if="isFeatureEnabled('officialAccount') && canManageSettings" class="node-add-menu-item" @select="openCloudNodeOnboarding">
+                      <Cloud :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>{{ t("settings.nodeRelay.onboardingTitle") }}</strong>
+                        <small>{{ t("settings.nodeRelay.onboardingDescription") }}</small>
+                      </span>
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem v-if="!hasLocalNode" class="node-add-menu-item" :disabled="syncingLocalNode" @select="addLocalNode">
                       <MonitorCog :size="16" aria-hidden="true" />
@@ -279,9 +286,18 @@
         :nodes="nodes.data.value || []"
         :open="nodeOnboardingOpen"
         :public-base-url="nodeAgentInstallControlPlaneUrl"
+        :cloud-node-enabled="isFeatureEnabled('officialAccount') && canManageSettings"
         :version="nodeAgentInstallVersion"
         @close="nodeOnboardingOpen = false"
         @created="handleOnboardingCreated"
+        @open-cloud-node-wizard="openCloudNodeWizardFromOnboarding"
+      />
+      <CloudNodeOnboardingDialog
+        :nodes="nodes.data.value || []"
+        :open="cloudNodeOnboardingOpen"
+        @close="cloudNodeOnboardingOpen = false"
+        @created="handleOnboardingCreated"
+        @open-cloud-settings="openCloudSettingsFromOnboarding"
       />
       <Dialog :open="nodeRenameOpen" @update:open="setNodeRenameOpen">
         <DialogContent class="node-rename-dialog">
@@ -445,7 +461,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
+import { AlertTriangle, ArrowLeft, ChevronDown, Cloud, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayUnknownModelPolicy, UpdateChannel } from "../../../api/types";
@@ -475,6 +491,7 @@ import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdate
 import NodeDetailPanel from "./NodeDetailPanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeOnboardingDialog from "./NodeOnboardingDialog.vue";
+import CloudNodeOnboardingDialog from "./CloudNodeOnboardingDialog.vue";
 import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
@@ -528,6 +545,12 @@ const settingsSections = computed(() => buildSettingsSections(t, {
   manageSettings: canManageSettings.value,
   manageUsers: canManageUsers.value,
 }));
+
+function openCloudSettingsFromOnboarding() {
+  nodeOnboardingOpen.value = false;
+  cloudNodeOnboardingOpen.value = false;
+  setSettingsSection("cloud-connectivity");
+}
 
 const settingsSection = ref<SettingsSection>(props.initialSection === "cloud-connectivity" && !isFeatureEnabled("officialAccount") ? "nodes" : props.initialSection || "nodes");
 const currentSettingsSectionLabel = computed(() => settingsSections.value.find((item) => item.id === settingsSection.value)?.label || "");
@@ -601,6 +624,7 @@ const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" &&
 const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
 const nodeOnboardingOpen = ref(false);
+const cloudNodeOnboardingOpen = ref(false);
 const remoteNodeMode = ref<"direct" | "control-plane-proxy">("direct");
 const creatingProxyNode = ref(false);
 const proxyNodeError = ref("");
@@ -999,6 +1023,15 @@ function openRemoteNodeDialog() {
 
 function openNodeOnboarding() {
   nodeOnboardingOpen.value = true;
+}
+
+function openCloudNodeOnboarding() {
+  cloudNodeOnboardingOpen.value = true;
+}
+
+function openCloudNodeWizardFromOnboarding() {
+  nodeOnboardingOpen.value = false;
+  cloudNodeOnboardingOpen.value = true;
 }
 
 function handleOnboardingCreated(node: Node) {

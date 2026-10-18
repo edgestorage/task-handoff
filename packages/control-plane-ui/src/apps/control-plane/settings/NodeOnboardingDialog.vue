@@ -73,38 +73,49 @@
               <TriangleAlert :size="15" />
               {{ t("settings.nodeOnboarding.network.overrideWarning") }}
             </p>
+            <div v-if="cloudNodeEnabled" class="node-onboarding-cloud-option">
+              <Cloud :size="18" aria-hidden="true" />
+              <span>
+                <strong>{{ t("settings.nodeOnboarding.network.cloudOptionTitle") }}</strong>
+                <small>{{ t("settings.nodeOnboarding.network.cloudOptionDescription") }}</small>
+              </span>
+              <Button type="button" size="sm" variant="outline" @click="emit('open-cloud-node-wizard')">{{ t("settings.nodeOnboarding.network.cloudOptionAction") }}</Button>
+            </div>
           </section>
 
           <section v-else-if="step === 'target'" class="node-onboarding-section">
             <template v-if="controlPlanePublic">
               <h3>{{ t("settings.nodeOnboarding.target.agentInstalledTitle") }}</h3>
               <p>{{ t("settings.nodeOnboarding.target.agentInstalledDescription") }}</p>
-              <div class="node-onboarding-choice-list" :aria-label="t('settings.nodeOnboarding.target.agentInstalledTitle')">
-                <button type="button" class="node-onboarding-choice" :class="{ selected: agentInstalled === true }" :aria-pressed="agentInstalled === true" @click="agentInstalled = true">
-                  <ServerCog :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.installed") }}</strong><small>{{ t("settings.nodeOnboarding.target.installedDescription") }}</small></span>
-                </button>
-                <button type="button" class="node-onboarding-choice" :class="{ selected: agentInstalled === false }" :aria-pressed="agentInstalled === false" @click="agentInstalled = false">
-                  <Download :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.notInstalled") }}</strong><small>{{ t("settings.nodeOnboarding.target.notInstalledDescription") }}</small></span>
-                </button>
-              </div>
-              <label class="node-onboarding-field" for="node-onboarding-join-name">
-                <span>{{ t("settings.nodeOnboarding.target.optionalName") }}</span>
-                <ControlPlaneInput id="node-onboarding-join-name" v-model="nodeName" :maxlength="160" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
-              </label>
             </template>
-
             <template v-else>
               <h3>{{ t("settings.nodeOnboarding.target.agentPublicTitle") }}</h3>
               <p>{{ t("settings.nodeOnboarding.target.agentPublicDescription") }}</p>
-              <div class="node-onboarding-choice-list" :aria-label="t('settings.nodeOnboarding.target.agentPublicTitle')">
-                <button type="button" class="node-onboarding-choice" :class="{ selected: nodeAgentPublic === true }" :aria-pressed="nodeAgentPublic === true" @click="nodeAgentPublic = true">
+            </template>
+
+            <div class="node-onboarding-choice-list" :aria-label="t('settings.nodeOnboarding.steps.target')">
+              <template v-if="controlPlanePublic">
+                <button type="button" class="node-onboarding-choice" :class="{ selected: agentInstalled === true }" :aria-pressed="agentInstalled === true" @click="chooseAgentInstalled(true)">
+                  <ServerCog :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.installed") }}</strong><small>{{ t("settings.nodeOnboarding.target.installedDescription") }}</small></span>
+                </button>
+                <button type="button" class="node-onboarding-choice" :class="{ selected: agentInstalled === false }" :aria-pressed="agentInstalled === false" @click="chooseAgentInstalled(false)">
+                  <Download :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.notInstalled") }}</strong><small>{{ t("settings.nodeOnboarding.target.notInstalledDescription") }}</small></span>
+                </button>
+              </template>
+              <template v-else>
+                <button type="button" class="node-onboarding-choice" :class="{ selected: nodeAgentPublic === true }" :aria-pressed="nodeAgentPublic === true" @click="chooseNodeAgentPublic(true)">
                   <Globe2 :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.agentPublic") }}</strong><small>{{ t("settings.nodeOnboarding.target.agentPublicHint") }}</small></span>
                 </button>
-                <button type="button" class="node-onboarding-choice" :class="{ selected: nodeAgentPublic === false }" :aria-pressed="nodeAgentPublic === false" @click="nodeAgentPublic = false">
+                <button type="button" class="node-onboarding-choice" :class="{ selected: nodeAgentPublic === false }" :aria-pressed="nodeAgentPublic === false" @click="chooseNodeAgentPublic(false)">
                   <Cloud :size="18" /><span><strong>{{ t("settings.nodeOnboarding.target.neitherPublic") }}</strong><small>{{ t("settings.nodeOnboarding.target.neitherPublicHint") }}</small></span>
                 </button>
-              </div>
-            </template>
+              </template>
+            </div>
+
+            <label v-if="controlPlanePublic" class="node-onboarding-field" for="node-onboarding-join-name">
+              <span>{{ t("settings.nodeOnboarding.target.optionalName") }}</span>
+              <ControlPlaneInput id="node-onboarding-join-name" v-model="nodeName" :maxlength="160" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
+            </label>
           </section>
 
           <section v-else-if="step === 'connect' && connectionPath === 'reverse'" class="node-onboarding-section">
@@ -183,10 +194,6 @@
           <section v-else-if="step === 'connect' && connectionPath === 'proxy'" class="node-onboarding-section">
             <h3>{{ t("settings.nodeOnboarding.relay.title") }}</h3>
             <p>{{ t("settings.nodeOnboarding.relay.description") }}</p>
-            <div class="node-onboarding-relay-option disabled" aria-disabled="true">
-              <Cloud :size="18" /><span><strong>{{ t("settings.nodeOnboarding.relay.account") }}</strong><small>{{ t("settings.nodeOnboarding.relay.accountUnavailable") }}</small></span>
-              <Badge class="node-onboarding-badge" variant="secondary">{{ t("settings.nodeOnboarding.unavailable") }}</Badge>
-            </div>
             <div class="node-onboarding-relay-option selected">
               <Server :size="18" /><span><strong>{{ t("settings.nodeOnboarding.relay.proxy") }}</strong><small>{{ t("settings.nodeOnboarding.relay.proxyDescription") }}</small></span>
             </div>
@@ -283,11 +290,12 @@ const props = defineProps<{
   open: boolean;
   publicBaseUrl: string;
   nodes: Node[];
+  cloudNodeEnabled?: boolean;
   nodeJoinedEvent?: NodeJoinedEvent;
   version?: string;
 }>();
 
-const emit = defineEmits<{ close: []; created: [node: Node] }>();
+const emit = defineEmits<{ close: []; created: [node: Node]; "open-cloud-node-wizard": [] }>();
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const queryClient = useQueryClient();
@@ -543,6 +551,14 @@ async function submitProxy() {
   }
 }
 
+function chooseAgentInstalled(value: boolean) {
+  agentInstalled.value = value;
+}
+
+function chooseNodeAgentPublic(value: boolean) {
+  nodeAgentPublic.value = value;
+}
+
 function completeFromSnapshot() {
   if (!pendingNodeId.value) return;
   const node = props.nodes.find((item) => item.id === pendingNodeId.value);
@@ -734,7 +750,39 @@ function closeDialog() {
 .node-onboarding-warning,
 .node-onboarding-waiting.expired { color: var(--status-warning); }
 .node-onboarding-probe[data-status="checking"],
-.node-onboarding-probe[data-status="inconclusive"],
+.node-onboarding-probe[data-status="inconclusive"] {
+  color: var(--text-muted);
+}
+
+.node-onboarding-cloud-option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.node-onboarding-cloud-option > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.node-onboarding-cloud-option strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.node-onboarding-cloud-option small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .node-onboarding-waiting { color: var(--text-muted); }
 
 .node-onboarding-choice-list {
@@ -763,10 +811,20 @@ function closeDialog() {
 }
 
 .node-onboarding-choice:hover,
+.node-onboarding-relay-option:hover {
+  border-color: var(--brand-accent);
+  background: var(--surface-hover);
+}
+
 .node-onboarding-choice.selected,
 .node-onboarding-relay-option.selected {
-  border-color: hsl(var(--primary));
-  background: hsl(var(--accent) / 0.45);
+  border-color: var(--brand-accent);
+  background: var(--surface-active);
+}
+
+.node-onboarding-choice.selected > svg,
+.node-onboarding-relay-option.selected > svg {
+  color: var(--brand-accent);
 }
 
 .node-onboarding-choice > span,
@@ -936,6 +994,15 @@ function closeDialog() {
   .node-onboarding-command-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .node-onboarding-cloud-option {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .node-onboarding-cloud-option > button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .node-onboarding-copy-field {

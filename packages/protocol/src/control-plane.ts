@@ -2126,6 +2126,11 @@ export const NodeConnectionPathSchema = z.discriminatedUnion("kind", [
     proxyBindingId: IdSchema,
     targetNodeId: IdSchema,
   }).strict(),
+  z.object({
+    kind: z.literal("cloud-relay"),
+    /** Account-level node handle; the Control Plane never stores an address for this node. */
+    nodeHandle: z.string().trim().min(8).max(160).regex(/^[a-z][a-z0-9_-]*$/),
+  }).strict(),
 ]);
 
 /** Ephemeral public diagnostics for the control-plane/node-agent connection. */
@@ -2175,7 +2180,7 @@ export const NodeSchema = z
   .object({
     id: IdSchema,
     name: z.string().trim().min(1).max(160),
-    connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy"]).default("direct-http"),
+    connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy", "cloud-relay"]).default("direct-http"),
     connectionPath: NodeConnectionPathSchema.default({ kind: "direct" }),
     connectionEnabled: z.boolean().default(true),
     auth: z
@@ -2225,6 +2230,20 @@ export const NodeSchema = z
         message: "Control-plane proxy nodes require a control-plane-proxy connection path.",
       });
     }
+    if (node.connectionMode === "cloud-relay" && node.connectionPath.kind !== "cloud-relay") {
+      context.addIssue({
+        code: "custom",
+        path: ["connectionPath"],
+        message: "Cloud-relay nodes require a cloud-relay connection path.",
+      });
+    }
+    if (node.connectionPath.kind === "cloud-relay" && node.connectionMode !== "cloud-relay") {
+      context.addIssue({
+        code: "custom",
+        path: ["connectionPath"],
+        message: "Cloud-relay connection paths require cloud-relay connection mode.",
+      });
+    }
   });
 
 /** Minimal public projection for converging one node's ephemeral connection state. */
@@ -2257,7 +2276,9 @@ export function sanitizeStoredNode(input: unknown, onWarning?: (warning: { field
   const connectionPath = source.connectionPath && typeof source.connectionPath === "object" && !Array.isArray(source.connectionPath)
     ? (source.connectionPath as Record<string, unknown>).kind === "control-plane-proxy"
       ? pickObjectFields(source.connectionPath, ["kind", "proxyId", "proxyBindingId", "targetNodeId"])
-      : pickObjectFields(source.connectionPath, ["kind"])
+      : (source.connectionPath as Record<string, unknown>).kind === "cloud-relay"
+        ? pickObjectFields(source.connectionPath, ["kind", "nodeHandle"])
+        : pickObjectFields(source.connectionPath, ["kind"])
     : { kind: "direct" };
   const proxyState = source.proxyState && typeof source.proxyState === "object" && !Array.isArray(source.proxyState)
     ? pickObjectFields(source.proxyState, [
@@ -2577,6 +2598,64 @@ export const NodeAgentControlPlaneConnectionCreateResultSchema = z
 export const NodeAgentDeleteResponseSchema = z
   .object({
     deleted: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Node-agent cloud relay (account binding + relay channels). The status is the
+ * single projection every surface sees: it never carries the credential, the
+ * claim grant, the relay key or any endpoint the node is reachable at.
+ */
+export const NodeAgentCloudRelayBindRequestSchema = z
+  .object({
+    cloudOrigin: z.string().trim().url().max(2048),
+    bindingToken: z.string().trim().min(1).max(4096),
+    displayName: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+export const NodeAgentCloudRelayErrorSchema = z
+  .object({
+    code: z.string().trim().min(1).max(160),
+    message: z.string().trim().max(2048),
+    at: TimestampSchema,
+    retryable: z.boolean().optional(),
+  })
+  .passthrough();
+
+export const NodeAgentCloudRelayChannelSchema = z
+  .object({
+    controlPlaneId: IdSchema,
+    name: z.string().trim().min(1).max(160).optional(),
+    status: z.enum(["connecting", "connected", "reconnecting", "failed"]),
+    connectedAt: TimestampSchema.optional(),
+    lastDisconnectedAt: TimestampSchema.optional(),
+    nextRetryAt: TimestampSchema.optional(),
+    error: z.string().trim().max(2048).optional(),
+  })
+  .passthrough();
+
+export const NodeAgentCloudRelayStatusSchema = z
+  .object({
+    bound: z.boolean(),
+    // True while the account binding exists but its credential was refused:
+    // the node keeps its local identity and asks for a fresh binding command.
+    rebindRequired: z.boolean().optional(),
+    nodeHandle: z.string().trim().min(1).max(160).optional(),
+    accountId: IdSchema.optional(),
+    cloudOrigin: z.string().trim().min(1).max(2048).optional(),
+    boundAt: TimestampSchema.optional(),
+    credentialExpiresAt: TimestampSchema.optional(),
+    channels: z.array(NodeAgentCloudRelayChannelSchema),
+    lastError: NodeAgentCloudRelayErrorSchema.optional(),
+  })
+  .passthrough();
+
+export const NodeAgentCloudRelayUnbindResultSchema = z
+  .object({
+    unbound: z.boolean(),
+    nodeHandle: z.string().trim().min(1).max(160).optional(),
+    cloudUnbind: z.enum(["confirmed", "unavailable", "not-bound"]).optional(),
   })
   .passthrough();
 
@@ -3630,6 +3709,10 @@ export type NodeAgentPairingSelfRevokeResult = z.infer<typeof NodeAgentPairingSe
 export type NodeAgentControlPlaneConnection = z.infer<typeof NodeAgentControlPlaneConnectionSchema>;
 export type NodeAgentControlPlaneConnectionCreateResult = z.infer<typeof NodeAgentControlPlaneConnectionCreateResultSchema>;
 export type NodeAgentDeleteResponse = z.infer<typeof NodeAgentDeleteResponseSchema>;
+export type NodeAgentCloudRelayBindRequest = z.infer<typeof NodeAgentCloudRelayBindRequestSchema>;
+export type NodeAgentCloudRelayChannel = z.infer<typeof NodeAgentCloudRelayChannelSchema>;
+export type NodeAgentCloudRelayStatus = z.infer<typeof NodeAgentCloudRelayStatusSchema>;
+export type NodeAgentCloudRelayUnbindResult = z.infer<typeof NodeAgentCloudRelayUnbindResultSchema>;
 export type LocalDockerImage = z.infer<typeof LocalDockerImageSchema>;
 export type NodeAgentInstanceProxyRawResponse = z.infer<typeof NodeAgentInstanceProxyRawResponseSchema>;
 export type BuildInfo = z.infer<typeof BuildInfoSchema>;

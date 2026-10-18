@@ -1,13 +1,13 @@
 import type { MobileControlPlaneProfile } from './profile';
 
 export type NativeProfilesScreenProps = {
-  activeId?: string;
+  activeProfile?: MobileControlPlaneProfile;
   error?: string;
   profiles: MobileControlPlaneProfile[];
   profilesLoaded: boolean;
   testMode: boolean;
   onAdd(): void;
-  onOpen(controlPlaneId: string): void;
+  onOpen(profile: MobileControlPlaneProfile): void;
 };
 
 export function NativeProfilesScreen(_props: NativeProfilesScreenProps) {

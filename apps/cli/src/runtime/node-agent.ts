@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import fs from "node:fs";
 import path from "node:path";
 import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import {
@@ -8,6 +9,23 @@ import {
   runNodeAgentServer,
   uninstallNodeAgent,
 } from "@task-handoff/control-plane/node-agent";
+
+// The Linux service installer listens here explicitly. Keep the same default
+// for one-off CLI commands run through sudo, where the service's environment
+// file is not loaded and the invoking user's data directory is not the agent's.
+const INSTALLED_NODE_AGENT_IPC_PATH = "/run/task-handoff/node-agent.sock";
+
+function resolveNodeAgentIpcPath(explicitIpcPath?: string, dataDir?: string) {
+  if (explicitIpcPath) return explicitIpcPath;
+  if (!dataDir && process.platform !== "win32") {
+    try {
+      if (fs.statSync(INSTALLED_NODE_AGENT_IPC_PATH).isSocket()) return INSTALLED_NODE_AGENT_IPC_PATH;
+    } catch {
+      // Fall through to the per-data-directory socket used by local/desktop runs.
+    }
+  }
+  return nodeAgentIpcPath(dataDir || defaultNodeAgentDataDir());
+}
 
 function parsePort(value: string) {
   const port = Number(value);
@@ -95,6 +113,49 @@ async function connectControlPlane(options: {
   return payload.data;
 }
 
+async function bindCloudRelay(options: {
+  cloudOrigin: string;
+  bindingToken: string;
+  displayName?: string;
+  endpoint?: string;
+  ipcPath?: string;
+  token?: string;
+}) {
+  const headers = {
+    "content-type": "application/json",
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+  };
+  const body = JSON.stringify({
+    cloudOrigin: options.cloudOrigin,
+    bindingToken: options.bindingToken,
+    ...(options.displayName ? { displayName: options.displayName } : {}),
+  });
+  const response = options.endpoint
+    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent/cloud-relay/bind`, { method: "POST", headers, body })
+    : await fetchNodeAgentIpc(options.ipcPath!, "/cloud-relay/bind", { method: "POST", headers, body });
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: { nodeHandle?: unknown; channels?: unknown };
+    error?: { message?: string };
+  };
+  if (!response.ok) throw new Error(payload.error?.message || `Cloud relay binding failed with HTTP ${response.status}`);
+  return payload.data || {};
+}
+
+async function unbindCloudRelay(options: { endpoint?: string; ipcPath?: string; token?: string }) {
+  const headers = {
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+  };
+  const response = options.endpoint
+    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent/cloud-relay`, { method: "DELETE", headers })
+    : await fetchNodeAgentIpc(options.ipcPath!, "/cloud-relay", { method: "DELETE", headers });
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: { unbound?: unknown; nodeHandle?: unknown; cloudUnbind?: unknown };
+    error?: { message?: string };
+  };
+  if (!response.ok) throw new Error(payload.error?.message || `Cloud relay unbind failed with HTTP ${response.status}`);
+  return payload.data || {};
+}
+
 async function main() {
   const program = new Command();
   program
@@ -137,7 +198,7 @@ async function main() {
         || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
       const ipcPath = options.endpoint
         ? undefined
-        : explicitIpcPath || nodeAgentIpcPath(dataDir || defaultNodeAgentDataDir());
+        : resolveNodeAgentIpcPath(explicitIpcPath, dataDir);
       const invite = await createPairingInvite({
         endpoint: options.endpoint,
         ipcPath,
@@ -172,7 +233,7 @@ async function main() {
         || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
       const ipcPath = options.endpoint
         ? undefined
-        : explicitIpcPath || nodeAgentIpcPath(dataDir || defaultNodeAgentDataDir());
+        : resolveNodeAgentIpcPath(explicitIpcPath, dataDir);
       const result = await connectControlPlane({
         controlPlane: options.controlPlane,
         joinToken: options.joinToken,
@@ -187,6 +248,67 @@ async function main() {
       }
       console.log(`Control Plane: ${String(result?.connection?.url || options.controlPlane)}`);
       console.log(`Connection: ${String(result?.tunnel?.status || "saved")}`);
+    });
+
+  program
+    .command("cloud-bind")
+    .description("Bind this Node Agent to a cloud platform account with a one-time binding token.")
+    .requiredOption("--cloud-origin <url>", "Cloud platform origin that issued the binding command")
+    .requiredOption("--binding-token <token>", "One-time binding token from the cloud platform")
+    .option("--display-name <name>", "Display name shown in the account node directory")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (options) => {
+      const rootOptions = program.opts();
+      const explicitIpcPath = options.ipcPath || rootOptions.ipcPath
+        || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH;
+      const dataDir = options.dataDir || rootOptions.dataDir
+        || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
+      const ipcPath = options.endpoint
+        ? undefined
+        : resolveNodeAgentIpcPath(explicitIpcPath, dataDir);
+      const result = await bindCloudRelay({
+        cloudOrigin: options.cloudOrigin,
+        bindingToken: options.bindingToken,
+        displayName: options.displayName,
+        endpoint: options.endpoint,
+        ipcPath,
+        token: options.token,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(`Node handle: ${String(result.nodeHandle || "unknown")}`);
+      console.log("Binding: active");
+    });
+
+  program
+    .command("cloud-unbind")
+    .description("Remove this Node Agent from its cloud platform account; local instances are untouched.")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (options) => {
+      const rootOptions = program.opts();
+      const explicitIpcPath = options.ipcPath || rootOptions.ipcPath
+        || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH;
+      const dataDir = options.dataDir || rootOptions.dataDir
+        || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
+      const ipcPath = options.endpoint
+        ? undefined
+        : resolveNodeAgentIpcPath(explicitIpcPath, dataDir);
+      const result = await unbindCloudRelay({ endpoint: options.endpoint, ipcPath, token: options.token });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(result.unbound ? `Unbound: ${String(result.nodeHandle || "node")}` : "Node Agent was not bound.");
     });
 
   program

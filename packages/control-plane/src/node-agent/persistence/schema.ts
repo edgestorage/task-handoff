@@ -114,6 +114,25 @@ export const controlPlanePairings = sqliteTable("na_control_plane_pairings", {
   updatedAt: text("updated_at").notNull(),
 }, (table) => [uniqueIndex("na_control_plane_pairings_control_plane_uq").on(table.controlPlaneId)]);
 
+export const cloudRelayBindings = sqliteTable("na_cloud_relay_bindings", {
+  singletonKey: integer("singleton_key").primaryKey().default(1),
+  status: text("status", { enum: ["active", "rebind-required"] }).notNull(),
+  nodeHandle: text("node_handle").notNull(),
+  accountId: text("account_id").notNull(),
+  cloudOrigin: text("cloud_origin").notNull(),
+  serviceOrigin: text("service_origin").notNull(),
+  credential: text("credential").notNull(),
+  credentialExpiresAt: text("credential_expires_at").notNull(),
+  signingKid: text("signing_kid"),
+  signingPublicKey: text("signing_public_key"),
+  relayPublicKey: text("relay_public_key").notNull(),
+  relayPrivateKey: text("relay_private_key").notNull(),
+  pairedControlPlanes: text("paired_control_planes_json", { mode: "json" }).$type<string[]>().notNull(),
+  lastError: text("last_error_json", { mode: "json" }).$type<JsonObject>(),
+  boundAt: text("bound_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [check("na_cloud_relay_bindings_singleton_check", sql`${table.singletonKey} = 1`)]);
+
 export const controlPlaneConnections = sqliteTable("na_control_plane_connections", {
   id: text("id").primaryKey(),
   pairingKeyId: text("pairing_key_id").notNull().references(() => controlPlanePairings.keyId, { onDelete: "restrict", onUpdate: "cascade" }),

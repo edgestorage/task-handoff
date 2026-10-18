@@ -102,7 +102,16 @@ function fixture(retention, deployedStatus = "deferred") {
       },
     }),
     requireRuntime: async () => ({ id: "runtime_one", name: "Docker", type: "docker", capabilities: { requiresImage: false } }),
-    requireLocalFolder: async () => { throw new Error("not used"); },
+    requireLocalFolder: async () => ({
+      id: "folder_one",
+      nodeId: "node_one",
+      name: "Workspace",
+      path: "/workspace",
+      origin: "user",
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
     resolveImageSelection: () => { throw new Error("not used"); },
     prepareModels: async () => ({}),
     gitCredentials,
@@ -182,4 +191,22 @@ test("a lost retained payload response still triggers payload cleanup", async ()
   state.gateway.deployGitCredential = async () => { state.calls.push("payload:response-lost"); throw new Error("response lost"); };
   await assert.rejects(() => state.run(), /response lost/);
   assert.deepEqual(state.calls, ["create", "payload:response-lost", "remove-payload"]);
+});
+
+test("local-folder create omits the Control Plane's projected owner node from the node request", async () => {
+  const state = fixture(undefined);
+  await state.run({
+    projectId: undefined,
+    source: {
+      type: "local-folder",
+      localFolderId: "folder_one",
+      path: "/workspace",
+      ownerNodeId: "node_one",
+    },
+  });
+  assert.deepEqual(state.createdInputs[0].source, {
+    type: "local-folder",
+    localFolderId: "folder_one",
+    path: "/workspace",
+  });
 });

@@ -24,7 +24,7 @@ export class CloudAccessIngress {
   async actor(assertion: unknown): Promise<ControlPlaneActor> {
     const verified = await this.verifyAssertion(assertion);
     const current = this.state.snapshot();
-    if (current.status !== "active" || !current.remoteAccessEnabled || current.identity.controlPlaneId !== verified.controlPlaneId || current.accountId !== verified.accountId || current.bindingId !== verified.bindingId || current.bindingRevision !== verified.bindingRevision || Date.parse(verified.expiresAt) <= this.clock()) throw ingressError("CLOUD_ASSERTION_NOT_AUTHORIZED");
+    if (current.status !== "active" || current.scopes.deviceAccess !== true || current.cloudControlPlaneId !== verified.controlPlaneId || current.accountId !== verified.accountId || current.bindingId !== verified.bindingId || current.bindingRevision !== verified.bindingRevision || Date.parse(verified.expiresAt) <= this.clock()) throw ingressError("CLOUD_ASSERTION_NOT_AUTHORIZED");
     return { type: "cloud-account", accountId: verified.accountId, deviceSessionId: verified.deviceSessionId, bindingId: verified.bindingId, bindingRevision: verified.bindingRevision };
   }
 

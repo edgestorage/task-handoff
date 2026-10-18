@@ -15,7 +15,7 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
-import { mobileControlPlaneProfileAddress } from './profile';
+import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity } from './profile';
 
 export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
@@ -75,13 +75,13 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
     <>
       <Section title={t('nav.controlPlanes')}>
         {props.profiles.map((profile) => {
-          const active = props.activeId === profile.identity.controlPlaneId;
+          const active = Boolean(props.activeProfile && sameMobileControlPlaneProfileIdentity(props.activeProfile, profile));
           const name = profile.identity.displayName || t('profiles.defaultName');
           return (
             <Button
               key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}
               modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('profiles.viewDetails', { name }))]}
-              onPress={() => props.onOpen(profile.identity.controlPlaneId)}
+              onPress={() => props.onOpen(profile)}
             >
               <HStack alignment="center" spacing={12}>
                 <Image size={22} systemName="server.rack" />

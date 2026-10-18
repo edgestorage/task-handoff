@@ -68,6 +68,31 @@ export function mobileControlPlaneProfileAddress(profile: MobileControlPlaneProf
   return profile.access.kind === 'direct' ? profile.access.origin : profile.access.serviceOrigin;
 }
 
+/**
+ * Profiles are keyed by signing identity and access kind. A Direct profile and a
+ * cloud Relay profile can coexist for the same Control Plane, so id-only
+ * comparisons would mark both of them active or resolve to the wrong profile.
+ */
+export function sameMobileControlPlaneProfileIdentity(left: MobileControlPlaneProfile, right: MobileControlPlaneProfile) {
+  return left.identity.controlPlaneId === right.identity.controlPlaneId
+    && left.identity.publicKeyFingerprint === right.identity.publicKeyFingerprint
+    && left.access.kind === right.access.kind;
+}
+
+export function selectMobileControlPlaneProfile(
+  candidates: readonly MobileControlPlaneProfile[],
+  target: { readonly kind?: string; readonly fingerprint?: string },
+  active: MobileControlPlaneProfile | undefined,
+) {
+  const targeted = target.kind || target.fingerprint
+    ? candidates.find((candidate) => (
+      (!target.kind || candidate.access.kind === target.kind)
+      && (!target.fingerprint || candidate.identity.publicKeyFingerprint === target.fingerprint)
+    ))
+    : undefined;
+  return targeted ?? (active ? candidates.find((candidate) => sameMobileControlPlaneProfileIdentity(candidate, active)) : undefined) ?? candidates[0];
+}
+
 export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePublicCapabilities): MobileControlPlaneCapabilities {
   return MobileControlPlaneCapabilitiesSchema.parse({
     ...input,

@@ -5,17 +5,20 @@ export type NodeAgentTransportResolverOptions = {
   direct: NodeAgentTransport;
   tunnel?: NodeAgentTransport;
   proxy?: NodeAgentTransport;
+  cloudRelay?: NodeAgentTransport;
 };
 
 export class NodeAgentTransportResolver {
   private readonly direct: NodeAgentTransport;
   private tunnel: NodeAgentTransport | undefined;
   private proxy: NodeAgentTransport | undefined;
+  private cloudRelay: NodeAgentTransport | undefined;
 
   constructor(options: NodeAgentTransportResolverOptions) {
     this.direct = options.direct;
     this.tunnel = options.tunnel;
     this.proxy = options.proxy;
+    this.cloudRelay = options.cloudRelay;
   }
 
   setTunnel(transport: NodeAgentTransport) {
@@ -24,6 +27,10 @@ export class NodeAgentTransportResolver {
 
   setProxy(transport: NodeAgentTransport) {
     this.proxy = transport;
+  }
+
+  setCloudRelay(transport: NodeAgentTransport) {
+    this.cloudRelay = transport;
   }
 
   resolve(node: Node): NodeAgentTransport {
@@ -39,6 +46,14 @@ export class NodeAgentTransportResolver {
         throw error;
       }
       return this.proxy;
+    }
+    if (node.connectionMode === "cloud-relay") {
+      if (!this.cloudRelay) {
+        const error = new Error("Cloud relay node agent transport is not available.");
+        Object.assign(error, { statusCode: 503, code: "NODE_AGENT_CLOUD_RELAY_TRANSPORT_UNAVAILABLE" });
+        throw error;
+      }
+      return this.cloudRelay;
     }
     if (node.connectionMode !== "reverse-wss") {
       return this.direct;

@@ -30,6 +30,16 @@ test("Control Plane identity is private, stable across restart and has a public 
   assert.doesNotMatch(JSON.stringify(restarted.publicIdentity()), /privateKey/);
 });
 
+test("cloud identity is persisted separately from the local Control Plane identity", () => {
+  const { root, identity, service } = fixture();
+  service.setCloudControlPlaneId("cp_cloud_a");
+  assert.equal(service.snapshot().identity.controlPlaneId, "control_plane_a");
+  assert.equal(service.snapshot().cloudControlPlaneId, "cp_cloud_a");
+  const restarted = new CloudConnectivityService({ statePath: path.join(root, "binding.json"), identity, serviceOrigin: "https://cloud.example.test" });
+  restarted.init();
+  assert.equal(restarted.cloudControlPlaneId(), "cp_cloud_a");
+});
+
 test("binding challenge is target-bound, one-time, memory-only and restart-invalidated", () => {
   const { root, identity, service } = fixture();
   const issued = service.createChallenge();
@@ -46,6 +56,7 @@ test("binding challenge is target-bound, one-time, memory-only and restart-inval
 
 test("local state enforces one active account, idempotency and revoke-before-switch", () => {
   const { service } = fixture();
+  service.setCloudControlPlaneId("cp_cloud_a");
   const challenge = service.createChallenge();
   service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
   service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
@@ -56,6 +67,7 @@ test("local state enforces one active account, idempotency and revoke-before-swi
   assert.throws(() => service.createChallenge(), { code: "BINDING_STATE_CONFLICT" });
   service.confirmRevocation();
   assert.equal(service.snapshot().status, "unbound");
+  assert.equal(service.snapshot().cloudControlPlaneId, "cp_cloud_a");
   assert.doesNotMatch(JSON.stringify(service.snapshot()), /backgroundCredential/);
 });
 
@@ -86,13 +98,50 @@ test("service outage keeps local disable and pending revocation instead of allow
     connections: { async stop(reason) { stopped.push(reason); } },
     remote: { async revoke() { throw new Error("unreachable"); }, async setRemoteAccess() { throw new Error("unreachable"); } },
   });
-  const disabled = await lifecycle.setRemoteAccess(false);
+  const disabled = await lifecycle.setRemoteAccess({ deviceAccess: false, nodeRelay: false });
   assert.equal(disabled.remoteAccessEnabled, false);
   assert.equal(disabled.remoteResult, "unknown");
   const pending = await lifecycle.disconnect();
   assert.equal(pending.status, "pending-revocation");
   assert.throws(() => service.createChallenge(), { code: "BINDING_STATE_CONFLICT" });
-  assert.deepEqual(stopped, ["remote-access-disabled", "binding-pending-revocation"]);
+  assert.deepEqual(stopped, ["scope-disabled", "binding-pending-revocation"]);
+});
+
+test("turning both relay scopes off notifies the cloud before stopping the outbound connection", async () => {
+  const { service } = fixture();
+  const challenge = service.createChallenge();
+  service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  const calls = [];
+  const lifecycle = new CloudConnectivityLifecycle({
+    state: service,
+    connections: { async stop(reason) { calls.push(`stop:${reason}`); } },
+    remote: { async revoke() { throw new Error("unexpected revoke"); }, async setRemoteAccess(input) { calls.push(`remote:${input.scopes.deviceAccess}:${input.scopes.nodeRelay}`); } },
+  });
+  const result = await lifecycle.setRemoteAccess({ deviceAccess: false, nodeRelay: false });
+  assert.equal(result.remoteResult, "confirmed");
+  assert.deepEqual(calls, ["remote:false:false", "stop:scope-disabled"]);
+});
+
+test("turning a relay scope back on reconnects before notifying the cloud", async () => {
+  const { service } = fixture();
+  const challenge = service.createChallenge();
+  service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  const calls = [];
+  const lifecycle = new CloudConnectivityLifecycle({
+    state: service,
+    connections: {
+      async stop(reason) { calls.push(`stop:${reason}`); },
+      async ensure() { calls.push(`ensure:${service.snapshot().scopes.deviceAccess}:${service.snapshot().scopes.nodeRelay}`); },
+    },
+    remote: { async revoke() { throw new Error("unexpected revoke"); }, async setRemoteAccess(input) { calls.push(`remote:${input.scopes.deviceAccess}:${input.scopes.nodeRelay}`); } },
+  });
+  await lifecycle.setRemoteAccess({ deviceAccess: false, nodeRelay: false });
+  calls.length = 0;
+  const result = await lifecycle.setRemoteAccess({ deviceAccess: true, nodeRelay: true });
+  assert.equal(result.remoteResult, "confirmed");
+  assert.deepEqual(calls, ["ensure:true:true", "remote:true:true"]);
 });
 
 test("production Control Plane pins the cloud service origin while isolated builds require explicit trust", () => {

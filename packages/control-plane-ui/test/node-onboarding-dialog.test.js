@@ -70,9 +70,17 @@ test("node onboarding constrains the dialog and scrolls only its content", () =>
   assert.doesNotMatch(dialog, /font-size:\s*(?:[0-9]|1[01])px/);
 });
 
-test("unsupported account relay is capability-gated instead of reusing device relay", () => {
+test("the general node wizard leaves cloud relay to its standalone wizard", () => {
   const dialog = read("src/apps/control-plane/settings/NodeOnboardingDialog.vue");
-  assert.match(dialog, /accountUnavailable/);
-  assert.match(dialog, /aria-disabled="true"/);
-  assert.doesNotMatch(dialog, /official-relay|CloudRelayConnector/);
+  assert.doesNotMatch(dialog, /cloudRelaySelected|accountNodeItems|claimCloudAccountNode|createCloudNodeBindingToken/);
+  assert.doesNotMatch(dialog, /connectionPath === 'cloud'|open-cloud-settings/);
+});
+
+test("the first onboarding step redirects unsure users to the standalone cloud wizard", () => {
+  const dialog = read("src/apps/control-plane/settings/NodeOnboardingDialog.vue");
+  assert.match(dialog, /cloudNodeEnabled/);
+  assert.match(dialog, /settings\.nodeOnboarding\.network\.cloudOptionTitle/);
+  assert.match(dialog, /settings\.nodeOnboarding\.network\.cloudOptionDescription/);
+  assert.match(dialog, /settings\.nodeOnboarding\.network\.cloudOptionAction/);
+  assert.match(dialog, /emit\('open-cloud-node-wizard'\)/);
 });

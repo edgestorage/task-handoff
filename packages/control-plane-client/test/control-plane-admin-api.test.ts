@@ -14,6 +14,7 @@ function cloud(overrides: Record<string, unknown> = {}) {
     version: 1,
     serviceOrigin: "https://cloud.example.com",
     status: "active",
+    scopes: { deviceAccess: true, nodeRelay: false },
     remoteAccessEnabled: true,
     updatedAt: TS,
     identity: { controlPlaneId: "cp_1", algorithm: "Ed25519", publicKey: "key", fingerprint: "sha256:fp" },
@@ -97,6 +98,7 @@ test("control-plane admin cloud routes", async () => {
   const challenge = await api.createCloudChallenge();
   assert.equal(challenge.challengeCode, "code");
   await api.setCloudRemoteAccess(false);
+  assert.deepEqual((await api.setCloudScopes({ deviceAccess: false, nodeRelay: true })).scopes, { deviceAccess: true, nodeRelay: false });
   await api.disconnectCloud();
   assert.equal((await api.cloudAccount()).pendingRequest?.scope, "account:sign-in");
   assert.equal((await api.createCloudSignInRequest()).scope, "account:sign-in");
@@ -107,11 +109,64 @@ test("control-plane admin cloud routes", async () => {
     ["/api/cloud-connectivity", undefined],
     ["/api/cloud-connectivity/challenges", "POST"],
     ["/api/cloud-connectivity/remote-access", "POST"],
+    ["/api/cloud-connectivity/remote-access", "POST"],
     ["/api/cloud-connectivity/disconnect", "POST"],
     ["/api/cloud-account", undefined],
     ["/api/cloud-account/sign-in-requests", "POST"],
     ["/api/cloud-connectivity/binding-requests", "POST"],
     ["/api/cloud-account/sign-out", "POST"],
+  ]);
+});
+
+test("control-plane admin node relay account routes", async () => {
+  const node = {
+    nodeHandle: "nrh_node_alpha",
+    displayName: "Alpha box",
+    publicKeyFingerprint: "sha256:fp",
+    status: "active",
+    revision: 1,
+    createdAt: TS,
+    updatedAt: TS,
+  };
+  const relayState = {
+    channels: [{ nodeHandle: "nrh_node_alpha", nodeId: "node_nrh_node_alpha", allocationId: "alloc_a", connectedAt: TS, connected: true }],
+    claims: [],
+    errors: [],
+    onboarding: [{ nodeHandle: "nrh_node_alpha", tokenId: "nrb_1", at: TS }],
+  };
+  const { api, requests } = fixture((path, init) => {
+    if (path === "/api/cloud-connectivity/account-nodes") return { data: { signedIn: true, nodeRelay: { ...relayState, channels: [], onboarding: [] }, items: [node] } };
+    if (path.endsWith("/claim") && init?.method === "POST") return { data: { claimed: true, nodeHandle: "nrh_node_alpha", controlPlaneId: "cp_1", status: "active", revision: 1 } };
+    if (path.endsWith("/claim") && init?.method === "DELETE") return { data: { nodeHandle: "nrh_node_alpha", status: "revoked", revision: 2 } };
+    if (path === "/api/cloud-connectivity/node-binding-tokens") return { data: { tokenId: "nrb_1", expiresAt: TS, command: "sudo task-handoff-node-agent cloud-bind", installCommand: "curl -fsSL https://cp.example.com/install-node-agent.sh | sudo sh -s --" } };
+    if (path.endsWith("/node-binding-tokens/nrb_1")) return { data: { tokenId: "nrb_1", cancelled: true } };
+    if (path === "/api/nodes/nod_1/cloud-relay-binding") return { data: { bound: true, nodeHandle: "nrh_node_alpha", accountId: "account_a", tokenId: "nrb_2", expiresAt: TS } };
+    return { data: relayState };
+  });
+
+  const directory = await api.cloudAccountNodes();
+  assert.equal(directory.signedIn, true);
+  assert.equal(directory.items[0]?.displayName, "Alpha box");
+  assert.equal((await api.claimCloudAccountNode("nrh_node_alpha")).claimed, true);
+  assert.equal((await api.releaseCloudAccountNodeClaim("nrh_node_alpha")).status, "revoked");
+  const token = await api.createCloudNodeBindingToken({ displayName: "Alpha box" });
+  assert.equal(token.tokenId, "nrb_1");
+  assert.ok(token.installCommand.includes("/install-node-agent.sh"));
+  assert.equal((await api.cancelCloudNodeBindingToken("nrb_1")).cancelled, true);
+  const state = await api.cloudNodeRelayState();
+  assert.equal(state.channels[0]?.connected, true);
+  const bound = await api.bindCloudRelayNode("nod_1");
+  assert.equal(bound.bound, true);
+  assert.equal(bound.nodeHandle, "nrh_node_alpha");
+
+  assert.deepEqual(requests.map((entry) => [entry.path, entry.init?.method]), [
+    ["/api/cloud-connectivity/account-nodes", undefined],
+    ["/api/cloud-connectivity/account-nodes/nrh_node_alpha/claim", "POST"],
+    ["/api/cloud-connectivity/account-nodes/nrh_node_alpha/claim", "DELETE"],
+    ["/api/cloud-connectivity/node-binding-tokens", "POST"],
+    ["/api/cloud-connectivity/node-binding-tokens/nrb_1", "DELETE"],
+    ["/api/cloud-connectivity/node-relay", undefined],
+    ["/api/nodes/nod_1/cloud-relay-binding", "POST"],
   ]);
 });
 

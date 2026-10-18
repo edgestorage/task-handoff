@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DateTimeSchema, IdSchema, LocaleTextSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
+import { CloudRelayScopesSchema } from "./relay.ts";
 import { CONTROL_PLANE_BINDING_PROTOCOL_VERSION, OfficialAudience } from "./versions.ts";
 
 export const ControlPlaneIdentitySchema = z.strictObject({
@@ -38,6 +39,8 @@ export const ControlPlaneDirectoryEntrySchema = z.strictObject({
   publicKeyFingerprint: Sha256DigestSchema,
   bindingRevision: z.number().int().positive(),
   remoteAccess: z.enum(["enabled", "disabled", "revocation-pending"]),
+  // Independently upgraded Coordinators may omit scope state.
+  scopes: CloudRelayScopesSchema.optional(),
   leaseExpiresAt: DateTimeSchema.optional(),
   lastConnectedAt: DateTimeSchema.optional(),
   relayUsageBytes: z.number().int().nonnegative(),

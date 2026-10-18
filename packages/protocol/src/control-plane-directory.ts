@@ -217,7 +217,7 @@ export const ControlPlaneNodeDirectoryEntrySchema = z.object({
   name: z.string().trim().min(1).max(160),
   status: z.enum(["unknown", "online", "offline", "degraded"]),
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
-  connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy"]),
+  connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy", "cloud-relay"]),
   connectionPhase: ControlPlaneNodeConnectionPhaseSchema.optional(),
   lastSeenAt: TimestampSchema.optional(),
   observedAt: TimestampSchema,

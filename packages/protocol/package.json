@@ -30,6 +30,10 @@
       "types": "./src/control-plane-directory.ts",
       "default": "./src/control-plane-directory.ts"
     },
+    "./node-relay-channel": {
+      "types": "./src/node-relay-channel.ts",
+      "default": "./src/node-relay-channel.ts"
+    },
     "./config-sync": {
       "types": "./src/config-sync.ts",
       "default": "./src/config-sync.ts"

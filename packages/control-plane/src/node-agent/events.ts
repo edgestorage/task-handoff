@@ -77,6 +77,11 @@ function splitTerminalReplay(data: string, maxLength = 60_000) {
   return chunks;
 }
 
+function bufferedByteCount(value: unknown) {
+  const bytes = Number(value);
+  return Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0;
+}
+
 const MAX_EVENT_OUTPUT_BUFFERED_BYTES = 16 * 1024 * 1024;
 const AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES = 256 * 1024;
 const AI_SESSION_AUTHORITY_MAX_EVENT_BYTES = 4 * 1024 * 1024;
@@ -524,7 +529,7 @@ export class NodeAgentInstanceEventForwarder {
 
   private observeEventTransportCongestion(output: WebSocket, coalesced: boolean, payloadBytes = 0) {
     const observedAt = new Date().toISOString();
-    const bufferedBytes = Math.max(0, Math.floor(output.bufferedAmount));
+    const bufferedBytes = bufferedByteCount(output.bufferedAmount);
     const current = this.eventTransportCongestion;
     this.eventTransportCongestion = {
       congestedSince: current?.recoveredAt ? observedAt : current?.congestedSince || observedAt,
@@ -539,7 +544,7 @@ export class NodeAgentInstanceEventForwarder {
   private eventTransportIsCongested() {
     if ([...this.pendingAiSessionAuthorityByOutput.values()].some((pending) => pending.size > 0)) return true;
     return [...this.outputs].some((output) => output.readyState === WebSocket.OPEN
-      && output.bufferedAmount >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES);
+      && bufferedByteCount(output.bufferedAmount) >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES);
   }
 
   private refreshEventTransportRecovery() {
@@ -551,7 +556,7 @@ export class NodeAgentInstanceEventForwarder {
   eventTransportHealth() {
     this.refreshEventTransportRecovery();
     const activeOutputs = [...this.outputs].filter((output) => output.readyState === WebSocket.OPEN);
-    const bufferedBytes = activeOutputs.reduce((maximum, output) => Math.max(maximum, Math.max(0, Math.floor(output.bufferedAmount))), 0);
+    const bufferedBytes = activeOutputs.reduce((maximum, output) => Math.max(maximum, bufferedByteCount(output.bufferedAmount)), 0);
     const congested = this.eventTransportIsCongested();
     let incident = this.eventTransportCongestion;
     if (incident?.recoveredAt && Date.now() - Date.parse(incident.recoveredAt) > EVENT_TRANSPORT_RECOVERY_NOTICE_MS) {

@@ -14,6 +14,8 @@ import {
   NodeAgentInstanceProxyRawResponseSchema,
   NodeAgentInstanceLifecycleResultSchema,
   NodeAgentPairingInviteResponseSchema,
+  NodeAgentCloudRelayBindRequestSchema,
+  NodeAgentCloudRelayStatusSchema,
   NodeAgentControlPlaneConnectionCreateResultSchema,
   NodeAgentControlPlanePairingSchema,
   NodeAgentControlPlaneConnectionSchema,
@@ -192,16 +194,17 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  applyUpdate(node: Node, input: ApplyUpdateRequest) {
-    return this.client.requestSchema(node, "/updates/apply", UpdateJobSchema, {
+  async applyUpdate(node: Node, input: ApplyUpdateRequest) {
+    return this.projectNodeResource(node, await this.client.requestSchema(node, "/updates/apply", UpdateJobSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
   }
 
-  listUpdateJobs(node: Node) {
-    return this.client.requestSchema(node, "/updates/jobs", z.array(UpdateJobSchema));
+  async listUpdateJobs(node: Node) {
+    const jobs = await this.client.requestSchema(node, "/updates/jobs", z.array(UpdateJobSchema));
+    return jobs.map((job) => this.projectNodeResource(node, job));
   }
 
   getExternalListener(node: Node) {
@@ -296,6 +299,20 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
+  /**
+   * Guided account binding (path one): the Control Plane delivers a one-time
+   * binding token to a node it already manages, over the existing tunnel. The
+   * node redeems it cloud-side; this Control Plane stays a courier.
+   */
+  bindNodeCloudRelay(node: Node, input: unknown) {
+    const parsed = NodeAgentCloudRelayBindRequestSchema.parse(input);
+    return this.client.requestSchema(node, "/cloud-relay/bind", NodeAgentCloudRelayStatusSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+  }
+
   createControlPlaneConnection(node: Node, input: unknown) {
     return this.client.requestSchema(node, "/control-plane-connections", NodeAgentControlPlaneConnectionCreateResultSchema, {
       method: "POST",
@@ -344,24 +361,25 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.requestSchema(node, "/folders/places", z.array(NodeFolderPlaceSchema));
   }
 
-  listLocalFolders(node: Node, init: RequestInit = {}) {
-    return this.client.requestSchema(node, "/local-folders", z.array(NodeLocalFolderSchema), init);
+  async listLocalFolders(node: Node, init: RequestInit = {}) {
+    const folders = await this.client.requestSchema(node, "/local-folders", z.array(NodeLocalFolderSchema), init);
+    return folders.map((folder) => this.projectNodeResource(node, folder));
   }
 
-  createLocalFolder(node: Node, input: unknown) {
-    return this.client.requestSchema(node, "/local-folders", NodeLocalFolderSchema, {
+  async createLocalFolder(node: Node, input: unknown) {
+    return this.projectNodeResource(node, await this.client.requestSchema(node, "/local-folders", NodeLocalFolderSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
   }
 
-  updateLocalFolder(node: Node, folderId: string, input: unknown) {
-    return this.client.requestSchema(node, `/local-folders/${encodeURIComponent(folderId)}`, NodeLocalFolderSchema, {
+  async updateLocalFolder(node: Node, folderId: string, input: unknown) {
+    return this.projectNodeResource(node, await this.client.requestSchema(node, `/local-folders/${encodeURIComponent(folderId)}`, NodeLocalFolderSchema, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
   }
 
   async requireLocalFolder(node: Node, folderId: string) {
@@ -375,35 +393,36 @@ export class ControlPlaneNodeAgentGateway {
     return folder;
   }
 
-  listRuntimes(node: Node, init: RequestInit = {}) {
+  async listRuntimes(node: Node, init: RequestInit = {}) {
     // add-wsl-runtime D11: 未知 runtime 类型只被忽略，不能让旧端整表解析失败。
-    return this.client.requestSchema(node, "/runtimes", NodeRuntimeConsumerListSchema, init);
+    const runtimes = await this.client.requestSchema(node, "/runtimes", NodeRuntimeConsumerListSchema, init);
+    return runtimes.map((runtime) => this.projectNodeResource(node, runtime));
   }
 
   async createRuntime(node: Node, input: unknown) {
-    const result = await this.client.requestSchema(node, "/runtimes", NodeRuntimeSchema, {
+    const result = this.projectNodeResource(node, await this.client.requestSchema(node, "/runtimes", NodeRuntimeSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
     this.upsertRuntimeSnapshot(node, result);
     return result;
   }
 
   async updateRuntime(node: Node, runtimeId: string, input: unknown) {
     const route = `/runtimes/${encodeURIComponent(runtimeId)}`;
-    const result = await this.client.requestSchema(node, route, NodeRuntimeSchema, {
+    const result = this.projectNodeResource(node, await this.client.requestSchema(node, route, NodeRuntimeSchema, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
     this.upsertRuntimeSnapshot(node, result);
     return result;
   }
 
   async checkRuntime(node: Node, runtimeId: string) {
     const route = `/runtimes/${encodeURIComponent(runtimeId)}/check`;
-    const result = await this.client.requestSchema(node, route, NodeRuntimeSchema, { method: "POST" });
+    const result = this.projectNodeResource(node, await this.client.requestSchema(node, route, NodeRuntimeSchema, { method: "POST" }));
     this.upsertRuntimeSnapshot(node, result);
     return result;
   }
@@ -500,8 +519,9 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.upsertInstanceSnapshot(node, result.instance);
-    return result;
+    const instance = this.projectInstanceNodeId(node, result.instance);
+    this.upsertInstanceSnapshot(node, instance);
+    return { ...result, instance };
   }
 
   async syncInstanceModels(node: Node, instanceId: string) {
@@ -647,21 +667,21 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   async createInstance(node: Node, input: unknown) {
-    const instance = await this.client.requestSchema(node, "/instances", ControlledInstanceSchema, {
+    const instance = this.projectInstanceNodeId(node, await this.client.requestSchema(node, "/instances", ControlledInstanceSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
     this.upsertInstanceSnapshot(node, instance);
     return instance;
   }
 
   async updateInstance(node: Node, instanceId: string, input: unknown) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}`, ControlledInstanceSchema, {
+    const instance = this.projectInstanceNodeId(node, await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}`, ControlledInstanceSchema, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
     this.upsertInstanceSnapshot(node, instance);
     return instance;
   }
@@ -676,20 +696,21 @@ export class ControlPlaneNodeAgentGateway {
     return result;
   }
 
-  listEnvironmentTemplates(node: Node, init: RequestInit = {}) {
-    return this.client.requestSchema(node, "/environment-templates", z.array(EnvironmentTemplateSchema), init);
+  async listEnvironmentTemplates(node: Node, init: RequestInit = {}) {
+    const templates = await this.client.requestSchema(node, "/environment-templates", z.array(EnvironmentTemplateSchema), init);
+    return templates.map((template) => this.projectNodeResource(node, template));
   }
 
-  getEnvironmentTemplate(node: Node, templateId: string, init: RequestInit = {}) {
-    return this.client.requestSchema(node, `/environment-templates/${encodeURIComponent(templateId)}`, EnvironmentTemplateSchema, init);
+  async getEnvironmentTemplate(node: Node, templateId: string, init: RequestInit = {}) {
+    return this.projectNodeResource(node, await this.client.requestSchema(node, `/environment-templates/${encodeURIComponent(templateId)}`, EnvironmentTemplateSchema, init));
   }
 
-  createEnvironmentTemplate(node: Node, instanceId: string, input: unknown) {
-    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/environment-templates`, EnvironmentTemplateSchema, {
+  async createEnvironmentTemplate(node: Node, instanceId: string, input: unknown) {
+    return this.projectNodeResource(node, await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/environment-templates`, EnvironmentTemplateSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
-    });
+    }));
   }
 
   deleteEnvironmentTemplate(node: Node, templateId: string) {
@@ -705,30 +726,31 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.upsertInstanceSnapshot(node, result.instance);
-    return result;
+    const instance = this.projectInstanceNodeId(node, result.instance);
+    this.upsertInstanceSnapshot(node, instance);
+    return { ...result, instance };
   }
 
   async retryInstanceImageProvisioning(node: Node, instanceId: string) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/image-provisioning/retry`, ControlledInstanceSchema, {
+    const instance = this.projectInstanceNodeId(node, await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/image-provisioning/retry`, ControlledInstanceSchema, {
       method: "POST",
-    });
+    }));
     this.upsertInstanceSnapshot(node, instance);
     return instance;
   }
 
   async retryInstanceGitProvisioning(node: Node, instanceId: string) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/git-provisioning/retry`, ControlledInstanceSchema, {
+    const instance = this.projectInstanceNodeId(node, await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/git-provisioning/retry`, ControlledInstanceSchema, {
       method: "POST",
-    });
+    }));
     this.upsertInstanceSnapshot(node, instance);
     return instance;
   }
 
   async stopInstance(node: Node, instanceId: string) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/stop`, ControlledInstanceSchema, {
+    const instance = this.projectInstanceNodeId(node, await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/stop`, ControlledInstanceSchema, {
       method: "POST",
-    });
+    }));
     this.upsertInstanceSnapshot(node, instance);
     return instance;
   }
@@ -739,8 +761,9 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.upsertInstanceSnapshot(node, result.instance);
-    return result;
+    const instance = this.projectInstanceNodeId(node, result.instance);
+    this.upsertInstanceSnapshot(node, instance);
+    return { ...result, instance };
   }
 
   instanceResourceMetrics(node: Node, instanceId: string) {
@@ -1246,9 +1269,9 @@ export class ControlPlaneNodeAgentGateway {
           actualProtocolVersion: parsed.data.protocolVersion,
           errorCode: "PROTOCOL_VERSION_MISMATCH",
         }, "node instance protocol version mismatch");
-        return { instance: parsed.data };
+        return { instance: this.projectInstanceNodeId(node, parsed.data) };
       }
-      return { instance: parsed.data };
+      return { instance: this.projectInstanceNodeId(node, parsed.data) };
     }
     const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
     const instanceId = typeof record.id === "string" ? record.id : undefined;
@@ -1269,6 +1292,29 @@ export class ControlPlaneNodeAgentGateway {
         issues: parsed.error.issues,
       },
     };
+  }
+
+  private projectInstanceNodeId(node: Node, instance: ControlledInstance) {
+    if (node.connectionPath.kind !== "cloud-relay" || instance.nodeId === node.id) return instance;
+    // Instances are owned by the machine, but a cloud-relay node's local record
+    // is keyed by its account handle. Project that local record ID at the CP
+    // boundary so routing and ownership checks never fall back to another
+    // connection for the same machine.
+    return ControlledInstanceSchema.parse({
+      ...instance,
+      nodeId: node.id,
+      ...(instance.source.type === "local-folder" && instance.source.ownerNodeId && instance.source.ownerNodeId !== node.id
+        ? { source: { ...instance.source, ownerNodeId: node.id } }
+        : {}),
+      ...(instance.environmentTemplateOrigin && instance.environmentTemplateOrigin.nodeId !== node.id
+        ? { environmentTemplateOrigin: { ...instance.environmentTemplateOrigin, nodeId: node.id } }
+        : {}),
+    });
+  }
+
+  private projectNodeResource<T extends { nodeId: string }>(node: Node, resource: T): T {
+    if (node.connectionPath.kind !== "cloud-relay" || resource.nodeId === node.id) return resource;
+    return { ...resource, nodeId: node.id };
   }
 }
 

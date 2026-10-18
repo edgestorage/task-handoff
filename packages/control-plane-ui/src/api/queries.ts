@@ -230,6 +230,50 @@ export function updateCloudRemoteAccess(enabled: boolean) {
   return sharedControlPlaneClient.admin.setCloudRemoteAccess(enabled);
 }
 
+export function updateCloudScopes(scopes: { deviceAccess: boolean; nodeRelay: boolean }) {
+  return sharedControlPlaneClient.admin.setCloudScopes(scopes);
+}
+
+export function useCloudAccountNodesQuery(options: { enabled?: () => boolean; refetchIntervalMs?: () => number | false } = {}) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cloudAccountNodes,
+    queryFn: () => sharedControlPlaneClient.admin.cloudAccountNodes(),
+    retry: false,
+    ...(options.enabled ? { enabled: options.enabled } : {}),
+    ...(options.refetchIntervalMs ? { refetchInterval: options.refetchIntervalMs } : {}),
+  });
+}
+
+export function useCloudNodeRelayQuery(options: { enabled?: () => boolean; refetchIntervalMs?: () => number | false } = {}) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cloudNodeRelay,
+    queryFn: () => sharedControlPlaneClient.admin.cloudNodeRelayState(),
+    retry: false,
+    ...(options.enabled ? { enabled: options.enabled } : {}),
+    ...(options.refetchIntervalMs ? { refetchInterval: options.refetchIntervalMs } : {}),
+  });
+}
+
+export function claimCloudAccountNode(nodeHandle: string) {
+  return sharedControlPlaneClient.admin.claimCloudAccountNode(nodeHandle);
+}
+
+export function releaseCloudAccountNodeClaim(nodeHandle: string) {
+  return sharedControlPlaneClient.admin.releaseCloudAccountNodeClaim(nodeHandle);
+}
+
+export function createCloudNodeBindingToken(input: { displayName?: string } = {}) {
+  return sharedControlPlaneClient.admin.createCloudNodeBindingToken(input);
+}
+
+export function cancelCloudNodeBindingToken(tokenId: string) {
+  return sharedControlPlaneClient.admin.cancelCloudNodeBindingToken(tokenId);
+}
+
+export function bindCloudRelayNode(nodeId: string) {
+  return sharedControlPlaneClient.admin.bindCloudRelayNode(nodeId);
+}
+
 export function disconnectCloudAccount() {
   return sharedControlPlaneClient.admin.disconnectCloud();
 }

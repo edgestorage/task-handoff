@@ -9,6 +9,8 @@ set -eu
 MIN_NODE_VERSION="24.15.0"
 CONTROL_PLANE_URL=""
 JOIN_TOKEN=""
+CLOUD_RELAY_ORIGIN=""
+CLOUD_RELAY_BIND_TOKEN=""
 SERVICE_USER="root"
 DATA_DIR="/var/lib/task-handoff/node-agent"
 ENV_DIR="/etc/task-handoff"
@@ -34,6 +36,8 @@ Usage: install-node-agent.sh --control-plane <url> --join-token <token> [options
 Options:
   --control-plane <url>       Control-plane base URL, for example https://cp.example.com
   --join-token <token>        One-time node join token from the control plane
+  --cloud-relay-origin <url>  Cloud platform origin for account binding
+  --cloud-relay-bind-token <token>  One-time cloud binding token from the control plane
   --task-handoff-bin <path>   Existing node-agent or legacy task-handoff binary
   --package-url <url>         npm tarball containing task-handoff-node-agent
   --npm-package <name>        node-agent npm package to install globally
@@ -242,6 +246,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --control-plane) CONTROL_PLANE_URL="\${2:-}"; shift 2 ;;
     --join-token) JOIN_TOKEN="\${2:-}"; shift 2 ;;
+    --cloud-relay-origin) CLOUD_RELAY_ORIGIN="\${2:-}"; shift 2 ;;
+    --cloud-relay-bind-token) CLOUD_RELAY_BIND_TOKEN="\${2:-}"; shift 2 ;;
     --task-handoff-bin) TASK_HANDOFF_BIN="\${2:-}"; shift 2 ;;
     --package-url) PACKAGE_URL="\${2:-}"; shift 2 ;;
     --npm-package) NPM_PACKAGE="\${2:-}"; shift 2 ;;
@@ -267,8 +273,16 @@ NPM_REGISTRY_OVERRIDE="$NPM_REGISTRY"
 
 need_root
 
-if [ -z "$CONTROL_PLANE_URL" ]; then
-  echo "--control-plane is required." >&2
+if [ -z "$CONTROL_PLANE_URL" ] && [ -z "$CLOUD_RELAY_BIND_TOKEN" ]; then
+  echo "Either --control-plane or --cloud-relay-bind-token is required." >&2
+  exit 1
+fi
+if [ -n "$CLOUD_RELAY_BIND_TOKEN" ] && [ -z "$CLOUD_RELAY_ORIGIN" ]; then
+  echo "--cloud-relay-origin is required with --cloud-relay-bind-token." >&2
+  exit 1
+fi
+if [ -n "$CLOUD_RELAY_ORIGIN" ] && [ -z "$CLOUD_RELAY_BIND_TOKEN" ]; then
+  echo "--cloud-relay-bind-token is required with --cloud-relay-origin." >&2
   exit 1
 fi
 
@@ -432,6 +446,24 @@ if [ -n "$JOIN_TOKEN" ]; then
   rm -f "$payload"
 else
   echo "No --join-token provided; installed node-agent without remote pairing."
+fi
+
+if [ -n "$CLOUD_RELAY_BIND_TOKEN" ]; then
+  payload="$(mktemp)"
+  status="$(curl -sS -o "$payload" -w '%{http_code}' \
+    --unix-socket "$IPC_PATH" \
+    -H 'content-type: application/json' \
+    -d "{\"cloudOrigin\":\"$CLOUD_RELAY_ORIGIN\",\"bindingToken\":\"$CLOUD_RELAY_BIND_TOKEN\"}" \
+    "http://localhost/api/node-agent/cloud-relay/bind")"
+  if [ "$status" != "201" ]; then
+    cat "$payload" >&2 || true
+    rm -f "$payload"
+    echo "Cloud platform account binding failed with HTTP $status." >&2
+    echo "The node agent is installed and running; retry with: sudo task-handoff-node-agent cloud-bind --cloud-origin $CLOUD_RELAY_ORIGIN --binding-token <token>" >&2
+    exit 1
+  fi
+  rm -f "$payload"
+  echo "Node agent bound to the cloud platform account; waiting for the first claim."
 fi
 
 echo "TaskHandoff node-agent is installed and running."

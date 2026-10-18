@@ -392,6 +392,22 @@ ALTER TABLE na_runtimes_wsl RENAME TO na_runtimes;
 CREATE INDEX na_runtimes_node_type_idx ON na_runtimes(node_id, type);
 `;
 
+// add-cloud-platform-node-agent-relay：账号级节点绑定与 relay 通道的本地持久化。
+// 凭据、relay 私钥与云信任锚都只落在节点本地；云端只保存 hash 与公钥指纹。
+const cloudRelayBinding = `
+CREATE TABLE na_cloud_relay_bindings (
+  singleton_key INTEGER PRIMARY KEY NOT NULL DEFAULT 1 CHECK(singleton_key = 1),
+  status TEXT NOT NULL CHECK(status IN ('active','rebind-required')),
+  node_handle TEXT NOT NULL, account_id TEXT NOT NULL,
+  cloud_origin TEXT NOT NULL, service_origin TEXT NOT NULL,
+  credential TEXT NOT NULL, credential_expires_at TEXT NOT NULL,
+  signing_kid TEXT, signing_public_key TEXT,
+  relay_public_key TEXT NOT NULL, relay_private_key TEXT NOT NULL,
+  paired_control_planes_json TEXT NOT NULL DEFAULT '[]',
+  last_error_json TEXT, bound_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -411,4 +427,5 @@ export const nodeAgentMigrations = [
   migration("0014_story_decision_domain", storyDecisionDomain),
   migration("0015_agent_definition_model_identity", agentDefinitionModelIdentity),
   migration("0016_runtime_type_wsl", runtimeTypeWsl, { foreignKeysOff: true }),
+  migration("0017_cloud_relay_binding", cloudRelayBinding),
 ] as const;

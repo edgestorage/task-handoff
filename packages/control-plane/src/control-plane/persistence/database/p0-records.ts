@@ -18,12 +18,13 @@ const NodeConnectionPathRecordSchema = z.discriminatedUnion("kind", [
     proxyBindingId: IdSchema,
     targetNodeId: IdSchema,
   }).strict(),
+  z.object({ kind: z.literal("cloud-relay"), nodeHandle: z.string().trim().min(8).max(160).regex(/^[a-z][a-z0-9_-]*$/) }).strict(),
 ]);
 
 export const NodeConfigRecordSchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
-  connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy"]),
+  connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy", "cloud-relay"]),
   connectionPath: NodeConnectionPathRecordSchema,
   connectionEnabled: z.boolean(),
   authMode: z.enum(["local-static-key", "paired-hmac", "proxy-binding"]),

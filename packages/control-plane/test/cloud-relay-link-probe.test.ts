@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
 import { RelayLinkProbeLoop, relayEndpointProbeUrl, relayProbeUrl, type RelayLinkMeasurement } from "../src/control-plane/cloud-connectivity/relay-link-probe.ts";
+import { ed25519Identity, nodeRelayAllocationEvent, nodeRelayFingerprint } from "./support/cloud-relay-node-harness.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -140,7 +141,7 @@ test("the runtime reports its own Relay RTT hints over the control channel once 
   }
   const identity = fakeIdentity();
   const state = {
-    snapshot: () => ({ status: "active", remoteAccessEnabled: true, serviceOrigin: "https://cloud.thandoff.com", identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1 }),
+    snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.thandoff.com", identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1 }),
     backgroundCredential: () => "c".repeat(43), nextConnectionEpoch: () => 1,
   };
   const probed: string[] = [];
@@ -172,4 +173,82 @@ test("an unbound Control Plane never probes and never reports", async () => {
   await wait(40);
   void runtime.stop();
   assert.deepEqual(probed, []);
+});
+
+test("a pushed node allocation starts attaching through the event path", async () => {
+  const sockets: any[] = [];
+  class FakeSocket {
+    static OPEN = 1;
+    readyState = FakeSocket.OPEN;
+    listeners = new Map<string, ((...args: any[]) => void)[]>();
+    sent: any[] = [];
+    constructor() { sockets.push(this); queueMicrotask(() => this.emit("open")); }
+    on(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
+    send(data: string) {
+      const message = JSON.parse(data);
+      this.sent.push(message);
+      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test" }) }));
+    }
+    close() { this.readyState = 3; queueMicrotask(() => this.emit("close", 1000, "closed")); }
+    emit(event: string, ...args: any[]) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
+    receive(value: any) { this.emit("message", { toString: () => JSON.stringify(value) }); }
+  }
+
+  const identity = fakeIdentity();
+  const node = ed25519Identity();
+  const state = {
+    snapshot: () => ({ status: "active", scopes: { deviceAccess: false, nodeRelay: true }, identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, serviceOrigin: "https://cloud.example.com" }),
+    backgroundCredential: () => "c".repeat(43),
+    nextConnectionEpoch: () => 1,
+  };
+  let releaseAttach!: () => void;
+  const attachGate = new Promise<void>((resolve) => { releaseAttach = resolve; });
+  const connected: string[] = [];
+  const nodes = {
+    resolve: () => undefined,
+    ensure: () => ({ nodeId: "node_alpha" }),
+    savePairing: () => undefined,
+    connected: (nodeId: string) => connected.push(nodeId),
+    disconnected: () => undefined,
+  };
+  const transport = {
+    attachNode: (nodeId: string) => { connected.push(`transport:${nodeId}`); return true; },
+    detachNode: () => true,
+    connected: () => false,
+  };
+  const runtime = new CloudConnectivityBackgroundRuntime({
+    state, identity, webSocket: FakeSocket as any,
+    fetch: (async () => probeResponse("relay_a")) as unknown as typeof fetch,
+    relayLinkProbeIntervalMs: 60_000,
+    nodeRelay: {
+      connector: {
+        async connect(input: any) {
+          await attachGate;
+          const pairing = input.createPairing();
+          return { socket: {}, key: new Uint8Array(32), paired: false, issuedPairing: pairing, allocationId: input.allocation.allocationId, channelId: "channel_a" };
+        },
+      },
+      transport: () => transport,
+      nodes,
+    },
+  });
+  runtime.start();
+  for (let index = 0; index < 100 && !sockets.length; index += 1) await wait(5);
+  const event = nodeRelayAllocationEvent({
+    allocationId: "node_allocation_event",
+    nodeHandle: "nrh_node_alpha",
+    controlPlaneId: "control_plane_test",
+    accountId: "account_a",
+    bindingId: "binding_a",
+    nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey),
+    relayUrl: "wss://relay.cloud.example.com/connect",
+  });
+  sockets[0].receive({ type: "event", event });
+  await wait(10);
+  assert.deepEqual(connected, [], "the attach remains asynchronous while the handshake waits");
+  releaseAttach();
+  for (let index = 0; index < 100 && !connected.includes("transport:node_alpha"); index += 1) await wait(5);
+  assert.ok(connected.includes("node_alpha"));
+  assert.ok(connected.includes("transport:node_alpha"));
+  void runtime.stop();
 });
