@@ -669,6 +669,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     transport: () => cloudRelayNodeTransport,
     nodes: {
       resolve: (nodeHandle: string) => {
+        const linked = service.findNodeByCloudAccountHandle(nodeHandle);
+        if (linked) return { nodeId: linked.id, preserveLocalConnection: true };
         const node = service.findCloudRelayNode(nodeHandle);
         if (!node) return undefined;
         const pairing = node.auth.mode === "paired-hmac" && node.auth.keyId && node.auth.secret
@@ -1147,30 +1149,62 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // Guided binding (path one): a signed-in Control Plane hands one of its
   // already-managed nodes a one-time binding token over the existing tunnel.
   // The node redeems it directly with the cloud; this Control Plane only
-  // delivers the command, so it gains no privilege and no registry field.
+  // delivers the command, so it gains no privilege and no registry field. This
+  // path deliberately omits the onboarding hint: publishing an existing node
+  // must not auto-claim a relay channel back into this Control Plane.
   app.post("/api/nodes/:id/cloud-relay-binding", async (request) => {
     await requireCloudConnectivityAdmin(request);
     const nodeId = String((request.params as { id?: unknown }).id ?? "");
     const node = service.requireNode(nodeId);
-    const issued = await cloudConnectivityRuntime.issueNodeBindingToken({ displayName: node.name });
+    const cloudAccountId = cloudConnectivity.snapshot().accountId;
+    const finalize = async (status: { bound: boolean; nodeHandle?: string; accountId?: string }, token?: { tokenId: string; expiresAt: string }) => {
+      const nodeHandle = status.nodeHandle;
+      if (!status.bound || !nodeHandle) {
+        throw Object.assign(new Error("The node did not return its cloud account handle."), { statusCode: 502, code: "CLOUD_NODE_BINDING_HANDLE_UNAVAILABLE" });
+      }
+      if (status.accountId && cloudAccountId && status.accountId !== cloudAccountId) {
+        throw Object.assign(new Error("This node is already bound to a different cloud account."), { statusCode: 409, code: "CLOUD_NODE_BOUND_TO_ANOTHER_ACCOUNT" });
+      }
+      const linked = await service.linkNodeToCloudAccount(nodeId, nodeHandle);
+      // A node that already exists locally must keep its original connection.
+      // Drop any relay claim and duplicate record created by older releases.
+      await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle).catch((error) => {
+        request.log.warn({ nodeId, nodeHandle, code: (error as { code?: unknown })?.code }, "cloud node claim cleanup skipped");
+      });
+      for (const duplicateId of linked.duplicateNodeIds) {
+        await service.deleteNode(duplicateId).catch((error) => {
+          request.log.warn({ nodeId, duplicateId, nodeHandle, code: (error as { code?: unknown })?.code }, "duplicate cloud relay node cleanup skipped");
+        });
+      }
+      events.publish("node.cloud-relay.bound", { nodeId, ...(token ? { tokenId: token.tokenId } : {}) });
+      return { data: { ...status, nodeHandle, ...(token ? { tokenId: token.tokenId, expiresAt: token.expiresAt } : {}) } };
+    };
+
+    // Older UI builds may already have bound this node and left a cloud-relay
+    // duplicate behind. Treat the bind action as idempotent so one click can
+    // restore the original connection and converge the records.
+    const current = await service.getNodeCloudRelayStatus(nodeId).catch(() => undefined);
+    if (current?.bound && current.nodeHandle) return await finalize(current);
+
+    const issued = await cloudConnectivityRuntime.issueNodeBindingToken({ displayName: node.name, onboarding: false });
     const bindingToken = typeof issued.bindingToken === "string" ? issued.bindingToken : "";
     if (!bindingToken) {
       throw Object.assign(new Error("The cloud did not return a binding token."), { statusCode: 502, code: "CLOUD_NODE_BINDING_TOKEN_UNAVAILABLE" });
     }
+    let result;
     try {
-      const result = await service.bindNodeCloudRelay(nodeId, {
+      result = await service.bindNodeCloudRelay(nodeId, {
         cloudOrigin: cloudConnectivity.snapshot().serviceOrigin,
         bindingToken,
         ...(node.name ? { displayName: node.name } : {}),
       });
-      events.publish("node.cloud-relay.bound", { nodeId, tokenId: issued.tokenId });
-      return { data: { ...result, tokenId: issued.tokenId, expiresAt: issued.expiresAt } };
     } catch (error) {
       // Delivery failed (node offline, older node agent, ...): cancel the
       // one-time token so it cannot linger, and leave every local record as is.
       await cloudConnectivityRuntime.cancelNodeBindingToken(issued.tokenId).catch(() => undefined);
       throw error;
     }
+    return await finalize(result, issued);
   });
 
   app.get("/api/cloud-connectivity/node-relay", async (request) => {
@@ -1602,6 +1636,23 @@ export async function runControlPlaneServer(options: RunControlPlaneServerOption
     });
     await app.listen({ host: options.host, port: options.port });
     startup("http listener ready", { host: options.host, port: options.port });
+    // systemd stops the service with SIGTERM. Close through Fastify so onClose
+    // hooks run, including the cloud control socket. Exiting without this makes
+    // a rapid restart look like a second live identity to the Coordinator and
+    // can quarantine the Control Plane as a clone conflict.
+    let stopping = false;
+    const shutdown = async (signal: string) => {
+      if (stopping) return;
+      stopping = true;
+      startup("stopping", { signal });
+      const forceExit = setTimeout(() => process.exit(0), 5_000);
+      forceExit.unref();
+      try { await app.close(); } catch { /* the process is exiting regardless */ }
+      clearTimeout(forceExit);
+      process.exit(0);
+    };
+    process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+    process.once("SIGINT", () => { void shutdown("SIGINT"); });
   } catch (error) {
     lock.release();
     startup("startup failed", { error: error instanceof Error ? error.message : String(error) });

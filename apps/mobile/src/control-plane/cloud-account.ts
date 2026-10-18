@@ -2,6 +2,8 @@ import { OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTok
 import * as Crypto from 'expo-crypto';
 import type { SecureValueStore } from '../platform/secure-storage';
 import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, MOBILE_PRODUCTION_CLOUD_ORIGIN } from '../platform/build-variant';
+import { markCloudAccountReauthenticationRequired } from './account-reauthentication';
+import type { CloudEndpointResolver } from '../cloud-discovery/resolver';
 
 export const CLOUD_PRODUCTION_ORIGIN = MOBILE_PRODUCTION_CLOUD_ORIGIN;
 type TokenSet = Omit<MobileTokenResponse, 'tokenType'>;
@@ -19,17 +21,28 @@ export class MobileCloudAccountSession {
   private refreshing?: Promise<string>;
   private readonly pending = new Map<string, { verifier: string; createdAt: number }>();
   private pendingEmailSecondFactor?: PendingEmailSecondFactor;
-  readonly origin: string;
+  private readonly baseOrigin: string;
+  private readonly endpointResolver?: CloudEndpointResolver;
   readonly client: CloudMobileAccountClient;
   private restoration?: Promise<unknown>;
 
-  constructor(private readonly secureStore: SecureValueStore, options: { origin?: string; request?: typeof fetch; allowNonProductionOrigin?: boolean; reference?: { id: string; secureCredentialKey: string } } = {}) {
-    this.origin = new URL(options.origin ?? CLOUD_PRODUCTION_ORIGIN).origin;
+  constructor(private readonly secureStore: SecureValueStore, options: { origin?: string; request?: typeof fetch; allowNonProductionOrigin?: boolean; endpointResolver?: CloudEndpointResolver; reference?: { id: string; secureCredentialKey: string } } = {}) {
+    this.baseOrigin = new URL(options.origin ?? CLOUD_PRODUCTION_ORIGIN).origin;
+    this.endpointResolver = options.endpointResolver;
     const trustedDevelopment = isMobileTestMode && options.allowNonProductionOrigin === true;
-    const trustedEnvironment = isTrustedMobileCloudServiceOrigin(this.origin);
-    if (this.origin !== CLOUD_PRODUCTION_ORIGIN && !trustedDevelopment && !trustedEnvironment) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
-    this.client = new CloudMobileAccountClient({ origin: this.origin, request: options.request, accessToken: () => this.accessToken() });
+    const trustedEnvironment = isTrustedMobileCloudServiceOrigin(this.baseOrigin);
+    const trustedDiscovery = options.endpointResolver?.isTrustedOrigin(this.baseOrigin) ?? false;
+    if (this.baseOrigin !== CLOUD_PRODUCTION_ORIGIN && !trustedDevelopment && !trustedEnvironment && !trustedDiscovery) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
+    this.client = new CloudMobileAccountClient({
+      origin: this.baseOrigin,
+      request: options.request ?? (options.endpointResolver?.enabled ? options.endpointResolver.request : undefined),
+      accessToken: () => this.accessToken(),
+    });
     if (options.reference) this.restoration = this.restore(options.reference);
+  }
+
+  get origin() {
+    return this.endpointResolver?.enabled ? this.endpointResolver.activeOrigin : this.baseOrigin;
   }
 
   register(input: { email: string; password: string; termsVersion: string; acceptTerms: true }) { return this.client.register(input); }
@@ -143,9 +156,12 @@ export class MobileCloudAccountSession {
       await flight;
       return this.tokenSet!.accessToken;
     } catch (error) {
-      if ((error as any)?.status === 401 || String((error as any)?.code ?? '').includes('REPLAY')) {
+      const status = Number((error as any)?.status);
+      const code = String((error as any)?.code ?? '');
+      if (status === 401 || status === 403 || /REPLAY|REFRESH_INVALID|DEVICE_SESSION_REVOKED|SESSION_REVOKED/.test(code)) {
         await this.secureStore.remove(credentialKey(current.deviceSessionId));
         this.tokenSet = undefined;
+        markCloudAccountReauthenticationRequired();
         throw cloudError('CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED');
       }
       throw error;

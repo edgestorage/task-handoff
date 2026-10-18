@@ -48,3 +48,32 @@ test("node detail tabs reuse the shared settings directory list pattern", () => 
   // Non-list section content keeps a single padded body wrapper.
   assert.match(panel, /\.node-detail-section-body\s*\{[^}]*display:\s*grid;[^}]*gap:\s*10px;[^}]*padding:\s*12px;/s);
 });
+
+test("cloud relay panels own their card layout instead of relying on parent scoped styles", () => {
+  const bind = read("src/apps/control-plane/settings/CloudRelayBindPanel.vue");
+  const node = read("src/apps/control-plane/settings/CloudRelayNodePanel.vue");
+
+  for (const component of [bind, node]) {
+    assert.match(component, /class="cloud-relay-panel"/);
+    assert.match(component, /\.cloud-relay-panel\s*\{[^}]*border: 1px solid var\(--line\);[^}]*border-radius: 8px;[^}]*background: var\(--surface-raised\);/s);
+    assert.match(component, /\.cloud-relay-panel-head\s*\{[^}]*border-bottom: 1px solid var\(--line\);[^}]*padding: 8px 12px;/s);
+    assert.doesNotMatch(component, /node-remote-panel|class="section-head/);
+  }
+
+  assert.match(bind, /cloudRelayBindRequiresScope/);
+  assert.match(node, /\.cloud-relay-panel-row\s*\{[^}]*padding: 10px 12px;/s);
+});
+
+test("cloud permission copy exposes an inline node picker", () => {
+  const chinese = read("src/i18n/locales/zh-CN/settings.ts");
+  const english = read("src/i18n/locales/en-US/settings.ts");
+
+  assert.match(chinese, /scopesTitle: "云平台权限"/);
+  assert.match(chinese, /nodeListTitle: "当前控制面节点"/);
+  assert.match(chinese, /nodeAddAndEnable: "开启权限并添加"/);
+  assert.match(chinese, /cloudRelayBindAction: "添加到云平台"/);
+  assert.match(english, /scopesTitle: "Cloud permissions"/);
+  assert.match(english, /nodeListTitle: "Nodes in this Control Plane"/);
+  assert.match(english, /nodeAddAndEnable: "Enable access and add"/);
+  assert.match(english, /cloudRelayBindAction: "Add to cloud"/);
+});

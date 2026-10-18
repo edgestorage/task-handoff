@@ -497,7 +497,7 @@
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
               </p>
             </div>
-            <CloudRelayBindPanel :selected-node="selectedNode" />
+            <CloudRelayBindPanel :selected-node="selectedNode" @open-cloud-settings="emit('open-cloud-settings')" />
             <div class="node-remote-panel">
               <div class="node-detail-section-body">
               <ControlPlaneProxyManagementPanel :node-id="selectedNode.id" :node-name="selectedNode.name" />
@@ -725,6 +725,7 @@ const props = defineProps<{
   selectedNode?: Node;
   status: NodeDetailStatus;
 }>();
+const emit = defineEmits<{ "open-cloud-settings": [] }>();
 
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);

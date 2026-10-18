@@ -2,6 +2,7 @@ import TaskHandoffBrowserModule from './TaskHandoffBrowserModule';
 
 export { default as TaskHandoffBrowserView } from './TaskHandoffBrowserView';
 export * from './TaskHandoffBrowser.types';
+export { createNativeRelaySocket, isNativeRelaySocketAvailable } from './native-relay-socket';
 
 export const browserCapabilities = () => TaskHandoffBrowserModule.browserCapabilities();
 export const browserDiagnostics = () => TaskHandoffBrowserModule.browserDiagnostics();

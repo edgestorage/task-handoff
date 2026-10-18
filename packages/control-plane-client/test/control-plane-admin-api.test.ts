@@ -75,7 +75,7 @@ test("control-plane admin cloud routes", async () => {
         data: {
           challengeCode: "code",
           authorizationUrl: "https://cloud.example.com/authorize",
-          payload: { controlPlaneId: "cp_1", publicKeyFingerprint: "sha256:fp", expiresAt: TS },
+          payload: { controlPlaneId: "cp_1", publicKeyFingerprint: "sha256:fp", expiresAt: TS, hostname: "studio-box" },
           signature: "sig",
         },
       };
@@ -97,6 +97,7 @@ test("control-plane admin cloud routes", async () => {
   await api.cloudConnectivity();
   const challenge = await api.createCloudChallenge();
   assert.equal(challenge.challengeCode, "code");
+  assert.equal(challenge.payload.hostname, "studio-box");
   await api.setCloudRemoteAccess(false);
   assert.deepEqual((await api.setCloudScopes({ deviceAccess: false, nodeRelay: true })).scopes, { deviceAccess: true, nodeRelay: false });
   await api.disconnectCloud();

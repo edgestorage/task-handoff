@@ -8,6 +8,7 @@ import { MobileCloudAccountSession, CLOUD_PRODUCTION_ORIGIN } from './cloud-acco
 import { allowCloudRelayUrlForService, createMobileRelayChannelFactory } from './relay-channel';
 import { RelayControlPlaneTransport, type RelayChannelFactory } from './relay-transport';
 import { RelayWinnerCache } from './relay-winner-cache';
+import { mobileCloudDiscovery } from '../cloud-discovery';
 
 type MobileClientOptions = { relayChannelFactory?: RelayChannelFactory; cloudRequest?: typeof fetch; allowNonProductionOrigin?: boolean; relayWinnerCache?: RelayWinnerCache };
 
@@ -48,12 +49,18 @@ function clientCacheKey(profile: MobileControlPlaneProfile) {
 }
 
 function cloudClient(profile: MobileCloudRelayControlPlaneProfile, secureStore: SecureValueStore, options: MobileClientOptions) {
-  const account = new MobileCloudAccountSession(secureStore, { origin: profile.access.serviceOrigin, request: options.cloudRequest, allowNonProductionOrigin: options.allowNonProductionOrigin ?? isMobileTestMode, reference: profile.access.accountSession });
-  const allowIsolatedEnvironment = account.origin !== CLOUD_PRODUCTION_ORIGIN;
+  const account = new MobileCloudAccountSession(secureStore, {
+    origin: profile.access.serviceOrigin,
+    request: options.cloudRequest,
+    allowNonProductionOrigin: options.allowNonProductionOrigin ?? isMobileTestMode,
+    endpointResolver: mobileCloudDiscovery,
+    reference: profile.access.accountSession,
+  });
+  const allowIsolatedEnvironment = () => account.origin !== CLOUD_PRODUCTION_ORIGIN;
   // The remembered winner is what turns the second connection into a single
   // validation sample, so the cache lives with the client and shares its store.
   const winnerCache = options.relayWinnerCache ?? new RelayWinnerCache({ store: secureStore });
-  const allowRelayUrl = (url: URL) => allowCloudRelayUrlForService(url, profile.access.serviceOrigin, allowIsolatedEnvironment);
+  const allowRelayUrl = (url: URL) => allowCloudRelayUrlForService(url, account.origin, allowIsolatedEnvironment());
   const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl }), { winnerCache, allowRelayUrl });
   return { transport, api: createControlPlaneClient(transport), account };
 }

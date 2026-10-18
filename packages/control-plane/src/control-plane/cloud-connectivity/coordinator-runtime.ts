@@ -19,10 +19,9 @@ type CloudAccountScope = "account:sign-in" | "control-plane:bind";
 type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
 const ACCOUNT_REQUEST_POLL_MS = 3_000;
 const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
-// Renewing inside the sliding window keeps the account session alive without user action, and
-// surfaces a remote revocation without waiting for the next reconnect. A lapse (the Control Plane
-// was offline longer than the window) still requires a fresh sign-in.
-const ACCOUNT_RENEWAL_INTERVAL_MS = 12 * 60 * 60_000;
+// Check often, but refresh only after the cached access token enters its expiry window. A remote
+// revocation therefore surfaces within one access-token lifetime instead of waiting half a day.
+const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
@@ -84,6 +83,7 @@ export class CloudConnectivityBackgroundRuntime {
   private running = false;
   private connecting?: Promise<unknown>;
   private reconciling?: Promise<void>;
+  private revoking?: Promise<void>;
   private rotatingCredentials?: Promise<void>;
   private accessToken?: { value: string; expiresAt: number };
   private readonly nodeRelayChannels?: CloudNodeRelayChannels;
@@ -149,6 +149,7 @@ export class CloudConnectivityBackgroundRuntime {
         transport: () => options.nodeRelay?.transport?.(),
         nodes: options.nodeRelay.nodes,
         audit: options.nodeRelay.audit,
+        onPreserveLocalConnection: async (nodeHandle) => { await this.revokeAccountNodeClaim(nodeHandle); },
       });
     }
   }
@@ -163,7 +164,9 @@ export class CloudConnectivityBackgroundRuntime {
     // The stored access token is normally stale after a restart, so rotating once at boot keeps
     // the sliding expiry fresh and surfaces a remote revocation without waiting for the interval.
     void this.renewAccountCredential().catch(() => undefined);
-    if (this.options.state.snapshot().status === "active") this.schedule(0);
+    // A pending revocation also needs a connection: it is how the runtime
+    // finishes the remote revoke after a restart or a previous network error.
+    this.schedule(0);
   }
   async stop() {
     this.running = false;
@@ -213,18 +216,27 @@ export class CloudConnectivityBackgroundRuntime {
 
   /** Removes this Control Plane's claim; other Control Planes keep their channels. */
   async revokeAccountNodeClaim(nodeHandle: string) {
-    const result = await this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle }));
-    this.nodeRelayChannels?.forgetNode(nodeHandle);
-    return result;
+    try {
+      return await this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle }));
+    } finally {
+      // Even if the remote revoke cannot be delivered now, stop using the
+      // local relay channel. A later stale allocation is then ignored because
+      // the node stays linked through its original local connection.
+      this.nodeRelayChannels?.forgetNode(nodeHandle);
+    }
   }
 
-  /** One-time node binding token plus the cloud-rendered CLI command. */
-  async issueNodeBindingToken(input: { displayName?: string } = {}) {
+  /**
+   * One-time node binding token plus the cloud-rendered CLI command. The
+   * onboarding hint is only for a node this Control Plane is introducing to
+   * the account for the first time. Publishing an already-managed node must
+   * leave that node on its existing local connection instead of claiming it
+   * back through the cloud relay.
+   */
+  async issueNodeBindingToken(input: { displayName?: string; onboarding?: boolean } = {}) {
     return await this.request("issue-node-relay-binding-token", this.nodeRelayBindingPayload({
       ...(input.displayName ? { displayName: input.displayName } : {}),
-      // The Control Plane always wants the onboarding hint: it is how the
-      // generated command's Control Plane learns the node actually bound.
-      onboarding: true,
+      onboarding: input.onboarding !== false,
     })) as { tokenId: string; expiresAt: string; command: string; bindingToken?: string };
   }
 
@@ -290,7 +302,7 @@ export class CloudConnectivityBackgroundRuntime {
     });
     const body = await response.json().catch(() => undefined) as any;
     if (response.status === 401 || response.status === 403) {
-      session.signOut();
+      session.signOut("credential-rejected");
       throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
     }
     if (!response.ok) throw Object.assign(new Error(body?.error?.message || `Cloud account request failed with HTTP ${response.status}`), {
@@ -330,7 +342,7 @@ export class CloudConnectivityBackgroundRuntime {
     if (operation === "deliver-account-credential") return this.acceptAccountCredential(payload);
     if (operation === "control-plane-request-resolved") {
       const requestId = String(payload?.requestId ?? "");
-      if (requestId && payload?.status === "denied") this.options.accountSession.resolveRequest({ requestId, status: "denied" });
+      if (requestId) this.applyAccountRequestResolution(requestId, payload);
       return { accepted: true };
     }
     if (operation === "relay-allocation") {
@@ -349,9 +361,37 @@ export class CloudConnectivityBackgroundRuntime {
 
   private async ensureConnected() {
     if (!this.connecting) this.connecting = this.control.connectOnce().finally(() => { this.connecting = undefined; });
-    const result = await this.connecting as { status: string; reused?: boolean };
+    const result = await this.connecting as { status: string; reused?: boolean; revocationFallback?: boolean };
     if (result.status !== "connected") throw runtimeError("CLOUD_CONTROL_CONNECTION_DISABLED");
+    // The Coordinator only accepts an unbound registration when this identity
+    // has no live binding. That means the revoked credential is stale and the
+    // local pending revocation can be confirmed without another remote call.
+    if (result.revocationFallback) this.options.state.confirmRevocation();
+    else if (this.options.state.snapshot().status === "pending-revocation") await this.completePendingRevocation();
     if (!result.reused && !this.reconciling) this.reconciling = this.reconcileAccount().catch(() => undefined).finally(() => { this.reconciling = undefined; });
+  }
+
+  /**
+   * A revocation that could not reach the cloud stays pending locally. Retry it
+   * on every connection (including the one opened at process start) so the
+   * state eventually becomes unbound and the account can sign in / re-bind.
+   */
+  private async completePendingRevocation() {
+    if (!this.revoking) this.revoking = (async () => {
+      const snapshot = this.options.state.snapshot();
+      if (snapshot.status !== "pending-revocation" || !snapshot.bindingId) return;
+      try {
+        const result = await this.connector.request("revoke-binding", { bindingId: snapshot.bindingId }) as { status?: string } | undefined;
+        if (result?.status === "revoked") this.options.state.confirmRevocation();
+      } catch (error) {
+        // The binding may already be gone (for example revoked from the
+        // account page). In that case local confirmation is safe and unblocks
+        // a fresh sign-in/bind. Other failures stay pending for another retry.
+        if ((error as { code?: string } | undefined)?.code === "BINDING_NOT_FOUND") this.options.state.confirmRevocation();
+        else this.schedule(15_000);
+      }
+    })().finally(() => { this.revoking = undefined; });
+    await this.revoking;
   }
 
   /**
@@ -363,14 +403,22 @@ export class CloudConnectivityBackgroundRuntime {
     const pending = this.options.accountSession.pendingRequest();
     if (pending) {
       try {
-        const result = await this.request("poll-control-plane-request", { requestId: pending.requestId }) as { status?: string } | undefined;
-        if (result?.status === "denied") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "denied" });
-        else if (result?.status === "expired") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "expired" });
-        else if (result?.status === "delivered") this.options.accountSession.resolveRequest({ requestId: pending.requestId, status: "delivered" });
+        const result = await this.request("poll-control-plane-request", { requestId: pending.requestId }) as { status?: string; errorCode?: string } | undefined;
+        this.applyAccountRequestResolution(pending.requestId, result);
       } catch { /* the request keeps its own TTL and the UI can retry */ }
     }
     if (this.options.accountSession.refreshCredential() && !this.hasFreshAccessToken()) await this.refreshAccountCredential();
     this.scheduleAccountPoll();
+  }
+
+  private applyAccountRequestResolution(requestId: string, result: { status?: unknown; errorCode?: unknown } | undefined) {
+    const status = result?.status;
+    if (status !== "denied" && status !== "expired" && status !== "delivered" && status !== "delivery-failed") return;
+    this.options.accountSession.resolveRequest({
+      requestId,
+      status,
+      ...(typeof result?.errorCode === "string" ? { errorCode: result.errorCode } : {}),
+    });
   }
 
   private acceptAccountCredential(payload: any) {
@@ -407,7 +455,7 @@ export class CloudConnectivityBackgroundRuntime {
     const tokens = body?.data ?? body;
     if (!response.ok) {
       // Rotation is the only authoritative "your session is gone" signal we can get here.
-      if (response.status === 401 || response.status === 403 || response.status === 400) session.signOut();
+      if (response.status === 401 || response.status === 403 || response.status === 400) session.signOut("credential-rejected");
       return;
     }
     if (!tokens?.refreshCredential || !tokens?.accountId || !tokens?.deviceSessionId) return;
@@ -420,7 +468,7 @@ export class CloudConnectivityBackgroundRuntime {
     await this.refreshAccountCredential();
   }
 
-  private scheduleAccountPoll(delay = ACCOUNT_REQUEST_POLL_MS) {
+  private scheduleAccountPoll(delay = this.options.accountRequestPollMs ?? ACCOUNT_REQUEST_POLL_MS) {
     if (!this.running || this.accountTimer) return;
     if (!this.options.accountSession.hasPendingRequest()) return;
     this.accountTimer = setTimeout(() => { this.accountTimer = undefined; void this.reconcileAccount().catch(() => undefined).finally(() => this.scheduleAccountPoll()); }, delay);
@@ -430,7 +478,9 @@ export class CloudConnectivityBackgroundRuntime {
   private schedule(delay = this.control.reconnectDelay()) {
     if (!this.running || this.timer) return;
     const state = this.options.state.snapshot();
-    if (state.status !== "active" || (!state.scopes.deviceAccess && !state.scopes.nodeRelay)) return;
+    const active = state.status === "active" && (state.scopes.deviceAccess || state.scopes.nodeRelay);
+    const revoking = state.status === "pending-revocation" && Boolean(state.bindingId) && Boolean(this.options.state.revocationCredential());
+    if (!active && !revoking) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.ensureConnected().catch(() => this.schedule()); }, delay);
     this.timer.unref();
   }
@@ -478,6 +528,7 @@ type CloudRuntimeOptions = {
   relayLinks?: RelayLinkProbeLoop;
   relayLinkProbeIntervalMs?: number;
   accountRenewalIntervalMs?: number;
+  accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
   nodeRelay?: {
     connector?: CloudNodeRelayChannelConnector;

@@ -61,7 +61,23 @@ test("a binding request while signed in keeps the session and resolves back to s
   assert.equal(resolved.pendingRequest, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId } = {}) {
+test("a delivery-failed request clears pending and exposes a retryable failure", () => {
+  const dir = tempDir();
+  const now = Date.parse("2026-08-10T00:00:00Z");
+  const service = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test", clock: () => now });
+  service.init();
+  service.beginRequest({ requestId: "request_a", authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_a", scope: "account:sign-in", expiresAt: ISO(now + 60_000) });
+
+  const failed = service.resolveRequest({ requestId: "request_a", status: "delivery-failed", errorCode: "CONTROL_PLANE_DELIVERY_FAILED" });
+  assert.equal(failed.pendingRequest, undefined);
+  assert.deepEqual(failed.requestFailure, { requestId: "request_a", scope: "account:sign-in", code: "CONTROL_PLANE_DELIVERY_FAILED" });
+  assert.equal(service.hasPendingRequest(), false);
+
+  service.beginRequest({ requestId: "request_b", authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_b", scope: "account:sign-in", expiresAt: ISO(now + 60_000) });
+  assert.equal(service.snapshot().requestFailure, undefined);
+});
+
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -76,7 +92,8 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId } = {})
     send(data) {
       const message = JSON.parse(data);
       this.sent = [...(this.sent ?? []), message];
-      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test" }) }));
+      if (message.type === "register" && rejectCredentialRegistration && message.backgroundCredential) queueMicrotask(() => this.close(1008, "BACKGROUND_CREDENTIAL_INVALID"));
+      else if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test", reportedControlPlaneId: "control_plane_test", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }) }));
     }
     close(code, reason) { this.readyState = 3; queueMicrotask(() => this.emit("close", code, reason)); }
     emit(event, ...args) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
@@ -84,25 +101,74 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId } = {})
     respond(requestId, data) { this.receive({ type: "response", requestId, data }); }
   }
   const identity = { publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "key", fingerprint: "sha256:fingerprint" }), signCloudOutboundRegistration: () => "signature" };
+  let status = pendingRevocation ? "pending-revocation" : bindingId ? "active" : "unbound";
+  let currentBindingId = bindingId;
   const state = {
     snapshot: () => ({
-      status: bindingId ? "active" : "unbound",
-      scopes: { deviceAccess: true, nodeRelay: Boolean(bindingId) },
-      remoteAccessEnabled: true,
+      status,
+      scopes: status === "pending-revocation" ? { deviceAccess: false, nodeRelay: false } : { deviceAccess: true, nodeRelay: Boolean(currentBindingId) },
+      remoteAccessEnabled: status !== "pending-revocation",
       serviceOrigin: "https://cloud.example.test",
       identity: identity.publicIdentity(),
-      ...(bindingId ? { accountId: "account_a", bindingId, bindingRevision: 1 } : {}),
+      ...(currentBindingId ? { accountId: "account_a", bindingId: currentBindingId, bindingRevision: 1 } : {}),
     }),
-    backgroundCredential: () => bindingId ? "c".repeat(43) : undefined, nextConnectionEpoch: () => 1,
+    backgroundCredential: () => status === "active" && currentBindingId ? "c".repeat(43) : undefined,
+    revocationCredential: () => status === "pending-revocation" && currentBindingId ? "c".repeat(43) : undefined,
+    confirmRevocation: () => { status = "unbound"; currentBindingId = undefined; return state.snapshot(); },
+    nextConnectionEpoch: () => 1,
     activate: () => ({ status: "active" }), consumeChallenge: () => ({ challengeId: "challenge_a" }),
+    setCloudControlPlaneId: () => undefined,
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
-    state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs,
+    state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs, accountRequestPollMs,
     fetch: async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return fetchImpl ? fetchImpl(url, init) : { ok: false, status: 500 }; },
   });
   runtime.start();
-  return { runtime, accountSession, sockets, fetchCalls };
+  return { runtime, accountSession, sockets, fetchCalls, state };
 }
+
+test("a pending revocation reconnects, revokes remotely and re-registers unbound for sign-in", async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const { runtime, sockets, state } = runtimeHarness({ bindingId: "binding_a", pendingRevocation: true });
+
+  for (let attempt = 0; attempt < 100 && !sockets[0]?.sent?.some((message) => message.operation === "revoke-binding"); attempt += 1) await wait(5);
+  const firstRegister = sockets[0].sent.find((message) => message.type === "register");
+  assert.equal(firstRegister.registration.bindingId, "binding_a");
+  assert.equal(firstRegister.backgroundCredential, "c".repeat(43));
+
+  const revoke = sockets[0].sent.find((message) => message.operation === "revoke-binding");
+  assert.ok(revoke, "pending revocation must use the retained credential to reconnect");
+  sockets[0].respond(revoke.requestId, { status: "revoked" });
+  for (let attempt = 0; attempt < 100 && state.snapshot().status !== "unbound"; attempt += 1) await wait(5);
+  assert.equal(state.snapshot().status, "unbound");
+
+  const created = runtime.beginAccountRequest({ scope: "account:sign-in" });
+  for (let attempt = 0; attempt < 100 && sockets.length < 2; attempt += 1) await wait(5);
+  assert.equal(sockets.length, 2, "the bound socket must be replaced by an unbound one");
+  const secondRegister = sockets[1].sent.find((message) => message.type === "register");
+  assert.equal(secondRegister.registration.bindingId, undefined);
+  assert.equal(secondRegister.backgroundCredential, undefined);
+  const create = sockets[1].sent.find((message) => message.operation === "create-control-plane-request");
+  assert.ok(create, "sign-in must be possible after the pending revocation is completed");
+  sockets[1].respond(create.requestId, { requestId: "request_a", scope: "account:sign-in", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_a" });
+  assert.equal((await created).requestId, "request_a");
+  await runtime.stop();
+});
+
+test("a pending revocation confirms locally when the revoked credential is rejected", async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const { runtime, sockets, state } = runtimeHarness({ bindingId: "binding_a", pendingRevocation: true, rejectCredentialRegistration: true });
+
+  for (let attempt = 0; attempt < 100 && state.snapshot().status !== "unbound"; attempt += 1) await wait(5);
+  assert.equal(state.snapshot().status, "unbound");
+  assert.equal(sockets.length, 2);
+  const firstRegister = sockets[0].sent.find((message) => message.type === "register");
+  const secondRegister = sockets[1].sent.find((message) => message.type === "register");
+  assert.equal(firstRegister.backgroundCredential, "c".repeat(43));
+  assert.equal(secondRegister.backgroundCredential, undefined);
+  assert.equal(secondRegister.registration.bindingId, undefined);
+  await runtime.stop();
+});
 
 test("node relay RPCs carry the active Control Plane binding", async () => {
   const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
@@ -124,6 +190,27 @@ test("node relay RPCs carry the active Control Plane binding", async () => {
   }
 });
 
+test("publishing an already-managed node omits the onboarding auto-claim hint", async () => {
+  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const response = { tokenId: "token_a", expiresAt: new Date(Date.now() + 60_000).toISOString(), command: "cloud-bind" };
+
+  const published = runtime.issueNodeBindingToken({ displayName: "Local Node", onboarding: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  const publishRequest = sockets[0].sent.filter((message) => message.type === "request" && message.operation === "issue-node-relay-binding-token").at(-1);
+  assert.equal(publishRequest.payload.onboarding, false);
+  sockets[0].respond(publishRequest.requestId, response);
+  await published;
+
+  const installed = runtime.issueNodeBindingToken({ displayName: "New Node" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const installRequest = sockets[0].sent.filter((message) => message.type === "request" && message.operation === "issue-node-relay-binding-token").at(-1);
+  assert.equal(installRequest.payload.onboarding, true);
+  sockets[0].respond(installRequest.requestId, response);
+  await installed;
+  await runtime.stop();
+});
+
 test("the runtime records a created request and completes the local session from the delivered credential", async () => {
   const { runtime, accountSession, sockets } = runtimeHarness();
   const created = runtime.beginAccountRequest({ scope: "account:sign-in" });
@@ -143,6 +230,26 @@ test("the runtime records a created request and completes the local session from
   assert.equal(response.requestId, "push_1");
   assert.deepEqual(accountSession.snapshot(), { signedIn: true, accountId: "account_a", email: "owner@example.test", sessionExpiresAt: "2026-09-09T00:00:00.000Z", pendingRequest: undefined });
   assert.equal(accountSession.pendingRequest(), undefined);
+});
+
+test("the runtime makes a delivery-failed authorization retryable", async () => {
+  const { runtime, accountSession, sockets } = runtimeHarness({ accountRequestPollMs: 5 });
+  void runtime.beginAccountRequest({ scope: "account:sign-in" }).catch(() => undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  const create = sockets[0].sent.find((message) => message.type === "request" && message.operation === "create-control-plane-request");
+  sockets[0].respond(create.requestId, { requestId: "request_a", scope: "account:sign-in", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_a" });
+
+  let poll;
+  for (let attempt = 0; attempt < 100 && !poll; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    poll = sockets[0].sent.find((message) => message.type === "request" && message.operation === "poll-control-plane-request");
+  }
+  assert.ok(poll, "missing delivery-failed poll");
+  sockets[0].respond(poll.requestId, { requestId: "request_a", scope: "account:sign-in", status: "delivery-failed", errorCode: "CONTROL_PLANE_DELIVERY_FAILED" });
+  for (let attempt = 0; attempt < 100 && !accountSession.snapshot().requestFailure; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+  assert.equal(accountSession.pendingRequest(), undefined);
+  assert.deepEqual(accountSession.snapshot().requestFailure, { requestId: "request_a", scope: "account:sign-in", code: "CONTROL_PLANE_DELIVERY_FAILED" });
 });
 
 test("concurrent credential refreshes share one rotation and read the official response envelope", async () => {
@@ -204,7 +311,11 @@ test("a replayed refresh credential signs the local session out", async () => {
   accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}` });
   await runtime.refreshAccountCredential();
   assert.equal(accountSession.snapshot().signedIn, false);
+  assert.equal(accountSession.snapshot().reauthRequired, true);
   assert.equal(accountSession.refreshCredential(), undefined);
+
+  accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"c".repeat(40)}` });
+  assert.equal(accountSession.snapshot().reauthRequired, undefined);
 });
 
 test("a lapsed stored session is signed out by the next renewal attempt", async () => {
@@ -223,6 +334,7 @@ test("a transient refresh failure keeps the local session", async () => {
   accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}` });
   await runtime.refreshAccountCredential();
   assert.equal(accountSession.snapshot().signedIn, true);
+  assert.equal(accountSession.snapshot().reauthRequired, undefined);
   assert.equal(accountSession.refreshCredential(), `${"a".repeat(40)}`);
 });
 

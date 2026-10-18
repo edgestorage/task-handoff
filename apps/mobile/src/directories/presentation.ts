@@ -67,6 +67,7 @@ export function connectionModeLabel(mode: ControlPlaneNodeDirectoryEntry['connec
     'direct-http': t('directories.connectionDirect'),
     'reverse-wss': t('directories.connectionRemote'),
     'control-plane-proxy': t('directories.connectionProxy'),
+    'cloud-relay': t('directories.connectionCloudRelay'),
   } as const)[mode];
 }
 

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import os from "node:os";
 import { z } from "zod";
 import { JsonFile, createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
@@ -155,6 +156,16 @@ export class CloudConnectivityService {
     return current.status === "active" && (current.scopes.deviceAccess || current.scopes.nodeRelay) ? current.backgroundCredential : undefined;
   }
 
+  /**
+   * A pending revocation still needs its credential: the only way to finish a
+   * remote revoke is to re-open the outbound connection that authenticates the
+   * binding. This value is intentionally internal and never part of snapshot().
+   */
+  revocationCredential() {
+    const current = this.current();
+    return current.status === "pending-revocation" ? current.backgroundCredential : undefined;
+  }
+
   nextConnectionEpoch() {
     const current = this.current();
     const connectionEpoch = current.connectionEpoch + 1;
@@ -165,6 +176,7 @@ export class CloudConnectivityService {
   private challengePayload(challengeId: string) {
     const identity = this.identity.publicIdentity();
     const issuedAt = this.clock();
+    const hostname = os.hostname().trim().slice(0, 160);
     return {
       protocolVersion: "2026-08-10",
       audience: "task-handoff:binding",
@@ -176,6 +188,7 @@ export class CloudConnectivityService {
       nonce: crypto.randomBytes(24).toString("base64url"),
       issuedAt: new Date(issuedAt).toISOString(),
       expiresAt: new Date(issuedAt + 5 * 60_000).toISOString(),
+      ...(hostname ? { hostname } : {}),
     } as const;
   }
 

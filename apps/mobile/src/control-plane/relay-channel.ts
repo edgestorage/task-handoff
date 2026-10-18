@@ -1,17 +1,19 @@
 import '../platform/random-values';
 import * as Crypto from 'expo-crypto';
 import { deflateSync, inflateSync } from 'fflate';
+import { Platform } from 'react-native';
 import nacl from 'tweetnacl';
 import { isMobileTestMode, isTrustedMobileCloudRelayHost, mobileCloudEnvironment } from '../platform/build-variant';
 import { decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, type RelayFramePayload } from '@task-handoff/cloud-contracts/mobile';
 import type { EncryptedRelayChannel, RelayChannelFactory } from './relay-transport';
 import { MobileControlPlaneTransportError } from './transport';
+import { createNativeRelaySocket, isNativeRelaySocketAvailable } from '../../modules/task-handoff-browser/src';
 
 type SocketDefaultEvent = { data?: unknown };
 type SocketListener = (event: SocketDefaultEvent) => void;
 type SocketEvent = 'open'|'message'|'error'|'close';
 type SocketLike = { readyState: number; bufferedAmount?: number; binaryType?: string; addEventListener(type: SocketEvent, listener: SocketListener): void; removeEventListener?(type: SocketEvent, listener: SocketListener): void; send(data: string | Uint8Array): void; close(code?: number, reason?: string): void };
-type SocketFactory = (url: string) => SocketLike;
+type SocketFactory = (url: string) => SocketLike | Promise<SocketLike>;
 
 export function createMobileRelayChannelFactory(options: { webSocketFactory?: SocketFactory; allowRelayUrl?: (url: URL) => boolean } = {}): RelayChannelFactory {
   return async (input) => {
@@ -21,7 +23,8 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
     // direct Control Plane enrollment allows http://.
     const insecureAllowed = isMobileTestMode && url.protocol === 'ws:';
     if ((url.protocol !== 'wss:' && !insecureAllowed) || !(options.allowRelayUrl ?? cloudRelayUrl)(url)) throw relayError('UNTRUSTED_RELAY_URL');
-    const socket = (options.webSocketFactory ?? ((target) => new WebSocket(target) as unknown as SocketLike))(url.toString());
+    const createdSocket = (options.webSocketFactory ?? defaultRelaySocketFactory)(url.toString());
+    const socket = createdSocket instanceof Promise ? await createdSocket : createdSocket;
     try {
       // Frames are binary; the attach/attached handshake is the only text exchange.
       socket.binaryType = 'arraybuffer';
@@ -78,6 +81,10 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
 }
 
 function cloudRelayUrl(url:URL){return isTrustedMobileCloudRelayHost(url)}
+function defaultRelaySocketFactory(url: string): SocketLike | Promise<SocketLike> {
+  if (Platform.OS === 'ios' && isNativeRelaySocketAvailable()) return createNativeRelaySocket(url);
+  return new WebSocket(url) as unknown as SocketLike;
+}
 function waitForOpen(socket:SocketLike){return new Promise<void>((resolve,reject)=>{const cleanup=()=>{socket.removeEventListener?.('open',opened);socket.removeEventListener?.('error',failed);socket.removeEventListener?.('close',closed)};const opened=()=>{cleanup();resolve()};const failed=()=>{cleanup();reject(relayError('RELAY_SOCKET_FAILED',true))};const closed=()=>{cleanup();reject(relayError('RELAY_SOCKET_CLOSED',true))};socket.addEventListener('open',opened);socket.addEventListener('error',failed);socket.addEventListener('close',closed)})}
 // A one-shot wait must stop listening the moment it settles: a long-lived channel would
 // otherwise keep parsing every incoming frame once per completed wait.

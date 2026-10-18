@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ControlledInstanceSchema, CONTROL_PLANE_PROTOCOL_VERSION } from "@task-handoff/protocol/control-plane";
+import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL, ControlledInstanceSchema, CONTROL_PLANE_PROTOCOL_VERSION, NodeSchema } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneService } from "../src/control-plane/application/service.ts";
 import { ControlPlaneNodeAgentClient } from "../src/control-plane/nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../src/control-plane/nodes/gateway.ts";
@@ -65,6 +65,52 @@ test("checking a cloud-relay node preserves its local handle identity across res
     await service.init();
 
     assert.equal(service.findCloudRelayNode(NODE_HANDLE)?.id, created.nodeId);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publishing a managed node links its account handle without changing the local connection", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-account-link-"));
+  const paths = controlPlaneStorePaths(root);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const service = new ControlPlaneService(paths, { database, secrets });
+  const timestamp = "2026-10-18T00:00:00.000Z";
+  try {
+    await service.init();
+    const local = NodeSchema.parse({
+      id: "node_local_managed",
+      name: "Local Node",
+      connectionMode: "local-ipc",
+      connectionPath: { kind: "direct" },
+      connectionEnabled: true,
+      auth: { mode: "paired-hmac", keyId: "key_local", secret: "local-secret", pairing: { status: "paired" } },
+      status: "online",
+      health: "ok",
+      capabilities: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await service.nodes.put(local);
+    const duplicate = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, displayName: "Local Node" });
+
+    const linked = await service.linkNodeToCloudAccount(local.id, NODE_HANDLE);
+
+    assert.equal(linked.node.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL], NODE_HANDLE);
+    assert.equal(linked.node.connectionMode, "local-ipc");
+    assert.deepEqual(linked.node.connectionPath, { kind: "direct" });
+    assert.equal(linked.node.auth.mode, "paired-hmac");
+    assert.equal(linked.node.auth.keyId, "key_local");
+    assert.deepEqual(linked.duplicateNodeIds, [duplicate.nodeId]);
+    assert.equal(service.findNodeByCloudAccountHandle(NODE_HANDLE)?.id, local.id);
+    await service.deleteNode(duplicate.nodeId);
+    assert.deepEqual(await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE }), { nodeId: local.id, preserveLocalConnection: true });
+    assert.deepEqual(service.listNodes().map((node) => node.id), [local.id]);
   } finally {
     service.dispose();
     await database.close();

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { hasActiveCloudAccount, restoreActiveCloudAccountSession, subscribeCloudAccountState } from './runtime';
+import { cloudMobileError } from './cloud-error';
 import { isMobileFeatureEnabled } from '../platform/build-variant';
 
 type CloudAccountProfile = {
@@ -38,7 +39,11 @@ export function useCloudAccountState() {
         const session = await restoreActiveCloudAccountSession();
         const profile = await session.client.profile() as CloudAccountProfile;
         if (live && currentRequest === request) setState({ phase: 'signed-in', profile });
-      } catch {
+      } catch (error) {
+        if (cloudMobileError(error).kind === 'reauthentication') {
+          setState({ phase: 'signed-out' });
+          return;
+        }
         const stillActive = await hasActiveCloudAccount().catch(() => false);
         if (live && currentRequest === request && !stillActive) setState({ phase: 'signed-out' });
       }

@@ -257,6 +257,7 @@
             :resources="nodeDetailResources"
             :selected-node="selectedNode"
             :status="nodeDetailStatus"
+            @open-cloud-settings="setSettingsSection('cloud-connectivity')"
           />
         </TooltipProvider>
       </div>

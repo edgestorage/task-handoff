@@ -4,7 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
-import { aiSessionInboxRows, inboxHierarchyEntries, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { aiSessionInboxRows, inboxHierarchyEntries, inboxIsAwaitingInitialSync, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
 import type { MobileDirectoryProfileState } from '../src/directories/store';
 import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
 import { SessionStatusIndicator, sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
@@ -31,6 +31,25 @@ const snapshot = ControlPlaneAiSessionsSchema.parse({
 });
 
 describe('<InboxRoute />', () => {
+  test('shows loading instead of an authoritative empty state before the first snapshot arrives', async () => {
+    const idle = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'idle' } }} />,
+    );
+
+    expect(idle.getByLabelText('Loading AI Sessions')).toBeTruthy();
+    expect(idle.queryByText('No AI Sessions yet')).toBeNull();
+    await idle.unmount();
+
+    const loading = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'loading' } }} />,
+    );
+
+    expect(loading.getByLabelText('Loading AI Sessions')).toBeTruthy();
+    expect(loading.queryByText('No AI Sessions yet')).toBeNull();
+    expect(inboxIsAwaitingInitialSync({ sync: { phase: 'idle' } })).toBe(true);
+    expect(inboxIsAwaitingInitialSync({ sync: { phase: 'loading' } })).toBe(true);
+  });
+
   test('pairs an empty session message with a contextual icon', async () => {
     const screen = await render(
       <AiSessionInbox state={{
@@ -43,6 +62,16 @@ describe('<InboxRoute />', () => {
 
     expect(screen.getByText('No AI Sessions yet')).toBeTruthy();
     expect(screen.getByTestId('empty-state-icon')).toBeTruthy();
+    expect(inboxIsAwaitingInitialSync({ snapshot: ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-08-05T00:02:00.000Z', instances: [] }), sync: { phase: 'ready' } })).toBe(false);
+  });
+
+  test('keeps a cached session list visible while refreshing', async () => {
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'loading' } }} />,
+    );
+
+    expect(screen.queryByLabelText('Loading AI Sessions')).toBeNull();
+    expect(screen.getAllByTestId('session-card')).toHaveLength(2);
   });
 
   test('renders the mobile Control Plane entry point', async () => {

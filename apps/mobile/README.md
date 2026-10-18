@@ -25,6 +25,16 @@ Development builds are test builds and accept both HTTP and HTTPS Control Plane 
 
 Signing credentials are never committed. Local builds use the developer's platform credentials; remote build profiles contain only non-secret variant selection and obtain credentials from the configured build environment.
 
+## Cloud endpoint discovery
+
+Production and staging builds resolve their cloud service endpoints from a versioned DNS TXT record at startup. HTTPS is implied, so the record contains up to five bare host names ordered by priority:
+
+```text
+_cloud.thandoff.com TXT "v1 cloud.thandoff.com cloud-backup.thandoff.com"
+```
+
+The production fallback remains `https://cloud.thandoff.com`; staging uses `_cloud.aaasu.com` and falls back to `https://th.aaasu.com`. Clients query the record through Alibaba and Cloudflare DoH resolvers, validate the `v1` format and allowed host suffixes, persist the last valid list, and use a local fallback when DNS is unavailable. Safe requests fail over to the next endpoint; account-changing requests are not replayed across endpoints because refresh credentials rotate on every use. All listed endpoints must share the same account, device-session, and binding storage. An ad-hoc build can opt into a custom record with `TASK_HANDOFF_CLOUD_DISCOVERY_RECORD`.
+
 ## Commands
 
 Run commands from the repository root:
@@ -33,6 +43,7 @@ Run commands from the repository root:
 pnpm --filter @task-handoff/mobile lint
 pnpm --filter @task-handoff/mobile typecheck
 pnpm --filter @task-handoff/mobile test
+pnpm --filter @task-handoff/mobile e2e:ios
 pnpm --filter @task-handoff/mobile prebuild:check
 pnpm --filter @task-handoff/mobile ios
 pnpm --filter @task-handoff/mobile android

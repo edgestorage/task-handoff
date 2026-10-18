@@ -25,12 +25,13 @@ export type CloudNodeRelayChannelsOptions = {
   /** Resolved lazily: the tunnel transport is wired after the runtime exists. */
   transport?: () => CloudNodeRelayChannelTransport | undefined;
   nodes: {
-    resolve(nodeHandle: string): { nodeId: string; pairing?: { keyId: string; secret: string } } | undefined;
-    ensure(input: { nodeHandle: string; displayName?: string }): { nodeId: string; pairing?: { keyId: string; secret: string } } | Promise<{ nodeId: string; pairing?: { keyId: string; secret: string } }>;
+    resolve(nodeHandle: string): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | undefined;
+    ensure(input: { nodeHandle: string; displayName?: string }): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | Promise<{ nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean }>;
     savePairing(nodeId: string, pairing: { keyId: string; secret: string }): void | Promise<void>;
     connected(nodeId: string, input: { nodeHandle: string }): void | Promise<void>;
     disconnected(nodeId: string, input: { nodeHandle: string; reason: string }): void | Promise<void>;
   };
+  onPreserveLocalConnection?(nodeHandle: string): void | Promise<void>;
   now?: () => number;
   audit?(event: { type: string; outcome: "allowed" | "denied"; nodeHandle?: string; reason: string }): void;
 };
@@ -82,6 +83,16 @@ export class CloudNodeRelayChannels {
     }
     const resolved = this.options.nodes.resolve(verified.nodeHandle) ?? await this.options.nodes.ensure({ nodeHandle: verified.nodeHandle, displayName: verified.displayName });
     const current = this.channels.get(verified.nodeHandle);
+    if (resolved.preserveLocalConnection) {
+      // The node is already managed here over its original transport. A stale
+      // or duplicate cloud claim must not create a second local record or
+      // overwrite the original pairing.
+      if (current) this.closeNode(verified.nodeHandle, "local-connection-preserved");
+      this.claims.delete(verified.nodeHandle);
+      this.errors.delete(verified.nodeHandle);
+      await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
+      return { status: "attached" as const, preservedLocalConnection: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
+    }
     if (current && current.allocationId === verified.allocationId && transport.connected(resolved.nodeId)) return { status: "attached" as const, replayed: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
     // A superseding allocation for the same node replaces the live channel; the
     // stale one is torn down before the new session starts.

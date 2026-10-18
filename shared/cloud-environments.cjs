@@ -9,7 +9,11 @@ const CLOUD_ENVIRONMENTS = Object.freeze({
   production: Object.freeze({
     id: "production",
     serviceOrigin: "https://cloud.thandoff.com",
-    relayHosts: Object.freeze(["relay.thandoff.com"]),
+    relayHosts: Object.freeze([
+      "relay.thandoff.com",
+      "relay.th.xpbox.cn",
+      "relay.aaasu.com",
+    ]),
     allowInsecureRelay: false,
   }),
   staging: Object.freeze({
@@ -17,6 +21,19 @@ const CLOUD_ENVIRONMENTS = Object.freeze({
     serviceOrigin: "https://th.aaasu.com",
     relayHosts: Object.freeze(["relay.aaasu.com"]),
     allowInsecureRelay: false,
+  }),
+});
+
+const CLOUD_DISCOVERY = Object.freeze({
+  production: Object.freeze({
+    record: "_cloud.thandoff.com",
+    fallbackOrigin: "https://cloud.thandoff.com",
+    allowedHostSuffixes: Object.freeze(["thandoff.com"]),
+  }),
+  staging: Object.freeze({
+    record: "_cloud.aaasu.com",
+    fallbackOrigin: "https://th.aaasu.com",
+    allowedHostSuffixes: Object.freeze(["aaasu.com"]),
   }),
 });
 
@@ -71,6 +88,7 @@ function isTrustedCloudRelayUrl(environment, value) {
 
 module.exports = {
   CLOUD_ENVIRONMENTS,
+  CLOUD_DISCOVERY,
   DEFAULT_CLOUD_ENVIRONMENT,
   resolveCloudEnvironment,
   cloudEnvironmentForServiceOrigin,

@@ -27,10 +27,13 @@ if (!imagePickerPlugin || imagePickerPlugin[1]?.cameraPermission !== false || im
 
 const productionFiles = sourceFiles(path.join(root, 'app')).concat(sourceFiles(path.join(root, 'src')));
 const networkOwners = new Set([
+  // Cloud endpoint discovery owns its DoH and cloud HTTP transport, while all
+  // account/Relay traffic still goes through the cloud contract clients.
   path.join(root, 'src', 'control-plane', 'browser-context.ts'),
   path.join(root, 'src', 'control-plane', 'direct-enrollment.ts'),
   path.join(root, 'src', 'control-plane', 'direct-transport.ts'),
   path.join(root, 'src', 'control-plane', 'relay-channel.ts'),
+  path.join(root, 'src', 'cloud-discovery', 'transport.ts'),
 ]);
 const forbiddenSourcePatterns = [
   [/\bNodeAgentTransport\b/, 'NodeAgentTransport'],

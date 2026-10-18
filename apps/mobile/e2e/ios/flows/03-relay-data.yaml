@@ -1,0 +1,14 @@
+appId: com.taskhandoff.mobile.staging
+name: Cloud Relay data expectation
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "AI Sessions|AI 会话"
+    timeout: 30000
+- assertNotVisible: "No AI Sessions yet|还没有 AI 会话"
+- extendedWaitUntil:
+    visible: "All Instances|全部实例"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: ".*${E2E_EXPECTED_TEXT}.*"
+    timeout: 60000

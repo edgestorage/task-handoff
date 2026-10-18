@@ -119,7 +119,9 @@ const CloudAccountSessionSchema = z.object({
   accountId: z.string().optional(),
   email: z.string().optional(),
   sessionExpiresAt: z.string().optional(),
+  reauthRequired: z.boolean().optional(),
   pendingRequest: z.object({ requestId: z.string(), authorizationUrl: z.string().optional(), scope: z.string().optional(), expiresAt: z.string().optional() }).strict().optional(),
+  requestFailure: z.object({ requestId: z.string(), scope: z.string().optional(), code: z.string() }).strict().optional(),
 }).strict();
 
 const CloudBindingChallengeSchema = z.object({
@@ -129,6 +131,7 @@ const CloudBindingChallengeSchema = z.object({
     controlPlaneId: z.string(),
     publicKeyFingerprint: z.string(),
     expiresAt: z.string(),
+    hostname: z.string().optional(),
   }).strict(),
   signature: z.string(),
 }).strict();

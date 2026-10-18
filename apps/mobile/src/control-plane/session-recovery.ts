@@ -12,3 +12,11 @@ export function mobileSessionRecoveryRoute(
     params: { reauthenticate: profile.identity.controlPlaneId },
   };
 }
+
+export function cloudAccountReauthenticationRoute(pathname: string) {
+  if (pathname === '/cloud-account' || pathname === '/cloud-account-totp') return undefined;
+  return {
+    pathname: '/cloud-account' as const,
+    params: { reason: 'reauthentication' },
+  };
+}

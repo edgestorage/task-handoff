@@ -160,13 +160,15 @@ export type CloudAccountSession = {
   accountId?: string;
   email?: string;
   sessionExpiresAt?: string;
+  reauthRequired?: boolean;
   pendingRequest?: { requestId: string; authorizationUrl?: string; scope?: string; expiresAt?: string };
+  requestFailure?: { requestId: string; scope?: string; code: string };
 };
 
 export type CloudBindingChallenge = {
   challengeCode: string;
   authorizationUrl: string;
-  payload: { controlPlaneId: string; publicKeyFingerprint: string; expiresAt: string };
+  payload: { controlPlaneId: string; publicKeyFingerprint: string; expiresAt: string; hostname?: string };
   signature: string;
 };
 

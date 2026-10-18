@@ -5,7 +5,14 @@ export type CloudEnvironment = {
   readonly allowInsecureRelay: boolean;
 };
 
+export type CloudDiscovery = {
+  readonly record: string;
+  readonly fallbackOrigin: string;
+  readonly allowedHostSuffixes: readonly string[];
+};
+
 export const CLOUD_ENVIRONMENTS: Readonly<Record<"production" | "staging", CloudEnvironment>>;
+export const CLOUD_DISCOVERY: Readonly<Record<"production" | "staging", CloudDiscovery>>;
 export const DEFAULT_CLOUD_ENVIRONMENT: "production";
 
 export function resolveCloudEnvironment(name?: string, fallback?: string): CloudEnvironment;

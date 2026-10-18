@@ -97,7 +97,12 @@ type NodeAgentFleetSnapshot<T> = {
   error?: NodeAgentScopedError;
 };
 
-const DEFAULT_FLEET_REQUEST_TIMEOUT_MS = 2_000;
+// Remote transports (notably the trusted control-plane proxy) forward complete
+// instance projections that can exceed 100 KB. A two-second deadline marked
+// healthy but slower nodes as stale even though the response arrived shortly
+// afterwards. Keep enough headroom for those links while still bounding a
+// genuinely unavailable node.
+const DEFAULT_FLEET_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_FLEET_SNAPSHOT_FRESH_MS = 15_000;
 const DEFAULT_FLEET_RETRY_BASE_MS = 1_000;
 const DEFAULT_FLEET_RETRY_MAX_MS = 30_000;
@@ -311,6 +316,10 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(parsed),
     });
+  }
+
+  cloudRelayStatus(node: Node) {
+    return this.client.requestSchema(node, "/cloud-relay", NodeAgentCloudRelayStatusSchema);
   }
 
   createControlPlaneConnection(node: Node, input: unknown) {

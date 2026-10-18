@@ -6,6 +6,7 @@ type ManagedConnection = { close(reason?: string): Promise<void> | void };
 
 export class CloudControlConnectionManager {
   private connection?: ManagedConnection;
+  private connectionBindingId?: string;
   readonly processInstanceId = `control_plane_process_${crypto.randomUUID().replaceAll("-", "_")}`;
   private readonly backoff: StandardReconnectBackoff;
   private readonly options: {
@@ -23,30 +24,55 @@ export class CloudControlConnectionManager {
   }) { this.options = options; this.backoff = options.backoff ?? new StandardReconnectBackoff(); }
 
   async connectOnce() {
-    const credential = this.options.state.backgroundCredential();
     const snapshot = this.options.state.snapshot();
+    // A pending revocation keeps the credential only so it can reconnect and
+    // finish the remote revoke. Without this, a failed revoke would strand the
+    // local state machine forever: no connection means no way to ask the cloud
+    // to revoke, and no way to sign in again.
+    const credential = snapshot.status === "pending-revocation"
+      ? this.options.state.revocationCredential()
+      : this.options.state.backgroundCredential();
     // An unbound Control Plane still registers so it can sign in to a Thandoff account; the
     // Coordinator rejects it if the account already holds a live binding. An active binding
     // keeps the cloud connection while either cloud-relay scope is on; only turning both off
     // stops it.
-    const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim" || (snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay) && Boolean(credential));
+    const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim"
+      || (snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay) && Boolean(credential))
+      || (snapshot.status === "pending-revocation" && Boolean(snapshot.bindingId) && Boolean(credential));
     if (!canRegister) return { status: "disabled" as const };
-    if (this.connection) return { status: "connected" as const, reused: true as const };
+    // The registration carries the binding identity that was current when the
+    // socket opened. Reuse it only while the local binding still matches;
+    // otherwise a post-revocation request would be sent as a bound Control
+    // Plane and the Coordinator would reject a new binding challenge.
+    if (this.connection && this.connectionBindingId === snapshot.bindingId) return { status: "connected" as const, reused: true as const };
+    if (this.connection) await this.stop("registration-changed");
     const epoch = this.options.state.nextConnectionEpoch();
-    const previous = this.connection;
-    this.connection = await this.options.connector.connect({ serviceOrigin: snapshot.serviceOrigin, credential, bindingId: snapshot.bindingId, bindingRevision: snapshot.bindingRevision, scopes: snapshot.scopes, cloudControlPlaneId: snapshot.cloudControlPlaneId, processInstanceId: this.processInstanceId, epoch, onEvent: this.options.onEvent });
-    await previous?.close("replaced-by-new-epoch");
+    try {
+      this.connection = await this.options.connector.connect({ serviceOrigin: snapshot.serviceOrigin, credential, bindingId: snapshot.bindingId, bindingRevision: snapshot.bindingRevision, scopes: snapshot.scopes, cloudControlPlaneId: snapshot.cloudControlPlaneId, processInstanceId: this.processInstanceId, epoch, onEvent: this.options.onEvent });
+    } catch (error) {
+      // A revoked binding credential can no longer authenticate. Try an
+      // unbound registration: the Coordinator only accepts that when it has no
+      // live binding for this identity, which is the authoritative signal that
+      // the pending revocation is already complete remotely.
+      if (snapshot.status !== "pending-revocation" || !credential) throw error;
+      this.connection = await this.options.connector.connect({ serviceOrigin: snapshot.serviceOrigin, credential: undefined, bindingId: undefined, bindingRevision: undefined, scopes: { deviceAccess: false, nodeRelay: false }, cloudControlPlaneId: snapshot.cloudControlPlaneId, processInstanceId: this.processInstanceId, epoch, onEvent: this.options.onEvent });
+      this.connectionBindingId = undefined;
+      this.backoff.reset();
+      return { status: "connected" as const, epoch, revocationFallback: true as const };
+    }
+    this.connectionBindingId = snapshot.bindingId;
     this.backoff.reset();
     return { status: "connected" as const, epoch };
   }
 
   reconnectDelay() { return this.backoff.next().delay; }
 
-  disconnected() { this.connection = undefined; }
+  disconnected() { this.connection = undefined; this.connectionBindingId = undefined; }
 
   async stop(reason: string) {
     const current = this.connection;
     this.connection = undefined;
+    this.connectionBindingId = undefined;
     await current?.close(reason);
   }
 }

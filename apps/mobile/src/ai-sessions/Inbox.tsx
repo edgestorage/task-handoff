@@ -24,6 +24,7 @@ import {
   aiSessionInboxRows,
   inboxCardContent,
   inboxHierarchyEntries,
+  inboxIsAwaitingInitialSync,
   inboxStatusMessage,
   statusFilterLabel,
   workspaceLabel,
@@ -84,6 +85,7 @@ export function AiSessionInbox({
     }
     return grouped;
   }, [state.messages]);
+  const awaitingInitialSync = inboxIsAwaitingInitialSync(state);
   const statusMessage = inboxStatusMessage(state.sync, t);
   const statusFilterWidth = Math.max(0, (statusFilterTrackWidth - STATUS_FILTER_PADDING * 2) / STATUS_FILTERS.length);
 
@@ -103,7 +105,7 @@ export function AiSessionInbox({
   return (
     <Profiler id="inbox" onRender={recordInboxRender}>
       <>
-      {state.sync.phase === 'loading' && !state.snapshot ? <ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} style={styles.loading} /> : (
+      {awaitingInitialSync ? <ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} style={styles.loading} /> : (
         <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
           data={rows}

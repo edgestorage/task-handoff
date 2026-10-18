@@ -1,0 +1,22 @@
+appId: com.taskhandoff.mobile.staging
+name: Staging onboarding smoke
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Connect a Control Plane|连接控制面板"
+    timeout: 30000
+- tapOn: "Connect a Control Plane|连接控制面板"
+- extendedWaitUntil:
+    visible: "Use Thandoff account and Relay|使用 Thandoff 账户和中转"
+    timeout: 15000
+- assertVisible: "Control Plane address|控制面板地址"
+- tapOn: "Use Thandoff account and Relay|使用 Thandoff 账户和中转"
+- extendedWaitUntil:
+    visible: "Welcome back|欢迎回来"
+    timeout: 30000
+- assertVisible:
+    id: "cloud-account-email"
+- assertVisible:
+    id: "cloud-account-password"
+- assertVisible: "Sign in with email|使用邮箱登录"

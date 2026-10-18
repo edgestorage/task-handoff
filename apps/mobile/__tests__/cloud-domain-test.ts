@@ -14,18 +14,23 @@ describe('mobile cloud connectivity', () => {
     jest.resetModules();
   });
 
-  test('production cloud connectivity trusts only the thandoff.com service and Relay domains', () => {
+  test('production cloud connectivity trusts the configured service and Relay domains', () => {
     expect(CLOUD_PRODUCTION_ORIGIN).toBe('https://cloud.thandoff.com');
     expect(allowCloudRelayUrlForService(new URL('wss://eu.relay.thandoff.com/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(true);
+    expect(allowCloudRelayUrlForService(new URL('wss://relay.th.xpbox.cn/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(true);
+    expect(allowCloudRelayUrlForService(new URL('wss://hk.relay.th.xpbox.cn/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(true);
+    expect(allowCloudRelayUrlForService(new URL('wss://relay.aaasu.com/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(true);
     expect(allowCloudRelayUrlForService(new URL('wss://relay.taskhandoff.com/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(false);
     expect(allowCloudRelayUrlForService(new URL('wss://eu.relay.taskhandoff.com/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(false);
+    expect(allowCloudRelayUrlForService(new URL('wss://relay.th.xpbox.cn.evil.test/connect'), CLOUD_PRODUCTION_ORIGIN)).toBe(false);
   });
 
   test('the production fallback for legacy manifests mirrors the shared environment definition', () => {
     const variant = loadBuildVariant({ variant: 'production' });
     expect(variant.mobileCloudEnvironment).toEqual(CLOUD_ENVIRONMENTS.production);
     expect(variant.isTrustedMobileCloudServiceOrigin('https://cloud.thandoff.com')).toBe(true);
-    expect(variant.isTrustedMobileCloudRelayUrl(new URL('wss://relay1.relay.aaasu.com/connect'))).toBe(false);
+    expect(variant.isTrustedMobileCloudRelayUrl(new URL('wss://relay1.relay.aaasu.com/connect'))).toBe(true);
+    expect(variant.isTrustedMobileCloudRelayUrl(new URL('wss://relay.th.xpbox.cn/connect'))).toBe(true);
   });
 
   test('a staging build trusts the baked test domains only', () => {
@@ -46,6 +51,26 @@ describe('mobile cloud connectivity', () => {
     expect(variant.isTrustedMobileCloudServiceOrigin('https://staging.cloud.example.test')).toBe(true);
     expect(variant.isTrustedMobileCloudRelayUrl(new URL('wss://staging.cloud.example.test/connect'))).toBe(true);
     expect(variant.isTrustedMobileCloudRelayUrl(new URL('wss://relay1.relay.aaasu.com/connect'))).toBe(false);
+  });
+
+  test('discovery-enabled builds trust only their declared host suffixes', () => {
+    const variant = loadBuildVariant({
+      variant: 'production',
+      cloudEnvironment: CLOUD_ENVIRONMENTS.production,
+      cloudDiscovery: {
+        record: '_cloud.thandoff.com',
+        fallbackOrigin: 'https://cloud.thandoff.com',
+        allowedHostSuffixes: ['thandoff.com'],
+      },
+    });
+    expect(variant.mobileCloudDiscoveryConfig).toEqual({
+      record: '_cloud.thandoff.com',
+      fallbackOrigin: 'https://cloud.thandoff.com',
+      allowedHostSuffixes: ['thandoff.com'],
+    });
+    expect(variant.isTrustedMobileCloudServiceOrigin('https://cloud-backup.thandoff.com')).toBe(true);
+    expect(variant.isTrustedMobileCloudServiceOrigin('https://thandoff.com.evil.test')).toBe(false);
+    expect(variant.isTrustedMobileCloudServiceOrigin('http://cloud-backup.thandoff.com')).toBe(false);
   });
 
   test('a legacy manifest pointing at a registered origin keeps its declared Relay hosts', () => {

@@ -1,6 +1,6 @@
 const baseConfig = require('./app.json').expo;
 const { resolveFeatureFlags } = require('../../shared/feature-flags.cjs');
-const { CLOUD_ENVIRONMENTS, cloudEnvironmentForServiceOrigin } = require('../../shared/cloud-environments.cjs');
+const { CLOUD_DISCOVERY, CLOUD_ENVIRONMENTS, cloudEnvironmentForServiceOrigin } = require('../../shared/cloud-environments.cjs');
 
 const variants = {
   development: {
@@ -30,6 +30,7 @@ module.exports = () => {
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
   const featureFlags = resolveFeatureFlags(process.env);
   const cloudEnvironment = resolveCloudEnvironmentForVariant(variantName);
+  const cloudDiscovery = resolveCloudDiscovery(cloudEnvironment);
   const plugins = [
     ...(baseConfig.plugins || []),
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
@@ -84,10 +85,23 @@ module.exports = () => {
       // Compatibility for v0.0.32: keep the old Expo extra available to N-1 JS bundles.
       cloudRelayEnabled: featureFlags.officialAccount,
       ...(cloudEnvironment ? { cloudEnvironment } : {}),
+      ...(cloudDiscovery ? { cloudDiscovery } : {}),
       ...(cloudEnvironment && variantName !== 'production' ? { cloudServiceOrigin: cloudEnvironment.serviceOrigin } : {}),
     },
   };
 };
+
+function resolveCloudDiscovery(cloudEnvironment) {
+  if (!cloudEnvironment) return undefined;
+  const registered = CLOUD_DISCOVERY[cloudEnvironment.id];
+  const record = registered?.record ?? process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD;
+  if (!record) return undefined;
+  return Object.freeze({
+    record,
+    fallbackOrigin: cloudEnvironment.serviceOrigin,
+    allowedHostSuffixes: registered?.allowedHostSuffixes ?? Object.freeze([new URL(cloudEnvironment.serviceOrigin).hostname]),
+  });
+}
 
 // The registered staging environment carries the test domains, so a staging build
 // needs no environment variables. An explicit HTTPS origin still overrides it for

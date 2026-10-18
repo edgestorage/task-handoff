@@ -18,10 +18,19 @@ import { MobileSessionRecovery } from '../src/control-plane/MobileSessionRecover
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 import { StoryNodeFilterProvider } from '../src/stories/use-story-node-filter';
+import { mobileCloudDiscovery } from '../src/cloud-discovery';
+import { subscribeToNetworkState } from '../src/platform/network';
 
 void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
+  useEffect(() => {
+    if (!mobileCloudDiscovery.enabled) return;
+    void mobileCloudDiscovery.initialize();
+    return subscribeToNetworkState((state) => {
+      if (state.connected) void mobileCloudDiscovery.refresh();
+    });
+  }, []);
   return <MobileThemeProvider><MobileI18nProvider><TaskStatusSettingsProvider><LocalizedRootLayout /></TaskStatusSettingsProvider></MobileI18nProvider></MobileThemeProvider>;
 }
 

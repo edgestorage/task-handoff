@@ -1,5 +1,5 @@
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
-import { mobileSessionRecoveryRoute } from '../src/control-plane/session-recovery';
+import { cloudAccountReauthenticationRoute, mobileSessionRecoveryRoute } from '../src/control-plane/session-recovery';
 
 const profile: MobileControlPlaneProfile = {
   version: 1,
@@ -17,4 +17,13 @@ test('an expired direct session routes to in-place reauthentication', () => {
   });
   expect(mobileSessionRecoveryRoute('connected', profile, '/inbox')).toBeUndefined();
   expect(mobileSessionRecoveryRoute('session-expired', profile, '/control-planes/add')).toBeUndefined();
+});
+
+test('a revoked account session offers the account sign-in route without trapping the login screen', () => {
+  expect(cloudAccountReauthenticationRoute('/inbox')).toEqual({
+    pathname: '/cloud-account',
+    params: { reason: 'reauthentication' },
+  });
+  expect(cloudAccountReauthenticationRoute('/cloud-account')).toBeUndefined();
+  expect(cloudAccountReauthenticationRoute('/cloud-account-totp')).toBeUndefined();
 });

@@ -170,6 +170,10 @@ export function inboxStatusMessage(sync: MobileAiSessionProfileState['sync'], t:
       : sync.error;
 }
 
+export function inboxIsAwaitingInitialSync(state: Pick<MobileAiSessionProfileState, 'snapshot' | 'sync'>) {
+  return !state.snapshot && (state.sync.phase === 'idle' || state.sync.phase === 'loading');
+}
+
 export function sessionScopeOptions(directory?: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>, t: Translate = english): SessionScopeOption[] {
   const nodes = directory?.nodes ?? [];
   const nodeNames = new Map(nodes.map((node) => [node.id, node.name]));

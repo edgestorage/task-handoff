@@ -10,6 +10,12 @@ export type MobileCloudEnvironment = {
   allowInsecureRelay: boolean;
 };
 
+export type MobileCloudDiscoveryConfig = {
+  record: string;
+  fallbackOrigin: string;
+  allowedHostSuffixes: readonly string[];
+};
+
 // Last-resort default for JS bundles that run against a manifest produced before
 // `extra.cloudEnvironment` existed. It mirrors `shared/cloud-environments.cjs`
 // (asserted by `__tests__/cloud-domain-test.ts`); every current build bakes the
@@ -18,7 +24,11 @@ export const MOBILE_PRODUCTION_CLOUD_ORIGIN = 'https://cloud.thandoff.com';
 const PRODUCTION_CLOUD_ENVIRONMENT: MobileCloudEnvironment = Object.freeze({
   id: 'production',
   serviceOrigin: MOBILE_PRODUCTION_CLOUD_ORIGIN,
-  relayHosts: Object.freeze(['relay.thandoff.com']),
+  relayHosts: Object.freeze([
+    'relay.thandoff.com',
+    'relay.th.xpbox.cn',
+    'relay.aaasu.com',
+  ]),
   allowInsecureRelay: false,
 });
 
@@ -78,9 +88,35 @@ export const mobileCloudEnvironment: MobileCloudEnvironment = parseCloudEnvironm
   ?? mobileCloudEnvironmentForServiceOrigin(Constants.expoConfig?.extra?.cloudServiceOrigin)
   ?? PRODUCTION_CLOUD_ENVIRONMENT;
 
+function parseCloudDiscoveryConfig(value: unknown): MobileCloudDiscoveryConfig | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  const fallbackOrigin = safeUrl(candidate.fallbackOrigin);
+  const allowedHostSuffixes = Array.isArray(candidate.allowedHostSuffixes)
+    ? candidate.allowedHostSuffixes.filter((suffix): suffix is string => typeof suffix === 'string' && suffix.length > 0)
+    : [];
+  if (typeof candidate.record !== 'string' || !candidate.record || !fallbackOrigin || allowedHostSuffixes.length === 0) return undefined;
+  return Object.freeze({
+    record: candidate.record,
+    fallbackOrigin: fallbackOrigin.origin,
+    allowedHostSuffixes: Object.freeze(allowedHostSuffixes),
+  });
+}
+
+export const mobileCloudDiscoveryConfig = parseCloudDiscoveryConfig(Constants.expoConfig?.extra?.cloudDiscovery);
+
+function hostMatchesSuffix(hostname: string, suffix: string) {
+  const normalized = suffix.toLowerCase().replace(/^\./, '').replace(/\.$/, '');
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return host === normalized || host.endsWith(`.${normalized}`);
+}
+
 export function isTrustedMobileCloudServiceOrigin(origin: unknown) {
   const parsed = safeUrl(origin);
-  return Boolean(parsed) && parsed!.origin === mobileCloudEnvironment.serviceOrigin;
+  if (!parsed) return false;
+  if (parsed.origin === mobileCloudEnvironment.serviceOrigin) return true;
+  return parsed.protocol === 'https:'
+    && Boolean(mobileCloudDiscoveryConfig?.allowedHostSuffixes.some((suffix) => hostMatchesSuffix(parsed.hostname, suffix)));
 }
 
 export function isTrustedMobileCloudRelayHost(url: URL) {

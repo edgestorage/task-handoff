@@ -17,10 +17,17 @@ const CloudAccountSessionStateSchema = z.object({
   pendingAuthorizationUrl: z.string().url().optional(),
   pendingScope: z.string().optional(),
   pendingExpiresAt: z.string().datetime().optional(),
+  lastSignOutReason: z.enum(["user", "credential-rejected"]).optional(),
+  lastRequestFailure: z.object({
+    requestId: z.string(),
+    scope: z.string().optional(),
+    code: z.string(),
+  }).strict().optional(),
   updatedAt: z.string().datetime(),
 }).strip();
 
 export type CloudAccountSessionState = z.infer<typeof CloudAccountSessionStateSchema>;
+export type CloudAccountRequestResolution = "denied" | "expired" | "delivered" | "delivery-failed";
 
 export class CloudAccountSessionService {
   private readonly state: JsonFile<CloudAccountSessionState>;
@@ -65,7 +72,9 @@ export class CloudAccountSessionService {
       accountId: signedIn ? current.accountId : undefined,
       email: signedIn ? current.email : undefined,
       sessionExpiresAt: signedIn ? current.sessionExpiresAt : undefined,
+      ...(!signedIn && current.lastSignOutReason === "credential-rejected" ? { reauthRequired: true } : {}),
       pendingRequest: pending,
+      ...(current.lastRequestFailure ? { requestFailure: current.lastRequestFailure } : {}),
     };
   }
 
@@ -91,7 +100,8 @@ export class CloudAccountSessionService {
     const current = this.state.get();
     this.state.put({
       ...current, status: "pending", pendingRequestId: input.requestId, pendingAuthorizationUrl: input.authorizationUrl,
-      pendingScope: input.scope, pendingExpiresAt: input.expiresAt, updatedAt: new Date(this.clock()).toISOString(),
+      pendingScope: input.scope, pendingExpiresAt: input.expiresAt, lastRequestFailure: undefined,
+      updatedAt: new Date(this.clock()).toISOString(),
     });
     return this.snapshot();
   }
@@ -102,34 +112,40 @@ export class CloudAccountSessionService {
       version: 1, serviceOrigin: current.serviceOrigin, status: "signed-in",
       accountId: input.accountId, email: input.email ?? current.email, deviceSessionId: input.deviceSessionId,
       refreshCredential: input.refreshCredential, sessionExpiresAt: input.sessionExpiresAt,
+      lastSignOutReason: undefined,
       // Credential rotation must not cancel an unrelated in-flight request (a binding
       // approval waiting while the refresh credential rotates); a delivered credential
       // always resolves the request it answers, so it clears by default.
       ...(options.preservePending ? {
         status: current.status, pendingRequestId: current.pendingRequestId, pendingAuthorizationUrl: current.pendingAuthorizationUrl,
-        pendingScope: current.pendingScope, pendingExpiresAt: current.pendingExpiresAt,
-      } : {}),
+        pendingScope: current.pendingScope, pendingExpiresAt: current.pendingExpiresAt, lastRequestFailure: current.lastRequestFailure,
+      } : { lastRequestFailure: undefined }),
       updatedAt: new Date(this.clock()).toISOString(),
     });
     return this.snapshot();
   }
 
   /** Records the browser decision so the UI stops showing an in-flight request. */
-  resolveRequest(input: { requestId: string; status: "denied" | "expired" | "delivered" }) {
+  resolveRequest(input: { requestId: string; status: CloudAccountRequestResolution; errorCode?: string }) {
     const current = this.state.get();
     if (current.pendingRequestId !== input.requestId) return this.snapshot();
     const signedIn = Boolean(current.refreshCredential);
     this.state.put({
       ...current, status: signedIn ? "signed-in" : "signed-out",
       pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined,
+      lastRequestFailure: input.status === "delivery-failed" ? {
+        requestId: input.requestId,
+        ...(current.pendingScope ? { scope: current.pendingScope } : {}),
+        code: input.errorCode ?? "CONTROL_PLANE_DELIVERY_FAILED",
+      } : undefined,
       updatedAt: new Date(this.clock()).toISOString(),
     });
     return this.snapshot();
   }
 
-  signOut() {
+  signOut(reason: "user" | "credential-rejected" = "user") {
     const current = this.state.get();
-    this.state.put({ version: 1, serviceOrigin: current.serviceOrigin, status: "signed-out", updatedAt: new Date(this.clock()).toISOString() });
+    this.state.put({ version: 1, serviceOrigin: current.serviceOrigin, status: "signed-out", lastSignOutReason: reason, lastRequestFailure: undefined, updatedAt: new Date(this.clock()).toISOString() });
     return this.snapshot();
   }
 

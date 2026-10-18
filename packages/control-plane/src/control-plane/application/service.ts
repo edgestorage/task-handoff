@@ -1,5 +1,6 @@
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
+  CLOUD_ACCOUNT_NODE_HANDLE_LABEL,
   AppManagementJobResponseSchema,
   AppManagementUpdateCheckResponseSchema,
   AppManagementSnapshotSchema,
@@ -502,6 +503,32 @@ export class ControlPlaneService {
     return this.listNodes().find((node) => node.connectionPath.kind === "cloud-relay" && node.connectionPath.nodeHandle === nodeHandle);
   }
 
+  /** The locally managed node already linked to an account handle, if any. */
+  findNodeByCloudAccountHandle(nodeHandle: string) {
+    return this.listNodes().find((node) => node.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL] === nodeHandle);
+  }
+
+  /**
+   * Records that a locally managed node was published to the cloud account.
+   * This is metadata only: connectionMode, connectionPath and auth stay
+   * untouched so the Control Plane keeps using its original transport.
+   */
+  async linkNodeToCloudAccount(id: string, nodeHandle: string) {
+    const current = this.requireNode(id);
+    const updated = NodeSchema.parse({
+      ...current,
+      labels: { ...current.labels, [CLOUD_ACCOUNT_NODE_HANDLE_LABEL]: nodeHandle },
+      updatedAt: now(),
+    });
+    const node = await this.nodes.put(updated);
+    const duplicateNodeIds = this.listNodes()
+      .filter((candidate) => candidate.id !== id
+        && candidate.connectionPath.kind === "cloud-relay"
+        && candidate.connectionPath.nodeHandle === nodeHandle)
+      .map((candidate) => candidate.id);
+    return { node, duplicateNodeIds };
+  }
+
   /**
    * Creates the local `cloud-relay` record on first claim. The node handle is
    * the only cloud identity stored; no endpoint or credential ever arrives.
@@ -509,6 +536,8 @@ export class ControlPlaneService {
   async ensureCloudRelayNode(input: { nodeHandle: string; displayName?: string }) {
     const existing = this.findCloudRelayNode(input.nodeHandle);
     if (existing) return { nodeId: existing.id, pairing: cloudRelayPairingOf(existing) };
+    const linked = this.findNodeByCloudAccountHandle(input.nodeHandle);
+    if (linked) return { nodeId: linked.id, preserveLocalConnection: true as const };
     const timestamp = now();
     const node = NodeSchema.parse({
       id: createId("node"),
@@ -1221,6 +1250,11 @@ export class ControlPlaneService {
   async bindNodeCloudRelay(id: string, input: unknown) {
     const node = this.requireNode(id);
     return this.nodeAgentGateway.bindNodeCloudRelay(node, input);
+  }
+
+  async getNodeCloudRelayStatus(id: string) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.cloudRelayStatus(node);
   }
 
   async listNodeControlPlanePairings(id: string) {

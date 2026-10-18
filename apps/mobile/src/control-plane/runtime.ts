@@ -12,6 +12,12 @@ import type { MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
 import { attemptRemoteMobileSessionRevocation } from './profile-removal';
 import { MobileCloudAccountSession } from './cloud-account';
+import { mobileCloudDiscovery } from '../cloud-discovery';
+import {
+  clearCloudAccountReauthenticationRequired,
+  markCloudAccountReauthenticationRequired,
+  subscribeCloudAccountReauthentication,
+} from './account-reauthentication';
 import { isMobileTestMode, mobileCloudEnvironment } from '../platform/build-variant';
 
 export const mobileSecureStore = new ExpoSecureValueStore();
@@ -22,6 +28,7 @@ export const mobileProfileStore = new MobileControlPlaneProfileStore(mobileFileS
 export const mobileCloudAccountSession = new MobileCloudAccountSession(mobileSecureStore, {
   origin: mobileCloudEnvironment.serviceOrigin,
   allowNonProductionOrigin: isMobileTestMode,
+  endpointResolver: mobileCloudDiscovery,
 });
 const ACTIVE_CLOUD_ACCOUNT_KEY = 'cloud.account.active';
 type CloudAccountReference = { id: string; secureCredentialKey: string };
@@ -45,6 +52,7 @@ export async function saveActiveCloudAccountReference() {
     });
   }
   await mobileSecureStore.set(ACTIVE_CLOUD_ACCOUNT_KEY, JSON.stringify(next));
+  clearCloudAccountReauthenticationRequired();
   emitCloudAccountState();
 }
 
@@ -52,9 +60,8 @@ export async function hasActiveCloudAccount() {
   const reference = await activeCloudAccountReference();
   if (!reference) return false;
   if (await mobileSecureStore.get(reference.secureCredentialKey)) return true;
-  await mobileSecureStore.remove(ACTIVE_CLOUD_ACCOUNT_KEY);
-  await mobileProfileStore.removeCloudAccountProfiles();
-  emitCloudAccountState();
+  markCloudAccountReauthenticationRequired();
+  await clearActiveCloudAccountArtifacts();
   return false;
 }
 
@@ -72,13 +79,28 @@ export async function logoutActiveCloudAccount() {
     if (reference) await mobileCloudAccountSession.logout();
   } finally {
     try {
-      await mobileSecureStore.remove(ACTIVE_CLOUD_ACCOUNT_KEY);
-      await mobileProfileStore.removeCloudAccountProfiles();
+      await clearActiveCloudAccountArtifacts();
     } finally {
+      clearCloudAccountReauthenticationRequired();
       emitCloudAccountState();
     }
   }
 }
+
+let clearingActiveCloudAccount: Promise<void> | undefined;
+
+async function clearActiveCloudAccountArtifacts() {
+  if (!clearingActiveCloudAccount) {
+    clearingActiveCloudAccount = (async () => {
+      await mobileSecureStore.remove(ACTIVE_CLOUD_ACCOUNT_KEY);
+      await mobileProfileStore.removeCloudAccountProfiles();
+      emitCloudAccountState();
+    })().finally(() => { clearingActiveCloudAccount = undefined; });
+  }
+  return clearingActiveCloudAccount;
+}
+
+subscribeCloudAccountReauthentication(() => { void clearActiveCloudAccountArtifacts(); });
 
 async function activeCloudAccountReference(): Promise<CloudAccountReference | undefined> {
   const raw = await mobileSecureStore.get(ACTIVE_CLOUD_ACCOUNT_KEY);

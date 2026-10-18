@@ -43,6 +43,8 @@ test("cloud identity is persisted separately from the local Control Plane identi
 test("binding challenge is target-bound, one-time, memory-only and restart-invalidated", () => {
   const { root, identity, service } = fixture();
   const issued = service.createChallenge();
+  const hostname = os.hostname().trim().slice(0, 160);
+  assert.equal(issued.payload.hostname, hostname || undefined);
   assert.equal(new URL(issued.authorizationUrl).search, "");
   assert.doesNotMatch(fs.readFileSync(path.join(root, "binding.json"), "utf8"), new RegExp(issued.challengeCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.throws(() => service.consumeChallenge({ challengeCode: issued.challengeCode, controlPlaneId: "control_plane_b", fingerprint: issued.payload.publicKeyFingerprint }), { code: "BINDING_IDENTITY_CONFLICT" });
@@ -104,7 +106,33 @@ test("service outage keeps local disable and pending revocation instead of allow
   const pending = await lifecycle.disconnect();
   assert.equal(pending.status, "pending-revocation");
   assert.throws(() => service.createChallenge(), { code: "BINDING_STATE_CONFLICT" });
-  assert.deepEqual(stopped, ["scope-disabled", "binding-pending-revocation"]);
+  // The outbound control connection is kept for the retry; only the scope
+  // change stopped it before disconnect was attempted.
+  assert.deepEqual(stopped, ["scope-disabled"]);
+  assert.equal(service.revocationCredential(), "c".repeat(43));
+});
+
+test("disconnect confirms the remote revoke before dropping the control connection", async () => {
+  const { service } = fixture();
+  const challenge = service.createChallenge();
+  service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  const calls = [];
+  const lifecycle = new CloudConnectivityLifecycle({
+    state: service,
+    connections: {
+      async ensure() { calls.push("ensure"); },
+      async stop(reason) { calls.push(`stop:${reason}`); },
+    },
+    remote: {
+      async revoke(input) { calls.push(`revoke:${input.bindingId}`); return { status: "revoked" }; },
+      async setRemoteAccess() { throw new Error("unexpected setRemoteAccess"); },
+    },
+  });
+  const result = await lifecycle.disconnect();
+  assert.equal(result.status, "unbound");
+  assert.equal(service.revocationCredential(), undefined);
+  assert.deepEqual(calls, ["ensure", "revoke:binding_a", "stop:binding-revoked"]);
 });
 
 test("turning both relay scopes off notifies the cloud before stopping the outbound connection", async () => {

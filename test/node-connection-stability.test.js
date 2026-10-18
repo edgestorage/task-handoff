@@ -391,6 +391,49 @@ test("fleet aggregation serves node snapshots without waiting for a slow or reco
   assert.deepEqual(replacedConnection.items, []);
 });
 
+test("fleet aggregation tolerates remote projections slower than the legacy two-second deadline", async () => {
+  const timestamp = new Date().toISOString();
+  const runtime = {
+    id: "runtime_remote",
+    nodeId: "node_remote",
+    name: "Remote Runtime",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_200));
+      return new Response(JSON.stringify({ data: [runtime] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: "node_remote",
+    connectionMode: "control-plane-proxy",
+    connectionPath: {
+      kind: "control-plane-proxy",
+      proxyId: "proxy_remote",
+      proxyBindingId: "binding_remote",
+      targetNodeId: "node_remote",
+    },
+    status: "online",
+    auth: { mode: "proxy-binding" },
+    connectionPhase: "healthy",
+  };
+
+  const result = await gateway.listFleetRuntimes([node]);
+  assert.deepEqual(result.items.map((item) => item.id), [runtime.id]);
+  assert.deepEqual(result.nodeErrors, []);
+});
+
 test("instance lookup consumes the current node fleet snapshot without another request", async () => {
   const timestamp = "2026-08-21T00:00:00.000Z";
   const instance = ControlledInstanceSchema.parse({

@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  CLOUD_DISCOVERY,
   CLOUD_ENVIRONMENTS,
   cloudEnvironmentForServiceOrigin,
   isTrustedCloudRelayUrl,
@@ -12,11 +13,28 @@ const {
 test("registered cloud environments declare their service origin and Relay hosts", () => {
   assert.deepEqual(Object.keys(CLOUD_ENVIRONMENTS).sort(), ["production", "staging"]);
   assert.equal(CLOUD_ENVIRONMENTS.production.serviceOrigin, "https://cloud.thandoff.com");
-  assert.deepEqual(CLOUD_ENVIRONMENTS.production.relayHosts, ["relay.thandoff.com"]);
+  assert.deepEqual(CLOUD_ENVIRONMENTS.production.relayHosts, [
+    "relay.thandoff.com",
+    "relay.th.xpbox.cn",
+    "relay.aaasu.com",
+  ]);
   assert.equal(CLOUD_ENVIRONMENTS.staging.serviceOrigin, "https://th.aaasu.com");
   assert.deepEqual(CLOUD_ENVIRONMENTS.staging.relayHosts, ["relay.aaasu.com"]);
   assert.equal(resolveCloudEnvironment(undefined), CLOUD_ENVIRONMENTS.production);
   assert.equal(resolveCloudEnvironment("staging"), CLOUD_ENVIRONMENTS.staging);
+});
+
+test("registered cloud environments declare their versioned plain-text discovery records", () => {
+  assert.deepEqual(CLOUD_DISCOVERY.production, {
+    record: "_cloud.thandoff.com",
+    fallbackOrigin: "https://cloud.thandoff.com",
+    allowedHostSuffixes: ["thandoff.com"],
+  });
+  assert.deepEqual(CLOUD_DISCOVERY.staging, {
+    record: "_cloud.aaasu.com",
+    fallbackOrigin: "https://th.aaasu.com",
+    allowedHostSuffixes: ["aaasu.com"],
+  });
 });
 
 test("unknown cloud environment identifiers fail closed instead of trusting any origin", () => {
@@ -43,12 +61,21 @@ test("Relay URL trust follows the environment Relay host allowlist", () => {
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://relay1.relay.aaasu.com/connect"), true);
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://relay.aaasu.com/connect"), true);
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://relay.thandoff.com/connect"), false);
-  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay1.relay.aaasu.com/connect"), false);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.thandoff.com/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://hk.relay.thandoff.com/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.th.xpbox.cn/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://hk.relay.th.xpbox.cn/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.aaasu.com/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://hk.relay.aaasu.com/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.taskhandoff.com/connect"), false);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.th.xpbox.cn.evil.test/connect"), false);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://evilrelay.th.xpbox.cn/connect"), false);
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://evilrelay.aaasu.com/connect"), false);
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://relay.aaasu.com.evil.test/connect"), false);
   assert.equal(isTrustedCloudRelayUrl(staging, "wss://relay9.relay.example.com/connect"), false);
   assert.equal(isTrustedCloudRelayUrl(staging, "ws://relay1.relay.aaasu.com/connect"), false);
   assert.equal(isTrustedCloudRelayUrl(production, "http://relay.thandoff.com/connect"), false);
+  assert.equal(isTrustedCloudRelayUrl(production, "ws://relay.th.xpbox.cn/connect"), false);
 });
 
 test("ad-hoc cloud environments keep the isolated single-host behaviour", () => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Redirect, router, Stack } from 'expo-router';
+import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
@@ -22,6 +22,7 @@ export default function CloudAccountScreen() {
 function CloudAccountContent() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const { reason } = useLocalSearchParams<{ reason?: string }>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [verification, setVerification] = useState('');
@@ -110,7 +111,7 @@ function CloudAccountContent() {
   return <>
     <Stack.Screen options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
     <CloudAuthScaffold description={description} error={error} title={title}>
-      {notice ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="checkmark-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{notice}</Text></View> : null}
+      {reason === 'reauthentication' ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="information-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{t('cloudAccount.reauthenticationNotice')}</Text></View> : notice ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="checkmark-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{notice}</Text></View> : null}
       <View style={styles.form}>
         {mode === 'verify' ? <>
           <CloudAuthLabel>{t('cloudAccount.verificationToken')}</CloudAuthLabel>
@@ -134,7 +135,7 @@ function CloudAccountContent() {
               style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
               <Icon color={colors.textMuted} name="mail-outline" size={18}/>
-              <TextInput accessibilityLabel={t('cloudAccount.email')} autoCapitalize="none" autoCorrect={false} editable={!busy} inputMode="email" keyboardType="email-address" onChangeText={(value) => { setEmail(value); setError(undefined); }} placeholder={t('cloudAccount.emailPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType="next" style={[styles.input, { color: colors.text }]} textContentType="emailAddress" value={email}/>
+              <TextInput accessibilityLabel={t('cloudAccount.email')} autoCapitalize="none" autoCorrect={false} editable={!busy} inputMode="email" keyboardType="email-address" onChangeText={(value) => { setEmail(value); setError(undefined); }} placeholder={t('cloudAccount.emailPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType="next" style={[styles.input, { color: colors.text }]} testID="cloud-account-email" textContentType="emailAddress" value={email}/>
             </View>
           </View>
           <View style={styles.field}>
@@ -143,7 +144,7 @@ function CloudAccountContent() {
               style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
               <Icon color={colors.textMuted} name="lock-closed" size={18}/>
-              <TextInput accessibilityLabel={t('cloudAccount.password')} editable={!busy} onChangeText={(value) => { setPassword(value); setError(undefined); }} onSubmitEditing={() => { if (mode === 'login' && email.trim() && password && !busy) void authenticate('email'); }} placeholder={t('cloudAccount.passwordPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType={mode === 'login' ? 'go' : 'done'} secureTextEntry={!passwordVisible} style={[styles.input, { color: colors.text }]} textContentType={mode === 'login' ? 'password' : 'newPassword'} value={password}/>
+              <TextInput accessibilityLabel={t('cloudAccount.password')} editable={!busy} onChangeText={(value) => { setPassword(value); setError(undefined); }} onSubmitEditing={() => { if (mode === 'login' && email.trim() && password && !busy) void authenticate('email'); }} placeholder={t('cloudAccount.passwordPlaceholder')} placeholderTextColor={colors.textMuted} returnKeyType={mode === 'login' ? 'go' : 'done'} secureTextEntry={!passwordVisible} style={[styles.input, { color: colors.text }]} testID="cloud-account-password" textContentType={mode === 'login' ? 'password' : 'newPassword'} value={password}/>
               <Pressable accessibilityLabel={t(passwordVisible ? 'cloudAccount.hidePassword' : 'cloudAccount.showPassword')} accessibilityRole="button" hitSlop={10} onPress={() => setPasswordVisible((value) => !value)}><Icon color={colors.textMuted} name={passwordVisible ? 'eye-off-outline' : 'eye-outline'} size={18}/></Pressable>
             </View>
             {mode === 'register' ? <Text style={[styles.passwordHint, { color: password.length >= 12 ? colors.sessionActive : colors.textMuted }]}>{t('cloudAccount.passwordHint')}</Text> : null}

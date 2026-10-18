@@ -2176,6 +2176,13 @@ export const NodeControlPlaneProxyStateSchema = z.object({
   updatedAt: TimestampSchema,
 }).strict();
 
+/**
+ * Internal node label linking a locally managed node to its opaque cloud
+ * account handle. The handle is metadata only: it must not change how this
+ * Control Plane connects to the node.
+ */
+export const CLOUD_ACCOUNT_NODE_HANDLE_LABEL = "cloudAccountNodeHandle";
+
 export const NodeSchema = z
   .object({
     id: IdSchema,

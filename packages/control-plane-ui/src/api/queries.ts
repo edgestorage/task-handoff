@@ -206,7 +206,7 @@ export function useCloudAccountQuery() {
     retry: false,
     // While a browser approval is outstanding the Control Plane refreshes the decision in the
     // background, so the UI only needs to mirror it.
-    refetchInterval: (query) => (query.state.data?.pendingRequest ? 3_000 : false),
+    refetchInterval: (query) => (query.state.data?.pendingRequest ? 3_000 : query.state.data?.signedIn ? 15_000 : false),
   });
 }
 

@@ -1,4 +1,5 @@
 import { MobileCloudAccountSession } from '../src/control-plane/cloud-account';
+import { clearCloudAccountReauthenticationRequired, cloudAccountReauthenticationRequired } from '../src/control-plane/account-reauthentication';
 import type { SecureValueStore } from '../src/platform/secure-storage';
 
 let mockRandomSourceCounter = 0;
@@ -124,6 +125,7 @@ test('a session refreshing after another session rotated presents the persisted 
 });
 
 test('refresh replay or unauthorized rotation clears device credentials and requires reauthentication', async () => {
+  clearCloudAccountReauthenticationRequired();
   const key = 'cloud.account.device_a';
   const storage = store({ [key]: JSON.stringify({ refreshCredential: 'replayed', deviceSessionId: 'device_a', accountId: 'account_a' }) });
   const request = jest.fn(async () => response({ error: { code: 'REFRESH_TOKEN_REPLAYED', message: 'revoked' } }, 401)) as unknown as typeof fetch;
@@ -131,4 +133,5 @@ test('refresh replay or unauthorized rotation clears device credentials and requ
 
   await expect(session.accessToken()).rejects.toMatchObject({ code: 'CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED' });
   expect(storage.values.has(key)).toBe(false);
+  expect(cloudAccountReauthenticationRequired()).toBe(true);
 });

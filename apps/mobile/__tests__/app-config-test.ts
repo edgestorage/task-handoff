@@ -1,6 +1,7 @@
 describe('mobile native feature variants', () => {
   const originalVariant = process.env.TASK_HANDOFF_MOBILE_VARIANT;
   const originalStagingOrigin = process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
+  const originalDiscoveryRecord = process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD;
   const originalOfficialAccountEnabled = process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
   const originalCloudRelayEnabled = process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
 
@@ -9,6 +10,8 @@ describe('mobile native feature variants', () => {
     else process.env.TASK_HANDOFF_MOBILE_VARIANT = originalVariant;
     if (originalStagingOrigin === undefined) delete process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
     else process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = originalStagingOrigin;
+    if (originalDiscoveryRecord === undefined) delete process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD;
+    else process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD = originalDiscoveryRecord;
     if (originalOfficialAccountEnabled === undefined) delete process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
     else process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED = originalOfficialAccountEnabled;
     if (originalCloudRelayEnabled === undefined) delete process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
@@ -70,6 +73,34 @@ describe('mobile native feature variants', () => {
     expect(require('../app.config.js')().extra.cloudServiceOrigin).toBe('https://staging.cloud.example.test');
     process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = 'http://staging.cloud.example.test';
     expect(() => require('../app.config.js')()).toThrow(/must use HTTPS/);
+  });
+
+  test('bakes the versioned _cloud TXT record for production and staging', () => {
+    process.env.TASK_HANDOFF_MOBILE_VARIANT = 'production';
+    expect(require('../app.config.js')().extra.cloudDiscovery).toEqual({
+      record: '_cloud.thandoff.com',
+      fallbackOrigin: 'https://cloud.thandoff.com',
+      allowedHostSuffixes: ['thandoff.com'],
+    });
+
+    process.env.TASK_HANDOFF_MOBILE_VARIANT = 'staging';
+    delete process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
+    expect(require('../app.config.js')().extra.cloudDiscovery).toEqual({
+      record: '_cloud.aaasu.com',
+      fallbackOrigin: 'https://th.aaasu.com',
+      allowedHostSuffixes: ['aaasu.com'],
+    });
+  });
+
+  test('uses the explicit discovery record for an ad-hoc cloud override', () => {
+    process.env.TASK_HANDOFF_MOBILE_VARIANT = 'staging';
+    process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = 'https://staging.cloud.example.test';
+    process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD = '_cloud.example.test';
+    expect(require('../app.config.js')().extra.cloudDiscovery).toEqual({
+      record: '_cloud.example.test',
+      fallbackOrigin: 'https://staging.cloud.example.test',
+      allowedHostSuffixes: ['staging.cloud.example.test'],
+    });
   });
 
   test('official account is disabled by default without changing direct profiles', () => {

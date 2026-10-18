@@ -74,6 +74,7 @@
     "export:audit": "pnpm run export:audit:ios && pnpm run export:audit:android",
     "export:audit:ios": "expo export --platform ios --output-dir dist/audit/ios",
     "export:audit:android": "expo export --platform android --output-dir dist/audit/android",
+    "e2e:ios": "bash e2e/ios/run.sh",
     "check:bundle": "node scripts/check-boundaries.mjs --bundle-dir dist/audit",
     "release:check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run check:boundaries && pnpm run prebuild:check && pnpm run export:audit && pnpm run check:bundle",
     "lint": "expo lint",

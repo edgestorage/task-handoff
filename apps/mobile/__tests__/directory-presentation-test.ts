@@ -36,6 +36,7 @@ describe('directory presentation', () => {
 
   test('formats connection mode and relative last seen compactly', () => {
     expect(connectionModeLabel('reverse-wss')).toBe('Remote');
+    expect(connectionModeLabel('cloud-relay')).toBe('Thandoff relay');
     const now = Date.parse('2026-08-06T00:00:00.000Z');
     expect(relativeObservedAt('2026-08-05T23:59:35.000Z', now)).toBe('Seen just now');
     expect(relativeObservedAt('2026-08-05T22:00:00.000Z', now)).toBe('Seen 2h ago');

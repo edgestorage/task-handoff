@@ -56,7 +56,7 @@ function nodeStore() {
   };
 }
 
-function controlPlaneChannel(options: { controlPlaneId: string; bindingId: string; socket: ReturnType<typeof linkedFrameSockets>["left"] | (() => ReturnType<typeof linkedFrameSockets>["left"]); identity: ReturnType<typeof ed25519Identity>; store: ReturnType<typeof nodeStore>; audit?: Array<Record<string, unknown>>; onConnect?: (input: { paired: boolean }) => void }) {
+function controlPlaneChannel(options: { controlPlaneId: string; bindingId: string; socket: ReturnType<typeof linkedFrameSockets>["left"] | (() => ReturnType<typeof linkedFrameSockets>["left"]); identity: ReturnType<typeof ed25519Identity>; store: ReturnType<typeof nodeStore>; audit?: Array<Record<string, unknown>>; onConnect?: (input: { paired: boolean }) => void; onPreserveLocalConnection?: (nodeHandle: string) => void }) {
   const tunnel = new ControlPlaneNodeAgentTunnelTransport();
   const transport = new CloudRelayNodeAgentTransport({ tunnel });
   const channels = new CloudNodeRelayChannels({
@@ -68,6 +68,7 @@ function controlPlaneChannel(options: { controlPlaneId: string; bindingId: strin
     }),
     transport: () => transport,
     nodes: options.store.adapter,
+    ...(options.onPreserveLocalConnection ? { onPreserveLocalConnection: options.onPreserveLocalConnection } : {}),
     ...(options.audit ? { audit: (event) => { options.audit!.push(event); } } : {}),
   });
   return { tunnel, transport, channels };
@@ -119,6 +120,25 @@ test("each Control Plane keeps its own channel and pairing for one node, and one
   assert.deepEqual(await second.json(), { data: { nodeId: "/health" } });
   assert.equal(store2.calls.disconnected.length, 0);
   cpTwo.channels.closeAll("test-done");
+});
+
+test("a stale cloud claim preserves the locally managed node connection without attaching a relay", async () => {
+  const node = ed25519Identity();
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  (store.adapter as any).resolve = () => ({ nodeId: "node_local_managed", preserveLocalConnection: true });
+  const sockets = linkedFrameSockets();
+  const preserved: string[] = [];
+  const channel = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets.left, identity: cp, store, onPreserveLocalConnection: (nodeHandle) => preserved.push(nodeHandle) });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+
+  const result = await channel.channels.attach(event);
+
+  assert.deepEqual(result, { status: "attached", preservedLocalConnection: true, nodeId: "node_local_managed", nodeHandle: "nrh_node_alpha" });
+  assert.equal(channel.transport.connected("node_local_managed"), false);
+  assert.deepEqual(store.calls.connected, []);
+  assert.equal(store.records.size, 0);
+  assert.deepEqual(preserved, ["nrh_node_alpha"]);
 });
 
 test("a reconnect proves the pinned pairing instead of enrolling a new one", async () => {

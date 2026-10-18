@@ -1,0 +1,55 @@
+appId: com.taskhandoff.mobile.staging
+name: Cloud Relay sign-in and cold-start recovery
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Connect a Control Plane|连接控制面板"
+    timeout: 30000
+- tapOn: "Connect a Control Plane|连接控制面板"
+- extendedWaitUntil:
+    visible: "Use Thandoff account and Relay|使用 Thandoff 账户和中转"
+    timeout: 15000
+- tapOn: "Use Thandoff account and Relay|使用 Thandoff 账户和中转"
+- extendedWaitUntil:
+    visible: "Welcome back|欢迎回来"
+    timeout: 30000
+- tapOn:
+    id: "cloud-account-email"
+- inputText: "${E2E_EMAIL}"
+- tapOn:
+    id: "cloud-account-password"
+- inputText: "${E2E_PASSWORD}"
+- pressKey: Enter
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn:
+    text: "Not Now|以后再说"
+    optional: true
+- extendedWaitUntil:
+    visible: "Choose Control Plane|选择 Control Plane"
+    timeout: 45000
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn:
+    text: "Not Now|以后再说"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: "cloud-control-plane-row"
+    timeout: 30000
+- tapOn:
+    id: "cloud-control-plane-row"
+    index: 0
+- extendedWaitUntil:
+    visible: "All Instances|全部实例"
+    timeout: 60000
+- assertVisible: "AI Sessions|AI 会话"
+- assertNotVisible: "AI Sessions could not be loaded.|无法加载 AI 会话。"
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "All Instances|全部实例"
+    timeout: 60000
+- assertVisible: "AI Sessions|AI 会话"
+- assertNotVisible: "AI Sessions could not be loaded.|无法加载 AI 会话。"
