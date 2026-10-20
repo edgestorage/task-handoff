@@ -391,11 +391,8 @@ export class CloudRelayDataConnectionManager {
         throw error;
       } finally {
         entry.resuming = undefined;
+        if (!entry.connection && this.connections.get(allocationId) === entry) this.scheduleResume(allocationId);
       }
-      // Schedule only after the in-flight marker is cleared. Scheduling from
-      // the catch block above would no-op because `resuming` still held this
-      // promise, permanently stranding a transiently failed resume.
-      if (!entry.connection && this.connections.get(allocationId) === entry) this.scheduleResume(allocationId);
     })();
     return entry.resuming;
   }

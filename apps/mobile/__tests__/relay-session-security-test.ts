@@ -49,6 +49,7 @@ function grantFor(clientProofPublicKey: string): RelaySessionGrant {
     grantId: 'grant_a',
     generation: 1,
     allocationId: 'allocation_a',
+    accessTicketId: 'access_ticket_a',
     relayId: 'relay_a',
     relayRegion: 'cn-north-test-1',
     relayUrl: 'wss://sz1-staging.relay.aaasu.com/connect',

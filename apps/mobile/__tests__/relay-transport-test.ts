@@ -63,6 +63,7 @@ function grantFor(candidate: (typeof candidates)[number], generation = 1, overri
     grantId: `grant_${generation}`,
     generation,
     allocationId: candidate.allocationId,
+    accessTicketId: 'access_ticket_a',
     relayId: candidate.relayId,
     relayRegion: candidate.relayRegion,
     relayUrl: candidate.relayUrl,

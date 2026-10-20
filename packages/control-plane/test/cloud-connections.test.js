@@ -148,6 +148,37 @@ test("relay data connection never dials an allocation the Coordinator did not ju
   assert.equal(connects[0].allocation.allocationId, "allocation_a");
 });
 
+test("relay data connection retries after a transient resume failure", { timeout: 5_000 }, async () => {
+  let resumeCalls = 0;
+  let resolveSecondResume;
+  const secondResume = new Promise((resolve) => { resolveSecondResume = resolve; });
+  const manager = new CloudRelayDataConnectionManager({
+    verifyAllocation: async (value) => value,
+    verifyGrant: async (grant) => ({ allocationId: grant.allocationId, relayUrl: grant.relayUrl, epoch: 1, channelKind: "access", grant }),
+    connector: {
+      async connect() { throw new Error("unexpected new connection"); },
+      async resume() {
+        resumeCalls += 1;
+        if (resumeCalls === 1) throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+        resolveSecondResume();
+        return { async close() {} };
+      },
+    },
+  });
+
+  await assert.rejects(() => manager.applyGrant({
+    allocationId: "allocation_retry",
+    relayUrl: "wss://relay.example.test/connect",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), { code: "ECONNRESET" });
+
+  await Promise.race([
+    secondResume,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("transient resume failure was not retried")), 1_000)),
+  ]);
+  assert.equal(resumeCalls, 2);
+});
+
 test("relay data connection persists grants with private permissions and resumes after a process restart", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-sessions-"));
   const statePath = path.join(directory, "cloud-relay-sessions.json");
@@ -191,6 +222,38 @@ test("relay data connection persists grants with private permissions and resumes
       clock: () => now,
     });
     assert.equal((await third.resumePersistedSessions()).length, 1);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("relay data connection ignores pre-upgrade grants that cannot be resumed safely", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-sessions-"));
+  const statePath = path.join(directory, "cloud-relay-sessions.json");
+  const now = Date.parse("2026-10-20T00:00:00.000Z");
+  const legacyGrant = relaySessionGrant({ now, allocationId: "allocation_legacy" });
+  delete legacyGrant.accessTicketId;
+  const currentGrant = relaySessionGrant({ now, allocationId: "allocation_current" });
+  try {
+    fs.writeFileSync(statePath, JSON.stringify({
+      version: 1,
+      updatedAt: new Date(now).toISOString(),
+      sessions: [legacyGrant, currentGrant].map((grant) => ({ allocationId: grant.allocationId, relayUrl: grant.relayUrl, epoch: now, channelKind: "access", grant })),
+    }));
+    const resumed = [];
+    const manager = new CloudRelayDataConnectionManager({
+      verifyAllocation: async (value) => value,
+      verifyGrant: async (value) => ({ allocationId: value.grant.allocationId, relayUrl: value.grant.relayUrl, epoch: Date.parse(value.grant.issuedAt), channelKind: "access", grant: value.grant }),
+      connector: {
+        async connect() { throw new Error("unexpected new connection"); },
+        async resume(input) { resumed.push(input); return { async close() {} }; },
+      },
+      sessionStatePath: statePath,
+      clock: () => now,
+    });
+
+    assert.deepEqual(await manager.resumePersistedSessions(), [currentGrant.allocationId]);
+    assert.deepEqual(resumed.map((entry) => entry.grant.allocationId), [currentGrant.allocationId]);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -250,6 +313,7 @@ function relaySessionGrant({ now, allocationId: allocationOverride, relayUrl: re
     sessionId: identity.sessionId,
     grantId: "grant_restart_1",
     generation: 1,
+    accessTicketId: "access_ticket_restart",
     ...identity,
     relayRegion: "cn-north-sz1-staging",
     clientProofPublicKey: "b".repeat(43),
@@ -292,7 +356,7 @@ test("authoritative revocation and clone events close both connection planes; st
 test("Control Plane accepts only current Coordinator-delivered allocation identity and trusted Relay origin", () => {
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
   const base = relaySessionGrant({ now, allocationId: "allocation_a", relayUrl: "wss://relay.cloud.example.test/connect", targetPublicKeyFingerprint: fingerprint, accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a" });
-  const attachFor = (grant, extra = {}) => ({ protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.sessionTranscriptTicket.transcriptTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32), ...extra });
+  const attachFor = (grant, extra = {}) => ({ protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32), ...extra });
   const allocation = (grant, relayUrl = grant.relayUrl, attach = attachFor(grant)) => ({ type: "relay-allocation", allocationId: grant.allocationId, relayUrl, attach, grant });
   const state = { snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", accountId: "account_a", bindingId: "binding_a", bindingRevision: 2, cloudControlPlaneId: "cp_cloud_a", identity: { controlPlaneId: "control_plane_a", fingerprint } }) };
   assert.equal(verifyCoordinatorRelayAllocation(allocation(base), state).allocationId, "allocation_a");
@@ -300,6 +364,7 @@ test("Control Plane accepts only current Coordinator-delivered allocation identi
   assert.throws(() => verifyCoordinatorRelayAllocation(allocation(untrusted), state), { code: "UNTRUSTED_RELAY_URL" });
   assert.throws(() => verifyCoordinatorRelayAllocation(allocation(base, "wss://attacker.example/connect"), state), { code: "UNTRUSTED_RELAY_URL" });
   assert.throws(() => verifyCoordinatorRelayAllocation(allocation(base, base.relayUrl, attachFor(base, { bindingRevision: 1 })), state), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
+  assert.throws(() => verifyCoordinatorRelayAllocation(allocation(base, base.relayUrl, attachFor(base, { ticketId: "access_ticket_forged" })), state), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
   const shared = relaySessionGrant({ now, allocationId: "allocation_a", relayUrl: "wss://relay.cloud.example.test/connect", targetPublicKeyFingerprint: fingerprint, accountId: "account_grantee", deviceSessionId: "device_shared", controlPlaneId: "cp_cloud_a", bindingId: "binding_a", ownerAccountId: "account_a", accessMode: "shared", shareGrantId: "share_a", shareRevision: 4, shareRole: "viewer" });
   const sharedAttach = attachFor(shared, { accountId: "account_grantee", ownerAccountId: "account_a", accessMode: "shared", shareGrantId: "share_a", shareRevision: 4, shareRole: "viewer" });
   assert.equal(verifyCoordinatorRelayAllocation(allocation(shared, shared.relayUrl, sharedAttach), state).ticket.ownerAccountId, "account_a");
@@ -401,7 +466,7 @@ test("relay attach acknowledges the Coordinator before the client completes the 
   }
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
   const grant = relaySessionGrant({ now, allocationId: "allocation_a", relayUrl: "ws://localhost:8080/connect", targetPublicKeyFingerprint: fingerprint, accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a" });
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.sessionTranscriptTicket.transcriptTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey: new Uint8Array(32) }), publicIdentity: () => ({ publicKey: "c".repeat(43) }), signRelayRoleProof: (payload) => ({ ...payload, signature: "s".repeat(64) }) };
   const connector = new CloudRelayConnector({ identity, bridge: {}, webSocket: FakeSocket });
   const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, grant } });

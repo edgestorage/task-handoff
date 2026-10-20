@@ -25,6 +25,19 @@ const PersistedRelaySessionsSchema = z.object({
 export type PersistedRelaySession = z.infer<typeof PersistedRelaySessionSchema>;
 type PersistedRelaySessions = z.infer<typeof PersistedRelaySessionsSchema>;
 
+function sanitizePersistedRelaySessions(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const sessions = (value as { sessions?: unknown }).sessions;
+  if (!Array.isArray(sessions)) return value;
+  const compatible = sessions.filter((session) => {
+    if (!session || typeof session !== "object" || Array.isArray(session)) return true;
+    const grant = (session as { grant?: unknown }).grant;
+    if (!grant || typeof grant !== "object" || Array.isArray(grant)) return true;
+    return (grant as { accessTicketId?: unknown }).accessTicketId !== undefined;
+  });
+  return compatible.length === sessions.length ? value : { ...value, sessions: compatible };
+}
+
 /** Protected local state for grants that may outlive the Coordinator connection. */
 export class RelaySessionStore {
   private readonly file: JsonFile<PersistedRelaySessions>;
@@ -34,6 +47,7 @@ export class RelaySessionStore {
     this.clock = options.clock ?? Date.now;
     this.file = new JsonFile<PersistedRelaySessions>(statePath, () => this.empty(), {
       schema: PersistedRelaySessionsSchema,
+      sanitize: sanitizePersistedRelaySessions,
       directoryMode: 0o700,
       fileMode: 0o600,
       rejectInvalid: true,

@@ -81,6 +81,7 @@ export const RelaySessionGrantPayloadSchema = z.strictObject({
   grantId: IdSchema,
   generation: z.number().int().positive(),
   allocationId: IdSchema,
+  accessTicketId: IdSchema,
   relayId: IdSchema,
   relayRegion: z.string().trim().min(1).max(80),
   relayUrl: z.url(),

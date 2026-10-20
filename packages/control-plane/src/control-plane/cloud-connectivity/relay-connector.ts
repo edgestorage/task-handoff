@@ -48,6 +48,7 @@ export function verifyCoordinatorRelayAllocation(raw: unknown, state: { snapshot
       attach.role !== "control-plane" || attach.relayId !== grant.relayId ||
       attach.controlPlaneId !== grant.controlPlaneId || attach.accountId !== grant.accountId ||
       attach.deviceSessionId !== grant.deviceSessionId || attach.bindingId !== grant.bindingId || attach.bindingRevision !== grant.bindingRevision ||
+      attach.ticketId !== grant.accessTicketId ||
       !sharedIdentityMatches ||
       current.status !== "active" || current.scopes.deviceAccess !== true || current.cloudControlPlaneId !== grant.controlPlaneId ||
       current.accountId !== ownerAccountId || current.bindingId !== grant.bindingId || current.bindingRevision !== grant.bindingRevision ||

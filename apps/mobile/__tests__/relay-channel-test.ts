@@ -60,6 +60,7 @@ const grant = {
   grantId: 'grant_a',
   generation: 1,
   allocationId: 'allocation_a',
+  accessTicketId: 'access_ticket_a',
   relayId: 'relay_a',
   relayRegion: 'eu-west',
   relayUrl: 'wss://eu.relay.thandoff.com/connect',

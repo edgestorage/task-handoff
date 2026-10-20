@@ -172,6 +172,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     grantId: "grant_a",
     generation: 1,
     allocationId: "allocation_a",
+    accessTicketId: "access_ticket_a",
     relayId: "relay_a",
     relayRegion: "eu-west",
     relayUrl: "ws://localhost:8080/connect",
@@ -190,7 +191,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     expiresAt,
     signature: "s".repeat(86),
   } as const;
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: transcriptTicket.transcriptTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const sessionKey = new Uint8Array(32);
   const identity = {
     acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey }),
