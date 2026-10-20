@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MOBILE_EVENT_STREAM_ROUTE } from '@task-handoff/control-plane-client';
 import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
 import {
   COMPACT_EVENT_ENVELOPE_VERSION,
@@ -83,7 +84,7 @@ function websocketRouteUrl(origin: string, route: string) {
 }
 
 function websocketUrl(origin: string) {
-  return websocketRouteUrl(origin, '/api/events?aiSessionTransient=1&resourceMetricsScope=1');
+  return websocketRouteUrl(origin, MOBILE_EVENT_STREAM_ROUTE);
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
@@ -158,6 +159,10 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         this.eventSubscribers.delete(handlers);
         if (!this.eventSubscribers.size) this.closeEventConnection();
         else if (this.eventOpen) this.sendEventSubscription();
+      },
+      updateTopics: (topics) => {
+        handlers.topics = topics;
+        this.sendEventSubscription();
       },
       updateAiSessionTransient: (subscription) => {
         handlers.aiSessionTransient = subscription;

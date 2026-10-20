@@ -56,6 +56,7 @@ export type MobileControlPlaneEventHandlers = {
 
 export interface MobileControlPlaneEventConnection {
   close(): void;
+  updateTopics?(topics: readonly string[]): void;
   updateAiSessionTransient?(subscription: AiSessionTransientSubscription): void;
 }
 

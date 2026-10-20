@@ -10,8 +10,9 @@ import { mobileControlPlaneProfileAddress } from './profile';
 
 export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps) {
   const { colors, dark } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const secondaryText = [font({ size: 13 }), foregroundStyle('secondary'), lineLimit(2), textSelection(true)];
+  const sharedAccess = props.profile.access.kind === 'cloud-relay' && props.profile.access.resourceAccess?.kind === 'shared' ? props.profile.access.resourceAccess : undefined;
 
   return (
     <View style={{ flex: 1 }}>
@@ -29,6 +30,10 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
             <ValueRow label={t('controlPlane.address')} systemImage="link" value={mobileControlPlaneProfileAddress(props.profile)} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.id')} systemImage="number" value={props.profile.identity.controlPlaneId} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.fingerprint')} systemImage="checkmark.seal" value={props.profile.identity.publicKeyFingerprint} modifiers={secondaryText} />
+            {sharedAccess ? <>
+              <ValueRow label={t('controlPlane.cloudAccess')} systemImage="person.2" value={t('cloudControlPlanes.sharedRole', { role: t(sharedAccess.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer') })} modifiers={secondaryText} />
+              <ValueRow label={t('controlPlane.shareExpiry')} systemImage="calendar" value={new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(sharedAccess.expiresAt))} modifiers={secondaryText} />
+            </> : null}
             {props.currentAccess ? <>
               <ValueRow label={t('controlPlane.memberRole')} systemImage="person.badge.key" value={props.currentAccess.roleIds.map((roleId) => { const key = controlPlaneRoleMessageKey(roleId); return key ? t(key) : roleId; }).join(', ')} modifiers={secondaryText} />
               <ValueRow label={t('controlPlane.nodeAccess')} systemImage="server.rack" value={props.currentAccess.nodeScope.kind === 'all' ? t('controlPlane.allNodes') : t('controlPlane.selectedNodes', { count: props.currentAccess.nodeScope.nodeIds.length })} modifiers={secondaryText} />

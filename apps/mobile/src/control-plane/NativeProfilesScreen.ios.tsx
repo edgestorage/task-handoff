@@ -77,6 +77,8 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
         {props.profiles.map((profile) => {
           const active = Boolean(props.activeProfile && sameMobileControlPlaneProfileIdentity(props.activeProfile, profile));
           const name = profile.identity.displayName || t('profiles.defaultName');
+          const sharedAccess = profile.access.kind === 'cloud-relay' && profile.access.resourceAccess?.kind === 'shared' ? profile.access.resourceAccess : undefined;
+          const accessLabel = sharedAccess ? t('cloudControlPlanes.sharedRole', { role: t(sharedAccess.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer') }) : undefined;
           return (
             <Button
               key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}
@@ -87,7 +89,7 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
                 <Image size={22} systemName="server.rack" />
                 <VStack alignment="leading" spacing={3}>
                   <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{name}</Text>
-                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{mobileControlPlaneProfileAddress(profile)}</Text>
+                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{accessLabel ? `${accessLabel} · ${mobileControlPlaneProfileAddress(profile)}` : mobileControlPlaneProfileAddress(profile)}</Text>
                 </VStack>
                 <Spacer />
                 {active ? <Image size={17} systemName="checkmark.circle.fill" /> : null}

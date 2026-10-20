@@ -830,7 +830,7 @@ function storedSessionPreviewExpanded() {
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
-const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.authenticated)));
 const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
 const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
 const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);

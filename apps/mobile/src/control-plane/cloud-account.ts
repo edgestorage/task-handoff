@@ -1,11 +1,10 @@
 import { OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
 import * as Crypto from 'expo-crypto';
 import type { SecureValueStore } from '../platform/secure-storage';
-import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, MOBILE_PRODUCTION_CLOUD_ORIGIN } from '../platform/build-variant';
+import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, mobileCloudEnvironment } from '../platform/build-variant';
 import { markCloudAccountReauthenticationRequired } from './account-reauthentication';
 import type { CloudEndpointResolver } from '../cloud-discovery/resolver';
 
-export const CLOUD_PRODUCTION_ORIGIN = MOBILE_PRODUCTION_CLOUD_ORIGIN;
 type TokenSet = Omit<MobileTokenResponse, 'tokenType'>;
 type PendingEmailSecondFactor = { createdAt: number; email: string; password: string; redirectUri: string };
 type LoginResult = { authorizationUrl?: string; code?: string; state?: string };
@@ -27,12 +26,12 @@ export class MobileCloudAccountSession {
   private restoration?: Promise<unknown>;
 
   constructor(private readonly secureStore: SecureValueStore, options: { origin?: string; request?: typeof fetch; allowNonProductionOrigin?: boolean; endpointResolver?: CloudEndpointResolver; reference?: { id: string; secureCredentialKey: string } } = {}) {
-    this.baseOrigin = new URL(options.origin ?? CLOUD_PRODUCTION_ORIGIN).origin;
+    this.baseOrigin = new URL(options.origin ?? mobileCloudEnvironment.serviceOrigin).origin;
     this.endpointResolver = options.endpointResolver;
     const trustedDevelopment = isMobileTestMode && options.allowNonProductionOrigin === true;
     const trustedEnvironment = isTrustedMobileCloudServiceOrigin(this.baseOrigin);
     const trustedDiscovery = options.endpointResolver?.isTrustedOrigin(this.baseOrigin) ?? false;
-    if (this.baseOrigin !== CLOUD_PRODUCTION_ORIGIN && !trustedDevelopment && !trustedEnvironment && !trustedDiscovery) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
+    if (this.baseOrigin !== mobileCloudEnvironment.serviceOrigin && !trustedDevelopment && !trustedEnvironment && !trustedDiscovery) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
     this.client = new CloudMobileAccountClient({
       origin: this.baseOrigin,
       request: options.request ?? (options.endpointResolver?.enabled ? options.endpointResolver.request : undefined),
@@ -46,7 +45,7 @@ export class MobileCloudAccountSession {
   }
 
   register(input: { email: string; password: string; termsVersion: string; acceptTerms: true }) { return this.client.register(input); }
-  verifyEmail(input: { capability: string }) { return this.client.verifyEmail(input); }
+  verifyEmail(input: { email: string; code: string } | { capability: string }) { return this.client.verifyEmail(input); }
 
   async beginLogin(input: { providerId: 'email' | 'google' | 'github' | 'apple'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
     if (input.providerId === 'email' && !input.totpCode && !input.recoveryCode) this.pendingEmailSecondFactor = undefined;

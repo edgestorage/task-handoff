@@ -1,13 +1,15 @@
 import { createControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import type { SecureValueStore } from '../platform/secure-storage';
-import { isMobileFeatureEnabled, isMobileTestMode } from '../platform/build-variant';
+import { isMobileFeatureEnabled, isMobileTestMode, mobileCloudEnvironment } from '../platform/build-variant';
 import { DirectControlPlaneTransport } from './direct-transport';
 import { isDirectMobileControlPlaneProfile, type MobileControlPlaneProfile, type MobileDirectControlPlaneProfile, type MobileCloudRelayControlPlaneProfile } from './profile';
-import { MobileCloudAccountSession, CLOUD_PRODUCTION_ORIGIN } from './cloud-account';
+import { MobileCloudAccountSession } from './cloud-account';
 import { allowCloudRelayUrlForService, createMobileRelayChannelFactory } from './relay-channel';
 import { RelayControlPlaneTransport, type RelayChannelFactory } from './relay-transport';
 import { RelayWinnerCache } from './relay-winner-cache';
+import { MobileRelayProofKeyProvider } from './relay-proof-key';
+import { MobileRelaySessionStore } from './relay-session-store';
 import { mobileCloudDiscovery } from '../cloud-discovery';
 
 type MobileClientOptions = { relayChannelFactory?: RelayChannelFactory; cloudRequest?: typeof fetch; allowNonProductionOrigin?: boolean; relayWinnerCache?: RelayWinnerCache };
@@ -56,12 +58,14 @@ function cloudClient(profile: MobileCloudRelayControlPlaneProfile, secureStore: 
     endpointResolver: mobileCloudDiscovery,
     reference: profile.access.accountSession,
   });
-  const allowIsolatedEnvironment = () => account.origin !== CLOUD_PRODUCTION_ORIGIN;
+  const allowIsolatedEnvironment = () => account.origin !== mobileCloudEnvironment.serviceOrigin;
   // The remembered winner is what turns the second connection into a single
   // validation sample, so the cache lives with the client and shares its store.
   const winnerCache = options.relayWinnerCache ?? new RelayWinnerCache({ store: secureStore });
+  const proofKey = new MobileRelayProofKeyProvider(secureStore, profile.access.accountSession.id);
+  const sessionStore = new MobileRelaySessionStore(secureStore, profile.access.accountSession.id, profile.identity.controlPlaneId);
   const allowRelayUrl = (url: URL) => allowCloudRelayUrlForService(url, account.origin, allowIsolatedEnvironment());
-  const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl }), { winnerCache, allowRelayUrl });
+  const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl }), { winnerCache, allowRelayUrl, proofKey, sessionStore });
   return { transport, api: createControlPlaneClient(transport), account };
 }
 

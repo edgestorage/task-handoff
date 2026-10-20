@@ -7,7 +7,7 @@ import {
   controlPlaneIdentitySigningInput,
   type ControlPlanePublicCapabilities,
 } from "@task-handoff/protocol/control-plane-access";
-import { acceptControlPlaneHandshake, outboundConnectionRegistrationSigningInput } from "@task-handoff/cloud-contracts";
+import { acceptControlPlaneHandshake, outboundConnectionRegistrationSigningInput, relayRoleProofSigningInput, type RelayRoleProof, type RelayRoleProofPayload } from "@task-handoff/cloud-contracts";
 import { JsonFile } from "../../shared/persistence/store.ts";
 
 const IDENTITY_DOCUMENT_TTL_MS = 5 * 60 * 1000;
@@ -143,6 +143,14 @@ export class ControlPlaneIdentityService {
 
   signCloudOutboundRegistration(payload: unknown) {
     return crypto.sign(null, Buffer.from(outboundConnectionRegistrationSigningInput(payload)), this.privateKey()).toString("base64url");
+  }
+
+  /** Proof of possession for one Relay session grant. */
+  signRelayRoleProof(payload: RelayRoleProofPayload): RelayRoleProof {
+    return {
+      ...payload,
+      signature: crypto.sign(null, Buffer.from(relayRoleProofSigningInput(payload)), this.privateKey()).toString("base64url"),
+    };
   }
 
   /**

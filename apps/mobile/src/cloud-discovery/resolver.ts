@@ -1,4 +1,5 @@
 import { MOBILE_PUBLIC_PROVIDERS_PATH } from '@task-handoff/cloud-contracts/mobile';
+import { isReplayableRelaySessionMutation } from '@task-handoff/control-plane-client';
 
 import type { ValueStore } from '../platform/secure-storage';
 import { readCloudDiscoveryCache, writeCloudDiscoveryCache } from './cache';
@@ -103,9 +104,9 @@ export class CloudEndpointResolver {
   readonly request: CloudRequestFunction = async (input, init) => {
     await this.initialize();
     const method = (init?.method ?? 'GET').toUpperCase();
-    const retryable = method === 'GET' || method === 'HEAD';
     const target = new URL(input, this.active);
     const path = `${target.pathname}${target.search}`;
+    const retryable = method === 'GET' || method === 'HEAD' || isReplayableRelaySessionMutation(method, target.pathname, init?.headers);
     const candidates = this.orderedCandidates();
     let lastResponse: CloudFetchResponse | undefined;
     let lastError: unknown;

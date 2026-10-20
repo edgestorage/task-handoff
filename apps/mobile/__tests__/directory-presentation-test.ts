@@ -1,12 +1,12 @@
 import {
   aiSessionSummary,
-  connectionModeLabel,
   instanceStateLabel,
   nodeDisplayName,
   nodeStateLabel,
   nodeSummary,
   relativeObservedAt,
 } from '../src/directories/presentation';
+import { connectionModeLabel } from '../src/control-plane/connection-presentation';
 
 describe('directory presentation', () => {
   test('shortens only generated node names', () => {

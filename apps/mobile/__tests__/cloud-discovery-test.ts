@@ -119,6 +119,78 @@ describe('cloud discovery', () => {
     expect(resolver.activeOrigin).toBe('https://backup.thandoff.com');
   });
 
+  test('fails over an idempotent Relay bootstrap with the same body and key', async () => {
+    const calls: Array<{ url: string; body: unknown; key: unknown }> = [];
+    const fetchImpl: CloudFetch = async (input, init) => {
+      if (input.includes('dns.alidns.com')) return response(200, txtAnswer('v1 primary.thandoff.com backup.thandoff.com'));
+      if (input.includes('/health')) return response(200);
+      calls.push({ url: input, body: init?.body, key: header(init?.headers, 'idempotency-key') });
+      if (input.startsWith('https://primary.thandoff.com/api/v1/relay-sessions/bootstrap')) return response(503);
+      return response(200, { data: { ok: true } });
+    };
+    const resolver = new CloudEndpointResolver({
+      config,
+      fallbackOrigin: config.fallbackOrigin,
+      fetchImpl,
+      healthCheckPath: '/health',
+      queryTimeoutMs: 50,
+      healthTimeoutMs: 50,
+    });
+    await resolver.initialize();
+    const init = { method: 'POST', headers: { 'Idempotency-Key': 'relay_bootstrap_123456' }, body: '{"controlPlaneId":"control_plane_a"}' };
+    await expect(resolver.request('https://primary.thandoff.com/api/v1/relay-sessions/bootstrap', init)).resolves.toMatchObject({ status: 200 });
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://primary.thandoff.com/api/v1/relay-sessions/bootstrap',
+      'https://backup.thandoff.com/api/v1/relay-sessions/bootstrap',
+    ]);
+    expect(calls[0].body).toBe(calls[1].body);
+    expect(calls[0].key).toBe('relay_bootstrap_123456');
+    expect(calls[1].key).toBe('relay_bootstrap_123456');
+  });
+
+  test('fails over an idempotent Relay confirm after a connection reset', async () => {
+    const calls: Array<{ url: string; key: unknown }> = [];
+    const fetchImpl: CloudFetch = async (input, init) => {
+      if (input.includes('dns.alidns.com')) return response(200, txtAnswer('v1 primary.thandoff.com backup.thandoff.com'));
+      if (input.includes('/health')) return response(200);
+      calls.push({ url: input, key: header(init?.headers, 'idempotency-key') });
+      if (input.startsWith('https://primary.thandoff.com/')) throw new Error('connection reset');
+      return response(200, { data: { ok: true } });
+    };
+    const resolver = new CloudEndpointResolver({
+      config,
+      fallbackOrigin: config.fallbackOrigin,
+      fetchImpl,
+      healthCheckPath: '/health',
+      queryTimeoutMs: 50,
+      healthTimeoutMs: 50,
+    });
+    await resolver.initialize();
+    await expect(resolver.request('https://primary.thandoff.com/api/v1/relay-selections/relay_selection_a/confirm', {
+      method: 'POST', headers: new Headers({ 'Idempotency-Key': 'relay_confirm_123456' }), body: '{}',
+    })).resolves.toMatchObject({ status: 200 });
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://primary.thandoff.com/api/v1/relay-selections/relay_selection_a/confirm',
+      'https://backup.thandoff.com/api/v1/relay-selections/relay_selection_a/confirm',
+    ]);
+    expect(calls[1].key).toBe('relay_confirm_123456');
+  });
+
+  test('does not fail over an establishment POST without an idempotency key', async () => {
+    const calls: string[] = [];
+    const fetchImpl: CloudFetch = async (input, init) => {
+      if (input.includes('dns.alidns.com')) return response(200, txtAnswer('v1 primary.thandoff.com backup.thandoff.com'));
+      if (input.includes('/health')) return response(200);
+      calls.push(`${init?.method ?? 'GET'} ${input}`);
+      return response(503);
+    };
+    const resolver = new CloudEndpointResolver({ config, fallbackOrigin: config.fallbackOrigin, fetchImpl, healthCheckPath: '/health', queryTimeoutMs: 50, healthTimeoutMs: 50 });
+    await resolver.initialize();
+    const result = await resolver.request('https://primary.thandoff.com/api/v1/relay-sessions/bootstrap', { method: 'POST', body: '{}' });
+    expect(result.status).toBe(503);
+    expect(calls).toEqual(['POST https://primary.thandoff.com/api/v1/relay-sessions/bootstrap']);
+  });
+
   test('uses a valid cached endpoint list when TXT lookup fails', async () => {
     const store = memoryStore();
     store.values.set('cloud.discovery.v1', JSON.stringify({
@@ -149,3 +221,11 @@ describe('cloud discovery', () => {
     expect(resolver.activeOrigin).toBe('https://primary.thandoff.com');
   });
 });
+
+function header(headers: HeadersInit | undefined, name: string) {
+  if (!headers) return undefined;
+  const candidate = headers as { get?: (key: string) => string | null };
+  if (typeof candidate.get === 'function') return candidate.get(name) ?? undefined;
+  if (Array.isArray(headers)) return headers.find(([key]) => key.toLowerCase() === name)?.[1];
+  return Object.entries(headers as Record<string, string>).find(([key]) => key.toLowerCase() === name)?.[1];
+}

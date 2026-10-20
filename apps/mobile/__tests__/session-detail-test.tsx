@@ -10,7 +10,7 @@ import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/p
 import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
 
 import { conversationDetailItems, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
-import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
+import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
 import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
@@ -60,6 +60,19 @@ test('mobile timeline activities use the latest Web activity-kind icons', () => 
   expect(timelineActivityIcon('skillLoad')).toBe(Brain);
   expect(timelineActivityIcon('exitedPlanMode')).toBe(ClipboardCheck);
   expect(timelineActivityIcon('unknown')).toBeUndefined();
+});
+
+test('a missing session stays in recovery until the snapshot is authoritative', async () => {
+  const recovering = await render(<SessionDetail messages={[]} recovering session={undefined} />);
+  recovering.getByTestId('session-recovering');
+  recovering.getByText('Restoring session…');
+  expect(recovering.queryByText('Session unavailable')).toBeNull();
+  await recovering.unmount();
+
+  const missing = await render(<SessionDetail messages={[]} session={undefined} />);
+  missing.getByText('Session unavailable');
+  expect(missing.queryByTestId('session-recovering')).toBeNull();
+  await missing.unmount();
 });
 
 test('timeline activity groups stay collapsed until explicitly expanded', async () => {
@@ -1279,7 +1292,11 @@ test('offline detail keeps cached content visible but disables authoritative act
       <SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} syncPhase="offline" />
     </SafeAreaProvider>,
   );
-  screen.getByText('Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.');
+  expect(screen.queryByText('Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.')).toBeNull();
+  await waitFor(
+    () => screen.getByText('Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.'),
+    { timeout: OFFLINE_NOTICE_DELAY_MS + 1_000 },
+  );
   expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'retry' })).toBeDisabled();
   screen.getByLabelText('Queued messages');
@@ -1289,6 +1306,7 @@ test('offline detail keeps cached content visible but disables authoritative act
   screen.getByText('Needs attention');
   screen.getByText('Ask for approval');
   screen.getByText('provider unavailable');
+  await screen.unmount();
 });
 
 test('queued messages expose edit controls and a drag handle that reorders with the authoritative revision', async () => {

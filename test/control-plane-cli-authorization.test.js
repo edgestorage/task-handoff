@@ -138,7 +138,8 @@ test("cli browser authorization exchanges a web approval for an independent cli 
   const mobileRoute = await app.inject({ method: "POST", url: "/api/auth/mobile/renew", headers: { authorization: `Bearer ${sessionToken}` } });
   assert.equal(mobileRoute.statusCode, 401, mobileRoute.body);
   const webCookieAsCli = await app.inject({ method: "GET", url: "/api/auth/cli/sessions", headers: { cookie } });
-  assert.equal(webCookieAsCli.statusCode, 401, webCookieAsCli.body);
+  assert.equal(webCookieAsCli.statusCode, 200, webCookieAsCli.body);
+  assert.deepEqual(webCookieAsCli.json().data.map((entry) => entry.id), [session.id]);
 
   const reuse = await app.inject({
     method: "POST",
@@ -150,10 +151,11 @@ test("cli browser authorization exchanges a web approval for an independent cli 
 
   const webSession = await app.inject({ method: "GET", url: "/api/auth/session", headers: { cookie } });
   assert.equal(webSession.json().data.authenticated, true);
-  const logout = await app.inject({ method: "POST", url: "/api/auth/cli/logout", headers: { authorization: `Bearer ${sessionToken}` } });
-  assert.equal(logout.statusCode, 200, logout.body);
-  const afterLogout = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${sessionToken}` } });
-  assert.equal(afterLogout.statusCode, 401, afterLogout.body);
+  const webCookieRevoke = await app.inject({ method: "DELETE", url: `/api/auth/cli/sessions/${session.id}`, headers: { cookie } });
+  assert.equal(webCookieRevoke.statusCode, 200, webCookieRevoke.body);
+  assert.equal(webCookieRevoke.json().data.revoked, true);
+  const afterRevoke = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${sessionToken}` } });
+  assert.equal(afterRevoke.statusCode, 401, afterRevoke.body);
 });
 
 test("cli device authorization reports pending, slow down, denial and expiry", async (t) => {

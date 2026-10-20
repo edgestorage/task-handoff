@@ -34,3 +34,49 @@ test("cloud ingress rejects stale revision, disabled remote access and expired a
   state.setRemoteAccess(false);
   await assert.rejects(() => ingress.actor(assertion), { code: "CLOUD_ASSERTION_NOT_AUTHORIZED" });
 });
+
+test("shared cloud assertions match the local binding owner and enforce viewer least privilege", async () => {
+  const { state, assertion } = await fixture();
+  const shared = {
+    ...assertion,
+    accountId: "account_grantee",
+    ownerAccountId: "account_a",
+    accessMode: "shared",
+    shareGrantId: "share_a",
+    shareRevision: 3,
+    shareRole: "viewer",
+  };
+  const ingress = new CloudAccessIngress({ state, verifyAssertion: (value) => value });
+  const actor = await ingress.authorize(shared, "read", { type: "instance", id: "instance_a" });
+  assert.equal(actor.type, "cloud-account");
+  assert.equal(actor.accountId, "account_grantee");
+  assert.equal(actor.ownerAccountId, "account_a");
+  assert.equal(actor.shareRole, "viewer");
+  await assert.rejects(() => ingress.authorize(shared, "start", { type: "instance", id: "instance_a" }), { code: "CONTROL_PLANE_FORBIDDEN" });
+  await assert.rejects(() => ingress.authorize(shared, "proxy", { type: "instance", id: "instance_a" }), { code: "CONTROL_PLANE_FORBIDDEN" });
+  await assert.rejects(() => ingress.authorize({ ...shared, ownerAccountId: "account_forged" }, "read", { type: "instance", id: "instance_a" }), { code: "CLOUD_ASSERTION_NOT_AUTHORIZED" });
+});
+
+test("shared operators can use ordinary controls but cannot reach administration", async () => {
+  const { state, assertion } = await fixture();
+  const shared = {
+    ...assertion,
+    accountId: "account_grantee",
+    ownerAccountId: "account_a",
+    accessMode: "shared",
+    shareGrantId: "share_operator",
+    shareRevision: 7,
+    shareRole: "operator",
+  };
+  const ingress = new CloudAccessIngress({ state, verifyAssertion: (value) => value });
+  await ingress.authorize(shared, "start", { type: "instance", id: "instance_a" });
+  await ingress.authorize(shared, "proxy", { type: "instance", id: "instance_a" });
+  for (const [action, resource] of [
+    ["manage-members", { type: "user" }],
+    ["manage-members", { type: "role" }],
+    ["manage-settings", { type: "control-plane-settings" }],
+    ["manage-secrets", { type: "secret" }],
+    ["read", { type: "chat-bridge" }],
+    ["manage-node-auth", { type: "node" }],
+  ]) await assert.rejects(() => ingress.authorize(shared, action, resource), { code: "CONTROL_PLANE_FORBIDDEN" });
+});

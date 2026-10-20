@@ -20,6 +20,7 @@ const packageName = option("--package-name") || packageJson.name || "@task-hando
 const controlPlaneRoot = path.join(sourceRoot, "control-plane");
 const nodeAgentRoot = path.join(sourceRoot, "node-agent");
 const sharedRoot = path.join(sourceRoot, "shared");
+const monorepoSharedRoot = path.resolve(packageRoot, "../../shared");
 const compilerOptions = {
   allowImportingTsExtensions: true,
   module: ts.ModuleKind.NodeNext,
@@ -170,12 +171,12 @@ function checkGraph({ roots, isAllowedDependency, forbiddenExternalDependencies 
 
 const controlPlaneFailed = checkGraph({
   roots: typescriptFiles(controlPlaneRoot),
-  isAllowedDependency: (filePath) => isWithin(controlPlaneRoot, filePath) || isWithin(sharedRoot, filePath),
+  isAllowedDependency: (filePath) => isWithin(controlPlaneRoot, filePath) || isWithin(sharedRoot, filePath) || isWithin(monorepoSharedRoot, filePath),
   label: "control-plane modules must only import control-plane or shared modules",
 });
 const nodeAgentFailed = checkGraph({
   roots: typescriptFiles(nodeAgentRoot),
-  isAllowedDependency: (filePath) => isWithin(nodeAgentRoot, filePath) || isWithin(sharedRoot, filePath),
+  isAllowedDependency: (filePath) => isWithin(nodeAgentRoot, filePath) || isWithin(sharedRoot, filePath) || isWithin(monorepoSharedRoot, filePath),
   forbiddenExternalDependencies: ["pg", "better-sqlite3", "sqlite3", "node-gyp"],
   label: "node-agent modules must only import node-agent or shared modules",
 });

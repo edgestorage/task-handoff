@@ -3,6 +3,7 @@ import {
   ControlPlanePublicCapabilitiesSchema,
   type ControlPlanePublicCapabilities,
 } from '@task-handoff/protocol/control-plane-access';
+import { ResourceAccessSchema, type ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
 
 export const MOBILE_CONTROL_PLANE_PROFILE_VERSION = 1;
 
@@ -46,6 +47,9 @@ const MobileCloudRelayAccessSchema = z.object({
     stream: z.boolean(),
     webSocket: z.boolean(),
   }).strict(),
+  /** Cloud directory authority captured when the profile was added. Legacy
+   * profiles have no field and remain owner profiles. */
+  resourceAccess: ResourceAccessSchema.optional(),
 }).strict();
 
 export const MobileDirectControlPlaneProfileSchema = MobileControlPlaneProfileBaseSchema.extend({ access: MobileDirectAccessSchema }).strict();
@@ -59,6 +63,18 @@ export type MobileControlPlaneCapabilities = z.infer<typeof MobileControlPlaneCa
 export type MobileDirectControlPlaneProfile = z.infer<typeof MobileDirectControlPlaneProfileSchema>;
 export type MobileCloudRelayControlPlaneProfile = z.infer<typeof MobileCloudRelayControlPlaneProfileSchema>;
 export type MobileControlPlaneProfile = z.infer<typeof MobileControlPlaneProfileSchema>;
+export type MobileResourceAccess = z.infer<typeof ResourceAccessSchema>;
+
+export function staleCloudControlPlaneProfiles(
+  profiles: readonly MobileControlPlaneProfile[],
+  accountSessionId: string,
+  entries: readonly Pick<ControlPlaneDirectoryEntry, 'controlPlaneId' | 'publicKeyFingerprint'>[],
+) {
+  const accessible = new Set(entries.map((entry) => `${entry.controlPlaneId}\0${entry.publicKeyFingerprint}`));
+  return profiles.filter((profile) => profile.access.kind === 'cloud-relay'
+    && profile.access.accountSession.id === accountSessionId
+    && !accessible.has(`${profile.identity.controlPlaneId}\0${profile.identity.publicKeyFingerprint}`));
+}
 
 export function isDirectMobileControlPlaneProfile(profile: MobileControlPlaneProfile): profile is MobileDirectControlPlaneProfile {
   return profile.access.kind === 'direct';
@@ -104,7 +120,7 @@ export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePubli
 const STORED_PROFILE_FIELDS = {
   '': ['version', 'identity', 'access', 'capabilities', 'createdAt', 'updatedAt'],
   identity: ['controlPlaneId', 'publicKeyFingerprint', 'displayName', 'protocolVersion'],
-  access: ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport'],
+  access: ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport', 'resourceAccess'],
   'access.accountSession': ['id', 'secureCredentialKey'],
   'access.transport': ['request', 'stream', 'webSocket'],
   capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers', 'stories'],
@@ -141,7 +157,7 @@ export function sanitizeStoredMobileControlPlaneProfile(input: unknown) {
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile;
   const value = profile as Record<string, unknown>;
   const capabilities = pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers', 'stories']);
-  const access = pick(value.access, ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport']);
+  const access = pick(value.access, ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport', 'resourceAccess']);
   const accessRecord = access && typeof access === 'object' && !Array.isArray(access) ? access as Record<string, unknown> : undefined;
   const sanitizedAccess = accessRecord
     ? {

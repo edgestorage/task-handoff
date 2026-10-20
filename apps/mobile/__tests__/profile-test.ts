@@ -7,6 +7,7 @@ import {
   parseStoredMobileControlPlaneProfile,
   sameMobileControlPlaneProfileIdentity,
   selectMobileControlPlaneProfile,
+  staleCloudControlPlaneProfiles,
 } from '../src/control-plane/profile';
 import { MobileControlPlaneProfileStore } from '../src/control-plane/profile-store';
 import type { SecureValueStore } from '../src/platform/secure-storage';
@@ -112,11 +113,13 @@ describe('MobileControlPlaneProfile', () => {
         bindingRevision: 2,
         accountSession: { id: 'account_session_01', secureCredentialKey: 'cloud.account.session.01' },
         transport: { request: true, stream: true, webSocket: true },
+        resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 3, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
       },
     });
 
     expect(profile.access.kind).toBe('cloud-relay');
     expect(profile.access.accountSession.id).toBe('account_session_01');
+    expect(profile.access.resourceAccess).toMatchObject({ kind: 'shared', role: 'viewer', revision: 3 });
     expect(() => MobileCloudRelayControlPlaneProfileSchema.parse({
       ...profile,
       access: { ...profile.access, nodeId: 'node_must_not_cross_boundary' },
@@ -182,6 +185,31 @@ describe('MobileControlPlaneProfile', () => {
     expect(await sessionStorage.get(second.access.secureSessionKey)).toBe('second-token');
     expect(onProfileChanged).toHaveBeenCalledTimes(4);
     unsubscribe();
+  });
+
+  test('authoritative Cloud refresh selects only inaccessible profiles from the active account', () => {
+    const cloudProfile = (controlPlaneId: string, marker: string, accountSessionId = 'device_a') => MobileCloudRelayControlPlaneProfileSchema.parse({
+      ...baseProfile,
+      identity: { ...baseProfile.identity, controlPlaneId, publicKeyFingerprint: `sha256:${marker.repeat(43)}` },
+      access: {
+        kind: 'cloud-relay',
+        serviceOrigin: 'https://cloud.thandoff.com',
+        bindingId: `binding_${controlPlaneId}`,
+        bindingRevision: 1,
+        accountSession: { id: accountSessionId, secureCredentialKey: `cloud.account.${accountSessionId}` },
+        transport: { request: true, stream: true, webSocket: true },
+        resourceAccess: { kind: 'shared', shareId: `shr_${controlPlaneId}`, revision: 1, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
+      },
+    });
+    const direct = MobileDirectControlPlaneProfileSchema.parse(baseProfile);
+    const retainedOwner = cloudProfile('cp_owner', 'b');
+    const revokedShare = cloudProfile('cp_revoked', 'c');
+    const otherAccount = cloudProfile('cp_other', 'd', 'device_b');
+
+    expect(staleCloudControlPlaneProfiles([direct, retainedOwner, revokedShare, otherAccount], 'device_a', [{
+      controlPlaneId: retainedOwner.identity.controlPlaneId,
+      publicKeyFingerprint: retainedOwner.identity.publicKeyFingerprint,
+    }])).toEqual([revokedShare]);
   });
 
   test('keeps direct and cloud Relay profiles for one Control Plane distinct when switching', async () => {

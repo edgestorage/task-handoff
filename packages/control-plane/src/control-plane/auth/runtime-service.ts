@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ControlPlaneCliLocalSessionRequestSchema,
   ControlPlaneCliTokenResponseSchema,
+  ControlPlaneCurrentAuthorizationSchema,
   type ControlPlaneMobileDevice,
 } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
@@ -152,7 +153,16 @@ export class ControlPlaneAuth {
     return this.renewSession(token, ["mobile"]);
   }
 
-  async currentAccess(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
+  async currentAccess(
+    token: string | undefined,
+    clientTypes: readonly ControlPlaneSessionClientType[],
+    options: { remoteAddress?: string } = {},
+  ) {
+    if (!this.enabled()) {
+      const current = token ? await this.resolveDisabledCredential(token, clientTypes) : undefined;
+      if (current) return current.authorization;
+      return this.localOperatorAuthorization(options.remoteAddress);
+    }
     return (await this.sessions.resolve(token, clientTypes))?.authorization;
   }
 
@@ -190,11 +200,18 @@ export class ControlPlaneAuth {
     return this.clientSessions(token, credentialClientTypes, "mobile");
   }
 
-  async cliSessions(token: string | undefined, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
+  async cliSessions(
+    token: string | undefined,
+    credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"],
+    options: { remoteAddress?: string } = {},
+  ) {
     if (!this.enabled()) {
-      // disabled 模式下本地信任会话仍可被列出，保证本地 CLI 会话可审计、可撤销。
       const current = await this.resolveDisabledCredential(token, credentialClientTypes);
-      return current ? this.sessions.listClientSessions(current.user.id, "cli") : undefined;
+      if (current) return this.sessions.listClientSessions(current.user.id, "cli");
+      // 桌面控制面板没有 CLI bearer，但 loopback 上的本地操作员拥有同一信任边界；
+      // 因此 auth-disabled 模式也要能在 UI 中审计和撤销同机 CLI 会话。
+      const operator = await this.localOperator(options.remoteAddress);
+      return operator ? this.sessions.listClientSessions(operator.userId, "cli") : undefined;
     }
     return this.clientSessions(token, credentialClientTypes, "cli");
   }
@@ -213,10 +230,17 @@ export class ControlPlaneAuth {
     return this.revokeClientSession(token, credentialClientTypes, ["mobile"], sessionId);
   }
 
-  async revokeCliSession(token: string | undefined, sessionId: string, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
+  async revokeCliSession(
+    token: string | undefined,
+    sessionId: string,
+    credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"],
+    options: { remoteAddress?: string } = {},
+  ) {
     if (!this.enabled()) {
       const current = await this.resolveDisabledCredential(token, credentialClientTypes);
-      return current ? this.sessions.revokeSession(current.user.id, sessionId, ["cli"]) : undefined;
+      if (current) return this.sessions.revokeSession(current.user.id, sessionId, ["cli"]);
+      const operator = await this.localOperator(options.remoteAddress);
+      return operator ? this.sessions.revokeSession(operator.userId, sessionId, ["cli"]) : undefined;
     }
     return this.revokeClientSession(token, credentialClientTypes, ["cli"], sessionId);
   }
@@ -299,6 +323,18 @@ export class ControlPlaneAuth {
       if ((error as { code?: string } | undefined)?.code === "CONTROL_PLANE_DATABASE_NOT_INITIALIZED") return undefined;
       throw error;
     }
+  }
+
+  private async localOperator(remoteAddress: string | undefined) {
+    if (this.enabled() || !isLoopbackRemoteAddress(remoteAddress)) return undefined;
+    return this.users.ensureLocalTrustOperator();
+  }
+
+  private async localOperatorAuthorization(remoteAddress: string | undefined) {
+    const operator = await this.localOperator(remoteAddress);
+    if (!operator) return undefined;
+    const authorization = await this.users.authorization(operator.userId);
+    return ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId: operator.identityId });
   }
 
   private async clientSessions(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[], clientType: "mobile" | "cli") {

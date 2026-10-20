@@ -29,6 +29,8 @@ import { StoryDecisionAnswer } from '../stories/StoryDecisionAnswer';
 import { useStoryEvents } from '../stories/use-story-events';
 import { isStoryDecisionResumePending, pendingStoryDecisionsForSession, type StoryDecisionAnswerInput } from '../stories/story-decision';
 
+export const OFFLINE_NOTICE_DELAY_MS = 2_000;
+
 export function SessionWorkspace({
   controlPlaneId,
   instanceId,
@@ -122,6 +124,7 @@ export function SessionWorkspace({
   const [decisionBusyId, setDecisionBusyId] = useState('');
   const [decisionError, setDecisionError] = useState<{ decisionId: string; message: string }>();
   const [decisionResume, setDecisionResume] = useState<{ decisionId: string; input: StoryDecisionAnswerInput }>();
+  const [offlineNoticeVisible, setOfflineNoticeVisible] = useState(false);
   const queueOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const queueRowHeights = useRef(new Map<string, number>());
   const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
@@ -132,6 +135,14 @@ export function SessionWorkspace({
   const timelineRequests = useRef(new Map<string, symbol>());
   const [turnBodyRetry, setTurnBodyRetry] = useState(0);
   const turnBodyRetryAttempt = useRef(0);
+  useEffect(() => {
+    if (syncPhase === 'ready') {
+      setOfflineNoticeVisible(false);
+      return;
+    }
+    const timer = setTimeout(() => setOfflineNoticeVisible(true), OFFLINE_NOTICE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [syncPhase]);
   const [localDetailMode, setLocalDetailMode] = useState<SessionDetailMode>('turn');
   const detailMode = controlledDetailMode ?? localDetailMode;
   const setDetailMode = (next: SessionDetailMode) => {
@@ -364,7 +375,7 @@ export function SessionWorkspace({
     () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
     [decisionsSessionId, storyDecisionList],
   );
-  if (!session) return <SessionDetail messages={messages} session={session} />;
+  if (!session) return <SessionDetail messages={messages} recovering={syncPhase !== 'ready'} session={session} />;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
     controlPlaneId,
@@ -771,7 +782,7 @@ export function SessionWorkspace({
         </View>
       </>
       <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: composerBottomInset }]} testID="session-actions">
-        {!authoritativeActionsEnabled ? (
+        {!authoritativeActionsEnabled && offlineNoticeVisible ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
             <Icon color={colors.noticeText} name="cloud-offline-outline" size={16} />
             <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('workspace.offline')}</Text>

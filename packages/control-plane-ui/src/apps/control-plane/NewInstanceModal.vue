@@ -155,7 +155,7 @@ const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 
 const queryClient = useQueryClient();
 const authSession = useAuthSessionQuery();
-const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.authenticated)));
 const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
 const projects = useProjectsQuery();
 const models = useModelsQuery();

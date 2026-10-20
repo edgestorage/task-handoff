@@ -7,8 +7,21 @@ import { ControlPlaneIdentityService } from "../src/control-plane/identity/servi
 import { CloudConnectivityService } from "../src/control-plane/cloud-connectivity/service.ts";
 import { can } from "../src/control-plane/auth/authorization.ts";
 import { CloudConnectivityLifecycle } from "../src/control-plane/cloud-connectivity/lifecycle.ts";
-import { createControlPlaneApp, trustedCloudServiceOrigin } from "../src/control-plane/http/server.ts";
-import { CLOUD_ENVIRONMENTS } from "../../../shared/cloud-environments.cjs";
+import { createControlPlaneApp, trustedCloudCoordinatorOrigins, trustedCloudServiceOrigin } from "../src/control-plane/http/server.ts";
+import { resolveCloudEnvironment } from "../../../shared/cloud-environments.cjs";
+
+const PRODUCTION_ENVIRONMENT = resolveCloudEnvironment("production", undefined, {
+  TASK_HANDOFF_CLOUD_ENV: "production",
+  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://cloud.example.test",
+  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: "example.test",
+  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "relay.example.test",
+});
+const STAGING_ENVIRONMENT = resolveCloudEnvironment("staging", undefined, {
+  TASK_HANDOFF_CLOUD_ENV: "staging",
+  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://staging.example.test",
+  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: "staging.example.test",
+  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "staging.example.test",
+});
 
 function fixture(now = Date.parse("2026-08-10T00:00:00Z")) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-connectivity-"));
@@ -173,20 +186,41 @@ test("turning a relay scope back on reconnects before notifying the cloud", asyn
 });
 
 test("production Control Plane pins the cloud service origin while isolated builds require explicit trust", () => {
-  assert.equal(trustedCloudServiceOrigin(undefined, { production: true }), "https://cloud.thandoff.com");
-  assert.throws(() => trustedCloudServiceOrigin("https://cloud.taskhandoff.com", { production: true }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
-  assert.throws(() => trustedCloudServiceOrigin("https://self-hosted.example", { production: true, allowNonProduction: true }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
-  assert.throws(() => trustedCloudServiceOrigin("https://staging.example"), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
-  assert.equal(trustedCloudServiceOrigin("https://staging.example/path", { allowNonProduction: true }), "https://staging.example");
+  const production = PRODUCTION_ENVIRONMENT;
+  const local = resolveCloudEnvironment(undefined, undefined, {});
+  assert.equal(trustedCloudServiceOrigin(undefined, { production: true, environment: production }), production.serviceOrigin);
+  for (const suffix of production.coordinatorHostSuffixes) {
+    const origin = `https://coordinator.${suffix}`;
+    assert.equal(trustedCloudServiceOrigin(origin, { production: true, environment: production }), origin);
+  }
+  assert.throws(() => trustedCloudServiceOrigin("https://outside.test", { production: true, environment: production }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  assert.throws(() => trustedCloudServiceOrigin("https://self-hosted.example", { production: true, allowNonProduction: true, environment: production }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  assert.throws(() => trustedCloudServiceOrigin("https://staging.example", { environment: local }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  assert.equal(trustedCloudServiceOrigin("https://staging.example/path", { allowNonProduction: true, environment: local }), "https://staging.example");
 });
 
 test("staging Control Plane trusts only the test environment domains", () => {
-  const environment = CLOUD_ENVIRONMENTS.staging;
-  assert.equal(trustedCloudServiceOrigin(undefined, { environment }), "https://th.aaasu.com");
-  assert.equal(trustedCloudServiceOrigin("https://th.aaasu.com/path", { environment }), "https://th.aaasu.com");
+  const environment = STAGING_ENVIRONMENT;
+  const coordinatorOrigin = `https://coordinator.${environment.coordinatorHostSuffixes[0]}`;
+  const excludedProductionSuffix = PRODUCTION_ENVIRONMENT.coordinatorHostSuffixes.find((suffix) => !environment.coordinatorHostSuffixes.includes(suffix));
+  assert.equal(trustedCloudServiceOrigin(undefined, { environment }), environment.serviceOrigin);
+  assert.equal(trustedCloudServiceOrigin(`${environment.serviceOrigin}/path`, { environment }), environment.serviceOrigin);
+  assert.equal(trustedCloudServiceOrigin(coordinatorOrigin, { environment }), coordinatorOrigin);
   assert.throws(() => trustedCloudServiceOrigin("https://staging.example", { environment }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
-  assert.throws(() => trustedCloudServiceOrigin("https://cloud.thandoff.com", { environment }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
-  assert.throws(() => trustedCloudServiceOrigin("https://th.aaasu.com", { environment, production: true }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  if (excludedProductionSuffix) {
+    assert.throws(() => trustedCloudServiceOrigin(`https://coordinator.${excludedProductionSuffix}`, { environment }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  }
+});
+
+test("Coordinator fallbacks follow the configured main-domain suffixes", () => {
+  const production = PRODUCTION_ENVIRONMENT;
+  const coordinators = production.coordinatorHostSuffixes.map((suffix) => `https://coordinator.${suffix}`);
+  const expected = [production.serviceOrigin, ...coordinators.filter((origin) => origin !== production.serviceOrigin)];
+  assert.deepEqual(trustedCloudCoordinatorOrigins(coordinators, production.serviceOrigin, { production: true, environment: production }), expected);
+  const untrustedSuffix = production.coordinatorHostSuffixes[0];
+  assert.throws(() => trustedCloudCoordinatorOrigins([
+    `https://${untrustedSuffix}.evil.test`,
+  ], production.serviceOrigin, { production: true, environment: production }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
 });
 
 test("a persisted binding authority rejects a different environment service origin", () => {
@@ -194,9 +228,10 @@ test("a persisted binding authority rejects a different environment service orig
   const identity = new ControlPlaneIdentityService(path.join(root, "identity.json"), () => "control_plane_a");
   identity.init();
   const statePath = path.join(root, "binding.json");
-  new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://cloud.thandoff.com" }).init();
-  assert.throws(() => new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://th.aaasu.com" }).init(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
-  new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://cloud.thandoff.com/path" }).init();
+  const productionOrigin = PRODUCTION_ENVIRONMENT.serviceOrigin;
+  new CloudConnectivityService({ statePath, identity, serviceOrigin: productionOrigin }).init();
+  assert.throws(() => new CloudConnectivityService({ statePath, identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin }).init(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
+  new CloudConnectivityService({ statePath, identity, serviceOrigin: `${productionOrigin}/path` }).init();
 });
 
 test("cloud connectivity feature flag disables only cloud routes", async () => {
@@ -209,4 +244,50 @@ test("cloud connectivity feature flag disables only cloud routes", async () => {
     assert.equal(cloud.json().error.code, "CLOUD_CONNECTIVITY_DISABLED");
     assert.equal(health.statusCode, 200);
   } finally { await app.close(); }
+});
+
+test("Control Plane resolves the cloud service through TXT discovery before starting", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-discovery-startup-"));
+  const names = ["TASK_HANDOFF_CLOUD_ENV", "TASK_HANDOFF_CLOUD_SERVICE_ORIGIN", "TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES", "TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES", "TASK_HANDOFF_CLOUD_DISCOVERY_RECORD", "TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN"];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  Object.assign(process.env, {
+    TASK_HANDOFF_CLOUD_ENV: "production",
+    TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://primary.example.test",
+    TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: "example.test",
+    TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "example.test",
+    TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: "_cloud.example.test",
+    TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: "https://primary.example.test",
+  });
+  const calls = [];
+  let app;
+  try {
+    app = await createControlPlaneApp({
+      dataDir: root,
+      staticDir: path.join(root, "missing-ui"),
+      logger: false,
+      auth: { mode: "disabled" },
+      cloudConnectivityEnabled: false,
+      cloudDiscoveryFetch: async (input) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+        calls.push(url.href);
+        if (url.hostname === "dns.alidns.com") {
+          return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 backup.example.test" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("", { status: 200 });
+      },
+    });
+    assert.ok(calls.some((url) => url.startsWith("https://dns.alidns.com/")));
+    const cache = JSON.parse(fs.readFileSync(path.join(root, "cloud-discovery.json"), "utf8"));
+    assert.deepEqual(cache.origins, ["https://backup.example.test"]);
+  } finally {
+    await app?.close();
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

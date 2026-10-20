@@ -5,6 +5,7 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
 import { Icon } from '../src/components/Icon';
+import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
 import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, mobileCloudAccountSession as account, saveActiveCloudAccountReference } from '../src/control-plane/runtime';
@@ -99,9 +100,13 @@ function CloudAccountContent() {
   async function verify() {
     Keyboard.dismiss(); setBusy(true); setError(undefined);
     try {
-      await account.verifyEmail({ capability: verification.trim() });
+      await account.verifyEmail({ email: email.trim(), code: verification });
       setVerification(''); setMode('login'); setNotice(t('cloudAccount.verified'));
-    } catch (cause) { setError(cloudMobileErrorMessage(cause, locale === 'zh-CN')); }
+    } catch (cause) {
+      setVerification('');
+      const code = cloudErrorCode(cause);
+      setError(code === 'EMAIL_VERIFICATION_CODE_INVALID' ? t('cloudAccount.verificationCodeInvalid') : code === 'RATE_LIMITED' ? t('cloudAccount.verificationRateLimited') : cloudMobileErrorMessage(cause, locale === 'zh-CN'));
+    }
     finally { setBusy(false); }
   }
 
@@ -114,20 +119,8 @@ function CloudAccountContent() {
       {reason === 'reauthentication' ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="information-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{t('cloudAccount.reauthenticationNotice')}</Text></View> : notice ? <View style={[styles.notice, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="checkmark-circle" size={18}/><Text style={[styles.noticeText, { color: colors.text }]}>{notice}</Text></View> : null}
       <View style={styles.form}>
         {mode === 'verify' ? <>
-          <CloudAuthLabel>{t('cloudAccount.verificationToken')}</CloudAuthLabel>
-          <TextInput
-            accessibilityLabel={t('cloudAccount.verificationToken')}
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!busy}
-            onChangeText={(value) => { setVerification(value); setError(undefined); }}
-            onSubmitEditing={() => { if (verification.trim() && !busy) void verify(); }}
-            placeholder={t('cloudAccount.verificationToken')}
-            placeholderTextColor={colors.textMuted}
-            returnKeyType="done"
-            style={[styles.standaloneInput, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
-            value={verification}
-          />
+          <CloudAuthLabel>{t('cloudAccount.verificationCode')}</CloudAuthLabel>
+          <OneTimeCodeInput accessibilityLabel={t('cloudAccount.verificationCode')} autoFocus disabled={busy} onChangeText={(value) => { setVerification(value); setError(undefined); }} value={verification}/>
         </> : <>
           <View style={styles.field}>
             <CloudAuthLabel>{t('cloudAccount.email')}</CloudAuthLabel>
@@ -152,7 +145,7 @@ function CloudAccountContent() {
         </>}
         {mode === 'login' ? <NativeActionButton disabled={busy || !email.trim() || !password} label={busy ? t('cloudAccount.signingIn') : t('cloudAccount.signInEmail')} onPress={() => void authenticate('email')}/>
           : mode === 'register' ? <NativeActionButton disabled={busy || !email.trim() || password.length < 12} label={busy ? t('cloudAccount.creating') : t('cloudAccount.createAccount')} onPress={() => void register()}/>
-          : <NativeActionButton disabled={busy || !verification.trim()} label={busy ? t('cloudAccount.verifying') : t('cloudAccount.verify')} onPress={() => void verify()}/>}
+          : <NativeActionButton disabled={busy || verification.length !== 6} label={busy ? t('cloudAccount.verifying') : t('cloudAccount.verify')} onPress={() => void verify()}/>}
       </View>
 
       {mode === 'login' && thirdPartyProviders.length ? <>

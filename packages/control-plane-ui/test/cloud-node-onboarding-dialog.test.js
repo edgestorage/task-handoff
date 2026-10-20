@@ -18,6 +18,9 @@ test("cloud node onboarding is a standalone source and connection flow", () => {
   assert.match(dialog, /claimCloudAccountNode/);
   assert.match(dialog, /createCloudNodeBindingToken/);
   assert.match(dialog, /cancelCloudNodeBindingToken/);
+  assert.match(dialog, /accountNodeAccess/);
+  assert.match(dialog, /item\.access\?\.kind === 'shared'/);
+  assert.match(dialog, /connectAccountNode\(item\.nodeHandle\)/);
 });
 
 test("cloud node onboarding shows one generated command for the selected node state", () => {

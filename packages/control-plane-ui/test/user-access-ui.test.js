@@ -18,7 +18,9 @@ test("user management navigation consumes the authoritative permission projectio
   assert.match(settings, /manageUsers: canManageUsers\.value/);
   assert.match(settingsSections, /access\.manageUsers[\s\S]*id: "users"/);
   assert.doesNotMatch(settings, /user\?\.role|role !== "admin"/);
-  assert.match(workbench, /useCurrentAccessQuery/);
+  assert.match(workbench, /useCurrentAccessQuery\(computed\(\(\) => Boolean\(authSession\.data\.value\?\.authenticated\)\)\)/);
+  assert.match(settings, /useCurrentAccessQuery\(computed\(\(\) => Boolean\(authSession\.data\.value\?\.authenticated\)\)\)/);
+  assert.doesNotMatch(settings, /useCurrentAccessQuery\(computed\(\(\) => Boolean\(authSession\.data\.value\?\.enabled/);
   assert.match(workbench, /preserveAcrossAuthorizationChange/);
   assert.doesNotMatch(workbench, /hiddenNodeIds|deniedNodeIds|roleAllows/);
 });

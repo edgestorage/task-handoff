@@ -18,7 +18,7 @@ export const RELAY_LINK_PROBE_MAX_BACKOFF_MS = 15 * 60_000;
 const RELAY_LINK_PROBE_MAX_ENTRIES = 64;
 
 interface RelayLinkProbeLoopOptions {
-  /** Environment the Control Plane is bound to; its declared Relay hosts are the only targets. */
+  /** Environment the Control Plane is bound to. */
   serviceOrigin(): string;
   /** Relays are only useful to a bound Control Plane, so an unbound one stays quiet. */
   enabled?(): boolean;
@@ -35,18 +35,17 @@ interface RelayLinkProbeLoopOptions {
 export function relayProbeUrl(serviceOrigin: string, host: string): URL {
   const environment = cloudEnvironmentForServiceOrigin(serviceOrigin);
   const service = new URL(serviceOrigin);
-  // A registered environment names its Relay hosts explicitly and serves them on the
-  // default TLS port. An ad-hoc cloud serves the Relay from its own origin instead, so
-  // that origin's port has to survive; probing the bare hostname would drop it.
+  // An ad-hoc cloud serves the Relay from its own origin, so that origin's port
+  // has to survive; probing the bare hostname would drop it.
   if (host === service.hostname) return new URL("/probe", service);
   return new URL("/probe", `${environment.allowInsecureRelay ? "http:" : "https:"}//${host}`);
 }
 
 /**
- * The same probe, derived from a Relay the Control Plane was actually allocated. A
- * registered environment only declares Relay *suffixes* (`relay.aaasu.com`), and the
- * fleet is reached through hosts under them (`relay1.relay.aaasu.com`); the bare
- * suffix does not necessarily resolve. A host the Coordinator just handed out does.
+ * The same probe, derived from a Relay the Control Plane was actually allocated. An
+ * environment only declares Relay *suffixes*, and the fleet is reached through hosts
+ * under them; the bare suffix does not necessarily resolve. A host the Coordinator
+ * just handed out does.
  */
 export function relayEndpointProbeUrl(relayUrl: string): URL {
   const url = new URL(relayUrl);
@@ -111,9 +110,9 @@ export class RelayLinkProbeLoop {
   }
 
   /**
-   * Remembers a Relay the Coordinator allocated to this Control Plane. Declared hosts
-   * are an allowlist, not a host list, so an environment whose fleet lives under a
-   * wildcard suffix is only measurable once a real endpoint has been seen.
+   * Remembers a Relay the Coordinator allocated to this Control Plane. The fleet is
+   * reached through hosts under configured suffixes, so a real endpoint is the only
+   * reliable probe target.
    */
   observe(relayUrl: unknown) {
     if (typeof relayUrl !== "string" || !relayUrl) return;
@@ -130,12 +129,7 @@ export class RelayLinkProbeLoop {
   }
 
   private targets(): URL[] {
-    const environment = cloudEnvironmentForServiceOrigin(this.options.serviceOrigin());
     const targets = new Map<string, URL>();
-    for (const host of environment.relayHosts) {
-      try { const url = relayProbeUrl(environment.serviceOrigin, host); targets.set(url.host, url); } catch { /* an unusable declared host is not probed */ }
-    }
-    // An observed endpoint carries the real port, so it replaces the declared host entry.
     for (const url of this.observed.values()) targets.set(url.host, url);
     return [...targets.values()];
   }

@@ -759,14 +759,32 @@ test("external listener live update rolls the listener and instances back when e
 });
 
 test("desktop node-agent listener allocation skips an occupied preferred port", async (t) => {
-  const occupied = net.createServer();
-  await new Promise((resolve, reject) => {
-    occupied.once("error", reject);
-    occupied.listen(0, "127.0.0.1", resolve);
-  });
+  let occupied;
+  let address;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = net.createServer();
+    await new Promise((resolve, reject) => {
+      candidate.once("error", reject);
+      candidate.listen(0, "127.0.0.1", resolve);
+    });
+    const candidateAddress = candidate.address();
+    if (typeof candidateAddress !== "object") continue;
+    const successor = net.createServer();
+    try {
+      await new Promise((resolve, reject) => {
+        successor.once("error", reject);
+        successor.listen(candidateAddress.port + 1, "127.0.0.1", resolve);
+      });
+      await new Promise((resolve) => successor.close(resolve));
+      occupied = candidate;
+      address = candidateAddress;
+      break;
+    } catch {
+      await new Promise((resolve) => candidate.close(resolve));
+    }
+  }
+  assert.ok(occupied, "failed to reserve a preferred port with a free successor");
   t.after(() => occupied.close());
-  const address = occupied.address();
-  assert.equal(typeof address, "object");
 
   const allocated = await allocateNodeAgentExternalListener({ bindScope: "loopback", port: address.port }, 2);
   assert.equal(allocated.bindScope, "loopback");

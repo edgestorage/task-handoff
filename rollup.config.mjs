@@ -6,6 +6,7 @@ import { rmSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runtimePackages } from "./runtime-packages.config.mjs";
+import { cloudEnvironmentBuildPlugin } from "./scripts/rollup-cloud-environment.mjs";
 
 const require = createRequire(import.meta.url);
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
@@ -148,6 +149,9 @@ function runtimeMinifier() {
 
 function runtimeBuild(name, definition) {
   const outputDir = `dist/runtime-packages/${name}`;
+  const cloudEnvironmentPlugins = name === "control-plane" || name === "node-agent"
+    ? [cloudEnvironmentBuildPlugin()]
+    : [];
   const onwarn = (warning, warn) => {
     if (warning.code === "UNRESOLVED_IMPORT") {
       throw new Error(`Runtime package ${name} contains an unresolved import: ${warning.source || warning.message}`);
@@ -165,7 +169,7 @@ function runtimeBuild(name, definition) {
       },
       external: externalFrom(definition.dependencies),
       onwarn,
-      plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
+      plugins: [cleanRuntimeDir(outputDir), ...cloudEnvironmentPlugins, runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
     },
   ];
   if (definition.updateWorkerInput) {
@@ -179,7 +183,7 @@ function runtimeBuild(name, definition) {
       },
       external: externalFrom(definition.dependencies),
       onwarn,
-      plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
+      plugins: [cleanRuntimeDir(outputDir), ...cloudEnvironmentPlugins, runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
     });
   }
   for (const standalone of definition.standaloneInputs || []) {
@@ -206,9 +210,11 @@ const selectedRuntimePackages = requestedRuntimePackage
 if (requestedRuntimePackage && selectedRuntimePackages.length === 0) {
   throw new Error(`Unknown TASK_HANDOFF_RUNTIME_PACKAGE: ${requestedRuntimePackage}`);
 }
-const runtimePackageBuild = selectedRuntimePackages
-  .filter(([, definition]) => definition.input)
-  .flatMap(([name, definition]) => runtimeBuild(name, definition));
+const runtimePackageBuild = process.env.TASK_HANDOFF_ROLLUP_TARGET === "runtime-packages"
+  ? selectedRuntimePackages
+    .filter(([, definition]) => definition.input)
+    .flatMap(([name, definition]) => runtimeBuild(name, definition))
+  : [];
 
 export default process.env.TASK_HANDOFF_ROLLUP_TARGET === "controlled-instance"
   ? controlledInstanceBuild

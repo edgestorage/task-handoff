@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { CLOUD_ENVIRONMENT_VARIABLES, configuredCloudEnvironmentVariables } = require("../../../shared/cloud-environments.cjs");
 
 const DEFAULT_DESKTOP_CONTROL_PLANE_PORT = 18081;
 const DEFAULT_DESKTOP_NODE_AGENT_PORT = 18091;
@@ -123,6 +124,37 @@ function resolveMarketCatalogPublicKey(env = process.env, options = {}) {
   return override || readBundledMarketCatalogPublicKey(options) || DEFAULT_MARKET_CATALOG_PUBLIC_KEY;
 }
 
+function readBundledCloudEnvironment(options = {}) {
+  if (options.cloudEnvironmentModulePath === null) return {};
+  const modulePath = path.resolve(options.cloudEnvironmentModulePath || path.join(repoRoot(), "build", "desktop-cloud-environment.cjs"));
+
+  let parsed;
+  try {
+    parsed = require(modulePath);
+  } catch (error) {
+    if (error?.code === "MODULE_NOT_FOUND") {
+      if (options.packaged) throw new Error(`Packaged desktop cloud environment is missing: ${modulePath}`, { cause: error });
+      return {};
+    }
+    throw new Error(`Bundled desktop cloud environment could not be loaded: ${modulePath}`, { cause: error });
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Bundled desktop cloud environment must export an object: ${modulePath}`);
+  }
+
+  const environment = {};
+  for (const name of Object.values(CLOUD_ENVIRONMENT_VARIABLES)) {
+    const value = parsed[name];
+    if (value === undefined) continue;
+    if (typeof value !== "string") {
+      throw new Error(`Bundled desktop cloud environment export must contain string values: ${name}`);
+    }
+    const trimmed = value.trim();
+    if (trimmed) environment[name] = trimmed;
+  }
+  return configuredCloudEnvironmentVariables(environment);
+}
+
 function resolveDesktopProcessCwd(env = process.env, options = {}) {
   return path.resolve(
     env.TASK_HANDOFF_DESKTOP_PROCESS_CWD
@@ -142,8 +174,13 @@ function resolveDesktopProcessEnv(env = process.env, options = {}) {
 }
 
 function buildDesktopChildProcessEnv(env = process.env, options = {}) {
+  // Packaged cloud trust roots are build-time constants. Process environment
+  // may configure an unpackaged development run, but it cannot replace the
+  // trust boundary that shipped in the signed application.
+  const resolved = { ...env, ...readBundledCloudEnvironment(options) };
+  configuredCloudEnvironmentVariables(resolved);
   return {
-    ...resolveDesktopProcessEnv(env, options),
+    ...resolveDesktopProcessEnv(resolved, options),
     ...(options.packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     ...(options.version ? { TASK_HANDOFF_VERSION: options.version } : {}),
     ...(options.overrides || {}),
@@ -249,6 +286,7 @@ module.exports = {
   buildNodeAgentArgs,
   controlPlaneUrl,
   nodeAgentUrl,
+  readBundledCloudEnvironment,
   repoRoot,
   resolveCliEntry,
   resolveControlPlaneAuthMode,

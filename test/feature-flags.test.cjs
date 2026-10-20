@@ -3,14 +3,18 @@ const test = require("node:test");
 
 const { FEATURE_FLAG_DEFINITIONS, resolveFeatureFlags } = require("../shared/feature-flags.cjs");
 
-test("feature flags are disabled unless explicitly enabled", () => {
-  assert.deepEqual(resolveFeatureFlags({}), { officialAccount: false, agentRuns: false, builtinProjects: false });
+test("official account is enabled by default while other feature flags remain opt-in", () => {
+  assert.deepEqual(resolveFeatureFlags({}), { officialAccount: true, agentRuns: false, builtinProjects: false });
   assert.deepEqual(
     resolveFeatureFlags({ TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: "1" }),
     { officialAccount: true, agentRuns: false, builtinProjects: false },
   );
   assert.deepEqual(
     resolveFeatureFlags({ TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: "true" }),
+    { officialAccount: false, agentRuns: false, builtinProjects: false },
+  );
+  assert.deepEqual(
+    resolveFeatureFlags({ TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: "0" }),
     { officialAccount: false, agentRuns: false, builtinProjects: false },
   );
 });

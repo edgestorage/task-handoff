@@ -82,6 +82,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           <View style={[styles.profileGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
             {savedProfiles.map((profile, index) => {
               const active = Boolean(activeProfile && sameMobileControlPlaneProfileIdentity(activeProfile, profile));
+              const sharedAccess = profile.access.kind === 'cloud-relay' && profile.access.resourceAccess?.kind === 'shared' ? profile.access.resourceAccess : undefined;
               return <View key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}>
                 {index ? <View style={[styles.profileDivider, { backgroundColor: colors.border }]} /> : null}
                 <Pressable
@@ -96,6 +97,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                   <View style={styles.profileIdentity}>
                     <View style={styles.profileNameRow}>
                       <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || t('profiles.defaultName')}</Text>
+                      {sharedAccess ? <Text style={[styles.accessBadge, { color: colors.primary, backgroundColor: colors.primarySoft }]}>{t('cloudControlPlanes.sharedRole', { role: t(sharedAccess.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer') })}</Text> : null}
                       {active ? <Icon color={colors.primary} name="checkmark-circle" size={16} testID="profile-active-marker" /> : null}
                     </View>
                     <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{mobileControlPlaneProfileAddress(profile)}</Text>
@@ -231,6 +233,7 @@ const styles = StyleSheet.create({
   profileIdentity: { flex: 1, gap: 2 },
   profileNameRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   profileName: { flexShrink: 1, fontSize: 16, fontWeight: '600' },
+  accessBadge: { borderRadius: 5, fontSize: 11, fontWeight: '700', overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 2 },
   profileOrigin: { fontSize: 13, lineHeight: 18 },
   addRow: { alignItems: 'center', flexDirection: 'row', gap: 11, minHeight: 56, paddingHorizontal: 12 },
   addIcon: { alignItems: 'center', borderRadius: 8, height: 32, justifyContent: 'center', width: 32 },

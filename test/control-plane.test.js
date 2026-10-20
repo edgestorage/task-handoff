@@ -4188,6 +4188,8 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     entry.type === AiSessionEventType.Snapshot
     && entry.scope?.nodeId === directNodeId
     && entry.scope?.instanceId === "inst_direct_events"
+    && entry.payload.meta.revision === 1
+    && entry.payload.snapshot.sessions.some((session) => session.id === "ai_1")
   )), "direct node agent ai session event", 7000);
   assert.equal(event.type, AiSessionEventType.Snapshot);
   assert.equal(event.topic, AiSessionEventTopic);

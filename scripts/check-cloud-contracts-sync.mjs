@@ -45,7 +45,7 @@ if (!hostDir && !consumerDir) {
   process.exit(1);
 }
 
-const sharedFiles = ["account", "binding", "client", "common", "e2e", "index", "mobile", "mobile-client", "node-relay", "relay", "relay-frame", "versions"];
+const sharedFiles = ["account", "binding", "client", "common", "e2e", "index", "mobile", "mobile-client", "node-relay", "relay", "relay-frame", "relay-session", "versions"];
 const consumerOnly = { "relay.ts": ["RelayTtySnapshotEnvelopeSchema", "RelayTtySnapshotEnvelope"] };
 
 const exportNames = (source) => [...source.matchAll(/^export (?:const|function|class|type|interface|enum)\s+(\w+)/gm)].map((match) => match[1]).sort();

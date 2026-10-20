@@ -3,6 +3,7 @@ export const CONTROL_PLANE_BINDING_PROTOCOL_VERSION = "2026-08-10";
 export const CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION = "2026-10-18";
 export const OUTBOUND_CONNECTION_PROTOCOL_VERSION = "2026-08-10";
 export const RELAY_FRAMING_PROTOCOL_VERSION = "2026-08-10";
+export const RELAY_SESSION_PROTOCOL_VERSION = "2026-10-20";
 
 // Relay allocation leases are the one contractual value that spans both services:
 // the Coordinator stamps it onto every attach capability, and the Relay refuses an
@@ -10,6 +11,22 @@ export const RELAY_FRAMING_PROTOCOL_VERSION = "2026-08-10";
 // the issued lease the Relay rejects every allocation, so the two stay in this module.
 export const RELAY_ALLOCATION_LEASE_MS = 10 * 60_000;
 export const RELAY_MAX_ATTACH_LEASE_MS = 15 * 60_000;
+
+// A session grant is the resumable authorization boundary. Phase one keeps the
+// existing ten-minute refresh cadence and gives the session five minutes of
+// recovery headroom after a missed renewal. The ceiling is the Relay attach
+// lease, so a grant can never authorize a channel longer than a Relay accepts.
+export const RELAY_SESSION_GRANT_TTL_MS = 15 * 60_000;
+export const RELAY_SESSION_MIN_GRANT_TTL_MS = 60_000;
+export const RELAY_SESSION_MAX_GRANT_TTL_MS = RELAY_MAX_ATTACH_LEASE_MS;
+export const RELAY_SESSION_REFRESH_INTERVAL_MS = 10 * 60_000;
+export const RELAY_SESSION_RENEWAL_LEAD_MS = 5_000;
+export const RELAY_SESSION_MAX_E2E_AGE_MS = 60 * 60_000;
+export const RELAY_SESSION_PROOF_WINDOW_MS = 30_000;
+export const RELAY_REVOCATION_MIN_VALIDITY_MS = RELAY_SESSION_MAX_GRANT_TTL_MS;
+export const RELAY_SESSION_RESUME_CAPABILITY = "relay-session-resume-v1";
+export const RELAY_SESSION_REQUIRED_CAPABILITIES = Object.freeze([RELAY_SESSION_RESUME_CAPABILITY] as const);
+export const RELAY_SESSION_NOT_READY_CODE = "RELAY_SESSION_RESUME_NOT_READY";
 
 // Node relay channels are long-lived: a node agent holds one channel per claiming
 // Control Plane instead of rotating short tickets, so the default lease is half a
@@ -38,5 +55,14 @@ export const OfficialAudience = Object.freeze({
   RelayNodeAgentAttach: "task-handoff:relay-node-agent-attach",
   RelayNodeClaimGrant: "task-handoff:relay-node-claim-grant",
   RelayRevocation: "task-handoff:relay-revocation",
+  RelayRevocationSync: "task-handoff:relay-revocation-sync",
+  RelaySessionGrant: "task-handoff:relay-session-grant",
+  RelaySessionTranscript: "task-handoff:relay-session-transcript",
   ControlPlaneAccess: "task-handoff:control-plane-access",
+});
+
+export const RelaySessionAudience = Object.freeze({
+  Grant: "task-handoff:relay-session-grant",
+  Transcript: "task-handoff:relay-session-transcript",
+  RevocationSync: "task-handoff:relay-revocation-sync",
 });

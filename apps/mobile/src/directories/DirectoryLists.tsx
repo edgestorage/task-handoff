@@ -9,7 +9,8 @@ import { Icon, type IconName } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenFlatList } from '../components/ScreenFlatList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
-import { aiSessionSummary, connectionModeLabel, instanceStateLabel, nodeDisplayName, nodeStateLabel, nodeSummary, relativeObservedAt } from './presentation';
+import { connectionModeLabel } from '../control-plane/connection-presentation';
+import { aiSessionSummary, instanceStateLabel, nodeDisplayName, nodeStateLabel, nodeSummary, relativeObservedAt } from './presentation';
 import { useI18n, type Translate } from '../i18n';
 
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {

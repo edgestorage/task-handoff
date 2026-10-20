@@ -61,6 +61,21 @@ test('drawer hides the Thandoff account entry unless cloud Relay is enabled', as
   await enabled.unmount();
 });
 
+test('drawer shows the Control Plane name for a cloud Relay profile', async () => {
+  mockRuntime.mockReturnValue({
+    profile: {
+      access: { kind: 'cloud-relay' },
+      identity: { displayName: 'Relay Studio' },
+    },
+    triggerCapability: false,
+  } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+
+  const screen = await render(<InstanceDrawerContent {...drawerProps} />);
+  expect(screen.getByText('Relay Studio')).toBeTruthy();
+  expect(screen.queryByText('https://control.example')).toBeNull();
+  await screen.unmount();
+});
+
 test('Story drawer switches to node multi-select without changing other tab instance scope', async () => {
   const setFilter = jest.fn();
   mockStoryNodeFilter.mockReturnValue({ filter: { kind: 'all' }, setFilter });

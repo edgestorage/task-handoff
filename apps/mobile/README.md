@@ -33,7 +33,21 @@ Production and staging builds resolve their cloud service endpoints from a versi
 _cloud.thandoff.com TXT "v1 cloud.thandoff.com cloud-backup.thandoff.com"
 ```
 
-The production fallback remains `https://cloud.thandoff.com`; staging uses `_cloud.aaasu.com` and falls back to `https://th.aaasu.com`. Clients query the record through Alibaba and Cloudflare DoH resolvers, validate the `v1` format and allowed host suffixes, persist the last valid list, and use a local fallback when DNS is unavailable. Safe requests fail over to the next endpoint; account-changing requests are not replayed across endpoints because refresh credentials rotate on every use. All listed endpoints must share the same account, device-session, and binding storage. An ad-hoc build can opt into a custom record with `TASK_HANDOFF_CLOUD_DISCOVERY_RECORD`.
+The release fallback origin and TXT record name are supplied with the rest of the production cloud environment. Clients query the record through Alibaba and Cloudflare DoH resolvers, validate the `v1` format and Coordinator host suffixes, persist the last valid list, and use the configured fallback when DNS is unavailable. Safe requests fail over to the next endpoint; account-changing requests are not replayed across endpoints because refresh credentials rotate on every use. All listed endpoints must share the same account, device-session, and binding storage.
+
+Production domain declarations and restrictions are build-time environment variables. No production domain is built into the source tree; the mobile release workflow supplies the values explicitly, and local and ad-hoc builds use the same names.
+
+| Variable | Meaning |
+| --- | --- |
+| `TASK_HANDOFF_CLOUD_ENV` | Selects the environment identity. |
+| `TASK_HANDOFF_CLOUD_SERVICE_ORIGIN` | Canonical Coordinator origin. |
+| `TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES` | Coordinator and discovery hosts, including every subdomain. |
+| `TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES` | Relay hosts, including every subdomain. |
+| `TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY` | Allows plain `ws://` Relay URLs when set to `1`. |
+| `TASK_HANDOFF_CLOUD_DISCOVERY_RECORD` | Versioned DNS TXT discovery record. |
+| `TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN` | Coordinator origin used when discovery is unavailable. |
+
+The Control Plane and Node Agent release bundles inline the same variables at build time and ignore runtime overrides, so their trust roots are fixed by the signed artifact. Packaged desktop builds materialize the values for their child processes. `TASK_HANDOFF_CLOUD_SERVICE_ORIGINS` optionally adds ordered Coordinator fallback origins.
 
 ## Commands
 

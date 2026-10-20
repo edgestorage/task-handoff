@@ -49,6 +49,11 @@ const CloudConnectivitySchema = z.object({
 }).strict();
 
 /** Account node directory projection: only allowlisted identity fields, never endpoints or business data. */
+const CloudResourceAccessSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("owner") }).strict(),
+  z.object({ kind: z.literal("shared"), shareId: z.string(), revision: z.number().int().positive(), role: z.literal("use"), expiresAt: z.string().datetime() }).strict(),
+]);
+
 const CloudAccountNodeSchema = z.object({
   nodeHandle: z.string(),
   displayName: z.string().optional(),
@@ -57,6 +62,7 @@ const CloudAccountNodeSchema = z.object({
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  access: CloudResourceAccessSchema.optional(),
 }).strict();
 
 const CloudNodeRelayStateSchema = z.object({

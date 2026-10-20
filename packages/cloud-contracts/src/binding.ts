@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DateTimeSchema, IdSchema, LocaleTextSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
-import { CloudRelayScopesSchema } from "./relay.ts";
+import { CloudRelayScopesSchema, ResourceAccessSchema } from "./relay.ts";
 import { CONTROL_PLANE_BINDING_PROTOCOL_VERSION, OfficialAudience } from "./versions.ts";
 
 export const ControlPlaneIdentitySchema = z.strictObject({
@@ -47,6 +47,7 @@ export const ControlPlaneDirectoryEntrySchema = z.strictObject({
   relayQuotaBytes: z.number().int().nonnegative().optional(),
   versionWarning: z.string().trim().min(1).max(500).optional(),
   errorCode: z.string().trim().min(1).max(160).optional(),
+  access: ResourceAccessSchema.optional(),
 });
 
 export type ControlPlaneDirectoryEntry = z.infer<typeof ControlPlaneDirectoryEntrySchema>;

@@ -2,6 +2,23 @@ import { MobileCloudAccountSession } from '../src/control-plane/cloud-account';
 import { clearCloudAccountReauthenticationRequired, cloudAccountReauthenticationRequired } from '../src/control-plane/account-reauthentication';
 import type { SecureValueStore } from '../src/platform/secure-storage';
 
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: {
+    expoConfig: {
+      extra: {
+        cloudEnvironment: {
+          id: 'test',
+          serviceOrigin: 'https://cloud.example.test',
+          coordinatorHostSuffixes: ['example.test'],
+          relayHostSuffixes: ['example.test'],
+          allowInsecureRelay: false,
+        },
+      },
+    },
+  },
+}));
+
 let mockRandomSourceCounter = 0;
 jest.mock('expo-crypto', () => ({
   CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
@@ -48,8 +65,8 @@ test('cloud mobile login uses one-time PKCE state and stores only the refresh cr
 
   const reference = await session.completeLogin({ code: authorizationCode, state: authorization.state, redirectUri: 'taskhandoff://cloud-auth/callback' });
   expect(requests.map(([url]) => url)).toEqual([
-    'https://cloud.thandoff.com/api/v1/auth/authorize',
-    'https://cloud.thandoff.com/api/v1/auth/token',
+    'https://cloud.example.test/api/v1/auth/authorize',
+    'https://cloud.example.test/api/v1/auth/token',
   ]);
   await expect(session.completeLogin({ code: authorizationCode, state: authorization.state, redirectUri: 'taskhandoff://cloud-auth/callback' })).rejects.toMatchObject({ code: 'CLOUD_LOGIN_STATE_INVALID' });
   const persisted = storage.values.get(reference.secureCredentialKey)!;

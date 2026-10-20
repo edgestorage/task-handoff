@@ -128,6 +128,7 @@ test("control-plane admin node relay account routes", async () => {
     revision: 1,
     createdAt: TS,
     updatedAt: TS,
+    access: { kind: "shared", shareId: "shr_node_alpha", revision: 2, role: "use", expiresAt: TS },
   };
   const relayState = {
     channels: [{ nodeHandle: "nrh_node_alpha", nodeId: "node_nrh_node_alpha", allocationId: "alloc_a", connectedAt: TS, connected: true }],
@@ -148,6 +149,7 @@ test("control-plane admin node relay account routes", async () => {
   const directory = await api.cloudAccountNodes();
   assert.equal(directory.signedIn, true);
   assert.equal(directory.items[0]?.displayName, "Alpha box");
+  assert.equal(directory.items[0]?.access?.kind, "shared");
   assert.equal((await api.claimCloudAccountNode("nrh_node_alpha")).claimed, true);
   assert.equal((await api.releaseCloudAccountNodeClaim("nrh_node_alpha")).status, "revoked");
   const token = await api.createCloudNodeBindingToken({ displayName: "Alpha box" });

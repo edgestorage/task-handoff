@@ -37,6 +37,12 @@ export function cloudSigningKey(issuerId = "cloud_issuer", kid = "cloud_signing_
 export type CloudClaim = {
   controlPlaneId: string;
   controlPlanePublicKey: string;
+  accountId?: string;
+  ownerAccountId?: string;
+  accessMode?: "owner" | "shared";
+  shareGrantId?: string;
+  shareRevision?: number;
+  shareRole?: "use";
   bindingId?: string;
   bindingRevision?: number;
   displayName?: string;
@@ -116,19 +122,27 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
             if (existing) return existing;
             const allocationId = `allocation_test_${++allocationSequence}`;
             const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+            const shared = claim.accessMode === "shared" ? {
+              ownerAccountId: claim.ownerAccountId,
+              accessMode: "shared" as const,
+              shareGrantId: claim.shareGrantId,
+              shareRevision: claim.shareRevision,
+              shareRole: "use" as const,
+            } : {};
             const base = {
               protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION,
               channelKind: "node" as const,
               allocationId,
               relayId: state.relayId,
               controlPlaneId: claim.controlPlaneId,
-              accountId: options.accountId ?? "account_test",
+              accountId: claim.accountId ?? options.accountId ?? "account_test",
               bindingId: claim.bindingId ?? "binding_test",
               bindingRevision: claim.bindingRevision ?? 1,
               nodeHandle,
               trafficClass: "interactive" as const,
               issuedAt: new Date().toISOString(),
               expiresAt,
+              ...shared,
             };
             const nodeAttach = { ...base, audience: OfficialAudience.RelayNodeAgentAttach, role: "node-agent", nonce: crypto.randomBytes(24).toString("base64url"), signature: "s".repeat(43) };
             const grantPayload = {
@@ -138,7 +152,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
               allocationId,
               nodeHandle,
               controlPlaneId: claim.controlPlaneId,
-              accountId: options.accountId ?? "account_test",
+              accountId: claim.accountId ?? options.accountId ?? "account_test",
               bindingId: claim.bindingId ?? "binding_test",
               bindingRevision: claim.bindingRevision ?? 1,
               relayId: state.relayId,
@@ -147,6 +161,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
               nonce: crypto.randomBytes(24).toString("base64url"),
               issuedAt: base.issuedAt,
               expiresAt,
+              ...shared,
               controlPlanePublicKey: claim.controlPlanePublicKey,
             };
             const claimGrant = NodeRelayClaimGrantSchema.parse({ ...grantPayload, signature: signingKey.sign("node-relay-claim-grant", grantPayload) });

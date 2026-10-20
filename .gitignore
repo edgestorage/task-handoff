@@ -2,6 +2,7 @@
 .idea/
 .pnpm-store/
 build/market-catalog-public-key.txt
+build/desktop-cloud-environment.cjs
 .task-handoff/
 .tmp-review/
 node_modules/

@@ -44,7 +44,6 @@ export function OneTimeCodeInput({
         editable={!disabled}
         inputMode="numeric"
         keyboardType="number-pad"
-        maxLength={length}
         onBlur={() => setFocused(false)}
         onChangeText={(next) => onChangeText(normalizeOneTimeCode(next, length))}
         onFocus={() => setFocused(true)}

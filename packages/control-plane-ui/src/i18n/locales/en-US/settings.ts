@@ -72,7 +72,7 @@ export const settings = {
     commandMode: "Node state", installMode: "New machine, install and bind", bindMode: "Installed, bind only", installModeHint: "The command installs a matching Node Agent version and binds it to this Thandoff account.", bindModeHint: "Nothing is reinstalled. The existing Node Agent on the target machine is bound to this Thandoff account.",
     path: "Thandoff relay (account node)", pathHint: "Bind a node to your Thandoff account and reach it over the cloud relay. Neither side needs a public address.",
     unavailableSignedIn: "Sign in to your Thandoff account to add account nodes.", unavailableUnbound: "This Control Plane is not bound to Thandoff yet.", unavailableScope: "Node relay is turned off in cloud settings.", openSettings: "Open cloud settings",
-    accountStatus: { active: "Ready to connect", suspended: "Suspended", revoked: "Revoked" }, unnamedNode: "Unnamed node",
+    accountStatus: { active: "Ready to connect", suspended: "Suspended", revoked: "Revoked" }, unnamedNode: "Unnamed node", accountAccessOwner: "Owned by you", accountAccessShared: "Shared node use · expires {expiresAt}",
     directoryTitle: "Nodes in the account", directoryHint: "Connect a node that is already bound to the account, or generate an install command for a machine that has nothing deployed yet.",
     directoryLoading: "Loading account nodes…", directoryEmpty: "No nodes are bound to this account yet.", directoryFailed: "Could not load the account nodes.", directoryRetry: "Retry",
     connect: "Connect", connecting: "Connecting…", waiting: "Claimed. Waiting for the node to open its relay channel…", claimed: "Channel connected", statusError: "Last relay error: {message}",
@@ -195,6 +195,7 @@ export const settings = {
   cliSessions: {
     title: "Command line sessions",
     description: "Signed-in command line clients. Revoking a session signs that client out without affecting other clients.",
+    authenticationRequired: "Sign in to manage command line sessions.",
     loading: "Loading command line sessions...",
     empty: "No command line clients are signed in to this account",
     lastSeen: "Last active",

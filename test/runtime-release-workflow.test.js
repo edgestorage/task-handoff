@@ -6,6 +6,52 @@ const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
+const {
+  isTrustedCloudRelayUrl,
+  isTrustedCloudServiceOrigin,
+  resolveCloudEnvironment,
+} = require("../shared/cloud-environments.cjs");
+
+function workflowCloudEnvironment(source) {
+  const environment = {};
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^  (TASK_HANDOFF_CLOUD_[A-Z_]+):\s*(.+)$/);
+    if (!match) continue;
+    environment[match[1]] = match[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+  }
+  return environment;
+}
+
+test("runtime releases bake the production cloud identity into published packages", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+  const environment = workflowCloudEnvironment(workflow);
+  const expectedNames = [
+    "TASK_HANDOFF_CLOUD_ENV",
+    "TASK_HANDOFF_CLOUD_SERVICE_ORIGIN",
+    "TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_RECORD",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN",
+  ];
+  assert.deepEqual(Object.keys(environment).sort(), [...expectedNames].sort());
+  for (const name of expectedNames) assert.ok(environment[name], `runtime release must define ${name}`);
+
+  const production = resolveCloudEnvironment("production", undefined, environment);
+  assert.equal(isTrustedCloudServiceOrigin(production, production.serviceOrigin), true);
+  assert.equal(isTrustedCloudRelayUrl(production, `wss://edge.${production.relayHostSuffixes[0]}/connect`), true);
+  assert.match(workflow, /pnpm runtime:pack/);
+});
+
+test("all release workflows use the same cloud identity", () => {
+  const environments = ["mobile-release.yml", "desktop-release.yml", "runtime-release.yml"].map((name) => {
+    const source = fs.readFileSync(path.join(root, ".github", "workflows", name), "utf8");
+    return [name, workflowCloudEnvironment(source)];
+  });
+  for (const [name, environment] of environments.slice(1)) {
+    assert.deepEqual(environment, environments[0][1], `${name} cloud environment drifted from mobile-release.yml`);
+  }
+});
 
 test("runtime releases map stable to latest and isolate prerelease dist-tags", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");

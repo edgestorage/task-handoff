@@ -20,9 +20,19 @@ permissions:
   contents: read
 
 env:
+  TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || '1' }}
   # Pulls the published Agent Skill into the node agent's shipped built-in
   # project at build time; off by default until the rollout variable is on.
   TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: ${{ vars.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED || '0' }}
+  # Baked into the published Control Plane and Node Agent packages so systemd
+  # services retain the official client trust roots without host configuration.
+  TASK_HANDOFF_CLOUD_ENV: production
+  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: https://cloud.thandoff.com
+  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: thandoff.com,xpbox.cn,aaasu.com
+  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: thandoff.com,xpbox.cn,aaasu.com
+  TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY: "0"
+  TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: _cloud.thandoff.com
+  TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: https://cloud.thandoff.com
 
 jobs:
   node-pty-prebuilds:

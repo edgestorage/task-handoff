@@ -86,7 +86,7 @@
                 />
                 <span class="cloud-node-onboarding-account-copy">
                   <strong>{{ item.displayName || t("settings.nodeRelay.unnamedNode") }}</strong>
-                  <small>{{ accountNodeStatus(item) }}</small>
+                  <small>{{ accountNodeStatus(item) }} · {{ accountNodeAccess(item) }}</small>
                 </span>
                 <span class="cloud-node-onboarding-account-meta">
                   <Badge v-if="accountNodeConnected(item.nodeHandle)" variant="default">{{ t("settings.nodeRelay.claimed") }}</Badge>
@@ -244,6 +244,9 @@ const accountNodeItems = computed(() => (accountNodes.data.value?.items ?? []).f
 const accountNodeConnected = (nodeHandle: string) => Boolean(accountNodes.data.value?.nodeRelay.channels.some((channel) => channel.nodeHandle === nodeHandle && channel.connected));
 const accountNodeClaimed = (nodeHandle: string) => claimedHandles.value.includes(nodeHandle) || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle)) || accountNodeConnected(nodeHandle);
 const accountNodeStatus = (item: CloudAccountNode) => t(`settings.nodeRelay.accountStatus.${item.status}`);
+const accountNodeAccess = (item: CloudAccountNode) => item.access?.kind === 'shared'
+  ? t("settings.nodeRelay.accountAccessShared", { expiresAt: formatDateTime(new Date(item.access.expiresAt), locale.value) })
+  : t("settings.nodeRelay.accountAccessOwner");
 const relayAccountError = computed(() => accountNodes.data.value?.nodeRelay.errors[0]?.message || "");
 const generatedCommand = computed(() => commandMode.value === "install" ? bindingToken.value?.installCommand ?? "" : bindingToken.value?.command ?? "");
 const bindingTokenExpired = computed(() => Boolean(bindingToken.value && Date.parse(bindingToken.value.expiresAt) <= nowMs.value));

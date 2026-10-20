@@ -8,7 +8,8 @@ import { mobileAiSessionStore } from '../ai-sessions/store';
 import { mobileDirectoryStore } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { mobileTriggerStore } from '../triggers/store';
-import type { MobileControlPlaneProfile } from './profile';
+import type { ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
+import { staleCloudControlPlaneProfiles, type MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
 import { attemptRemoteMobileSessionRevocation } from './profile-removal';
 import { MobileCloudAccountSession } from './cloud-account';
@@ -138,4 +139,14 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   mobileTriggerStore.clearProfile(controlPlaneId);
   await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   return remaining;
+}
+
+/** Apply the Cloud directory as authoritative only for the active account session. */
+export async function reconcileCloudControlPlaneProfiles(
+  accountSessionId: string,
+  entries: readonly Pick<ControlPlaneDirectoryEntry, 'controlPlaneId' | 'publicKeyFingerprint'>[],
+) {
+  const stale = staleCloudControlPlaneProfiles(await mobileProfileStore.list(), accountSessionId, entries);
+  for (const profile of stale) await deleteMobileControlPlaneProfile(profile);
+  return stale;
 }

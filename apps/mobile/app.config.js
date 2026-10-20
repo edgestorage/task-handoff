@@ -1,6 +1,6 @@
 const baseConfig = require('./app.json').expo;
 const { resolveFeatureFlags } = require('../../shared/feature-flags.cjs');
-const { CLOUD_DISCOVERY, CLOUD_ENVIRONMENTS, cloudEnvironmentForServiceOrigin } = require('../../shared/cloud-environments.cjs');
+const { resolveCloudDiscovery: resolveConfiguredCloudDiscovery, resolveCloudEnvironment, cloudEnvironmentForServiceOrigin } = require('../../shared/cloud-environments.cjs');
 
 const variants = {
   development: {
@@ -30,7 +30,7 @@ module.exports = () => {
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
   const featureFlags = resolveFeatureFlags(process.env);
   const cloudEnvironment = resolveCloudEnvironmentForVariant(variantName);
-  const cloudDiscovery = resolveCloudDiscovery(cloudEnvironment);
+  const cloudDiscovery = resolveCloudDiscovery(cloudEnvironment, variantName);
   const plugins = [
     ...(baseConfig.plugins || []),
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
@@ -91,30 +91,42 @@ module.exports = () => {
   };
 };
 
-function resolveCloudDiscovery(cloudEnvironment) {
+function resolveCloudDiscovery(cloudEnvironment, variantName) {
   if (!cloudEnvironment) return undefined;
-  const registered = CLOUD_DISCOVERY[cloudEnvironment.id];
-  const record = registered?.record ?? process.env.TASK_HANDOFF_CLOUD_DISCOVERY_RECORD;
-  if (!record) return undefined;
-  return Object.freeze({
-    record,
-    fallbackOrigin: cloudEnvironment.serviceOrigin,
-    allowedHostSuffixes: registered?.allowedHostSuffixes ?? Object.freeze([new URL(cloudEnvironment.serviceOrigin).hostname]),
-  });
+  return resolveConfiguredCloudDiscovery(cloudEnvironment, environmentForVariant(variantName));
 }
 
-// The registered staging environment carries the test domains, so a staging build
-// needs no environment variables. An explicit HTTPS origin still overrides it for
-// ad-hoc clouds, and production ignores overrides entirely.
+// Production and staging builds require an explicitly configured cloud identity.
+// An explicit HTTPS staging origin still selects an ad-hoc cloud. Production
+// accepts the same cloud identity overrides as the Control Plane, but it never
+// accepts the staging-only origin variable.
 function resolveCloudEnvironmentForVariant(variantName) {
-  if (variantName === 'production') return CLOUD_ENVIRONMENTS.production;
+  if (variantName === 'production') return resolveCloudEnvironment('production', undefined, environmentForVariant('production'));
   if (variantName === 'staging') {
     const override = process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
-    if (!override) return CLOUD_ENVIRONMENTS.staging;
+    if (!override) return resolveCloudEnvironment('staging', undefined, environmentForVariant('staging'));
     const url = new URL(override);
     if (url.protocol !== 'https:') throw new Error('TASK_HANDOFF_CLOUD_STAGING_ORIGIN must use HTTPS');
-    return cloudEnvironmentForServiceOrigin(url.origin);
+    return cloudEnvironmentForServiceOrigin(url.origin, {
+      ...environmentForVariant('staging'),
+      TASK_HANDOFF_CLOUD_ENV: 'staging',
+      TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: url.origin,
+    });
   }
   const developmentOrigin = process.env.TASK_HANDOFF_CLOUD_DEVELOPMENT_ORIGIN;
-  return developmentOrigin ? cloudEnvironmentForServiceOrigin(new URL(developmentOrigin).origin) : undefined;
+  return developmentOrigin ? cloudEnvironmentForServiceOrigin(new URL(developmentOrigin).origin, {
+    ...environmentForVariant('development'),
+    TASK_HANDOFF_CLOUD_ENV: 'development',
+    TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: new URL(developmentOrigin).origin,
+  }) : undefined;
+}
+
+// A shell that runs the Control Plane against staging commonly exports the generic
+// cloud variables too. They belong to that selected environment, not to a different
+// mobile variant, so a variant build only consumes them when the selected environment
+// matches (or when no environment was selected explicitly).
+function environmentForVariant(variantName) {
+  const selected = process.env.TASK_HANDOFF_CLOUD_ENV?.trim();
+  if (!selected || selected === variantName) return process.env;
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASK_HANDOFF_CLOUD_')));
 }

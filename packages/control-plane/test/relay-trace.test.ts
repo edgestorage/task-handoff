@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import nacl from "tweetnacl";
-import { decodeRelayFrame, encodeRelayFrame, type RelayFramePayload } from "@task-handoff/cloud-contracts";
+import { decodeRelayFrame, encodeRelayFrame, RELAY_SESSION_PROTOCOL_VERSION, RelaySessionAudience, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { CloudRelayConnector } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 import { RelayTraceRecorder, relayTraceEnabled, relayTraceFromEnvironment } from "../src/control-plane/cloud-connectivity/relay-trace.ts";
 
@@ -142,17 +142,61 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
       if (typeof data !== "string") { this.frames.push(decodeRelayFrame(data)); return; }
       const message = JSON.parse(data);
       this.sent.push(message);
-      if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", channelId: "relay_channel_a" }) }));
+      if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", channelId: "relay_channel_a", allocationId: "allocation_a", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }) }));
     }
     close(code?: number, reason?: string) { this.readyState = FakeSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
     receive(frame: RelayFramePayload) { this.emit("message", Buffer.from(encodeRelayFrame(frame)), true); }
   }
 
   const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
-  const ticket = { protocolVersion: "2026-08-10", audience: "task-handoff:control-plane-access", ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(24), trafficClasses: ["interactive"], issuedAt: new Date(now - 1_000).toISOString(), expiresAt: new Date(now + 30_000).toISOString(), signature: "s".repeat(32) };
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: "allocation_a", relayId: "relay_a", role: "control-plane", controlPlaneId: ticket.controlPlaneId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, bindingId: ticket.bindingId, ticketId: ticket.ticketId, bindingRevision: ticket.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: ticket.issuedAt, expiresAt: ticket.expiresAt, signature: "s".repeat(32) };
+  const issuedAt = new Date(now - 1_000).toISOString();
+  const expiresAt = new Date(now + 14 * 60_000).toISOString();
+  const transcriptTicket = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Transcript,
+    transcriptTicketId: "transcript_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    nonce: "t".repeat(24),
+    issuedAt,
+    expiresAt,
+  };
+  const grant = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Grant,
+    sessionId: "relay_session_a",
+    grantId: "grant_a",
+    generation: 1,
+    allocationId: "allocation_a",
+    relayId: "relay_a",
+    relayRegion: "eu-west",
+    relayUrl: "ws://localhost:8080/connect",
+    accountId: transcriptTicket.accountId,
+    deviceSessionId: transcriptTicket.deviceSessionId,
+    controlPlaneId: transcriptTicket.controlPlaneId,
+    bindingId: transcriptTicket.bindingId,
+    bindingRevision: transcriptTicket.bindingRevision,
+    targetPublicKeyFingerprint: fingerprint,
+    clientProofPublicKey: "b".repeat(43),
+    controlPlaneProofPublicKey: "c".repeat(43),
+    trafficClass: "interactive",
+    sessionTranscriptTicket: transcriptTicket,
+    revocationEpoch: 0,
+    issuedAt,
+    expiresAt,
+    signature: "s".repeat(86),
+  } as const;
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: transcriptTicket.transcriptTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const sessionKey = new Uint8Array(32);
-  const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey }), publicIdentity: () => ({ publicKey: "c".repeat(43) }) };
+  const identity = {
+    acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey }),
+    publicIdentity: () => ({ publicKey: "c".repeat(43) }),
+    signRelayRoleProof: (payload: Record<string, unknown>) => ({ ...payload, signature: "s".repeat(86) }),
+  };
   const directory = tempDir();
   const trace = new RelayTraceRecorder({ enabled: true, directory });
   const connector = new CloudRelayConnector({
@@ -162,8 +206,8 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     trace,
   });
 
-  const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, ticket } });
-  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify({ ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) })) });
+  const connection = await connector.connect({ relayUrl: grant.relayUrl, allocation: { attach, grant } });
+  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify({ ticketId: transcriptTicket.transcriptTicketId, deviceSessionId: transcriptTicket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) })) });
   // The data frame can only be consumed once the encrypted session has registered its
   // listener, which happens after the handshake response goes back over the socket.
   await waitFor(() => sockets[0].frames.some((frame) => frame.kind === "handshake"));

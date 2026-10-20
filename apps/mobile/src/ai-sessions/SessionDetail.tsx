@@ -60,6 +60,7 @@ export function SessionDetail({
   showModePicker = true,
   bottomInset = 0,
   contentLoading = false,
+  recovering = false,
   keyboardViewportRevision = 0,
 }: {
   session?: ControlPlaneAiSessionSummary;
@@ -79,6 +80,8 @@ export function SessionDetail({
   showModePicker?: boolean;
   bottomInset?: number;
   contentLoading?: boolean;
+  /** The session is expected to reappear after a transient connection recovery. */
+  recovering?: boolean;
   keyboardViewportRevision?: number;
 }) {
   const { colors } = useMobileTheme();
@@ -207,6 +210,15 @@ export function SessionDetail({
     if (mode === undefined) setLocalMode(next);
     onModeChange?.(next);
   };
+  if (!session && recovering) return (
+    <Profiler id="detail" onRender={recordDetailRender}>
+      <View style={[styles.empty, { backgroundColor: colors.background }]} testID="session-recovering">
+        <ActivityIndicator color={colors.primary} />
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('sessions.recovering')}</Text>
+        <Text style={[styles.muted, styles.emptyText, { color: colors.textMuted }]}>{t('sessions.recoveringDescription')}</Text>
+      </View>
+    </Profiler>
+  );
   if (!session) return (
     <Profiler id="detail" onRender={recordDetailRender}>
       <View style={[styles.empty, { backgroundColor: colors.background }]}>

@@ -72,6 +72,7 @@ test("Electron uses the TaskHandoff icon for packaging and runtime windows", () 
   assert.deepEqual(packageJson.build.extraResources, [
     { from: "build/icon.png", to: "icon.png" },
     { from: "build/tray-icon.png", to: "tray-icon.png" },
+    { from: "build/market-catalog-public-key.txt", to: "market-catalog-public-key.txt" },
   ]);
   assert.equal(desktopIconPath({ packaged: false, root, resourcesPath: "/unused" }), path.join(root, "build", "icon.png"));
   assert.equal(desktopTrayIconPath({ packaged: false, root, resourcesPath: "/unused" }), path.join(root, "build", "tray-icon.png"));
@@ -131,6 +132,9 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
   assert.ok(packageJson.build.asarUnpack.includes("builtin-projects/**/*"), "built-in project content must be available as a real file");
   assert.ok(packageJson.files.includes("shared"), "npm releases must contain shared desktop runtime sources");
   assert.ok(packageJson.build.files.includes("shared/process-start-identity.cjs"), "Desktop packages must contain the shared process identity helper");
+  assert.ok(packageJson.build.files.includes("build/desktop-cloud-environment.cjs"), "Desktop packages must contain the build-time cloud environment module");
+  assert.ok(packageJson.build.files.includes("shared/cloud-environment-build.cjs"), "Desktop packages must contain the cloud environment build placeholder");
+  assert.ok(packageJson.build.files.includes("shared/cloud-environments.cjs"), "Desktop packages must contain the shared cloud environment resolver");
   assert.equal(packageJson.build.extraResources.some((entry) => entry.from === "dist"), false);
 });
 

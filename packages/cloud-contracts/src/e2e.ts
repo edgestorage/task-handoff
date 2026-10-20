@@ -2,6 +2,7 @@ import { createHash, createPublicKey, diffieHellman, generateKeyPairSync, sign, 
 import { z } from "zod";
 import { canonicalJson } from "./common.ts";
 import { AccessTicketSchema, type AccessTicket } from "./relay.ts";
+import { RelaySessionTranscriptTicketSchema, type RelaySessionTranscriptTicket } from "./relay-session.ts";
 
 export const ClientHelloSchema = z.object({
   ticketId: z.string().trim().min(3).max(160),
@@ -20,13 +21,17 @@ export type HandshakeResponse = z.infer<typeof HandshakeResponseSchema>;
 
 interface ClientPrivateState {
   privateKey: KeyObject;
-  ticket: AccessTicket;
+  ticket: AccessTicket | RelaySessionTranscriptTicket;
 }
 
-export function beginClientHandshake(ticket: AccessTicket): { privateState: ClientPrivateState; hello: ClientHello } {
+const RelayTranscriptCredentialSchema = z.union([AccessTicketSchema, RelaySessionTranscriptTicketSchema]);
+type RelayTranscriptCredential = AccessTicket | RelaySessionTranscriptTicket;
+
+export function beginClientHandshake(ticket: AccessTicket | RelaySessionTranscriptTicket): { privateState: ClientPrivateState; hello: ClientHello } {
+  const credential = RelayTranscriptCredentialSchema.parse(ticket);
   const keyPair = generateKeyPairSync("x25519");
   const clientEphemeralPublicKey = jwkX(keyPair.publicKey);
-  return { privateState: { privateKey: keyPair.privateKey, ticket }, hello: { ticketId: ticket.ticketId, deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey } };
+  return { privateState: { privateKey: keyPair.privateKey, ticket: credential }, hello: { ticketId: transcriptTicketId(credential), deviceSessionId: credential.deviceSessionId, clientEphemeralPublicKey } };
 }
 
 export function acceptControlPlaneHandshake(input: {
@@ -35,9 +40,9 @@ export function acceptControlPlaneHandshake(input: {
   controlPlaneFingerprint: string;
   controlPlanePrivateKey: KeyObject | string | Buffer;
 }): { sessionKey: Buffer; response: HandshakeResponse } {
-  const ticket = AccessTicketSchema.parse(input.ticket);
+  const ticket = RelayTranscriptCredentialSchema.parse(input.ticket);
   const clientHello = ClientHelloSchema.parse(input.clientHello);
-  if (ticket.ticketId !== clientHello.ticketId || ticket.deviceSessionId !== clientHello.deviceSessionId || ticket.targetPublicKeyFingerprint !== input.controlPlaneFingerprint) throw handshakeError();
+  if (transcriptTicketId(ticket) !== clientHello.ticketId || ticket.deviceSessionId !== clientHello.deviceSessionId || ticket.targetPublicKeyFingerprint !== input.controlPlaneFingerprint) throw handshakeError();
   const keyPair = generateKeyPairSync("x25519");
   const serverEphemeralPublicKey = jwkX(keyPair.publicKey);
   const transcript = transcriptHash(ticket, clientHello.clientEphemeralPublicKey, serverEphemeralPublicKey);
@@ -55,8 +60,28 @@ export function finishClientHandshake(privateState: ClientPrivateState, rawRespo
   return deriveSessionKey(sharedSecret, expected);
 }
 
-function transcriptHash(ticket: AccessTicket, clientKey: string, serverKey: string): string {
-  return createHash("sha256").update(canonicalJson({ audience: ticket.audience, ticketId: ticket.ticketId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, controlPlaneId: ticket.controlPlaneId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision, nonce: ticket.nonce, clientEphemeralPublicKey: clientKey, serverEphemeralPublicKey: serverKey })).digest("base64url");
+function transcriptHash(ticket: RelayTranscriptCredential, clientKey: string, serverKey: string): string {
+  return createHash("sha256").update(canonicalJson({
+    audience: ticket.audience,
+    ticketId: transcriptTicketId(ticket),
+    accountId: ticket.accountId,
+    deviceSessionId: ticket.deviceSessionId,
+    controlPlaneId: ticket.controlPlaneId,
+    bindingId: ticket.bindingId,
+    bindingRevision: ticket.bindingRevision,
+    nonce: ticket.nonce,
+    clientEphemeralPublicKey: clientKey,
+    serverEphemeralPublicKey: serverKey,
+    ...(ticket.accessMode === undefined ? {} : {
+      ownerAccountId: ticket.ownerAccountId,
+      accessMode: ticket.accessMode,
+      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision, shareRole: ticket.shareRole }),
+    }),
+  })).digest("base64url");
+}
+
+function transcriptTicketId(ticket: RelayTranscriptCredential): string {
+  return "ticketId" in ticket ? ticket.ticketId : ticket.transcriptTicketId;
 }
 
 function deriveSessionKey(sharedSecret: NodeJS.ArrayBufferView, transcript: string): Buffer {

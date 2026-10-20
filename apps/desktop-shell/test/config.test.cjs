@@ -25,6 +25,7 @@ const {
   resolveNodeAgentIpcPath,
   resolveNodeAgentPort,
   resolveNodeCommand,
+  readBundledCloudEnvironment,
   resolveStaticDir,
 } = require("../src/config.cjs");
 
@@ -87,6 +88,49 @@ test("desktop config reads the bundled market catalog key and prefers environmen
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("packaged desktop builds use the bundled cloud trust roots instead of runtime environment", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-desktop-cloud-"));
+  const bundledCloudEnvironmentPath = path.join(dir, "desktop-cloud-environment.cjs");
+  const bundled = {
+    TASK_HANDOFF_CLOUD_ENV: "production",
+    TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://cloud.bundled.test",
+    TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: "bundled.test",
+    TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "bundled.test",
+    TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY: "0",
+    TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: "_cloud.bundled.test",
+    TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: "https://cloud.bundled.test",
+  };
+  fs.writeFileSync(bundledCloudEnvironmentPath, `module.exports = Object.freeze(${JSON.stringify(bundled)});\n`);
+  try {
+    assert.deepEqual(readBundledCloudEnvironment({ cloudEnvironmentModulePath: bundledCloudEnvironmentPath }), bundled);
+    const env = buildDesktopChildProcessEnv({
+      KEEP: "yes",
+      TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://cloud.runtime.test",
+      TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "runtime.test",
+    }, {
+      cloudEnvironmentModulePath: bundledCloudEnvironmentPath,
+      packaged: true,
+      platform: "darwin",
+    });
+    assert.equal(env.KEEP, "yes");
+    assert.equal(env.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN, bundled.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN);
+    assert.equal(env.TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES, bundled.TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("desktop rejects incomplete bundled cloud environments", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-desktop-cloud-invalid-"));
+  const cloudEnvironmentModulePath = path.join(dir, "desktop-cloud-environment.cjs");
+  fs.writeFileSync(cloudEnvironmentModulePath, `module.exports = Object.freeze(${JSON.stringify({ TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: "_cloud.example.test" })});\n`);
+  try {
+    assert.throws(() => readBundledCloudEnvironment({ cloudEnvironmentModulePath }), { code: "MISSING_CLOUD_ENVIRONMENT" });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("desktop config uses the Electron executable as Node in packaged builds", () => {
   assert.equal(resolveNodeCommand({}, { packaged: false, execPath: "/app/TaskHandoff" }), "node");
   assert.equal(resolveNodeCommand({}, { packaged: true, execPath: "/app/TaskHandoff" }), "/app/TaskHandoff");
@@ -137,6 +181,7 @@ test("desktop child process environment does not rewrite PATH on unsupported pla
 
 test("Windows desktop child processes receive the packaged application version", () => {
   const env = buildDesktopChildProcessEnv({ Path: "C:\\custom", KEEP: "yes" }, {
+    cloudEnvironmentModulePath: null,
     platform: "win32",
     packaged: true,
     version: "0.0.9",
@@ -149,6 +194,7 @@ test("Windows desktop child processes receive the packaged application version",
 
 test("desktop child process environment materializes packaged runtime identity and structured overrides", () => {
   const env = buildDesktopChildProcessEnv({ PATH: "/custom/bin", KEEP: "yes" }, {
+    cloudEnvironmentModulePath: null,
     platform: "darwin",
     packaged: true,
     version: "2.3.4",

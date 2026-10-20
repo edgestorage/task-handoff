@@ -75,7 +75,7 @@ export const settings = {
     commandMode: "节点状态", installMode: "新机器，安装并绑定", bindMode: "已安装，仅绑定", installModeHint: "命令会安装匹配版本的 Node Agent，并将它绑定到当前云平台账号。", bindModeHint: "不会重复安装，只把目标机器上现有的 Node Agent 绑定到当前云平台账号。",
     path: "云平台中转（账号节点）", pathHint: "把节点绑定到云平台账号，通过云端中转连接；两边都不需要公网入口。",
     unavailableSignedIn: "请先登录云平台账号，再添加账号节点。", unavailableUnbound: "本控制面尚未绑定到云平台。", unavailableScope: "云设置中的“节点中转”未开启。", openSettings: "打开云平台设置",
-    accountStatus: { active: "可连接", suspended: "已暂停", revoked: "已撤销" }, unnamedNode: "未命名节点",
+    accountStatus: { active: "可连接", suspended: "已暂停", revoked: "已撤销" }, unnamedNode: "未命名节点", accountAccessOwner: "本人所有", accountAccessShared: "共享节点使用权 · 到期 {expiresAt}",
     directoryTitle: "账号下的节点", directoryHint: "连接已绑定到账号的节点，或为尚未部署的机器生成安装命令。",
     directoryLoading: "正在加载账号节点…", directoryEmpty: "账号下还没有已绑定的节点。", directoryFailed: "无法加载账号节点。", directoryRetry: "重试",
     connect: "连接", connecting: "连接中…", waiting: "已认领，等待节点建立中转通道…", claimed: "通道已连接", statusError: "最近中转错误：{message}",
@@ -198,6 +198,7 @@ export const settings = {
   cliSessions: {
     title: "命令行会话",
     description: "已登录的命令行客户端。撤销会话会让该客户端退出登录，不影响其他客户端。",
+    authenticationRequired: "需要先登录账号，才能管理命令行会话。",
     loading: "正在加载命令行会话…",
     empty: "当前账号没有已登录的命令行客户端",
     lastSeen: "最近活跃",

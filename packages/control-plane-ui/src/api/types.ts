@@ -124,6 +124,7 @@ export type CloudAccountNode = {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  access?: { kind: "owner" } | { kind: "shared"; shareId: string; revision: number; role: "use"; expiresAt: string };
 };
 
 export type CloudNodeRelayState = {

@@ -8,6 +8,7 @@ import { createNodeAgentApp } from "../src/node-agent/app.ts";
 import { createNodeAgentHmacHeaders } from "../src/shared/security/node-agent-auth.ts";
 import type { NodeAgentIdentityService } from "../src/node-agent/identity/service.ts";
 import type { NodeAgentCloudRelayClient } from "../src/node-agent/cloud-relay/client.ts";
+import type { CloudDiscovery } from "../../../shared/cloud-environments.cjs";
 import {
   cloudRelayCloudStub,
   ed25519Identity,
@@ -44,7 +45,11 @@ function authorizationHeaders() {
   return { authorization: `Bearer ${AUTH_TOKEN}`, "content-type": "application/json" };
 }
 
-async function cloudRelayFixture(t: test.TestContext, stub: CloudStub) {
+async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: {
+  fetchImpl?: typeof fetch;
+  cloudDiscovery?: CloudDiscovery;
+  discoveryCachePath?: string;
+} = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-cloud-relay-"));
   const planes = new Map<string, PlaneState>();
   const connections: Array<{ controlPlaneId: string; url: string }> = [];
@@ -53,7 +58,9 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub) {
     nodeId: "node_cloud_relay",
     token: AUTH_TOKEN,
     logger: false,
-    fetchImpl: stub.fetchImpl,
+    fetchImpl: options.fetchImpl ?? stub.fetchImpl,
+    ...(options.cloudDiscovery ? { cloudDiscovery: options.cloudDiscovery } : {}),
+    ...(options.discoveryCachePath ? { discoveryCachePath: options.discoveryCachePath } : {}),
     webSocket: fakeRelayWebSocket({
       onConnection(peer, url) {
         // The Relay routes by the attach capability; the test relay reads the
@@ -216,6 +223,37 @@ test("binding redeems the token, persists the account binding and never exposes 
   assert.equal(relay.binding()?.nodeHandle, "nrh_test_node_handle");
 });
 
+test("node agent discovers the cloud origin from TXT before binding", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push(url.href);
+    if (url.hostname === "dns.alidns.com") {
+      return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 backup.cloud.example.com" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return stub.fetchImpl(input, init);
+  };
+  const { app, identityService } = await cloudRelayFixture(t, stub, {
+    fetchImpl,
+    cloudDiscovery: {
+      record: "_cloud.example.com",
+      fallbackOrigin: SERVICE_ORIGIN,
+      allowedHostSuffixes: ["example.com"],
+    },
+  });
+
+  const bound = await bind(app, stub);
+  assert.equal(bound.cloudOrigin, SERVICE_ORIGIN);
+  assert.equal(identityService.cloudRelayBinding()?.cloudOrigin, SERVICE_ORIGIN);
+  assert.ok(calls.some((url) => url.startsWith("https://dns.alidns.com/")), "the node must resolve the discovery TXT record");
+  assert.ok(calls.some((url) => url === "https://backup.cloud.example.com/api/v1/node-relay/v1/redeem"), "redemption must use the discovered origin");
+  assert.equal(calls.some((url) => url === `${SERVICE_ORIGIN}/api/v1/node-relay/v1/redeem`), false);
+});
+
 test("a claiming Control Plane gets a paired channel, tunnel requests round-trip and the pairing survives reconnect", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
@@ -267,7 +305,7 @@ test("a claiming Control Plane gets a paired channel, tunnel requests round-trip
 
 test("two Control Planes claim one node and run independent channels", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
-  const { app, relay, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
   const one = planeFor("control_plane_one");
   const two = planeFor("control_plane_two");
   await bind(app, stub);
@@ -324,6 +362,68 @@ test("an account relay streams HTTP bodies and bridges websockets over auxiliary
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(peer.messages.filter((message) => message.type === "node-agent.websocket.error"), []);
   socket.close();
+});
+
+test("a shared node allocation keeps the owner credential local and binds the grantee Control Plane", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN, accountId: "account_owner" });
+  const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  const plane = planeFor("control_plane_grantee");
+  stub.claimNode({
+    controlPlaneId: "control_plane_grantee",
+    controlPlanePublicKey: plane.identity.publicKey,
+    accountId: "account_grantee",
+    ownerAccountId: "account_owner",
+    accessMode: "shared",
+    shareGrantId: "share_node_a",
+    shareRevision: 3,
+    shareRole: "use",
+    bindingId: "binding_control_plane_grantee",
+    bindingRevision: 1,
+  });
+  await bind(app, stub);
+  relay.pollNow();
+  const peer = await connect("control_plane_grantee");
+  assert.equal((await peer.request("/health")).status, 200);
+  const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+  assert.equal(snapshot.channels[0]?.controlPlaneId, "control_plane_grantee");
+  assert.equal(snapshot.channels[0]?.status, "connected");
+  const serialized = JSON.stringify({ snapshot, allocation: stub.issuedAllocation("control_plane_grantee") });
+  const binding = identityService.cloudRelayBinding();
+  assert.ok(binding);
+  assert.equal(serialized.includes(binding.credential), false);
+  assert.equal(serialized.includes(binding.relayPrivateKey), false);
+  assert.equal(serialized.includes(binding.serviceSigningKey!.publicKey), false, "even the public signing key stays out of the allocation");
+});
+
+test("a signed node grant cannot claim another node owner", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN, accountId: "account_owner" });
+  const { app, relay, planeFor, connections } = await cloudRelayFixture(t, stub);
+  planeFor("control_plane_grantee");
+  stub.claimNode({
+    controlPlaneId: "control_plane_grantee",
+    controlPlanePublicKey: planeFor("control_plane_grantee").identity.publicKey,
+    accountId: "account_grantee",
+    ownerAccountId: "account_owner",
+    accessMode: "shared",
+    shareGrantId: "share_node_a",
+    shareRevision: 3,
+    shareRole: "use",
+    bindingId: "binding_control_plane_grantee",
+    bindingRevision: 1,
+  });
+  stub.setAllocationTransform((allocation) => {
+    const { signature, ...payload } = allocation.claimGrant;
+    const forged = { ...payload, ownerAccountId: "account_forged" };
+    return { ...allocation, claimGrant: { ...forged, signature: stub.signingKey.sign("node-relay-claim-grant", forged) } };
+  });
+  await bind(app, stub);
+  relay.pollNow();
+  const failed = await waitFor(async () => {
+    const snapshot = await status(app);
+    return snapshot.lastError?.code === "NODE_AGENT_CLOUD_RELAY_ALLOCATION_MISMATCH" ? snapshot : undefined;
+  }, "forged owner grant to be rejected");
+  assert.equal(failed.lastError.retryable, true);
+  assert.equal(connections.length, 0);
 });
 
 test("an allocation whose claim grant fails verification is recorded and never dialed", async (t) => {

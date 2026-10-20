@@ -1304,7 +1304,7 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   private projectInstanceNodeId(node: Node, instance: ControlledInstance) {
-    if (node.connectionPath.kind !== "cloud-relay" || instance.nodeId === node.id) return instance;
+    if (node.connectionPath?.kind !== "cloud-relay" || instance.nodeId === node.id) return instance;
     // Instances are owned by the machine, but a cloud-relay node's local record
     // is keyed by its account handle. Project that local record ID at the CP
     // boundary so routing and ownership checks never fall back to another
@@ -1322,7 +1322,7 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   private projectNodeResource<T extends { nodeId: string }>(node: Node, resource: T): T {
-    if (node.connectionPath.kind !== "cloud-relay" || resource.nodeId === node.id) return resource;
+    if (node.connectionPath?.kind !== "cloud-relay" || resource.nodeId === node.id) return resource;
     return { ...resource, nodeId: node.id };
   }
 }

@@ -56,13 +56,8 @@ for (const file of productionFiles) {
     failures.push(`${relative(file)} creates a network connection outside the Direct transport boundary`);
   }
   const apiRoutes = source.match(/["'`]\/api\/[^"'`\s]*/g) ?? [];
-  const allowedPlatformRoutes = file === path.join(root, 'src', 'control-plane', 'direct-transport.ts')
-    ? new Set(["'/api/events?aiSessionTransient=1", '"/api/events?aiSessionTransient=1', '`/api/events?aiSessionTransient=1'])
-    : new Set();
   for (const route of apiRoutes) {
-    if (!allowedPlatformRoutes.has(route)) {
-      failures.push(`${relative(file)} owns Control Plane user API route ${route}; move it to @task-handoff/control-plane-client`);
-    }
+    failures.push(`${relative(file)} owns Control Plane user API route ${route}; move it to @task-handoff/control-plane-client`);
   }
 }
 

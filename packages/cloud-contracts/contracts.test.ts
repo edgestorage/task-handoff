@@ -7,8 +7,11 @@ import {
   AccountApiContextSchema,
   AccountPublicProfileSchema,
   BindingChallengeCapabilitySchema,
+  CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
   ControlPlaneDirectoryEntrySchema,
   DeviceSessionSchema,
+  NodeRelayAllocationEventSchema,
+  NodeRelayClaimGrantPayloadSchema,
   OfficialAudience,
   OutboundConnectionRegistrationSchema,
   OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION,
@@ -18,6 +21,10 @@ import {
   RELAY_FRAMING_PROTOCOL_VERSION,
   RelayAttachCapabilitySchema,
   RelayChannelSchema,
+  RelayNodeChannelAttachCapabilitySchema,
+  RelayRevocationSchema,
+  ResourceAccessSchema,
+  RESOURCE_SHARING_CLIENT_CAPABILITY,
   acceptControlPlaneHandshake,
   beginClientHandshake,
   finishClientHandshake,
@@ -92,6 +99,56 @@ test("ticket, registration, and relay contracts bind authority identities", () =
   assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, bindingId: "binding_a" }).success, false);
 });
 
+test("shared authority fields are additive, complete, and resource-role scoped", () => {
+  assert.equal(RESOURCE_SHARING_CLIENT_CAPABILITY, "resource-sharing-v1");
+  assert.equal(CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, "shared-access-v1");
+  assert.equal(ResourceAccessSchema.safeParse({ kind: "owner" }).success, true);
+  assert.equal(ResourceAccessSchema.safeParse({ kind: "shared", shareId: "share_a", revision: 2, role: "viewer", expiresAt: at }).success, true);
+  assert.equal(ResourceAccessSchema.safeParse({ kind: "shared", shareId: "share_a", revision: 2, role: "use", expiresAt: at }).success, true);
+  assert.equal(ResourceAccessSchema.safeParse({ kind: "shared", shareId: "share_a", revision: 2, expiresAt: at }).success, false);
+
+  const ownerTicket = { protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION, audience: OfficialAudience.ControlPlaneAccess, ticketId: "ticket_owner", accountId: "account_owner", deviceSessionId: "session_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, targetPublicKeyFingerprint: fingerprint, nonce: "n".repeat(32), trafficClasses: ["interactive"], issuedAt: at, expiresAt: at, signature: "s".repeat(64) };
+  const sharedTicket = { ...ownerTicket, ticketId: "ticket_shared", accountId: "account_grantee", ownerAccountId: "account_owner", accessMode: "shared", shareGrantId: "share_a", shareRevision: 3, shareRole: "viewer" };
+  assert.equal(AccessTicketSchema.safeParse(ownerTicket).success, true);
+  assert.equal(AccessTicketSchema.safeParse(sharedTicket).success, true);
+  assert.equal(AccessTicketSchema.safeParse({ ...ownerTicket, ownerAccountId: "account_owner" }).success, false);
+  assert.equal(AccessTicketSchema.safeParse({ ...sharedTicket, shareRevision: undefined }).success, false);
+  assert.equal(AccessTicketSchema.safeParse({ ...sharedTicket, shareRole: "use" }).success, false);
+  assert.equal(AccessTicketSchema.safeParse({ ...sharedTicket, ownerAccountId: "account_grantee" }).success, false);
+
+  const attach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: OfficialAudience.RelayClientAttach, allocationId: "allocation_a", relayId: "relay_a", role: "client", controlPlaneId: "control_plane_a", accountId: "account_grantee", deviceSessionId: "session_a", bindingId: "binding_a", ticketId: "ticket_shared", bindingRevision: 2, trafficClass: "interactive", nonce: "n".repeat(16), issuedAt: at, expiresAt: at, signature: "s".repeat(32), ownerAccountId: "account_owner", accessMode: "shared", shareGrantId: "share_a", shareRevision: 3, shareRole: "operator" };
+  assert.equal(RelayAttachCapabilitySchema.safeParse(attach).success, true);
+  assert.equal(RelayAttachCapabilitySchema.safeParse({ ...attach, shareGrantId: undefined }).success, false);
+  assert.equal(RelayAttachCapabilitySchema.safeParse({ ...attach, shareRole: "use" }).success, false);
+});
+
+test("node grants and revocations carry complete shared node authority", () => {
+  const shared = { ownerAccountId: "account_owner", accessMode: "shared", shareGrantId: "share_node_a", shareRevision: 4, shareRole: "use" };
+  const nodeAttach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, channelKind: "node", audience: OfficialAudience.RelayControlPlaneAttach, allocationId: "allocation_node", relayId: "relay_a", role: "control-plane", controlPlaneId: "control_plane_a", accountId: "account_grantee", bindingId: "binding_a", bindingRevision: 2, nodeHandle: "node_alpha", trafficClass: "interactive", nonce: "n".repeat(16), issuedAt: at, expiresAt: at, signature: "s".repeat(32), ...shared };
+  assert.equal(RelayNodeChannelAttachCapabilitySchema.safeParse(nodeAttach).success, true);
+  assert.equal(RelayNodeChannelAttachCapabilitySchema.safeParse({ ...nodeAttach, shareRole: "viewer" }).success, false);
+  assert.equal(RelayNodeChannelAttachCapabilitySchema.safeParse({ ...nodeAttach, accessMode: undefined }).success, false);
+
+  const claimGrant = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: OfficialAudience.RelayNodeClaimGrant, grantId: "grant_a", allocationId: "allocation_node", nodeHandle: "node_alpha", controlPlaneId: "control_plane_a", accountId: "account_grantee", bindingId: "binding_a", bindingRevision: 2, relayId: "relay_a", relayRegion: "test", relayUrl: "https://relay.example.test", nonce: "n".repeat(16), issuedAt: at, expiresAt: at, controlPlanePublicKey: "p".repeat(43), ...shared };
+  assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse(claimGrant).success, true);
+  assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse({ ...claimGrant, shareRevision: undefined }).success, false);
+
+  const allocationEvent = { type: "node-relay-allocation", protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION, allocationId: "allocation_node", relayId: "relay_a", relayRegion: "test", relayUrl: "https://relay.example.test", nodeHandle: "node_alpha", accountId: "account_grantee", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, controlPlaneAttach: nodeAttach, expiresAt: at, ...shared };
+  assert.equal(NodeRelayAllocationEventSchema.safeParse(allocationEvent).success, true);
+  assert.equal(NodeRelayAllocationEventSchema.safeParse({ ...allocationEvent, ownerAccountId: undefined }).success, false);
+
+  const revocation = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: OfficialAudience.RelayRevocation, revocationId: "revocation_share", channelKind: "node", shareGrantId: "share_node_a", shareRevision: 4, accessMode: "shared", issuedAt: at, expiresAt: at, signature: "s".repeat(32) };
+  assert.equal(RelayRevocationSchema.safeParse(revocation).success, true);
+  assert.equal(RelayRevocationSchema.safeParse({ ...revocation, shareRevision: undefined }).success, false);
+  assert.equal(RelayRevocationSchema.safeParse({ ...revocation, accessMode: "owner" }).success, false);
+});
+
+test("capability negotiation accepts only the shared-access registration capability", () => {
+  const registration = { protocolVersion: CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, audience: OfficialAudience.CoordinatorControl, connectionId: "connection_a", processInstanceId: "process_a", reportedControlPlaneId: "control_plane_a", publicKey: "p".repeat(43), publicKeyFingerprint: fingerprint, epoch: 1, capabilities: ["request", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY], issuedAt: at, expiresAt: at, signature: "s".repeat(32) };
+  assert.equal(OutboundConnectionRegistrationSchema.safeParse(registration).success, true);
+  assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, capabilities: ["resource-sharing-v1"] }).success, false);
+});
+
 test("X25519 session key is bound to the signed Control Plane and ticket transcript", () => {
   const controlPlane = generateKeyPairSync("ed25519");
   const publicX = controlPlane.publicKey.export({ format: "jwk" }).x;
@@ -103,4 +160,10 @@ test("X25519 session key is bound to the signed Control Plane and ticket transcr
   const clientKey = finishClientHandshake(client.privateState, accepted.response, controlPlane.publicKey);
   assert.deepEqual(clientKey, accepted.sessionKey);
   assert.throws(() => finishClientHandshake({ ...client.privateState, ticket: { ...ticket, bindingRevision: 1 } }, accepted.response, controlPlane.publicKey), { code: "E2E_HANDSHAKE_INVALID" });
+
+  const sharedTicket: AccessTicket = { ...ticket, accountId: "account_grantee", ownerAccountId: "account_owner", accessMode: "shared", shareGrantId: "share_a", shareRevision: 3, shareRole: "viewer" };
+  const sharedClient = beginClientHandshake(sharedTicket);
+  const sharedAccepted = acceptControlPlaneHandshake({ ticket: sharedTicket, clientHello: sharedClient.hello, controlPlaneFingerprint: fingerprint, controlPlanePrivateKey: controlPlane.privateKey });
+  assert.deepEqual(finishClientHandshake(sharedClient.privateState, sharedAccepted.response, controlPlane.publicKey), sharedAccepted.sessionKey);
+  assert.throws(() => finishClientHandshake({ ...sharedClient.privateState, ticket: { ...sharedTicket, shareRevision: 4 } }, sharedAccepted.response, controlPlane.publicKey), { code: "E2E_HANDSHAKE_INVALID" });
 });

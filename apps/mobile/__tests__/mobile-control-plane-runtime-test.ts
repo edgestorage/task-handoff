@@ -45,11 +45,13 @@ function domain(key: string, topics: string[], background = false): MobileContro
 function harness() {
   let handlers: MobileControlPlaneEventHandlers | undefined;
   const close = jest.fn();
+  const updateTopics = jest.fn((topics: readonly string[]) => { if (handlers) handlers.topics = [...topics]; });
+  const updateAiSessionTransient = jest.fn();
   const revalidate = jest.fn().mockResolvedValue(undefined);
   const connectEvents = jest.fn((next: MobileControlPlaneEventHandlers) => {
     handlers = next;
     next.onOpen();
-    return { close };
+    return { close, updateTopics, updateAiSessionTransient };
   });
   const authSession = jest.fn().mockResolvedValue({ authenticated: true });
   const renewMobileSession = jest.fn().mockResolvedValue({ expiresAt: '2026-09-12T00:00:00.000Z' });
@@ -78,6 +80,8 @@ function harness() {
     renewMobileSession,
     get handlers() { return handlers; },
     revalidate,
+    updateAiSessionTransient,
+    updateTopics,
   };
 }
 
@@ -135,6 +139,84 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     await flushCoordinator();
     expect(runtime.renewMobileSession).toHaveBeenCalledTimes(1);
     expect(runtime.authSession).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
+  test('route domain registration and removal update one live connection in place', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.updateTopics).not.toHaveBeenCalled();
+
+    const detail = domain('ai-session-detail', ['ai.sessions']);
+    const unregister = runtime.coordinator.register(detail);
+    await flushCoordinator();
+
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.close).not.toHaveBeenCalled();
+    expect(detail.start).toHaveBeenCalledTimes(1);
+    expect(ai.stop).not.toHaveBeenCalled();
+    expect(runtime.updateTopics).toHaveBeenLastCalledWith(['ai.sessions']);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    unregister();
+    await flushCoordinator();
+    expect(detail.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(ai.start).toHaveBeenCalledTimes(1);
+    runtime.coordinator.stop();
+  });
+
+  test('a route domain start failure does not tear down the shared connection', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    const detail = domain('ai-session-detail', ['ai.sessions']);
+    detail.start = jest.fn().mockRejectedValue(new Error('session detail read failed'));
+    runtime.coordinator.register(detail);
+    await flushCoordinator();
+
+    expect(detail.onConnectionError).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONTROL_PLANE_DOMAIN_START_FAILED', retryable: true }));
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.close).not.toHaveBeenCalled();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    runtime.coordinator.stop();
+  });
+
+  test('opening a session updates transient demand on the live connection in place', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    const dispose = runtime.coordinator.registerAiSessionTransientDemand({
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineAllSessions: false,
+      timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
+    });
+    await flushCoordinator();
+
+    expect(runtime.updateAiSessionTransient).toHaveBeenCalledWith(expect.objectContaining({
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
+    }));
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.close).not.toHaveBeenCalled();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    dispose();
+    await flushCoordinator();
+    expect(runtime.close).not.toHaveBeenCalled();
     runtime.coordinator.stop();
   });
 

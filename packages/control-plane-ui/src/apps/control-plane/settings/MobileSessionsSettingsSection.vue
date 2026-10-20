@@ -3,7 +3,7 @@
     <div class="mobile-sessions-page settings-content-page">
       <header class="mobile-sessions-page-head">
         <p>{{ t("settings.mobileSessions.description") }}</p>
-        <Button variant="outline" size="sm" :disabled="!canLoadSessions || sessions.isFetching.value" @click="sessions.refetch()">
+        <Button variant="outline" size="sm" :disabled="!canLoadMobileSessions || sessions.isFetching.value" @click="sessions.refetch()">
           <RefreshCw :class="{ spinning: sessions.isFetching.value }" :size="14" />
           <span>{{ sessions.isFetching.value ? t("settings.mobileSessions.refreshing") : t("settings.mobileSessions.refresh") }}</span>
         </Button>
@@ -67,7 +67,7 @@
         </header>
 
         <p v-if="authSession.isLoading.value" class="mobile-sessions-state" role="status">{{ t("settings.cliSessions.loading") }}</p>
-        <p v-else-if="!authSession.data.value?.enabled" class="mobile-sessions-state">{{ t("settings.mobileSessions.authenticationRequired") }}</p>
+        <p v-else-if="!authSession.data.value?.authenticated" class="mobile-sessions-state">{{ t("settings.cliSessions.authenticationRequired") }}</p>
         <p v-else-if="cliSessions.isLoading.value" class="mobile-sessions-state" role="status">{{ t("settings.cliSessions.loading") }}</p>
         <div v-else-if="cliSessions.error.value" class="mobile-sessions-error" role="alert">
           <span>{{ cliErrorText(cliSessions.error.value) }}</span>
@@ -146,9 +146,10 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
-const canLoadSessions = computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated));
-const sessions = useMobileSessionsQuery(canLoadSessions);
-const cliSessions = useCliSessionsQuery(canLoadSessions);
+const canLoadMobileSessions = computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated));
+const canLoadCliSessions = computed(() => Boolean(authSession.data.value?.authenticated));
+const sessions = useMobileSessionsQuery(canLoadMobileSessions);
+const cliSessions = useCliSessionsQuery(canLoadCliSessions);
 const pendingTarget = ref<{ kind: "mobile" | "cli"; id: string; name: string }>();
 const revokingId = ref("");
 

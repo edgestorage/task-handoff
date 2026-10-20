@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { ControlPlaneDirectoryEntrySchema, type ControlPlaneDirectoryEntry } from "./binding.ts";
+import { NodeRelayRegistryProjectionSchema, type NodeRelayRegistryProjection } from "./node-relay.ts";
+import { RESOURCE_SHARING_CAPABILITY_HEADER, RESOURCE_SHARING_CLIENT_CAPABILITY } from "./relay.ts";
 import { CONTROL_PLANE_BINDING_PROTOCOL_VERSION } from "./versions.ts";
 
 const DirectoryResponseSchema = z.strictObject({
@@ -9,7 +11,14 @@ const DirectoryResponseSchema = z.strictObject({
   }),
 });
 
+const NodeDirectoryResponseSchema = z.strictObject({
+  data: z.strictObject({
+    items: z.array(NodeRelayRegistryProjectionSchema),
+  }),
+});
+
 const directoryKeys = Object.keys(ControlPlaneDirectoryEntrySchema.shape);
+const nodeDirectoryKeys = Object.keys(NodeRelayRegistryProjectionSchema.shape);
 
 type JsonObject = Readonly<Record<string, unknown>>;
 export interface OfficialHttpResponse {
@@ -43,6 +52,18 @@ function sanitizeDirectoryResponse(value: unknown): unknown {
   return { data: { protocolVersion: data.protocolVersion, items } };
 }
 
+function sanitizeNodeDirectoryResponse(value: unknown): unknown {
+  const root = objectValue(value);
+  const data = objectValue(root?.data);
+  if (!root || !data) return value;
+  const items = Array.isArray(data.items) ? data.items.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    const record = item as Record<string, unknown>;
+    return Object.fromEntries(nodeDirectoryKeys.filter((key) => Object.hasOwn(record, key)).map((key) => [key, record[key]]));
+  }) : data.items;
+  return { data: { items } };
+}
+
 export class OfficialAccountClient {
   protected readonly origin: string;
   protected readonly accessToken: () => Promise<string>;
@@ -59,6 +80,11 @@ export class OfficialAccountClient {
     return DirectoryResponseSchema.parse(sanitizeDirectoryResponse(response)).data.items;
   }
 
+  async listNodes(): Promise<NodeRelayRegistryProjection[]> {
+    const response = await this.call("/api/v1/nodes", { method: "GET" });
+    return NodeDirectoryResponseSchema.parse(sanitizeNodeDirectoryResponse(response)).data.items;
+  }
+
   async updateControlPlaneMetadata(controlPlaneId: string, displayName: JsonObject): Promise<unknown> {
     const response = await this.call<{ data: unknown }>(`/api/v1/control-planes/${encodeURIComponent(controlPlaneId)}/metadata`, { method: "PATCH", body: JSON.stringify({ displayName }) });
     return response.data;
@@ -66,7 +92,13 @@ export class OfficialAccountClient {
 
   protected async call<T = unknown>(path: string, init: RequestInit): Promise<T> {
     const token = await this.accessToken();
-    const response = await this.request(`${this.origin}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "x-task-handoff-protocol": CONTROL_PLANE_BINDING_PROTOCOL_VERSION } });
+    const response = await this.request(`${this.origin}${path}`, { ...init, headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "x-task-handoff-protocol": CONTROL_PLANE_BINDING_PROTOCOL_VERSION,
+      [RESOURCE_SHARING_CAPABILITY_HEADER]: RESOURCE_SHARING_CLIENT_CAPABILITY,
+    } });
     const body: unknown = await response.json();
     if (!response.ok) throw officialClientError(body, response.status);
     return body as T;

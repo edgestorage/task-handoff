@@ -38,7 +38,7 @@ const direct = MobileDirectControlPlaneProfileSchema.parse({
 const relay = MobileCloudRelayControlPlaneProfileSchema.parse({
   ...profileBase,
   identity: { ...profileBase.identity, displayName: 'Alpha Relay' },
-  access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true } },
+  access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true }, resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 2, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' } },
 });
 
 const originalPlatform = Platform.OS;
@@ -51,6 +51,7 @@ test('marks only the active profile when a direct and cloud Relay profile share 
   const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
   await waitFor(() => expect(screen.getByText('https://direct.example.com')).toBeTruthy());
   expect(screen.getByText('https://cloud.thandoff.com')).toBeTruthy();
+  expect(screen.getByText('Shared · Viewer')).toBeTruthy();
   expect(screen.getAllByTestId('profile-active-marker', { includeHiddenElements: true })).toHaveLength(1);
 
   await fireEvent.press(screen.getByLabelText('View Alpha Relay details'));

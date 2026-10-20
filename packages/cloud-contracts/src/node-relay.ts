@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DateTimeSchema, IdSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
-import { NodeRelayHandleSchema, TrafficClassSchema } from "./relay.ts";
+import { NodeRelayHandleSchema, ResourceAccessSchema, SharedAccessFieldsSchema, TrafficClassSchema, validateSharedAccessFields } from "./relay.ts";
 import { OfficialAudience, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION } from "./versions.ts";
 
 /** Ed25519 public keys are 32-byte base64url strings, same shape as every other cloud key. */
@@ -27,6 +27,7 @@ export const NodeRelayRegistryProjectionSchema = z.strictObject({
   revision: z.number().int().positive(),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
+  access: ResourceAccessSchema.optional(),
 });
 
 /**
@@ -114,9 +115,11 @@ export const RelayNodeChannelAttachCapabilitySchema = z.strictObject({
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
   signature: OpaqueSecretSchema,
+  ...SharedAccessFieldsSchema.shape,
 }).superRefine((value, context) => {
   const expected = value.role === "node-agent" ? OfficialAudience.RelayNodeAgentAttach : OfficialAudience.RelayControlPlaneAttach;
   if (value.audience !== expected) context.addIssue({ code: "custom", path: ["audience"], message: `audience must match ${value.role} role` });
+  validateSharedAccessFields(value, context, ["use"]);
 });
 
 /**
@@ -146,7 +149,8 @@ export const NodeRelayClaimGrantPayloadSchema = z.strictObject({
    * authenticate the peer must refuse a grant that omits it.
    */
   controlPlanePublicKey: PublicKeySchema.optional(),
-});
+  ...SharedAccessFieldsSchema.shape,
+}).superRefine((value, context) => validateSharedAccessFields(value, context, ["use"]));
 export const NodeRelayClaimGrantSchema = NodeRelayClaimGrantPayloadSchema.safeExtend({ signature: OpaqueSecretSchema });
 
 /** The allocation the node fetches for itself (credential-authenticated node API). */
@@ -169,6 +173,7 @@ export const NodeRelayAllocationEventSchema = z.strictObject({
   relayRegion: z.string().trim().min(1).max(80),
   relayUrl: z.string().url(),
   nodeHandle: NodeRelayHandleSchema,
+  accountId: IdSchema.optional(),
   controlPlaneId: IdSchema,
   bindingId: IdSchema,
   bindingRevision: z.number().int().positive(),
@@ -181,6 +186,10 @@ export const NodeRelayAllocationEventSchema = z.strictObject({
    */
   nodePublicKeyFingerprint: Sha256DigestSchema.optional(),
   displayName: z.string().trim().min(1).max(160).optional(),
+  ...SharedAccessFieldsSchema.shape,
+}).superRefine((value, context) => {
+  if (value.accessMode) validateSharedAccessFields(value, context, ["use"]);
+  else if (value.ownerAccountId !== undefined || value.shareGrantId !== undefined || value.shareRevision !== undefined || value.shareRole !== undefined) context.addIssue({ code: "custom", message: "shared access fields require accessMode" });
 });
 
 /**

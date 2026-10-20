@@ -24,10 +24,13 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   const { filter: storyNodeFilter, setFilter: setStoryNodeFilter } = useStoryNodeFilter();
   const pathname = usePathname();
   const storyMode = pathname.startsWith('/stories');
-  const { triggerCapability } = useMobileControlPlaneRuntime();
+  const { profile, triggerCapability } = useMobileControlPlaneRuntime();
   const cloudAccount = useCloudAccountState();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const instancesByNode = useMemo(() => new Map(state.nodes.map((node) => [node.id, state.instances.filter((instance) => instance.nodeId === node.id)])), [state.instances, state.nodes]);
+  const controlPlaneLabel = profile?.access.kind === 'cloud-relay'
+    ? profile.identity.displayName || t('profiles.defaultName')
+    : controlPlaneOrigin || t('nav.controlPlane');
   const select = (instanceId?: string) => {
     setScope(instanceId ? { kind: 'instance', instanceId } : { kind: 'all' });
     props.navigation.closeDrawer();
@@ -38,7 +41,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         <Image accessibilityIgnoresInvertColors source={require('../../assets/icon.png')} style={styles.brandIcon} />
         <View style={styles.brandCopy}>
           <Text style={[styles.product, { color: colors.text }]}>TaskHandoff</Text>
-          <Text numberOfLines={1} style={[styles.controlPlane, { color: colors.textMuted }]}>{controlPlaneOrigin || t('nav.controlPlane')}</Text>
+          <Text numberOfLines={1} style={[styles.controlPlane, { color: colors.textMuted }]}>{controlPlaneLabel}</Text>
         </View>
       </View>
       {storyMode ? <>

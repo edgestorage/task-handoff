@@ -18,11 +18,11 @@ import { MobileReconnectBackoff } from '../platform/reconnect';
 import { createMobileControlPlaneClient } from './client';
 import type { MobileControlPlaneProfile } from './profile';
 import { mobileProfileStore, mobileSecureStore } from './runtime';
+import { MobileControlPlaneTransportError } from './transport';
 import type {
   MobileControlPlaneEvent,
   MobileControlPlaneEventConnection,
   MobileControlPlaneTransport,
-  MobileControlPlaneTransportError,
 } from './transport';
 
 export type MobileControlPlaneRuntimePhase =
@@ -75,6 +75,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private readonly reconnectBackoff = new MobileReconnectBackoff();
   private desiredSignature = '';
   private reconcileQueued = false;
+  private pendingReconcileMode: 'domains' | 'environment' = 'environment';
   private mobileSessionRenewalSupported = true;
   private snapshotValue: RuntimeSnapshot = { phase: 'idle' };
 
@@ -94,11 +95,11 @@ export class MobileControlPlaneConnectionCoordinator {
 
   register(domain: MobileControlPlaneDomain) {
     this.domains.set(domain.key, domain);
-    this.queueReconcile();
+    this.queueReconcile('domains');
     return () => {
       if (this.domains.get(domain.key) !== domain) return;
       this.domains.delete(domain.key);
-      this.queueReconcile();
+      this.queueReconcile('domains');
     };
   }
 
@@ -120,7 +121,7 @@ export class MobileControlPlaneConnectionCoordinator {
     if (previousCarPlayConnected !== this.carPlayConnected) {
       for (const listener of this.listeners) listener();
     }
-    this.queueReconcile();
+    this.queueReconcile('environment');
   }
 
   isCarPlayConnected() { return this.carPlayConnected; }
@@ -138,23 +139,66 @@ export class MobileControlPlaneConnectionCoordinator {
     this.publish({ phase: 'idle' });
   }
 
-  private queueReconcile() {
-    if (this.reconcileQueued) return;
+  private queueReconcile(mode: 'domains' | 'environment' = 'environment') {
+    if (this.reconcileQueued) {
+      if (mode === 'environment') this.pendingReconcileMode = 'environment';
+      return;
+    }
     this.reconcileQueued = true;
+    this.pendingReconcileMode = mode;
     queueMicrotask(() => {
+      const pendingMode = this.pendingReconcileMode;
       this.reconcileQueued = false;
-      this.reconcile();
+      this.pendingReconcileMode = 'environment';
+      this.reconcile(false, pendingMode);
     });
   }
 
-  private reconcile(force = false) {
+  private reconcile(force = false, mode: 'domains' | 'environment' = 'environment') {
     const desired = this.connected
       ? [...this.domains.values()].filter((domain) => this.foreground || (this.carPlayConnected && domain.background))
       : [];
     const signature = desired.map((domain) => domain.key).sort().join('\u0000');
     if (!force && signature === this.desiredSignature) return;
     this.desiredSignature = signature;
+    if (!force && mode === 'domains' && this.connected && this.connection && this.abortController && !this.abortController.signal.aborted) {
+      // Route-scoped domains come and go as the user navigates. They share the
+      // already authenticated transport, so applying a delta must not replace a
+      // healthy Relay channel or reset in-flight reads.
+      if (this.snapshotValue.phase === 'reconnecting') return;
+      if (this.snapshotValue.phase === 'connected') {
+        void this.applyDomainDelta(desired);
+        return;
+      }
+    }
     void this.restart(desired);
+  }
+
+  private async applyDomainDelta(desired: MobileControlPlaneDomain[]) {
+    const desiredKeys = new Set(desired.map((domain) => domain.key));
+    const activeKeys = new Set(this.activeDomains.map((domain) => domain.key));
+    for (const domain of this.activeDomains) {
+      if (!desiredKeys.has(domain.key)) domain.stop();
+    }
+    const added = desired.filter((domain) => !activeKeys.has(domain.key));
+    this.activeDomains = desired;
+
+    const abortController = this.abortController;
+    if (!abortController || abortController.signal.aborted) return;
+    const topics = [...new Set(desired.flatMap((domain) => [...domain.topics]))].sort();
+    this.connection?.updateTopics?.(topics);
+    await Promise.all(added.map(async (domain) => {
+      try {
+        await domain.start(abortController.signal);
+      } catch (cause) {
+        // A newly opened route must never tear down an otherwise healthy shared
+        // connection. Its cached view stays visible and its own retry policy owns
+        // the failed read.
+        domain.onConnectionError?.(cause instanceof Error
+          ? new MobileControlPlaneTransportError('CONTROL_PLANE_DOMAIN_START_FAILED', cause.message, true)
+          : undefined);
+      }
+    }));
   }
 
   private async restart(desired: MobileControlPlaneDomain[]) {
@@ -223,16 +267,16 @@ export class MobileControlPlaneConnectionCoordinator {
         },
         onEvent: (event) => {
           if (!this.live(epoch, abortController)) return;
-          for (const domain of desired) domain.onEvent(event);
+          for (const domain of this.activeDomains) domain.onEvent(event);
         },
         onError: (error) => {
           if (!this.live(epoch, abortController)) return;
-          for (const domain of desired) domain.onConnectionError?.(error);
+          for (const domain of this.activeDomains) domain.onConnectionError?.(error);
           this.scheduleReconnect(epoch, abortController, error.message);
         },
         onClose: () => {
           if (!this.live(epoch, abortController)) return;
-          for (const domain of desired) domain.onConnectionError?.();
+          for (const domain of this.activeDomains) domain.onConnectionError?.();
           this.scheduleReconnect(epoch, abortController);
         },
       });

@@ -190,6 +190,14 @@ test("node relay RPCs carry the active Control Plane binding", async () => {
   }
 });
 
+test("the existing account-node directory advertises sharing before claiming through the unchanged RPC", () => {
+  const source = fs.readFileSync(new URL("../src/control-plane/cloud-connectivity/coordinator-runtime.ts", import.meta.url), "utf8");
+  assert.match(source, /accountRequest\("\/api\/v1\/nodes"/);
+  assert.match(source, /\[RESOURCE_SHARING_CAPABILITY_HEADER\]: RESOURCE_SHARING_CLIENT_CAPABILITY/);
+  assert.match(source, /claim-node-relay-node/);
+  assert.match(source, /nodeRelayBindingPayload\(\{ nodeHandle \}\)/);
+});
+
 test("publishing an already-managed node omits the onboarding auto-claim hint", async () => {
   const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
   await new Promise((resolve) => setImmediate(resolve));

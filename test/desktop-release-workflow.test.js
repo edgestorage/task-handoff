@@ -7,13 +7,39 @@ const root = path.resolve(__dirname, "..");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/desktop-release.yml"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const prepareDesktopRuntime = fs.readFileSync(path.join(root, "scripts", "prepare-desktop-runtime.mjs"), "utf8");
+const {
+  isTrustedCloudRelayUrl,
+  isTrustedCloudServiceOrigin,
+  resolveCloudDiscovery,
+  resolveCloudEnvironment,
+} = require("../shared/cloud-environments.cjs");
+
+function workflowCloudEnvironment(source) {
+  const environment = {};
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^  (TASK_HANDOFF_CLOUD_[A-Z_]+):\s*(.+)$/);
+    if (!match) continue;
+    environment[match[1]] = match[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+  }
+  return environment;
+}
 
 test("desktop releases build the shared official account feature flag into the UI", () => {
-  assert.match(workflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '0' \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '1' \}\}/);
   assert.match(workflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);
   // Built-in project content is materialized during `desktop:prepare`, so the
   // release workflow owns the rollout switch for the shipped folder.
   assert.match(workflow, /TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED \|\| '0' \}\}/);
+});
+
+test("mobile releases default the official account feature flag on", () => {
+  const mobileWorkflow = fs.readFileSync(path.join(root, ".github/workflows/mobile-release.yml"), "utf8");
+  assert.match(mobileWorkflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '1' \}\}/);
+});
+
+test("runtime releases default the official account feature flag on", () => {
+  const runtimeWorkflow = fs.readFileSync(path.join(root, ".github/workflows/runtime-release.yml"), "utf8");
+  assert.match(runtimeWorkflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| '1' \}\}/);
 });
 
 test("desktop releases materialize the image market public key into the packaged app", () => {
@@ -25,9 +51,57 @@ test("desktop releases materialize the image market public key into the packaged
   );
 });
 
+test("desktop releases bake the production cloud identity into packaged resources", () => {
+  const environment = workflowCloudEnvironment(workflow);
+  const expectedNames = [
+    "TASK_HANDOFF_CLOUD_ENV",
+    "TASK_HANDOFF_CLOUD_SERVICE_ORIGIN",
+    "TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_RECORD",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN",
+  ];
+  assert.deepEqual(Object.keys(environment).sort(), [...expectedNames].sort());
+  for (const name of expectedNames) assert.ok(environment[name], `desktop release must define ${name}`);
+
+  const production = resolveCloudEnvironment("production", undefined, environment);
+  assert.equal(production.id, "production");
+  assert.equal(isTrustedCloudServiceOrigin(production, production.serviceOrigin), true);
+  assert.equal(isTrustedCloudRelayUrl(production, `wss://edge.${production.relayHostSuffixes[0]}/connect`), true);
+  assert.match(manifest.scripts["desktop:prepare"], /node scripts\/prepare-cloud-environment\.mjs --out build\/desktop-cloud-environment\.cjs/);
+  assert.ok(manifest.build.files.includes("build/desktop-cloud-environment.cjs"));
+  assert.equal(manifest.build.extraResources.some((entry) => String(entry.to).includes("cloud-environment")), false);
+});
+
 test("mobile releases pass the Agent Runs build flag through to Expo", () => {
   const mobileWorkflow = fs.readFileSync(path.join(root, ".github/workflows/mobile-release.yml"), "utf8");
   assert.match(mobileWorkflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);
+});
+
+test("mobile releases bake the production cloud identity from workflow environment variables", () => {
+  const mobileWorkflow = fs.readFileSync(path.join(root, ".github/workflows/mobile-release.yml"), "utf8");
+  const environment = workflowCloudEnvironment(mobileWorkflow);
+  const expectedNames = [
+    "TASK_HANDOFF_CLOUD_ENV",
+    "TASK_HANDOFF_CLOUD_SERVICE_ORIGIN",
+    "TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES",
+    "TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_RECORD",
+    "TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN",
+  ];
+  assert.deepEqual(Object.keys(environment).sort(), [...expectedNames].sort());
+  for (const name of expectedNames) assert.ok(environment[name], `mobile release must define ${name}`);
+
+  const production = resolveCloudEnvironment("production", undefined, environment);
+  const discovery = resolveCloudDiscovery(production, environment);
+  assert.equal(production.id, "production");
+  assert.equal(isTrustedCloudServiceOrigin(production, production.serviceOrigin), true);
+  assert.equal(isTrustedCloudRelayUrl(production, `wss://edge.${production.relayHostSuffixes[0]}/connect`), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.outside.test/connect"), false);
+  assert.equal(discovery.fallbackOrigin, production.serviceOrigin);
+  assert.deepEqual(discovery.allowedHostSuffixes, production.coordinatorHostSuffixes);
 });
 
 test("local desktop runtime preparation follows the controlled-instance package version", () => {

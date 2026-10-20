@@ -116,6 +116,7 @@ import { connectReverseTunnel } from "./reverse-tunnel/client.ts";
 import { createReverseTunnelManager } from "./reverse-tunnel/manager.ts";
 import { NodeAgentCloudRelayClient } from "./cloud-relay/client.ts";
 import { registerNodeAgentCloudRelayRoutes } from "./cloud-relay/routes.ts";
+import { resolveCloudDiscovery, type CloudDiscovery } from "../../../../shared/cloud-environments.cjs";
 import {
   DockerRuntimeAdapter,
   RuntimeAdapterRegistry,
@@ -221,6 +222,8 @@ export type CreateNodeAgentAppOptions = {
   /** Test-only managed-update capability override. */
   managedUpdateSupport?: (selection: { packageName: string; installPrefix: string }) => { supported: boolean; reason?: string };
   fetchImpl?: typeof fetch;
+  cloudDiscovery?: CloudDiscovery;
+  discoveryCachePath?: string;
   /** Test-only Relay socket injection for the cloud relay client. */
   webSocket?: typeof import("ws").default;
   platform?: NodeJS.Platform;
@@ -793,6 +796,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const endpoint = `http://127.0.0.1:${port}`;
   const containerUrl = options.containerUrl || process.env.TASK_HANDOFF_NODE_AGENT_CONTAINER_URL;
   const paths = nodeAgentStorePaths(options.dataDir);
+  const cloudDiscovery = options.cloudDiscovery ?? resolveCloudDiscovery();
+  const discoveryCachePath = options.discoveryCachePath ?? path.join(paths.dataDir, "cloud-discovery.json");
   const storyDatabase = await openNodeAgentDatabase(paths);
   try {
   const storyRepository = createNodeAgentRepository(storyDatabase);
@@ -1173,6 +1178,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       currentListenerPort: () => state.currentListenerPort,
     },
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(cloudDiscovery ? { cloudDiscovery } : {}),
+    discoveryCachePath,
     ...(options.webSocket ? { webSocket: options.webSocket } : {}),
   });
   app.decorate("nodeAgentCloudRelay", cloudRelay);

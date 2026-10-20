@@ -41,7 +41,8 @@ import { importLegacyP0Json } from "../persistence/database/legacy-p0-import.ts"
 import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/legacy-identity-provider-import.ts";
 import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
-import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
+import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneActor } from "../auth/authorization.ts";
+import { cloudRelayRouteReachable, routeAuthorization, sharedCloudEventAllowed, sharedCloudRouteAllowed } from "./cloud-relay-authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -78,7 +79,15 @@ import { AuthorizationConnectionRegistry } from "../auth/authorization-connectio
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
 import { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
-import { CLOUD_ENVIRONMENTS, isTrustedCloudServiceOrigin, resolveCloudEnvironment, type CloudEnvironment } from "../../../../../shared/cloud-environments.cjs";
+import {
+  CLOUD_ENVIRONMENT_VARIABLES,
+  configuredCloudEnvironmentVariables,
+  isTrustedCloudServiceOrigin,
+  resolveCloudDiscovery,
+  resolveCloudEnvironment,
+  type CloudEnvironment,
+} from "../../../../../shared/cloud-environments.cjs";
+import { CloudEndpointResolver } from "../../../../../shared/cloud-discovery.cjs";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -89,9 +98,13 @@ export type CreateControlPlaneAppOptions = {
   operationApprovalPolicy?: OperationApprovalPolicy;
   proxyOrigin?: string;
   cloudServiceOrigin?: string;
+  cloudServiceOrigins?: string[];
   allowNonProductionCloudOrigin?: boolean;
   cloudConnectivityEnabled?: boolean;
+  relaySessionResumeEnabled?: boolean;
   cloudAccountFetch?: typeof fetch;
+  cloudDiscovery?: CloudEndpointResolver;
+  cloudDiscoveryFetch?: typeof fetch;
   cloudConnectivityLifecycle?: (state: CloudConnectivityService) => CloudConnectivityLifecycle;
   publishCloudBindingChallenge?: (challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => Promise<void>;
 };
@@ -114,19 +127,54 @@ export const ControlPlaneHttpErrorResponseSchema = z.object({
   error: ControlPlaneHttpErrorSchema,
 }).strict();
 
-const CLOUD_PRODUCTION_ORIGIN = CLOUD_ENVIRONMENTS.production.serviceOrigin;
-
 // The selected cloud environment decides which service origin this build trusts.
 // `allowNonProduction` remains an explicit development escape hatch for ad-hoc
 // local clouds; it never widens what a production process accepts.
 export function trustedCloudServiceOrigin(value: string | undefined, options: { production?: boolean; allowNonProduction?: boolean; environment?: CloudEnvironment } = {}) {
   // A production process always keeps the production environment, even when a
   // non-production environment was requested through configuration.
-  const environment = options.production === true ? CLOUD_ENVIRONMENTS.production : (options.environment ?? CLOUD_ENVIRONMENTS.production);
+  const configured = options.environment ?? resolveCloudEnvironment();
+  const environment = options.production === true && configured.id !== "production"
+    ? resolveCloudEnvironment("production")
+    : configured;
   if (options.allowNonProduction === true && options.production !== true) return new URL(value || environment.serviceOrigin).origin;
   const origin = new URL(value || environment.serviceOrigin).origin;
   if (!isTrustedCloudServiceOrigin(environment, origin)) throw Object.assign(new Error("Non-production cloud service origin is not trusted by this build."), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
   return origin;
+}
+
+/**
+ * Coordinator transports may use any host under the environment's Coordinator
+ * suffixes. The canonical origin remains first and authoritative; alternates
+ * are ordered fallbacks only.
+ */
+export function trustedCloudCoordinatorOrigins(
+  values: readonly string[] | undefined,
+  canonical: string,
+  options: { production?: boolean; allowNonProduction?: boolean; environment?: CloudEnvironment } = {},
+) {
+  const configured = options.environment ?? resolveCloudEnvironment();
+  const environment = options.production === true && configured.id !== "production"
+    ? resolveCloudEnvironment("production")
+    : configured;
+  const coordinatorHostSuffixes = environment.coordinatorHostSuffixes;
+  const origins = new Set<string>();
+  for (const value of [canonical, ...(values ?? [])]) {
+    let url: URL;
+    try { url = new URL(value); } catch { throw coordinatorOriginError("Coordinator service origin is invalid."); }
+    if (!options.production && options.allowNonProduction === true) {
+      origins.add(url.origin);
+      continue;
+    }
+    const suffixValid = coordinatorHostSuffixes.some((suffix) => url.hostname === suffix || url.hostname.endsWith(`.${suffix}`));
+    const secureTransport = url.protocol === "https:"
+      || (environment.allowInsecureRelay === true && url.protocol === "http:");
+    if (!secureTransport || !suffixValid || url.username || url.password || url.port || url.pathname !== "/" || url.search || url.hash) {
+      throw coordinatorOriginError("Coordinator service origin is not trusted by this build.");
+    }
+    origins.add(url.origin);
+  }
+  return [...origins];
 }
 
 function defaultStaticDir() {
@@ -135,6 +183,21 @@ function defaultStaticDir() {
 
 function envFlag(value: string | undefined) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function configuredCoordinatorOrigins(value: string | undefined) {
+  if (!value?.trim()) return [] as string[];
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || parsed.some((origin) => typeof origin !== "string")) throw coordinatorOriginError("Coordinator service origins must be a string array.");
+    return parsed as string[];
+  }
+  return trimmed.split(",").map((origin) => origin.trim()).filter(Boolean);
+}
+
+function coordinatorOriginError(message: string) {
+  return Object.assign(new Error(message), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
 }
 
 function controlPlaneDiagnosticLogsEnabled() {
@@ -358,164 +421,7 @@ function cliApprover(request: FastifyRequest) {
   return { userId: actor.userId, identityId: actor.identityId };
 }
 
-const ROUTES_WITHOUT_RBAC = new Set([
-  "/api/auth/session",
-  "/api/auth/bootstrap-admin",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/auth/mobile/login",
-  "/api/control-plane/identity",
-  "/api/health",
-  "/api/events",
-  "/api/access/me",
-  "/api/auth/external/callback",
-]);
-
-// A linked cloud account is its own principal, so a relayed request has no
-// Control Plane session credential to present. These credential-free routes
-// are reachable over the relay because the mobile profile bootstraps and
-// re-verifies itself with them; every other route still needs an RBAC mapping.
-const CLOUD_RELAY_ROUTES_WITHOUT_RBAC = new Set([
-  "/api/auth/session",
-  "/api/access/me",
-  "/api/control-plane/identity",
-  "/api/health",
-]);
-
-export function cloudRelayRouteReachable(method: string, url: string) {
-  if (routeAuthorization(method, url)) return true;
-  return CLOUD_RELAY_ROUTES_WITHOUT_RBAC.has(url.split("?")[0] || "/");
-}
-
-export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
-  const path = url.split("?")[0] || "/";
-  if (!path.startsWith("/api/")) {
-    return undefined;
-  }
-  if (ROUTES_WITHOUT_RBAC.has(path)) {
-    return undefined;
-  }
-  if (path.startsWith("/api/operation-approvals")) return undefined;
-  const action = actionForHttpMethod(method);
-  if (path === "/api/control-plane/diagnostic-logs/export") {
-    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
-  }
-  if (path === "/api/session-streams/diagnostics") {
-    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
-  }
-  if (path === "/api/control-plane/relay-trace" || path.startsWith("/api/control-plane/relay-trace/")) {
-    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
-  }
-  if (path.startsWith("/api/control-plane/settings")) {
-    return { action: method === "GET" ? "read" : "manage-settings", resource: { type: "control-plane-settings" } };
-  }
-  if (path === "/api/auth/mobile/logout" || path.startsWith("/api/auth/mobile/sessions")) {
-    return undefined;
-  }
-  // CLI authorization and CLI session routes carry their own credential and CSRF rules.
-  if (path.startsWith("/api/auth/cli/")) return undefined;
-  if (path === "/api/auth/password") {
-    return undefined;
-  }
-  if (path.startsWith("/api/auth/external/")) return undefined;
-  if (path.startsWith("/api/users")) {
-    return { action: method === "GET" ? "read" : "manage-members", resource: { type: path.includes("/sessions") ? "user-session" : "user" } };
-  }
-  if (path.startsWith("/api/roles") || path === "/api/permissions") {
-    return { action: method === "GET" ? "read" : "update", resource: { type: "role" } };
-  }
-  if (path.startsWith("/api/identity-providers")) {
-    return { action: method === "GET" ? "read" : "update", resource: { type: "identity-provider" } };
-  }
-  if (path.startsWith("/api/external-identity-approvals")) {
-    return { action: method === "GET" ? "read" : "manage-members", resource: { type: "identity-approval" } };
-  }
-  if (path.startsWith("/api/models")) {
-    return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "model" } };
-  }
-  if (path.startsWith("/api/git-credentials")) {
-    return { action: "manage-secrets", resource: { type: "secret" } };
-  }
-  if (path.startsWith("/api/chat-gateway/bridges")) {
-    return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "chat-bridge" } };
-  }
-  if (path === "/api/chat-gateway/messages" || path === "/api/chat-gateway/actions") {
-    return { action: "send-message", resource: { type: "ai-session" } };
-  }
-  if (path === "/api/chat-gateway/poll-ai-sessions") {
-    return { action: "manage-settings", resource: { type: "chat-bridge" } };
-  }
-  if (path === "/api/ai-session-attachments") {
-    return { action: "send-message", resource: { type: "ai-session" } };
-  }
-  if (path === "/api/node-join/invites") {
-    return { action: "manage-node-auth", resource: { type: "node" } };
-  }
-  // AI session aggregates are read surfaces: the reconnect sync route posts its
-  // known checkpoints but only reads the directory, so it shares the list route's
-  // non-sensitive directory policy and filters by visible instances in the handler.
-  if (path === "/api/ai-sessions" || path === "/api/ai-sessions/sync") {
-    return { action: "read", resource: { type: "public-directory" } };
-  }
-  if (path.startsWith("/api/control-plane-proxy")) {
-    return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
-  }
-  if (path.startsWith("/api/nodes")) {
-    if (/\/(runtimes|local-folders)(\/|$)/.test(path)) {
-      return { action, resource: { type: "runtime" } };
-    }
-    return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
-  }
-  if (path.startsWith("/api/controlled-instances")) {
-    if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
-    // 自定义应用目录可能携带启动环境变量；读取与写入都要求实例 update 权限，不能按普通 read 放开。
-    if (/\/apps\/catalog\/custom$/.test(path)) return { action: "update", resource: { type: "instance" } };
-    if (path.includes("/ai-sessions")) {
-      if (path.includes("/triggers")) return { action, resource: { type: "trigger-deployment" } };
-      if (/\/messages\/[^/]+\/attachments\/[^/]+\/content$/.test(path)) return { action: "read-file-content", resource: { type: "attachment" } };
-      if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };
-      if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
-      if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };
-      if (path.endsWith("/resume") || path.endsWith("/fork") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
-        return { action: "send-message", resource: { type: "ai-session" } };
-      }
-      if (path.endsWith("/read") || path.endsWith("/mentions/files")) {
-        return { action: "read", resource: { type: "ai-session" } };
-      }
-      if (path.endsWith("/open-app") || path.endsWith("/close")) return { action: "update", resource: { type: "ai-session" } };
-      if (method === "GET" || method === "HEAD") return { action: "read", resource: { type: "ai-session" } };
-      return { action: "manage-settings", resource: { type: "control-plane-settings" } };
-    }
-    if (path.includes("/start")) return { action: "start", resource: { type: "instance" } };
-    if (path.includes("/stop")) return { action: "stop", resource: { type: "instance" } };
-    if (path.includes("/restart")) return { action: "restart", resource: { type: "instance" } };
-    if (/\/config-sync(?:\/|$)/.test(path)) return { action: "update", resource: { type: "instance" } };
-    return { action, resource: { type: "instance" } };
-  }
-  if (path.startsWith("/api/projects")) {
-    return { action, resource: { type: "project" } };
-  }
-  if (path.startsWith("/api/images") || path.startsWith("/api/image-options") || path.startsWith("/api/market")) {
-    return { action, resource: { type: "image" } };
-  }
-  if (path.startsWith("/api/triggers")) {
-    if (path.endsWith("/apply")) return { action: "create", resource: { type: "trigger-deployment" } };
-    return { action, resource: { type: "trigger-template" } };
-  }
-  // Collection reads use a non-sensitive global directory policy and must be
-  // filtered by their handler. Unknown mutations fail closed as settings.
-  return method === "GET" || method === "HEAD"
-    ? { action: "read", resource: { type: "public-directory" } }
-    : { action, resource: { type: "control-plane-settings" } };
-}
-
-function actionForHttpMethod(method: string): ControlPlaneAction {
-  if (method === "GET" || method === "HEAD") return "read";
-  if (method === "POST") return "create";
-  if (method === "PATCH" || method === "PUT") return "update";
-  if (method === "DELETE") return "delete";
-  return "read";
-}
+export { cloudRelayRouteReachable, routeAuthorization, sharedCloudEventAllowed, sharedCloudRouteAllowed } from "./cloud-relay-authorization.ts";
 
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
@@ -541,6 +447,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const authorizationConnections = new AuthorizationConnectionRegistry();
   const browserAccess = new BrowserAccessService();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
+  const relaySessionResumeEnabled = options.relaySessionResumeEnabled
+    ?? envFlag(process.env.TASK_HANDOFF_RELAY_SESSION_RESUME ?? process.env.FEATURE_RELAY_SESSION_RESUME);
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
@@ -585,11 +493,32 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     () => service.proxyPrivateStore.controlPlaneId(),
     (message, details) => app.log.warn(details, message),
   );
-  const cloudServiceOrigin = trustedCloudServiceOrigin(options.cloudServiceOrigin || process.env.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN, {
+  const configuredCloudVariables = configuredCloudEnvironmentVariables(process.env);
+  const cloudEnvironment = resolveCloudEnvironment(configuredCloudVariables[CLOUD_ENVIRONMENT_VARIABLES.environment]);
+  const cloudServiceOrigin = trustedCloudServiceOrigin(options.cloudServiceOrigin || configuredCloudVariables[CLOUD_ENVIRONMENT_VARIABLES.serviceOrigin], {
     production: process.env.NODE_ENV === "production",
     allowNonProduction: options.allowNonProductionCloudOrigin === true,
-    environment: resolveCloudEnvironment(process.env.TASK_HANDOFF_CLOUD_ENV),
+    environment: cloudEnvironment,
   });
+  const configuredCloudDiscovery = resolveCloudDiscovery(cloudEnvironment, configuredCloudVariables);
+  const cloudDiscovery = options.cloudDiscovery ?? (configuredCloudDiscovery && !options.cloudServiceOrigin
+    ? new CloudEndpointResolver({
+        config: configuredCloudDiscovery,
+        fallbackOrigin: configuredCloudDiscovery.fallbackOrigin,
+        fetchImpl: options.cloudDiscoveryFetch ?? options.cloudAccountFetch ?? globalThis.fetch,
+        cachePath: path.join(paths.dataDir, "cloud-discovery.json"),
+      })
+    : undefined);
+  if (cloudDiscovery) await cloudDiscovery.initialize();
+  const cloudServiceOrigins = trustedCloudCoordinatorOrigins(
+    options.cloudServiceOrigins ?? configuredCoordinatorOrigins(configuredCloudVariables[CLOUD_ENVIRONMENT_VARIABLES.serviceOrigins]),
+    cloudServiceOrigin,
+    {
+      production: process.env.NODE_ENV === "production",
+      allowNonProduction: options.allowNonProductionCloudOrigin === true,
+      environment: cloudEnvironment,
+    },
+  );
   const cloudConnectivity = new CloudConnectivityService({ statePath: paths.cloudConnectivityPath, identity, serviceOrigin: cloudServiceOrigin });
   const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin });
   const cloudRelayActors = new Map<string, ControlPlaneActor>();
@@ -601,6 +530,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       }
+      if (actor.type === "cloud-account" && actor.accessMode === "shared" && !sharedCloudRouteAllowed(requestPath)) throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(actor, authorization.action, authorization.resource);
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
@@ -629,6 +559,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       // retains topic-derived legacy demand. Current mobile clients are precise.
       const stopEvents = events.on((event) => {
         if (!acceptsResourceMetricInstance(metricScope, event)) return;
+        if (actor.accessMode === "shared" && !sharedCloudEventAllowed(event)) return;
         if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
       });
       // Install delivery before publishing upstream demand so a synchronous
@@ -684,7 +615,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       disconnected: async (nodeId: string, input: { reason: string }) => { await service.setCloudRelayNodeConnection(nodeId, false, input.reason); publishCloudRelayNodeState(nodeId); },
     },
   };
-  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge, fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir), ...(cloudConnectivityEnabled ? { nodeRelay: cloudRelayNodeRelay } : {}) });
+  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
+    state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
+    fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir), relaySessionResumeEnabled,
+    cloudRelaySessionsPath: paths.cloudRelaySessionsPath, coordinatorOrigins: cloudServiceOrigins,
+    ...(cloudDiscovery ? { cloudDiscovery } : {}),
+    onOriginFailover: ({ fromOrigin, toOrigin, reason }) => app.log.warn({ code: "CLOUD_COORDINATOR_ORIGIN_FAILOVER", fromOrigin, toOrigin, reason }, "cloud_coordinator_origin_failover"),
+    ...(cloudConnectivityEnabled ? { nodeRelay: cloudRelayNodeRelay } : {}),
+  });
   const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
   const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
@@ -940,6 +878,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
       if (!cloudRelayRouteReachable(request.method, securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      if (cloudActor.type === "cloud-account" && cloudActor.accessMode === "shared" && !sharedCloudRouteAllowed(securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(cloudActor, authorization.action, authorization.resource);
       return;
     }
@@ -1444,16 +1383,18 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
   });
   app.get("/api/auth/cli/sessions", async (request, reply) => {
-    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
-    const sessions = await auth.cliSessions(credential.token, credential.clientTypes);
+    // The web UI manages the signed-in user's own CLI clients through its web session;
+    // thctl continues to use its dedicated CLI bearer token.
+    const credential = requestSessionCredential(request, { bearerClientTypes: ["cli"] });
+    const sessions = await auth.cliSessions(credential.token, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
     return sessions ? { data: sessions } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access CLI sessions." },
     });
   });
   app.delete("/api/auth/cli/sessions/:id", async (request, reply) => {
     const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
-    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
-    const revoked = await auth.revokeCliSession(credential.token, params.id, credential.clientTypes);
+    const credential = requestSessionCredential(request, { bearerClientTypes: ["cli"] });
+    const revoked = await auth.revokeCliSession(credential.token, params.id, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
     return revoked === undefined ? reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke CLI sessions." },
     }) : { data: { revoked } };
@@ -1463,7 +1404,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const actor = controlPlaneRequestActor(request);
     if (actor?.type === "cloud-account") return { data: cloudAccountAuthorization(actor) };
     const credential = requestSessionCredential(request);
-    const access = await auth.currentAccess(credential.token, credential.clientTypes);
+    const access = await auth.currentAccess(credential.token, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
     return access ? { data: access } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to read Control Plane access." },
     });
@@ -1559,7 +1500,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (!actor) return "system:unknown";
       if (actor.type === "user") return `user:${actor.userId}`;
       if (actor.type === "system") return `system:${actor.reason}`;
-      if (actor.type === "cloud-account") return `cloud-account:${actor.accountId}:${actor.deviceSessionId}`;
+      if (actor.type === "cloud-account") return `cloud-account:${actor.ownerAccountId ?? actor.accountId}:${actor.accountId}:${actor.shareGrantId ?? "owner"}:${actor.deviceSessionId}`;
       return `chat-bridge:${actor.bridgeId}`;
     },
   });

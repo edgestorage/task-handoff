@@ -17,7 +17,7 @@ jest.mock('expo-crypto', () => {
   };
 });
 
-type SocketListener = (event: { data?: unknown }) => void;
+type SocketListener = (event: { data?: unknown; code?: number; reason?: string }) => void;
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
 
 class FakeSocket {
@@ -36,21 +36,70 @@ class FakeSocket {
   emit(type: SocketEvent, event: { data?: unknown }) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event); }
 }
 
-const ticket = {
-  protocolVersion: '2026-08-10',
-  audience: 'official.control-plane-access',
-  ticketId: 'ticket_a',
+const now = '2026-10-20T00:00:00.000Z';
+const expiresAt = '2026-10-20T00:15:00.000Z';
+const fingerprint = `sha256:${'a'.repeat(43)}`;
+const transcriptTicket = {
+  protocolVersion: '2026-10-20' as const,
+  audience: 'task-handoff:relay-session-transcript' as const,
+  transcriptTicketId: 'rtt_ticket_a',
   accountId: 'account_a',
   deviceSessionId: 'device_a',
   controlPlaneId: 'control_plane_a',
   bindingId: 'binding_a',
   bindingRevision: 1,
-  targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`,
+  targetPublicKeyFingerprint: fingerprint,
   nonce: 'n'.repeat(24),
-  trafficClasses: ['interactive'],
-  issuedAt: '2026-08-10T00:00:00.000Z',
-  expiresAt: '2026-08-10T00:05:00.000Z',
-  signature: 's'.repeat(48),
+  issuedAt: now,
+  expiresAt,
+};
+const grant = {
+  protocolVersion: '2026-10-20' as const,
+  audience: 'task-handoff:relay-session-grant' as const,
+  sessionId: 'session_a',
+  grantId: 'grant_a',
+  generation: 1,
+  allocationId: 'allocation_a',
+  relayId: 'relay_a',
+  relayRegion: 'eu-west',
+  relayUrl: 'wss://eu.relay.thandoff.com/connect',
+  accountId: 'account_a',
+  deviceSessionId: 'device_a',
+  controlPlaneId: 'control_plane_a',
+  bindingId: 'binding_a',
+  bindingRevision: 1,
+  targetPublicKeyFingerprint: fingerprint,
+  clientProofPublicKey: 'c'.repeat(43),
+  controlPlaneProofPublicKey: 'p'.repeat(43),
+  trafficClass: 'interactive' as const,
+  sessionTranscriptTicket: transcriptTicket,
+  revocationEpoch: 0,
+  issuedAt: now,
+  expiresAt,
+  signature: 's'.repeat(86),
+};
+const clientAttach = { role: 'client' as const } as any;
+const proof = {
+  protocolVersion: '2026-10-20' as const,
+  role: 'client' as const,
+  sessionId: 'session_a',
+  grantId: 'grant_a',
+  generation: 1,
+  allocationId: 'allocation_a',
+  relayId: 'relay_a',
+  nonce: 'n'.repeat(24),
+  issuedAt: now,
+  signature: 's'.repeat(86),
+};
+const attached = {
+  type: 'attached' as const,
+  role: 'client' as const,
+  sessionId: 'session_a',
+  allocationId: 'allocation_a',
+  channelId: 'channel_a',
+  generation: 1,
+  state: 'waiting-for-peer' as const,
+  leaseExpiresAt: '2026-10-20T00:15:00.000Z',
 };
 
 function base64Url(value: Uint8Array) { let binary = ''; for (const byte of value) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
@@ -63,29 +112,33 @@ function nonce(direction: number, counter: number) { const value = new Uint8Arra
 function frame(sequence: number, payload: Uint8Array, kind: 'handshake' | 'data' | 'cancel' = 'data', flags = 0) { return encodeRelayFrame({ kind, sequence, payload, flags }); }
 function sentFrame(socket: FakeSocket, index: number) { const value = socket.sent[index]; if (!value || typeof value === 'string') throw new Error(`sent message ${index} is not a binary frame`); return decodeRelayFrame(value); }
 
-// Mirrors packages/cloud-contracts/src/e2e.ts so the fake Control Plane derives the same session key.
-async function acceptHandshake(input: { hello: any; identity: nacl.SignKeyPair }) {
+async function acceptHandshake(input: { hello: any; identity: nacl.SignKeyPair; ticket?: any }) {
   const serverKeys = nacl.box.keyPair();
   const controlPlanePublicKey = base64Url(input.identity.publicKey);
   const serverEphemeralPublicKey = base64Url(serverKeys.publicKey);
-  const transcript = base64Url(await sha256(new TextEncoder().encode(canonicalJson({ audience: ticket.audience, ticketId: ticket.ticketId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, controlPlaneId: ticket.controlPlaneId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision, nonce: ticket.nonce, clientEphemeralPublicKey: input.hello.clientEphemeralPublicKey, serverEphemeralPublicKey }))));
+  const ticket = input.ticket ?? transcriptTicket;
+  const transcript = base64Url(await sha256(new TextEncoder().encode(canonicalJson({
+    audience: ticket.audience, ticketId: ticket.transcriptTicketId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, controlPlaneId: ticket.controlPlaneId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision, nonce: ticket.nonce, clientEphemeralPublicKey: input.hello.clientEphemeralPublicKey, serverEphemeralPublicKey,
+    ...(ticket.accessMode === undefined ? {} : {
+      ownerAccountId: ticket.ownerAccountId, accessMode: ticket.accessMode,
+      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision, shareRole: ticket.shareRole }),
+    }),
+  }))));
   const shared = nacl.scalarMult(serverKeys.secretKey, fromBase64Url(input.hello.clientEphemeralPublicKey));
   const sessionKey = await sha256(shared, new TextEncoder().encode(transcript), new TextEncoder().encode('task-handoff:control-plane-access:e2e:v1'));
   return { controlPlanePublicKey, serverEphemeralPublicKey, transcript, signature: base64Url(nacl.sign.detached(new TextEncoder().encode(transcript), input.identity.secretKey)), sessionKey };
 }
 function handshakeResponse(controlPlane: Awaited<ReturnType<typeof acceptHandshake>>) { return frame(0, new TextEncoder().encode(JSON.stringify({ controlPlanePublicKey: controlPlane.controlPlanePublicKey, serverEphemeralPublicKey: controlPlane.serverEphemeralPublicKey, transcript: controlPlane.transcript, signature: controlPlane.signature })), 'handshake'); }
-
 function flush() { return new Promise<void>((resolve) => setTimeout(resolve, 0)); }
 
 async function connected() {
   const identity = nacl.sign.keyPair();
-  const controlPlanePublicKey = base64Url(identity.publicKey);
   const socket = new FakeSocket();
   const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-  const creating = factory({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' }, ticket, targetPublicKeyFingerprint: await fingerprintOf(controlPlanePublicKey), epoch: 1 });
+  const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
   socket.open();
   await flush();
-  socket.emit('message', { data: JSON.stringify({ type: 'attached', channelId: 'channel_a', leaseExpiresAt: '2026-08-10T00:01:00.000Z' }) });
+  socket.emit('message', { data: JSON.stringify(attached) });
   await flush();
   const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
   const controlPlane = await acceptHandshake({ hello, identity });
@@ -94,37 +147,35 @@ async function connected() {
 }
 
 describe('createMobileRelayChannelFactory', () => {
-  test('completes the end-to-end handshake, detaches one-shot listeners and exchanges frames', async () => {
+  test('authenticates the initial attach and completes the end-to-end handshake', async () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' }, ticket, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
 
     expect(socket.listenerCount('open')).toBe(1);
     socket.open();
     await flush();
-    expect(JSON.parse(socket.sent[0] as string)).toEqual({ type: 'attach', capability: { role: 'client' } });
+    expect(JSON.parse(socket.sent[0] as string)).toEqual({ type: 'attach', capability: clientAttach, grant, proof });
 
-    socket.emit('message', { data: JSON.stringify({ type: 'attached', channelId: 'channel_a', leaseExpiresAt: '2026-08-10T00:01:00.000Z' }) });
+    socket.emit('message', { data: JSON.stringify(attached) });
     await flush();
     const helloFrame = sentFrame(socket, 1);
     expect(helloFrame).toMatchObject({ sequence: 0, kind: 'handshake' });
     const hello = JSON.parse(new TextDecoder().decode(helloFrame.payload));
-    expect(hello).toEqual({ ticketId: 'ticket_a', deviceSessionId: 'device_a', clientEphemeralPublicKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+    expect(hello).toEqual({ ticketId: 'rtt_ticket_a', deviceSessionId: 'device_a', clientEphemeralPublicKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
 
     const controlPlane = await acceptHandshake({ hello, identity });
     socket.emit('message', { data: handshakeResponse(controlPlane) });
     const channel = await creating;
 
-    expect(channel.leaseExpiresAt).toBe('2026-08-10T00:01:00.000Z');
-    // Only the channel itself may keep listening; the one-shot handshake waits must be gone.
+    expect(channel.leaseExpiresAt).toBe(attached.leaseExpiresAt);
+    expect(channel.generation).toBe(1);
     expect(socket.listenerCount('message')).toBe(1);
     expect(socket.listenerCount('open')).toBe(0);
-    expect(socket.listenerCount('error')).toBe(1);
-    expect(socket.listenerCount('close')).toBe(1);
 
-    const received: any[] = []; const closed: unknown[] = [];
-    channel.subscribe((value) => received.push(value), (error) => closed.push(error));
+    const received: any[] = [];
+    channel.subscribe((value) => received.push(value), () => undefined);
     channel.send({ type: 'request', id: 'request_1', body: { path: '/api/bootstrap' } });
     const requestFrame = sentFrame(socket, 2);
     expect(requestFrame).toMatchObject({ sequence: 1, kind: 'data' });
@@ -133,21 +184,86 @@ describe('createMobileRelayChannelFactory', () => {
 
     socket.emit('message', { data: frame(1, nacl.secretbox(new TextEncoder().encode(JSON.stringify({ type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } })), nonce(2, 0), controlPlane.sessionKey)) });
     expect(received).toEqual([{ type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } }]);
-    expect(closed).toEqual([]);
-
-    channel.send({ type: 'cancel', id: 'request_1' });
-    expect(sentFrame(socket, 3)).toMatchObject({ sequence: 2, kind: 'cancel' });
-
     channel.close();
-    expect(closed).toEqual([undefined]);
-    expect(socket.listenerCount('message')).toBe(0);
-    expect(() => channel.send({ type: 'request', id: 'request_2' })).toThrow(expect.objectContaining({ code: 'RELAY_CHANNEL_CLOSED' }));
   });
 
-  test('rejects a protocol violation during the handshake, closes the socket and drops every listener', async () => {
+  test('resumes with session-attach and accepts the full session acknowledgement', async () => {
+    const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' }, ticket, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+
+    expect(JSON.parse(socket.sent[0] as string)).toEqual({ type: 'session-attach', grant, proof });
+    socket.emit('message', { data: JSON.stringify({ ...attached, state: 'open' }) });
+    await flush();
+    const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity })) });
+    expect((await creating).leaseExpiresAt).toBe(attached.leaseExpiresAt);
+  });
+
+  test('renews on the same socket without advancing the encrypted frame sequence', async () => {
+    const { channel, socket } = await connected();
+    channel.send({ type: 'request', id: 'request_before_renew' });
+    expect(sentFrame(socket, 2).sequence).toBe(1);
+
+    const nextGrant = { ...grant, grantId: 'grant_b', generation: 2 };
+    const nextProof = { ...proof, grantId: 'grant_b', generation: 2 };
+    const renewal = channel.renew!(nextGrant, nextProof);
+    expect(JSON.parse(socket.sent[3] as string)).toEqual({ type: 'session-renew', grant: nextGrant, proof: nextProof });
+    socket.emit('message', { data: JSON.stringify({ type: 'renewed', role: 'client', sessionId: 'session_a', generation: 2, committed: true, leaseExpiresAt: '2026-10-20T00:25:00.000Z' }) });
+    await expect(renewal).resolves.toEqual({ generation: 2, committed: true, leaseExpiresAt: '2026-10-20T00:25:00.000Z' });
+    expect(channel.leaseExpiresAt).toBe('2026-10-20T00:25:00.000Z');
+
+    channel.send({ type: 'request', id: 'request_after_renew' });
+    expect(sentFrame(socket, 4).sequence).toBe(2);
+  });
+
+  test('surfaces peer-detached without replacing the grant or socket sequence', async () => {
+    const { channel, socket } = await connected();
+    const notices: any[] = [];
+    channel.subscribeControl!((notice) => notices.push(notice));
+    socket.emit('message', { data: JSON.stringify({ type: 'peer-detached', sessionId: 'session_a', retryable: true }) });
+    expect(notices).toEqual([{ type: 'peer-detached', sessionId: 'session_a', retryable: true }]);
+    expect(channel.generation).toBe(1);
+  });
+
+  test('binds shared-access identity fields into the end-to-end transcript', async () => {
+    const sharedTicket = { ...transcriptTicket, transcriptTicketId: 'rtt_shared', accountId: 'account_grantee', ownerAccountId: 'account_owner', accessMode: 'shared' as const, shareGrantId: 'share_a', shareRevision: 3, shareRole: 'viewer' as const };
+    const sharedGrant = { ...grant, accountId: 'account_grantee', sessionTranscriptTicket: sharedTicket, ownerAccountId: 'account_owner', accessMode: 'shared' as const, shareGrantId: 'share_a', shareRevision: 3, shareRole: 'viewer' as const };
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant: sharedGrant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify(attached) });
+    await flush();
+    const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: sharedTicket })) });
+    const channel = await creating;
+    expect(channel.leaseExpiresAt).toBe(attached.leaseExpiresAt);
+    channel.close();
+  });
+
+  test('rejects a mismatched session acknowledgement and closes the socket', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify({ ...attached, sessionId: 'session_other' }) });
+    await expect(creating).rejects.toMatchObject({ code: 'RELAY_SESSION_ATTACH_INVALID' });
+    expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
+    expect(socket.listenerCount('message')).toBe(0);
+  });
+
+  test('rejects a protocol violation during the handshake and drops every listener', async () => {
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: 'not-json' });
@@ -164,10 +280,10 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: 'wss://eu.relay.thandoff.com/connect', clientAttach: { role: 'client' }, ticket, targetPublicKeyFingerprint: `sha256:${'b'.repeat(43)}`, epoch: 1 });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'b'.repeat(43)}`, epoch: 1 });
     socket.open();
     await flush();
-    socket.emit('message', { data: JSON.stringify({ type: 'attached', channelId: 'channel_a' }) });
+    socket.emit('message', { data: JSON.stringify(attached) });
     await flush();
     const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
     socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity })) });

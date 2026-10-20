@@ -11,6 +11,7 @@ import { verifyNodeRelayClaimGrant } from "./claim-grant.ts";
 import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
 import { resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
+import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_IDLE_POLL_INTERVAL_MS = 5_000;
@@ -42,6 +43,8 @@ export type NodeAgentCloudRelayClientOptions = {
   host: NodeRelayTunnelHost;
   nodeId: string;
   fetchImpl?: typeof fetch;
+  cloudDiscovery?: CloudDiscoveryConfig;
+  discoveryCachePath?: string;
   webSocket?: typeof WebSocket;
   pollIntervalMs?: number;
   idlePollIntervalMs?: number;
@@ -125,6 +128,7 @@ function credentialRejected(error: unknown) {
 export class NodeAgentCloudRelayClient {
   private readonly options: NodeAgentCloudRelayClientOptions;
   private readonly channels = new Map<string, ChannelEntry>();
+  private readonly discoveryResolvers = new Map<string, Promise<CloudEndpointResolver | undefined>>();
   private readonly refreshControlPlaneIds = new Set<string>();
   private pollTimer?: ReturnType<typeof setTimeout>;
   private pollDueAt?: number;
@@ -160,7 +164,8 @@ export class NodeAgentCloudRelayClient {
       throw Object.assign(new Error("This node is already bound to a cloud account."), { statusCode: 409, code: "NODE_AGENT_CLOUD_RELAY_ALREADY_BOUND" });
     }
     const cloudOrigin = resolveCloudOrigin(input.cloudOrigin);
-    const cloud = this.cloudClient(cloudOrigin);
+    const resolver = await this.discoveryResolver(cloudOrigin);
+    const cloud = await this.cloudClient(cloudOrigin);
     const relayKeys = generateRelayKeyPair();
     // Redemption is the only step that can fail before anything local changes:
     // an invalid, expired or replayed token leaves the node exactly as it was.
@@ -169,7 +174,9 @@ export class NodeAgentCloudRelayClient {
       publicKey: relayKeys.publicKey,
       ...(input.displayName ? { displayName: input.displayName } : {}),
     });
-    if (new URL(redeemed.serviceOrigin).origin !== new URL(cloudOrigin).origin) {
+    const redeemedOrigin = new URL(redeemed.serviceOrigin).origin;
+    const serviceOriginTrusted = resolver ? resolver.isTrustedOrigin(redeemedOrigin) : redeemedOrigin === cloudOrigin;
+    if (!serviceOriginTrusted) {
       throw Object.assign(new Error("The cloud returned a different service origin than the one the command pinned."), {
         statusCode: 400,
         code: "NODE_AGENT_CLOUD_RELAY_ORIGIN_MISMATCH",
@@ -187,7 +194,7 @@ export class NodeAgentCloudRelayClient {
       nodeHandle: redeemed.nodeHandle,
       accountId: redeemed.accountId,
       cloudOrigin,
-      serviceOrigin: new URL(redeemed.serviceOrigin).origin,
+      serviceOrigin: redeemedOrigin,
       credential: redeemed.credential,
       credentialExpiresAt: redeemed.credentialExpiresAt,
       serviceSigningKey: redeemed.serviceSigningKey,
@@ -207,7 +214,7 @@ export class NodeAgentCloudRelayClient {
     if (!binding) return { unbound: false, cloudUnbind: "not-bound" as const };
     let cloudUnbind: "confirmed" | "unavailable" = "unavailable";
     try {
-      await this.cloudClient(binding.cloudOrigin).unbind(binding.credential);
+      await (await this.cloudClient(binding.cloudOrigin)).unbind(binding.credential);
       cloudUnbind = "confirmed";
     } catch (error) {
       this.options.host.log.warn({
@@ -256,11 +263,40 @@ export class NodeAgentCloudRelayClient {
     this.schedulePoll(0);
   }
 
-  private cloudClient(cloudOrigin: string) {
+  private async cloudClient(cloudOrigin: string) {
+    const resolver = await this.discoveryResolver(cloudOrigin);
     return new NodeRelayCloudClient({
-      cloudOrigin,
+      cloudOrigin: resolver ? () => resolver.activeOrigin : cloudOrigin,
       ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
+      ...(resolver ? {
+        onOriginSuccess: (origin: string) => resolver.markSuccess(origin),
+        onOriginFailure: (origin: string) => resolver.markFailure(origin),
+      } : {}),
     });
+  }
+
+  private discoveryResolver(cloudOrigin: string) {
+    const canonicalOrigin = new URL(cloudOrigin).origin;
+    const existing = this.discoveryResolvers.get(canonicalOrigin);
+    if (existing) return existing;
+    const pending = (async () => {
+      const discovery = this.options.cloudDiscovery;
+      if (!discovery) return undefined;
+      const parsed = new URL(canonicalOrigin);
+      if (parsed.protocol !== "https:") return undefined;
+      if (!discovery.allowedHostSuffixes.some((suffix) => hostMatchesSuffix(parsed.hostname, suffix))) return undefined;
+      const resolver = new CloudEndpointResolver({
+        config: { ...discovery, fallbackOrigin: canonicalOrigin },
+        fallbackOrigin: canonicalOrigin,
+        ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
+        ...(this.options.discoveryCachePath ? { cachePath: this.options.discoveryCachePath } : {}),
+        now: () => this.now(),
+      });
+      await resolver.initialize();
+      return resolver;
+    })();
+    this.discoveryResolvers.set(canonicalOrigin, pending);
+    return pending;
   }
 
   private now() {
@@ -301,7 +337,7 @@ export class NodeAgentCloudRelayClient {
       const current = this.binding();
       if (!current || current.status !== "active") return;
       const refreshControlPlaneIds = [...this.refreshControlPlaneIds];
-      const allocations = await this.cloudClient(current.cloudOrigin).allocations(current.credential, {
+      const allocations = await (await this.cloudClient(current.cloudOrigin)).allocations(current.credential, {
         ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
       });
       for (const controlPlaneId of refreshControlPlaneIds) this.refreshControlPlaneIds.delete(controlPlaneId);
@@ -347,7 +383,7 @@ export class NodeAgentCloudRelayClient {
   private async renewCredentialIfDue(binding: NodeAgentCloudRelayBinding) {
     const renewBefore = this.options.credentialRenewBeforeMs ?? DEFAULT_CREDENTIAL_RENEW_BEFORE_MS;
     if (Date.parse(binding.credentialExpiresAt) - this.now() > renewBefore) return;
-    const renewed = await this.cloudClient(binding.cloudOrigin).renew(binding.credential);
+    const renewed = await (await this.cloudClient(binding.cloudOrigin)).renew(binding.credential);
     this.options.identity.updateCloudRelayBinding((current) => ({
       ...current,
       credential: renewed.credential,
@@ -418,10 +454,22 @@ export class NodeAgentCloudRelayClient {
     if (!binding.serviceSigningKey) throw relayError("NODE_AGENT_CLOUD_RELAY_TRUST_ANCHOR_MISSING");
     const grant = verifyNodeRelayClaimGrant({ grant: allocation.claimGrant, trust: binding.serviceSigningKey, now: this.now() });
     const attach = allocation.nodeAttach;
+    const accessMode = grant.accessMode ?? "owner";
+    const ownerAccountId = grant.ownerAccountId ?? grant.accountId;
+    const authorityValid = accessMode === "shared"
+      ? ownerAccountId === binding.accountId && grant.accountId !== ownerAccountId && Boolean(grant.shareGrantId) && Boolean(grant.shareRevision) && grant.shareRole === "use"
+      : ownerAccountId === binding.accountId && grant.accountId === ownerAccountId && grant.shareGrantId === undefined && grant.shareRevision === undefined && grant.shareRole === undefined;
+    const attachAuthorityMatches = attach.accountId === grant.accountId
+      && sameOptional(attach.ownerAccountId, grant.ownerAccountId)
+      && sameOptional(attach.accessMode, grant.accessMode)
+      && sameOptional(attach.shareGrantId, grant.shareGrantId)
+      && sameOptional(attach.shareRevision, grant.shareRevision)
+      && sameOptional(attach.shareRole, grant.shareRole);
     if (grant.allocationId !== allocation.allocationId || grant.relayId !== allocation.relayId || grant.relayUrl !== allocation.relayUrl ||
-        grant.nodeHandle !== binding.nodeHandle || grant.accountId !== binding.accountId ||
+        grant.nodeHandle !== binding.nodeHandle || !authorityValid || !attachAuthorityMatches || !grant.controlPlanePublicKey ||
         attach.channelKind !== "node" || attach.role !== "node-agent" || attach.allocationId !== allocation.allocationId ||
-        attach.controlPlaneId !== grant.controlPlaneId || attach.nodeHandle !== grant.nodeHandle) {
+        attach.relayId !== grant.relayId || attach.controlPlaneId !== grant.controlPlaneId || attach.nodeHandle !== grant.nodeHandle ||
+        attach.bindingId !== grant.bindingId || attach.bindingRevision !== grant.bindingRevision || attach.expiresAt !== grant.expiresAt) {
       throw relayError("NODE_AGENT_CLOUD_RELAY_ALLOCATION_MISMATCH");
     }
     if (!trustedNodeRelayUrl(allocation.relayUrl, binding.serviceOrigin)) throw relayError("NODE_AGENT_CLOUD_RELAY_UNTRUSTED_RELAY");
@@ -590,4 +638,8 @@ export class NodeAgentCloudRelayClient {
     this.channels.clear();
     this.refreshControlPlaneIds.clear();
   }
+}
+
+function sameOptional(left: unknown, right: unknown) {
+  return left === undefined ? right === undefined : left === right;
 }

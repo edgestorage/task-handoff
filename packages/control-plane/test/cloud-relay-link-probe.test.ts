@@ -16,12 +16,12 @@ function fakeIdentity() {
 
 type Responders = Record<string, () => Promise<any> | any>;
 
-function probeFixture(options: { responses: Responders; fetchImpl?: () => Promise<any>; report?: (links: readonly RelayLinkMeasurement[]) => void }) {
+function probeFixture(options: { responses: Responders; fetchImpl?: () => Promise<any>; report?: (links: readonly RelayLinkMeasurement[]) => void; serviceOrigin?: string }) {
   const calls: string[] = [];
   const reported: RelayLinkMeasurement[][] = [];
   let clock = 0;
   const instance = new RelayLinkProbeLoop({
-    serviceOrigin: () => "https://cloud.thandoff.com",
+    serviceOrigin: () => options.serviceOrigin ?? "https://cloud.example.test",
     fetch: (async (url: URL) => {
       calls.push(String(url));
       if (options.fetchImpl) return options.fetchImpl();
@@ -32,36 +32,35 @@ function probeFixture(options: { responses: Responders; fetchImpl?: () => Promis
     samples: 2,
     report: (links) => { reported.push([...links]); options.report?.(links); },
   });
+  instance.observe("wss://relay.example.test/connect");
   return { instance, calls, reported, advance: (ms: number) => { clock += ms; } };
 }
 
-test("probe targets the environment's declared Relay hosts and keeps an ad-hoc origin's port", () => {
-  assert.equal(relayProbeUrl("https://cloud.thandoff.com", "relay.thandoff.com").href, "https://relay.thandoff.com/probe");
+test("probe URLs keep an ad-hoc origin's port", () => {
+  assert.equal(relayProbeUrl("https://cloud.example.test", "relay.example.test").href, "https://relay.example.test/probe");
   // An ad-hoc cloud serves the Relay from its own origin: dropping the port there would
   // point every probe at port 80 and silently disable linkage measurement.
   assert.equal(relayProbeUrl("http://127.0.0.1:8787", "127.0.0.1").href, "http://127.0.0.1:8787/probe");
-  assert.equal(relayProbeUrl("https://th.aaasu.com", "relay1.relay.aaasu.com").href, "https://relay1.relay.aaasu.com/probe");
+  assert.equal(relayProbeUrl("https://cloud.example.test", "relay1.relay.example.test").href, "https://relay1.relay.example.test/probe");
 });
 
-test("an allocated Relay becomes a probe target because declared hosts are only a suffix", async () => {
-  // `relay.staging.test` is the declared allowlist entry and does not resolve; the
-  // Coordinator hands out `relay1.relay.staging.test`, which does.
+test("an allocated Relay becomes the probe target", async () => {
   const probed: string[] = [];
   const instance = new RelayLinkProbeLoop({
-    serviceOrigin: () => "https://th.aaasu.com",
+    serviceOrigin: () => "https://cloud.example.test",
     fetch: (async (url: URL) => {
       probed.push(String(url));
-      if (new URL(String(url)).hostname !== "relay1.relay.aaasu.com") throw new Error("ENOTFOUND");
+      if (new URL(String(url)).hostname !== "relay1.relay.example.test") throw new Error("ENOTFOUND");
       return probeResponse("relay_a");
     }) as unknown as typeof fetch,
     samples: 1,
   });
-  assert.deepEqual(await instance.refresh(), [], "the declared suffix alone yields nothing");
-  instance.observe("wss://relay1.relay.aaasu.com/connect");
+  assert.deepEqual(await instance.refresh(), [], "nothing is probed before an allocation");
+  instance.observe("wss://relay1.relay.example.test/connect");
   const measured = await instance.refresh();
   assert.equal(measured.length, 1);
   assert.equal(measured[0].relayId, "relay_a");
-  assert.equal(probed.at(-1), "https://relay1.relay.aaasu.com/probe");
+  assert.equal(probed.at(-1), "https://relay1.relay.example.test/probe");
   // A malformed or non-http allocation URL is ignored instead of poisoning the cycle.
   instance.observe(undefined);
   instance.observe("not a url");
@@ -70,9 +69,9 @@ test("an allocated Relay becomes a probe target because declared hosts are only 
 });
 
 test("a probe cycle caches one measurement per Relay and reports the wire shape", async () => {
-  const { instance, calls, reported } = probeFixture({ responses: { "relay.thandoff.com": () => probeResponse("relay_a") } });
+  const { instance, calls, reported } = probeFixture({ responses: { "relay.example.test": () => probeResponse("relay_a") } });
   const measured = await instance.refresh();
-  assert.deepEqual(calls, ["https://relay.thandoff.com/probe", "https://relay.thandoff.com/probe"]);
+  assert.deepEqual(calls, ["https://relay.example.test/probe", "https://relay.example.test/probe"]);
   assert.equal(measured.length, 1);
   assert.equal(measured[0].relayId, "relay_a");
   assert.equal(measured[0].rttMs, 0);
@@ -110,10 +109,11 @@ test("an unreachable Relay keeps its last known measurement and a silent one is 
 test("concurrent probe cycles share one round of requests", async () => {
   let calls = 0;
   const instance = new RelayLinkProbeLoop({
-    serviceOrigin: () => "https://cloud.thandoff.com",
+    serviceOrigin: () => "https://cloud.example.test",
     fetch: (async () => { calls += 1; await wait(5); return probeResponse("relay_a"); }) as unknown as typeof fetch,
     samples: 2,
   });
+  instance.observe("wss://relay.example.test/connect");
   const [left, right] = await Promise.all([instance.probeOnce(), instance.probeOnce()]);
   assert.equal(calls, 2, "two samples, not four");
   assert.deepEqual(left, right);
@@ -133,7 +133,7 @@ test("the runtime reports its own Relay RTT hints over the control channel once 
     send(data: string) {
       const message = JSON.parse(data);
       this.sent.push(message);
-      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test" }) }));
+      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test", reportedControlPlaneId: "control_plane_test", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }) }));
       if (message.type === "request" && message.operation === "report-relay-links") requests.push(message.payload);
     }
     close() { this.readyState = 3; queueMicrotask(() => this.emit("close", 1000, "closed")); }
@@ -141,8 +141,8 @@ test("the runtime reports its own Relay RTT hints over the control channel once 
   }
   const identity = fakeIdentity();
   const state = {
-    snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.thandoff.com", identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1 }),
-    backgroundCredential: () => "c".repeat(43), nextConnectionEpoch: () => 1,
+    snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1 }),
+    backgroundCredential: () => "c".repeat(43), nextConnectionEpoch: () => 1, setCloudControlPlaneId: () => undefined,
   };
   const probed: string[] = [];
   const runtime = new CloudConnectivityBackgroundRuntime({
@@ -151,9 +151,10 @@ test("the runtime reports its own Relay RTT hints over the control channel once 
     fetch: (async (url: URL) => { probed.push(String(url)); return probeResponse("relay_a"); }) as unknown as typeof fetch,
   });
   runtime.start();
+  runtime.relayLinks.observe("wss://relay.example.test/connect");
   for (let index = 0; index < 200 && !requests.length; index += 1) await wait(10);
   void runtime.stop();
-  assert.deepEqual(probed.slice(0, 1), ["https://relay.thandoff.com/probe"]);
+  assert.deepEqual(probed.slice(0, 1), ["https://relay.example.test/probe"]);
   assert.equal(requests.length >= 1, true);
   assert.deepEqual(Object.keys(requests[0].links[0]).sort(), ["relayId", "rttMs", "updatedAt"]);
   assert.equal(requests[0].links[0].relayId, "relay_a");
@@ -164,7 +165,7 @@ test("the runtime reports its own Relay RTT hints over the control channel once 
 test("an unbound Control Plane never probes and never reports", async () => {
   const probed: string[] = [];
   const runtime = new CloudConnectivityBackgroundRuntime({
-    state: { snapshot: () => ({ status: "unbound", remoteAccessEnabled: false, serviceOrigin: "https://cloud.thandoff.com" }), backgroundCredential: () => undefined, nextConnectionEpoch: () => 1 } as any,
+    state: { snapshot: () => ({ status: "unbound", remoteAccessEnabled: false, serviceOrigin: "https://cloud.example.test" }), backgroundCredential: () => undefined, nextConnectionEpoch: () => 1 } as any,
     identity: fakeIdentity() as any,
     relayLinkProbeIntervalMs: 5,
     fetch: (async (url: URL) => { probed.push(String(url)); return probeResponse("relay_a"); }) as unknown as typeof fetch,
@@ -187,7 +188,7 @@ test("a pushed node allocation starts attaching through the event path", async (
     send(data: string) {
       const message = JSON.parse(data);
       this.sent.push(message);
-      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test" }) }));
+      if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test", reportedControlPlaneId: "control_plane_test", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }) }));
     }
     close() { this.readyState = 3; queueMicrotask(() => this.emit("close", 1000, "closed")); }
     emit(event: string, ...args: any[]) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
@@ -197,9 +198,10 @@ test("a pushed node allocation starts attaching through the event path", async (
   const identity = fakeIdentity();
   const node = ed25519Identity();
   const state = {
-    snapshot: () => ({ status: "active", scopes: { deviceAccess: false, nodeRelay: true }, identity: identity.publicIdentity(), accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, serviceOrigin: "https://cloud.example.com" }),
+    snapshot: () => ({ status: "active", scopes: { deviceAccess: false, nodeRelay: true }, identity: identity.publicIdentity(), cloudControlPlaneId: "control_plane_test", accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, serviceOrigin: "https://cloud.example.com" }),
     backgroundCredential: () => "c".repeat(43),
     nextConnectionEpoch: () => 1,
+    setCloudControlPlaneId: () => undefined,
   };
   let releaseAttach!: () => void;
   const attachGate = new Promise<void>((resolve) => { releaseAttach = resolve; });

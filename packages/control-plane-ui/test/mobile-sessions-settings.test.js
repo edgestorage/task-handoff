@@ -16,8 +16,11 @@ test("settings exposes account-scoped mobile and command line sessions with auth
   assert.match(settingsSections, /id: "mobile-sessions"/);
   assert.match(modal, /<MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'"/);
   assert.match(section, /useAuthSessionQuery\(\)/);
-  assert.match(section, /useMobileSessionsQuery\(canLoadSessions\)/);
-  assert.match(section, /useCliSessionsQuery\(canLoadSessions\)/);
+  assert.match(section, /useMobileSessionsQuery\(canLoadMobileSessions\)/);
+  assert.match(section, /useCliSessionsQuery\(canLoadCliSessions\)/);
+  assert.match(section, /canLoadMobileSessions = computed\(\(\) => Boolean\(authSession\.data\.value\?\.enabled && authSession\.data\.value\.authenticated\)\)/);
+  assert.match(section, /canLoadCliSessions = computed\(\(\) => Boolean\(authSession\.data\.value\?\.authenticated\)\)/);
+  assert.match(section, /settings\.cliSessions\.authenticationRequired/);
   assert.match(section, /<Dialog :open="Boolean\(pendingTarget\)"/);
   assert.match(section, /await revokeMobileSession\(target\.id\)/);
   assert.match(section, /await revokeCliSession\(target\.id\)/);

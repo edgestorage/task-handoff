@@ -47,6 +47,13 @@ test("disabled control plane issues an auditable local cli session to loopback",
   assert.equal(capabilities.localCliSessions, true);
   assert.equal(capabilities.cliSessions, false);
 
+  const desktopAccess = await app.inject({ method: "GET", url: "/api/access/me", remoteAddress: "127.0.0.1" });
+  assert.equal(desktopAccess.statusCode, 200, desktopAccess.body);
+  assert.ok(desktopAccess.json().data.permissionIds.includes("settings:manage"));
+  assert.ok(desktopAccess.json().data.permissionIds.includes("users:manage"));
+  const remoteAccess = await app.inject({ method: "GET", url: "/api/access/me", remoteAddress: "10.1.2.3" });
+  assert.equal(remoteAccess.statusCode, 401, remoteAccess.body);
+
   const first = await app.inject({ method: "POST", url: "/api/auth/cli/local", payload: { client: CLIENT } });
   assert.equal(first.statusCode, 200, first.body);
   const { sessionToken, session, authorization } = first.json().data;
@@ -80,6 +87,11 @@ test("disabled control plane issues an auditable local cli session to loopback",
   const sessions = await app.inject({ method: "GET", url: "/api/auth/cli/sessions", headers: { authorization: `Bearer ${sessionToken}` } });
   assert.equal(sessions.statusCode, 200, sessions.body);
   assert.deepEqual(sessions.json().data.map((entry) => entry.id).sort(), [session.id, second.json().data.session.id].sort());
+  const desktopSessions = await app.inject({ method: "GET", url: "/api/auth/cli/sessions", remoteAddress: "127.0.0.1" });
+  assert.equal(desktopSessions.statusCode, 200, desktopSessions.body);
+  assert.deepEqual(desktopSessions.json().data.map((entry) => entry.id).sort(), [session.id, second.json().data.session.id].sort());
+  const remoteSessions = await app.inject({ method: "GET", url: "/api/auth/cli/sessions", remoteAddress: "10.1.2.3" });
+  assert.equal(remoteSessions.statusCode, 401, remoteSessions.body);
 
   const remote = await app.inject({ method: "POST", url: "/api/auth/cli/local", payload: { client: CLIENT }, remoteAddress: "10.1.2.3" });
   assert.equal(remote.statusCode, 403, remote.body);
@@ -100,6 +112,34 @@ test("disabled control plane issues an auditable local cli session to loopback",
   const afterLogout = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${sessionToken}` } });
   assert.equal(afterLogout.json().data.authenticated, true);
   assert.equal(afterLogout.json().data.user, undefined);
+});
+
+test("loopback desktop can revoke local cli sessions without a bearer token", async (t) => {
+  const app = await createControlPlaneApp({ dataDir: tempDataDir("cp-cli-local-revoke"), logger: false, auth: { mode: "disabled" } });
+  t.after(() => app.close());
+
+  const first = await app.inject({ method: "POST", url: "/api/auth/cli/local", payload: { client: CLIENT }, remoteAddress: "127.0.0.1" });
+  assert.equal(first.statusCode, 200, first.body);
+  const second = await app.inject({ method: "POST", url: "/api/auth/cli/local", payload: { client: CLIENT }, remoteAddress: "127.0.0.1" });
+  assert.equal(second.statusCode, 200, second.body);
+  const firstId = first.json().data.session.id;
+  const secondId = second.json().data.session.id;
+
+  const remoteRevoke = await app.inject({ method: "DELETE", url: `/api/auth/cli/sessions/${firstId}`, remoteAddress: "10.1.2.3" });
+  assert.equal(remoteRevoke.statusCode, 401, remoteRevoke.body);
+  const revoke = await app.inject({ method: "DELETE", url: `/api/auth/cli/sessions/${firstId}`, remoteAddress: "127.0.0.1" });
+  assert.equal(revoke.statusCode, 200, revoke.body);
+  assert.equal(revoke.json().data.revoked, true);
+
+  const remaining = await app.inject({ method: "GET", url: "/api/auth/cli/sessions", remoteAddress: "127.0.0.1" });
+  assert.equal(remaining.statusCode, 200, remaining.body);
+  assert.deepEqual(remaining.json().data.map((entry) => entry.id), [secondId]);
+  const revoked = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${first.json().data.sessionToken}` } });
+  assert.equal(revoked.statusCode, 200, revoked.body);
+  assert.equal(revoked.json().data.user, undefined);
+  const active = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${second.json().data.sessionToken}` } });
+  assert.equal(active.statusCode, 200, active.body);
+  assert.ok(active.json().data.user);
 });
 
 test("local sessions stay closed for pw-authenticated control planes and keep bootstrap usable", async (t) => {

@@ -31,9 +31,9 @@ import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMobileTheme } from '../components/theme';
+import { connectionModeLabel } from '../control-plane/connection-presentation';
 import {
   aiSessionSummary,
-  connectionModeLabel,
   instanceStateLabel,
   nodeDisplayName,
   nodeStateLabel,

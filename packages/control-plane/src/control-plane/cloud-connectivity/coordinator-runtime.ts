@@ -1,18 +1,26 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import { CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, OutboundConnectionRegistrationResponseSchema } from "@task-handoff/cloud-contracts";
+import {
+  CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION,
+  CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
+  OutboundConnectionRegistrationResponseSchema,
+  RELAY_SESSION_RESUME_CAPABILITY,
+  RESOURCE_SHARING_CAPABILITY_HEADER,
+  RESOURCE_SHARING_CLIENT_CAPABILITY,
+} from "@task-handoff/cloud-contracts";
 import { CloudAuthorityEventConsumer } from "./authority-events.ts";
 import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "./connections.ts";
 import { CloudConnectivityLifecycle } from "./lifecycle.ts";
 import type { CloudAccountSessionService } from "./account-session.ts";
 import type { CloudConnectivityService } from "./service.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
-import { CloudRelayConnector, verifyCoordinatorRelayAllocation, type RelaySessionBridge } from "./relay-connector.ts";
+import { CloudRelayConnector, verifyCoordinatorRelayAllocation, verifyCoordinatorRelaySessionGrant, type RelaySessionBridge } from "./relay-connector.ts";
 import { CloudNodeRelayConnector } from "./node-relay-connector.ts";
 import { CloudNodeRelayChannels, type CloudNodeRelayChannelConnector, type CloudNodeRelayChannelTransport, type CloudNodeRelayChannelsOptions } from "./node-relay-channels.ts";
 import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { RelayLinkProbeLoop } from "./relay-link-probe.ts";
 import { RelayTraceRecorder } from "./relay-trace.ts";
+import type { CloudEndpointResolver } from "../../../../../shared/cloud-discovery.cjs";
 
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
 type CloudAccountScope = "account:sign-in" | "control-plane:bind";
@@ -25,9 +33,9 @@ const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
-  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket };
+  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; relaySessionResume?: boolean };
 
-  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket }) {
+  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; relaySessionResume?: boolean }) {
     this.options = options;
   }
 
@@ -42,7 +50,7 @@ export class CloudCoordinatorConnector {
       publicKey: identity.publicKey, publicKeyFingerprint: identity.fingerprint,
       ...(input.bindingId ? { bindingId: input.bindingId, bindingRevision: input.bindingRevision } : {}),
       scopes: input.scopes,
-      epoch: input.epoch, capabilities: ["request", "stream", "websocket"],
+      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, ...(this.options.relaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     const socketUrl = new URL("/api/v1/control-plane/connect", input.serviceOrigin);
@@ -94,10 +102,19 @@ export class CloudConnectivityBackgroundRuntime {
   constructor(options: CloudRuntimeOptions) {
     this.options = { ...options, fetch: options.fetch ?? globalThis.fetch };
     this.clock = options.clock ?? Date.now;
-    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
     this.relayTrace = options.relayTrace ?? new RelayTraceRecorder();
     const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
-    this.dataConnections = new CloudRelayDataConnectionManager({ verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)), connector: relayConnector });
+    const verifyGrant = options.verifyRelaySessionGrant ?? ((grant) => verifyCoordinatorRelaySessionGrant(grant, options.state));
+    const persistResume = options.relaySessionResumeEnabled === true && Boolean(options.cloudRelaySessionsPath)
+      && typeof (relayConnector as { resume?: unknown }).resume === "function";
+    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, relaySessionResume: persistResume, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
+    this.dataConnections = new CloudRelayDataConnectionManager({
+      verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)),
+      verifyGrant,
+      connector: relayConnector,
+      ...(persistResume ? { sessionStatePath: options.cloudRelaySessionsPath } : {}),
+      clock: this.clock,
+    });
     this.events = new CloudAuthorityEventConsumer({
       state: options.state,
       connections: { stop: (reason) => this.control.stop(reason) },
@@ -106,7 +123,14 @@ export class CloudConnectivityBackgroundRuntime {
       // consumer is built first, so the lookup stays lazy.
       nodeChannels: { closeAll: (reason) => { this.nodeRelayChannels?.closeAll(reason); } },
     });
-    this.control = new CloudControlConnectionManager({ state: options.state, connector: this.connector, onEvent: async (event) => {
+    this.control = new CloudControlConnectionManager({ state: options.state, connector: this.connector, coordinatorOrigins: options.coordinatorOrigins, clock: this.clock, onOriginFailover: options.onOriginFailover, ...(options.cloudDiscovery ? {
+      originResolver: {
+        activeOrigin: () => options.cloudDiscovery!.activeOrigin,
+        endpoints: () => options.cloudDiscovery!.endpoints,
+        markSuccess: (origin) => options.cloudDiscovery!.markSuccess(origin),
+        markFailure: (origin) => options.cloudDiscovery!.markFailure(origin),
+      },
+    } : {}), onEvent: async (event) => {
       // Onboarding hints are plain bookkeeping: they carry no binding revision
       // and only wake this Control Plane to claim the node it helped install.
       if ((event as any)?.type === "node-relay-node-bound") { await this.handleNodeBound(event as any); return; }
@@ -119,10 +143,14 @@ export class CloudConnectivityBackgroundRuntime {
         void this.nodeRelayChannels.attach(event).catch(() => undefined);
         return;
       }
+      if ((event as any)?.type === "relay-session-grant") {
+        await this.dataConnections.applyGrant(event);
+        return;
+      }
       await this.events.apply(event as any);
     } });
     this.relayLinks = options.relayLinks ?? new RelayLinkProbeLoop({
-      serviceOrigin: () => options.state.snapshot().serviceOrigin,
+      serviceOrigin: () => options.cloudDiscovery?.activeOrigin ?? options.state.snapshot().serviceOrigin,
       // Hints only matter once the Control Plane is bound and reachable, and they
       // feed both channel kinds, so either scope keeps the probe running.
       enabled: () => { const snapshot = options.state.snapshot(); return snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay); },
@@ -166,6 +194,7 @@ export class CloudConnectivityBackgroundRuntime {
     void this.renewAccountCredential().catch(() => undefined);
     // A pending revocation also needs a connection: it is how the runtime
     // finishes the remote revoke after a restart or a previous network error.
+    void this.dataConnections.resumePersistedSessions().catch(() => undefined);
     this.schedule(0);
   }
   async stop() {
@@ -177,7 +206,7 @@ export class CloudConnectivityBackgroundRuntime {
     this.relayLinks.stop();
     this.relayTrace.close();
     this.nodeRelayChannels?.closeAll("runtime-stopped");
-    await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping")]);
+    await Promise.all([this.control.stop("control-plane-stopping"), this.dataConnections.closeAll("control-plane-stopping", { preserveSessions: true })]);
   }
 
   /**
@@ -291,13 +320,14 @@ export class CloudConnectivityBackgroundRuntime {
     if (!this.hasFreshAccessToken()) await this.refreshAccountCredential();
     const token = this.accessToken?.value;
     if (!token) throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
-    const response = await this.options.fetch(`${session.origin}${path}`, {
+    const response = await this.cloudFetch(path, {
       ...init,
       headers: {
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...(init.headers as Record<string, string> | undefined),
         authorization: `Bearer ${token}`,
         "x-task-handoff-client": "control-plane",
+        [RESOURCE_SHARING_CAPABILITY_HEADER]: RESOURCE_SHARING_CLIENT_CAPABILITY,
       },
     });
     const body = await response.json().catch(() => undefined) as any;
@@ -346,12 +376,13 @@ export class CloudConnectivityBackgroundRuntime {
       return { accepted: true };
     }
     if (operation === "relay-allocation") {
-      // The declared Relay hosts are an allowlist suffix; this is the first time the
-      // Control Plane learns a host under it that actually resolves, so let the
-      // background prober measure it for the next selection.
+      // Relay authorization is suffix-based; this is the first time the Control Plane
+      // learns a concrete host that actually resolves, so let the background prober
+      // measure it for the next selection.
       this.relayLinks.observe(payload?.relayUrl);
       return this.dataConnections.attach(payload);
     }
+    if (operation === "relay-session-grant") return this.dataConnections.applyGrant(payload);
     if (operation === "node-relay-allocation") {
       if (!this.nodeRelayChannels) throw runtimeError("NODE_RELAY_UNAVAILABLE");
       return this.nodeRelayChannels.attach(payload);
@@ -443,7 +474,7 @@ export class CloudConnectivityBackgroundRuntime {
     const session = this.options.accountSession;
     const credentials = session.credentials();
     if (!credentials) return;
-    const response = await this.options.fetch(`${session.origin}/api/v1/auth/refresh`, {
+    const response = await this.cloudFetch("/api/v1/auth/refresh", {
       method: "POST", headers: { "content-type": "application/json", "x-task-handoff-client": "mobile" },
       body: JSON.stringify({ refreshCredential: credentials.refreshCredential, deviceSessionId: credentials.deviceSessionId, scopes: ACCOUNT_REQUEST_SCOPES }),
     }).catch(() => undefined);
@@ -473,6 +504,11 @@ export class CloudConnectivityBackgroundRuntime {
     if (!this.options.accountSession.hasPendingRequest()) return;
     this.accountTimer = setTimeout(() => { this.accountTimer = undefined; void this.reconcileAccount().catch(() => undefined).finally(() => this.scheduleAccountPoll()); }, delay);
     this.accountTimer.unref();
+  }
+
+  private cloudFetch(path: string, init?: RequestInit) {
+    if (this.options.cloudDiscovery) return this.options.cloudDiscovery.request(path, init);
+    return this.options.fetch(`${this.options.accountSession.origin}${path}`, init);
   }
 
   private schedule(delay = this.control.reconnectDelay()) {
@@ -530,6 +566,13 @@ type CloudRuntimeOptions = {
   accountRenewalIntervalMs?: number;
   accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
+  verifyRelaySessionGrant?: (grant: unknown) => any;
+  relaySessionResumeEnabled?: boolean;
+  cloudRelaySessionsPath?: string;
+  cloudDiscovery?: CloudEndpointResolver;
+  /** Alternate Coordinator transports; the persisted canonical origin stays first. */
+  coordinatorOrigins?: readonly string[];
+  onOriginFailover?: (entry: { fromOrigin: string; toOrigin: string; reason: string }) => void;
   nodeRelay?: {
     connector?: CloudNodeRelayChannelConnector;
     transport?: () => CloudNodeRelayChannelTransport | undefined;

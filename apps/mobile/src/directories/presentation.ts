@@ -60,17 +60,6 @@ export function aiSessionSummary(summary: AiSummary, t: Translate = english) {
   return parts.join(' · ');
 }
 
-export function connectionModeLabel(mode: ControlPlaneNodeDirectoryEntry['connectionMode'], t: Translate = english) {
-  return ({
-    'local-ipc': t('directories.connectionLocal'),
-    'local-loopback': t('directories.connectionLocal'),
-    'direct-http': t('directories.connectionDirect'),
-    'reverse-wss': t('directories.connectionRemote'),
-    'control-plane-proxy': t('directories.connectionProxy'),
-    'cloud-relay': t('directories.connectionCloudRelay'),
-  } as const)[mode];
-}
-
 export function relativeObservedAt(value: string | number, nowOrTranslate: number | Translate = Date.now(), translateOverride?: Translate) {
   const now = typeof nowOrTranslate === 'number' ? nowOrTranslate : Date.now();
   const t = typeof nowOrTranslate === 'function' ? nowOrTranslate : translateOverride ?? english;

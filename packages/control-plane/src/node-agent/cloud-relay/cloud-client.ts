@@ -29,18 +29,28 @@ function normalizedOrigin(value: string) {
  * here ever exposes a node endpoint, an instance or a local path.
  */
 export class NodeRelayCloudClient {
-  private readonly cloudOrigin: string;
+  private readonly cloudOrigin: string | (() => string);
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly onOriginSuccess?: (origin: string) => void;
+  private readonly onOriginFailure?: (origin: string) => void;
 
-  constructor(options: { cloudOrigin: string; fetchImpl?: typeof fetch; timeoutMs?: number }) {
-    this.cloudOrigin = normalizedOrigin(options.cloudOrigin);
+  constructor(options: {
+    cloudOrigin: string | (() => string);
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    onOriginSuccess?: (origin: string) => void;
+    onOriginFailure?: (origin: string) => void;
+  }) {
+    this.cloudOrigin = options.cloudOrigin;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.onOriginSuccess = options.onOriginSuccess;
+    this.onOriginFailure = options.onOriginFailure;
   }
 
   get origin() {
-    return this.cloudOrigin;
+    return normalizedOrigin(typeof this.cloudOrigin === "function" ? this.cloudOrigin() : this.cloudOrigin);
   }
 
   async redeem(input: { bindingToken: string; publicKey: string; displayName?: string }): Promise<CloudRelayRedemption> {
@@ -75,7 +85,8 @@ export class NodeRelayCloudClient {
   }
 
   private async post(path: string, body: unknown, options: { credential?: string } = {}) {
-    const response = await this.fetchImpl(new URL(path, this.cloudOrigin).toString(), {
+    const origin = this.origin;
+    const response = await this.fetchImpl(new URL(path, origin).toString(), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -84,14 +95,17 @@ export class NodeRelayCloudClient {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
     }).catch((error: unknown) => {
+      this.onOriginFailure?.(origin);
       throw cloudRelayClientError("NODE_AGENT_CLOUD_RELAY_UNREACHABLE", error instanceof Error ? error.message : String(error));
     });
     const payload = await response.json().catch(() => ({} as Record<string, unknown>)) as { data?: unknown; error?: { code?: unknown; message?: unknown } };
     if (!response.ok) {
+      if (response.status >= 500) this.onOriginFailure?.(origin);
       const code = typeof payload.error?.code === "string" ? payload.error.code : `NODE_AGENT_CLOUD_RELAY_HTTP_${response.status}`;
       const message = typeof payload.error?.message === "string" ? payload.error.message : `Cloud relay request failed with HTTP ${response.status}.`;
       throw Object.assign(cloudRelayClientError(code, message), { statusCode: response.status });
     }
+    this.onOriginSuccess?.(origin);
     return payload.data;
   }
 }

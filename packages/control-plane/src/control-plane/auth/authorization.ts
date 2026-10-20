@@ -19,7 +19,18 @@ export type ControlPlaneUserAuthorizationContext = {
 
 export type ControlPlaneActor =
   | ControlPlaneUserAuthorizationContext
-  | { type: "cloud-account"; accountId: string; deviceSessionId: string; bindingId: string; bindingRevision: number }
+  | {
+    type: "cloud-account";
+    accountId: string;
+    ownerAccountId?: string;
+    deviceSessionId: string;
+    bindingId: string;
+    bindingRevision: number;
+    accessMode?: "owner" | "shared";
+    shareGrantId?: string;
+    shareRevision?: number;
+    shareRole?: "viewer" | "operator";
+  }
   | { type: "chat-bridge"; bridgeId: string; channel: string; chatSessionId?: string; userId?: string }
   | { type: "system"; reason: string };
 
@@ -103,7 +114,7 @@ export function canAccessResolvedResource(actor: ControlPlaneUserAuthorizationCo
 export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
   if (actor.type === "system") return true;
   if (actor.type === "chat-bridge") return canChatBridge(action, resource);
-  if (actor.type === "cloud-account") return canCloudAccount(action, resource);
+  if (actor.type === "cloud-account") return canCloudAccount(actor, action, resource);
   return userCan(actor, action, resource);
 }
 
@@ -112,8 +123,12 @@ function userCan(actor: ControlPlaneUserAuthorizationContext, action: ControlPla
   return Boolean(permission && actor.permissionIds.includes(permission));
 }
 
-function canCloudAccount(action: ControlPlaneAction, resource: ControlPlaneResource) {
+function canCloudAccount(actor: ControlPlaneCloudAccountActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
   if (["user", "role", "identity-provider", "user-session", "identity-approval", "user-audit", "control-plane-settings", "secret", "chat-bridge"].includes(resource.type)) return false;
+  if (actor.accessMode === "shared") {
+    if (!actor.shareGrantId || !actor.shareRevision || !actor.shareRole) return false;
+    if (actor.shareRole === "viewer") return action === "read";
+  }
   if (resource.type === "node") return action === "read";
   if (action === "read") return true;
   if (resource.type === "image" || resource.type === "public-directory") return false;
@@ -145,15 +160,18 @@ export const CLOUD_ACCOUNT_PERMISSION_IDS: readonly ControlPlanePermissionId[] =
   "images:read", "public-directory:read",
 ];
 
+const SHARED_VIEWER_PERMISSION_IDS = CLOUD_ACCOUNT_PERMISSION_IDS.filter((permission) => permission.endsWith(":read"));
+
 export function cloudAccountAuthorization(actor: ControlPlaneCloudAccountActor): ControlPlaneCurrentAuthorization {
+  const shared = actor.accessMode === "shared";
   return {
     userId: `cloud-account:${actor.accountId}`,
     identityId: `cloud-device:${actor.deviceSessionId}`,
-    roleIds: ["role_cloud_account"],
-    permissionIds: [...CLOUD_ACCOUNT_PERMISSION_IDS],
+    roleIds: [shared ? `role_cloud_shared_${actor.shareRole ?? "viewer"}` : "role_cloud_account"],
+    permissionIds: [...(shared && actor.shareRole === "viewer" ? SHARED_VIEWER_PERMISSION_IDS : CLOUD_ACCOUNT_PERMISSION_IDS)],
     nodeScope: { kind: "all" },
     instanceScope: { kind: "inherit-node-scope" },
-    authorizationRevision: Math.max(1, actor.bindingRevision),
+    authorizationRevision: Math.max(1, actor.bindingRevision, actor.shareRevision ?? 1),
   };
 }
 
