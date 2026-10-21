@@ -31,7 +31,7 @@ function objectArray(value: unknown, field: string): JsonObject[] {
 }
 
 function contentArray(value: unknown, field: string): unknown[] | undefined {
-  if (value === undefined || typeof value === "string") return undefined;
+  if (value === undefined || value === null || typeof value === "string") return undefined;
   if (!Array.isArray(value)) throw new ImagePruningBodyError(`${field} must be a string or array.`);
   return value;
 }
@@ -58,6 +58,10 @@ function collectResponsesImages(root: JsonObject, references: ImageReference[]) 
     if (!isObject(item)) continue;
     const content = contentArray(item.content, "input.content");
     if (content) collectContentImages(content, "input_image", references);
+    if (item.type === "function_call_output") {
+      const output = contentArray(item.output, "function_call_output.output");
+      if (output) collectContentImages(output, "input_image", references);
+    }
   }
 }
 

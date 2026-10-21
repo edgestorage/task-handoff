@@ -139,6 +139,42 @@ test("responses and Anthropic traversal follow document order across nested cont
   assert.equal(anthropic.messages[0].content[2].source.data, "latest");
 });
 
+test("responses accepts null reasoning content and prunes function-call output images", () => {
+  const responses = {
+    model: "public-image-pruning",
+    input: [
+      { type: "reasoning", content: null, summary: [] },
+      { type: "function_call_output", call_id: "call_old", output: [responsesImage("https://images.example/old-output.png", 0)] },
+      { type: "message", role: "assistant", content: null },
+      { type: "function_call_output", call_id: "call_latest", output: [responsesImage("https://images.example/latest-output.png", 1)] },
+    ],
+  };
+  const result = pruneWith("openai-responses", responses, 1);
+
+  assert.equal(result.totalImages, 2);
+  assert.equal(result.removedImages, 1);
+  assert.equal(result.retainedImages, 1);
+  assert.equal(responses.input[0].content, null);
+  assert.deepEqual(responses.input[1].output, [{ type: "input_text", text: IMAGE_OMITTED_PLACEHOLDER }]);
+  assert.equal(responses.input[2].content, null);
+  assert.equal(responses.input[3].output[0].image_url, "https://images.example/latest-output.png");
+  assert.equal(responses.input[3].output[0].file_id, "file_1");
+});
+
+test("chat completions accepts assistant messages with null content", () => {
+  const chat = {
+    messages: [
+      { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] },
+      { role: "user", content: [chatImage("https://images.example/old.png", 0), chatImage("https://images.example/latest.png", 1)] },
+    ],
+  };
+  const result = pruneWith("openai-chat-completions", chat, 1);
+
+  assert.equal(result.removedImages, 1);
+  assert.equal(chat.messages[0].content, null);
+  assert.equal(chat.messages[1].content[0].image_url.url, "https://images.example/latest.png");
+});
+
 test("empty content arrays receive protocol-specific text placeholders without dropping messages", () => {
   const chat = {
     messages: [

@@ -287,14 +287,17 @@ test("node-agent applies image pruning across all relay protocols and count_toke
       headers: { authorization: `Bearer ${INSTANCE_TOKEN}` },
       body: {
         model: "public-codex",
-        input: [{
-          role: "user",
-          content: [
-            { type: "input_text", text: "keep this text" },
-            { type: "input_image", image_url: "https://images.example/old-codex.png" },
-            { type: "input_image", image_url: "https://images.example/latest-codex.png", file_id: "file_codex", detail: "high" },
-          ],
-        }],
+        input: [
+          { type: "reasoning", content: null, summary: [] },
+          { type: "function_call_output", call_id: "call_old", output: [{ type: "input_image", image_url: "https://images.example/old-codex.png" }] },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "keep this text" },
+              { type: "input_image", image_url: "https://images.example/latest-codex.png", file_id: "file_codex", detail: "high" },
+            ],
+          },
+        ],
       },
       latest: "https://images.example/latest-codex.png",
     },
@@ -365,12 +368,17 @@ test("node-agent applies image pruning across all relay protocols and count_toke
 
   const images = upstream.requests.map((record) => {
     const body = JSON.parse(record.body.toString("utf8"));
-    const content = body.input?.[0]?.content ?? body.messages?.[0]?.content;
+    const content = body.input
+      ? body.input.flatMap((item) => Array.isArray(item.content) ? item.content : Array.isArray(item.output) ? item.output : [])
+      : body.messages?.[0]?.content;
     return content.filter((part) => part.type === "input_image" || part.type === "image_url" || part.type === "image");
   });
   assert.equal(images[0].length, 1);
   assert.equal(images[0][0].image_url, cases[0].latest);
   assert.equal(images[0][0].file_id, "file_codex");
+  const codexBody = JSON.parse(upstream.requests[0].body.toString("utf8"));
+  assert.equal(codexBody.input[0].content, null);
+  assert.equal(upstream.requests[0].body.toString("utf8").includes("old-codex.png"), false);
   assert.equal(images[1].length, 1);
   assert.equal(images[1][0].image_url.url, cases[1].latest);
   assert.equal(images[2].length, 1);
