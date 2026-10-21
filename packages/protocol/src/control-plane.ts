@@ -2489,12 +2489,56 @@ export const UpdateNodeAgentExternalListenerSchema = NodeAgentExternalListenerCo
  */
 export const NodeAgentModelRelayUnknownModelPolicySchema = z.enum(["passthrough", "reject"]);
 
+export const NODE_MODEL_RELAY_IMAGE_PRUNING_LIMITS = {
+  maxTriggerBodyBytes: 64 * 1024 * 1024,
+  maxInspectBytes: 64 * 1024 * 1024,
+  maxKeepLatestImages: 100,
+} as const;
+
+export const NODE_MODEL_RELAY_IMAGE_PRUNING_DEFAULTS = {
+  enabled: false,
+  triggerBodyBytes: 4 * 1024 * 1024,
+  keepLatestImages: 4,
+  maxInspectBytes: 32 * 1024 * 1024,
+  onTooLarge: "reject",
+} as const;
+
+export const NodeAgentModelRelayImagePruningSchema = z.object({
+  enabled: z.boolean(),
+  triggerBodyBytes: z.number().int().min(1).max(NODE_MODEL_RELAY_IMAGE_PRUNING_LIMITS.maxTriggerBodyBytes),
+  keepLatestImages: z.number().int().min(1).max(NODE_MODEL_RELAY_IMAGE_PRUNING_LIMITS.maxKeepLatestImages),
+  maxInspectBytes: z.number().int().min(1).max(NODE_MODEL_RELAY_IMAGE_PRUNING_LIMITS.maxInspectBytes),
+  onTooLarge: z.enum(["reject", "passthrough"]),
+}).strict().superRefine((value, context) => {
+  if (value.maxInspectBytes < value.triggerBodyBytes) {
+    context.addIssue({
+      code: "custom",
+      path: ["maxInspectBytes"],
+      message: "maxInspectBytes must be greater than or equal to triggerBodyBytes.",
+    });
+  }
+});
+
+export type NodeAgentModelRelayImagePruningConfig = z.infer<typeof NodeAgentModelRelayImagePruningSchema>;
+
+export function defaultNodeAgentModelRelayImagePruning(): NodeAgentModelRelayImagePruningConfig {
+  return { ...NODE_MODEL_RELAY_IMAGE_PRUNING_DEFAULTS };
+}
+
+export function normalizeNodeAgentModelRelayImagePruning(input: unknown): NodeAgentModelRelayImagePruningConfig {
+  const parsed = NodeAgentModelRelayImagePruningSchema.safeParse(input);
+  return parsed.success ? parsed.data : defaultNodeAgentModelRelayImagePruning();
+}
+
 export const NodeAgentModelRelayConfigSchema = z.object({
   enabled: z.boolean(),
   // Additive: a request model that matches neither declared names nor request
   // mappings is forwarded verbatim when "passthrough" (the default) and fails
   // closed with MODEL_RELAY_UNKNOWN_MODEL_NAME when "reject".
   unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicySchema.optional(),
+  // Additive: node-level request image pruning. Absence keeps the feature
+  // disabled and lets old control planes update the switch without changing it.
+  imagePruning: NodeAgentModelRelayImagePruningSchema.optional(),
 }).strict();
 
 /** Effective node-agent response consumed by the control panel. */
@@ -2503,6 +2547,9 @@ export const NodeAgentModelRelaySchema = z.object({
   // Optional on the wire so a node-agent that predates this setting still
   // parses; writers must gate the field on the relay capability.
   unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicySchema.optional(),
+  // Optional on the wire for the same compatibility reason. New node-agents
+  // always return the normalized, complete image-pruning configuration.
+  imagePruning: NodeAgentModelRelayImagePruningSchema.optional(),
   // "default" means the switch was never persisted and relay stays on.
   source: z.enum(["default", "persisted"]),
 }).strip();
@@ -2517,6 +2564,7 @@ export function normalizeNodeAgentModelRelaySettings(input: unknown): z.infer<ty
     // malformed value falls back to the product default, which is on.
     enabled: source.enabled !== false,
     unknownModelPolicy: source.unknownModelPolicy === "reject" ? "reject" : "passthrough",
+    imagePruning: normalizeNodeAgentModelRelayImagePruning(source.imagePruning),
     source: source.source === "persisted" ? "persisted" : "default",
   };
 }

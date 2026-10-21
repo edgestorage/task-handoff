@@ -47,13 +47,32 @@ test("node relay state loads and saves through the API without a local write", (
   assert.doesNotMatch(settingsModal, /modelRelay\.value = \{ enabled/);
   assert.match(settingsModal, /void loadModelRelay\(\)/);
   assert.match(settingsModal, /setModelRelayUnknownModelPolicy/);
+  assert.match(settingsModal, /imagePruningDraft/);
+  assert.match(settingsModal, /nodeSupportsModelRelayImagePruning/);
+  assert.match(settingsModal, /updateNodeModelRelay\(node\.id, \{[\s\S]*imagePruning: draft/);
+});
+
+test("node detail gates image pruning controls on the authoritative capability", () => {
+  assert.match(nodeDetail, /modelRelayImagePruningDescription/);
+  assert.match(nodeDetail, /resources\.modelRelayImagePruningSupported/);
+  assert.match(nodeDetail, /resources\.imagePruningDraft\.triggerBodyBytes/);
+  assert.match(nodeDetail, /resources\.imagePruningDraft\.keepLatestImages/);
+  assert.match(nodeDetail, /resources\.imagePruningDraft\.maxInspectBytes/);
+  assert.match(nodeDetail, /actions\.setModelRelayImagePruningOnTooLarge/);
+  assert.match(nodeDetail, /actions\.saveModelRelayImagePruning/);
+  assert.match(settingsModal, /setModelRelayImagePruningEnabled/);
+  assert.match(settingsModal, /updateModelRelayImagePruningNumber/);
+  assert.match(settingsModal, /Math\.max\(1, Math\.floor\(numeric\)\)/);
+  assert.match(settingsModal, /saveModelRelayImagePruning/);
 });
 
 test("relay copy ships in both locales", () => {
   for (const locale of [zhSettings, enSettings]) {
-    for (const key of ["modelRelay:", "modelRelayDescription:", "modelRelayDefaultHint:", "modelRelayUnsupported:", "modelRelayUnknownModelPolicy:", "externalName:", "upstreamName:"]) {
+    for (const key of ["modelRelay:", "modelRelayDescription:", "modelRelayDefaultHint:", "modelRelayUnsupported:", "modelRelayUnknownModelPolicy:", "modelRelayImagePruning:", "modelRelayImagePruningDescription:", "modelRelayImagePruningInvalidLimit:", "modelRelayImagePruningSaved:", "externalName:", "upstreamName:"]) {
       assert.ok(locale.includes(key), `missing ${key}`);
     }
+    assert.match(locale, /Content-Length/);
+    assert.match(locale, /chunked/i);
   }
 });
 

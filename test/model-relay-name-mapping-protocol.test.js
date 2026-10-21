@@ -13,6 +13,7 @@ const {
   ModelConfigSchema,
   MODEL_REQUEST_MAPPING_PRESETS,
   ModelRequestMappingListSchema,
+  NodeAgentModelRelayImagePruningSchema,
   NodeAgentModelRelaySchema,
   UpdateNodeAgentModelRelaySchema,
   UpdateNodeModelSchema,
@@ -24,6 +25,7 @@ const {
   normalizeControlledInstanceCapabilities,
   normalizeModelNameEntries,
   normalizeModelRequestMappings,
+  defaultNodeAgentModelRelayImagePruning,
   normalizeNodeAgentModelRelaySettings,
   projectModelNameEntries,
   sanitizeModelNameEntries,
@@ -36,6 +38,7 @@ const {
 const {
   normalizeNodeAgentCapabilities,
   supportsNodeModelRelay,
+  supportsNodeModelRelayImagePruning,
   supportsNodeModelRelayProtocol,
   supportsNodeModelRelayStreaming,
   supportsNodeModelRelayUnknownModelPolicy,
@@ -401,9 +404,16 @@ test("relay capability documents normalize to unsupported when absent", () => {
   assert.equal(supportsNodeModelRelayStreaming(nodeCapabilities), true);
   // Additive: a document without the field is fail-closed (unsupported).
   assert.equal(supportsNodeModelRelayUnknownModelPolicy(nodeCapabilities), false);
+  assert.equal(supportsNodeModelRelayImagePruning(nodeCapabilities), false);
   assert.equal(
     supportsNodeModelRelayUnknownModelPolicy(normalizeNodeAgentCapabilities({
       managedModels: { multiEntityAssignment: true, modelRelay: { protocols: ["openai-responses"], streaming: true, unknownModelPolicy: true } },
+    })),
+    true,
+  );
+  assert.equal(
+    supportsNodeModelRelayImagePruning(normalizeNodeAgentCapabilities({
+      managedModels: { multiEntityAssignment: true, modelRelay: { protocols: ["openai-responses"], streaming: true, imagePruning: true } },
     })),
     true,
   );
@@ -507,18 +517,40 @@ test("session selection consumes external names from both catalog projections", 
 });
 
 test("node relay settings wire model defaults to enabled and writes strictly", () => {
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: false }), { enabled: false, unknownModelPolicy: "passthrough", source: "default" });
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "reject" }), { enabled: true, unknownModelPolicy: "reject", source: "default" });
+  const imagePruning = defaultNodeAgentModelRelayImagePruning();
+  assert.deepEqual(imagePruning, {
+    enabled: false,
+    triggerBodyBytes: 4 * 1024 * 1024,
+    keepLatestImages: 4,
+    maxInspectBytes: 32 * 1024 * 1024,
+    onTooLarge: "reject",
+  });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings(undefined), { enabled: true, unknownModelPolicy: "passthrough", imagePruning, source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: "yes" }), { enabled: true, unknownModelPolicy: "passthrough", imagePruning, source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: false }), { enabled: false, unknownModelPolicy: "passthrough", imagePruning, source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "reject" }), { enabled: true, unknownModelPolicy: "reject", imagePruning, source: "default" });
   // Missing or malformed policies normalize to the passthrough default.
-  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "bogus" }), { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(normalizeNodeAgentModelRelaySettings({ enabled: true, unknownModelPolicy: "bogus" }), { enabled: true, unknownModelPolicy: "passthrough", imagePruning, source: "default" });
+  assert.deepEqual(
+    normalizeNodeAgentModelRelaySettings({ enabled: true, imagePruning: { ...imagePruning, enabled: true, keepLatestImages: 7 } }).imagePruning,
+    { ...imagePruning, enabled: true, keepLatestImages: 7 },
+  );
+  assert.deepEqual(
+    normalizeNodeAgentModelRelaySettings({ enabled: true, imagePruning: { ...imagePruning, maxInspectBytes: 1 } }).imagePruning,
+    imagePruning,
+  );
   assert.deepEqual(NodeAgentModelRelaySchema.parse({ enabled: true, source: "persisted", future: true }), { enabled: true, source: "persisted" });
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true }).success, true);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, unknownModelPolicy: "passthrough" }).success, true);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, unknownModelPolicy: "bogus" }).success, false);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, scope: "all" }).success, false);
   assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: "true" }).success, false);
+  assert.equal(NodeAgentModelRelayImagePruningSchema.safeParse(imagePruning).success, true);
+  assert.equal(NodeAgentModelRelayImagePruningSchema.safeParse({ ...imagePruning, maxInspectBytes: imagePruning.triggerBodyBytes - 1 }).success, false);
+  assert.equal(NodeAgentModelRelayImagePruningSchema.safeParse({ ...imagePruning, onTooLarge: "truncate" }).success, false);
+  assert.equal(NodeAgentModelRelayImagePruningSchema.safeParse({ ...imagePruning, keepLatestImages: 0 }).success, false);
+  assert.equal(NodeAgentModelRelayImagePruningSchema.safeParse({ ...imagePruning, keepLatestImages: -1 }).success, false);
+  assert.equal(UpdateNodeAgentModelRelaySchema.safeParse({ enabled: true, imagePruning }).success, true);
 });
 
 test("protocol version mismatch keeps relay capability gating non-blocking", () => {

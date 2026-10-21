@@ -255,6 +255,132 @@ test("anthropic messages rewrites message_start, forwards count_tokens and rejec
   assert.equal(countRequest.body.toString("utf8").includes('"upstream-claude"'), true);
 });
 
+test("node-agent applies image pruning across all relay protocols and count_tokens", async (t) => {
+  const upstream = await startUpstream((_record, _request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  t.after(() => upstream.close());
+  const { app, route } = await setupRelay(t, upstream);
+
+  const configured = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/settings/model-relay",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      enabled: true,
+      imagePruning: {
+        enabled: true,
+        triggerBodyBytes: 1,
+        keepLatestImages: 1,
+        maxInspectBytes: 1024 * 1024,
+        onTooLarge: "reject",
+      },
+    },
+  });
+  assert.equal(configured.statusCode, 200, configured.body);
+
+  const cases = [
+    {
+      key: "codex",
+      operation: "/responses",
+      headers: { authorization: `Bearer ${INSTANCE_TOKEN}` },
+      body: {
+        model: "public-codex",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "keep this text" },
+            { type: "input_image", image_url: "https://images.example/old-codex.png" },
+            { type: "input_image", image_url: "https://images.example/latest-codex.png", file_id: "file_codex", detail: "high" },
+          ],
+        }],
+      },
+      latest: "https://images.example/latest-codex.png",
+    },
+    {
+      key: "chat",
+      operation: "/chat/completions",
+      headers: { authorization: `Bearer ${INSTANCE_TOKEN}` },
+      body: {
+        model: "public-chat",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "keep this text" },
+            { type: "image_url", image_url: { url: "https://images.example/old-chat.png" } },
+            { type: "image_url", image_url: { url: "https://images.example/latest-chat.png", detail: "low" }, file_id: "file_chat" },
+          ],
+        }],
+      },
+      latest: "https://images.example/latest-chat.png",
+    },
+    {
+      key: "claude",
+      operation: "/messages",
+      headers: { "x-api-key": INSTANCE_TOKEN },
+      body: {
+        model: "public-claude",
+        max_tokens: 32,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "keep this text" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "old-claude" } },
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "latest-claude" }, cache_control: { type: "ephemeral" } },
+          ],
+        }],
+      },
+      latest: "latest-claude",
+    },
+    {
+      key: "claude",
+      operation: "/messages/count_tokens",
+      headers: { "x-api-key": INSTANCE_TOKEN },
+      body: {
+        model: "public-claude",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "keep this text" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "old-count" } },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "latest-count" } },
+          ],
+        }],
+      },
+      latest: "latest-count",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const response = await fetch(route(testCase.key, testCase.operation), {
+      method: "POST",
+      headers: { ...testCase.headers, "content-type": "application/json", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(testCase.body),
+    });
+    assert.equal(response.status, 200, `${testCase.key} ${testCase.operation}: ${await response.text()}`);
+  }
+  await waitFor(() => upstream.requests.filter((record) => record.completed).length === cases.length);
+  assert.equal(upstream.requests.length, cases.length);
+
+  const images = upstream.requests.map((record) => {
+    const body = JSON.parse(record.body.toString("utf8"));
+    const content = body.input?.[0]?.content ?? body.messages?.[0]?.content;
+    return content.filter((part) => part.type === "input_image" || part.type === "image_url" || part.type === "image");
+  });
+  assert.equal(images[0].length, 1);
+  assert.equal(images[0][0].image_url, cases[0].latest);
+  assert.equal(images[0][0].file_id, "file_codex");
+  assert.equal(images[1].length, 1);
+  assert.equal(images[1][0].image_url.url, cases[1].latest);
+  assert.equal(images[2].length, 1);
+  assert.equal(images[2][0].source.data, cases[2].latest);
+  assert.deepEqual(images[2][0].cache_control, { type: "ephemeral" });
+  assert.equal(images[3].length, 1);
+  assert.equal(images[3][0].source.data, cases[3].latest);
+  assert.equal(upstream.requests.some((record) => record.url.includes("images.example")), false);
+});
+
 test("anthropic relay accepts the version-prefixed path a real Claude Code client sends", async (t) => {
   let messageRequest;
   const upstream = await startUpstream((record, _request, response) => {

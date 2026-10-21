@@ -20,6 +20,10 @@ export type ModelRelayLimits = {
   maxConcurrentRequests: number;
   /** Maximum concurrent relay requests per instance. */
   maxConcurrentRequestsPerInstance: number;
+  /** Maximum concurrent full-body image-pruning inspections on this node. */
+  maxConcurrentImagePruning: number;
+  /** Maximum time a request waits for an image-pruning inspection slot. */
+  imagePruningQueueTimeoutMs: number;
   /** Grace period for active streams when node-agent shuts down. */
   shutdownDrainMs: number;
 };
@@ -33,6 +37,8 @@ export const MODEL_RELAY_DEFAULT_LIMITS: ModelRelayLimits = {
   maxResponseEventBytes: 1024 * 1024,
   maxConcurrentRequests: 64,
   maxConcurrentRequestsPerInstance: 8,
+  maxConcurrentImagePruning: 2,
+  imagePruningQueueTimeoutMs: 5_000,
   shutdownDrainMs: 5_000,
 };
 
@@ -51,6 +57,8 @@ export function resolveModelRelayLimits(env: NodeJS.ProcessEnv = process.env): M
     maxResponseEventBytes: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_MAX_EVENT_BYTES, MODEL_RELAY_DEFAULT_LIMITS.maxResponseEventBytes),
     maxConcurrentRequests: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_MAX_CONCURRENT, MODEL_RELAY_DEFAULT_LIMITS.maxConcurrentRequests),
     maxConcurrentRequestsPerInstance: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_MAX_CONCURRENT_PER_INSTANCE, MODEL_RELAY_DEFAULT_LIMITS.maxConcurrentRequestsPerInstance),
+    maxConcurrentImagePruning: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_MAX_CONCURRENT_IMAGE_PRUNING, MODEL_RELAY_DEFAULT_LIMITS.maxConcurrentImagePruning),
+    imagePruningQueueTimeoutMs: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_IMAGE_PRUNING_QUEUE_TIMEOUT_MS, MODEL_RELAY_DEFAULT_LIMITS.imagePruningQueueTimeoutMs),
     shutdownDrainMs: positiveInt(env.TASK_HANDOFF_MODEL_RELAY_SHUTDOWN_DRAIN_MS, MODEL_RELAY_DEFAULT_LIMITS.shutdownDrainMs),
   };
 }

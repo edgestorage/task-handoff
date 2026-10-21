@@ -12512,7 +12512,7 @@ test("control plane model deletion ignores AI session model selections", async (
         creationSource: "ai-session",
         providerSessionId: "ses_session_snapshot",
         modelSelection: { modelEntityId: model.body.data.id, modelName: "session-model" },
-        cwd: "/home/hua",
+        cwd: "/home/testuser",
         status: "idle",
         startedAt: timestamp,
         updatedAt: timestamp,

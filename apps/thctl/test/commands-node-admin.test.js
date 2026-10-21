@@ -48,6 +48,7 @@ const runtime = {
   id: "runtime_fake01", nodeId: NODE_ID, name: "docker", type: "docker", status: "online",
   accessStrategy: "node-proxy", capabilities: {}, labels: {}, createdAt: now, updatedAt: now,
 };
+const imagePruning = { enabled: true, triggerBodyBytes: 4 * 1024 * 1024, keepLatestImages: 2, maxInspectBytes: 8 * 1024 * 1024, onTooLarge: "passthrough" };
 
 /** 包装 fake CP，补充 node 管理面路由；`routeMissing` 用来模拟旧服务端未注册路由。 */
 function nodeAdminFetch(fake, options = {}) {
@@ -74,8 +75,8 @@ function nodeAdminFetch(fake, options = {}) {
     if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/runtimes`) return json(200, { data: [runtime] });
     if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/docker/images`) return json(200, { data: [{ id: "sha256:abc", reference: "ghcr.io/x/y:1", repoDigests: [], sizeBytes: 1024 }] });
     if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/image-options`) return json(200, { data: [] });
-    if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/settings/model-relay`) return json(200, { data: { enabled: true, source: "persisted" } });
-    if (method === "PATCH" && pathname === `/api/nodes/${NODE_ID}/settings/model-relay`) return json(200, { data: { enabled: body?.enabled === true, source: "persisted" } });
+    if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/settings/model-relay`) return json(200, { data: { enabled: true, source: "persisted", imagePruning } });
+    if (method === "PATCH" && pathname === `/api/nodes/${NODE_ID}/settings/model-relay`) return json(200, { data: { enabled: body?.enabled === true, source: "persisted", imagePruning: body?.imagePruning } });
     if (method === "GET" && pathname === `/api/nodes/${NODE_ID}/updates/jobs`) return json(200, { data: [] });
     if (method === "POST" && pathname === "/api/node-join/complete") return json(201, { data: { id: "node_joined0001", name: "joined", status: "online", health: "ok", connectionMode: "reverse-wss", observedAt: now, capabilities: [], auth: { mode: "local-static-key" } } });
     return fake.fetchImpl(url, init);
@@ -104,6 +105,12 @@ test("node read commands render tables and JSON from the shared client", async (
   const relay = capture();
   assert.equal(await runCli(["node", "thctl", "node", "settings", "model-relay", "show", NODE_ID], { store, streams: relay.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, relay.stderr());
   assert.match(relay.stdout(), /persisted/);
+  assert.match(relay.stdout(), /imagePruning/);
+  assert.match(relay.stdout(), /passthrough/);
+
+  const relayJson = capture();
+  assert.equal(await runCli(["node", "thctl", "node", "settings", "model-relay", "show", NODE_ID, "--json"], { store, streams: relayJson.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, relayJson.stderr());
+  assert.deepEqual(JSON.parse(relayJson.stdout()).imagePruning, imagePruning);
 
   const jobs = capture();
   assert.equal(await runCli(["node", "thctl", "node", "updates", "jobs", NODE_ID], { store, streams: jobs.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, jobs.stderr());
@@ -122,6 +129,12 @@ test("node writes require confirmation and never mark the response auth secret",
   const confirmed = capture();
   assert.equal(await runCli(["node", "thctl", "node", "folders", "add", NODE_ID, "--config", config, "--yes"], { store, streams: confirmed.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, confirmed.stderr());
   assert.ok(admin.calls.some((call) => call.method === "POST" && call.path.endsWith("/local-folders")));
+
+  const relayConfig = writeConfig(store, { enabled: true, imagePruning });
+  const relayWrite = capture();
+  assert.equal(await runCli(["node", "thctl", "node", "settings", "model-relay", "set", NODE_ID, "--config", relayConfig, "--yes"], { store, streams: relayWrite.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, relayWrite.stderr());
+  const relayCall = admin.calls.filter((call) => call.method === "PATCH" && call.path.endsWith("/settings/model-relay")).at(-1);
+  assert.deepEqual(relayCall.body, { enabled: true, imagePruning });
 });
 
 test("node capability gaps close only the gated domain", async () => {

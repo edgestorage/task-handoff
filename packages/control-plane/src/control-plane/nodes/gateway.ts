@@ -29,6 +29,7 @@ import {
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
+  supportsNodeModelRelayImagePruning,
   supportsNodeModelRelay,
   supportsNodeModelRelayUnknownModelPolicy,
   nodeAgentCapabilitiesFromPublicNode,
@@ -246,17 +247,33 @@ export class ControlPlaneNodeAgentGateway {
    * instead of silently leaving the node on its fail-closed behavior.
    */
   private modelRelayWriteBody(node: Node, parsed: UpdateNodeAgentModelRelay) {
-    if (supportsNodeModelRelayUnknownModelPolicy(nodeAgentCapabilitiesFromPublicNode(node.capabilities))) return parsed;
-    if (parsed.unknownModelPolicy === "passthrough") {
-      throw Object.assign(new Error(`Node ${node.id} must be updated before the model relay can forward unknown model names.`), {
-        statusCode: 409,
-        code: "NODE_MODEL_RELAY_UNKNOWN_MODEL_POLICY_UNSUPPORTED",
-        details: { nodeId: node.id },
-      });
+    const capabilities = nodeAgentCapabilitiesFromPublicNode(node.capabilities);
+    const body: UpdateNodeAgentModelRelay = { enabled: parsed.enabled };
+    if (parsed.unknownModelPolicy !== undefined) {
+      if (supportsNodeModelRelayUnknownModelPolicy(capabilities)) {
+        body.unknownModelPolicy = parsed.unknownModelPolicy;
+      } else if (parsed.unknownModelPolicy === "passthrough") {
+        throw Object.assign(new Error(`Node ${node.id} must be updated before the model relay can forward unknown model names.`), {
+          statusCode: 409,
+          code: "NODE_MODEL_RELAY_UNKNOWN_MODEL_POLICY_UNSUPPORTED",
+          details: { nodeId: node.id },
+        });
+      }
+      // An old node is already fail closed, so an explicit reject can be
+      // represented by omitting the unsupported field.
     }
-    // A node that predates the setting is already fail closed, which matches
-    // an explicit "reject".
-    return { enabled: parsed.enabled };
+    if (parsed.imagePruning !== undefined) {
+      if (supportsNodeModelRelayImagePruning(capabilities)) {
+        body.imagePruning = parsed.imagePruning;
+      } else if (parsed.imagePruning.enabled) {
+        throw Object.assign(new Error(`Node ${node.id} must be updated before model relay image pruning can be enabled.`), {
+          statusCode: 409,
+          code: "NODE_MODEL_RELAY_IMAGE_PRUNING_UNSUPPORTED",
+          details: { nodeId: node.id },
+        });
+      }
+    }
+    return body;
   }
 
   /**

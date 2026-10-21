@@ -306,7 +306,30 @@ export async function nodeModelRelayShow(context: CliContext, invocation: CliInv
   const connection = await openConnection(context);
   const relay = await connection.client.nodeAdmin.getModelRelay(nodeId, context.signal);
   if (context.output.json) return { data: relay };
-  return { data: relay, columns: [{ key: "enabled", header: "enabled" }, { key: "source", header: "source" }, { key: "unknownModelPolicy", header: "unknownModelPolicy" }] };
+  const imagePruning = relay.imagePruning;
+  const summary = {
+    enabled: relay.enabled,
+    source: relay.source,
+    unknownModelPolicy: relay.unknownModelPolicy,
+    imagePruning: imagePruning?.enabled,
+    triggerMiB: imagePruning ? imagePruning.triggerBodyBytes / (1024 * 1024) : undefined,
+    keepLatestImages: imagePruning?.keepLatestImages,
+    inspectLimitMiB: imagePruning ? imagePruning.maxInspectBytes / (1024 * 1024) : undefined,
+    onTooLarge: imagePruning?.onTooLarge,
+  };
+  return {
+    data: summary,
+    columns: [
+      { key: "enabled", header: "enabled" },
+      { key: "source", header: "source" },
+      { key: "unknownModelPolicy", header: "unknownModelPolicy" },
+      { key: "imagePruning", header: "imagePruning" },
+      { key: "triggerMiB", header: "triggerMiB" },
+      { key: "keepLatestImages", header: "keepLatestImages" },
+      { key: "inspectLimitMiB", header: "inspectLimitMiB" },
+      { key: "onTooLarge", header: "onTooLarge" },
+    ],
+  };
 }
 
 export async function nodeModelRelaySet(context: CliContext, invocation: CliInvocation) {

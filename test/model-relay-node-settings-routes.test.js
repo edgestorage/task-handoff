@@ -18,6 +18,7 @@ function createNodeAgentMock(options = {}) {
   const relay = options.relayEnabled === false
     ? { enabled: false, source: "persisted" }
     : { enabled: true, source: options.relayEnabled === true ? "persisted" : "default" };
+  if (options.imagePruning) relay.imagePruning = structuredClone(options.imagePruning);
   const json = (data, status = 200) => new Response(JSON.stringify({ data }), {
     status,
     headers: { "content-type": "application/json" },
@@ -53,6 +54,7 @@ function createNodeAgentMock(options = {}) {
       relay.enabled = body.enabled;
       relay.source = "persisted";
       if (body.unknownModelPolicy) relay.unknownModelPolicy = body.unknownModelPolicy;
+      if (body.imagePruning) relay.imagePruning = body.imagePruning;
       return json(relay);
     }
     return error("NODE_AGENT_ROUTE_NOT_FOUND", `Unexpected node-agent request ${init.method || "GET"} ${requestPath}`, 404);
@@ -101,6 +103,20 @@ function relayUnknownModelPolicyCapabilities() {
   capabilities.managedModels.modelRelay.unknownModelPolicy = true;
   return capabilities;
 }
+
+function relayImagePruningCapabilities() {
+  const capabilities = relayUnknownModelPolicyCapabilities();
+  capabilities.managedModels.modelRelay.imagePruning = true;
+  return capabilities;
+}
+
+const IMAGE_PRUNING = {
+  enabled: true,
+  triggerBodyBytes: 1024,
+  keepLatestImages: 2,
+  maxInspectBytes: 4096,
+  onTooLarge: "passthrough",
+};
 
 function onceWebSocketJsonMatching(socket, predicate, timeoutMs = 3000) {
   return new Promise((resolve, reject) => {
@@ -267,6 +283,59 @@ test("node relay settings forward the unknown-model policy when the node declare
 
   const reread = await app.inject({ method: "GET", url: "/api/nodes/node_relay/settings/model-relay" });
   assert.deepEqual(reread.json().data, { enabled: true, source: "persisted", unknownModelPolicy: "reject" });
+});
+
+test("node relay settings forward complete image pruning config to capable nodes", async (t) => {
+  const { app, mock } = await createHarness(t, { capabilities: relayImagePruningCapabilities() });
+
+  const updated = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, unknownModelPolicy: "reject", imagePruning: IMAGE_PRUNING },
+  });
+  assert.equal(updated.statusCode, 200, updated.body);
+  assert.deepEqual(updated.json().data, {
+    enabled: true,
+    source: "persisted",
+    unknownModelPolicy: "reject",
+    imagePruning: IMAGE_PRUNING,
+  });
+  assert.deepEqual(mock.requests.at(-1).body, {
+    enabled: true,
+    unknownModelPolicy: "reject",
+    imagePruning: IMAGE_PRUNING,
+  });
+
+  const reread = await app.inject({ method: "GET", url: "/api/nodes/node_relay/settings/model-relay" });
+  assert.deepEqual(reread.json().data, {
+    enabled: true,
+    source: "persisted",
+    unknownModelPolicy: "reject",
+    imagePruning: IMAGE_PRUNING,
+  });
+});
+
+test("node relay settings reject enabling image pruning on nodes without the capability", async (t) => {
+  const { app, mock } = await createHarness(t, { capabilities: relayUnknownModelPolicyCapabilities() });
+
+  const rejected = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, imagePruning: IMAGE_PRUNING },
+  });
+  assert.equal(rejected.statusCode, 409, rejected.body);
+  assert.equal(rejected.json().error.code, "NODE_MODEL_RELAY_IMAGE_PRUNING_UNSUPPORTED");
+  assert.equal(mock.requests.some((request) => request.path === "/settings/model-relay" && request.method === "PATCH"), false);
+
+  const disabledPruning = { ...IMAGE_PRUNING, enabled: false };
+  const accepted = await app.inject({
+    method: "PATCH",
+    url: "/api/nodes/node_relay/settings/model-relay",
+    payload: { enabled: true, imagePruning: disabledPruning },
+  });
+  assert.equal(accepted.statusCode, 200, accepted.body);
+  assert.deepEqual(mock.requests.at(-1).body, { enabled: true });
+  assert.equal(mock.relay.imagePruning, undefined);
 });
 
 test("node relay settings stay scoped to the addressed node", async (t) => {

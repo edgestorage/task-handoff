@@ -315,7 +315,7 @@ function relaySessionGrant({ now, allocationId: allocationOverride, relayUrl: re
     generation: 1,
     accessTicketId: "access_ticket_restart",
     ...identity,
-    relayRegion: "cn-north-sz1-staging",
+    relayRegion: "cn-north-test-1",
     clientProofPublicKey: "b".repeat(43),
     controlPlaneProofPublicKey: "c".repeat(43),
     trafficClass: "interactive",

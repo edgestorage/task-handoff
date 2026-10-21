@@ -226,6 +226,89 @@
                 </label>
                 <small>{{ t("settings.nodeDetail.modelRelayUnknownModelPolicyHint") }}</small>
               </div>
+              <div v-if="resources.modelRelaySupported" class="node-relay-image-pruning">
+                <div class="node-relay-image-pruning-head">
+                  <strong>{{ t("settings.nodeDetail.modelRelayImagePruning") }}</strong>
+                  <Badge v-if="resources.imagePruningDraft" variant="secondary">
+                    {{ resources.imagePruningDraft.enabled ? t("settings.nodeDetail.modelRelayOn") : t("settings.nodeDetail.modelRelayOff") }}
+                  </Badge>
+                </div>
+                <p class="node-relay-description">{{ t("settings.nodeDetail.modelRelayImagePruningDescription") }}</p>
+                <template v-if="resources.modelRelayImagePruningSupported && resources.imagePruningDraft">
+                  <label class="node-relay-toggle">
+                    <Checkbox
+                      :model-value="resources.imagePruningDraft.enabled"
+                      :disabled="busy.loadingModelRelay || busy.savingModelRelay"
+                      @update:model-value="(value) => actions.setModelRelayImagePruningEnabled(value === true)"
+                    />
+                    <span>
+                      <strong>{{ t("settings.nodeDetail.modelRelayImagePruningEnable") }}</strong>
+                      <small>{{ t("settings.nodeDetail.modelRelayImagePruningEnabledHint") }}</small>
+                    </span>
+                  </label>
+                  <div class="node-relay-image-pruning-grid">
+                    <label>
+                      <span>{{ t("settings.nodeDetail.modelRelayImagePruningTrigger") }}</span>
+                      <ControlPlaneInput
+                        :model-value="String(resources.imagePruningDraft.triggerBodyBytes / 1048576)"
+                        inputmode="decimal"
+                        :disabled="busy.loadingModelRelay || busy.savingModelRelay"
+                        @update:model-value="(value) => actions.updateModelRelayImagePruningNumber('triggerBodyBytes', value)"
+                      />
+                      <small>{{ t("settings.nodeDetail.modelRelayImagePruningTriggerHint") }}</small>
+                    </label>
+                    <label>
+                      <span>{{ t("settings.nodeDetail.modelRelayImagePruningKeep") }}</span>
+                      <ControlPlaneInput
+                        :model-value="String(resources.imagePruningDraft.keepLatestImages)"
+                        inputmode="numeric"
+                        :disabled="busy.loadingModelRelay || busy.savingModelRelay"
+                        @update:model-value="(value) => actions.updateModelRelayImagePruningNumber('keepLatestImages', value)"
+                      />
+                      <small>{{ t("settings.nodeDetail.modelRelayImagePruningKeepHint") }}</small>
+                    </label>
+                    <label>
+                      <span>{{ t("settings.nodeDetail.modelRelayImagePruningInspectLimit") }}</span>
+                      <ControlPlaneInput
+                        :model-value="String(resources.imagePruningDraft.maxInspectBytes / 1048576)"
+                        inputmode="decimal"
+                        :disabled="busy.loadingModelRelay || busy.savingModelRelay"
+                        @update:model-value="(value) => actions.updateModelRelayImagePruningNumber('maxInspectBytes', value)"
+                      />
+                      <small>{{ t("settings.nodeDetail.modelRelayImagePruningInspectLimitHint") }}</small>
+                    </label>
+                    <label>
+                      <span>{{ t("settings.nodeDetail.modelRelayImagePruningTooLarge") }}</span>
+                      <ControlPlaneSelect
+                        :model-value="resources.imagePruningDraft.onTooLarge"
+                        :disabled="busy.loadingModelRelay || busy.savingModelRelay"
+                        @update:model-value="(value) => actions.setModelRelayImagePruningOnTooLarge(value === 'passthrough' ? 'passthrough' : 'reject')"
+                      >
+                        <ControlPlaneSelectItem value="reject">{{ t("settings.nodeDetail.modelRelayImagePruningReject") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="passthrough">{{ t("settings.nodeDetail.modelRelayImagePruningPassthrough") }}</ControlPlaneSelectItem>
+                      </ControlPlaneSelect>
+                      <small>{{ t("settings.nodeDetail.modelRelayImagePruningTooLargeHint") }}</small>
+                    </label>
+                  </div>
+                  <p v-if="resources.imagePruningDraft.maxInspectBytes < resources.imagePruningDraft.triggerBodyBytes" class="node-relay-image-pruning-error">
+                    {{ t("settings.nodeDetail.modelRelayImagePruningInvalidLimit") }}
+                  </p>
+                  <div class="node-relay-image-pruning-actions">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      :disabled="busy.loadingModelRelay || busy.savingModelRelay || resources.imagePruningDraft.maxInspectBytes < resources.imagePruningDraft.triggerBodyBytes"
+                      @click="actions.saveModelRelayImagePruning"
+                    >
+                      <ServerCog :size="14" />
+                      <span>{{ busy.savingModelRelay ? t("settings.nodeDetail.applying") : t("common.actions.save") }}</span>
+                    </Button>
+                  </div>
+                </template>
+                <p v-else-if="!resources.modelRelayImagePruningSupported" class="node-relay-description node-relay-upgrade">
+                  {{ t("settings.nodeDetail.modelRelayImagePruningUnsupported") }}
+                </p>
+              </div>
               <p v-if="resources.modelRelayError" class="control-plane-error">{{ resources.modelRelayError }}</p>
               </div>
             </div>
@@ -574,7 +657,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -645,10 +728,14 @@ type NodeDetailActions = {
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   setModelRelayEnabled: (enabled: boolean) => void | Promise<void>;
+  setModelRelayImagePruningEnabled: (enabled: boolean) => void;
+  setModelRelayImagePruningOnTooLarge: (policy: NodeAgentModelRelayImagePruning["onTooLarge"]) => void;
   setModelRelayUnknownModelPolicy: (policy: NodeAgentModelRelayUnknownModelPolicy) => void | Promise<void>;
+  saveModelRelayImagePruning: () => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
+  updateModelRelayImagePruningNumber: (field: "triggerBodyBytes" | "keepLatestImages" | "maxInspectBytes", value: string | number) => void;
   updateRemoteConnect: (field: keyof RemoteConnectDraft, value: string) => void;
 };
 
@@ -692,8 +779,10 @@ type NodeDetailResources = {
   externalListenerBindScope: NodeAgentExternalListener["bindScope"];
   externalListenerError: string;
   externalListenerPort: string;
+  imagePruningDraft?: NodeAgentModelRelayImagePruning;
   modelRelay?: NodeAgentModelRelay;
   modelRelayError: string;
+  modelRelayImagePruningSupported: boolean;
   modelRelaySupported: boolean;
   modelRelayUnknownModelPolicySupported: boolean;
   runtimes: NodeRuntime[];
@@ -1194,6 +1283,65 @@ watch(
   font-size: var(--node-detail-body-size);
   font-weight: 400;
   line-height: 1.5;
+}
+
+.node-relay-image-pruning {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  max-width: 640px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.node-relay-image-pruning-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-relay-image-pruning-head strong {
+  color: var(--text-strong);
+  font-size: var(--node-detail-body-size);
+  font-weight: 500;
+}
+
+.node-relay-image-pruning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.node-relay-image-pruning-grid label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.node-relay-image-pruning-grid span,
+.node-relay-image-pruning-grid small {
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.node-relay-image-pruning-error {
+  margin: 0;
+  color: var(--status-danger);
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
+}
+
+.node-relay-image-pruning-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .node-relay-image-pruning-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .node-detail-tabs {

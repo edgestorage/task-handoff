@@ -18,6 +18,30 @@ function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-relay-"));
 }
 
+const DEFAULT_IMAGE_PRUNING = {
+  enabled: false,
+  triggerBodyBytes: 4 * 1024 * 1024,
+  keepLatestImages: 4,
+  maxInspectBytes: 32 * 1024 * 1024,
+  onTooLarge: "reject",
+};
+
+function effectiveRelay(overrides = {}) {
+  return {
+    enabled: true,
+    unknownModelPolicy: "passthrough",
+    imagePruning: { ...DEFAULT_IMAGE_PRUNING },
+    source: "default",
+    ...overrides,
+  };
+}
+
+function persistedRelay(overrides = {}) {
+  const relay = effectiveRelay(overrides);
+  delete relay.source;
+  return relay;
+}
+
 function request(app, method, url, payload) {
   return app.inject({
     method,
@@ -93,7 +117,10 @@ test("node relay settings default to on, persist across restart, and reject inva
 
   const initial = await relaySettingsPayload(app, "GET");
   assert.equal(initial.statusCode, 200);
-  assert.deepEqual(initial.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(initial.json().data, effectiveRelay());
+  const health = await request(app, "GET", "/api/node-agent/health");
+  assert.equal(health.statusCode, 200, health.body);
+  assert.equal(health.json().data.capabilities.managedModels.modelRelay.imagePruning, true);
   assert.equal(fs.existsSync(path.join(dataDir, "runtime-settings.json")), true);
 
   for (const invalid of [{ enabled: "yes" }, { enabled: true, extra: 1 }, {}]) {
@@ -101,24 +128,66 @@ test("node relay settings default to on, persist across restart, and reject inva
     assert.equal(rejected.statusCode, 400, JSON.stringify(invalid));
     assert.equal(rejected.json().error.code, "VALIDATION_ERROR");
   }
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay());
 
   const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
   assert.equal(enabled.statusCode, 200);
-  assert.deepEqual(enabled.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual(enabled.json().data, effectiveRelay({ source: "persisted" }));
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
-  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "passthrough" });
+  assert.deepEqual(stored.modelRelay, persistedRelay());
   assert.equal(typeof stored.externalListener.port, "number");
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), true);
 
   await app.close();
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_settings" });
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ source: "persisted" }));
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), true);
 
   const disabled = await relaySettingsPayload(app, "PATCH", { enabled: false });
-  assert.deepEqual(disabled.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual(disabled.json().data, effectiveRelay({ enabled: false, source: "persisted" }));
   assert.equal(app.nodeAgentState.modelRegistry.modelRelayEnabled(), false);
+});
+
+test("image pruning settings persist across restart and partial updates preserve the nested config", async (t) => {
+  const dataDir = tempDataDir();
+  const imagePruning = {
+    enabled: true,
+    triggerBodyBytes: 1024,
+    keepLatestImages: 2,
+    maxInspectBytes: 4096,
+    onTooLarge: "passthrough",
+  };
+  let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_image_pruning_settings" });
+  t.after(async () => { if (!app.closed) await app.close(); });
+
+  const configured = await relaySettingsPayload(app, "PATCH", { enabled: true, imagePruning });
+  assert.equal(configured.statusCode, 200, configured.body);
+  assert.deepEqual(configured.json().data, effectiveRelay({ source: "persisted", imagePruning }));
+  assert.deepEqual(app.nodeAgentState.modelRelaySwitch.imagePruning(), imagePruning);
+
+  await app.close();
+  app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_image_pruning_settings" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ source: "persisted", imagePruning }));
+
+  const updatedWithoutImagePruning = await relaySettingsPayload(app, "PATCH", { enabled: true, unknownModelPolicy: "reject" });
+  assert.equal(updatedWithoutImagePruning.statusCode, 200, updatedWithoutImagePruning.body);
+  assert.deepEqual(
+    updatedWithoutImagePruning.json().data,
+    effectiveRelay({ source: "persisted", unknownModelPolicy: "reject", imagePruning }),
+  );
+
+  const invalid = await relaySettingsPayload(app, "PATCH", {
+    enabled: true,
+    imagePruning: { ...imagePruning, maxInspectBytes: imagePruning.triggerBodyBytes - 1 },
+  });
+  assert.equal(invalid.statusCode, 400, invalid.body);
+  assert.equal(invalid.json().error.code, "VALIDATION_ERROR");
+  assert.deepEqual(
+    (await relaySettingsPayload(app, "GET")).json().data,
+    effectiveRelay({ source: "persisted", unknownModelPolicy: "reject", imagePruning }),
+  );
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
+  assert.deepEqual(stored.modelRelay, persistedRelay({ unknownModelPolicy: "reject", imagePruning }));
 });
 
 test("node relay gate keeps mapped records writable and pins the switch only for relay consumers", async (t) => {
@@ -177,7 +246,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
   // Only instances that actually consume relay routes and hold a request-name
   // rewrite pin the switch.
   assert.deepEqual(refused.json().error.details.instanceIds, ["inst_relay_ready"]);
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ source: "persisted" }));
 
   // Editing an already assigned same-name entity into a distinct upstream
   // identity applies directly; the plain consumer still projects the catalog.
@@ -194,7 +263,7 @@ test("node relay gate keeps mapped records writable and pins the switch only for
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_relay_ready/model-assignment", { modelSelection: {} })).statusCode, 200);
   const closed = await relaySettingsPayload(app, "PATCH", { enabled: false });
   assert.equal(closed.statusCode, 200);
-  assert.deepEqual(closed.json().data, { enabled: false, unknownModelPolicy: "passthrough", source: "persisted" });
+  assert.deepEqual(closed.json().data, effectiveRelay({ enabled: false, source: "persisted" }));
 });
 
 test("node relay routes are derived, fail closed, and resolve after restart without control-plane", async (t) => {
@@ -271,7 +340,7 @@ test("node relay routes are derived, fail closed, and resolve after restart with
   const offlineResolver = new NodeModelRelayResolver(app.nodeAgentState.modelRegistry);
   assert.equal(offlineResolver.resolveRoute(instanceId, routeId).model.id, mappedId);
   // The explicit reject policy set above also survives the restart.
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "reject", source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ unknownModelPolicy: "reject", source: "persisted" }));
 
   // Assignment removal invalidates the derived route immediately.
   assert.equal((await request(app, "PUT", `/api/node-agent/instances/${instanceId}/model-assignment`, { modelSelection: {} })).statusCode, 200);
@@ -297,10 +366,10 @@ test("stored runtime settings sanitize unknown and malformed relay values to the
   let app;
   try {
     app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize" });
-    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay());
 
     const enabled = await relaySettingsPayload(app, "PATCH", { enabled: true });
-    assert.deepEqual(enabled.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+    assert.deepEqual(enabled.json().data, effectiveRelay({ source: "persisted" }));
   } finally {
     console.warn = originalWarn;
   }
@@ -312,8 +381,8 @@ test("stored runtime settings sanitize unknown and malformed relay values to the
   // The persisted file is rewritten from the sanitized model, so the unknown
   // domain disappears on the next write.
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
-  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "passthrough" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ source: "persisted" }));
+  assert.deepEqual(stored.modelRelay, persistedRelay());
   assert.equal("futureDomain" in stored, false);
 });
 
@@ -333,7 +402,7 @@ test("stored runtime settings normalize an invalid relay policy to the passthrou
   try {
     app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize_policy" });
     // Only the policy is dropped; the switch itself stays persisted and on.
-    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "persisted" });
+    assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ source: "persisted" }));
   } finally {
     console.warn = originalWarn;
   }
@@ -341,9 +410,45 @@ test("stored runtime settings normalize an invalid relay policy to the passthrou
   assert.ok(warnings.some((warning) => warning.includes("modelRelay.unknownModelPolicy")), warnings.join("\n"));
 
   await relaySettingsPayload(app, "PATCH", { enabled: true, unknownModelPolicy: "reject" });
-  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, { enabled: true, unknownModelPolicy: "reject", source: "persisted" });
+  assert.deepEqual((await relaySettingsPayload(app, "GET")).json().data, effectiveRelay({ unknownModelPolicy: "reject", source: "persisted" }));
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "runtime-settings.json"), "utf8"));
-  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "reject" });
+  assert.deepEqual(stored.modelRelay, { enabled: true, unknownModelPolicy: "reject", imagePruning: DEFAULT_IMAGE_PRUNING });
+});
+
+test("stored runtime settings drop invalid image pruning without disturbing the relay switch", async (t) => {
+  const dataDir = tempDataDir();
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "runtime-settings.json"), `${JSON.stringify({
+    version: 1,
+    externalListener: { bindScope: "loopback", port: 8091 },
+    modelRelay: {
+      enabled: true,
+      unknownModelPolicy: "reject",
+      imagePruning: {
+        enabled: true,
+        triggerBodyBytes: 4096,
+        keepLatestImages: 2,
+        maxInspectBytes: 1024,
+        onTooLarge: "reject",
+      },
+    },
+  })}\n`);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.map(String).join(" "));
+  let app;
+  try {
+    app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_relay_sanitize_image_pruning" });
+    assert.deepEqual(
+      (await relaySettingsPayload(app, "GET")).json().data,
+      effectiveRelay({ source: "persisted", unknownModelPolicy: "reject" }),
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  t.after(async () => app.close());
+  assert.ok(warnings.some((warning) => warning.includes("modelRelay.imagePruning")), warnings.join("\n"));
 });
 
 test("mapping edits keep entity identity, advance revision, and store the private mapping only in SQLite", async (t) => {

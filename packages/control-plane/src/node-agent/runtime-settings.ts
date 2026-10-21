@@ -2,7 +2,9 @@ import { z } from "zod";
 import {
   NodeAgentExternalListenerConfigSchema,
   NodeAgentModelRelayConfigSchema,
+  NodeAgentModelRelayImagePruningSchema,
   type NodeAgentExternalListenerConfig,
+  type NodeAgentModelRelayImagePruningConfig,
   type NodeAgentModelRelayUnknownModelPolicy,
 } from "@task-handoff/protocol/control-plane";
 import { JsonFile } from "../shared/persistence/store.ts";
@@ -67,14 +69,21 @@ function sanitizeStoredSettings(input: unknown) {
   const wslRuntime = source.wslRuntime;
   const unknownTopLevel = Object.keys(source).filter((key) => key !== "version" && key !== "externalListener" && key !== "modelRelay" && key !== "wslRuntime");
   const unknownListener = Object.keys(listener).filter((key) => key !== "bindScope" && key !== "port");
-  let modelRelay: { enabled: boolean; unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy } | undefined;
+  let modelRelay: {
+    enabled: boolean;
+    unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
+    imagePruning?: NodeAgentModelRelayImagePruningConfig;
+  } | undefined;
   let relayWarning: string | undefined;
   if (relay !== undefined) {
     if (relay && typeof relay === "object" && !Array.isArray(relay) && typeof (relay as Record<string, unknown>).enabled === "boolean") {
       const value = relay as Record<string, unknown>;
-      const unknownRelay = Object.keys(value).filter((key) => key !== "enabled" && key !== "unknownModelPolicy");
+      const unknownRelay = Object.keys(value).filter((key) => key !== "enabled" && key !== "unknownModelPolicy" && key !== "imagePruning");
       const storedPolicy = value.unknownModelPolicy;
       const invalidPolicy = storedPolicy !== undefined && storedPolicy !== "passthrough" && storedPolicy !== "reject";
+      const parsedImagePruning = value.imagePruning === undefined
+        ? undefined
+        : NodeAgentModelRelayImagePruningSchema.safeParse(value.imagePruning);
       if (unknownRelay.length) {
         console.warn(JSON.stringify({
           message: "unknown stored node agent runtime setting fields were ignored",
@@ -91,9 +100,17 @@ function sanitizeStoredSettings(input: unknown) {
           field: "modelRelay.unknownModelPolicy",
         }));
       }
+      if (parsedImagePruning && !parsedImagePruning.success) {
+        console.warn(JSON.stringify({
+          message: "invalid stored node agent model relay image pruning was ignored",
+          filePath: "runtime-settings.json",
+          field: "modelRelay.imagePruning",
+        }));
+      }
       modelRelay = {
         enabled: value.enabled as boolean,
         ...(storedPolicy === "passthrough" || storedPolicy === "reject" ? { unknownModelPolicy: storedPolicy } : {}),
+        ...(parsedImagePruning?.success ? { imagePruning: parsedImagePruning.data } : {}),
       };
     } else {
       // Missing or malformed values normalize to disabled. Dropping the field

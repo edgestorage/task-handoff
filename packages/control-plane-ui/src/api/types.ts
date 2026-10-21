@@ -619,14 +619,25 @@ export type NodeAgentModelRelay = {
   enabled: boolean;
   /** Additive: absent on node-agents that predate the unknown-model policy. */
   unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
+  /** Additive: absent on node-agents that predate image pruning. */
+  imagePruning?: NodeAgentModelRelayImagePruning;
   /** "default" means the switch was never persisted and relay stays on. */
   source: "default" | "persisted";
 };
 
 export type NodeAgentModelRelayUnknownModelPolicy = "passthrough" | "reject";
 
+export type NodeAgentModelRelayImagePruning = {
+  enabled: boolean;
+  triggerBodyBytes: number;
+  keepLatestImages: number;
+  maxInspectBytes: number;
+  onTooLarge: "reject" | "passthrough";
+};
+
 export type UpdateNodeAgentModelRelay = Pick<NodeAgentModelRelay, "enabled"> & {
   unknownModelPolicy?: NodeAgentModelRelayUnknownModelPolicy;
+  imagePruning?: NodeAgentModelRelayImagePruning;
 };
 
 export type NodeRuntime = {

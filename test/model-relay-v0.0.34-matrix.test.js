@@ -88,7 +88,18 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults on on a curr
 
   const settings = await request(app, "GET", "/api/node-agent/settings/model-relay");
   assert.equal(settings.statusCode, 200);
-  assert.deepEqual(settings.json().data, { enabled: true, unknownModelPolicy: "passthrough", source: "default" });
+  assert.deepEqual(settings.json().data, {
+    enabled: true,
+    unknownModelPolicy: "passthrough",
+    imagePruning: {
+      enabled: false,
+      triggerBodyBytes: 4 * 1024 * 1024,
+      keepLatestImages: 4,
+      maxInspectBytes: 32 * 1024 * 1024,
+      onTooLarge: "reject",
+    },
+    source: "default",
+  });
 
   const created = await request(app, "POST", "/api/node-agent/models", legacyModelInput());
   assert.equal(created.statusCode, 201, created.body);

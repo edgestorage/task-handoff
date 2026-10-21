@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import {
+  defaultNodeAgentModelRelayImagePruning,
   UpdateNodeAgentModelRelaySchema,
   type NodeAgentModelRelay,
+  type NodeAgentModelRelayImagePruningConfig,
   type NodeAgentModelRelayUnknownModelPolicy,
 } from "@task-handoff/protocol/control-plane";
 import type { JsonFile } from "../../shared/persistence/store.ts";
@@ -11,6 +13,7 @@ import type { NodeModelRegistry } from "./registry.ts";
 /** Effective relay settings; unlike the wire model, the policy is always resolved. */
 export type EffectiveNodeAgentModelRelay = NodeAgentModelRelay & {
   unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy;
+  imagePruning: NodeAgentModelRelayImagePruningConfig;
 };
 
 /**
@@ -28,6 +31,7 @@ export const NODE_MODEL_RELAY_DEFAULT_ENABLED: boolean = true;
 export class NodeModelRelaySwitch {
   private enabledValue: boolean = NODE_MODEL_RELAY_DEFAULT_ENABLED;
   private unknownModelPolicyValue: NodeAgentModelRelayUnknownModelPolicy = "passthrough";
+  private imagePruningValue: NodeAgentModelRelayImagePruningConfig = defaultNodeAgentModelRelayImagePruning();
 
   enabled() {
     return this.enabledValue;
@@ -37,9 +41,18 @@ export class NodeModelRelaySwitch {
     return this.unknownModelPolicyValue;
   }
 
-  set(input: { enabled: boolean; unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy }) {
+  imagePruning() {
+    return this.imagePruningValue;
+  }
+
+  set(input: {
+    enabled: boolean;
+    unknownModelPolicy: NodeAgentModelRelayUnknownModelPolicy;
+    imagePruning: NodeAgentModelRelayImagePruningConfig;
+  }) {
     this.enabledValue = input.enabled;
     this.unknownModelPolicyValue = input.unknownModelPolicy;
+    this.imagePruningValue = input.imagePruning;
   }
 }
 
@@ -66,7 +79,11 @@ export class NodeModelRelaySettings {
   /** Load the persisted value into the live switch during startup. */
   restore(): NodeAgentModelRelay {
     const effective = this.effective();
-    this.relaySwitch.set({ enabled: effective.enabled, unknownModelPolicy: effective.unknownModelPolicy });
+    this.relaySwitch.set({
+      enabled: effective.enabled,
+      unknownModelPolicy: effective.unknownModelPolicy,
+      imagePruning: effective.imagePruning,
+    });
     return effective;
   }
 
@@ -77,6 +94,7 @@ export class NodeModelRelaySettings {
     return {
       enabled: stored?.enabled ?? NODE_MODEL_RELAY_DEFAULT_ENABLED,
       unknownModelPolicy: stored?.unknownModelPolicy ?? "passthrough",
+      imagePruning: stored?.imagePruning ?? defaultNodeAgentModelRelayImagePruning(),
       source: stored ? "persisted" : "default",
     };
   }
@@ -91,8 +109,13 @@ export class NodeModelRelaySettings {
     // The policy field is additive: an older control plane that only sends
     // `enabled` must keep the node's current unknown-model policy.
     const unknownModelPolicy = candidate.unknownModelPolicy ?? this.effective().unknownModelPolicy;
-    this.settings.put({ ...this.settings.get(), version: 1, modelRelay: { enabled: candidate.enabled, unknownModelPolicy } });
-    this.relaySwitch.set({ enabled: candidate.enabled, unknownModelPolicy });
+    const imagePruning = candidate.imagePruning ?? this.effective().imagePruning;
+    this.settings.put({
+      ...this.settings.get(),
+      version: 1,
+      modelRelay: { enabled: candidate.enabled, unknownModelPolicy, imagePruning },
+    });
+    this.relaySwitch.set({ enabled: candidate.enabled, unknownModelPolicy, imagePruning });
     return this.effective();
   }
 

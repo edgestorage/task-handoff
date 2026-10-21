@@ -14,7 +14,7 @@ test("an account session belongs to one service origin and a mismatch discards i
   const dir = tempDir();
   const statePath = path.join(dir, "cloud-account-session.json");
   const now = Date.parse("2026-08-10T00:00:00Z");
-  const staging = new CloudAccountSessionService({ statePath, serviceOrigin: "https://th.aaasu.com", clock: () => now });
+  const staging = new CloudAccountSessionService({ statePath, serviceOrigin: "https://staging.cloud.example.test", clock: () => now });
   staging.init();
   assert.equal(staging.snapshot().signedIn, false);
   assert.equal(staging.snapshot().pendingRequest, undefined);

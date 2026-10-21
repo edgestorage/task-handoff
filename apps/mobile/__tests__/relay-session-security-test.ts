@@ -52,7 +52,7 @@ function grantFor(clientProofPublicKey: string): RelaySessionGrant {
     accessTicketId: 'access_ticket_a',
     relayId: 'relay_a',
     relayRegion: 'cn-north-test-1',
-    relayUrl: 'wss://sz1-staging.relay.aaasu.com/connect',
+    relayUrl: 'wss://relay.example.test/connect',
     ...authority,
     targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`,
     clientProofPublicKey,

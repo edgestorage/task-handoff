@@ -1820,7 +1820,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             // node configuration and deliberately not part of this document.
             modelRelay: (() => {
               const protocols = modelRelay.protocolCapabilities();
-              return { protocols, streaming: protocols.length > 0, unknownModelPolicy: true };
+              return { protocols, streaming: protocols.length > 0, unknownModelPolicy: true, imagePruning: true };
             })(),
           },
           aiSessionHistoryLimit: true,
@@ -1913,6 +1913,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const modelRelay = new ModelRelayService({
     resolver: new NodeModelRelayResolver(state.modelRegistry),
     adapters: createModelRelayAdapters(),
+    imagePruning: () => state.modelRelaySwitch.imagePruning(),
     log: app.log,
     fetchImpl,
   });

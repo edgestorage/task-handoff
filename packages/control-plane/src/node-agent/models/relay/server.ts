@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
 import { once } from "node:events";
-import { Transform, type Readable, type Writable } from "node:stream";
+import { Readable, Transform, type Writable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ControlledInstance, ModelProtocol } from "@task-handoff/protocol/control-plane";
+import {
+  defaultNodeAgentModelRelayImagePruning,
+  type ControlledInstance,
+  type ModelProtocol,
+  type NodeAgentModelRelayImagePruningConfig,
+} from "@task-handoff/protocol/control-plane";
 import {
   NodeModelRelayResolver,
   parseModelRelayRoutePathname,
@@ -10,6 +15,7 @@ import {
 } from "../relay-routes.ts";
 import { MODEL_RELAY_ERROR_CODES, modelRelayError } from "./errors.ts";
 import { upstreamRequestHeaders, upstreamResponseHeaders } from "./header-policy.ts";
+import { ImagePruningBodyError, pruneModelRelayImages } from "./image-pruning.ts";
 import { resolveModelRelayLimits, type ModelRelayLimits } from "./limits.ts";
 import { ModelRelayAdapterRegistry, type ModelRelayAdapter, type ModelRelayUpstreamPlan } from "./types.ts";
 
@@ -109,9 +115,154 @@ function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+const IMAGE_PRUNING_OPERATIONS = new Set([
+  "chat.completions.create",
+  "responses.create",
+  "messages.create",
+  "messages.count_tokens",
+]);
+
+type ImagePruningMetadata = {
+  imagePruningOutcome?: string;
+  sourceRequestBytes?: number;
+  removedImages?: number;
+  retainedImages?: number;
+  imagePruningMs?: number;
+};
+
+type PreparedRelayBody = {
+  body: Readable;
+  metadata: ImagePruningMetadata;
+};
+
+type BufferedRelayBody = {
+  chunks: Buffer[];
+  totalBytes: number;
+  overflow: boolean;
+  buffer?: Buffer;
+  remainder?: Readable;
+};
+
+function singleHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function requestContentLength(headers: FastifyRequest["headers"]) {
+  const raw = singleHeader(headers["content-length"]);
+  if (raw === undefined || !/^\d+$/.test(raw.trim())) return undefined;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function hasRequestContentEncoding(headers: FastifyRequest["headers"]) {
+  const encoding = singleHeader(headers["content-encoding"])?.trim().toLowerCase();
+  return Boolean(encoding && encoding !== "identity");
+}
+
+function isJsonRequest(headers: FastifyRequest["headers"]) {
+  const contentType = singleHeader(headers["content-type"])?.split(";", 1)[0]?.trim().toLowerCase();
+  return contentType === "application/json";
+}
+
+function bufferRequestBody(source: Readable, maxBytes: number): Promise<BufferedRelayBody> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+    const cleanup = () => {
+      source.off("data", onData);
+      source.off("end", onEnd);
+      source.off("error", onError);
+    };
+    const onData = (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      chunks.push(buffer);
+      totalBytes += buffer.length;
+      if (totalBytes <= maxBytes) return;
+      settled = true;
+      source.pause();
+      cleanup();
+      resolve({ chunks, totalBytes, overflow: true, remainder: source });
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ chunks, totalBytes, overflow: false, buffer: Buffer.concat(chunks, totalBytes) });
+    };
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    source.on("data", onData);
+    source.once("end", onEnd);
+    source.once("error", onError);
+  });
+}
+
+function replayBufferedBody(chunks: Buffer[], remainder?: Readable) {
+  return Readable.from((async function* replay() {
+    for (const chunk of chunks) yield chunk;
+    if (!remainder) return;
+    for await (const chunk of remainder) yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  })(), { objectMode: false });
+}
+
+class ImagePruningGate {
+  private active = 0;
+  private readonly maxConcurrent: number;
+  private readonly waiters: Array<{
+    resolve: (release: () => void) => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+  }> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  async acquire(timeoutMs: number): Promise<() => void> {
+    if (this.active < this.maxConcurrent) {
+      this.active += 1;
+      return this.releaseOnce();
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          reject(modelRelayError(503, MODEL_RELAY_ERROR_CODES.busy, "The node model relay image pruning queue is full; retry later.", { retryable: true }));
+        }, timeoutMs),
+      };
+      this.waiters.push(waiter);
+    });
+  }
+
+  private releaseOnce() {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiters.shift();
+      if (next) {
+        clearTimeout(next.timer);
+        next.resolve(this.releaseOnce());
+      } else {
+        this.active = Math.max(0, this.active - 1);
+      }
+    };
+  }
+}
+
 export type ModelRelayServiceOptions = {
   resolver: NodeModelRelayResolver;
   adapters?: ModelRelayAdapter[];
+  imagePruning?: () => NodeAgentModelRelayImagePruningConfig;
   limits?: Partial<ModelRelayLimits>;
   fetchImpl?: typeof fetch;
   log?: RelayLog;
@@ -127,6 +278,8 @@ export class ModelRelayService {
   private readonly adapters: ModelRelayAdapterRegistry;
   private readonly limits: ModelRelayLimits;
   private readonly fetchImpl: ModelRelayFetch;
+  private readonly imagePruning: () => NodeAgentModelRelayImagePruningConfig;
+  private readonly imagePruningGate: ImagePruningGate;
   private readonly log?: RelayLog;
   private closing = false;
   private activeTotal = 0;
@@ -138,6 +291,8 @@ export class ModelRelayService {
     this.adapters = new ModelRelayAdapterRegistry(options.adapters);
     this.limits = { ...resolveModelRelayLimits(), ...options.limits };
     this.fetchImpl = (options.fetchImpl || fetch) as ModelRelayFetch;
+    this.imagePruning = options.imagePruning || defaultNodeAgentModelRelayImagePruning;
+    this.imagePruningGate = new ImagePruningGate(this.limits.maxConcurrentImagePruning);
     this.log = options.log;
   }
 
@@ -302,6 +457,123 @@ export class ModelRelayService {
     }, "model relay request completed");
   }
 
+  private async prepareImagePrunedBody(
+    request: FastifyRequest,
+    plan: ModelRelayUpstreamPlan,
+    protocol: ModelProtocol,
+    hasBody: boolean,
+  ): Promise<PreparedRelayBody> {
+    const original = request.raw;
+    if (!hasBody) return { body: original, metadata: {} };
+    const settings = this.imagePruning();
+    if (!settings.enabled) return { body: original, metadata: {} };
+    if (!IMAGE_PRUNING_OPERATIONS.has(plan.name)) {
+      return { body: original, metadata: { imagePruningOutcome: "not-applicable" } };
+    }
+    const contentLength = requestContentLength(request.headers);
+    if (contentLength === undefined) {
+      return { body: original, metadata: { imagePruningOutcome: "unknown-length" } };
+    }
+    if (contentLength <= settings.triggerBodyBytes) {
+      return {
+        body: original,
+        metadata: { imagePruningOutcome: "below-threshold", sourceRequestBytes: contentLength },
+      };
+    }
+    if (hasRequestContentEncoding(request.headers)) {
+      return {
+        body: original,
+        metadata: { imagePruningOutcome: "compressed", sourceRequestBytes: contentLength },
+      };
+    }
+    if (!isJsonRequest(request.headers)) {
+      return {
+        body: original,
+        metadata: { imagePruningOutcome: "non-json", sourceRequestBytes: contentLength },
+      };
+    }
+    if (contentLength > settings.maxInspectBytes) {
+      if (settings.onTooLarge === "passthrough") {
+        return {
+          body: original,
+          metadata: { imagePruningOutcome: "too-large-passthrough", sourceRequestBytes: contentLength },
+        };
+      }
+      throw modelRelayError(
+        413,
+        MODEL_RELAY_ERROR_CODES.imagePruningBodyTooLarge,
+        "The model relay request body exceeds the image-pruning inspection limit.",
+        { maxInspectBytes: settings.maxInspectBytes },
+      );
+    }
+
+    const startedAt = Date.now();
+    const release = await this.imagePruningGate.acquire(this.limits.imagePruningQueueTimeoutMs);
+    try {
+      if (this.closing) {
+        throw modelRelayError(503, MODEL_RELAY_ERROR_CODES.shuttingDown, "The node model relay is shutting down.");
+      }
+      const read = await bufferRequestBody(original, settings.maxInspectBytes);
+      if (read.overflow || read.totalBytes > contentLength) {
+        if (settings.onTooLarge === "passthrough") {
+          return {
+            body: replayBufferedBody(read.chunks, read.remainder),
+            metadata: {
+              imagePruningOutcome: "too-large-passthrough",
+              sourceRequestBytes: read.totalBytes,
+              imagePruningMs: Date.now() - startedAt,
+            },
+          };
+        }
+        throw modelRelayError(
+          413,
+          MODEL_RELAY_ERROR_CODES.imagePruningBodyTooLarge,
+          "The model relay request body exceeds the image-pruning inspection limit.",
+          { maxInspectBytes: settings.maxInspectBytes },
+        );
+      }
+      const body = read.buffer ?? Buffer.concat(read.chunks, read.totalBytes);
+      let json: unknown;
+      try {
+        const text = body.toString("utf8");
+        json = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+      } catch {
+        throw modelRelayError(
+          400,
+          MODEL_RELAY_ERROR_CODES.imagePruningInvalidBody,
+          "The model relay request body is not valid JSON for image pruning.",
+        );
+      }
+      let pruned;
+      try {
+        pruned = pruneModelRelayImages(protocol, json, settings.keepLatestImages);
+      } catch (error) {
+        if (error instanceof ImagePruningBodyError) {
+          throw modelRelayError(
+            400,
+            MODEL_RELAY_ERROR_CODES.imagePruningInvalidBody,
+            "The model relay request structure is not safe for image pruning.",
+          );
+        }
+        throw modelRelayError(500, MODEL_RELAY_ERROR_CODES.imagePruningFailed, "The model relay could not prune request images.");
+      }
+      const metadata: ImagePruningMetadata = {
+        imagePruningOutcome: pruned.changed ? "applied" : "unchanged",
+        sourceRequestBytes: contentLength,
+        removedImages: pruned.removedImages,
+        retainedImages: pruned.retainedImages,
+        imagePruningMs: Date.now() - startedAt,
+      };
+      const outgoing = pruned.changed ? Buffer.from(JSON.stringify(pruned.json), "utf8") : body;
+      return { body: Readable.from(outgoing, { objectMode: false }), metadata };
+    } catch (error) {
+      if (error && typeof error === "object" && typeof (error as { statusCode?: unknown }).statusCode === "number") throw error;
+      throw modelRelayError(500, MODEL_RELAY_ERROR_CODES.imagePruningFailed, "The model relay could not inspect request images.");
+    } finally {
+      release();
+    }
+  }
+
   private async proxyUpstream(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -314,9 +586,11 @@ export class ModelRelayService {
     const model = resolution.model;
     const targetUrl = this.allowedUpstreamUrl(plan.url, model.endpoint);
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
+    const imagePrepared = await this.prepareImagePrunedBody(request, plan, resolution.protocol, hasBody);
+    Object.assign(context, imagePrepared.metadata);
     let requestBytes = 0;
     const preparation = await adapter.prepareRequest({
-      body: hasBody ? request.raw : undefined,
+      body: hasBody ? imagePrepared.body : undefined,
       plan,
       model,
       resolveUpstreamModelName: (externalName) => this.resolver.resolveUpstreamModelName(model, externalName),

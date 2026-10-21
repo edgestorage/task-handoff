@@ -465,8 +465,8 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Cloud, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayUnknownModelPolicy, UpdateChannel } from "../../../api/types";
-import { nodeSupportsModelRelay, nodeSupportsModelRelayUnknownModelPolicy } from "../../../api/nodeCapabilities";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, UpdateChannel } from "../../../api/types";
+import { nodeSupportsModelRelay, nodeSupportsModelRelayImagePruning, nodeSupportsModelRelayUnknownModelPolicy } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
@@ -860,16 +860,19 @@ async function saveExternalListener() {
 }
 
 const modelRelay = ref<NodeAgentModelRelay>();
+const imagePruningDraft = ref<NodeAgentModelRelayImagePruning>();
 const modelRelayError = ref("");
 const loadingModelRelay = ref(false);
 const savingModelRelay = ref(false);
 const selectedNodeSupportsModelRelay = computed(() => nodeSupportsModelRelay(selectedNode.value));
 const selectedNodeSupportsModelRelayUnknownModelPolicy = computed(() => nodeSupportsModelRelayUnknownModelPolicy(selectedNode.value));
+const selectedNodeSupportsModelRelayImagePruning = computed(() => nodeSupportsModelRelayImagePruning(selectedNode.value));
 
 async function loadModelRelay() {
   const node = selectedNode.value;
   if (!node || !nodeSupportsModelRelay(node)) {
     modelRelay.value = undefined;
+    imagePruningDraft.value = undefined;
     modelRelayError.value = "";
     return;
   }
@@ -877,8 +880,10 @@ async function loadModelRelay() {
   modelRelayError.value = "";
   try {
     modelRelay.value = await getNodeModelRelay(node.id);
+    imagePruningDraft.value = modelRelay.value.imagePruning ? { ...modelRelay.value.imagePruning } : undefined;
   } catch (error) {
     modelRelay.value = undefined;
+    imagePruningDraft.value = undefined;
     modelRelayError.value = errorText(error);
   } finally {
     loadingModelRelay.value = false;
@@ -923,6 +928,57 @@ async function setModelRelayUnknownModelPolicy(unknownModelPolicy: NodeAgentMode
     // Only the policy changes here; the node-agent keeps the authoritative
     // switch state and refuses to honor an unsupported field.
     modelRelay.value = await updateNodeModelRelay(node.id, { enabled: modelRelay.value.enabled, unknownModelPolicy });
+  } catch (error) {
+    modelRelayError.value = errorText(error);
+    showControlPlaneToast(modelRelayError.value, "error");
+  } finally {
+    savingModelRelay.value = false;
+    await loadModelRelay();
+  }
+}
+
+function setModelRelayImagePruningEnabled(enabled: boolean) {
+  if (!imagePruningDraft.value) return;
+  imagePruningDraft.value = { ...imagePruningDraft.value, enabled };
+}
+
+function updateModelRelayImagePruningNumber(field: "triggerBodyBytes" | "maxInspectBytes" | "keepLatestImages", value: string | number) {
+  if (!imagePruningDraft.value) return;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return;
+  imagePruningDraft.value = {
+    ...imagePruningDraft.value,
+    [field]: field === "keepLatestImages"
+      ? Math.max(1, Math.floor(numeric))
+      : Math.max(1, Math.round(numeric * 1024 * 1024)),
+  };
+}
+
+function setModelRelayImagePruningOnTooLarge(onTooLarge: NodeAgentModelRelayImagePruning["onTooLarge"]) {
+  if (!imagePruningDraft.value) return;
+  imagePruningDraft.value = { ...imagePruningDraft.value, onTooLarge };
+}
+
+async function saveModelRelayImagePruning() {
+  const node = selectedNode.value;
+  const relay = modelRelay.value;
+  const draft = imagePruningDraft.value;
+  if (!node || !relay || !draft || !nodeSupportsModelRelayImagePruning(node) || savingModelRelay.value) return;
+  if (draft.maxInspectBytes < draft.triggerBodyBytes) {
+    modelRelayError.value = t("settings.nodeDetail.modelRelayImagePruningInvalidLimit");
+    showControlPlaneToast(modelRelayError.value, "error");
+    return;
+  }
+  savingModelRelay.value = true;
+  modelRelayError.value = "";
+  try {
+    modelRelay.value = await updateNodeModelRelay(node.id, {
+      enabled: relay.enabled,
+      ...(nodeSupportsModelRelayUnknownModelPolicy(node) && relay.unknownModelPolicy ? { unknownModelPolicy: relay.unknownModelPolicy } : {}),
+      imagePruning: draft,
+    });
+    imagePruningDraft.value = modelRelay.value.imagePruning ? { ...modelRelay.value.imagePruning } : undefined;
+    showControlPlaneToast(t("settings.nodeDetail.modelRelayImagePruningSaved"), "success");
   } catch (error) {
     modelRelayError.value = errorText(error);
     showControlPlaneToast(modelRelayError.value, "error");
@@ -1268,10 +1324,14 @@ const nodeDetailActions = computed(() => ({
   removeRuntime,
   saveExternalListener,
   setModelRelayEnabled,
+  setModelRelayImagePruningEnabled,
+  setModelRelayImagePruningOnTooLarge,
   setModelRelayUnknownModelPolicy,
+  saveModelRelayImagePruning,
   submitNodeLocalFolder,
   setUpdateChannel,
   updateExternalListenerDraft,
+  updateModelRelayImagePruningNumber,
   updateRemoteConnect,
 }));
 
@@ -1316,8 +1376,10 @@ const nodeDetailResources = computed(() => ({
   externalListenerError: externalListenerError.value,
   externalListenerPort: externalListenerPort.value,
   modelRelay: modelRelay.value,
+  imagePruningDraft: imagePruningDraft.value,
   modelRelayError: modelRelayError.value,
   modelRelaySupported: selectedNodeSupportsModelRelay.value,
+  modelRelayImagePruningSupported: selectedNodeSupportsModelRelayImagePruning.value,
   modelRelayUnknownModelPolicySupported: selectedNodeSupportsModelRelayUnknownModelPolicy.value,
   runtimes: selectedNodeRuntimes.value,
   selectedImageNodeId: selectedImageNodeId.value,

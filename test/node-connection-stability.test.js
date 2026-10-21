@@ -1160,7 +1160,7 @@ test("v0.0.21 directory metadata without node states normalizes to an empty prog
 test("node agent health response drops unknown cross-version fields", () => {
   const parsed = NodeAgentHealthSchema.parse({
     ok: true,
-    hostname: "  HuadeMac-mini.local  ",
+    hostname: "  test-node.local  ",
     futureTopLevel: true,
     capabilities: { modelEndpointProbe: true, futureProbe: true },
     build: { component: "node-agent", packageVersion: "1.2.3", futureBuildField: true },
@@ -1170,7 +1170,7 @@ test("node agent health response drops unknown cross-version fields", () => {
   });
   assert.deepEqual(parsed, {
     ok: true,
-    hostname: "HuadeMac-mini.local",
+    hostname: "test-node.local",
     capabilities: { modelEndpointProbe: true },
     build: { component: "node-agent", packageVersion: "1.2.3" },
     listener: { host: "127.0.0.1", port: 8091 },

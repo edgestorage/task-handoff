@@ -90,6 +90,16 @@ thctl schema --format json
 
 命令面共 236 个叶子，`thctl schema` 导出的契约是唯一来源。
 
+### 模型中转图片裁剪
+
+节点模型 relay 可在请求体超过阈值时只保留最近的 N 张图片，旧图片直接丢弃；不做压缩、缩放或重新编码，也不下载远程 URL。该设置默认关闭，`show` 会显示阈值、保留数、解析上限和超限策略；`set` 仍通过共享 schema 的嵌套 `imagePruning` 对象写入：
+
+```bash
+thctl node settings model-relay set <nodeId> --config '{"enabled":true,"imagePruning":{"enabled":true,"triggerBodyBytes":4194304,"keepLatestImages":4,"maxInspectBytes":33554432,"onTooLarge":"reject"}}' --yes
+```
+
+首期只处理带 `Content-Length` 且未压缩的 JSON 请求；chunked 请求继续原样透传。
+
 ### Skill 与升级检查
 
 - `thctl skill install|update` 从文档站索引（默认 `https://docs.thandoff.com/.well-known/skills/index.json`，可用 `TASK_HANDOFF_SKILLS_INDEX_URL` 覆盖）下载 skill，按索引里的 sha256 校验每个文件，原子替换目录，并写入 `.thandoff-skill.json` 记录版本、来源与每个文件的摘要；本地修改过的副本在 `skill update` 时报冲突（退出码 8），需要 `--force` 才替换。
