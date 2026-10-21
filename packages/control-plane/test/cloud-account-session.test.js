@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { RELAY_SESSION_RESUME_CAPABILITY } from "@task-handoff/cloud-contracts";
 import { CloudAccountSessionService } from "../src/control-plane/cloud-connectivity/account-session.ts";
 import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
 
@@ -121,11 +122,36 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPol
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
     state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs, accountRequestPollMs,
+    cloudRelaySessionsPath: path.join(dir, "cloud-relay-sessions.json"),
+    relayConnector: { async connect() { throw new Error("unexpected relay connection"); }, async resume() { throw new Error("unexpected relay resume"); } },
     fetch: async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return fetchImpl ? fetchImpl(url, init) : { ok: false, status: 500 }; },
   });
   runtime.start();
   return { runtime, accountSession, sockets, fetchCalls, state };
 }
+
+test("Control Plane always advertises resumable Relay sessions", async () => {
+  const names = ["TASK_HANDOFF_RELAY_SESSION_RESUME", "FEATURE_RELAY_SESSION_RESUME"];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) process.env[name] = "0";
+  let runtime;
+  try {
+    const harness = runtimeHarness({ bindingId: "binding_a" });
+    runtime = harness.runtime;
+    const { sockets } = harness;
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent?.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    const register = sockets[0].sent.find((message) => message.type === "register");
+    assert.ok(register, "the bound Control Plane must register with the Coordinator");
+    assert.ok(register.registration.capabilities.includes(RELAY_SESSION_RESUME_CAPABILITY));
+  } finally {
+    await runtime?.stop();
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  }
+});
 
 test("a pending revocation reconnects, revokes remotely and re-registers unbound for sign-in", async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

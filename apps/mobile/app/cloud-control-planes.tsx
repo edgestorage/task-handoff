@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Redirect, router, Stack } from 'expo-router';
 import type { ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
 
@@ -22,11 +22,13 @@ function CloudControlPlanesContent() {
   const zh = locale === 'zh-CN';
   const [items, setItems] = useState<ControlPlaneDirectoryEntry[]>([]);
   const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let live = true;
     async function load() {
       setError(undefined);
+      setLoading(true);
       try {
         const session = await restoreActiveCloudAccountSession();
         const directory = await session.client.listControlPlanes();
@@ -34,6 +36,8 @@ function CloudControlPlanesContent() {
         if (live) setItems(directory);
       } catch (cause) {
         if (live) setError(cloudMobileErrorMessage(cause, zh));
+      } finally {
+        if (live) setLoading(false);
       }
     }
     void load();
@@ -80,7 +84,11 @@ function CloudControlPlanesContent() {
         <Text style={[styles.accountLink, { color: colors.primary }]}>{t('cloudAccount.settings')}</Text>
       </Pressable>
       <Text style={[styles.note, { color: colors.textMuted }]}>{t('cloudControlPlanes.note')}</Text>
-      {items.map((entry) => {
+      {loading ? <View accessibilityLiveRegion="polite" style={styles.loading}>
+        <ActivityIndicator accessibilityLabel={t('cloudControlPlanes.loading')} color={colors.primary}/>
+        <Text style={[styles.loadingText, { color: colors.textMuted }]}>{t('cloudControlPlanes.loading')}</Text>
+      </View> : null}
+      {!loading ? items.map((entry) => {
         const accessLabel = accessLabelFor(entry, t);
         const name = entry.displayName.translations?.[locale] || entry.displayName.default || entry.controlPlaneId;
         return <Pressable
@@ -98,9 +106,9 @@ function CloudControlPlanesContent() {
           </View>
           <Text style={{ color: entry.remoteAccess === 'enabled' ? colors.primary : colors.textMuted }}>{remoteAccessLabel(entry.remoteAccess, t)}</Text>
         </Pressable>;
-      })}
-      {!items.length && !error ? <Text style={[styles.empty, { color: colors.textMuted }]}>{t('cloudControlPlanes.empty')}</Text> : null}
-      {error ? <Text accessibilityLiveRegion="polite" style={[styles.empty, { color: colors.error }]}>{error}</Text> : null}
+      }) : null}
+      {!loading && !items.length && !error ? <Text style={[styles.empty, { color: colors.textMuted }]}>{t('cloudControlPlanes.empty')}</Text> : null}
+      {!loading && error ? <Text accessibilityLiveRegion="polite" style={[styles.empty, { color: colors.error }]}>{error}</Text> : null}
     </Screen>
   </>;
 }
@@ -120,6 +128,8 @@ function remoteAccessLabel(value: ControlPlaneDirectoryEntry['remoteAccess'], t:
 const styles = StyleSheet.create({
   accountLink: { fontSize: 15, fontWeight: '600' },
   note: { fontSize: 14, lineHeight: 20 },
+  loading: { alignItems: 'center', gap: 10, justifyContent: 'center', minHeight: 180, paddingVertical: 24 },
+  loadingText: { fontSize: 14 },
   row: { alignItems: 'center', borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, padding: 14 },
   copy: { flex: 1, gap: 4 },
   name: { fontSize: 16, fontWeight: '600' },

@@ -9,10 +9,12 @@ import {
   listStyle,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
-import { View } from 'react-native';
+import { useSyncExternalStore } from 'react';
+import { Alert, View } from 'react-native';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
+import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled, setDiagnosticLogsEnabled, subscribeDiagnosticLogs } from '../observability/diagnostic-logs';
 import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
 import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity } from './profile';
@@ -21,6 +23,27 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
   const { preference, setPreference, t } = useI18n();
   const taskStatus = useTaskStatusSettings();
+  const diagnosticsEnabled = useSyncExternalStore(subscribeDiagnosticLogs, getDiagnosticLogsEnabled);
+
+  const copyDiagnostics = async () => {
+    try {
+      const copied = await copyRecentDiagnosticLogs();
+      Alert.alert(t('diagnostics.title'), t(copied ? 'diagnostics.copied' : 'diagnostics.empty'));
+    } catch {
+      Alert.alert(t('diagnostics.title'), t('diagnostics.copyFailed'));
+    }
+  };
+
+  const clearDiagnostics = () => {
+    Alert.alert(t('diagnostics.clearTitle'), t('diagnostics.clearMessage'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('diagnostics.clear'), style: 'destructive', onPress: () => { void clearDiagnosticLogs().then(() => {
+        Alert.alert(t('diagnostics.title'), t('diagnostics.cleared'));
+      }).catch(() => {
+        Alert.alert(t('diagnostics.title'), t('diagnostics.clearFailed'));
+      }); } },
+    ]);
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -40,6 +63,19 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
             <Button label={`${appearance === 'system' ? '✓ ' : ''}${t('appearance.system')}`} systemImage="gearshape" onPress={() => { void setAppearance('system'); }} />
             <Button label={`${appearance === 'light' ? '✓ ' : ''}${t('appearance.light')}`} systemImage="sun.max" onPress={() => { void setAppearance('light'); }} />
             <Button label={`${appearance === 'dark' ? '✓ ' : ''}${t('appearance.dark')}`} systemImage="moon" onPress={() => { void setAppearance('dark'); }} />
+          </Section>
+          <Section title={t('diagnostics.title')}>
+            <Toggle
+              isOn={diagnosticsEnabled}
+              label={t('diagnostics.enabled')}
+              systemImage="ladybug"
+              onIsOnChange={setDiagnosticLogsEnabled}
+            />
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>
+              {t('diagnostics.help')}
+            </Text>
+            <Button label={t('diagnostics.copyRecent')} systemImage="doc.on.doc" onPress={() => { void copyDiagnostics(); }} />
+            <Button label={t('diagnostics.clear')} systemImage="trash" role="destructive" onPress={clearDiagnostics} />
           </Section>
           {taskStatus.available && taskStatus.loaded ? (
             <Section title={t('liveActivity.title')}>

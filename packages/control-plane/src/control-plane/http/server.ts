@@ -101,7 +101,6 @@ export type CreateControlPlaneAppOptions = {
   cloudServiceOrigins?: string[];
   allowNonProductionCloudOrigin?: boolean;
   cloudConnectivityEnabled?: boolean;
-  relaySessionResumeEnabled?: boolean;
   cloudAccountFetch?: typeof fetch;
   cloudDiscovery?: CloudEndpointResolver;
   cloudDiscoveryFetch?: typeof fetch;
@@ -447,8 +446,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const authorizationConnections = new AuthorizationConnectionRegistry();
   const browserAccess = new BrowserAccessService();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
-  const relaySessionResumeEnabled = options.relaySessionResumeEnabled
-    ?? envFlag(process.env.TASK_HANDOFF_RELAY_SESSION_RESUME ?? process.env.FEATURE_RELAY_SESSION_RESUME);
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
@@ -617,7 +614,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
     state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
-    fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir), relaySessionResumeEnabled,
+    fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir),
     cloudRelaySessionsPath: paths.cloudRelaySessionsPath, coordinatorOrigins: cloudServiceOrigins,
     ...(cloudDiscovery ? { cloudDiscovery } : {}),
     onOriginFailover: ({ fromOrigin, toOrigin, reason }) => app.log.warn({ code: "CLOUD_COORDINATOR_ORIGIN_FAILOVER", fromOrigin, toOrigin, reason }, "cloud_coordinator_origin_failover"),

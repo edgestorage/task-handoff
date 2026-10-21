@@ -68,7 +68,8 @@ test('the iOS screen renders the account as a native inset grouped list', async 
 test('the iOS screen shows a loading row until the account state arrives', async () => {
   const screen = await render(<NativeCloudAccountSecurityScreen controller={controller({ loaded: false, profile: undefined })} onOpenControlPlanes={jest.fn()}/>);
 
-  expect(getByProps(screen, { title: t('cloudAccount.loadingProfile') })).toBeTruthy();
+  expect(getByProps(screen, { text: t('cloudAccount.loadingProfile') })).toBeTruthy();
+  expect(getByProps(screen, { testID: 'cloud-account-loading' })).toBeTruthy();
   expect(queryAllByProps(screen, { title: t('cloudAccount.accountInformation') })).toHaveLength(0);
 });
 

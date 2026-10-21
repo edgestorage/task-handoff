@@ -23,6 +23,9 @@ describe('mobile i18n', () => {
     expect(translate('zh-CN', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small 等 2 个模型');
     expect(translate('en-US', 'composer.placeholder')).toBe('Message');
     expect(translate('zh-CN', 'composer.placeholder')).toBe('输入消息');
+    expect(translate('en-US', 'controlPlane.closedTitle')).toBe('Control Plane closed');
+    expect(translate('zh-CN', 'controlPlane.closedTitle')).toBe('控制面板已关闭');
+    expect(translate('zh-CN', 'diagnostics.title')).toBe('诊断日志');
   });
 
   test('normalizes and resolves the persisted appearance preference', () => {

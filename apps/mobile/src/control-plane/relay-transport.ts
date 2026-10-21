@@ -16,9 +16,10 @@ import { probeRelayCandidates, RELAY_PROBE_FAST_BUDGET_MS, RELAY_PROBE_FAST_SAMP
 import { selectRelayCandidate, type RelayProbeResult, type RelaySelectionFallback } from './relay-scorer';
 import { RelayWinnerCache, type RelayWinnerEntry } from './relay-winner-cache';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
-import { MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
+import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 import { createEphemeralRelayProofKey, type RelayProofKeyProvider } from './relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from './relay-session-store';
+import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionRenewal = { leaseExpiresAt: string; generation: number; committed: boolean };
@@ -35,6 +36,7 @@ export interface EncryptedRelayChannel {
   close(code?: number, reason?: string): void;
 }
 export type RelayChannelFactory = (input: {
+  attemptId?: string;
   relayUrl: string;
   mode: 'attach' | 'resume';
   grant: RelaySessionGrant;
@@ -108,6 +110,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private unsubscribeControl?: () => void;
   private epoch = 0;
   private nextId = 0;
+  private nextAttemptId = 0;
   private readonly pending = new Map<string, { resolve(value: unknown): void; reject(error: unknown): void; schema: z.ZodType<any>; abort?: () => void }>();
   private readonly events = new Set<MobileControlPlaneEventHandlers>();
   private readonly tty = new Map<string, MobileAppSessionTtyHandlers>();
@@ -264,66 +267,103 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     return this.channel;
   }
 
+  private nextRelayAttemptId() {
+    return `relay_${Date.now().toString(36)}_${++this.nextAttemptId}`;
+  }
+
   private async establishChannel(allowCachedWinner = true): Promise<EncryptedRelayChannel> {
+    const attemptId = this.nextRelayAttemptId();
+    const startedAt = Date.now();
+    let route: 'resume' | 'selection' = 'selection';
+    diagnosticLog.info('relay.connect.start', { attemptId, allowCachedWinner, hasSession: Boolean(this.session) });
     await this.restorePersistedSession();
     if (this.session) {
+      route = 'resume';
+      diagnosticLog.info('relay.connect.route', { attemptId, route });
       try {
-        return await this.resumeSession(this.session);
+        const channel = await this.resumeSession(this.session, attemptId);
+        diagnosticLog.info('relay.connect.complete', { attemptId, route, durationMs: Date.now() - startedAt });
+        return channel;
       } catch (error) {
         // A transient network failure is not a reason to burn two Coordinator
         // requests and an allocation. Only an authoritative resume rejection
         // falls back to a fresh bootstrap + confirm.
         if (!terminalResumeFailure(error)) throw error;
+        diagnosticLog.warn('relay.resume.fallback', { attemptId, reason: 'terminal-resume-failure', ...diagnosticErrorDetails(error) });
         this.clearSession();
       }
     }
+    route = 'selection';
+    diagnosticLog.info('relay.connect.route', { attemptId, route, hasCachedWinner: allowCachedWinner });
     try {
-      return await this.runSelection(allowCachedWinner);
+      const channel = await this.runSelection(allowCachedWinner, false, attemptId);
+      diagnosticLog.info('relay.connect.complete', { attemptId, route, durationMs: Date.now() - startedAt });
+      return channel;
     } catch (error) {
       // "Reuse the winner until it stops working": a failed attempt is that evidence, so
       // the next connection measures again instead of trusting the cache.
       await this.winnerCache?.clear(this.profile.identity.controlPlaneId);
+      diagnosticLog.error('relay.connect.failed', { attemptId, route, durationMs: Date.now() - startedAt, ...diagnosticErrorDetails(error) });
       throw error;
     }
   }
 
-  private async resumeSession(session: ActiveRelaySession) {
+  private async resumeSession(session: ActiveRelaySession, attemptId: string) {
     if (Date.parse(session.grant.expiresAt) <= Date.now()) {
+      diagnosticLog.warn('relay.resume.expired', { attemptId, generation: session.grant.generation, relayId: session.grant.relayId });
       this.clearSession();
       throw transportError('RELAY_SESSION_EXPIRED', false);
     }
+    const startedAt = Date.now();
+    diagnosticLog.info('relay.resume.start', { attemptId, generation: session.grant.generation, relayId: session.grant.relayId, allocationId: session.grant.allocationId });
     const proof = await this.proofKey.proof(session.grant);
-    const channel = await this.openChannel({
-      relayUrl: session.grant.relayUrl,
-      mode: 'resume',
-      grant: session.grant,
-      proof,
-      targetPublicKeyFingerprint: this.profile.identity.publicKeyFingerprint,
-      epoch: ++this.epoch,
-    });
+    let channel: EncryptedRelayChannel;
+    try {
+      channel = await this.openChannel({
+        attemptId,
+        relayUrl: session.grant.relayUrl,
+        mode: 'resume',
+        grant: session.grant,
+        proof,
+        targetPublicKeyFingerprint: this.profile.identity.publicKeyFingerprint,
+        epoch: ++this.epoch,
+      });
+    } catch (error) {
+      diagnosticLog.warn('relay.resume.failed', { attemptId, durationMs: Date.now() - startedAt, generation: session.grant.generation, relayId: session.grant.relayId, ...diagnosticErrorDetails(error) });
+      throw error;
+    }
     if (this.session !== session) {
       channel.close(1000, 'session-replaced');
       throw transportError('RELAY_SESSION_REPLACED', true);
     }
     this.installChannel(channel, { grant: session.grant, appliedGeneration: channel.generation ?? session.appliedGeneration });
+    diagnosticLog.info('relay.resume.complete', { attemptId, durationMs: Date.now() - startedAt, generation: channel.generation ?? session.appliedGeneration, relayId: session.grant.relayId });
     return channel;
   }
 
-  private async runSelection(allowCachedWinner: boolean, freshRetry = false): Promise<EncryptedRelayChannel> {
+  private async runSelection(allowCachedWinner: boolean, freshRetry = false, attemptId = this.nextRelayAttemptId()): Promise<EncryptedRelayChannel> {
+    const startedAt = Date.now();
     const controlPlaneId = this.profile.identity.controlPlaneId;
     const networkFingerprint = this.networkFingerprint();
     const cached = allowCachedWinner ? await this.winnerCache?.read(controlPlaneId, networkFingerprint) : undefined;
     const pending = await this.loadPendingOperation();
+    diagnosticLog.info('relay.selection.start', { attemptId, freshRetry, cacheHit: Boolean(cached), cachedRelayId: cached?.relayId, pendingOperation: pending?.type ?? 'none' });
     if (pending?.type === 'confirm') {
+      const replayStartedAt = Date.now();
+      diagnosticLog.info('relay.confirm.replay.start', { attemptId, cacheHit: Boolean(cached) });
       let confirmed;
       try {
         confirmed = await this.account.confirmRelaySession(pending.selectionId, pending.body, pending.key);
       } catch (error) {
         if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
+        diagnosticLog.warn('relay.confirm.replay.failed', { attemptId, durationMs: Date.now() - replayStartedAt, ...diagnosticErrorDetails(error) });
         throw error;
       }
       await this.clearPendingOperation();
-      return this.completeConfirmedSelection(controlPlaneId, confirmed, cached, undefined, undefined, allowCachedWinner);
+      diagnosticLog.info('relay.confirm.replay.complete', { attemptId, durationMs: Date.now() - replayStartedAt, relayId: confirmed.relayId, substituted: confirmed.substituted });
+      const channel = await this.completeConfirmedSelection(controlPlaneId, confirmed, cached, undefined, undefined, allowCachedWinner, attemptId);
+      diagnosticLog.info('relay.selection.complete', { attemptId, durationMs: Date.now() - startedAt, route: 'confirm-replay', relayId: confirmed.relayId });
+      return channel;
     }
 
     const clientProofPublicKey = await this.proofKey.publicKey();
@@ -332,6 +372,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       await this.clearPendingOperation();
       bootstrapOperation = undefined;
     }
+    const bootstrapReplay = Boolean(bootstrapOperation);
     if (!bootstrapOperation) {
       bootstrapOperation = {
         type: 'bootstrap',
@@ -349,11 +390,14 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       await this.savePendingOperation(bootstrapOperation);
     }
 
+    const bootstrapStartedAt = Date.now();
+    diagnosticLog.info('relay.bootstrap.start', { attemptId, replay: bootstrapReplay, candidateLimit: RELAY_CANDIDATE_COUNT });
     let bootstrap;
     try {
       bootstrap = await this.account.bootstrapRelaySession(bootstrapOperation.body, bootstrapOperation.key);
     } catch (error) {
       if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
+      diagnosticLog.warn('relay.bootstrap.failed', { attemptId, replay: bootstrapReplay, durationMs: Date.now() - bootstrapStartedAt, ...diagnosticErrorDetails(error) });
       throw error;
     }
     const ticket = bootstrap.relayTicket;
@@ -366,12 +410,21 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     }
 
     const selection = bootstrap.selection;
+    diagnosticLog.info('relay.bootstrap.complete', {
+      attemptId,
+      replay: bootstrapReplay,
+      durationMs: Date.now() - bootstrapStartedAt,
+      candidates: selection.candidates.length,
+      preferredHonored: selection.preferredHonored,
+      expiresInMs: Date.parse(selection.expiresAt) - Date.now(),
+    });
     if (Date.parse(selection.expiresAt) <= Date.now()) {
       await this.clearPendingOperation();
-      if (!freshRetry) return this.runSelection(false, true);
+      diagnosticLog.warn('relay.selection.expired', { attemptId, freshRetry });
+      if (!freshRetry) return this.runSelection(false, true, attemptId);
       throw transportError('RELAY_SELECTION_EXPIRED', true);
     }
-    const winner = await this.chooseWinner(selection, cached, networkFingerprint);
+    const winner = await this.chooseWinner(selection, cached, networkFingerprint, attemptId);
     const confirmOperation: RelayPendingOperation = {
       type: 'confirm',
       selectionId: selection.selectionId,
@@ -380,19 +433,25 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       createdAt: Date.now(),
     };
     await this.savePendingOperation(confirmOperation);
+    const confirmStartedAt = Date.now();
+    diagnosticLog.info('relay.confirm.start', { attemptId, winnerRelayId: winner.relayId, fallback: winner.confirmation.fallback, cacheHit: Boolean(cached) });
     let confirmed;
     try {
       confirmed = await this.account.confirmRelaySession(confirmOperation.selectionId, confirmOperation.body, confirmOperation.key);
     } catch (error) {
       if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
+      diagnosticLog.warn('relay.confirm.failed', { attemptId, durationMs: Date.now() - confirmStartedAt, winnerRelayId: winner.relayId, ...diagnosticErrorDetails(error) });
       if (pendingOperationSelectionExpired(error) && !freshRetry) {
         await this.clearPendingOperation();
-        return this.runSelection(false, true);
+        return this.runSelection(false, true, attemptId);
       }
       throw error;
     }
     await this.clearPendingOperation();
-    return this.completeConfirmedSelection(controlPlaneId, confirmed, cached, winner.relayId, winner.measurements, allowCachedWinner);
+    diagnosticLog.info('relay.confirm.complete', { attemptId, durationMs: Date.now() - confirmStartedAt, winnerRelayId: winner.relayId, relayId: confirmed.relayId, substituted: confirmed.substituted, fallback: winner.confirmation.fallback });
+    const channel = await this.completeConfirmedSelection(controlPlaneId, confirmed, cached, winner.relayId, winner.measurements, allowCachedWinner, attemptId);
+    diagnosticLog.info('relay.selection.complete', { attemptId, durationMs: Date.now() - startedAt, route: 'selection', relayId: confirmed.relayId, fallback: winner.confirmation.fallback });
+    return channel;
   }
 
   private async completeConfirmedSelection(
@@ -402,23 +461,34 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     winnerRelayId: string | undefined,
     measurements: RelayProbeResult[] | undefined,
     allowCachedWinner: boolean,
+    attemptId: string,
   ): Promise<EncryptedRelayChannel> {
     const expectedRelayId = winnerRelayId ?? cached?.relayId;
     if (confirmed.substituted || (expectedRelayId && confirmed.relayId !== expectedRelayId)) {
       // The Coordinator had to book something other than what was asked for, so the
       // cached winner is stale information rather than a fact about this network.
       await this.winnerCache?.clear(controlPlaneId);
+      diagnosticLog.warn('relay.cache.invalidated', { attemptId, reason: confirmed.substituted ? 'substituted' : 'winner-changed', expectedRelayId, relayId: confirmed.relayId });
     }
-    this.verifyConfirmedGrant(confirmed, await this.proofKey.publicKey());
+    try {
+      this.verifyConfirmedGrant(confirmed, await this.proofKey.publicKey());
+    } catch (error) {
+      diagnosticLog.error('relay.grant.rejected', { attemptId, relayId: confirmed.relayId, allocationId: confirmed.allocationId, ...diagnosticErrorDetails(error) });
+      throw error;
+    }
+    diagnosticLog.info('relay.grant.verified', { attemptId, relayId: confirmed.relayId, allocationId: confirmed.allocationId, generation: confirmed.grant.generation, expiresInMs: Date.parse(confirmed.grant.expiresAt) - Date.now() });
     const session: ActiveRelaySession = { grant: confirmed.grant, appliedGeneration: 0 };
     // Publish the confirmed session before the first socket attempt so a lost
     // attach reply can be retried with `session-attach` instead of allocating a
     // second Relay session. The Control Plane half is already attached by now.
     this.session = session;
     await this.persistSession(confirmed.grant);
+    const attachStartedAt = Date.now();
+    diagnosticLog.info('relay.attach.start', { attemptId, relayId: confirmed.relayId, allocationId: confirmed.allocationId, generation: confirmed.grant.generation });
     try {
       const proof = await this.proofKey.proof(confirmed.grant);
       const channel = await this.openChannel({
+        attemptId,
         relayUrl: confirmed.relayUrl,
         mode: 'attach',
         grant: confirmed.grant,
@@ -429,11 +499,13 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       });
       session.appliedGeneration = channel.generation ?? confirmed.grant.generation;
       this.installChannel(channel, session);
-      if (measurements) await this.rememberWinner(controlPlaneId, confirmed, measurements, this.networkFingerprint(), cached);
+      diagnosticLog.info('relay.attach.complete', { attemptId, durationMs: Date.now() - attachStartedAt, relayId: confirmed.relayId, allocationId: confirmed.allocationId, appliedGeneration: session.appliedGeneration });
+      if (measurements) await this.rememberWinner(controlPlaneId, confirmed, measurements, this.networkFingerprint(), cached, attemptId);
       return channel;
     } catch (error) {
       // A cached winner that just failed should be remeasured, but an ordinary
       // first-attach failure keeps the grant for the next in-place resume.
+      diagnosticLog.warn('relay.attach.failed', { attemptId, durationMs: Date.now() - attachStartedAt, relayId: confirmed.relayId, allocationId: confirmed.allocationId, cachedWinnerFallback: allowCachedWinner && Boolean(cached), ...diagnosticErrorDetails(error) });
       if (allowCachedWinner && cached) {
         this.clearSession();
         return this.establishChannel(false);
@@ -468,18 +540,22 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
    * the whole set, and if every sample fails the client defers to the
    * Coordinator's own ranking instead of guessing.
    */
-  private async chooseWinner(selection: CloudRelaySelection, cached: RelayWinnerEntry | undefined, networkFingerprint: string) {
+  private async chooseWinner(selection: CloudRelaySelection, cached: RelayWinnerEntry | undefined, networkFingerprint: string, attemptId: string) {
+    const startedAt = Date.now();
     const trust = this.allowRelayUrl;
     const targets: RelayProbeTarget[] = selection.candidates.map((candidate) => ({ allocationId: candidate.allocationId, relayUrl: candidate.relayUrl }));
     const cachedCandidate = cached ? selection.candidates.find((candidate) => candidate.relayId === cached.relayId) : undefined;
     const fastPath = cachedCandidate !== undefined && cached !== undefined && selection.preferredHonored;
-    const probeOptions = trust ? { allowRelayUrl: trust } : {};
+    const probeOptions = { attemptId, ...(trust ? { allowRelayUrl: trust } : {}) };
+    diagnosticLog.info('relay.probe.start', { attemptId, fastPath, candidateCount: targets.length, measuredCandidateCount: fastPath ? 1 : targets.length });
     let probes = await this.probe(
       fastPath ? targets.filter((target) => target.allocationId === cachedCandidate!.allocationId) : targets,
       fastPath ? { ...probeOptions, samples: RELAY_PROBE_FAST_SAMPLES, budgetMs: RELAY_PROBE_FAST_BUDGET_MS } : probeOptions,
     );
+    const fastPathSucceeded = fastPath && probes.some((probe) => probe.mobileRttMs !== undefined);
     if (fastPath && !probes.some((probe) => probe.mobileRttMs !== undefined)) {
       // The remembered winner did not answer, so this is a full selection after all.
+      diagnosticLog.warn('relay.probe.fast-path-missed', { attemptId, cachedRelayId: cached?.relayId, fallbackCandidateCount: targets.length });
       probes = await this.probe(targets, probeOptions);
     }
     const scored = selectRelayCandidate({
@@ -500,6 +576,17 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       sampleCount: probe.sampleCount,
       failureCount: probe.failureCount,
     }));
+    diagnosticLog.info('relay.probe.complete', {
+      attemptId,
+      durationMs: Date.now() - startedAt,
+      mode: fastPath ? (fastPathSucceeded ? 'cached-fast-path' : 'cached-fallback') : 'full',
+      fastPath,
+      fastPathSucceeded,
+      fullFallback: fastPath && !fastPathSucceeded,
+      winnerRelayId: winnerCandidate.relayId,
+      fallback,
+      measurements,
+    });
     return {
       relayId: winnerCandidate.relayId,
       measurements: probes,
@@ -514,7 +601,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     };
   }
 
-  private async rememberWinner(controlPlaneId: string, confirmed: { relayId: string; relayUrl: string }, measurements: readonly RelayProbeResult[], networkFingerprint: string, cached?: RelayWinnerEntry) {
+  private async rememberWinner(controlPlaneId: string, confirmed: { relayId: string; relayUrl: string }, measurements: readonly RelayProbeResult[], networkFingerprint: string, cached: RelayWinnerEntry | undefined, attemptId: string) {
     if (!this.winnerCache) return;
     const measured = measurements.find((probe) => probe.mobileRttMs !== undefined);
     // The winner still answers, but far slower than the measurement the cache was
@@ -522,9 +609,11 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     // hint and let the next connection run a full selection.
     if (cached && measured?.mobileRttMs !== undefined && cached.rttMs > 0 && measured.mobileRttMs > cached.rttMs * 2) {
       await this.winnerCache.clear(controlPlaneId);
+      diagnosticLog.warn('relay.winner-cache.invalidated', { attemptId, relayId: confirmed.relayId, cachedRttMs: cached.rttMs, measuredRttMs: measured.mobileRttMs, reason: 'latency-degraded' });
       return;
     }
     await this.winnerCache.write(controlPlaneId, { relayId: confirmed.relayId, relayUrl: confirmed.relayUrl, rttMs: measured?.mobileRttMs ?? cached?.rttMs ?? 0, networkFingerprint });
+    diagnosticLog.info('relay.winner-cache.saved', { attemptId, relayId: confirmed.relayId, rttMs: measured?.mobileRttMs ?? cached?.rttMs ?? 0 });
   }
 
   private installChannel(channel: EncryptedRelayChannel, session: ActiveRelaySession) {
@@ -566,9 +655,13 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private async rekeyChannel(current: EncryptedRelayChannel) {
     if (this.rekeying || this.channelValue !== current || !this.session) return;
     const session = this.session;
+    const attemptId = this.nextRelayAttemptId();
+    const startedAt = Date.now();
+    diagnosticLog.info('relay.rekey.start', { attemptId, generation: session.grant.generation, relayId: session.grant.relayId });
     this.rekeying = (async () => {
       try {
         const channel = await this.openChannel({
+          attemptId,
           relayUrl: session.grant.relayUrl,
           mode: 'resume',
           grant: session.grant,
@@ -582,7 +675,9 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
         }
         this.installChannel(channel, session);
         current.close(1000, 'e2e-rekey');
-      } catch {
+        diagnosticLog.info('relay.rekey.complete', { attemptId, durationMs: Date.now() - startedAt, generation: channel.generation ?? session.grant.generation, relayId: session.grant.relayId });
+      } catch (error) {
+        diagnosticLog.warn('relay.rekey.failed', { attemptId, durationMs: Date.now() - startedAt, generation: session.grant.generation, relayId: session.grant.relayId, retryScheduled: this.channelValue === current, ...diagnosticErrorDetails(error) });
         if (this.channelValue === current) this.scheduleE2eRekeyRetry(current);
       }
     })().finally(() => { this.rekeying = undefined; });
@@ -601,7 +696,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private receiveControl(channel: EncryptedRelayChannel, notice: RelayControlNotice) {
     if (this.channelValue !== channel) return;
     if (notice.type === 'peer-detached') {
-      this.channelClosed(channel, transportError('RELAY_PEER_DETACHED', true));
+      this.channelClosed(channel, transportError('RELAY_PEER_DETACHED', true, MOBILE_CONTROL_PLANE_CLOSED_MESSAGE));
       return;
     }
     const session = this.session;
@@ -621,6 +716,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     // A rotated channel closes on its own schedule; only the active one resets the transport.
     if (this.channelValue !== channel) return;
     // The grant survives a socket close; the next request resumes it in place.
+    diagnosticLog.warn('relay.channel.reset', { generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, ...diagnosticErrorDetails(error) });
     this.reset(error ?? transportError('RELAY_CHANNEL_CLOSED', true));
   }
 
@@ -653,34 +749,43 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
 
   private async renewLease(current: EncryptedRelayChannel) {
     if (this.channelValue !== current || !this.session) return;
+    const startedAt = Date.now();
     if (Date.parse(this.session.grant.expiresAt) <= Date.now()) {
+      diagnosticLog.warn('relay.renew.expired', { generation: this.session.grant.generation, relayId: this.session.grant.relayId });
       this.clearSession();
       return;
     }
+    diagnosticLog.info('relay.renew.start', { generation: this.session.grant.generation, appliedGeneration: this.session.appliedGeneration, relayId: this.session.grant.relayId });
 
     // The Coordinator may have issued the next generation while the socket was
     // briefly unable to carry the control reply. Push that same grant before
     // asking for yet another generation.
     if (this.session.appliedGeneration < this.session.grant.generation) {
-      if (await this.pushGrant(current, this.session.grant)) this.scheduleLeaseRenewal(current);
+      const committed = await this.pushGrant(current, this.session.grant);
+      if (committed) this.scheduleLeaseRenewal(current);
       else this.scheduleRenewalRetry(current);
+      diagnosticLog[committed ? 'info' : 'warn']('relay.renew.repush', { durationMs: Date.now() - startedAt, generation: this.session.grant.generation, committed });
       return;
     }
 
     let next: RelaySessionGrant;
     try {
       next = await this.renewCoordinatorGrant(this.session.grant);
-    } catch {
+    } catch (error) {
       // A failed renewal deliberately leaves the current channel intact. It can
       // keep carrying requests until the Relay closes it at grant expiry.
+      diagnosticLog.warn('relay.renew.coordinator-failed', { durationMs: Date.now() - startedAt, generation: this.session.grant.generation, relayId: this.session.grant.relayId, retryScheduled: true, ...diagnosticErrorDetails(error) });
       this.scheduleRenewalRetry(current);
       return;
     }
     if (this.channelValue !== current || !this.session) return;
+    const previousGeneration = this.session.grant.generation;
     this.session.grant = next;
     await this.persistSession(next);
-    if (await this.pushGrant(current, next)) this.scheduleLeaseRenewal(current);
+    const committed = await this.pushGrant(current, next);
+    if (committed) this.scheduleLeaseRenewal(current);
     else this.scheduleRenewalRetry(current);
+    diagnosticLog[committed ? 'info' : 'warn']('relay.renew.complete', { durationMs: Date.now() - startedAt, previousGeneration, generation: next.generation, relayId: next.relayId, committed });
   }
 
   private async renewCoordinatorGrant(current: RelaySessionGrant) {
@@ -713,7 +818,8 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       if (result.generation !== grant.generation) throw transportError('RELAY_SESSION_GENERATION_CONFLICT');
       if (result.committed) this.session.appliedGeneration = Math.max(this.session.appliedGeneration, result.generation);
       return result.committed;
-    } catch {
+    } catch (error) {
+      diagnosticLog.warn('relay.grant.push.failed', { generation: grant.generation, relayId: grant.relayId, ...diagnosticErrorDetails(error) });
       return false;
     }
   }
@@ -759,6 +865,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   private reset(error: unknown) {
+    diagnosticLog.warn('relay.transport.reset', { hadChannel: Boolean(this.channelValue), generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, ...diagnosticErrorDetails(error) });
     this.cancelLeaseRenewal();
     this.cancelE2eRekey();
     this.unsubscribeControl?.();
@@ -935,6 +1042,6 @@ function normalize(error: unknown) {
   return new MobileControlPlaneTransportError('RELAY_CONNECTION_FAILED', 'Cloud Relay connection is unavailable.', true);
 }
 
-function transportError(code: string, retryable = false) {
-  return new MobileControlPlaneTransportError(code, 'Cloud Relay connection is unavailable.', retryable);
+function transportError(code: string, retryable = false, message = 'Cloud Relay connection is unavailable.') {
+  return new MobileControlPlaneTransportError(code, message, retryable);
 }

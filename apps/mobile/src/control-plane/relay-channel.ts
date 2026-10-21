@@ -18,12 +18,18 @@ import {
 import type { EncryptedRelayChannel, RelayChannelFactory, RelayControlNotice, RelaySessionRenewal } from './relay-transport';
 import { MobileControlPlaneTransportError } from './transport';
 import { createNativeRelaySocket, isNativeRelaySocketAvailable } from '../../modules/task-handoff-browser/src';
+import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
 type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string };
 type SocketListener = (event: SocketDefaultEvent) => void;
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
 type SocketLike = { readyState: number; bufferedAmount?: number; binaryType?: string; addEventListener(type: SocketEvent, listener: SocketListener): void; removeEventListener?(type: SocketEvent, listener: SocketListener): void; send(data: string | Uint8Array): void; close(code?: number, reason?: string): void };
 type SocketFactory = (url: string) => SocketLike | Promise<SocketLike>;
+export type MobileRelayChannelTimeouts = {
+  socketOpenMs: number;
+  attachMs: number;
+  handshakeMs: number;
+};
 type ControlWaiter = {
   predicate(control: RelaySessionRenewal): boolean;
   resolve(value: RelaySessionRenewal): void;
@@ -31,34 +37,71 @@ type ControlWaiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export const MOBILE_RELAY_CHANNEL_TIMEOUTS: Readonly<MobileRelayChannelTimeouts> = Object.freeze({
+  socketOpenMs: 10_000,
+  attachMs: 8_000,
+  handshakeMs: 8_000,
+});
 const RENEWAL_REPLY_TIMEOUT_MS = 10_000;
 
-export function createMobileRelayChannelFactory(options: { webSocketFactory?: SocketFactory; allowRelayUrl?: (url: URL) => boolean } = {}): RelayChannelFactory {
+export function createMobileRelayChannelFactory(options: { webSocketFactory?: SocketFactory; allowRelayUrl?: (url: URL) => boolean; timeouts?: Partial<MobileRelayChannelTimeouts> } = {}): RelayChannelFactory {
+  const timeouts = {
+    socketOpenMs: timeoutOption(options.timeouts?.socketOpenMs, MOBILE_RELAY_CHANNEL_TIMEOUTS.socketOpenMs),
+    attachMs: timeoutOption(options.timeouts?.attachMs, MOBILE_RELAY_CHANNEL_TIMEOUTS.attachMs),
+    handshakeMs: timeoutOption(options.timeouts?.handshakeMs, MOBILE_RELAY_CHANNEL_TIMEOUTS.handshakeMs),
+  };
   return async (input) => {
-    const url = new URL(input.relayUrl);
-    // Test builds may use the plain-HTTP test cloud stack: allow ws:// there just like
-    // direct Control Plane enrollment allows http://.
-    const insecureAllowed = isMobileTestMode && url.protocol === 'ws:';
-    if ((url.protocol !== 'wss:' && !insecureAllowed) || !(options.allowRelayUrl ?? cloudRelayUrl)(url)) throw relayError('UNTRUSTED_RELAY_URL');
-    const createdSocket = (options.webSocketFactory ?? defaultRelaySocketFactory)(url.toString());
-    const socket = createdSocket instanceof Promise ? await createdSocket : createdSocket;
+    const startedAt = Date.now();
+    const base = {
+      attemptId: input.attemptId,
+      epoch: input.epoch,
+      mode: input.mode,
+      relayId: input.grant.relayId,
+      allocationId: input.grant.allocationId,
+      generation: input.grant.generation,
+    };
+    let relayHost: string | undefined;
+    let socket: SocketLike | undefined;
+    let phase: 'socket' | 'attach' | 'handshake' = 'socket';
+    let phaseStartedAt = startedAt;
     try {
+      const url = new URL(input.relayUrl);
+      relayHost = url.hostname;
+      // Test builds may use the plain-HTTP test cloud stack: allow ws:// there just like
+      // direct Control Plane enrollment allows http://.
+      const insecureAllowed = isMobileTestMode && url.protocol === 'ws:';
+      if ((url.protocol !== 'wss:' && !insecureAllowed) || !(options.allowRelayUrl ?? cloudRelayUrl)(url)) {
+        diagnosticLog.warn('relay.channel.rejected', { ...base, relayHost, reason: 'untrusted-relay-url' });
+        throw relayError('UNTRUSTED_RELAY_URL');
+      }
+      diagnosticLog.info('relay.socket.connecting', { ...base, relayHost });
+      const socketStartedAt = Date.now();
+      const createdSocket = (options.webSocketFactory ?? defaultRelaySocketFactory)(url.toString());
+      socket = createdSocket instanceof Promise
+        ? await withTimeout(createdSocket, timeouts.socketOpenMs, 'RELAY_SOCKET_OPEN_TIMEOUT', closeLateSocket)
+        : createdSocket;
       // Frames are binary; attach and the later session-renew acknowledgements
       // are the only text exchanges on this socket.
       socket.binaryType = 'arraybuffer';
-      await waitForOpen(socket);
+      await waitForOpen(socket, remainingTimeout(timeouts.socketOpenMs, socketStartedAt));
+      diagnosticLog.info('relay.socket.open', { ...base, relayHost, durationMs: Date.now() - socketStartedAt });
       const attach = input.mode === 'attach'
         ? { type: 'attach', capability: input.attach, grant: input.grant, proof: input.proof }
         : { type: 'session-attach', grant: input.grant, proof: input.proof };
       if (input.mode === 'attach' && !input.attach) throw relayError('RELAY_ATTACH_INVALID');
+      const attachStartedAt = Date.now();
+      phase = 'attach';
+      phaseStartedAt = attachStartedAt;
       socket.send(JSON.stringify(attach));
-      const rawAttached = await nextMessage(socket, (value) => value?.type === 'attached');
+      diagnosticLog.info('relay.attach.sent', { ...base, relayHost });
+      const rawAttached = await nextMessage(socket, (value) => value?.type === 'attached', timeouts.attachMs, 'RELAY_SESSION_ATTACH_TIMEOUT');
       const attached = RelaySessionResumeResultSchema.safeParse(rawAttached);
       if (!attached.success || attached.data.sessionId !== input.grant.sessionId
         || attached.data.allocationId !== input.grant.allocationId
         || attached.data.generation < input.grant.generation) {
         throw relayError('RELAY_SESSION_ATTACH_INVALID');
       }
+      diagnosticLog.info('relay.attach.accepted', { ...base, relayHost, durationMs: Date.now() - attachStartedAt, appliedGeneration: attached.data.generation });
 
       const ticket = input.grant.sessionTranscriptTicket;
       const keyPair = nacl.box.keyPair();
@@ -68,8 +111,11 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
         clientEphemeralPublicKey: base64Url(keyPair.publicKey),
       };
       let sendSequence = 0;
+      const e2eStartedAt = Date.now();
+      phase = 'handshake';
+      phaseStartedAt = e2eStartedAt;
       socket.send(encodeRelayFrame({ kind: 'handshake', sequence: sendSequence++, payload: new TextEncoder().encode(JSON.stringify(hello)) }));
-      const handshakeFrame = await nextFrame(socket, (frame) => frame.kind === 'handshake');
+      const handshakeFrame = await nextFrame(socket, (frame) => frame.kind === 'handshake', timeouts.handshakeMs, 'RELAY_E2E_HANDSHAKE_TIMEOUT');
       const response = JSON.parse(new TextDecoder().decode(handshakeFrame.payload));
       const identityKey = fromBase64Url(response.controlPlanePublicKey);
       const fingerprint = `sha256:${base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, identityKey)))}`;
@@ -80,7 +126,11 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       // box HSalsa20 transform on top, so the two sides would never agree.
       const shared = nacl.scalarMult(keyPair.secretKey, fromBase64Url(response.serverEphemeralPublicKey));
       const sessionKey = new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, concat(shared, new TextEncoder().encode(transcript), new TextEncoder().encode('task-handoff:control-plane-access:e2e:v1'))));
+      diagnosticLog.info('relay.e2e.ready', { ...base, relayHost, durationMs: Date.now() - e2eStartedAt });
+      diagnosticLog.info('relay.channel.ready', { ...base, relayHost, durationMs: Date.now() - startedAt, appliedGeneration: attached.data.generation });
       return new WebSocketEncryptedRelayChannel(socket, sessionKey, sendSequence, {
+        attemptId: input.attemptId,
+        relayId: input.grant.relayId,
         sessionId: input.grant.sessionId,
         allocationId: input.grant.allocationId,
         generation: attached.data.generation,
@@ -89,7 +139,16 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
     } catch (error) {
       // The caller only ever sees the rejection, so a socket left behind by a failed
       // attach/handshake would stay open for the lifetime of the native WebSocket.
-      try { socket.close(4400, 'handshake-failed'); } catch { /* the socket may already be closed */ }
+      try { socket?.close(4400, 'handshake-failed'); } catch { /* the socket may already be closed */ }
+      diagnosticLog.error('relay.channel.failed', {
+        ...base,
+        relayHost,
+        phase,
+        phaseDurationMs: Date.now() - phaseStartedAt,
+        phaseTimeoutMs: phase === 'socket' ? timeouts.socketOpenMs : phase === 'attach' ? timeouts.attachMs : timeouts.handshakeMs,
+        durationMs: Date.now() - startedAt,
+        ...diagnosticErrorDetails(error),
+      });
       throw error;
     }
   };
@@ -115,6 +174,8 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
   private receiveSequence = 1;
   private closedFlag = false;
   private readonly detachSocket: () => void;
+  private readonly attemptId?: string;
+  private readonly relayId?: string;
   private readonly sessionId: string;
   private readonly allocationId: string;
   readonly generation: number;
@@ -123,8 +184,10 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
     private readonly socket: SocketLike,
     private readonly key: Uint8Array,
     private sendSequence: number,
-    identity: { sessionId: string; allocationId: string; generation: number; leaseExpiresAt?: string },
+    identity: { attemptId?: string; relayId?: string; sessionId: string; allocationId: string; generation: number; leaseExpiresAt?: string },
   ) {
+    this.attemptId = identity.attemptId;
+    this.relayId = identity.relayId;
     this.sessionId = identity.sessionId;
     this.allocationId = identity.allocationId;
     this.generation = identity.generation;
@@ -160,11 +223,21 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
     const renewal = this.waitForControl((value) => value.generation >= grant.generation, RENEWAL_REPLY_TIMEOUT_MS);
     // Text control shares the socket but not the E2E frame sequence. Sending it
     // here deliberately leaves sendSequence/receiveSequence untouched.
-    this.socket.send(JSON.stringify({ type: 'session-renew', grant, proof }));
-    return renewal;
+    const startedAt = Date.now();
+    diagnosticLog.info('relay.renew.sent', this.logDetails({ generation: grant.generation }));
+    try {
+      this.socket.send(JSON.stringify({ type: 'session-renew', grant, proof }));
+      const result = await renewal;
+      diagnosticLog.info('relay.renew.acknowledged', this.logDetails({ durationMs: Date.now() - startedAt, generation: grant.generation, committed: result.committed }));
+      return result;
+    } catch (error) {
+      diagnosticLog.warn('relay.renew.failed', this.logDetails({ durationMs: Date.now() - startedAt, generation: grant.generation, ...diagnosticErrorDetails(error) }));
+      throw error;
+    }
   }
 
   close(code = 1000, reason = 'normal') {
+    diagnosticLog.info('relay.channel.close.requested', this.logDetails({ closeCode: code, reason }));
     try { this.socket.close(code, reason); }
     catch { this.closed(); }
   }
@@ -211,6 +284,7 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
           ...(typeof value.sessionId === 'string' ? { sessionId: value.sessionId } : {}),
           ...(value.retryable === true ? { retryable: true } : {}),
         };
+        diagnosticLog.warn('relay.peer.detached', this.logDetails({ retryable: control.retryable }));
         for (const listener of this.controlListeners) listener(control);
         return;
       }
@@ -261,6 +335,9 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
   private closed(error?: unknown) {
     if (this.closedFlag) return;
     this.closedFlag = true;
+    const details = this.logDetails({ ...diagnosticErrorDetails(error), ...(error ? { reason: 'socket-error' } : { reason: 'normal-close' }) });
+    if (error) diagnosticLog.warn('relay.channel.closed', details);
+    else diagnosticLog.info('relay.channel.closed', details);
     this.detachSocket();
     for (const waiter of this.controlWaiters) {
       clearTimeout(waiter.timer);
@@ -272,6 +349,16 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
     this.closeListeners.clear();
     this.controlListeners.clear();
   }
+
+  private logDetails(data: Record<string, unknown> = {}) {
+    return {
+      ...(this.attemptId ? { attemptId: this.attemptId } : {}),
+      ...(this.relayId ? { relayId: this.relayId } : {}),
+      allocationId: this.allocationId,
+      channelGeneration: this.generation,
+      ...data,
+    };
+  }
 }
 
 function cloudRelayUrl(url: URL) { return isTrustedMobileCloudRelayHost(url); }
@@ -281,9 +368,14 @@ function defaultRelaySocketFactory(url: string): SocketLike | Promise<SocketLike
   return new WebSocket(url) as unknown as SocketLike;
 }
 
-function waitForOpen(socket: SocketLike) {
+function waitForOpen(socket: SocketLike, timeoutMs: number) {
   return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(relayError('RELAY_SOCKET_OPEN_TIMEOUT', true));
+    }, timeoutMs);
     const cleanup = () => {
+      clearTimeout(timer);
       socket.removeEventListener?.('open', opened);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
@@ -299,9 +391,14 @@ function waitForOpen(socket: SocketLike) {
 
 // A one-shot wait must stop listening the moment it settles: a long-lived channel would
 // otherwise keep parsing every incoming frame once per completed wait.
-function nextMessage(socket: SocketLike, predicate: (value: any) => boolean) {
+function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, timeoutMs: number, timeoutCode: string) {
   return new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(relayError(timeoutCode, true));
+    }, timeoutMs);
     const cleanup = () => {
+      clearTimeout(timer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
@@ -328,9 +425,14 @@ function nextMessage(socket: SocketLike, predicate: (value: any) => boolean) {
 // Binary frames travel as ArrayBuffer once `binaryType` is set; the React Native
 // WebSocket normalizes to ArrayBuffer the same way the browser does.
 // Everything after attach is binary; a text message here is a protocol violation.
-function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => boolean) {
+function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => boolean, timeoutMs: number, timeoutCode: string) {
   return new Promise<RelayFramePayload>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(relayError(timeoutCode, true));
+    }, timeoutMs);
     const cleanup = () => {
+      clearTimeout(timer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
@@ -360,6 +462,45 @@ function frameBytes(raw: unknown) {
   if (raw instanceof Uint8Array) return raw;
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
   return undefined;
+}
+
+function remainingTimeout(timeoutMs: number, startedAt: number) {
+  return Math.max(1, timeoutMs - (Date.now() - startedAt));
+}
+
+function timeoutOption(value: number | undefined, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutCode: string, onLateValue?: (value: T) => void) {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(relayError(timeoutCode, true));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        if (settled) {
+          try { onLateValue?.(value); } catch { /* late-resource cleanup is best effort */ }
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function closeLateSocket(socket: SocketLike) {
+  try { socket.close(4400, 'handshake-timeout'); } catch { /* the socket may already be closed */ }
 }
 
 async function transcriptHash(ticket: { audience: string; transcriptTicketId?: string; ticketId?: string; accountId: string; deviceSessionId: string; controlPlaneId: string; bindingId: string; bindingRevision: number; nonce: string; accessMode?: string; ownerAccountId?: string; shareGrantId?: string; shareRevision?: number; shareRole?: string }, clientKey: string, serverKey: string) {

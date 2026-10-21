@@ -261,6 +261,58 @@ describe('createMobileRelayChannelFactory', () => {
     expect(socket.listenerCount('message')).toBe(0);
   });
 
+  test('bounds the socket-open wait and closes a socket that never opens', async () => {
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { socketOpenMs: 10 } });
+
+    await expect(factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
+    expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
+    expect(socket.listenerCount('open')).toBe(0);
+    expect(socket.listenerCount('message')).toBe(0);
+    expect(socket.listenerCount('error')).toBe(0);
+    expect(socket.listenerCount('close')).toBe(0);
+  });
+
+  test('closes a native socket that finishes creating after the open timeout', async () => {
+    let resolveSocket!: (socket: FakeSocket) => void;
+    const socketPromise = new Promise<FakeSocket>((resolve) => { resolveSocket = resolve; });
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socketPromise, allowRelayUrl: () => true, timeouts: { socketOpenMs: 10 } });
+
+    await expect(factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
+    const lateSocket = new FakeSocket();
+    resolveSocket(lateSocket);
+    await flush();
+    expect(lateSocket.closed).toEqual({ code: 4400, reason: 'handshake-timeout' });
+  });
+
+  test('bounds the attach acknowledgement wait', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { attachMs: 10 } });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+
+    await expect(creating).rejects.toMatchObject({ code: 'RELAY_SESSION_ATTACH_TIMEOUT', retryable: true });
+    expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
+    expect(socket.listenerCount('message')).toBe(0);
+  });
+
+  test('bounds the end-to-end handshake wait', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { handshakeMs: 10 } });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify(attached) });
+    await flush();
+    expect(sentFrame(socket, 1).kind).toBe('handshake');
+
+    await expect(creating).rejects.toMatchObject({ code: 'RELAY_E2E_HANDSHAKE_TIMEOUT', retryable: true });
+    expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
+    expect(socket.listenerCount('message')).toBe(0);
+  });
+
   test('rejects a protocol violation during the handshake and drops every listener', async () => {
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });

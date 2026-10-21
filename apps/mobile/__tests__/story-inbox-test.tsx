@@ -45,6 +45,24 @@ beforeEach(() => {
 });
 
 describe('<StoryInbox />', () => {
+  test('keeps the Story list mounted while the initial snapshot loads', async () => {
+    let resolveInitial!: (value: { stories: Story[]; unavailableNodeIds: string[] }) => void;
+    const list = jest.fn(() => new Promise<{ stories: Story[]; unavailableNodeIds: string[] }>((resolve) => { resolveInitial = resolve; }));
+    mockRuntime.mockReturnValue({ api: { stories: { list } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Loading…')).toBeTruthy());
+    expect(screen.getByTestId('story-list')).toBeTruthy();
+
+    await act(async () => { resolveInitial({ stories: [], unavailableNodeIds: [] }); });
+    await waitFor(() => expect(screen.getByText('No Stories yet')).toBeTruthy());
+    expect(screen.getByTestId('story-list')).toBeTruthy();
+    await screen.unmount();
+  });
+
   test('subscribes to Story events and refreshes from the authoritative snapshot', async () => {
     const initial: Story = {
       id: 'story-1', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],

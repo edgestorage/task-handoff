@@ -1,4 +1,4 @@
-import { Button, Host, Label, LabeledContent, List, Section, SecureField, Text, TextField } from '@expo/ui/swift-ui';
+import { Button, Host, HStack, Label, LabeledContent, List, ProgressView, Section, SecureField, Text, TextField } from '@expo/ui/swift-ui';
 import {
   buttonStyle,
   disabled as disabledModifier,
@@ -40,7 +40,10 @@ export function NativeCloudAccountSecurityScreen({ controller, onOpenControlPlan
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), scrollDismissesKeyboard('interactively')]}>
           {!controller.loaded ? (
             <Section>
-              <Label title={t('cloudAccount.loadingProfile')} systemImage="arrow.triangle.2.circlepath" />
+              <HStack spacing={10}>
+                <ProgressView testID="cloud-account-loading"/>
+                <Text modifiers={[foregroundStyle('secondary')]}>{t('cloudAccount.loadingProfile')}</Text>
+              </HStack>
             </Section>
           ) : null}
 

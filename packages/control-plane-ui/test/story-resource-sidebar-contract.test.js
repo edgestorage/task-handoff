@@ -118,6 +118,7 @@ test("instance action menus share one chrome definition", () => {
   assert.match(tabStrip, /<style src="\.\.\/shared\/InstanceActionMenu\.css"><\/style>/);
   assert.match(instanceList, /<style src="\.\.\/shared\/InstanceActionMenu\.css"><\/style>/);
   assert.match(layoutMenu, /<style src="\.\/InstanceActionMenu\.css"><\/style>/);
+  assert.match(instanceList, /:global\(\.instance-action-menu\) \{\s*width: max-content;\s*min-width: 158px;\s*max-width: min\(280px, calc\(100vw - 24px\)\);\s*\}/);
   assert.doesNotMatch(instanceList, /\.instance-action-item[\s:]/);
   assert.match(layoutMenu, /\.instance-action-menu\.workbench-layout-context-menu \{\s*width: 172px;\s*\}/);
   assert.match(tabStrip, /:global\(\.instance-action-menu\.story-resource-tab-menu\) \{\s*width: 172px;\s*\}/);

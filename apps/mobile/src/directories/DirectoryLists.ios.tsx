@@ -126,7 +126,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: Instanc
   const node = nodeId ? state.nodes.find((candidate) => candidate.id === nodeId) : undefined;
 
   return (
-    <SafeAreaView edges={nodeId ? [] : ['top']} style={[styles.screen, { backgroundColor: colors.background }]}> 
+    <SafeAreaView edges={[]} style={[styles.screen, { backgroundColor: colors.background }]}>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), ...(onRefresh ? [refreshable(onRefresh)] : [])]}>
         <DirectoryStateSections state={state} />

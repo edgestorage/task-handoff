@@ -96,3 +96,19 @@ export class MobileControlPlaneTransportError extends Error {
     this.name = 'MobileControlPlaneTransportError';
   }
 }
+
+export const MOBILE_CONTROL_PLANE_CLOSED_MESSAGE = 'The Control Plane is closed.';
+
+const MOBILE_CONTROL_PLANE_CLOSED_CODES = new Set([
+  'RELAY_PEER_DETACHED',
+  'CONTROL_PLANE_CONNECTION_CLOSED',
+  'CONTROL_PLANE_CONNECTION_UNAVAILABLE',
+  'CONTROL_PLANE_UNAVAILABLE',
+  'CONTROL_PLANE_UNREACHABLE',
+]);
+
+export function mobileControlPlaneClosedErrorCode(error: unknown) {
+  if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
+  const code = String((error as { code?: unknown }).code ?? '');
+  return MOBILE_CONTROL_PLANE_CLOSED_CODES.has(code) ? code : undefined;
+}

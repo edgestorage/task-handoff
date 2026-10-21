@@ -18,7 +18,12 @@ import { MobileReconnectBackoff } from '../platform/reconnect';
 import { createMobileControlPlaneClient } from './client';
 import type { MobileControlPlaneProfile } from './profile';
 import { mobileProfileStore, mobileSecureStore } from './runtime';
-import { MobileControlPlaneTransportError } from './transport';
+import {
+  MOBILE_CONTROL_PLANE_CLOSED_MESSAGE,
+  MobileControlPlaneTransportError,
+  mobileControlPlaneClosedErrorCode,
+} from './transport';
+import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import type {
   MobileControlPlaneEvent,
   MobileControlPlaneEventConnection,
@@ -31,6 +36,7 @@ export type MobileControlPlaneRuntimePhase =
   | 'loading'
   | 'connected'
   | 'reconnecting'
+  | 'control-plane-closed'
   | 'offline'
   | 'session-expired'
   | 'error';
@@ -68,9 +74,12 @@ export class MobileControlPlaneConnectionCoordinator {
   private mobileSessionRenewalTimer?: ReturnType<typeof setTimeout>;
   private connectTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
+  private revalidation?: Promise<void>;
   private epoch = 0;
+  private connectionSequence = 0;
   private foreground = false;
   private connected = true;
+  private controlPlaneClosed = false;
   private carPlayConnected = false;
   private readonly reconnectBackoff = new MobileReconnectBackoff();
   private desiredSignature = '';
@@ -128,6 +137,7 @@ export class MobileControlPlaneConnectionCoordinator {
 
   stop() {
     this.desiredSignature = '';
+    this.controlPlaneClosed = false;
     this.epoch += 1;
     this.clearTimers();
     this.abortController?.abort();
@@ -218,15 +228,29 @@ export class MobileControlPlaneConnectionCoordinator {
       this.publish({ phase: 'idle' });
       return;
     }
+    const connectionId = `runtime_${Date.now().toString(36)}_${++this.connectionSequence}`;
+    const startedAt = Date.now();
+    diagnosticLog.info('runtime.connect.start', {
+      connectionId,
+      accessKind: this.profile.access.kind,
+      reconnectAttempts: this.reconnectBackoff.attempts,
+      domains: desired.length,
+      foreground: this.foreground,
+      carPlayConnected: this.carPlayConnected,
+    });
     const abortController = new AbortController();
     this.abortController = abortController;
     try {
-      this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
-      await this.transport.revalidate?.();
+      this.publish({ phase: this.controlPlaneClosed
+        ? 'control-plane-closed'
+        : this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
+      await this.revalidateTransport();
+      diagnosticLog.info('runtime.transport.ready', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
       if (!this.live(epoch, abortController)) return;
       if (this.profile.access.kind === 'direct' && this.mobileSessionRenewalSupported) {
         try {
           const renewal = await this.api.auth.renewMobileSession(abortController.signal);
+          if (!this.live(epoch, abortController)) return;
           this.scheduleMobileSessionRenewal(renewal.expiresAt);
         } catch (cause) {
           // Compatibility for v0.0.28: older Control Planes do not expose mobile session renewal.
@@ -235,18 +259,23 @@ export class MobileControlPlaneConnectionCoordinator {
           if (fallback === 'unsupported') this.mobileSessionRenewalSupported = false;
         }
       }
+      if (!this.live(epoch, abortController)) return;
       const auth = await this.api.auth.session(abortController.signal);
+      if (!this.live(epoch, abortController)) return;
       if (!auth.authenticated) {
         this.publish({ phase: 'session-expired', error: 'The mobile Control Plane session expired.' });
         return;
       }
       const identity = await this.api.auth.identity?.().catch(() => undefined);
+      if (!this.live(epoch, abortController)) return;
       const payload = identity?.data.payload;
       if (payload?.controlPlaneId === this.profile.identity.controlPlaneId
         && payload.publicKey.fingerprint === this.profile.identity.publicKeyFingerprint) {
         this.currentCapabilities = payload.capabilities;
       }
-      this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
+      this.publish({ phase: this.controlPlaneClosed
+        ? 'control-plane-closed'
+        : this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
       await Promise.all(desired.map((domain) => domain.start(abortController.signal)));
       if (!this.live(epoch, abortController)) return;
       const topics = [...new Set(desired.flatMap((domain) => [...domain.topics]))].sort();
@@ -260,6 +289,8 @@ export class MobileControlPlaneConnectionCoordinator {
         onOpen: () => {
           if (!this.live(epoch, abortController)) return;
           this.clearConnectTimer();
+          this.controlPlaneClosed = false;
+          diagnosticLog.info('runtime.connected', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
           this.publish({ phase: 'connected' });
           this.stableTimer = setTimeout(() => {
             if (this.live(epoch, abortController)) this.reconnectBackoff.reset();
@@ -271,25 +302,29 @@ export class MobileControlPlaneConnectionCoordinator {
         },
         onError: (error) => {
           if (!this.live(epoch, abortController)) return;
+          diagnosticLog.warn('runtime.connection.failed', { connectionId, phase: this.snapshotValue.phase, durationMs: Date.now() - startedAt, ...diagnosticErrorDetails(error) });
           for (const domain of this.activeDomains) domain.onConnectionError?.(error);
-          this.scheduleReconnect(epoch, abortController, error.message);
+          this.scheduleReconnect(epoch, abortController, error);
         },
         onClose: () => {
           if (!this.live(epoch, abortController)) return;
+          diagnosticLog.warn('runtime.connection.closed', { connectionId, phase: this.snapshotValue.phase, durationMs: Date.now() - startedAt });
           for (const domain of this.activeDomains) domain.onConnectionError?.();
           this.scheduleReconnect(epoch, abortController);
         },
       });
       this.connectTimer = setTimeout(() => {
         if (!this.live(epoch, abortController) || this.snapshotValue.phase === 'connected') return;
+        diagnosticLog.warn('runtime.connect.timeout', { connectionId, timeoutMs: CONNECT_TIMEOUT_MS, phase: this.snapshotValue.phase, durationMs: Date.now() - startedAt });
         this.connection?.close();
         this.scheduleReconnect(epoch, abortController, 'The Control Plane event connection timed out.');
       }, CONNECT_TIMEOUT_MS);
     } catch (cause) {
       if (!this.live(epoch, abortController)) return;
-      const error = cause instanceof Error ? cause.message : 'The Control Plane connection failed.';
-      for (const domain of desired) domain.onConnectionError?.();
-      this.scheduleReconnect(epoch, abortController, error);
+      diagnosticLog.error('runtime.connect.failed', { connectionId, durationMs: Date.now() - startedAt, phase: this.snapshotValue.phase, ...diagnosticErrorDetails(cause) });
+      const connectionError = mobileConnectionError(cause);
+      for (const domain of desired) domain.onConnectionError?.(connectionError);
+      this.scheduleReconnect(epoch, abortController, cause);
     }
   }
 
@@ -321,18 +356,39 @@ export class MobileControlPlaneConnectionCoordinator {
     };
   }
 
-  private scheduleReconnect(epoch: number, abortController: AbortController, error?: string) {
+  private scheduleReconnect(epoch: number, abortController: AbortController, cause?: unknown) {
     if (!this.live(epoch, abortController) || this.reconnectTimer) return;
     this.clearConnectTimer();
     if (this.stableTimer) clearTimeout(this.stableTimer);
     this.stableTimer = undefined;
-    this.publish({ phase: 'reconnecting', ...(error ? { error } : {}) });
-    const { delay } = this.reconnectBackoff.next();
+    const closedCode = mobileControlPlaneClosedErrorCode(cause);
+    if (closedCode) {
+      this.controlPlaneClosed = true;
+      diagnosticLog.warn('runtime.control_plane.closed', { code: closedCode, phase: this.snapshotValue.phase });
+    }
+    const error = this.controlPlaneClosed
+      ? MOBILE_CONTROL_PLANE_CLOSED_MESSAGE
+      : cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : undefined;
+    this.publish(this.controlPlaneClosed
+      ? { phase: 'control-plane-closed', error }
+      : { phase: 'reconnecting', ...(error ? { error } : {}) });
+    const { attempt, delay } = this.reconnectBackoff.next();
+    diagnosticLog.warn('runtime.reconnect.scheduled', { attempt, delayMs: delay, errorPresent: Boolean(error) });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.live(epoch, abortController)) return;
       this.reconcile(true);
     }, delay);
+  }
+
+  private revalidateTransport() {
+    if (!this.revalidation) {
+      const revalidation = Promise.resolve(this.transport.revalidate?.()).finally(() => {
+        if (this.revalidation === revalidation) this.revalidation = undefined;
+      });
+      this.revalidation = revalidation;
+    }
+    return this.revalidation;
   }
 
   private live(epoch: number, abortController: AbortController) {
@@ -368,9 +424,23 @@ export class MobileControlPlaneConnectionCoordinator {
 
   private publish(snapshot: RuntimeSnapshot) {
     if (this.snapshotValue.phase === snapshot.phase && this.snapshotValue.error === snapshot.error) return;
+    diagnosticLog.info('runtime.phase', { phase: snapshot.phase, previousPhase: this.snapshotValue.phase, errorPresent: Boolean(snapshot.error) });
     this.snapshotValue = snapshot;
     for (const listener of this.listeners) listener();
   }
+}
+
+function mobileConnectionError(cause: unknown) {
+  if (cause instanceof MobileControlPlaneTransportError) return cause;
+  if (!cause || typeof cause !== 'object') return undefined;
+  const code = 'code' in cause && typeof (cause as { code?: unknown }).code === 'string'
+    ? String((cause as { code: string }).code)
+    : 'CONTROL_PLANE_CONNECTION_FAILED';
+  const message = cause instanceof Error && cause.message ? cause.message : 'The Control Plane connection failed.';
+  const status = 'status' in cause && typeof (cause as { status?: unknown }).status === 'number'
+    ? Number((cause as { status: number }).status)
+    : undefined;
+  return new MobileControlPlaneTransportError(code, message, true, status);
 }
 
 function mobileRenewalFallback(cause: unknown) {

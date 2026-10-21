@@ -80,3 +80,17 @@ test('a directory refresh is applied without a separate share acceptance route',
   expect(mockReconcile).toHaveBeenCalledWith('device_a', [owner, shared]);
   expect(mockRouter.push).not.toHaveBeenCalledWith(expect.stringMatching(/share|accept|invite/i));
 });
+
+test('the directory shows a loading state until Control Planes arrive', async () => {
+  let resolveDirectory: (value: unknown[]) => void = () => undefined;
+  mockList.mockReturnValue(new Promise((resolve) => { resolveDirectory = resolve; }));
+  const screen = await render(<CloudControlPlanesScreen />);
+
+  expect(screen.getByLabelText('Loading cloud Control Planes…')).toBeTruthy();
+  expect(screen.queryByText('No accessible Control Planes.')).toBeNull();
+
+  resolveDirectory([owner, shared]);
+
+  expect(await screen.findByLabelText('Open Owner Studio')).toBeTruthy();
+  expect(screen.queryByLabelText('Loading cloud Control Planes…')).toBeNull();
+});

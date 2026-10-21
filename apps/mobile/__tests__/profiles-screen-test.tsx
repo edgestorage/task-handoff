@@ -2,7 +2,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import ProfilesScreen from '../app/profiles';
+import ProfilesScreen, { ProfilesWelcome } from '../app/profiles';
 import {
   MOBILE_CONTROL_PLANE_PROFILE_VERSION,
   MobileCloudRelayControlPlaneProfileSchema,
@@ -45,6 +45,13 @@ const originalPlatform = Platform.OS;
 beforeAll(() => { Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android', writable: true }); });
 afterAll(() => { Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform, writable: true }); });
 
+test('keeps diagnostic logging out of the initial profile screen', async () => {
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesWelcome onAdd={jest.fn()} /></SafeAreaProvider>);
+
+  expect(screen.queryByText('Record diagnostic logs')).toBeNull();
+  expect(screen.queryByTestId('diagnostic-logs-toggle')).toBeNull();
+});
+
 test('marks only the active profile when a direct and cloud Relay profile share one Control Plane', async () => {
   mockStore.list.mockResolvedValue([direct, relay]);
   mockStore.active.mockResolvedValue(relay);
@@ -52,6 +59,8 @@ test('marks only the active profile when a direct and cloud Relay profile share 
   await waitFor(() => expect(screen.getByText('https://direct.example.com')).toBeTruthy());
   expect(screen.getByText('https://cloud.thandoff.com')).toBeTruthy();
   expect(screen.getByText('Shared · Viewer')).toBeTruthy();
+  expect(screen.getByText('Record diagnostic logs')).toBeTruthy();
+  expect(screen.getByTestId('diagnostic-logs-toggle')).toBeTruthy();
   expect(screen.getAllByTestId('profile-active-marker', { includeHiddenElements: true })).toHaveLength(1);
 
   await fireEvent.press(screen.getByLabelText('View Alpha Relay details'));

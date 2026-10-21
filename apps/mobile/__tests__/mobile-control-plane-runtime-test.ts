@@ -26,7 +26,7 @@ const profile: MobileControlPlaneProfile = {
 
 async function flushCoordinator() {
   jest.runAllTicks();
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 32; index += 1) await Promise.resolve();
 }
 
 function domain(key: string, topics: string[], background = false): MobileControlPlaneDomain {
@@ -124,6 +124,62 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     runtime.coordinator.stop();
   });
 
+  test('a superseded startup does not open its domains or event connection', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    const directories = domain('directories', ['instances', 'nodes']);
+    let releaseFirstSession: ((value: { authenticated: boolean }) => void) | undefined;
+    runtime.authSession.mockImplementationOnce(() => new Promise((resolve) => { releaseFirstSession = resolve; }));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
+
+    runtime.coordinator.register(directories);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    expect(ai.start).toHaveBeenCalledTimes(1);
+    expect(directories.start).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+
+    releaseFirstSession?.({ authenticated: true });
+    await flushCoordinator();
+    expect(runtime.authSession).toHaveBeenCalledTimes(2);
+    expect(ai.start).toHaveBeenCalledTimes(1);
+    expect(directories.start).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('coalesces revalidation when a newer startup supersedes one already in flight', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    const directories = domain('directories', ['instances', 'nodes']);
+    let releaseRevalidation: (() => void) | undefined;
+    runtime.revalidate.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseRevalidation = resolve; }));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.authSession).not.toHaveBeenCalled();
+
+    runtime.coordinator.register(directories);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+
+    releaseRevalidation?.();
+    await flushCoordinator();
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
+    expect(ai.start).toHaveBeenCalledTimes(1);
+    expect(directories.start).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
   test('continues with session verification when v0.0.28 does not support renewal', async () => {
     const runtime = harness();
     runtime.renewMobileSession.mockRejectedValue(new MobileControlPlaneTransportError('DIRECT_HTTP_ERROR', 'Not found', false, 404));
@@ -139,6 +195,51 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     await flushCoordinator();
     expect(runtime.renewMobileSession).toHaveBeenCalledTimes(1);
     expect(runtime.authSession).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
+  test('keeps control-plane-closed visible while reconnect attempts are still pending', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    const closed = new MobileControlPlaneTransportError('RELAY_PEER_DETACHED', 'The Control Plane is closed.', true);
+    runtime.handlers?.onError(closed);
+
+    expect(runtime.coordinator.snapshot()).toEqual({ phase: 'control-plane-closed', error: 'The Control Plane is closed.' });
+    expect(ai.onConnectionError).toHaveBeenCalledWith(closed);
+
+    let releaseReconnect: (() => void) | undefined;
+    runtime.revalidate.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseReconnect = resolve; }));
+    jest.advanceTimersByTime(1_000);
+    await flushCoordinator();
+
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.coordinator.snapshot().phase).toBe('control-plane-closed');
+
+    releaseReconnect?.();
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('treats an unavailable Control Plane during initial connection as closed', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    const closed = new MobileControlPlaneTransportError('CONTROL_PLANE_CONNECTION_UNAVAILABLE', 'Control Plane is unavailable.', true, 409);
+    runtime.revalidate.mockRejectedValueOnce(closed);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.coordinator.snapshot()).toEqual({ phase: 'control-plane-closed', error: 'The Control Plane is closed.' });
+    expect(ai.onConnectionError).toHaveBeenCalledWith(closed);
+
+    jest.advanceTimersByTime(1_000);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
     runtime.coordinator.stop();
   });
 

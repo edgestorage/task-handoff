@@ -196,23 +196,26 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
 
   useStoryEvents(refresh);
 
-  if (phase === 'loading' && stories.length === 0) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
+  const loadingInitialStories = stories.length === 0 && (phase === 'idle' || phase === 'loading');
   const emptyUnavailable = sortedStories.length === 0 && visibleUnavailableNodeIds.length > 0;
   const emptyError = phase === 'error' || emptyUnavailable;
   return <><FlatList
-    contentContainerStyle={[styles.content, { backgroundColor: colors.background }, sortedStories.length === 0 && styles.emptyContent]}
+    contentContainerStyle={[styles.content, sortedStories.length === 0 && styles.emptyContent]}
     contentInsetAdjustmentBehavior="automatic"
     data={sortedStories}
     keyExtractor={storyTreeKey}
-    ListEmptyComponent={<EmptyState
-      icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
-      iconColor={emptyError ? colors.error : undefined}
-      message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
-      style={styles.emptyState}
-    />}
+    ListEmptyComponent={loadingInitialStories
+      ? <View style={styles.loadingState}><ActivityIndicator accessibilityLabel={t('common.loading')} /></View>
+      : <EmptyState
+        icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
+        iconColor={emptyError ? colors.error : undefined}
+        message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
+        style={styles.emptyState}
+      />}
     onRefresh={pullToRefresh.onRefresh}
     refreshing={pullToRefresh.refreshing}
     scrollEnabled={!draggingStoryKey}
+    style={[styles.screen, { backgroundColor: colors.background }]}
     testID="story-list"
     renderItem={({ item: story }) => {
         const key = storyTreeKey(story);
@@ -350,7 +353,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1 },
+  screen: { flex: 1 },
+  loadingState: { alignItems: 'center', justifyContent: 'center', minHeight: 180 },
   content: { paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },

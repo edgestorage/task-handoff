@@ -33,9 +33,9 @@ const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
-  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; relaySessionResume?: boolean };
+  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean };
 
-  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; relaySessionResume?: boolean }) {
+  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean }) {
     this.options = options;
   }
 
@@ -50,7 +50,7 @@ export class CloudCoordinatorConnector {
       publicKey: identity.publicKey, publicKeyFingerprint: identity.fingerprint,
       ...(input.bindingId ? { bindingId: input.bindingId, bindingRevision: input.bindingRevision } : {}),
       scopes: input.scopes,
-      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, ...(this.options.relaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
+      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     const socketUrl = new URL("/api/v1/control-plane/connect", input.serviceOrigin);
@@ -105,9 +105,9 @@ export class CloudConnectivityBackgroundRuntime {
     this.relayTrace = options.relayTrace ?? new RelayTraceRecorder();
     const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
     const verifyGrant = options.verifyRelaySessionGrant ?? ((grant) => verifyCoordinatorRelaySessionGrant(grant, options.state));
-    const persistResume = options.relaySessionResumeEnabled === true && Boolean(options.cloudRelaySessionsPath)
+    const persistResume = Boolean(options.cloudRelaySessionsPath)
       && typeof (relayConnector as { resume?: unknown }).resume === "function";
-    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, relaySessionResume: persistResume, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
+    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
     this.dataConnections = new CloudRelayDataConnectionManager({
       verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)),
       verifyGrant,
@@ -567,7 +567,6 @@ type CloudRuntimeOptions = {
   accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
   verifyRelaySessionGrant?: (grant: unknown) => any;
-  relaySessionResumeEnabled?: boolean;
   cloudRelaySessionsPath?: string;
   cloudDiscovery?: CloudEndpointResolver;
   /** Alternate Coordinator transports; the persisted canonical origin stays first. */

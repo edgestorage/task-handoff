@@ -685,7 +685,9 @@ function openNewInstanceFromTemporaryList() {
 }
 
 :global(.instance-action-menu) {
-  width: 158px;
+  width: max-content;
+  min-width: 158px;
+  max-width: min(280px, calc(100vw - 24px));
 }
 
 .instance-group-label {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -13,6 +13,7 @@ import { isMobileTestMode } from '../src/platform/build-variant';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { useI18n, type LocalePreference } from '../src/i18n';
+import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled, setDiagnosticLogsEnabled, subscribeDiagnosticLogs } from '../src/observability/diagnostic-logs';
 
 export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInTabs?: boolean }) {
   const { colors } = useMobileTheme();
@@ -121,6 +122,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           </View>
           <LanguageRow />
           <AppearanceRow />
+          <DiagnosticLogsRow />
         </View>
         {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
       </Screen>
@@ -191,6 +193,60 @@ function AppearanceRow({ compact = false }: { compact?: boolean }) {
   </OptionMenu>;
 }
 
+function DiagnosticLogsRow() {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const enabled = useSyncExternalStore(subscribeDiagnosticLogs, getDiagnosticLogsEnabled);
+
+  const copyLogs = async () => {
+    try {
+      const copied = await copyRecentDiagnosticLogs();
+      Alert.alert(t('diagnostics.title'), t(copied ? 'diagnostics.copied' : 'diagnostics.empty'));
+    } catch {
+      Alert.alert(t('diagnostics.title'), t('diagnostics.copyFailed'));
+    }
+  };
+
+  const clearLogs = () => {
+    Alert.alert(t('diagnostics.clearTitle'), t('diagnostics.clearMessage'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('diagnostics.clear'), style: 'destructive', onPress: () => { void clearDiagnosticLogs().then(() => {
+        Alert.alert(t('diagnostics.title'), t('diagnostics.cleared'));
+      }).catch(() => {
+        Alert.alert(t('diagnostics.title'), t('diagnostics.clearFailed'));
+      }); } },
+    ]);
+  };
+
+  return (
+    <View style={[styles.diagnosticsCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={styles.diagnosticsHeader}>
+        <View style={styles.diagnosticsCopy}>
+          <Text style={[styles.diagnosticsLabel, { color: colors.text }]}>{t('diagnostics.enabled')}</Text>
+          <Text style={[styles.diagnosticsHelp, { color: colors.textMuted }]}>{t('diagnostics.help')}</Text>
+        </View>
+        <Switch
+          accessibilityLabel={t('diagnostics.enabled')}
+          onValueChange={setDiagnosticLogsEnabled}
+          testID="diagnostic-logs-toggle"
+          trackColor={{ false: colors.border, true: colors.primary }}
+          value={enabled}
+        />
+      </View>
+      <View style={[styles.diagnosticsDivider, { backgroundColor: colors.border }]} />
+      <Pressable accessibilityRole="button" onPress={() => { void copyLogs(); }} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surfaceMuted }]}>
+        <Icon color={colors.primary} name="copy-outline" size={18} />
+        <Text style={[styles.diagnosticsActionText, { color: colors.primary }]}>{t('diagnostics.copyRecent')}</Text>
+      </Pressable>
+      <View style={[styles.diagnosticsDivider, { backgroundColor: colors.border }]} />
+      <Pressable accessibilityRole="button" onPress={clearLogs} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surfaceMuted }]}>
+        <Icon color={colors.error} name="trash-outline" size={18} />
+        <Text style={[styles.diagnosticsActionText, { color: colors.error }]}>{t('diagnostics.clear')}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function GuideItem({ colors, icon, title, description }: { colors: ReturnType<typeof useMobileTheme>['colors']; icon: IconName; title: string; description: string }) {
   return (
     <View style={styles.guideItem}>
@@ -245,4 +301,12 @@ const styles = StyleSheet.create({
   languageRow: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 48, paddingHorizontal: 14 },
   languageLabel: { flex: 1, fontSize: 15, fontWeight: '600' },
   languageValue: { fontSize: 13 },
+  diagnosticsCard: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  diagnosticsHeader: { alignItems: 'center', flexDirection: 'row', gap: 12, paddingHorizontal: 14, paddingVertical: 14 },
+  diagnosticsCopy: { flex: 1, gap: 4 },
+  diagnosticsLabel: { fontSize: 15, fontWeight: '600' },
+  diagnosticsHelp: { fontSize: 12, lineHeight: 17 },
+  diagnosticsDivider: { height: StyleSheet.hairlineWidth, marginLeft: 14 },
+  diagnosticsAction: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 46, paddingHorizontal: 14 },
+  diagnosticsActionText: { fontSize: 14, fontWeight: '600' },
 });
