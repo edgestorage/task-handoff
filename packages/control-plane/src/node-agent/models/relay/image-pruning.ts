@@ -58,10 +58,6 @@ function collectResponsesImages(root: JsonObject, references: ImageReference[]) 
     if (!isObject(item)) continue;
     const content = contentArray(item.content, "input.content");
     if (content) collectContentImages(content, "input_image", references);
-    if (item.type === "function_call_output") {
-      const output = contentArray(item.output, "function_call_output.output");
-      if (output) collectContentImages(output, "input_image", references);
-    }
   }
 }
 

@@ -139,14 +139,18 @@ test("responses and Anthropic traversal follow document order across nested cont
   assert.equal(anthropic.messages[0].content[2].source.data, "latest");
 });
 
-test("responses accepts null reasoning content and prunes function-call output images", () => {
+test("responses accepts real Codex reasoning nulls and leaves tool output strings unchanged", () => {
+  const toolOutput = "Tool result is not an image part.";
   const responses = {
     model: "public-image-pruning",
     input: [
       { type: "reasoning", content: null, summary: [] },
-      { type: "function_call_output", call_id: "call_old", output: [responsesImage("https://images.example/old-output.png", 0)] },
-      { type: "message", role: "assistant", content: null },
-      { type: "function_call_output", call_id: "call_latest", output: [responsesImage("https://images.example/latest-output.png", 1)] },
+      {
+        type: "message",
+        role: "user",
+        content: [responsesImage("https://images.example/old.png", 0), responsesImage("https://images.example/latest.png", 1)],
+      },
+      { type: "function_call_output", call_id: "call_tool", output: toolOutput },
     ],
   };
   const result = pruneWith("openai-responses", responses, 1);
@@ -155,10 +159,9 @@ test("responses accepts null reasoning content and prunes function-call output i
   assert.equal(result.removedImages, 1);
   assert.equal(result.retainedImages, 1);
   assert.equal(responses.input[0].content, null);
-  assert.deepEqual(responses.input[1].output, [{ type: "input_text", text: IMAGE_OMITTED_PLACEHOLDER }]);
-  assert.equal(responses.input[2].content, null);
-  assert.equal(responses.input[3].output[0].image_url, "https://images.example/latest-output.png");
-  assert.equal(responses.input[3].output[0].file_id, "file_1");
+  assert.equal(responses.input[1].content[0].image_url, "https://images.example/latest.png");
+  assert.equal(responses.input[1].content[0].file_id, "file_1");
+  assert.equal(responses.input[2].output, toolOutput);
 });
 
 test("chat completions accepts assistant messages with null content", () => {
