@@ -86,16 +86,23 @@ if (bundleIndex >= 0) {
   const bundleDir = path.resolve(process.cwd(), process.argv[bundleIndex + 1] || '');
   if (!fs.existsSync(bundleDir)) failures.push(`bundle directory does not exist: ${bundleDir}`);
   else {
-    const forbiddenBundleTokens = [
-      'NodeAgentTransport', 'nodeCredential', 'relayEndpoint', 'accessTicket',
-      '/api/controlled-instances/:id/start', '/api/controlled-instances/:id/stop',
-      '/api/controlled-instances/:id/restart', '/api/nodes/:id/pairing',
-      '/api/nodes/:id/updates/apply',
+    const forbiddenBundlePatterns = [
+      ['NodeAgentTransport', /NodeAgentTransport/],
+      ['nodeCredential', /nodeCredential/],
+      ['relayEndpoint', /relayEndpoint/],
+      // The Coordinator-signed grant legitimately carries the public access-ticket
+      // identifier. Only reject the ticket object itself, not its `accessTicketId` field.
+      ['accessTicket', /accessTicket(?!Id)/],
+      ['/api/controlled-instances/:id/start', /\/api\/controlled-instances\/:id\/start/],
+      ['/api/controlled-instances/:id/stop', /\/api\/controlled-instances\/:id\/stop/],
+      ['/api/controlled-instances/:id/restart', /\/api\/controlled-instances\/:id\/restart/],
+      ['/api/nodes/:id/pairing', /\/api\/nodes\/:id\/pairing/],
+      ['/api/nodes/:id/updates/apply', /\/api\/nodes\/:id\/updates\/apply/],
     ];
     for (const file of sourceFiles(bundleDir, new Set(['.js', '.json', '.map', '.hbc']))) {
       const source = fs.readFileSync(file, 'utf8');
-      for (const token of forbiddenBundleTokens) {
-        if (source.includes(token)) failures.push(`${relative(file)} contains forbidden bundle token ${token}`);
+      for (const [token, pattern] of forbiddenBundlePatterns) {
+        if (pattern.test(source)) failures.push(`${relative(file)} contains forbidden bundle token ${token}`);
       }
     }
   }
