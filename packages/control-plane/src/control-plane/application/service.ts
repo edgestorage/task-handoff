@@ -150,7 +150,7 @@ import {
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { ControlPlanePersistenceMaintenance } from "../persistence/maintenance.ts";
-import { JsonCollection, JsonFile, createId } from "../../shared/persistence/store.ts";
+import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import {
@@ -530,17 +530,35 @@ export class ControlPlaneService {
   }
 
   /**
-   * Creates the local `cloud-relay` record on first claim. The node handle is
-   * the only cloud identity stored; no endpoint or credential ever arrives.
+   * Creates the local `cloud-relay` record on first claim. The node agent's
+   * signed handshake identity is the record identity, so resources written by
+   * the agent need no node-id projection on the Control Plane.
    */
-  async ensureCloudRelayNode(input: { nodeHandle: string; displayName?: string }) {
-    const existing = this.findCloudRelayNode(input.nodeHandle);
-    if (existing) return { nodeId: existing.id, pairing: cloudRelayPairingOf(existing) };
+  async ensureCloudRelayNode(input: { nodeHandle: string; nodeId: string; displayName?: string }) {
+    const nodeId = input.nodeId.trim();
     const linked = this.findNodeByCloudAccountHandle(input.nodeHandle);
-    if (linked) return { nodeId: linked.id, preserveLocalConnection: true as const };
+    if (linked) {
+      if (linked.id !== nodeId) throw cloudRelayNodeIdentityMismatch(input.nodeHandle, linked.id, nodeId);
+      return { nodeId: linked.id, preserveLocalConnection: true as const };
+    }
+    const existing = this.findCloudRelayNode(input.nodeHandle);
+    if (existing) {
+      if (existing.id !== nodeId) throw cloudRelayNodeIdentityMismatch(input.nodeHandle, existing.id, nodeId);
+      return { nodeId: existing.id, pairing: cloudRelayPairingOf(existing) };
+    }
+    const sameMachine = this.nodes.get(nodeId);
+    if (sameMachine) {
+      const linkedHandle = sameMachine.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL];
+      if (linkedHandle && linkedHandle !== input.nodeHandle) throw cloudRelayNodeIdentityMismatch(input.nodeHandle, sameMachine.id, nodeId);
+      if (sameMachine.connectionPath.kind === "cloud-relay") throw cloudRelayNodeIdentityMismatch(input.nodeHandle, sameMachine.id, nodeId);
+      // The same machine is already managed over its original transport. Link
+      // the cloud handle as metadata and keep that transport authoritative.
+      await this.linkNodeToCloudAccount(sameMachine.id, input.nodeHandle);
+      return { nodeId: sameMachine.id, preserveLocalConnection: true as const };
+    }
     const timestamp = now();
     const node = NodeSchema.parse({
-      id: createId("node"),
+      id: nodeId,
       name: input.displayName || input.nodeHandle,
       connectionMode: "cloud-relay",
       connectionPath: { kind: "cloud-relay", nodeHandle: input.nodeHandle },
@@ -1093,10 +1111,13 @@ export class ControlPlaneService {
     const data = await this.nodeAgentGateway.health(node);
     const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
     const agentNodeId = typeof record.nodeId === "string" && record.nodeId.trim() ? record.nodeId.trim() : node.id;
-    // A cloud-relay node keeps the locally generated record ID. The machine has
-    // its own node-agent ID and intentionally appears under several Control
-    // Planes, so the remote value must never re-key this local record.
-    const identityNodeId = node.connectionPath.kind === "cloud-relay" ? node.id : agentNodeId;
+    if (node.connectionPath.kind === "cloud-relay" && agentNodeId !== node.id) {
+      throw Object.assign(new Error(`Node agent ${node.id} reported a different identity (${agentNodeId}).`), {
+        statusCode: 502,
+        code: "NODE_AGENT_ID_MISMATCH",
+      });
+    }
+    const identityNodeId = agentNodeId;
     const updated = NodeSchema.parse({
       ...node,
       id: identityNodeId,
@@ -2630,4 +2651,13 @@ export function runtimeCwdForNodePath(instance: ControlledInstance, nodePath: st
 function isAbortError(error: unknown) {
   return error instanceof Error
     && (error.name === "AbortError" || (error as Error & { code?: string }).code === "ABORT_ERR");
+}
+
+function cloudRelayNodeIdentityMismatch(nodeHandle: string, localNodeId: string, reportedNodeId: string) {
+  return Object.assign(new Error(
+    `Cloud relay handle ${nodeHandle} is bound to node ${localNodeId}, but the node agent reported ${reportedNodeId}.`,
+  ), {
+    statusCode: 409,
+    code: "CLOUD_RELAY_NODE_ID_MISMATCH",
+  });
 }

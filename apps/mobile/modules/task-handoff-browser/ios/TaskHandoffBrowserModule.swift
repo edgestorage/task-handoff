@@ -5,7 +5,35 @@ import OSLog
 private let browserModuleLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 public final class TaskHandoffBrowserModule: Module {
+  private let relaySocketQueue = DispatchQueue(label: "com.taskhandoff.mobile.relay-socket", qos: .userInitiated)
+  private let relaySocketsLock = NSLock()
   private var relaySockets: [String: NativeRelaySocket] = [:]
+
+  private func relaySocket(_ id: String) -> NativeRelaySocket? {
+    relaySocketsLock.lock()
+    defer { relaySocketsLock.unlock() }
+    return relaySockets[id]
+  }
+
+  private func storeRelaySocket(_ socket: NativeRelaySocket) {
+    relaySocketsLock.lock()
+    relaySockets[socket.id] = socket
+    relaySocketsLock.unlock()
+  }
+
+  private func removeRelaySocket(_ id: String) {
+    relaySocketsLock.lock()
+    relaySockets.removeValue(forKey: id)
+    relaySocketsLock.unlock()
+  }
+
+  private func takeRelaySockets() -> [NativeRelaySocket] {
+    relaySocketsLock.lock()
+    let sockets = Array(relaySockets.values)
+    relaySockets.removeAll()
+    relaySocketsLock.unlock()
+    return sockets
+  }
 
   public func definition() -> ModuleDefinition {
     Name("TaskHandoffBrowser")
@@ -43,35 +71,34 @@ public final class TaskHandoffBrowserModule: Module {
         id: id,
         url: parsed,
         emit: { [weak self] event, body in DispatchQueue.main.async { self?.sendEvent(event, body) } },
-        onFinish: { [weak self] socketId in DispatchQueue.main.async { self?.relaySockets.removeValue(forKey: socketId) } }
+        onFinish: { [weak self] socketId in self?.removeRelaySocket(socketId) }
       )
-      relaySockets[id] = socket
+      storeRelaySocket(socket)
       return id
-    }.runOnQueue(.main)
+    }.runOnQueue(relaySocketQueue)
 
     AsyncFunction("startRelaySocket") { (id: String) in
-      guard let socket = self.relaySockets[id] else { throw RelaySocketUnavailableException() }
+      guard let socket = self.relaySocket(id) else { throw RelaySocketUnavailableException() }
       socket.start()
-    }.runOnQueue(.main)
+    }.runOnQueue(relaySocketQueue)
 
     AsyncFunction("sendRelaySocketText") { (id: String, value: String) in
-      guard let socket = self.relaySockets[id] else { throw RelaySocketUnavailableException() }
+      guard let socket = self.relaySocket(id) else { throw RelaySocketUnavailableException() }
       socket.sendText(value)
-    }.runOnQueue(.main)
+    }.runOnQueue(relaySocketQueue)
 
-    AsyncFunction("sendRelaySocketBinary") { (id: String, value: String) in
-      guard let socket = self.relaySockets[id], let data = Data(base64Encoded: value) else { throw RelaySocketUnavailableException() }
-      socket.sendBinary(data)
-    }.runOnQueue(.main)
+    AsyncFunction("sendRelaySocketBinary") { (id: String, value: ArrayBuffer) in
+      guard let socket = self.relaySocket(id) else { throw RelaySocketUnavailableException() }
+      socket.sendBinary(value.data)
+    }.runOnQueue(relaySocketQueue)
 
     AsyncFunction("closeRelaySocket") { (id: String, code: Int?, reason: String?) in
-      guard let socket = self.relaySockets[id] else { return }
+      guard let socket = self.relaySocket(id) else { return }
       socket.close(code: code ?? 1000, reason: reason ?? "")
-    }.runOnQueue(.main)
+    }.runOnQueue(relaySocketQueue)
 
     OnDestroy {
-      for socket in self.relaySockets.values { socket.close(code: 1001, reason: "module-destroyed") }
-      self.relaySockets.removeAll()
+      for socket in self.takeRelaySockets() { socket.close(code: 1001, reason: "module-destroyed") }
     }
 
     AsyncFunction("prepareBrowserContext") { (input: PrepareBrowserContextRecord) -> [String: String] in

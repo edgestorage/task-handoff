@@ -3,6 +3,7 @@ const mockDirectories = new Set<string>();
 const mockSecureValues = new Map<string, string>();
 const mockSetStringAsync = jest.fn(async (_value: string) => undefined);
 const mockConstants = { expoConfig: { extra: { variant: 'production' as string | undefined } } };
+let mockFileWriteThrows = false;
 
 jest.mock('expo-constants', () => ({ __esModule: true, default: mockConstants }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: (value: string) => mockSetStringAsync(value) }));
@@ -32,6 +33,7 @@ jest.mock('expo-file-system', () => {
       if (!mockFiles.has(this.uri)) mockFiles.set(this.uri, '');
     }
     write(content: string, options?: { append?: boolean }) {
+      if (mockFileWriteThrows) throw new Error('Simulated file write failure');
       mockFiles.set(this.uri, options?.append ? `${mockFiles.get(this.uri) ?? ''}${content}` : content);
     }
     async text() {
@@ -53,6 +55,8 @@ jest.mock('expo-file-system', () => {
 });
 
 type DiagnosticLogsModule = typeof import('../src/observability/diagnostic-logs');
+type GlobalErrorHandler = (error: unknown, isFatal?: boolean) => void;
+const originalErrorUtils = Object.getOwnPropertyDescriptor(globalThis, 'ErrorUtils');
 
 function loadLogs(): DiagnosticLogsModule {
   let loaded: DiagnosticLogsModule | undefined;
@@ -67,12 +71,26 @@ function logText() {
   return [...mockFiles.entries()].filter(([uri]) => uri.endsWith('.log')).map(([, value]) => value).join('');
 }
 
+function setErrorUtils(value: unknown) {
+  Object.defineProperty(globalThis, 'ErrorUtils', { configurable: true, writable: true, value });
+}
+
+function logEntries() {
+  return logText().trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
 beforeEach(() => {
   mockFiles.clear();
   mockDirectories.clear();
   mockSecureValues.clear();
   mockSetStringAsync.mockClear();
   mockConstants.expoConfig.extra.variant = 'production';
+  mockFileWriteThrows = false;
+});
+
+afterEach(() => {
+  if (originalErrorUtils) Object.defineProperty(globalThis, 'ErrorUtils', originalErrorUtils);
+  else delete (globalThis as { ErrorUtils?: unknown }).ErrorUtils;
 });
 
 test('enables diagnostics by default in staging builds and disables them in production', () => {
@@ -146,4 +164,78 @@ test('clears every rotated log file', async () => {
   expect(mockFiles.size).toBeGreaterThan(0);
   await logs.clearDiagnosticLogs();
   expect(mockFiles.size).toBe(0);
+});
+
+test('installs the fatal handler once and preserves the original handler', () => {
+  mockConstants.expoConfig.extra.variant = 'staging';
+  const originalHandler = jest.fn<ReturnType<GlobalErrorHandler>, Parameters<GlobalErrorHandler>>();
+  const setGlobalHandler = jest.fn();
+  setErrorUtils({ getGlobalHandler: () => originalHandler, setGlobalHandler });
+  const logs = loadLogs();
+  logs.setDiagnosticRoute('/sessions/inst_abc123/sess_xyz789');
+  logs.setDiagnosticAppPhase('active');
+
+  expect(logs.installFatalErrorDiagnosticHandler()).toBe(true);
+  expect(logs.installFatalErrorDiagnosticHandler()).toBe(false);
+  expect(setGlobalHandler).toHaveBeenCalledTimes(1);
+
+  const error = Object.assign(new Error('fatal boom token=message-secret'), { code: 'E_FATAL' });
+  error.stack = ['Error: fatal boom', ...Array.from({ length: 40 }, (_value, index) => `    at frame${index}`)].join('\n');
+  const wrappedHandler = setGlobalHandler.mock.calls[0][0] as GlobalErrorHandler;
+  wrappedHandler(error, true);
+
+  expect(originalHandler).toHaveBeenCalledWith(error, true);
+  const fatal = logEntries().find((entry) => entry.event === 'diagnostics.fatal');
+  expect(fatal).toMatchObject({
+    level: 'error',
+    data: {
+      errorName: 'Error',
+      errorCode: 'E_FATAL',
+      isFatal: true,
+      route: '/sessions/:id/:id',
+      appPhase: 'active',
+    },
+  });
+  expect(fatal.data.errorMessage).toBe('fatal boom token=[REDACTED]');
+  expect(fatal.data.errorStack).toHaveLength(20);
+  expect(JSON.stringify(fatal)).not.toContain('message-secret');
+  expect(logEntries().filter((entry) => entry.event === 'diagnostics.fatal-handler.ready')).toHaveLength(1);
+});
+
+test('fatal log write failures still reach the original handler', () => {
+  mockConstants.expoConfig.extra.variant = 'staging';
+  const originalHandler = jest.fn<ReturnType<GlobalErrorHandler>, Parameters<GlobalErrorHandler>>();
+  const setGlobalHandler = jest.fn();
+  setErrorUtils({ getGlobalHandler: () => originalHandler, setGlobalHandler });
+  const logs = loadLogs();
+  logs.installFatalErrorDiagnosticHandler();
+  mockFileWriteThrows = true;
+
+  const error = new Error('boom');
+  const wrappedHandler = setGlobalHandler.mock.calls[0][0] as GlobalErrorHandler;
+  expect(() => wrappedHandler(error, true)).not.toThrow();
+  expect(originalHandler).toHaveBeenCalledWith(error, true);
+});
+
+test('does not persist a fatal entry while diagnostics are disabled', () => {
+  const originalHandler = jest.fn<ReturnType<GlobalErrorHandler>, Parameters<GlobalErrorHandler>>();
+  const setGlobalHandler = jest.fn();
+  setErrorUtils({ getGlobalHandler: () => originalHandler, setGlobalHandler });
+  const logs = loadLogs();
+  logs.installFatalErrorDiagnosticHandler();
+
+  const error = new Error('boom');
+  const wrappedHandler = setGlobalHandler.mock.calls[0][0] as GlobalErrorHandler;
+  wrappedHandler(error, true);
+
+  expect(originalHandler).toHaveBeenCalledWith(error, true);
+  expect(mockFiles.size).toBe(0);
+});
+
+test('sanitizes dynamic route identifiers in navigation breadcrumbs', () => {
+  const logs = loadLogs();
+  expect(logs.diagnosticRouteLabel('/sessions/inst_abc123/sess_xyz789?token=secret')).toBe('/sessions/:id/:id');
+  expect(logs.diagnosticRouteLabel('/stories/123e4567-e89b-12d3-a456-426614174000/edit')).toBe('/stories/:id/edit');
+  expect(logs.diagnosticRouteLabel('/sessions/new')).toBe('/sessions/new');
+  expect(logs.diagnosticRouteLabel('/')).toBe('/');
 });

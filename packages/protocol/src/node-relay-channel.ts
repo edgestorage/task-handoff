@@ -8,9 +8,47 @@ import { z } from "zod";
  * and then multiplexes the tunnel protocol's main socket plus per-stream
  * auxiliary sockets over the single channel.
  */
-export const NODE_RELAY_CHANNEL_PROTOCOL_VERSION = "2026-10-17";
+export const NODE_RELAY_CHANNEL_PROTOCOL_VERSION = "2026-10-22.3";
 export const NODE_RELAY_HANDSHAKE_AUDIENCE = "task-handoff:node-relay-handshake";
 export const NODE_RELAY_MAIN_CHANNEL_ID = "main";
+
+/**
+ * Binary tunnel data carried inside the encrypted node channel.
+ *
+ * Control messages (open/accept/close and heartbeats) remain JSON. Once a
+ * stream exists, its payload bytes no longer pay JSON escaping or base64
+ * growth. The decrypted plaintext is either a JSON object (first byte `{`) or
+ * one of these data frames (first byte `0xB2`):
+ *
+ *   byte 0      magic, 0xB2
+ *   byte 1      frame version, currently 2
+ *   byte 2      flags, see NODE_RELAY_DATA_FLAG_*
+ *   bytes 3-6   stream id, uint32, 0 is the main tunnel socket
+ *   bytes 7..   one fragment of raw UTF-8 text or binary bytes
+ *
+ * WebSocket already preserves ordering, and the tunnel protocol owns its own
+ * request/response reliability, so fragments intentionally carry no offset or
+ * acknowledgement fields. A logical message is sent as consecutive frames for
+ * that stream; every frame except the last has MORE set. Binary frames are
+ * never deflated: payloads are commonly already compressed, and skipping CPU
+ * work matters more than a possible small win for text frames.
+ */
+export const NODE_RELAY_DATA_MAGIC = 0xb2;
+export const NODE_RELAY_DATA_VERSION = 2;
+export const NODE_RELAY_DATA_HEADER_BYTES = 8;
+export const NODE_RELAY_DATA_FLAG_BINARY = 0x01;
+/** More fragments of the same logical tunnel message follow this frame. */
+export const NODE_RELAY_DATA_FLAG_MORE = 0x02;
+export const NODE_RELAY_MAIN_STREAM_ID = 0;
+/** Keeps a sealed data frame comfortably below the Relay's 1 MiB frame ceiling. */
+export const NODE_RELAY_DATA_MAX_BYTES = 768 * 1024;
+/** Largest logical WS/HTTP message one stream may send after reassembly. */
+export const NODE_RELAY_DATA_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+/** One slow auxiliary stream may buffer at most this much before it is closed. */
+export const NODE_RELAY_STREAM_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
+/** Pause the peer before an auxiliary stream reaches the hard queue ceiling. */
+export const NODE_RELAY_STREAM_HIGH_WATER_BYTES = 1024 * 1024;
+const NODE_RELAY_DATA_KNOWN_FLAGS = NODE_RELAY_DATA_FLAG_BINARY | NODE_RELAY_DATA_FLAG_MORE;
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const PublicKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -30,6 +68,8 @@ const HandshakeBaseShape = {
   accountId: IdSchema,
   bindingId: IdSchema,
   bindingRevision: z.number().int().positive(),
+  /** The node agent's own stable identity; the Control Plane uses it verbatim. */
+  nodeId: IdSchema,
   nodePublicKey: PublicKeySchema,
   nodeEphemeralPublicKey: PublicKeySchema,
   nonce: NonceSchema,
@@ -88,13 +128,55 @@ export function nodeRelayPairingTranscript(payload: unknown): string {
   return `task-handoff:node-relay-pairing:v1\n${JSON.stringify(body)}`;
 }
 
-export const NodeRelayChannelOpenSchema = z.strictObject({ type: z.literal("channel-open"), channelId: IdSchema });
-export const NodeRelayChannelAcceptSchema = z.strictObject({ type: z.literal("channel-accept"), channelId: IdSchema });
+const AuxStreamIdSchema = z.number().int().positive().max(0xffff_ffff);
+
+export const NodeRelayChannelOpenSchema = z.strictObject({ type: z.literal("channel-open"), channelId: IdSchema, streamId: AuxStreamIdSchema });
+export const NodeRelayChannelAcceptSchema = z.strictObject({ type: z.literal("channel-accept"), channelId: IdSchema, streamId: AuxStreamIdSchema });
 export const NodeRelayChannelRejectSchema = z.strictObject({ type: z.literal("channel-reject"), channelId: IdSchema, code: z.string().trim().min(1).max(120), message: z.string().trim().max(512).optional() });
-export const NodeRelayChannelDataSchema = z.strictObject({ type: z.literal("channel-data"), channelId: IdSchema, data: z.string(), binary: z.boolean().optional() });
 export const NodeRelayChannelCloseSchema = z.strictObject({ type: z.literal("channel-close"), channelId: IdSchema, code: z.number().int().optional(), reason: z.string().trim().max(512).optional() });
 export const NodeRelayKeepaliveSchema = z.strictObject({ type: z.literal("relay-ping") });
 export const NodeRelayKeepaliveAckSchema = z.strictObject({ type: z.literal("relay-pong") });
+const StreamIdSchema = z.number().int().nonnegative().max(0xffff_ffff);
+export const NodeRelayStreamPauseSchema = z.strictObject({ type: z.literal("stream-pause"), streamId: StreamIdSchema });
+export const NodeRelayStreamResumeSchema = z.strictObject({ type: z.literal("stream-resume"), streamId: StreamIdSchema });
+
+export interface NodeRelayDataFrame {
+  streamId: number;
+  data: Uint8Array;
+  binary: boolean;
+  /** This frame is followed by more frames for the same logical message. */
+  more?: boolean;
+}
+
+export function nodeRelayDataFrameError(code = "NODE_RELAY_DATA_FRAME_INVALID") {
+  return Object.assign(new Error("Node relay data frame is invalid."), { code, retryable: false });
+}
+
+export function isNodeRelayDataFrame(raw: Uint8Array) {
+  return raw.byteLength > 0 && raw[0] === NODE_RELAY_DATA_MAGIC;
+}
+
+export function encodeNodeRelayDataFrame(frame: NodeRelayDataFrame): Uint8Array {
+  if (!Number.isInteger(frame.streamId) || frame.streamId < 0 || frame.streamId > 0xffff_ffff) throw nodeRelayDataFrameError();
+  if (frame.data.byteLength > NODE_RELAY_DATA_MAX_BYTES) throw nodeRelayDataFrameError("NODE_RELAY_DATA_FRAME_TOO_LARGE");
+  const encoded = new Uint8Array(NODE_RELAY_DATA_HEADER_BYTES + frame.data.byteLength);
+  encoded[0] = NODE_RELAY_DATA_MAGIC;
+  encoded[1] = NODE_RELAY_DATA_VERSION;
+  encoded[2] = (frame.binary ? NODE_RELAY_DATA_FLAG_BINARY : 0) | (frame.more ? NODE_RELAY_DATA_FLAG_MORE : 0);
+  new DataView(encoded.buffer).setUint32(3, frame.streamId, false);
+  encoded.set(frame.data, NODE_RELAY_DATA_HEADER_BYTES);
+  return encoded;
+}
+
+export function decodeNodeRelayDataFrame(raw: Uint8Array): NodeRelayDataFrame {
+  if (raw.byteLength < NODE_RELAY_DATA_HEADER_BYTES || raw[0] !== NODE_RELAY_DATA_MAGIC || raw[1] !== NODE_RELAY_DATA_VERSION) throw nodeRelayDataFrameError();
+  const flags = raw[2];
+  if ((flags & ~NODE_RELAY_DATA_KNOWN_FLAGS) !== 0) throw nodeRelayDataFrameError();
+  const data = raw.subarray(NODE_RELAY_DATA_HEADER_BYTES);
+  if (data.byteLength > NODE_RELAY_DATA_MAX_BYTES) throw nodeRelayDataFrameError("NODE_RELAY_DATA_FRAME_TOO_LARGE");
+  const streamId = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(3, false);
+  return { streamId, data, binary: (flags & NODE_RELAY_DATA_FLAG_BINARY) !== 0, more: (flags & NODE_RELAY_DATA_FLAG_MORE) !== 0 };
+}
 
 /** The pairing envelope sealed inside the handshake accept. */
 export const NodeRelayPairingEnvelopeSchema = z.strictObject({
@@ -108,13 +190,13 @@ export const NodeRelaySessionMessageSchema = z.discriminatedUnion("type", [
   NodeRelayChannelOpenSchema,
   NodeRelayChannelAcceptSchema,
   NodeRelayChannelRejectSchema,
-  NodeRelayChannelDataSchema,
   NodeRelayChannelCloseSchema,
   NodeRelayKeepaliveSchema,
   NodeRelayKeepaliveAckSchema,
+  NodeRelayStreamPauseSchema,
+  NodeRelayStreamResumeSchema,
 ]);
 
 export type NodeRelayHandshakeInit = z.infer<typeof NodeRelayHandshakeInitSchema>;
 export type NodeRelayHandshakeAccept = z.infer<typeof NodeRelayHandshakeAcceptSchema>;
 export type NodeRelaySessionMessage = z.infer<typeof NodeRelaySessionMessageSchema>;
-export type NodeRelayChannelData = z.infer<typeof NodeRelayChannelDataSchema>;

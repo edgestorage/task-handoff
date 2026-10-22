@@ -6,7 +6,7 @@ type RelaySocketNativeModule = {
   createRelaySocket(url: string): Promise<string>;
   startRelaySocket(id: string): Promise<void>;
   sendRelaySocketText(id: string, value: string): Promise<void>;
-  sendRelaySocketBinary(id: string, value: string): Promise<void>;
+  sendRelaySocketBinary(id: string, value: ArrayBuffer): Promise<void>;
   closeRelaySocket(id: string, code?: number, reason?: string): Promise<void>;
   addListener(eventName: string, listener: (payload: RelaySocketEventPayload) => void): NativeSubscription;
 };
@@ -15,7 +15,7 @@ type RelaySocketEventPayload = {
   id: string;
   protocol?: string;
   type?: 'text' | 'binary';
-  data?: string;
+  data?: string | ArrayBuffer | Uint8Array;
   domain?: string;
   code?: number;
   message?: string;
@@ -83,7 +83,12 @@ export class NativeRelaySocket {
       void this.module.sendRelaySocketText(this.id, data).catch((error) => this.onError({ id: this.id, message: String(error) }));
       return;
     }
-    void this.module.sendRelaySocketBinary(this.id, bytesToBase64(data)).catch((error) => this.onError({ id: this.id, message: String(error) }));
+    // Expo Modules converts ArrayBuffer arguments without a base64 hop. Slice
+    // only when the frame is a view into a larger buffer.
+    const value = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+      ? data.buffer as ArrayBuffer
+      : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    void this.module.sendRelaySocketBinary(this.id, value).catch((error) => this.onError({ id: this.id, message: String(error) }));
   }
 
   close(code = 1000, reason = '') {
@@ -107,13 +112,13 @@ export class NativeRelaySocket {
 
   private onMessage(event: RelaySocketEventPayload) {
     if (event.id !== this.id || this.readyState !== 1) return;
-    const data = event.type === 'binary' && typeof event.data === 'string' ? base64ToArrayBuffer(event.data) : event.data;
-    this.dispatch('message', { data });
+    this.dispatch('message', { data: event.data });
   }
 
   private onError(event: RelaySocketEventPayload) {
     if (event.id !== this.id || this.readyState === 3) return;
     this.readyState = 3;
+    void this.module.closeRelaySocket(this.id, 1011, 'relay-socket-error').catch(() => undefined);
     this.dispatch('error', { message: event.message ?? 'Relay WebSocket failed.' });
     this.dispatch('close', { code: 1006, reason: event.message ?? '', wasClean: false });
     this.dispose();
@@ -129,19 +134,4 @@ export class NativeRelaySocket {
   private dispatch(type: SocketEvent, value: SocketEventValue) {
     for (const listener of this.listeners.get(type) ?? []) listener(value);
   }
-}
-
-function bytesToBase64(value: Uint8Array) {
-  let binary = '';
-  for (let offset = 0; offset < value.length; offset += 0x8000) {
-    binary += String.fromCharCode(...value.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(value: string) {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes.buffer;
 }

@@ -92,6 +92,37 @@ test("instance lifecycle reducer applies runtime start facts when no newer heart
   assert.equal(reduced.target.web, "http://127.0.0.1:32000");
 });
 
+test("runtime lifecycle completion clears a stale workspace error from a racing heartbeat", () => {
+  const baseline = instance({ status: "starting", stateRevision: 4 });
+  const heartbeat = instance({
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    ready: true,
+    workspace: {
+      status: "ready",
+      path: "/workspace",
+      error: "Local controlled instance exited unexpectedly",
+    },
+    stateRevision: 6,
+    lastHeartbeatAt: "2026-07-28T00:00:01.000Z",
+  });
+
+  const reduced = reduceInstanceLifecycle(heartbeat, {
+    type: "runtime-lifecycle-completed",
+    baseline,
+    observation: {
+      workspace: { status: "ready", path: "/workspace", error: undefined },
+    },
+  }, "2026-07-28T00:00:02.000Z");
+
+  assert.equal(reduced.status, "running");
+  assert.equal(reduced.workspace.status, "ready");
+  assert.equal(reduced.workspace.path, "/workspace");
+  assert.equal(reduced.workspace.error, undefined);
+});
+
 test("stop completion consumes the latest snapshot and only normalizes lifecycle-owned fields", () => {
   const latest = instance({
     status: "running",

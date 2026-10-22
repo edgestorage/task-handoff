@@ -14,6 +14,7 @@ import {
 } from '@task-handoff/protocol/ai-sessions';
 
 import type { MobileLocalFile } from '../platform/file-picker';
+import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
 export function formatMobileAttachmentBytes(value: number, locale: string) {
   const units = ['B', 'KiB', 'MiB'];
@@ -122,24 +123,26 @@ export function uploadingMobileAttachment(file: MobileLocalFile, maxFileAttachme
 
 export async function uploadMobileAttachment(
   client: ControlPlaneClient,
-  identity: { instanceId: string; sessionId: string },
+  identity: { instanceId: string; sessionId: string; scopeType?: 'session' | 'create-request' },
   local: MobileLocalFile,
-  options: { readBase64?(uri: string): Promise<string>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; onProgress?(progress: number): void } = {},
+  options: { readBytes?(uri: string): Promise<Uint8Array>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; onProgress?(progress: number): void } = {},
 ): Promise<MobilePendingAttachment> {
+  const startedAt = Date.now();
+  let phase: 'read' | 'request' = 'read';
   const file = validateMobileLocalFile(local, options.maxFileAttachmentBytes);
   const localId = `${file.kind}:${file.name}:${file.size}`;
   let completed = false;
+  diagnosticLog.info('attachment.upload.start', { kind: file.kind, mime: file.mime, size: file.size });
   try {
-    const base64 = await (options.readBase64 ? options.readBase64(file.uri) : new File(file.uri).base64());
-    // The shared upload client consumes the same data URL source used by Web and
-    // converts it to the binary request body for the current upload endpoint.
-    const data = `data:${file.mime};base64,${base64}`;
+    const bytes = await (options.readBytes ? options.readBytes(file.uri) : new File(file.uri).bytes());
+    phase = 'request';
     const uploaded = await client.aiSessions.uploadAttachment(
-      { ...identity, kind: file.kind, name: file.name, mime: file.mime, data },
+      { ...identity, kind: file.kind, name: file.name, mime: file.mime, bytes },
       options.onProgress,
     );
     if (uploaded.expiresAt && Date.parse(uploaded.expiresAt) <= (options.now ?? Date.now())) throw attachmentError('ATTACHMENT_EXPIRED', 'The uploaded attachment expired before it could be used.');
     completed = true;
+    diagnosticLog.info('attachment.upload.complete', { kind: file.kind, size: file.size, durationMs: Date.now() - startedAt });
     return {
       localId, kind: uploaded.kind, name: uploaded.name, mime: uploaded.mime, size: uploaded.size,
       phase: 'uploaded', expiresAt: uploaded.expiresAt,
@@ -148,6 +151,7 @@ export async function uploadMobileAttachment(
     };
   } catch (cause) {
     const uncertain = cause && typeof cause === 'object' && ((cause as { retryable?: unknown }).retryable === true || (cause as { code?: unknown }).code === 'DIRECT_NETWORK_FAILED');
+    diagnosticLog.warn('attachment.upload.failed', { kind: file.kind, size: file.size, phase, durationMs: Date.now() - startedAt, uncertain, ...diagnosticErrorDetails(cause) });
     return { localId, kind: file.kind, name: file.name, mime: file.mime, size: file.size, phase: uncertain ? 'result-unknown' : 'failed', error: uncertain ? 'Upload result unknown. Retry this attachment before sending.' : cause instanceof Error ? cause.message : 'Upload failed.', retryLocal: file, textPresentation: file.textPresentation };
   } finally {
     if (completed && file.temporary) {

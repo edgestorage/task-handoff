@@ -240,7 +240,7 @@ export default function NewAiSessionRoute() {
       const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
       const uploadedAttachments = await Promise.all(attachments.map(async (attachment) => attachment.uploaded?.phase === 'uploaded'
         ? attachment.uploaded
-        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId }, attachment.local, { maxFileAttachmentBytes })));
+        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId, scopeType: 'create-request' }, attachment.local, { maxFileAttachmentBytes })));
       setAttachments((current) => current.map((attachment) => {
         const index = attachments.findIndex((candidate) => candidate.id === attachment.id);
         return index >= 0 ? { ...attachment, uploaded: uploadedAttachments[index] } : attachment;

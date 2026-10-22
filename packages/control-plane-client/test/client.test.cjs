@@ -425,11 +425,41 @@ test("shared AI Session attachment upload forwards transport progress", async ()
     kind: "image",
     name: "pasted.png",
     mime: "image/png",
-    data: "data:image/png;base64,eA==",
+    bytes: new Uint8Array([120]),
   }, (value) => progress.push(value));
 
   assert.deepEqual(progress, [0, 0.4, 1]);
   assert.equal("futureField" in uploaded, false);
+});
+
+test("shared AI Session attachment upload scopes a create request", async () => {
+  const transport = {
+    async request(path, schema, init) {
+      assert.equal(path, "/api/controlled-instances/instance-1/ai-session-attachments/drafts?scopeType=create-request&scopeId=create-request-1&kind=file&name=note.txt&mime=text%2Fplain&size=5");
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["content-type"], "application/octet-stream");
+      assert.equal(init.body.byteLength, 5);
+      return schema.parse({ data: {
+        id: "attachment-1",
+        kind: "file",
+        name: "note.txt",
+        mime: "text/plain",
+        size: 5,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "create-request-1",
+    scopeType: "create-request",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    bytes: new Uint8Array([104, 101, 108, 108, 111]),
+  });
+
+  assert.equal(uploaded.id, "attachment-1");
 });
 
 test("shared AI Session attachment upload falls back to the v0.0.21 endpoint", async () => {

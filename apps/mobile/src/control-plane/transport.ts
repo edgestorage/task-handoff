@@ -80,6 +80,7 @@ export interface MobileControlPlaneTransport extends ControlPlaneClientTransport
   readonly profile: MobileControlPlaneProfile;
   readonly currentCapabilities?: ControlPlanePublicCapabilities;
   request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit, onUploadProgress?: (progress: number) => void): Promise<T>;
+  requestBinary(path: string, init?: RequestInit): Promise<{ body: Uint8Array; filename?: string; contentType?: string }>;
   revalidate?(): Promise<void>;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
@@ -91,6 +92,8 @@ export class MobileControlPlaneTransportError extends Error {
     message: string,
     readonly retryable = false,
     readonly status?: number,
+    readonly relayCloseCode?: number,
+    readonly relayCloseReason?: string,
   ) {
     super(message);
     this.name = 'MobileControlPlaneTransportError';

@@ -144,6 +144,40 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     return parsed.data;
   }
 
+  async requestBinary(route: string, init: RequestInit = {}): Promise<{ body: Uint8Array; filename?: string; contentType?: string }> {
+    await this.ensureVerified();
+    const token = await this.sessionToken();
+    const headers = new Headers(init.headers);
+    if (headers.has('authorization')) {
+      throw new MobileControlPlaneTransportError('DIRECT_AUTH_HEADER_FORBIDDEN', 'Authorization is managed by DirectControlPlaneTransport.');
+    }
+    headers.set('authorization', `Bearer ${token}`);
+    headers.set('accept', 'application/octet-stream, application/gzip, */*');
+    headers.set('accept-encoding', 'identity');
+    let response: Response;
+    try {
+      response = await (this.options.fetchImpl ?? fetch)(requestUrl(this.profile.access.origin, route), {
+        ...init,
+        headers,
+        credentials: 'omit',
+        redirect: 'error',
+      });
+    } catch {
+      throw new MobileControlPlaneTransportError('DIRECT_NETWORK_FAILED', 'The Control Plane request could not be completed.', true);
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined);
+      throw responseError(response.status, body);
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const filename = dispositionFilename(disposition);
+    return {
+      body: new Uint8Array(await response.arrayBuffer()),
+      ...(filename ? { filename } : {}),
+      ...(response.headers.get('content-type') ? { contentType: response.headers.get('content-type')! } : {}),
+    };
+  }
+
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
     let closed = false;
     this.eventSubscribers.add(handlers);
@@ -460,6 +494,16 @@ function responseError(status: number, body: unknown) {
     typeof record?.retryable === 'boolean' ? record.retryable : status >= 500,
     status,
   );
+}
+
+function dispositionFilename(disposition: string) {
+  const raw = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)?.[1]?.trim();
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function asTransportError(cause: unknown) {

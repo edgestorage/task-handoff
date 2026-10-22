@@ -1433,7 +1433,7 @@ test('running composer sends in auto mode so the authoritative runtime queues th
 
 test('composer uploads images received from the native input paste action', async () => {
   const fileInfo = jest.spyOn(File.prototype, 'info').mockReturnValue({ exists: true, size: 5 });
-  const fileBase64 = jest.spyOn(File.prototype, 'base64').mockResolvedValue('aGVsbG8=');
+  const fileBytes = jest.spyOn(File.prototype, 'bytes').mockResolvedValue(new Uint8Array([104, 101, 108, 108, 111]));
   const fileDelete = jest.spyOn(File.prototype, 'delete').mockImplementation(() => undefined);
   let resolveUpload!: (value: unknown) => void;
   const uploadAttachment = jest.fn().mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
@@ -1457,7 +1457,7 @@ test('composer uploads images received from the native input paste action', asyn
   });
 
   await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
-    data: 'data:image/png;base64,aGVsbG8=',
+    bytes: new Uint8Array([104, 101, 108, 108, 111]),
     instanceId: 'instance',
     kind: 'image',
     mime: 'image/png',
@@ -1469,7 +1469,7 @@ test('composer uploads images received from the native input paste action', asyn
   await waitFor(() => screen.getByText('clipboard.png'));
   await screen.unmount();
   fileInfo.mockRestore();
-  fileBase64.mockRestore();
+  fileBytes.mockRestore();
   fileDelete.mockRestore();
 });
 

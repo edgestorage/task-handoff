@@ -8,6 +8,7 @@ import {
   decodeRelayFrame,
   encodeRelayFrame,
   packRelayPayload,
+  RelaySessionClosedMessageSchema,
   RelaySessionRenewalResultSchema,
   RelaySessionResumeResultSchema,
   unpackRelayPayload,
@@ -15,12 +16,13 @@ import {
   type RelayRoleProof,
   type RelaySessionGrant,
 } from '@task-handoff/cloud-contracts/mobile';
+import { decodeRelayResponseFrame, encodeRelayBodyFrame, isRelayResponseFrame, type RelayBodyFrame } from '@task-handoff/protocol/relay-body';
 import type { EncryptedRelayChannel, RelayChannelFactory, RelayControlNotice, RelaySessionRenewal } from './relay-transport';
 import { MobileControlPlaneTransportError } from './transport';
 import { createNativeRelaySocket, isNativeRelaySocketAvailable } from '../../modules/task-handoff-browser/src';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
-type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string };
+type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string; message?: string };
 type SocketListener = (event: SocketDefaultEvent) => void;
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
 type SocketLike = { readyState: number; bufferedAmount?: number; binaryType?: string; addEventListener(type: SocketEvent, listener: SocketListener): void; removeEventListener?(type: SocketEvent, listener: SocketListener): void; send(data: string | Uint8Array): void; close(code?: number, reason?: string): void };
@@ -43,6 +45,10 @@ export const MOBILE_RELAY_CHANNEL_TIMEOUTS: Readonly<MobileRelayChannelTimeouts>
   handshakeMs: 8_000,
 });
 const RENEWAL_REPLY_TIMEOUT_MS = 10_000;
+// Browsers and URLSession may dispatch `error` immediately before the terminal
+// `close`. Waiting briefly lets the close code/reason win instead of replacing
+// an actionable Relay rejection with a generic socket failure.
+const SOCKET_ERROR_CLOSE_GRACE_MS = 100;
 
 export function createMobileRelayChannelFactory(options: { webSocketFactory?: SocketFactory; allowRelayUrl?: (url: URL) => boolean; timeouts?: Partial<MobileRelayChannelTimeouts> } = {}): RelayChannelFactory {
   const timeouts = {
@@ -196,7 +202,7 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
       if (typeof event.data === 'string') this.receiveControl(event.data);
       else this.receive(event.data);
     };
-    const onError = () => this.closed(relayError('RELAY_SOCKET_ERROR', true));
+    const onError = (event: SocketDefaultEvent) => this.closed(socketError(event, 'RELAY_SOCKET_ERROR'));
     const onClose = (event: SocketDefaultEvent) => this.closed(closeError(event));
     socket.addEventListener('message', onMessage);
     socket.addEventListener('error', onError);
@@ -215,6 +221,20 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
     const packed = packRelayPayload(plaintext, (input) => deflateSync(input));
     const sealed = nacl.secretbox(packed.payload, nonce(1, this.sendCounter++), this.key);
     this.socket.send(encodeRelayFrame({ kind: value.type === 'cancel' ? 'cancel' : 'data', sequence: this.sendSequence++, payload: sealed, flags: packed.flags }));
+  }
+
+  /**
+   * One chunk of a binary request body. Chunks travel as `data` frames with
+   * their own header, so the Relay still routes opaque bytes while the body
+   * avoids the base64 envelope's ~33% growth and its single-frame size ceiling.
+   * Chunks skip deflate: they are usually already-compressed file bytes, and
+   * the sender window keeps the socket far below its backpressure limit.
+   */
+  sendBody(frame: RelayBodyFrame) {
+    if (this.socket.readyState !== 1) throw relayError('RELAY_CHANNEL_CLOSED', true);
+    if ((this.socket.bufferedAmount ?? 0) > 2 * 1024 * 1024) throw relayError('RELAY_BACKPRESSURE_LIMIT', true);
+    const sealed = nacl.secretbox(encodeRelayBodyFrame(frame), nonce(1, this.sendCounter++), this.key);
+    this.socket.send(encodeRelayFrame({ kind: 'data', sequence: this.sendSequence++, payload: sealed, flags: 0 }));
   }
 
   async renew(grant: RelaySessionGrant, proof: RelayRoleProof): Promise<RelaySessionRenewal> {
@@ -288,6 +308,19 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
         for (const listener of this.controlListeners) listener(control);
         return;
       }
+      if (value?.type === 'session-closed') {
+        const parsed = RelaySessionClosedMessageSchema.safeParse(value);
+        if (!parsed.success || parsed.data.sessionId !== this.sessionId) throw relayError('RELAY_PROTOCOL_INVALID');
+        const control: RelayControlNotice = {
+          type: 'session-closed',
+          sessionId: parsed.data.sessionId,
+          code: parsed.data.code,
+          retryable: parsed.data.retryable,
+        };
+        diagnosticLog.warn('relay.session.closed', this.logDetails({ code: control.code, retryable: control.retryable }));
+        for (const listener of this.controlListeners) listener(control);
+        return;
+      }
       throw relayError('RELAY_PROTOCOL_INVALID');
     } catch (error) {
       this.closed(error);
@@ -304,6 +337,12 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
       const opened = nacl.secretbox.open(frame.payload, nonce(2, this.receiveCounter++), this.key);
       if (!opened) throw relayError('RELAY_E2E_DECRYPT_FAILED');
       const plaintext = unpackRelayPayload(opened, frame.flags ?? 0, (input) => inflateSync(input));
+      if (isRelayResponseFrame(plaintext)) {
+        const chunk = decodeRelayResponseFrame(plaintext);
+        const envelope = { type: 'response-chunk', responseId: chunk.responseId, offset: chunk.offset, bytes: chunk.bytes, final: chunk.final };
+        for (const listener of this.listeners) listener(envelope);
+        return;
+      }
       const envelope = JSON.parse(new TextDecoder().decode(plaintext));
       for (const listener of this.listeners) listener(envelope);
     } catch (error) {
@@ -370,18 +409,23 @@ function defaultRelaySocketFactory(url: string): SocketLike | Promise<SocketLike
 
 function waitForOpen(socket: SocketLike, timeoutMs: number) {
   return new Promise<void>((resolve, reject) => {
+    let errorTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError('RELAY_SOCKET_OPEN_TIMEOUT', true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
+      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('open', opened);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
     };
     const opened = () => { cleanup(); resolve(); };
-    const failed = () => { cleanup(); reject(relayError('RELAY_SOCKET_FAILED', true)); };
+    const failed = (event: SocketDefaultEvent) => {
+      if (errorTimer) return;
+      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
+    };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
     socket.addEventListener('open', opened);
     socket.addEventListener('error', failed);
@@ -393,12 +437,14 @@ function waitForOpen(socket: SocketLike, timeoutMs: number) {
 // otherwise keep parsing every incoming frame once per completed wait.
 function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, timeoutMs: number, timeoutCode: string) {
   return new Promise<any>((resolve, reject) => {
+    let errorTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError(timeoutCode, true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
+      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
@@ -414,7 +460,10 @@ function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, tim
         reject(relayError('RELAY_PROTOCOL_INVALID'));
       }
     };
-    const failed = () => { cleanup(); reject(relayError('RELAY_SOCKET_FAILED', true)); };
+    const failed = (event: SocketDefaultEvent) => {
+      if (errorTimer) return;
+      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
+    };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
     socket.addEventListener('message', message);
     socket.addEventListener('error', failed);
@@ -427,12 +476,14 @@ function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, tim
 // Everything after attach is binary; a text message here is a protocol violation.
 function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => boolean, timeoutMs: number, timeoutCode: string) {
   return new Promise<RelayFramePayload>((resolve, reject) => {
+    let errorTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError(timeoutCode, true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
+      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
@@ -450,7 +501,10 @@ function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => 
         reject(error);
       }
     };
-    const failed = () => { cleanup(); reject(relayError('RELAY_SOCKET_FAILED', true)); };
+    const failed = (event: SocketDefaultEvent) => {
+      if (errorTimer) return;
+      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
+    };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
     socket.addEventListener('message', message);
     socket.addEventListener('error', failed);
@@ -558,15 +612,43 @@ function fromBase64Url(value: string) {
 }
 
 function closeError(event: SocketDefaultEvent) {
-  const reason = typeof event.reason === 'string' ? event.reason : '';
-  if (/^RELAY_[A-Z0-9_]+$/.test(reason)) return relayError(reason, retryableRelayClose(reason));
-  return relayError('RELAY_SOCKET_CLOSED', true);
+  const close = socketCloseDetails(event);
+  const reason = close.relayCloseReason ?? '';
+  const message = socketCloseMessage(event);
+  if (/^RELAY_[A-Z0-9_]+$/.test(reason)) return relayError(reason, retryableRelayClose(reason), message, close);
+  return relayError('RELAY_SOCKET_CLOSED', true, message, close);
+}
+
+function socketError(event: SocketDefaultEvent, code = 'RELAY_SOCKET_FAILED') {
+  const detail = closeDetailText(event);
+  const message = typeof event.message === 'string' && event.message
+    ? event.message
+    : detail ? `Cloud Relay socket failed (${detail}).` : 'Cloud Relay channel failed.';
+  return relayError(code, true, message, socketCloseDetails(event));
+}
+
+function socketCloseDetails(event: SocketDefaultEvent) {
+  return {
+    ...(typeof event.code === 'number' && Number.isFinite(event.code) ? { relayCloseCode: event.code } : {}),
+    ...(typeof event.reason === 'string' && event.reason ? { relayCloseReason: event.reason.slice(0, 240) } : {}),
+  };
+}
+
+function socketCloseMessage(event: SocketDefaultEvent) {
+  const detail = closeDetailText(event);
+  return detail ? `Cloud Relay closed the socket (${detail}).` : 'Cloud Relay channel closed.';
+}
+
+function closeDetailText(event: SocketDefaultEvent) {
+  const code = typeof event.code === 'number' && Number.isFinite(event.code) ? String(event.code) : '';
+  const reason = typeof event.reason === 'string' ? event.reason.slice(0, 240) : '';
+  return code && reason ? `${code}: ${reason}` : code || reason;
 }
 
 function retryableRelayClose(reason: string) {
   return ['RELAY_SESSION_REVOCATION_SYNC_PENDING', 'RELAY_DRAINING', 'RELAY_PROTOCOL_ERROR'].includes(reason);
 }
 
-function relayError(code: string, retryable = false) {
-  return new MobileControlPlaneTransportError(code, 'Cloud Relay channel failed.', retryable);
+function relayError(code: string, retryable = false, message = 'Cloud Relay channel failed.', close?: { relayCloseCode?: number; relayCloseReason?: string }) {
+  return new MobileControlPlaneTransportError(code, message, retryable, undefined, close?.relayCloseCode, close?.relayCloseReason);
 }

@@ -30,9 +30,11 @@ function cloudState(controlPlaneId: string, bindingId: string) {
 
 function nodeStore() {
   const records = new Map<string, { nodeId: string; pairing?: { keyId: string; secret: string } }>();
+  const known = new Map<string, { nodeId: string; connectionKind: string; nodeHandle?: string }>();
   const calls = { connected: [] as string[], disconnected: [] as string[], saved: [] as string[] };
   return {
     records,
+    known,
     calls,
     adapter: {
       resolve: (nodeHandle: string) => {
@@ -40,11 +42,12 @@ function nodeStore() {
         if (!record) return undefined;
         return { nodeId: record.nodeId, ...(record.pairing ? { pairing: record.pairing } : {}) };
       },
-      ensure: async (input: { nodeHandle: string }) => {
+      inspectNode: (nodeId: string) => known.get(nodeId),
+      linkNode: (nodeId: string, nodeHandle: string) => { records.set(nodeHandle, { nodeId }); },
+      ensure: async (input: { nodeHandle: string; nodeId: string }) => {
         await new Promise((resolve) => setImmediate(resolve));
-        const nodeId = `node_${input.nodeHandle}`;
-        records.set(input.nodeHandle, { nodeId });
-        return { nodeId };
+        records.set(input.nodeHandle, { nodeId: input.nodeId });
+        return { nodeId: input.nodeId };
       },
       savePairing: (nodeId: string, pairing: { keyId: string; secret: string }) => {
         calls.saved.push(nodeId);
@@ -87,8 +90,8 @@ test("each Control Plane keeps its own channel and pairing for one node, and one
   const cpOne = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets1.left, identity: cp1, store: store1, audit });
   const cpTwo = controlPlaneChannel({ controlPlaneId: "control_plane_cp2", bindingId: "binding_b", socket: sockets2.left, identity: cp2, store: store2, audit });
 
-  const event1 = nodeRelayAllocationEvent({ allocationId: "node_allocation_cp1", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: fingerprint, displayName: "Alpha box" });
-  const event2 = nodeRelayAllocationEvent({ allocationId: "node_allocation_cp2", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp2", accountId: "account_a", bindingId: "binding_b", nodePublicKeyFingerprint: fingerprint, displayName: "Alpha box" });
+  const event1 = nodeRelayAllocationEvent({ allocationId: "node_allocation_cp1", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: fingerprint, displayName: "Alpha box" });
+  const event2 = nodeRelayAllocationEvent({ allocationId: "node_allocation_cp2", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp2", accountId: "account_a", bindingId: "binding_b", nodePublicKeyFingerprint: fingerprint, displayName: "Alpha box" });
   const received1: any[] = [];
   const received2: any[] = [];
   const session1 = startNodeSession(sockets1.right, nodeRelayClaimGrant(event1, cp1.publicKey), node, received1);
@@ -98,25 +101,26 @@ test("each Control Plane keeps its own channel and pairing for one node, and one
   await cpTwo.channels.attach(event2);
   await Promise.all([session1, session2]);
 
-  assert.equal(cpOne.transport.connected("node_nrh_node_alpha"), true);
-  assert.equal(cpTwo.transport.connected("node_nrh_node_alpha"), true);
+  assert.equal(cpOne.transport.connected(node.nodeId), true);
+  assert.equal(cpTwo.transport.connected(node.nodeId), true);
   assert.deepEqual(received1.map((message) => message.type), ["control-plane.hello", "control-plane.identified"]);
   assert.deepEqual(received2.map((message) => message.type), ["control-plane.hello", "control-plane.identified"]);
-  assert.equal(received1[0].nodeId, "node_nrh_node_alpha");
+  assert.equal(received1[0].nodeId, node.nodeId);
+  assert.equal(store1.records.get("nrh_node_alpha")?.nodeId, node.nodeId);
   const pairing1 = store1.records.get("nrh_node_alpha")?.pairing;
   const pairing2 = store2.records.get("nrh_node_alpha")?.pairing;
   assert.ok(pairing1 && pairing2, "both Control Planes pinned their own pairing");
   assert.notEqual(pairing1.secret, pairing2.secret, "pairing secrets are per Control Plane");
 
-  const first = await cpOne.transport.request({ id: "node_nrh_node_alpha", connectionMode: "cloud-relay" } as any, "/health");
+  const first = await cpOne.transport.request({ id: node.nodeId, connectionMode: "cloud-relay" } as any, "/health");
   assert.deepEqual(await first.json(), { data: { nodeId: "/health" } });
 
   // Removing the node on one Control Plane only tears down that channel.
   cpOne.channels.closeNode("nrh_node_alpha", "control-plane-removed-node");
-  assert.equal(cpOne.transport.connected("node_nrh_node_alpha"), false);
-  assert.deepEqual(store1.calls.disconnected, ["node_nrh_node_alpha:control-plane-removed-node"]);
-  assert.equal(cpTwo.transport.connected("node_nrh_node_alpha"), true);
-  const second = await cpTwo.transport.request({ id: "node_nrh_node_alpha", connectionMode: "cloud-relay" } as any, "/health");
+  assert.equal(cpOne.transport.connected(node.nodeId), false);
+  assert.deepEqual(store1.calls.disconnected, [`${node.nodeId}:control-plane-removed-node`]);
+  assert.equal(cpTwo.transport.connected(node.nodeId), true);
+  const second = await cpTwo.transport.request({ id: node.nodeId, connectionMode: "cloud-relay" } as any, "/health");
   assert.deepEqual(await second.json(), { data: { nodeId: "/health" } });
   assert.equal(store2.calls.disconnected.length, 0);
   cpTwo.channels.closeAll("test-done");
@@ -139,6 +143,78 @@ test("a stale cloud claim preserves the locally managed node connection without 
   assert.deepEqual(store.calls.connected, []);
   assert.equal(store.records.size, 0);
   assert.deepEqual(preserved, ["nrh_node_alpha"]);
+});
+
+test("a known direct node skips the Relay dial entirely", async () => {
+  const node = ed25519Identity("node_direct_machine");
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  store.known.set(node.nodeId, { nodeId: node.nodeId, connectionKind: "direct" });
+  const preserved: string[] = [];
+  let connectCalls = 0;
+  const channels = new CloudNodeRelayChannels({
+    state: cloudState("control_plane_cp1", "binding_a"),
+    connector: {
+      async connect() {
+        connectCalls += 1;
+        throw new Error("the direct node must not be dialed over Relay");
+      },
+    },
+    transport: () => ({
+      attachNode: () => undefined,
+      detachNode: () => false,
+      connected: () => false,
+    }),
+    nodes: store.adapter,
+    onPreserveLocalConnection: (nodeHandle) => preserved.push(nodeHandle),
+  });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+
+  const result = await channels.attach(event);
+
+  assert.deepEqual(result, { status: "attached", preservedLocalConnection: true, nodeId: node.nodeId, nodeHandle: "nrh_node_alpha" });
+  assert.equal(connectCalls, 0, "the Relay connector is never called for an already-direct node");
+  assert.equal(store.records.get("nrh_node_alpha")?.nodeId, node.nodeId);
+  assert.deepEqual(preserved, ["nrh_node_alpha"]);
+});
+
+test("a direct node drops a stale Relay channel without changing its node status", async () => {
+  const node = ed25519Identity("node_direct_machine");
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  const sockets = linkedFrameSockets();
+  const preserved: string[] = [];
+  const channel = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets.left, identity: cp, store, onPreserveLocalConnection: (nodeHandle) => preserved.push(nodeHandle) });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+  const session = startNodeSession(sockets.right, nodeRelayClaimGrant(event, cp.publicKey), node, []);
+  await channel.channels.attach(event);
+  await session;
+  assert.equal(channel.transport.connected(node.nodeId), true);
+
+  store.known.set(node.nodeId, { nodeId: node.nodeId, connectionKind: "direct" });
+  const result = await channel.channels.attach({ ...event, allocationId: "node_allocation_b" });
+
+  assert.deepEqual(result, { status: "attached", preservedLocalConnection: true, nodeId: node.nodeId, nodeHandle: "nrh_node_alpha" });
+  assert.equal(channel.transport.connected(node.nodeId), false);
+  assert.deepEqual(store.calls.disconnected, [], "the direct connection remains authoritative");
+  assert.deepEqual(preserved, ["nrh_node_alpha"]);
+});
+
+test("the signed handshake identity must match the allocation identity", async () => {
+  const hinted = ed25519Identity("node_cloud_hint");
+  const actual = ed25519Identity("node_actual_machine");
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  const sockets = linkedFrameSockets();
+  const channel = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets.left, identity: cp, store });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", nodeId: hinted.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(actual.publicKey) });
+  const session = startNodeSession(sockets.right, nodeRelayClaimGrant(event, cp.publicKey), actual, []);
+
+  await assert.rejects(() => channel.channels.attach(event), { code: "CLOUD_RELAY_NODE_ID_MISMATCH" });
+  await session.catch(() => undefined);
+  assert.equal(store.records.size, 0);
+  assert.deepEqual(store.calls.connected, []);
+  assert.equal(channel.channels.state().errors[0]?.code, "CLOUD_RELAY_NODE_ID_MISMATCH");
 });
 
 test("a reconnect proves the pinned pairing instead of enrolling a new one", async () => {
@@ -189,9 +265,9 @@ test("a superseding allocation replaces the live channel for the same handle", a
   const secondSession = startNodeSession(second.right, nodeRelayClaimGrant({ ...event, allocationId: "node_allocation_b" }, cp.publicKey), node, []);
   await one.channels.attach({ ...event, allocationId: "node_allocation_b" });
   await secondSession;
-  assert.deepEqual(store.calls.disconnected, ["node_nrh_node_alpha:allocation-superseded"]);
+  assert.deepEqual(store.calls.disconnected, [`${node.nodeId}:allocation-superseded`]);
   assert.equal(store.records.size, 1, "a superseding allocation reuses the same local node record");
-  assert.equal(one.transport.connected("node_nrh_node_alpha"), true);
+  assert.equal(one.transport.connected(node.nodeId), true);
   one.channels.closeAll("test-done");
 });
 
@@ -206,7 +282,7 @@ test("a node that cannot prove the registered key never reaches the transport", 
   const attackerSession = startNodeSession(sockets.right, nodeRelayClaimGrant(event, cp.publicKey), attacker, [], undefined, 250);
   await assert.rejects(() => channel.channels.attach(event), { code: "NODE_RELAY_NODE_KEY_MISMATCH" });
   await attackerSession.catch(() => undefined);
-  assert.equal(channel.transport.connected("node_nrh_node_alpha"), false);
+  assert.equal(channel.transport.connected(attacker.nodeId), false);
   assert.deepEqual(store.calls.connected, []);
   assert.equal(channel.channels.state().errors[0]?.code, "NODE_RELAY_NODE_KEY_MISMATCH");
 });
@@ -223,8 +299,9 @@ test("a node refuses a peer that does not hold the key pinned in its claim grant
   const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: fingerprint });
   const received: any[] = [];
   const session = startNodeSession(sockets.right, nodeRelayClaimGrant(event, realControlPlane.publicKey), node, received);
+  const refused = assert.rejects(session, { code: "NODE_RELAY_HANDSHAKE_MISMATCH" });
   await channel.channels.attach(event).catch(() => undefined);
-  await assert.rejects(() => session, { code: "NODE_RELAY_HANDSHAKE_MISMATCH" });
+  await refused;
   assert.deepEqual(received, [], "the node never opened a tunnel session with the impostor");
   channel.channels.closeAll("test-done");
 });
@@ -237,7 +314,7 @@ test("an allocation that does not match the local binding is refused and recorde
   const channel = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets.left, identity: cp, store });
   const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", bindingRevision: 2, nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
   await assert.rejects(() => channel.channels.attach(event), { code: "RELAY_ALLOCATION_AUTHORITY_INVALID" });
-  assert.equal(channel.transport.connected("node_nrh_node_alpha"), false);
+  assert.equal(channel.transport.connected(node.nodeId), false);
   assert.deepEqual(store.calls.connected, []);
   assert.equal(channel.channels.state().errors[0]?.code, "RELAY_ALLOCATION_AUTHORITY_INVALID");
   assert.equal(channel.channels.state().channels.length, 0);

@@ -12,6 +12,7 @@ export type VerifiedNodeRelayAllocation = {
   attach: Record<string, any>;
   event: Record<string, any>;
   nodeHandle: string;
+  nodeId?: string;
   nodePublicKeyFingerprint: string;
   displayName?: string;
 };
@@ -19,6 +20,7 @@ export type VerifiedNodeRelayAllocation = {
 export type ConnectedNodeRelayChannel = {
   socket: NodeRelayFrameSocket;
   key: Uint8Array;
+  nodeId: string;
   paired: boolean;
   issuedPairing?: { keyId: string; secret: string };
   allocationId: string;
@@ -77,6 +79,7 @@ export class CloudNodeRelayConnector {
       return {
         socket: socket as unknown as NodeRelayFrameSocket,
         key: accepted.key,
+        nodeId: accepted.init.nodeId,
         paired: accepted.paired,
         ...(accepted.issuedPairing ? { issuedPairing: accepted.issuedPairing } : {}),
         allocationId: allocation.allocationId,

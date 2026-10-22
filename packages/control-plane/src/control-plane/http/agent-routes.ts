@@ -48,9 +48,10 @@ import {
   StoryAgentEntrySetUpdateInputSchema,
   sanitizeStoryAgentEntrySet,
 } from "@task-handoff/protocol/story-agent-authorization";
-import { StoryIdSchema, StorySchema } from "@task-handoff/protocol/stories";
+import { StoryIdSchema } from "@task-handoff/protocol/stories";
 import type { ControlPlaneService } from "../application/service.ts";
 import { requestCanAccessInstance, requestCanAccessNode, requestVisibleInstanceIds } from "./access-projection.ts";
+import { nodeStoryJson } from "./node-agent-story.ts";
 import { nodeJson } from "./node-agent-request.ts";
 import type { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
@@ -168,7 +169,7 @@ async function requireVisibleInstanceOnNode(
 
 async function requireStoryOnNode(service: ControlPlaneService, request: FastifyRequest, nodeId: string, storyId: string) {
   if (!requestCanAccessNode(request, nodeId)) throw resourceNotVisible();
-  const story = StorySchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`));
+  const story = await nodeStoryJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`);
   if (story.ownerNodeId !== nodeId) throw resourceNotVisible();
   return story;
 }

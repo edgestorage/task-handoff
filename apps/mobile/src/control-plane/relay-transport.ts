@@ -3,6 +3,7 @@ import * as Crypto from 'expo-crypto';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import {
   RelayTtySnapshotEnvelopeSchema,
+  RelaySessionClosedMessageSchema,
   RELAY_SESSION_REFRESH_INTERVAL_MS,
   RELAY_SESSION_PROTOCOL_VERSION,
   type OfficialMobileAccountClient as CloudMobileAccountClient,
@@ -16,20 +17,23 @@ import { probeRelayCandidates, RELAY_PROBE_FAST_BUDGET_MS, RELAY_PROBE_FAST_SAMP
 import { selectRelayCandidate, type RelayProbeResult, type RelaySelectionFallback } from './relay-scorer';
 import { RelayWinnerCache, type RelayWinnerEntry } from './relay-winner-cache';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
+import { RELAY_BODY_CHUNK_BYTES, RelayBinaryResponseSchema, type RelayBodyFrame } from '@task-handoff/protocol/relay-body';
 import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 import { createEphemeralRelayProofKey, type RelayProofKeyProvider } from './relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from './relay-session-store';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
-type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
+type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; bytes?: Uint8Array; final?: boolean; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionRenewal = { leaseExpiresAt: string; generation: number; committed: boolean };
 export type RelayControlNotice =
   | { type: 'renewed'; sessionId: string; generation: number; committed: boolean; leaseExpiresAt: string }
-  | { type: 'peer-detached'; sessionId?: string; retryable?: boolean };
+  | { type: 'peer-detached'; sessionId?: string; retryable?: boolean }
+  | { type: 'session-closed'; sessionId: string; code: string; retryable: boolean };
 export interface EncryptedRelayChannel {
   readonly leaseExpiresAt?: string;
   readonly generation?: number;
   send(value: RelayEnvelope): void;
+  sendBody(frame: RelayBodyFrame): void;
   renew?(grant: RelaySessionGrant, proof: RelayRoleProof): Promise<RelaySessionRenewal>;
   subscribe(listener: (value: RelayEnvelope) => void, onClose: (error?: unknown) => void): () => void;
   subscribeControl?(listener: (value: RelayControlNotice) => void): () => void;
@@ -58,6 +62,20 @@ const E2E_REKEY_RETRY_MS = 30_000;
 // idempotency key even after that selection has expired.
 const PENDING_BOOTSTRAP_TTL_MS = 15_000;
 const PENDING_CONFIRM_TTL_MS = 5 * 60_000;
+// Binary uploads keep four 256 KiB chunks in flight: 1 MiB of unacknowledged
+// bytes stays well under the 2 MiB socket backpressure limit while still
+// hiding one round trip behind the next chunk on mobile networks.
+const RELAY_UPLOAD_WINDOW_CHUNKS = 4;
+// The window is shared by every concurrent upload on the channel. Without the
+// shared cap, selecting several attachments at once could put 4 MiB or more in
+// flight and trip the socket backpressure guard, resetting every request.
+const RELAY_UPLOAD_GLOBAL_WINDOW_BYTES = RELAY_UPLOAD_WINDOW_CHUNKS * RELAY_BODY_CHUNK_BYTES;
+const RELAY_UPLOAD_STALL_TIMEOUT_MS = 15_000;
+const RELAY_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+// The client has already reattached successfully when this fires; the missing
+// half is the Control Plane's E2E handshake on a stale allocation. Retrying the
+// same Relay forever cannot repair that pair, so a fresh selection is required.
+const DEFAULT_MAX_E2E_HANDSHAKE_TIMEOUTS = 2;
 
 // The mobile app renders no instance resource metrics. The Control Plane
 // otherwise streams one `instance.metrics.snapshot` per instance on every
@@ -81,6 +99,47 @@ type ActiveRelaySession = {
 };
 
 type RenewalAttempt = { generation: number; key: string };
+type PendingRelayUpload = {
+  requestId: string;
+  channel: EncryptedRelayChannel;
+  bodyId: number;
+  data: Uint8Array;
+  size: number;
+  /** Cumulative bytes the Control Plane acknowledged; this is the flow-control cursor. */
+  acked: number;
+  nextOffset: number;
+  final: boolean;
+  finished: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  onProgress?: (progress: number) => void;
+};
+type PendingRelayDownload = {
+  requestId: string;
+  responseId: number;
+  size: number;
+  received: number;
+  data: Uint8Array;
+  contentType?: string;
+  filename?: string;
+  timer?: ReturnType<typeof setTimeout>;
+};
+type PendingRelayRequest = {
+  requestId: string;
+  resolve(value: unknown): void;
+  reject(error: unknown): void;
+  schema?: z.ZodType<any>;
+  abort?: () => void;
+  upload?: PendingRelayUpload;
+  download?: PendingRelayDownload;
+  method: string;
+  path: string;
+  bodyBytes: number;
+  bodyEncoding: 'none' | 'utf8' | 'binary';
+  binary: boolean;
+  responseBinary: boolean;
+  startedAt: number;
+};
+type EncodedRelayRequestBody = { value: unknown; data?: Uint8Array; bytes: number; encoding: PendingRelayRequest['bodyEncoding']; binary: boolean };
 
 export interface RelayTransportOptions {
   /** Injected by tests and by the app so the transport does not reach for platform APIs. */
@@ -94,6 +153,8 @@ export interface RelayTransportOptions {
   sessionStore?: RelaySessionStore;
   /** Rotates the E2E socket key without re-running bootstrap or confirm. */
   e2eRekeyIntervalMs?: number;
+  /** Consecutive E2E handshake timeouts before abandoning the allocation and reselecting. */
+  maxE2eHandshakeTimeouts?: number;
 }
 
 export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
@@ -110,8 +171,11 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private unsubscribeControl?: () => void;
   private epoch = 0;
   private nextId = 0;
+  private nextBodyId = 0;
   private nextAttemptId = 0;
-  private readonly pending = new Map<string, { resolve(value: unknown): void; reject(error: unknown): void; schema: z.ZodType<any>; abort?: () => void }>();
+  private readonly pending = new Map<string, PendingRelayRequest>();
+  private readonly uploadByBodyId = new Map<number, string>();
+  private readonly downloadByResponseId = new Map<number, string>();
   private readonly events = new Set<MobileControlPlaneEventHandlers>();
   private readonly tty = new Map<string, MobileAppSessionTtyHandlers>();
   private readonly ttyStreams = new Map<string, { instanceId: string; sessionId: string }>();
@@ -123,6 +187,8 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private readonly proofKey: RelayProofKeyProvider;
   private readonly sessionStore: RelaySessionStore | undefined;
   private readonly e2eRekeyIntervalMs: number;
+  private readonly maxE2eHandshakeTimeouts: number;
+  private e2eHandshakeTimeouts = 0;
   private sessionRestore?: Promise<void>;
   private sessionStoreChain: Promise<void> = Promise.resolve();
   private memoryPending?: RelayPendingOperation;
@@ -136,31 +202,327 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.proofKey = options.proofKey ?? createEphemeralRelayProofKey();
     this.sessionStore = options.sessionStore;
     this.e2eRekeyIntervalMs = Number.isFinite(options.e2eRekeyIntervalMs) ? Math.max(0, options.e2eRekeyIntervalMs!) : DEFAULT_E2E_REKEY_INTERVAL_MS;
+    this.maxE2eHandshakeTimeouts = Number.isFinite(options.maxE2eHandshakeTimeouts)
+      ? Math.max(1, Math.floor(options.maxE2eHandshakeTimeouts!))
+      : DEFAULT_MAX_E2E_HANDSHAKE_TIMEOUTS;
   }
 
-  async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, _onUploadProgress?: (progress: number) => void) {
+  async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, onUploadProgress?: (progress: number) => void) {
+    return await this.performRequest(path, init, { schema, onUploadProgress, responseBinary: false }) as T;
+  }
+
+  async requestBinary(path: string, init: RequestInit = {}): Promise<{ body: Uint8Array; filename?: string; contentType?: string }> {
+    return await this.performRequest(path, init, { responseBinary: true }) as { body: Uint8Array; filename?: string; contentType?: string };
+  }
+
+  private async performRequest(
+    path: string,
+    init: RequestInit,
+    options: { schema?: z.ZodType<any>; onUploadProgress?: (progress: number) => void; responseBinary: boolean },
+  ): Promise<unknown> {
     if (!path.startsWith('/') || path.startsWith('//')) throw transportError('RELAY_ROUTE_INVALID');
+    const body = encodeRelayRequestBody(init.body);
     const headers = new Headers(init.headers);
     if (headers.has('authorization')) throw transportError('RELAY_AUTH_HEADER_FORBIDDEN');
+    if (options.responseBinary) {
+      headers.set('accept', 'application/octet-stream, */*');
+      headers.set('accept-encoding', 'identity');
+    }
     const channel = await this.ensureChannel();
     const id = `request_${++this.nextId}`;
-    return new Promise<T>((resolve, reject) => {
+    const details = { method: init.method ?? 'GET', path: relayRequestPath(path), bodyBytes: body.bytes, bodyEncoding: body.encoding, binary: body.binary, responseBinary: options.responseBinary, startedAt: Date.now() };
+    return new Promise((resolve, reject) => {
       const abort = () => {
+        const pending = this.pending.get(id);
+        if (pending) {
+          this.stopUpload(pending);
+          this.stopDownload(pending);
+        }
         try { this.sendOrReset(channel, { type: 'cancel', id }); } catch { /* the failed send already reset pending requests */ }
         this.pending.delete(id);
+        diagnosticLog.warn('relay.request.cancelled', requestLogDetails(details, 'cancelled'));
         reject(transportError('RELAY_REQUEST_CANCELLED'));
       };
       if (init.signal?.aborted) return abort();
       init.signal?.addEventListener('abort', abort, { once: true });
-      this.pending.set(id, { resolve, reject, schema, abort: () => init.signal?.removeEventListener('abort', abort) });
+      const pending: PendingRelayRequest = { requestId: id, resolve, reject, schema: options.schema, abort: () => init.signal?.removeEventListener('abort', abort), ...details };
+      this.pending.set(id, pending);
       try {
-        this.sendOrReset(channel, { type: 'request', id, body: { path, method: init.method ?? 'GET', headers: Object.fromEntries(headers), body: init.body } });
+        if (body.binary) {
+          // Binary bodies travel as chunk frames; the request envelope carries
+          // only the metadata plus the body id the frames refer to.
+          this.startBinaryUpload(channel, id, pending, path, Object.fromEntries(headers), body.data ?? new Uint8Array(0), options.onUploadProgress);
+        } else {
+          this.sendOrReset(channel, {
+            type: 'request',
+            id,
+            body: {
+              path,
+              method: details.method,
+              headers: Object.fromEntries(headers),
+              body: body.value,
+              ...(options.responseBinary ? { responseBinary: true } : {}),
+            },
+          });
+        }
       } catch (error) {
-        this.pending.delete(id);
+        const stillPending = this.pending.delete(id);
         init.signal?.removeEventListener('abort', abort);
+        if (stillPending) {
+          this.stopUpload(pending);
+          this.stopDownload(pending);
+        }
+        if (stillPending) diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(details, 'send'), ...diagnosticErrorDetails(error) });
         reject(error);
       }
     });
+  }
+
+  private startBinaryUpload(channel: EncryptedRelayChannel, id: string, pending: PendingRelayRequest, path: string, headers: Record<string, string>, data: Uint8Array, onProgress?: (progress: number) => void) {
+    const upload: PendingRelayUpload = { requestId: id, channel, bodyId: ++this.nextBodyId, data, size: data.byteLength, acked: 0, nextOffset: 0, final: false, finished: false, onProgress };
+    pending.upload = upload;
+    this.uploadByBodyId.set(upload.bodyId, id);
+    diagnosticLog.info('relay.request.start', { ...requestLogDetails(pending), bodyId: upload.bodyId, size: upload.size, chunks: Math.max(1, Math.ceil(upload.size / RELAY_BODY_CHUNK_BYTES)) });
+    this.sendOrReset(channel, {
+      type: 'request',
+      id,
+      body: {
+        path,
+        method: pending.method,
+        headers,
+        binaryBody: { bodyId: upload.bodyId, size: upload.size },
+        ...(pending.responseBinary ? { responseBinary: true } : {}),
+      },
+    });
+    this.pumpPendingUploads(channel);
+  }
+
+  /** Sends at most one chunk so concurrent uploads share the channel fairly. */
+  private pumpUploadStep(upload: PendingRelayUpload) {
+    if (upload.finished || upload.final) return false;
+    if (upload.size === 0) {
+      this.sendBodyOrReset(upload.channel, { bodyId: upload.bodyId, offset: 0, bytes: new Uint8Array(0), final: true });
+      upload.final = true;
+      return true;
+    }
+    const perUploadBytes = RELAY_UPLOAD_WINDOW_CHUNKS * RELAY_BODY_CHUNK_BYTES;
+    if (upload.nextOffset - upload.acked >= perUploadBytes || upload.nextOffset >= upload.size) return false;
+    const inFlight = this.uploadInFlightBytes(upload.channel);
+    const available = RELAY_UPLOAD_GLOBAL_WINDOW_BYTES - inFlight;
+    if (available <= 0) return false;
+    const end = Math.min(upload.nextOffset + RELAY_BODY_CHUNK_BYTES, upload.size, upload.nextOffset + available);
+    const final = end >= upload.size;
+    this.sendBodyOrReset(upload.channel, { bodyId: upload.bodyId, offset: upload.nextOffset, bytes: upload.data.subarray(upload.nextOffset, end), final });
+    upload.nextOffset = end;
+    upload.final = final;
+    return true;
+  }
+
+  private uploadInFlightBytes(channel: EncryptedRelayChannel) {
+    let bytes = 0;
+    for (const pending of this.pending.values()) {
+      const upload = pending.upload;
+      if (upload && !upload.finished && upload.channel === channel) bytes += upload.nextOffset - upload.acked;
+    }
+    return bytes;
+  }
+
+  private pumpPendingUploads(channel: EncryptedRelayChannel) {
+    if (this.channelValue !== channel) return;
+    const progressedUploads = new Set<PendingRelayUpload>();
+    let progressed = true;
+    try {
+      while (progressed) {
+        progressed = false;
+        const uploads = [...this.pending.values()]
+          .map((pending) => pending.upload)
+          .filter((upload): upload is PendingRelayUpload => Boolean(upload && !upload.finished && upload.channel === channel))
+          .sort((left, right) => (left.nextOffset - left.acked) - (right.nextOffset - right.acked));
+        for (const upload of uploads) {
+          if (this.pumpUploadStep(upload)) {
+            progressed = true;
+            progressedUploads.add(upload);
+          }
+        }
+      }
+    } catch {
+      return;
+    }
+    for (const pending of this.pending.values()) {
+      if (pending.upload?.channel === channel) this.armUploadStallTimer(pending.upload, progressedUploads.has(pending.upload));
+    }
+  }
+
+  private armUploadStallTimer(upload: PendingRelayUpload, refresh = false) {
+    if (upload.finished || upload.acked >= upload.size || upload.nextOffset <= upload.acked) {
+      if (upload.timer) { clearTimeout(upload.timer); upload.timer = undefined; }
+      return;
+    }
+    // Another upload's acknowledgement must not extend this upload's idle
+    // deadline. Only a frame that actually made progress resets its timer.
+    if (upload.timer && !refresh) return;
+    if (upload.timer) clearTimeout(upload.timer);
+    upload.timer = setTimeout(() => this.failStalledUpload(upload), RELAY_UPLOAD_STALL_TIMEOUT_MS);
+  }
+
+  private failStalledUpload(upload: PendingRelayUpload) {
+    if (upload.finished || upload.acked >= upload.size) return;
+    const pending = this.pending.get(upload.requestId);
+    if (!pending) return;
+    const error = transportError('RELAY_UPLOAD_STALLED', true);
+    diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'response'), ...diagnosticErrorDetails(error) });
+    this.failPending(pending, error);
+  }
+
+  private handleBodyAck(value: { bodyId: number; offset: number }) {
+    const requestId = this.uploadByBodyId.get(value.bodyId);
+    if (!requestId) return;
+    const pending = this.pending.get(requestId);
+    const upload = pending?.upload;
+    if (!pending || !upload || upload.finished) return;
+    // A cumulative ACK cannot cover bytes that have not even been sent yet;
+    // accepting one would make the in-flight calculation negative and reopen
+    // the flow-control window to a full extra round.
+    if (value.offset <= upload.acked || value.offset > upload.size || value.offset > upload.nextOffset) {
+      const error = transportError('RELAY_UPLOAD_ACK_INVALID');
+      diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'response'), ...diagnosticErrorDetails(error) });
+      this.failPending(pending, error);
+      return;
+    }
+    upload.acked = value.offset;
+    upload.onProgress?.(upload.size === 0 ? 1 : upload.acked / upload.size);
+    if (upload.acked >= upload.size) {
+      if (upload.timer) { clearTimeout(upload.timer); upload.timer = undefined; }
+      // The completed upload no longer occupies the shared window. Pump the
+      // remaining uploads immediately instead of waiting for another ACK.
+      this.pumpPendingUploads(upload.channel);
+      return;
+    }
+    if (upload.timer) { clearTimeout(upload.timer); upload.timer = undefined; }
+    this.pumpPendingUploads(upload.channel);
+  }
+
+  private stopUpload(pending: PendingRelayRequest) {
+    const upload = pending.upload;
+    if (!upload || upload.finished) return;
+    upload.finished = true;
+    if (upload.timer) { clearTimeout(upload.timer); upload.timer = undefined; }
+    this.uploadByBodyId.delete(upload.bodyId);
+    if (this.channelValue === upload.channel) this.pumpPendingUploads(upload.channel);
+  }
+
+  private stopDownload(pending: PendingRelayRequest) {
+    const download = pending.download;
+    if (!download) return;
+    if (download.timer) clearTimeout(download.timer);
+    download.timer = undefined;
+    this.downloadByResponseId.delete(download.responseId);
+    pending.download = undefined;
+  }
+
+  private handleBinaryResponse(pending: PendingRelayRequest, value: RelayEnvelope) {
+    if (!pending.responseBinary) return this.failPending(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    if (pending.download) return this.failDownload(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    if ((value.status ?? 500) >= 400) return this.failPending(pending, relayResponseError(value.status ?? 500, value.body));
+    // Once a response envelope exists, the upload side (if any) has completed.
+    this.stopUpload(pending);
+    const parsed = RelayBinaryResponseSchema.safeParse(value.binaryResponse);
+    if (!parsed.success) return this.failPending(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    const metadata = parsed.data;
+    const download: PendingRelayDownload = {
+      requestId: pending.requestId,
+      responseId: metadata.responseId,
+      size: metadata.size,
+      received: 0,
+      data: new Uint8Array(metadata.size),
+      ...(metadata.contentType ? { contentType: metadata.contentType } : {}),
+      ...(metadata.filename ? { filename: metadata.filename } : {}),
+    };
+    pending.download = download;
+    this.downloadByResponseId.set(download.responseId, download.requestId);
+    if (download.size === 0) return this.completeDownload(pending, download);
+    this.armDownloadTimer(pending, download);
+  }
+
+  private receiveBinaryChunk(value: RelayEnvelope) {
+    if (typeof value.responseId !== 'number' || typeof value.offset !== 'number' || !(value.bytes instanceof Uint8Array)) {
+      return this.reset(transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    }
+    const requestId = this.downloadByResponseId.get(value.responseId);
+    const pending = requestId ? this.pending.get(requestId) : undefined;
+    const download = pending?.download;
+    if (!pending || !download) return;
+    if (value.offset !== download.received || value.offset + value.bytes.byteLength > download.size) {
+      return this.failDownload(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    }
+    download.data.set(value.bytes, value.offset);
+    download.received += value.bytes.byteLength;
+    this.armDownloadTimer(pending, download);
+    if (!this.sendResponseAck(download)) return;
+    if (value.final === true) {
+      if (download.received !== download.size) return this.failDownload(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+      this.completeDownload(pending, download);
+    } else if (download.received >= download.size) {
+      this.failDownload(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    }
+  }
+
+  private sendResponseAck(download: PendingRelayDownload) {
+    if (!this.channelValue) return false;
+    try {
+      this.sendOrReset(this.channelValue, { type: 'response-ack', responseId: download.responseId, offset: download.received });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private armDownloadTimer(pending: PendingRelayRequest, download: PendingRelayDownload) {
+    if (download.timer) clearTimeout(download.timer);
+    download.timer = setTimeout(() => {
+      this.failDownload(pending, transportError('RELAY_DOWNLOAD_STALLED', true));
+    }, RELAY_DOWNLOAD_IDLE_TIMEOUT_MS);
+    (download.timer as unknown as { unref?(): void }).unref?.();
+  }
+
+  private completeDownload(pending: PendingRelayRequest, download: PendingRelayDownload) {
+    const result = {
+      body: download.data,
+      ...(download.filename ? { filename: download.filename } : {}),
+      ...(download.contentType ? { contentType: download.contentType } : {}),
+    };
+    this.stopDownload(pending);
+    this.pending.delete(pending.requestId);
+    pending.abort?.();
+    pending.resolve(result);
+  }
+
+  private failDownload(pending: PendingRelayRequest, error: unknown) {
+    this.stopDownload(pending);
+    this.pending.delete(pending.requestId);
+    this.cancelRelayRequest(pending.requestId);
+    pending.abort?.();
+    pending.reject(error);
+  }
+
+  private failPending(pending: PendingRelayRequest, error: unknown) {
+    const requestId = pending.requestId;
+    this.stopUpload(pending);
+    this.stopDownload(pending);
+    this.pending.delete(requestId);
+    this.cancelRelayRequest(requestId);
+    pending.abort?.();
+    pending.reject(error);
+  }
+
+  private cancelRelayRequest(requestId: string) {
+    try { this.channelValue?.send({ type: 'cancel', id: requestId }); }
+    catch { /* the channel is already gone; the request is locally rejected */ }
+  }
+
+  private sendBodyOrReset(channel: EncryptedRelayChannel, frame: RelayBodyFrame) {
+    try { channel.sendBody(frame); }
+    catch (error) { this.channelClosed(channel, error); throw error; }
   }
 
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
@@ -286,11 +648,22 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
         return channel;
       } catch (error) {
         // A transient network failure is not a reason to burn two Coordinator
-        // requests and an allocation. Only an authoritative resume rejection
-        // falls back to a fresh bootstrap + confirm.
-        if (!terminalResumeFailure(error)) throw error;
-        diagnosticLog.warn('relay.resume.fallback', { attemptId, reason: 'terminal-resume-failure', ...diagnosticErrorDetails(error) });
-        this.clearSession();
+        // requests and an allocation. Repeated E2E timeouts mean this allocation
+        // no longer has a reachable Control Plane peer, while an authoritative
+        // rejection means the grant itself is dead; both need a fresh selection.
+        if (this.shouldAbandonE2eSession(error, 'resume')) {
+          const abandoned = { generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, allocationId: this.session?.grant.allocationId };
+          this.clearSession();
+          await this.winnerCache?.clear(this.profile.identity.controlPlaneId);
+          allowCachedWinner = false;
+          diagnosticLog.warn('relay.resume.abandoned', { attemptId, reason: 'repeated-e2e-handshake-timeout', ...abandoned, ...diagnosticErrorDetails(error) });
+        } else if (this.isE2eHandshakeTimeout(error)) {
+          throw error;
+        } else if (this.discardTerminalSession(error, 'resume')) {
+          diagnosticLog.warn('relay.resume.fallback', { attemptId, reason: 'terminal-resume-failure', ...diagnosticErrorDetails(error) });
+        } else {
+          throw error;
+        }
       }
     }
     route = 'selection';
@@ -503,11 +876,19 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       if (measurements) await this.rememberWinner(controlPlaneId, confirmed, measurements, this.networkFingerprint(), cached, attemptId);
       return channel;
     } catch (error) {
-      // A cached winner that just failed should be remeasured, but an ordinary
-      // first-attach failure keeps the grant for the next in-place resume.
-      diagnosticLog.warn('relay.attach.failed', { attemptId, durationMs: Date.now() - attachStartedAt, relayId: confirmed.relayId, allocationId: confirmed.allocationId, cachedWinnerFallback: allowCachedWinner && Boolean(cached), ...diagnosticErrorDetails(error) });
-      if (allowCachedWinner && cached) {
+      // A cached winner that just failed should be remeasured. Transient attach
+      // failures keep the grant for an in-place resume; authoritative session
+      // failures discard it and reselect instead of retrying a dead grant.
+      const terminalSessionFailure = this.discardTerminalSession(error, 'attach');
+      const abandonedE2eSession = this.shouldAbandonE2eSession(error, 'attach');
+      if (abandonedE2eSession) {
+        diagnosticLog.warn('relay.attach.abandoned', { attemptId, reason: 'repeated-e2e-handshake-timeout', relayId: confirmed.relayId, allocationId: confirmed.allocationId, ...diagnosticErrorDetails(error) });
         this.clearSession();
+        await this.winnerCache?.clear(controlPlaneId);
+      }
+      diagnosticLog.warn('relay.attach.failed', { attemptId, durationMs: Date.now() - attachStartedAt, relayId: confirmed.relayId, allocationId: confirmed.allocationId, cachedWinnerFallback: allowCachedWinner && Boolean(cached), terminalSessionFailure, ...diagnosticErrorDetails(error) });
+      if (allowCachedWinner && (cached || terminalSessionFailure || abandonedE2eSession)) {
+        if (!terminalSessionFailure && !abandonedE2eSession) this.clearSession();
         return this.establishChannel(false);
       }
       throw error;
@@ -622,6 +1003,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.channelValue = channel;
     this.channel = Promise.resolve(channel);
     this.session = session;
+    this.e2eHandshakeTimeouts = 0;
     channel.subscribe((value) => this.receive(value), (error) => this.channelClosed(channel, error));
     this.unsubscribeControl = channel.subscribeControl?.((notice) => this.receiveControl(channel, notice));
     // A rotated or resumed channel starts empty: replay the demand the previous
@@ -695,6 +1077,12 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
 
   private receiveControl(channel: EncryptedRelayChannel, notice: RelayControlNotice) {
     if (this.channelValue !== channel) return;
+    if (notice.type === 'session-closed') {
+      diagnosticLog.warn('relay.session.closed', { sessionId: notice.sessionId, code: notice.code, retryable: notice.retryable });
+      if (!notice.retryable) this.clearSession();
+      this.channelClosed(channel, transportError('RELAY_SESSION_CLOSED', notice.retryable, notice.retryable ? MOBILE_CONTROL_PLANE_CLOSED_MESSAGE : 'Cloud Relay session ended.'));
+      return;
+    }
     if (notice.type === 'peer-detached') {
       this.channelClosed(channel, transportError('RELAY_PEER_DETACHED', true, MOBILE_CONTROL_PLANE_CLOSED_MESSAGE));
       return;
@@ -715,8 +1103,11 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private channelClosed(channel: EncryptedRelayChannel, error?: unknown) {
     // A rotated channel closes on its own schedule; only the active one resets the transport.
     if (this.channelValue !== channel) return;
-    // The grant survives a socket close; the next request resumes it in place.
-    diagnosticLog.warn('relay.channel.reset', { generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, ...diagnosticErrorDetails(error) });
+    const session = this.session;
+    this.discardTerminalSession(error, 'channel-close');
+    // A transient socket close keeps the grant for an in-place resume; a terminal
+    // Relay reason has already discarded it above.
+    diagnosticLog.warn('relay.channel.reset', { generation: session?.grant.generation, relayId: session?.grant.relayId, ...diagnosticErrorDetails(error) });
     this.reset(error ?? transportError('RELAY_CHANNEL_CLOSED', true));
   }
 
@@ -825,16 +1216,48 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   private receive(value: RelayEnvelope) {
+    if (value.type === 'response-chunk') {
+      this.receiveBinaryChunk(value);
+      return;
+    }
+    if (value.type === 'body-ack' && typeof value.bodyId === 'number' && typeof value.offset === 'number') {
+      this.handleBodyAck({ bodyId: value.bodyId, offset: value.offset });
+      return;
+    }
     if (value.type === 'response' && value.id) {
       const pending = this.pending.get(value.id);
       if (!pending) return;
+      if ((value.status ?? 500) >= 400) {
+        this.pending.delete(value.id);
+        this.stopUpload(pending);
+        this.stopDownload(pending);
+        pending.abort?.();
+        const error = relayResponseError(value.status ?? 500, value.body);
+        diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'response', value.status), ...diagnosticErrorDetails(error) });
+        pending.reject(error);
+        return;
+      }
+      if (value.binaryResponse !== undefined) {
+        this.handleBinaryResponse(pending, value);
+        return;
+      }
+      if (pending.responseBinary) {
+        const error = transportError('RELAY_RESPONSE_PROTOCOL_INVALID');
+        diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'response-schema'), ...diagnosticErrorDetails(error) });
+        this.failPending(pending, error);
+        return;
+      }
       this.pending.delete(value.id);
+      this.stopUpload(pending);
       pending.abort?.();
-      if ((value.status ?? 500) >= 400) pending.reject(new MobileControlPlaneTransportError('RELAY_CONTROL_PLANE_RESPONSE_FAILED', 'Control Plane request failed.', false, value.status));
-      else {
-        const parsed = pending.schema.safeParse(value.body);
-        if (parsed.success) pending.resolve(parsed.data);
-        else pending.reject(transportError('RELAY_RESPONSE_SCHEMA_INVALID'));
+      const parsed = pending.schema?.safeParse(value.body);
+      if (parsed?.success) {
+        if (pending.binary) diagnosticLog.info('relay.request.complete', requestLogDetails(pending, 'complete', value.status));
+        pending.resolve(parsed.data);
+      } else {
+        const error = transportError('RELAY_RESPONSE_SCHEMA_INVALID');
+        diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'response-schema'), ...diagnosticErrorDetails(error) });
+        pending.reject(error);
       }
       return;
     }
@@ -873,7 +1296,14 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.channelValue?.close(4000, 'reset');
     this.channelValue = undefined;
     this.channel = undefined;
-    for (const pending of this.pending.values()) pending.reject(normalize(error));
+    for (const pending of this.pending.values()) {
+      const normalized = normalize(error);
+      this.stopUpload(pending);
+      this.stopDownload(pending);
+      pending.abort?.();
+      diagnosticLog.warn('relay.request.failed', { ...requestLogDetails(pending, 'connection-reset'), ...diagnosticErrorDetails(normalized) });
+      pending.reject(normalized);
+    }
     this.pending.clear();
     for (const handler of this.events) handler.onError(normalize(error));
     for (const handler of this.tty.values()) handler.onError(normalize(error));
@@ -882,7 +1312,44 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private clearSession() {
     this.session = undefined;
     this.renewalAttempt = undefined;
+    this.e2eHandshakeTimeouts = 0;
     void this.persistSession(undefined);
+  }
+
+  private isE2eHandshakeTimeout(error: unknown) {
+    return isE2eHandshakeTimeout(error);
+  }
+
+  /** Returns true once consecutive timeouts justify replacing the allocation. */
+  private shouldAbandonE2eSession(error: unknown, source: 'resume' | 'attach') {
+    if (!this.isE2eHandshakeTimeout(error)) return false;
+    this.e2eHandshakeTimeouts += 1;
+    const exhausted = this.e2eHandshakeTimeouts >= this.maxE2eHandshakeTimeouts;
+    diagnosticLog.warn('relay.e2e.timeout', {
+      source,
+      consecutive: this.e2eHandshakeTimeouts,
+      threshold: this.maxE2eHandshakeTimeouts,
+      exhausted,
+      generation: this.session?.grant.generation,
+      relayId: this.session?.grant.relayId,
+      allocationId: this.session?.grant.allocationId,
+      ...diagnosticErrorDetails(error),
+    });
+    return exhausted;
+  }
+
+  private discardTerminalSession(error: unknown, source: 'resume' | 'attach' | 'channel-close') {
+    if (!terminalRelaySessionFailure(error)) return false;
+    diagnosticLog.warn('relay.session.discarded', {
+      source,
+      generation: this.session?.grant.generation,
+      relayId: this.session?.grant.relayId,
+      sessionId: this.session?.grant.sessionId,
+      allocationId: this.session?.grant.allocationId,
+      ...diagnosticErrorDetails(error),
+    });
+    this.clearSession();
+    return true;
   }
 
   private async restorePersistedSession() {
@@ -1017,9 +1484,64 @@ function pendingOperationSelectionExpired(error: unknown) {
   return code === 'RELAY_SELECTION_EXPIRED' || code === 'RELAY_SELECTION_NOT_FOUND';
 }
 
-function terminalResumeFailure(error: unknown) {
-  const code = String((error as { code?: unknown } | null)?.code ?? '');
-  return [
+function encodeRelayRequestBody(body: BodyInit | null | undefined): EncodedRelayRequestBody {
+  if (body === undefined || body === null) return { value: undefined, bytes: 0, encoding: 'none', binary: false };
+  if (typeof body === 'string') return { value: body, bytes: new TextEncoder().encode(body).byteLength, encoding: 'utf8', binary: false };
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+    return encodeRelayRequestBody(body.toString());
+  }
+  if (body instanceof ArrayBuffer) {
+    const data = new Uint8Array(body);
+    return { value: undefined, data, bytes: data.byteLength, encoding: 'binary', binary: true };
+  }
+  if (ArrayBuffer.isView(body)) {
+    const data = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    return { value: undefined, data, bytes: data.byteLength, encoding: 'binary', binary: true };
+  }
+  throw transportError('RELAY_REQUEST_BODY_UNSUPPORTED', false, 'Cloud Relay request body type is unsupported.');
+}
+
+function relayRequestPath(path: string) {
+  return (path.split(/[?#]/, 1)[0] || '/').slice(0, 512);
+}
+
+function requestLogDetails(
+  request: Pick<PendingRelayRequest, 'method' | 'path' | 'bodyBytes' | 'bodyEncoding' | 'binary' | 'responseBinary' | 'startedAt'>,
+  phase?: 'cancelled' | 'send' | 'response' | 'response-schema' | 'connection-reset' | 'complete',
+  status?: number,
+) {
+  return {
+    method: request.method,
+    path: request.path,
+    bodyBytes: request.bodyBytes,
+    bodyEncoding: request.bodyEncoding,
+    binary: request.binary,
+    responseBinary: request.responseBinary,
+    durationMs: Math.max(0, Date.now() - request.startedAt),
+    ...(phase ? { phase } : {}),
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
+function relayResponseError(status: number, body: unknown) {
+  const envelope = body && typeof body === 'object' ? body as { error?: unknown } : undefined;
+  const record = envelope?.error && typeof envelope.error === 'object'
+    ? envelope.error as { code?: unknown; message?: unknown; retryable?: unknown }
+    : undefined;
+  const retryable = typeof record?.retryable === 'boolean'
+    ? record.retryable
+    : status >= 500 || [408, 409, 425, 429].includes(status);
+  return new MobileControlPlaneTransportError(
+    typeof record?.code === 'string' && record.code ? record.code : 'RELAY_CONTROL_PLANE_RESPONSE_FAILED',
+    typeof record?.message === 'string' && record.message ? record.message : `Control Plane request failed with HTTP ${status}.`,
+    retryable,
+    status,
+  );
+}
+
+function terminalRelaySessionFailure(error: unknown) {
+  const { code, relayCloseReason } = (error ?? {}) as { code?: unknown; relayCloseReason?: unknown };
+  return [code, relayCloseReason].some((value) => value !== undefined && [
     'RELAY_SESSION_NOT_FOUND',
     'RELAY_SESSION_REVOKED',
     'RELAY_SESSION_EXPIRED',
@@ -1030,7 +1552,12 @@ function terminalResumeFailure(error: unknown) {
     'RELAY_SESSION_GENERATION_STALE',
     'RELAY_SESSION_GENERATION_CONFLICT',
     'RELAY_ALLOCATION_MISMATCH',
-  ].includes(code);
+  ].includes(String(value)));
+}
+
+function isE2eHandshakeTimeout(error: unknown) {
+  const { code, relayCloseReason } = (error ?? {}) as { code?: unknown; relayCloseReason?: unknown };
+  return code === 'RELAY_E2E_HANDSHAKE_TIMEOUT' || relayCloseReason === 'handshake-timeout';
 }
 
 function normalize(error: unknown) {

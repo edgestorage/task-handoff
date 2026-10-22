@@ -203,7 +203,7 @@ test("binding redeems the token, persists the account binding and never exposes 
   assert.equal(bound.nodeHandle, "nrh_test_node_handle");
   assert.equal(bound.accountId, "account_test");
   assert.equal(bound.cloudOrigin, SERVICE_ORIGIN);
-  assert.deepEqual(stub.state.redemptions, [{ displayName: "Build box" }]);
+  assert.deepEqual(stub.state.redemptions, [{ nodeId: "node_cloud_relay", displayName: "Build box" }]);
 
   const binding = identityService.cloudRelayBinding();
   assert.ok(binding, "binding persisted");
@@ -291,6 +291,8 @@ test("a claiming Control Plane gets a paired channel, tunnel requests round-trip
   }, "a fresh allocation after the one-time attach was consumed");
   assert.ok(stub.state.allocationRequests.some((request) =>
     Array.isArray(request.refreshControlPlaneIds) && request.refreshControlPlaneIds.includes(controlPlaneId)));
+  assert.ok(stub.state.allocationRequests.length > 0);
+  assert.ok(stub.state.allocationRequests.every((request) => request.nodeId === "node_cloud_relay"), "every allocation poll identifies the original node agent");
   const second = await waitFor(async () => {
     if (plane.peers.length < 2) return undefined;
     return plane.peers[1] as Promise<ControlPlanePeer | undefined>;

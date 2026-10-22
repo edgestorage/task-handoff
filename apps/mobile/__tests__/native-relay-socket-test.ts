@@ -40,11 +40,12 @@ describe('native Relay WebSocket bridge', () => {
     expect(socket.readyState).toBe(1);
     expect(events).toEqual(['open']);
 
-    emit('onRelaySocketMessage', { id: 'socket_1', type: 'binary', data: 'AQID' });
-    expect(Array.from(new Uint8Array(received as ArrayBuffer))).toEqual([1, 2, 3]);
+    emit('onRelaySocketMessage', { id: 'socket_1', type: 'binary', data: new Uint8Array([1, 2, 3]) });
+    expect(Array.from(received as Uint8Array)).toEqual([1, 2, 3]);
 
     socket.send(new Uint8Array([4, 5]));
-    expect(mockNative.sendRelaySocketBinary).toHaveBeenCalledWith('socket_1', 'BAU=');
+    const sent = (mockNative.sendRelaySocketBinary as jest.Mock).mock.calls[0][1] as ArrayBuffer;
+    expect(Array.from(new Uint8Array(sent))).toEqual([4, 5]);
 
     socket.close(4400, 'done');
     expect(mockNative.closeRelaySocket).toHaveBeenCalledWith('socket_1', 4400, 'done');
@@ -63,6 +64,7 @@ describe('native Relay WebSocket bridge', () => {
     emit('onRelaySocketError', { id: 'socket_1', message: 'TLS failed' });
     expect(socket.readyState).toBe(3);
     expect(events).toEqual(['error:TLS failed', 'close:1006']);
+    expect(mockNative.closeRelaySocket).toHaveBeenCalledWith('socket_1', 1011, 'relay-socket-error');
     expect(mockListeners.get('onRelaySocketError')?.size).toBe(0);
   });
 });

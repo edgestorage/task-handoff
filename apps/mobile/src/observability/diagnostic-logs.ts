@@ -17,8 +17,19 @@ const MAX_DEPTH = 4;
 const MAX_ARRAY_ITEMS = 20;
 const MAX_OBJECT_KEYS = 40;
 const MAX_STRING_LENGTH = 1_000;
+const MAX_FATAL_STACK_LINES = 20;
 const REDACTED = '[REDACTED]';
 const SENSITIVE_KEY = /(token|credential|secret|password|authorization|cookie|signature|proof|capability|nonce|challenge|verifier|grant|ticket)/i;
+const SENSITIVE_ASSIGNMENT = /\b(token|credential|secret|password|authorization|cookie|signature|proof|capability|nonce|challenge|verifier|grant|ticket)=([^\s&;,]+)/gi;
+const SENSITIVE_HEADER = /\b(authorization|cookie|x-api-key)\s*:\s*[^\s,;]+/gi;
+const AUTHORIZATION_VALUE = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+const DYNAMIC_ROUTE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[a-z][a-z0-9]*_[a-z0-9_-]{6,}|[0-9a-f]{16,})$/i;
+
+type GlobalErrorHandler = (error: unknown, isFatal?: boolean) => void;
+type GlobalErrorUtils = {
+  getGlobalHandler(): GlobalErrorHandler;
+  setGlobalHandler(handler: GlobalErrorHandler): void;
+};
 
 type DiagnosticLogState = { enabled: boolean };
 
@@ -28,6 +39,8 @@ let state: DiagnosticLogState = { enabled: defaultEnabled };
 let hydrated = false;
 let mutated = false;
 let hydration: Promise<void> | undefined;
+let fatalHandlerInstalled = false;
+let fatalContext: { appPhase?: string; route?: string } = {};
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -53,6 +66,61 @@ export function initializeDiagnosticLogs() {
     notify();
   }).catch(() => undefined).finally(() => { hydrated = true; });
   return hydration;
+}
+
+// Install this after the React Native runtime has created ErrorUtils, but before
+// route modules start rendering. Fatal crashes do not always leave a React error
+// boundary or a native crash message, so persist the JS error synchronously and
+// then continue through the original handler unchanged.
+export function installFatalErrorDiagnosticHandler() {
+  if (fatalHandlerInstalled) return false;
+  const errorUtils = (globalThis as typeof globalThis & { ErrorUtils?: GlobalErrorUtils }).ErrorUtils;
+  if (!errorUtils) return false;
+  try {
+    const previousHandler = errorUtils.getGlobalHandler();
+    errorUtils.setGlobalHandler((error, isFatal) => {
+      if (isFatal) {
+        try { writeDiagnosticLog('error', 'diagnostics.fatal', fatalErrorDetails(error, isFatal)); } catch { /* never mask the original crash */ }
+      }
+      previousHandler(error, isFatal);
+    });
+    fatalHandlerInstalled = true;
+    diagnosticLog.info('diagnostics.fatal-handler.ready');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function diagnosticAppContext(): DiagnosticLogData {
+  const extra = Constants.expoConfig?.extra;
+  const cloudEnvironment = extra?.cloudEnvironment as { id?: unknown; serviceOrigin?: unknown } | undefined;
+  return compactRecord({
+    variant: typeof extra?.variant === 'string' ? extra.variant : undefined,
+    appVersion: Constants.expoConfig?.version,
+    buildNumber: typeof Constants.expoConfig?.ios?.buildNumber === 'string' ? Constants.expoConfig.ios.buildNumber : undefined,
+    cloudEnvironment: typeof cloudEnvironment?.id === 'string' ? cloudEnvironment.id : undefined,
+    cloudServiceOrigin: typeof cloudEnvironment?.serviceOrigin === 'string'
+      ? cloudEnvironment.serviceOrigin
+      : typeof extra?.cloudServiceOrigin === 'string' ? extra.cloudServiceOrigin : undefined,
+  });
+}
+
+export function diagnosticRouteLabel(pathname: string) {
+  const path = pathname.split(/[?#]/, 1)[0] ?? '';
+  const segments = path.split('/').filter(Boolean).filter((segment) => !segment.startsWith('('));
+  if (segments.length === 0) return '/';
+  return `/${segments.map((segment, index) => index > 0 && DYNAMIC_ROUTE_SEGMENT.test(segment) ? ':id' : segment).join('/')}`;
+}
+
+export function setDiagnosticRoute(pathname: string) {
+  fatalContext = { ...fatalContext, route: diagnosticRouteLabel(pathname) };
+  diagnosticLog.info('navigation.route', { route: fatalContext.route });
+}
+
+export function setDiagnosticAppPhase(phase: string) {
+  fatalContext = { ...fatalContext, appPhase: phase };
+  diagnosticLog.info('app.phase', { phase });
 }
 
 export function getDiagnosticLogsEnabled() {
@@ -97,18 +165,28 @@ export function diagnosticErrorDetails(error: unknown): DiagnosticLogData {
       ...(typeof value.code === 'string' ? { errorCode: value.code } : {}),
       ...(typeof value.status === 'number' ? { status: value.status } : {}),
       ...(typeof value.retryable === 'boolean' ? { retryable: value.retryable } : {}),
+      ...closeDetails(value),
     };
   }
   if (typeof error === 'object') {
-    const value = error as { code?: unknown; status?: unknown; retryable?: unknown; message?: unknown };
+    const value = error as { code?: unknown; status?: unknown; retryable?: unknown; message?: unknown; relayCloseCode?: unknown; relayCloseReason?: unknown };
     return {
       ...(typeof value.code === 'string' ? { errorCode: value.code } : {}),
       ...(typeof value.status === 'number' ? { status: value.status } : {}),
       ...(typeof value.retryable === 'boolean' ? { retryable: value.retryable } : {}),
       ...(typeof value.message === 'string' ? { errorMessage: value.message } : {}),
+      ...closeDetails(value),
     };
   }
   return { errorMessage: String(error) };
+}
+
+function closeDetails(source: object) {
+  const value = source as { relayCloseCode?: unknown; relayCloseReason?: unknown };
+  return {
+    ...(typeof value.relayCloseCode === 'number' && Number.isFinite(value.relayCloseCode) ? { relayCloseCode: value.relayCloseCode } : {}),
+    ...(typeof value.relayCloseReason === 'string' && value.relayCloseReason ? { relayCloseReason: value.relayCloseReason } : {}),
+  };
 }
 
 export async function getRecentDiagnosticLogs(maxBytes = RECENT_DIAGNOSTIC_LOG_BYTES) {
@@ -170,6 +248,31 @@ function writeDiagnosticEntry(level: DiagnosticLogLevel, event: string, data?: D
   } catch {
     // Diagnostics must never affect networking or app behavior.
   }
+}
+
+function fatalErrorDetails(error: unknown, isFatal: boolean): DiagnosticLogData {
+  const details = diagnosticErrorDetails(error);
+  const stack = error instanceof Error && typeof error.stack === 'string'
+    ? error.stack.split('\n').slice(0, MAX_FATAL_STACK_LINES).map((line) => redactDiagnosticText(line)).filter(Boolean)
+    : undefined;
+  return {
+    ...details,
+    ...(typeof details.errorMessage === 'string' ? { errorMessage: redactDiagnosticText(details.errorMessage) } : {}),
+    ...(stack?.length ? { errorStack: stack } : {}),
+    ...fatalContext,
+    isFatal,
+  };
+}
+
+function redactDiagnosticText(value: string) {
+  return value
+    .replace(SENSITIVE_ASSIGNMENT, '$1=[REDACTED]')
+    .replace(SENSITIVE_HEADER, '$1: [REDACTED]')
+    .replace(AUTHORIZATION_VALUE, '$1 [REDACTED]');
+}
+
+function compactRecord(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function rotate(directory: Directory) {

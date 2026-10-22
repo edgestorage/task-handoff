@@ -53,9 +53,10 @@ export class NodeRelayCloudClient {
     return normalizedOrigin(typeof this.cloudOrigin === "function" ? this.cloudOrigin() : this.cloudOrigin);
   }
 
-  async redeem(input: { bindingToken: string; publicKey: string; displayName?: string }): Promise<CloudRelayRedemption> {
+  async redeem(input: { bindingToken: string; nodeId: string; publicKey: string; displayName?: string }): Promise<CloudRelayRedemption> {
     const body = NodeRelayBindingRedemptionRequestSchema.parse({
       token: input.bindingToken,
+      nodeId: input.nodeId,
       nodePublicKey: input.publicKey,
       nodePublicKeyFingerprint: nodeRelayFingerprint(input.publicKey),
       ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -70,8 +71,9 @@ export class NodeRelayCloudClient {
     return NodeRelayCredentialSchema.parse(data);
   }
 
-  async allocations(credential: string, input: { controlPlaneId?: string; refreshControlPlaneIds?: string[] } = {}): Promise<NodeRelayNodeAllocation[]> {
+  async allocations(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[] }): Promise<NodeRelayNodeAllocation[]> {
     const data = await this.post("/api/v1/node-relay/v1/allocations", {
+      nodeId: input.nodeId,
       ...(input.controlPlaneId ? { controlPlaneId: input.controlPlaneId } : {}),
       ...(input.refreshControlPlaneIds?.length ? { refreshControlPlaneIds: input.refreshControlPlaneIds } : {}),
     }, { credential });

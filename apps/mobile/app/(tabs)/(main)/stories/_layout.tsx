@@ -30,11 +30,11 @@ export default function StoriesLayout() {
   ];
   const headerRightItems = runtime.storyCapability ? () => [
     {
-      accessibilityLabel: t('stories.create'), icon: { name: 'plus' as const, type: 'sfSymbol' as const }, identifier: 'story-create', label: t('stories.create'), onPress: () => router.push('/stories/new' as never), sharesBackground: false, tintColor: '#ffffff', type: 'button' as const,
+      accessibilityLabel: t('stories.create'), icon: { name: 'plus' as const, type: 'sfSymbol' as const }, identifier: 'story-create', label: t('stories.create'), onPress: () => router.push('/stories/new' as never), sharesBackground: false, tintColor: colors.primary, type: 'button' as const,
     },
     { type: 'spacing' as const, spacing: 8 },
     {
-      accessibilityLabel: t('stories.listOptions'), icon: { name: 'ellipsis' as const, type: 'sfSymbol' as const }, identifier: 'story-list-options', label: t('stories.listOptions'), sharesBackground: false, tintColor: '#ffffff', type: 'menu' as const,
+      accessibilityLabel: t('stories.listOptions'), icon: { name: 'ellipsis' as const, type: 'sfSymbol' as const }, identifier: 'story-list-options', label: t('stories.listOptions'), sharesBackground: false, tintColor: colors.primary, type: 'menu' as const,
       menu: { multiselectable: true, title: t('stories.listOptions'), items: [
         {
           type: 'submenu' as const,

@@ -82,6 +82,31 @@ describe('DirectControlPlaneTransport', () => {
     });
   });
 
+  test('downloads binary responses on the verified origin with the owned bearer header', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 3, 250, 255]);
+    const fetchImpl = jest.fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>(async () => new Response(bytes, {
+      status: 200,
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-disposition': "attachment; filename*=UTF-8''archive.bin",
+      },
+    }));
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      fetchImpl: fetchImpl as typeof fetch,
+      probeImpl: async () => target,
+    });
+
+    const response = await transport.requestBinary('/api/download');
+
+    expect([...response.body]).toEqual([...bytes]);
+    expect(response.filename).toBe('archive.bin');
+    expect(response.contentType).toBe('application/octet-stream');
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer msess_test.secret');
+    expect(headers.get('accept')).toContain('application/octet-stream');
+  });
+
   test('uses the authenticated XHR path for upload progress', async () => {
     const requestHeaders = new Map<string, string>();
     const xhr = {

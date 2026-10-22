@@ -203,6 +203,18 @@ export const RelaySessionDetachedMessageSchema = z.strictObject({
   retryable: z.literal(true),
 });
 
+/**
+ * Sent before a Relay closes an attached socket so the client can distinguish a
+ * recoverable idle timeout from an authoritative session failure.
+ */
+export const RelaySessionClosedMessageSchema = z.strictObject({
+  type: z.literal("session-closed"),
+  sessionId: IdSchema,
+  code: z.string().trim().min(1).max(80),
+  retryable: z.boolean(),
+});
+export type RelaySessionClosedMessage = z.infer<typeof RelaySessionClosedMessageSchema>;
+
 /** Errors are sanitized: no grants, tickets, nonces, or key material. */
 export const RelaySessionRejectionCodeSchema = z.enum([
   "RELAY_SESSION_GRANT_INVALID",

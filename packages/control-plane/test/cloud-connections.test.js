@@ -179,6 +179,34 @@ test("relay data connection retries after a transient resume failure", { timeout
   assert.equal(resumeCalls, 2);
 });
 
+test("relay data connection discards a missing Relay session from the close reason", async () => {
+  let resumeCalls = 0;
+  const manager = new CloudRelayDataConnectionManager({
+    verifyAllocation: async (value) => value,
+    verifyGrant: async (grant) => ({ allocationId: grant.allocationId, relayUrl: grant.relayUrl, epoch: 1, channelKind: "access", grant }),
+    connector: {
+      async connect() { throw new Error("unexpected new connection"); },
+      async resume() {
+        resumeCalls += 1;
+        throw Object.assign(new Error("Cloud Relay closed the session (4400: RELAY_SESSION_NOT_FOUND)."), {
+          code: "RELAY_SOCKET_CLOSED",
+          retryable: true,
+          relayCloseCode: 4400,
+          relayCloseReason: "RELAY_SESSION_NOT_FOUND",
+        });
+      },
+    },
+  });
+
+  assert.deepEqual(await manager.applyGrant({
+    allocationId: "allocation_gone",
+    relayUrl: "wss://relay.example.test/connect",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), { status: "discarded", allocationId: "allocation_gone" });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(resumeCalls, 1, "a missing Relay session must not be retried");
+});
+
 test("relay data connection persists grants with private permissions and resumes after a process restart", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-sessions-"));
   const statePath = path.join(directory, "cloud-relay-sessions.json");
@@ -477,6 +505,56 @@ test("relay attach acknowledges the Coordinator before the client completes the 
   sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(hello)) });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(sockets[0].frames.some((frame) => frame.kind === "handshake"), true);
+  sockets[0].emit("message", Buffer.from(JSON.stringify({ type: "session-closed", sessionId: grant.sessionId, code: "idle-timeout", retryable: true })), false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sockets[0].readyState, FakeSocket.OPEN);
   await connection.close("test-done");
   assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
+});
+
+test("relay heartbeat terminates a half-open socket and reports the disconnect", { timeout: 5_000 }, async () => {
+  const sockets = [];
+  let disconnected = 0;
+  let resolveDisconnected;
+  const lost = new Promise((resolve) => { resolveDisconnected = resolve; });
+  class HalfOpenSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = HalfOpenSocket.CONNECTING;
+    pings = 0;
+    terminated = false;
+    listeners = new Map();
+    constructor(url) { this.url = url; sockets.push(this); queueMicrotask(() => { this.readyState = HalfOpenSocket.OPEN; this.emit("open"); }); }
+    on(event, listener) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
+    once(event, listener) { const wrapper = (...args) => { this.off(event, wrapper); listener(...args); }; this.on(event, wrapper); }
+    off(event, listener) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
+    emit(event, ...args) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
+    send(data) {
+      const message = JSON.parse(data);
+      if (message.type === "attach") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "attached", role: "control-plane", sessionId: message.grant.sessionId, allocationId: message.grant.allocationId, channelId: "relay_channel_half_open", generation: message.grant.generation, state: "waiting-for-peer", leaseExpiresAt: message.grant.expiresAt }) }));
+    }
+    ping() { this.pings += 1; }
+    terminate() { this.terminated = true; this.readyState = HalfOpenSocket.CLOSED; this.emit("close", 1006, Buffer.from("heartbeat-timeout")); }
+    close(code, reason) { this.readyState = HalfOpenSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
+  }
+  const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
+  const grant = relaySessionGrant({ now, allocationId: "allocation_a", relayUrl: "ws://localhost:8080/connect", targetPublicKeyFingerprint: fingerprint, accountId: "account_a", deviceSessionId: "device_a", controlPlaneId: "cp_cloud_a", bindingId: "binding_a" });
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey: new Uint8Array(32) }), publicIdentity: () => ({ publicKey: "c".repeat(43) }), signRelayRoleProof: (payload) => ({ ...payload, signature: "s".repeat(64) }) };
+  const connector = new CloudRelayConnector({ identity, bridge: {}, webSocket: HalfOpenSocket, heartbeatIntervalMs: 5, heartbeatTimeoutMs: 5 });
+  const connection = await connector.connect({
+    relayUrl: "ws://localhost:8080/connect",
+    allocation: { attach, grant },
+    onDisconnected: () => { disconnected += 1; resolveDisconnected(); },
+  });
+
+  let timer;
+  await Promise.race([lost, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("heartbeat did not detect the half-open socket")), 1_000); })]);
+  clearTimeout(timer);
+  assert.equal(sockets[0].pings, 1);
+  assert.equal(sockets[0].terminated, true);
+  assert.equal(disconnected, 1);
+  await connection.close("test-done");
 });

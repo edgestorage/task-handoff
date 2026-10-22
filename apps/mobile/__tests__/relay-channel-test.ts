@@ -3,7 +3,9 @@ import { deflateSync, inflateSync } from 'fflate';
 import nacl from 'tweetnacl';
 
 import { RELAY_FRAME_FLAG_DEFLATE, decodeRelayFrame, encodeRelayFrame } from '@task-handoff/cloud-contracts/mobile';
+import { encodeRelayResponseFrame } from '@task-handoff/protocol/relay-body';
 import { createMobileRelayChannelFactory } from '../src/control-plane/relay-channel';
+import { diagnosticLog } from '../src/observability/diagnostic-logs';
 
 type NodeWebCrypto = { getRandomValues(value: Uint8Array): Uint8Array; subtle: { digest(algorithm: string, data: Uint8Array): Promise<ArrayBuffer> } };
 
@@ -33,7 +35,7 @@ class FakeSocket {
   open() { this.readyState = 1; this.emit('open', {}); }
   send(data: string | Uint8Array) { this.sent.push(data); }
   close(code?: number, reason?: string) { this.readyState = 3; this.closed = { code, reason }; this.emit('close', {}); }
-  emit(type: SocketEvent, event: { data?: unknown }) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event); }
+  emit(type: SocketEvent, event: { data?: unknown; code?: number; reason?: string; message?: string }) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event); }
 }
 
 const now = '2026-10-20T00:00:00.000Z';
@@ -184,7 +186,12 @@ describe('createMobileRelayChannelFactory', () => {
     expect(JSON.parse(new TextDecoder().decode(opened!))).toEqual({ type: 'request', id: 'request_1', body: { path: '/api/bootstrap' } });
 
     socket.emit('message', { data: frame(1, nacl.secretbox(new TextEncoder().encode(JSON.stringify({ type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } })), nonce(2, 0), controlPlane.sessionKey)) });
-    expect(received).toEqual([{ type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } }]);
+    const chunk = new Uint8Array([4, 5, 6]);
+    socket.emit('message', { data: frame(2, nacl.secretbox(encodeRelayResponseFrame({ responseId: 11, offset: 0, bytes: chunk, final: true }), nonce(2, 1), controlPlane.sessionKey)) });
+    expect(received).toEqual([
+      { type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } },
+      { type: 'response-chunk', responseId: 11, offset: 0, bytes: chunk, final: true },
+    ]);
     channel.close();
   });
 
@@ -202,6 +209,33 @@ describe('createMobileRelayChannelFactory', () => {
     const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
     socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity })) });
     expect((await creating).leaseExpiresAt).toBe(attached.leaseExpiresAt);
+  });
+
+  test('keeps the Relay close code and reason when the socket error fires first', async () => {
+    const socket = new FakeSocket();
+    const logError = jest.spyOn(diagnosticLog, 'error').mockImplementation(() => undefined);
+    try {
+      const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+      const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
+      socket.open();
+      await flush();
+      socket.emit('error', { message: 'WebSocket receive failed.' });
+      socket.emit('close', { code: 4400, reason: 'RELAY_SESSION_GENERATION_STALE' });
+
+      await expect(creating).rejects.toMatchObject({
+        code: 'RELAY_SESSION_GENERATION_STALE',
+        retryable: false,
+        relayCloseCode: 4400,
+        relayCloseReason: 'RELAY_SESSION_GENERATION_STALE',
+      });
+      expect(logError).toHaveBeenCalledWith('relay.channel.failed', expect.objectContaining({
+        errorCode: 'RELAY_SESSION_GENERATION_STALE',
+        relayCloseCode: 4400,
+        relayCloseReason: 'RELAY_SESSION_GENERATION_STALE',
+      }));
+    } finally {
+      logError.mockRestore();
+    }
   });
 
   test('renews on the same socket without advancing the encrypted frame sequence', async () => {
@@ -227,6 +261,15 @@ describe('createMobileRelayChannelFactory', () => {
     channel.subscribeControl!((notice) => notices.push(notice));
     socket.emit('message', { data: JSON.stringify({ type: 'peer-detached', sessionId: 'session_a', retryable: true }) });
     expect(notices).toEqual([{ type: 'peer-detached', sessionId: 'session_a', retryable: true }]);
+    expect(channel.generation).toBe(1);
+  });
+
+  test('surfaces a structured session-closed notice before the socket closes', async () => {
+    const { channel, socket } = await connected();
+    const notices: any[] = [];
+    channel.subscribeControl!((notice) => notices.push(notice));
+    socket.emit('message', { data: JSON.stringify({ type: 'session-closed', sessionId: 'session_a', code: 'idle-timeout', retryable: true }) });
+    expect(notices).toEqual([{ type: 'session-closed', sessionId: 'session_a', code: 'idle-timeout', retryable: true }]);
     expect(channel.generation).toBe(1);
   });
 

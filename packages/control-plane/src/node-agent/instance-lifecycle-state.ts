@@ -62,7 +62,18 @@ function runtimeLifecycleCompleted(
     // observed by the adapter completing this lifecycle operation.
     target: observation.target ? { ...latest.target, ...observation.target } : latest.target,
     workspace: observation.workspace
-      ? hasFreshProcessReport ? { ...observation.workspace, ...latest.workspace } : { ...latest.workspace, ...observation.workspace }
+      ? hasFreshProcessReport
+        ? {
+            ...observation.workspace,
+            ...latest.workspace,
+            // A successful lifecycle observation explicitly clears workspace
+            // errors. Do not let a stale heartbeat restore that error while
+            // preserving the heartbeat's other workspace fields.
+            ...(Object.prototype.hasOwnProperty.call(observation.workspace, "error")
+              ? { error: observation.workspace.error }
+              : {}),
+          }
+        : { ...latest.workspace, ...observation.workspace }
       : latest.workspace,
     runtime: observation.runtime ? { ...latest.runtime, ...observation.runtime } : latest.runtime,
     updatedAt: observedAt,

@@ -1,5 +1,11 @@
 import type { Node } from "@task-handoff/protocol/control-plane";
-import type { NodeRelaySessionMessage } from "@task-handoff/protocol/node-relay-channel";
+import {
+  NODE_RELAY_MAIN_STREAM_ID,
+  NODE_RELAY_STREAM_HIGH_WATER_BYTES,
+  NODE_RELAY_STREAM_MAX_QUEUED_BYTES,
+  type NodeRelayDataFrame,
+  type NodeRelaySessionMessage,
+} from "@task-handoff/protocol/node-relay-channel";
 import type { NodeAgentTransport, NodeAgentWebSocket, NodeAgentWebSocketControl } from "./client.ts";
 import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
 import type { ControlPlaneNodeAgentTunnelTransport } from "./tunnel.ts";
@@ -24,20 +30,39 @@ export class MultiplexedNodeRelaySocket implements NodeAgentTunnelSocket {
   static readonly CLOSED = 3;
   readyState = MultiplexedNodeRelaySocket.OPEN;
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  private readonly queued: Array<{ raw: unknown; isBinary: boolean }> = [];
+  private readonly queued: Array<{ raw: unknown; isBinary: boolean; bytes: number }> = [];
+  private queuedBytes = 0;
+  private readonly outbound: Array<{ data: string | Buffer; binary: boolean; bytes: number }> = [];
+  private outboundBytes = 0;
+  private readonly writableWaiters: Array<() => void> = [];
+  private paused = false;
+  private remotePaused = false;
   private readonly channel: CloudRelayNodeChannel;
   readonly channelId: string;
+  readonly streamId: number;
 
-  constructor(channel: CloudRelayNodeChannel, channelId: string) {
+  constructor(channel: CloudRelayNodeChannel, channelId: string, streamId: number) {
     this.channel = channel;
     this.channelId = channelId;
+    this.streamId = streamId;
   }
 
   send(data: string | Buffer, options?: { binary?: boolean }) {
     if (this.readyState !== MultiplexedNodeRelaySocket.OPEN) throw nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED");
+    const binary = options?.binary ?? typeof data !== "string";
+    const bytes = typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
+    if (this.remotePaused) {
+      if (this.outboundBytes + bytes > NODE_RELAY_STREAM_MAX_QUEUED_BYTES) {
+        this.close(1013, "Node relay stream writer is too slow.");
+        throw nodeRelaySessionError("NODE_RELAY_STREAM_WRITE_QUEUE_LIMIT");
+      }
+      this.outbound.push({ data, binary, bytes });
+      this.outboundBytes += bytes;
+      return;
+    }
     // `ws` hands text frames to listeners as Buffers. Honour an explicit
     // `binary` flag first so bridged text frames stay text on the peer.
-    this.channel.sendData(this.channelId, data, options?.binary ?? typeof data !== "string");
+    this.channel.sendData(this.streamId, data, binary);
   }
 
   close(code = 1000, reason = "normal") {
@@ -59,8 +84,12 @@ export class MultiplexedNodeRelaySocket implements NodeAgentTunnelSocket {
     const current = this.listeners.get(event) ?? new Set();
     current.add(listener);
     this.listeners.set(event, current);
-    if (event === "message" && this.queued.length) {
-      for (const item of this.queued.splice(0)) for (const callback of current) callback(item.raw, item.isBinary);
+    if (event === "message") {
+      // A listener may attach after the high-water mark paused the stream while
+      // the tunnel socket was being constructed. Draining now closes that gap;
+      // otherwise both peers wait on a resume that only this side can send.
+      if (this.paused) this.resume();
+      else this.flushInbound();
     }
   }
 
@@ -74,27 +103,95 @@ export class MultiplexedNodeRelaySocket implements NodeAgentTunnelSocket {
 
   /** Inbound frames wait in a small bounded queue until the tunnel attaches a listener. */
   deliver(raw: unknown, isBinary: boolean) {
-    const listeners = this.listeners.get("message");
-    if (listeners?.size) {
-      for (const listener of [...listeners]) listener(raw, isBinary);
+    if (this.readyState !== MultiplexedNodeRelaySocket.OPEN) return;
+    const bytes = dataBytes(raw);
+    if (!this.paused && this.listeners.get("message")?.size) {
+      this.deliverNow(raw, isBinary);
       return;
     }
-    if (this.queued.length >= 256) {
-      this.close(1011, "Multiplexed channel pending frame limit exceeded.");
+    if (this.queuedBytes + bytes > NODE_RELAY_STREAM_MAX_QUEUED_BYTES) {
+      this.close(1013, "Node relay stream consumer is too slow.");
       return;
     }
-    this.queued.push({ raw, isBinary });
+    this.queued.push({ raw, isBinary, bytes });
+    this.queuedBytes += bytes;
+    if (!this.paused && this.queuedBytes >= NODE_RELAY_STREAM_HIGH_WATER_BYTES) this.pause();
+  }
+
+  pause() {
+    if (this.paused || this.readyState !== MultiplexedNodeRelaySocket.OPEN) return;
+    this.paused = true;
+    this.channel.sendStreamPause(this.streamId);
+  }
+
+  resume() {
+    if (!this.paused || this.readyState !== MultiplexedNodeRelaySocket.OPEN) return;
+    this.paused = false;
+    this.flushInbound();
+    if (!this.paused) this.channel.sendStreamResume(this.streamId);
+  }
+
+  remotePause() {
+    this.remotePaused = true;
+  }
+
+  remoteResume() {
+    if (!this.remotePaused) return;
+    this.remotePaused = false;
+    this.flushOutbound();
+    for (const resolve of this.writableWaiters.splice(0)) resolve();
+  }
+
+  async waitForWritable() {
+    if (this.remotePaused || this.outbound.length) {
+      await new Promise<void>((resolve) => this.writableWaiters.push(resolve));
+    }
+    await this.channel.waitForOutboundCapacity();
   }
 
   /** The session ended underneath us: nothing more can be sent or received. */
   remoteClosed(code: number, reason: string) {
     if (this.readyState === MultiplexedNodeRelaySocket.CLOSED) return;
     this.readyState = MultiplexedNodeRelaySocket.CLOSED;
+    this.queued.length = 0;
+    this.queuedBytes = 0;
+    this.outbound.length = 0;
+    this.outboundBytes = 0;
+    for (const resolve of this.writableWaiters.splice(0)) resolve();
     this.emit("close", code, reason);
   }
 
-  pause() {}
-  resume() {}
+  private deliverNow(raw: unknown, isBinary: boolean) {
+    for (const listener of [...(this.listeners.get("message") ?? [])]) listener(raw, isBinary);
+  }
+
+  private flushInbound() {
+    while (!this.paused && this.listeners.get("message")?.size && this.queued.length) {
+      const item = this.queued.shift()!;
+      this.queuedBytes -= item.bytes;
+      this.deliverNow(item.raw, item.isBinary);
+    }
+  }
+
+  private flushOutbound() {
+    while (!this.remotePaused && this.outbound.length && this.readyState === MultiplexedNodeRelaySocket.OPEN) {
+      const item = this.outbound.shift()!;
+      this.outboundBytes -= item.bytes;
+      try { this.channel.sendData(this.streamId, item.data, item.binary); }
+      catch (error) {
+        this.remoteClosed(1011, error instanceof Error ? error.message : "Node relay stream write failed.");
+        return;
+      }
+    }
+  }
+}
+
+function dataBytes(value: unknown) {
+  if (typeof value === "string") return Buffer.byteLength(value, "utf8");
+  if (Buffer.isBuffer(value)) return value.byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  return Buffer.byteLength(String(value), "utf8");
 }
 
 class CloudRelayNodeChannel {
@@ -103,6 +200,7 @@ class CloudRelayNodeChannel {
   private readonly ingress: NodeTunnelIngress;
   private readonly nodeId: string;
   private readonly aux = new Map<string, MultiplexedNodeRelaySocket>();
+  private readonly auxByStreamId = new Map<number, MultiplexedNodeRelaySocket>();
   private readonly onClosed: (reason: string) => void;
   private closed = false;
 
@@ -110,13 +208,14 @@ class CloudRelayNodeChannel {
     this.nodeId = options.nodeId;
     this.ingress = options.ingress;
     this.onClosed = options.onClosed;
-    this.mainSocket = new MultiplexedNodeRelaySocket(this, "main");
+    this.mainSocket = new MultiplexedNodeRelaySocket(this, "main", NODE_RELAY_MAIN_STREAM_ID);
     this.session = new EncryptedNodeRelayChannel({
       socket: options.socket,
       key: options.key,
       sendDirection: NODE_RELAY_DIRECTION_CONTROL_PLANE,
       receiveDirection: NODE_RELAY_DIRECTION_NODE,
       onMessage: (message) => this.handleMessage(message),
+      onData: (frame) => this.handleData(frame),
       onClosed: (reason) => this.finish(reason),
     });
   }
@@ -126,10 +225,24 @@ class CloudRelayNodeChannel {
     this.ingress.attachMain(this.nodeId, this.mainSocket);
   }
 
-  sendData(channelId: string, data: string | Buffer, binary: boolean) {
-    this.session.send(binary || typeof data !== "string"
-      ? { type: "channel-data", channelId, data: Buffer.from(data as Buffer).toString("base64"), binary: true }
-      : { type: "channel-data", channelId, data, binary: false });
+  sendData(streamId: number, data: string | Buffer, binary: boolean) {
+    this.session.sendData(streamId, data, binary);
+  }
+
+  waitForOutboundCapacity() {
+    return this.session.waitForOutboundCapacity();
+  }
+
+  sendStreamPause(streamId: number) {
+    if (this.closed) return;
+    try { this.session.send({ type: "stream-pause", streamId }); }
+    catch { /* a closing channel has no reader left to pause */ }
+  }
+
+  sendStreamResume(streamId: number) {
+    if (this.closed) return;
+    try { this.session.send({ type: "stream-resume", streamId }); }
+    catch { /* a closing channel has no reader left to resume */ }
   }
 
   sendClose(channelId: string, code: number, reason: string) {
@@ -155,6 +268,7 @@ class CloudRelayNodeChannel {
       const socket = this.aux.get(channelId);
       if (!socket) return;
       this.aux.delete(channelId);
+      this.auxByStreamId.delete(socket.streamId);
       this.sendClose(channelId, code, reason);
       socket.remoteClosed(code, reason);
       return;
@@ -167,6 +281,7 @@ class CloudRelayNodeChannel {
     this.closed = true;
     const aux = [...this.aux.values()];
     this.aux.clear();
+    this.auxByStreamId.clear();
     for (const socket of aux) socket.remoteClosed(1001, reason);
     this.mainSocket.remoteClosed(1001, reason);
     this.session.close(reason);
@@ -183,32 +298,43 @@ class CloudRelayNodeChannel {
       return;
     }
     if (message.type === "channel-open") {
-      if (message.channelId === "main" || this.aux.has(message.channelId)) {
+      if (message.channelId === "main" || this.aux.has(message.channelId) || this.auxByStreamId.has(message.streamId)) {
         this.session.send({ type: "channel-reject", channelId: message.channelId, code: "NODE_RELAY_CHANNEL_DUPLICATE" });
         return;
       }
-      const socket = new MultiplexedNodeRelaySocket(this, message.channelId);
+      const socket = new MultiplexedNodeRelaySocket(this, message.channelId, message.streamId);
       this.aux.set(message.channelId, socket);
-      this.session.send({ type: "channel-accept", channelId: message.channelId });
+      this.auxByStreamId.set(message.streamId, socket);
       if (!this.ingress.attachAuxiliary(this.nodeId, message.channelId, socket)) {
         this.aux.delete(message.channelId);
+        this.auxByStreamId.delete(message.streamId);
         this.sendClose(message.channelId, 1008, "Unknown reverse tunnel channel.");
+        return;
       }
-      return;
-    }
-    if (message.type === "channel-data") {
-      const target = message.channelId === "main" ? this.mainSocket : this.aux.get(message.channelId);
-      if (!target) return;
-      const binary = message.binary === true;
-      target.deliver(binary ? Buffer.from(message.data, "base64") : message.data, binary);
+      // Attach first: the peer opens optimistically and may already be
+      // producing response data by the time this accept reaches it.
+      this.session.send({ type: "channel-accept", channelId: message.channelId, streamId: message.streamId });
       return;
     }
     if (message.type === "channel-close") {
       const target = message.channelId === "main" ? this.mainSocket : this.aux.get(message.channelId);
       if (!target) return;
-      if (message.channelId !== "main") this.aux.delete(message.channelId);
+      if (message.channelId !== "main") {
+        this.aux.delete(message.channelId);
+        this.auxByStreamId.delete(target.streamId);
+      }
       target.remoteClosed(message.code ?? 1000, message.reason ?? "closed");
       if (message.channelId === "main") this.close("remote-closed");
+      return;
+    }
+    if (message.type === "stream-pause") {
+      const target = message.streamId === NODE_RELAY_MAIN_STREAM_ID ? this.mainSocket : this.auxByStreamId.get(message.streamId);
+      target?.remotePause();
+      return;
+    }
+    if (message.type === "stream-resume") {
+      const target = message.streamId === NODE_RELAY_MAIN_STREAM_ID ? this.mainSocket : this.auxByStreamId.get(message.streamId);
+      target?.remoteResume();
       return;
     }
     if (message.type === "channel-accept" || message.type === "channel-reject") {
@@ -216,11 +342,22 @@ class CloudRelayNodeChannel {
     }
   }
 
+  private handleData(frame: NodeRelayDataFrame) {
+    if (this.closed) return;
+    const target = frame.streamId === NODE_RELAY_MAIN_STREAM_ID ? this.mainSocket : this.auxByStreamId.get(frame.streamId);
+    if (!target) return;
+    const bytes = Buffer.isBuffer(frame.data)
+      ? frame.data
+      : Buffer.from(frame.data.buffer as ArrayBuffer, frame.data.byteOffset, frame.data.byteLength);
+    target.deliver(frame.binary ? bytes : bytes.toString("utf8"), frame.binary);
+  }
+
   private finish(reason: string) {
     if (this.closed) return;
     this.closed = true;
     const aux = [...this.aux.values()];
     this.aux.clear();
+    this.auxByStreamId.clear();
     for (const socket of aux) socket.remoteClosed(1001, reason);
     this.mainSocket.remoteClosed(1001, reason);
     this.onClosed(reason);

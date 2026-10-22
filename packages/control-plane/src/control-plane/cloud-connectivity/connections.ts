@@ -17,6 +17,17 @@ type DataConnectionEntry = {
 };
 
 const COORDINATOR_ORIGIN_COOLDOWN_MS = 5_000;
+const TERMINAL_RELAY_RESUME_CODES = new Set([
+  "RELAY_SESSION_NOT_FOUND",
+  "RELAY_SESSION_REVOKED",
+  "RELAY_SESSION_EXPIRED",
+  "RELAY_SESSION_GRANT_INVALID",
+  "RELAY_SESSION_ROLE_MISMATCH",
+  "RELAY_SESSION_PROOF_INVALID",
+  "RELAY_SESSION_REPLAYED",
+  "RELAY_SESSION_GENERATION_STALE",
+  "RELAY_SESSION_GENERATION_CONFLICT",
+]);
 
 export class CloudControlConnectionManager {
   private connection?: ManagedConnection;
@@ -282,7 +293,7 @@ export class CloudRelayDataConnectionManager {
           this.disconnected(verified.allocationId);
         }
       }
-      await this.resume(verified.allocationId);
+      if (!await this.resumeGrant(verified.allocationId)) return { status: "discarded" as const, allocationId: verified.allocationId };
       return { status: "resumed" as const, allocationId: verified.allocationId };
     }
     const entry: DataConnectionEntry = {
@@ -294,7 +305,7 @@ export class CloudRelayDataConnectionManager {
     };
     await this.persist(entry);
     this.connections.set(verified.allocationId, entry);
-    await this.resume(verified.allocationId);
+    if (!await this.resumeGrant(verified.allocationId)) return { status: "discarded" as const, allocationId: verified.allocationId };
     return { status: "resumed" as const, allocationId: verified.allocationId };
   }
 
@@ -397,6 +408,19 @@ export class CloudRelayDataConnectionManager {
     return entry.resuming;
   }
 
+  private async resumeGrant(allocationId: string) {
+    try {
+      await this.resume(allocationId);
+      return true;
+    } catch (error) {
+      // Relays describe session rejection in the WebSocket close reason while the
+      // transport error itself stays generic. A missing session is terminal, so it
+      // must not close the Coordinator event stream or keep backing off forever.
+      if (terminalResumeFailure(error)) return false;
+      throw error;
+    }
+  }
+
   private async persist(entry: DataConnectionEntry) {
     if (!this.sessionStore || !entry.verified.grant) return;
     const grant = entry.verified.grant as { allocationId?: unknown };
@@ -420,8 +444,9 @@ function connectionError(code: string) {
 }
 
 function terminalResumeFailure(error: unknown) {
-  const code = (error as { code?: unknown } | null)?.code;
-  return ["RELAY_SESSION_NOT_FOUND", "RELAY_SESSION_REVOKED", "RELAY_SESSION_EXPIRED", "RELAY_SESSION_GRANT_INVALID", "RELAY_SESSION_ROLE_MISMATCH", "RELAY_SESSION_PROOF_INVALID"].includes(String(code));
+  if (error === null || typeof error !== "object") return false;
+  const { code, relayCloseReason } = error as { code?: unknown; relayCloseReason?: unknown };
+  return [code, relayCloseReason].some((value) => value !== undefined && TERMINAL_RELAY_RESUME_CODES.has(String(value)));
 }
 
 function coordinatorConnectRetryable(error: unknown) {

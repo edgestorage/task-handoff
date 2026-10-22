@@ -64,6 +64,12 @@ import { binaryUnsupported } from "./errors.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 
+function attachmentArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 // The Control Plane projection is the protocol AI session model: `unread` is
 // owned by the controlled-instance session runtime and now travels with it.
 export const ControlPlaneAiSessionSummarySchema = AiSessionSummarySchema;
@@ -223,9 +229,22 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     pauseQueue(instanceId: string, sessionId: string, input: { paused: boolean }) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/pause`, AiSessionQueueMutationResponseSchema, jsonRequest("POST", AiSessionQueuePauseInputSchema.parse(input)));
     },
-    async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
+    async uploadAttachment(input: {
+      instanceId: string;
+      sessionId: string;
+      scopeType?: "session" | "create-request";
+      kind: "image" | "file";
+      name: string;
+      mime: string;
+    } & ({ data: string; bytes?: never } | { bytes: Uint8Array; data?: never }), onProgress?: (progress: number) => void) {
       onProgress?.(0);
-      const content = await fetch(input.data).then((response) => response.arrayBuffer());
+      // Native clients pass the file bytes directly. Only the browser/legacy
+      // callers decode data URLs; React Native rejects large data: fetches
+      // before the upload transport is ever entered.
+      const fetched = input.bytes ? undefined : await fetch(input.data).then((response) => response.arrayBuffer()) as ArrayBuffer | Iterable<number>;
+      const content = input.bytes
+        ? attachmentArrayBuffer(input.bytes)
+        : fetched instanceof ArrayBuffer ? fetched : new Uint8Array(Array.from(fetched!)).buffer;
       const query = new URLSearchParams({
         scopeType: input.scopeType || "session",
         scopeId: input.sessionId,
@@ -243,7 +262,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
           onProgress,
         );
       } catch (error) {
-        if (!isMissingScopedAttachmentUploadRoute(error)) throw error;
+        if (!input.data || !isMissingScopedAttachmentUploadRoute(error)) throw error;
         // Compatibility for v0.0.21: its public upload endpoint accepts the same
         // attachment content and scopes create requests by clientRequestId.
         response = await transport.request(

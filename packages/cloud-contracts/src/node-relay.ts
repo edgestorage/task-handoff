@@ -58,6 +58,8 @@ export const NodeRelayBindingTokenIssueSchema = z.strictObject({
 
 export const NodeRelayBindingRedemptionRequestSchema = z.strictObject({
   token: OpaqueSecretSchema,
+  /** Stable Node Agent identity, forwarded to the claiming Control Plane. */
+  nodeId: IdSchema.optional(),
   nodePublicKey: PublicKeySchema,
   nodePublicKeyFingerprint: Sha256DigestSchema,
   displayName: z.string().trim().min(1).max(160).optional(),
@@ -173,6 +175,8 @@ export const NodeRelayAllocationEventSchema = z.strictObject({
   relayRegion: z.string().trim().min(1).max(80),
   relayUrl: z.string().url(),
   nodeHandle: NodeRelayHandleSchema,
+  /** Lets a Control Plane avoid dialing a machine it already manages directly. */
+  nodeId: IdSchema.optional(),
   accountId: IdSchema.optional(),
   controlPlaneId: IdSchema,
   bindingId: IdSchema,
@@ -198,6 +202,8 @@ export const NodeRelayAllocationEventSchema = z.strictObject({
  * Coordinator may reuse a live lease so repeated polls stay idempotent.
  */
 export const NodeRelayAllocationRequestSchema = z.strictObject({
+  /** Stable Node Agent identity, used to backfill bindings created before it was recorded. */
+  nodeId: IdSchema.optional(),
   controlPlaneId: IdSchema.optional(),
   refreshControlPlaneIds: z.array(IdSchema).max(8).optional(),
 });

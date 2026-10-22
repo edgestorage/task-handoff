@@ -221,10 +221,12 @@ export class MobileControlPlaneConnectionCoordinator {
     this.activeDomains = desired;
     if (!this.connected) {
       for (const domain of this.domains.values()) domain.offline?.();
+      diagnosticLog.info('runtime.connect.skipped', { reason: 'offline', previousPhase: this.snapshotValue.phase });
       this.publish({ phase: 'offline' });
       return;
     }
     if (!desired.length) {
+      diagnosticLog.info('runtime.connect.skipped', { reason: 'no-domains', previousPhase: this.snapshotValue.phase });
       this.publish({ phase: 'idle' });
       return;
     }
@@ -235,6 +237,7 @@ export class MobileControlPlaneConnectionCoordinator {
       accessKind: this.profile.access.kind,
       reconnectAttempts: this.reconnectBackoff.attempts,
       domains: desired.length,
+      domainKeys: desired.map((domain) => domain.key).sort(),
       foreground: this.foreground,
       carPlayConnected: this.carPlayConnected,
     });

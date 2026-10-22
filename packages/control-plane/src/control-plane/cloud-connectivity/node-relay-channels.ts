@@ -26,7 +26,9 @@ export type CloudNodeRelayChannelsOptions = {
   transport?: () => CloudNodeRelayChannelTransport | undefined;
   nodes: {
     resolve(nodeHandle: string): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | undefined;
-    ensure(input: { nodeHandle: string; displayName?: string }): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | Promise<{ nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean }>;
+    inspectNode?(nodeId: string): { nodeId: string; connectionKind: string; nodeHandle?: string } | undefined;
+    linkNode?(nodeId: string, nodeHandle: string): void | Promise<void>;
+    ensure(input: { nodeHandle: string; nodeId: string; displayName?: string }): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | Promise<{ nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean }>;
     savePairing(nodeId: string, pairing: { keyId: string; secret: string }): void | Promise<void>;
     connected(nodeId: string, input: { nodeHandle: string }): void | Promise<void>;
     disconnected(nodeId: string, input: { nodeHandle: string; reason: string }): void | Promise<void>;
@@ -75,63 +77,113 @@ export class CloudNodeRelayChannels {
       this.recordError((raw as any)?.nodeHandle, error);
       throw error;
     }
+    const resolved = this.options.nodes.resolve(verified.nodeHandle);
+    const current = this.channels.get(verified.nodeHandle);
+    const knownIdentity = verified.nodeId ? this.options.nodes.inspectNode?.(verified.nodeId) : undefined;
+    if (resolved && verified.nodeId && resolved.nodeId !== verified.nodeId) {
+      const error = nodeIdentityMismatch(verified.nodeHandle, resolved.nodeId, verified.nodeId);
+      this.recordError(verified.nodeHandle, error);
+      throw error;
+    }
+    if (resolved?.preserveLocalConnection) {
+      // The node is already managed here over its original transport. A stale
+      // or duplicate cloud claim must not create a second local record or
+      // overwrite the original pairing.
+      this.discardChannel(verified.nodeHandle, "local-connection-preserved");
+      this.claims.delete(verified.nodeHandle);
+      this.errors.delete(verified.nodeHandle);
+      await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
+      return { status: "attached" as const, preservedLocalConnection: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
+    }
+    if (knownIdentity?.connectionKind === "cloud-relay" && knownIdentity.nodeHandle !== verified.nodeHandle) {
+      const error = nodeIdentityMismatch(verified.nodeHandle, knownIdentity.nodeId, knownIdentity.nodeHandle ?? "another node handle");
+      this.recordError(verified.nodeHandle, error);
+      throw error;
+    }
+    if (knownIdentity && knownIdentity.connectionKind !== "cloud-relay") {
+      // The cloud supplied the machine identity before we dialed: this node is
+      // already managed over a direct connection, so no Relay channel is opened.
+      await this.options.nodes.linkNode?.(knownIdentity.nodeId, verified.nodeHandle);
+      this.discardChannel(verified.nodeHandle, "local-connection-preserved");
+      this.claims.delete(verified.nodeHandle);
+      this.errors.delete(verified.nodeHandle);
+      await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
+      this.options.audit?.({ type: "node-relay.channel.preserved", outcome: "allowed", nodeHandle: verified.nodeHandle, reason: "direct-connection" });
+      return { status: "attached" as const, preservedLocalConnection: true, nodeId: knownIdentity.nodeId, nodeHandle: verified.nodeHandle };
+    }
     const transport = this.options.transport?.();
     if (!transport) {
       const error = Object.assign(new Error("Cloud relay node transport is unavailable."), { code: "NODE_RELAY_TRANSPORT_UNAVAILABLE", retryable: true });
       this.recordError(verified.nodeHandle, error);
       throw error;
     }
-    const resolved = this.options.nodes.resolve(verified.nodeHandle) ?? await this.options.nodes.ensure({ nodeHandle: verified.nodeHandle, displayName: verified.displayName });
-    const current = this.channels.get(verified.nodeHandle);
-    if (resolved.preserveLocalConnection) {
-      // The node is already managed here over its original transport. A stale
-      // or duplicate cloud claim must not create a second local record or
-      // overwrite the original pairing.
-      if (current) this.closeNode(verified.nodeHandle, "local-connection-preserved");
-      this.claims.delete(verified.nodeHandle);
-      this.errors.delete(verified.nodeHandle);
-      await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
-      return { status: "attached" as const, preservedLocalConnection: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
-    }
-    if (current && current.allocationId === verified.allocationId && transport.connected(resolved.nodeId)) return { status: "attached" as const, replayed: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
+    if (current && current.allocationId === verified.allocationId && transport.connected(current.nodeId)) return { status: "attached" as const, replayed: true, nodeId: current.nodeId, nodeHandle: verified.nodeHandle };
     // A superseding allocation for the same node replaces the live channel; the
     // stale one is torn down before the new session starts.
     if (current) this.closeNode(verified.nodeHandle, "allocation-superseded");
     const connection = await this.options.connector.connect({
       allocation: verified,
       serviceOrigin: this.options.state.snapshot().serviceOrigin,
-      ...(resolved.pairing ? { pairing: resolved.pairing } : {}),
+      ...(resolved?.pairing ? { pairing: resolved.pairing } : {}),
       createPairing: () => ({ keyId: `key_${crypto.randomUUID().replaceAll("-", "_")}`, secret: crypto.randomBytes(32).toString("base64url") }),
     }).catch((error: unknown) => {
       this.recordError(verified.nodeHandle, error);
       throw error;
     });
-    if (connection.issuedPairing) await this.options.nodes.savePairing(resolved.nodeId, connection.issuedPairing);
+    if (verified.nodeId && verified.nodeId !== connection.nodeId) {
+      closeConnection(connection.socket, "node-relay-node-id-mismatch");
+      const error = nodeIdentityMismatch(verified.nodeHandle, verified.nodeId, connection.nodeId);
+      this.recordError(verified.nodeHandle, error);
+      throw error;
+    }
+    let identity = resolved;
+    if (!identity) {
+      try {
+        identity = await this.options.nodes.ensure({ nodeHandle: verified.nodeHandle, nodeId: connection.nodeId, displayName: verified.displayName });
+      } catch (error) {
+        closeConnection(connection.socket, "node-relay-node-id-conflict");
+        this.recordError(verified.nodeHandle, error);
+        throw error;
+      }
+    }
+    if (identity.nodeId !== connection.nodeId) {
+      closeConnection(connection.socket, "node-relay-node-id-mismatch");
+      const error = nodeIdentityMismatch(verified.nodeHandle, identity.nodeId, connection.nodeId);
+      this.recordError(verified.nodeHandle, error);
+      throw error;
+    }
+    if (identity.preserveLocalConnection) {
+      closeConnection(connection.socket, "local-connection-preserved");
+      this.discardChannel(verified.nodeHandle, "local-connection-preserved");
+      this.claims.delete(verified.nodeHandle);
+      this.errors.delete(verified.nodeHandle);
+      await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
+      return { status: "attached" as const, preservedLocalConnection: true, nodeId: identity.nodeId, nodeHandle: verified.nodeHandle };
+    }
+    if (connection.issuedPairing) await this.options.nodes.savePairing(identity.nodeId, connection.issuedPairing);
     this.channels.set(verified.nodeHandle, {
       allocationId: verified.allocationId,
-      nodeId: resolved.nodeId,
+      nodeId: identity.nodeId,
       ...(connection.channelId ? { channelId: connection.channelId } : {}),
       connectedAt: new Date(this.now()).toISOString(),
     });
     this.claims.delete(verified.nodeHandle);
     this.errors.delete(verified.nodeHandle);
-    transport.attachNode(resolved.nodeId, {
+    transport.attachNode(identity.nodeId, {
       socket: connection.socket,
       key: connection.key,
       onClosed: (reason) => this.handleClosed(verified.nodeHandle, reason),
     });
-    await this.options.nodes.connected(resolved.nodeId, { nodeHandle: verified.nodeHandle });
+    await this.options.nodes.connected(identity.nodeId, { nodeHandle: verified.nodeHandle });
     this.options.audit?.({ type: "node-relay.channel.attached", outcome: "allowed", nodeHandle: verified.nodeHandle, reason: connection.paired ? "paired" : "pairing-established" });
-    return { status: "attached" as const, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
+    return { status: "attached" as const, nodeId: identity.nodeId, nodeHandle: verified.nodeHandle };
   }
 
   closeNode(nodeHandle: string, reason: string) {
     const channel = this.channels.get(nodeHandle);
     if (!channel) return false;
-    this.channels.delete(nodeHandle);
-    this.options.transport?.()?.detachNode(channel.nodeId, reason);
+    this.discardChannel(nodeHandle, reason);
     void this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason });
-    this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
     return true;
   }
 
@@ -161,6 +213,16 @@ export class CloudNodeRelayChannels {
     this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
   }
 
+  /** Drops only the Relay channel; a preserved direct node keeps its own status and health. */
+  private discardChannel(nodeHandle: string, reason: string) {
+    const channel = this.channels.get(nodeHandle);
+    if (!channel) return false;
+    this.channels.delete(nodeHandle);
+    this.options.transport?.()?.detachNode(channel.nodeId, reason);
+    this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
+    return true;
+  }
+
   private recordError(nodeHandle: string | undefined, error: unknown) {
     if (!nodeHandle) return;
     const code = typeof (error as any)?.code === "string" ? (error as any).code : "NODE_RELAY_CHANNEL_FAILED";
@@ -171,4 +233,21 @@ export class CloudNodeRelayChannels {
   private now() {
     return this.options.now ? this.options.now() : Date.now();
   }
+}
+
+function closeConnection(socket: NodeRelayFrameSocket, reason: string) {
+  try {
+    socket.close(4409, reason);
+  } catch {
+    // The peer may already have closed after completing the handshake.
+  }
+}
+
+function nodeIdentityMismatch(nodeHandle: string, localNodeId: string, relayNodeId: string) {
+  return Object.assign(new Error(
+    `Cloud relay handle ${nodeHandle} is bound to node ${localNodeId}, but the node agent reported ${relayNodeId}.`,
+  ), {
+    code: "CLOUD_RELAY_NODE_ID_MISMATCH",
+    retryable: false,
+  });
 }

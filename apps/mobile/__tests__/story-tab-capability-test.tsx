@@ -2,6 +2,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import StoriesLayout from '../app/(tabs)/(main)/stories/_layout';
 import StoriesRoute from '../app/(tabs)/(main)/stories/index';
+import { mobileLightColors } from '../src/components/theme';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { updateStoryViewPreferences } from '../src/stories/story-view-preferences';
 
@@ -29,11 +30,13 @@ jest.mock('../src/components/PrimaryTabStack', () => {
   const { Pressable, Text } = jest.requireActual<typeof import('react-native')>('react-native');
   type MockMenuEntry = { items?: MockMenuEntry[]; label?: string; multiselectable?: boolean; onPress?: () => void; state?: string; type: string };
   const actions = (items: MockMenuEntry[]): MockMenuEntry[] => items.flatMap((item) => item.items ? actions(item.items) : [item]);
-  return { PrimaryTabStack: ({ headerRightItems, onAdd, scopeControl }: { headerRightItems?: () => { menu?: { items: MockMenuEntry[]; multiselectable?: boolean }; type: string }[]; onAdd?: () => void; scopeControl?: React.ReactNode }) => {
-    const menu = headerRightItems?.().find((item) => item.type === 'menu')?.menu;
+  return { PrimaryTabStack: ({ headerRightItems, onAdd, scopeControl }: { headerRightItems?: () => { menu?: { items: MockMenuEntry[]; multiselectable?: boolean }; tintColor?: string; type: string }[]; onAdd?: () => void; scopeControl?: React.ReactNode }) => {
+    const headerItems = headerRightItems?.();
+    const menu = headerItems?.find((item) => item.type === 'menu')?.menu;
     return React.createElement(React.Fragment, null,
       React.createElement(Text, null, onAdd ? 'Story add enabled' : 'Story add disabled'),
       scopeControl,
+      headerItems ? React.createElement(Text, { testID: 'native-header-tint' }, JSON.stringify(headerItems.filter((item) => item.type !== 'spacing').map((item) => item.tintColor))) : null,
       menu ? React.createElement(Text, { testID: 'native-menu-shape' }, JSON.stringify({ multiselectable: menu.multiselectable, submenus: menu.items.map((item) => ({ multiselectable: item.multiselectable, type: item.type })) })) : null,
       ...actions(menu?.items ?? []).map((action) => React.createElement(Pressable, { accessibilityLabel: `native-${action.label}`, key: action.label, onPress: action.onPress }, React.createElement(Text, null, `${action.label}:${action.state}`))),
     );
@@ -78,6 +81,7 @@ describe('<StoriesLayout />', () => {
 
     expect(screen.getByText('Story add enabled')).toBeTruthy();
     expect(screen.getByText('Story node scope')).toBeTruthy();
+    expect(JSON.parse(screen.getByTestId('native-header-tint').props.children)).toEqual([mobileLightColors.primary, mobileLightColors.primary]);
   });
 
   test('updates the native sort checkmark after one selection', async () => {

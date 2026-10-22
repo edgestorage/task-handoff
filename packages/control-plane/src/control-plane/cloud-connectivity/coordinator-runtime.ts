@@ -539,15 +539,20 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
       async close(reason = "normal") { intentional = true; if (heartbeat) clearInterval(heartbeat); socket.close(1000, reason.slice(0, 120)); },
     };
     socket.on("open", () => socket.send(JSON.stringify(options.register)));
-    socket.on("message", async (raw) => {
+    const handleMessage = async (raw: WebSocket.RawData) => {
       let message: any; try { message = JSON.parse(raw.toString()); } catch { return socket.close(1002, "invalid-json"); }
       if (message.type === "registered") { const registration = OutboundConnectionRegistrationResponseSchema.parse(message); options.onRegistered?.(registration); registered = true; heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000); heartbeat.unref(); return resolve(connection); }
-      if (message.type === "event") return options.onEvent(message.event);
+      if (message.type === "event") return await options.onEvent(message.event);
       if (message.type === "response") { const item = pending.get(message.requestId); if (!item) return; pending.delete(message.requestId); return message.error ? item.reject(Object.assign(new Error(message.error.message), { code: message.error.code })) : item.resolve(message.data); }
       if (message.type === "request" && options.onRequest) {
         try { socket.send(JSON.stringify({ type: "response", requestId: message.requestId, data: await options.onRequest(message.operation, message.payload) })); }
         catch (error) { socket.send(JSON.stringify({ type: "response", requestId: message.requestId, error: { code: (error as any)?.code ?? "REQUEST_FAILED", message: error instanceof Error ? error.message : String(error) } })); }
       }
+    };
+    socket.on("message", (raw) => {
+      void handleMessage(raw).catch(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.close(1011, "message-handler-failed");
+      });
     });
     socket.on("error", (error) => fail(error));
     socket.on("close", () => { if (heartbeat) clearInterval(heartbeat); fail(runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED")); if (!intentional) options.onDisconnected(); });

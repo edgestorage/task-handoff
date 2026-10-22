@@ -10,20 +10,22 @@ import {
   nodeRelayFingerprint,
   type NodeRelayFrameSocket,
 } from "../../src/shared/cloud-relay/node-relay-session.ts";
+import { NODE_RELAY_MAIN_STREAM_ID } from "@task-handoff/protocol/node-relay-channel";
 import type { CloudNodeRelayChannelConnector } from "../../src/control-plane/cloud-connectivity/node-relay-channels.ts";
 import type { ConnectedNodeRelayChannel, VerifiedNodeRelayAllocation } from "../../src/control-plane/cloud-connectivity/node-relay-connector.ts";
 
 /** Deterministic-shape Ed25519 identity with the same surface the Control Plane exposes. */
-export function ed25519Identity() {
+export function ed25519Identity(nodeId = "node_agent_test") {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyRaw = String((publicKey.export({ format: "jwk" }) as { x: string }).x);
   return {
+    nodeId,
     publicKey: publicKeyRaw,
     sign(input: string) { return crypto.sign(null, Buffer.from(input), privateKey).toString("base64url"); },
   };
 }
 
-export type InMemoryFrameSocket = NodeRelayFrameSocket & { deliver(raw: unknown, isBinary: boolean): void; drop(): void };
+export type InMemoryFrameSocket = NodeRelayFrameSocket & { bufferedAmount: number; deliver(raw: unknown, isBinary: boolean): void; drop(): void };
 
 /** Two in-memory sockets that behave like ws peers, including pre-listener buffering. */
 export function linkedFrameSockets() {
@@ -33,6 +35,7 @@ export function linkedFrameSockets() {
     const closeListeners: Array<(code?: number, reason?: unknown) => void> = [];
     const socket = {
       readyState: 1,
+      bufferedAmount: 0,
       send(data: string | Uint8Array) { peer().deliver(Buffer.from(data), true); },
       close() { socket.readyState = 3; for (const listener of closeListeners) listener(1000, "closed"); peer().drop(); },
       on(event: string, listener: (...args: any[]) => void) {
@@ -66,6 +69,7 @@ export function nodeRelayAllocationEvent(input: {
   allocationId: string;
   relayId?: string;
   nodeHandle: string;
+  nodeId?: string;
   controlPlaneId: string;
   accountId: string;
   bindingId: string;
@@ -109,6 +113,7 @@ export function nodeRelayAllocationEvent(input: {
     controlPlaneAttach: attach,
     expiresAt: input.expiresAt ?? new Date(now + 5 * 60_000).toISOString(),
     nodePublicKeyFingerprint: input.nodePublicKeyFingerprint,
+    ...(input.nodeId ? { nodeId: input.nodeId } : {}),
     ...(input.displayName ? { displayName: input.displayName } : {}),
   });
 }
@@ -169,6 +174,7 @@ export function acceptingNodeRelayConnector(input: {
       return {
         socket,
         key: accepted.key,
+        nodeId: accepted.init.nodeId,
         paired: accepted.paired,
         ...(accepted.issuedPairing ? { issuedPairing: accepted.issuedPairing } : {}),
         allocationId: options.allocation.allocationId,
@@ -185,7 +191,7 @@ export function acceptingNodeRelayConnector(input: {
 export async function startNodeSession(
   socket: NodeRelayFrameSocket,
   grant: ReturnType<typeof nodeRelayClaimGrant>,
-  identity: { publicKey: string; sign(input: string): string },
+  identity: { nodeId: string; publicKey: string; sign(input: string): string },
   incoming: unknown[],
   pairing?: { keyId: string; secret: string },
   timeoutMs?: number,
@@ -198,16 +204,15 @@ export async function startNodeSession(
     receiveDirection: NODE_RELAY_DIRECTION_CONTROL_PLANE,
     onMessage(message) {
       if (message.type === "relay-ping") return session.send({ type: "relay-pong" });
-      if (message.type !== "channel-data" || message.channelId !== "main" || message.binary) return;
-      const value = JSON.parse(message.data);
+    },
+    onData(frame) {
+      if (frame.streamId !== NODE_RELAY_MAIN_STREAM_ID || frame.binary) return;
+      const value = JSON.parse(Buffer.from(frame.data).toString("utf8"));
       incoming.push(value);
-      if (value.type === "control-plane.hello") session.send({ type: "channel-data", channelId: "main", data: JSON.stringify({ type: "node-agent.identify", nodeId: value.nodeId, serverTime: new Date().toISOString() }) });
+      const sendMain = (message: unknown) => session.sendData(NODE_RELAY_MAIN_STREAM_ID, JSON.stringify(message), false);
+      if (value.type === "control-plane.hello") sendMain({ type: "node-agent.identify", nodeId: value.nodeId, serverTime: new Date().toISOString() });
       if (value.type === "control-plane.request") {
-        session.send({
-          type: "channel-data",
-          channelId: "main",
-          data: JSON.stringify({ type: "node-agent.response", requestId: value.requestId, status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ data: { nodeId: value.route } }) }),
-        });
+        sendMain({ type: "node-agent.response", requestId: value.requestId, status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ data: { nodeId: value.route } }) });
       }
     },
   });

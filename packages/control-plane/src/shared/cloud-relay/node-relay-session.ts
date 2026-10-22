@@ -5,6 +5,12 @@ import { decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayloa
 import {
   NODE_RELAY_CHANNEL_PROTOCOL_VERSION,
   NODE_RELAY_HANDSHAKE_AUDIENCE,
+  NODE_RELAY_DATA_HEADER_BYTES,
+  NODE_RELAY_DATA_MAX_BYTES,
+  NODE_RELAY_DATA_MAX_MESSAGE_BYTES,
+  decodeNodeRelayDataFrame,
+  encodeNodeRelayDataFrame,
+  isNodeRelayDataFrame,
   NodeRelayHandshakeAcceptPayloadSchema,
   NodeRelayHandshakeAcceptSchema,
   NodeRelayHandshakeInitPayloadSchema,
@@ -14,6 +20,7 @@ import {
   nodeRelayHandshakeAcceptSigningInput,
   nodeRelayHandshakeSigningInput,
   nodeRelayPairingTranscript,
+  type NodeRelayDataFrame,
   type NodeRelaySessionMessage,
 } from "@task-handoff/protocol/node-relay-channel";
 
@@ -32,7 +39,20 @@ export type NodeRelayFrameSocket = {
   on(event: "error", listener: (error: unknown) => void): void;
   off?(event: string, listener: (...args: any[]) => void): void;
   readyState?: number;
+  bufferedAmount?: number;
 };
+
+type NodeRelayDataAssembly = {
+  streamId: number;
+  binary: boolean;
+  bytes: number;
+  chunks: Uint8Array[];
+};
+
+type PendingNodeRelayWrite = { payload: Uint8Array; flags: number; bytes: number };
+
+const NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+const NODE_RELAY_SOCKET_MAX_QUEUED_BYTES = 16 * 1024 * 1024;
 
 /** Direction bytes keep the two senders' secretbox counters in disjoint nonce spaces. */
 export const NODE_RELAY_DIRECTION_NODE = 1;
@@ -55,14 +75,20 @@ export function nodeRelaySessionError(code: string, message?: string) {
 function rawBytes(raw: unknown) {
   if (typeof raw === "string") return Buffer.from(raw, "utf8");
   if (Buffer.isBuffer(raw)) return raw;
-  if (raw instanceof Uint8Array) return Buffer.from(raw);
+  if (raw instanceof Uint8Array) return bufferView(raw);
   if (Array.isArray(raw)) return Buffer.concat(raw.map((item) => (Buffer.isBuffer(item) ? item : Buffer.from(item))));
   return Buffer.from(raw as ArrayBuffer);
 }
 
+function bufferView(value: Uint8Array) {
+  return Buffer.isBuffer(value)
+    ? value
+    : Buffer.from(value.buffer as ArrayBuffer, value.byteOffset, value.byteLength);
+}
+
 /** Writes the single plaintext handshake frame; it must be the sender's sequence 0. */
 export function writeNodeRelayHandshakeFrame(socket: NodeRelayFrameSocket, message: Record<string, unknown>) {
-  socket.send(Buffer.from(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(message)) })));
+  socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(message)) }));
 }
 
 /** Reads frames until the peer's handshake frame arrives; a data frame before it is a protocol error. */
@@ -202,7 +228,7 @@ export async function acceptNodeRelayHandshake(options: {
 export async function initiateNodeRelayHandshake(options: {
   socket: NodeRelayFrameSocket;
   grant: { allocationId: string; relayId: string; nodeHandle: string; controlPlaneId: string; accountId: string; bindingId: string; bindingRevision: number; controlPlanePublicKey: string };
-  node: { publicKey: string; /** Signs the given signing input text. */ sign(input: string): string };
+  node: { nodeId: string; publicKey: string; /** Signs the given signing input text. */ sign(input: string): string };
   pairing?: { keyId: string; secret: string };
   timeoutMs?: number;
   now?: () => number;
@@ -221,6 +247,7 @@ export async function initiateNodeRelayHandshake(options: {
     accountId: options.grant.accountId,
     bindingId: options.grant.bindingId,
     bindingRevision: options.grant.bindingRevision,
+    nodeId: options.node.nodeId,
     nodePublicKey: options.node.publicKey,
     nodeEphemeralPublicKey: Buffer.from(ephemeral.publicKey).toString("base64url"),
     nonce: crypto.randomBytes(24).toString("base64url"),
@@ -253,10 +280,11 @@ function sequenceNonce(direction: number, counter: number) {
 }
 
 /**
- * Sealed, ordered message transport over an attached Relay socket. The first
- * data frame of each direction carries sequence 1; the handshake consumed 0.
- * Payloads are deflate-packed when that is smaller, exactly like access
- * channels, so the wire shape stays uniform across channel kinds.
+ * Sealed, ordered transport over an attached Relay socket. The first data
+ * frame of each direction carries sequence 1; the handshake consumed 0.
+ * Control messages remain compact JSON and are deflate-packed when that is
+ * smaller. Tunnel payloads use the binary frame format from the protocol
+ * package and skip JSON/base64/deflate entirely.
  */
 export class EncryptedNodeRelayChannel {
   private sendSequence = 1;
@@ -265,11 +293,18 @@ export class EncryptedNodeRelayChannel {
   private receiveCounter = 0;
   private started = false;
   private closed = false;
+  private readonly dataAssemblies = new Map<number, NodeRelayDataAssembly>();
+  private readonly outboundControl: PendingNodeRelayWrite[] = [];
+  private readonly outboundData: PendingNodeRelayWrite[] = [];
+  private readonly outboundCapacityWaiters: Array<() => void> = [];
+  private outboundBytes = 0;
+  private flushTimer?: ReturnType<typeof setTimeout>;
   private readonly socket: NodeRelayFrameSocket;
   private readonly key: Uint8Array;
   private readonly sendDirection: number;
   private readonly receiveDirection: number;
   private readonly onMessage: (message: NodeRelaySessionMessage) => void | Promise<void>;
+  private readonly onData?: (frame: NodeRelayDataFrame) => void | Promise<void>;
   private readonly onClosed?: (reason: string) => void;
   private readonly onError?: (error: Error) => void;
 
@@ -279,6 +314,7 @@ export class EncryptedNodeRelayChannel {
     sendDirection: number;
     receiveDirection: number;
     onMessage(message: NodeRelaySessionMessage): void | Promise<void>;
+    onData?(frame: NodeRelayDataFrame): void | Promise<void>;
     onClosed?(reason: string): void;
     onError?(error: Error): void;
   }) {
@@ -287,6 +323,7 @@ export class EncryptedNodeRelayChannel {
     this.sendDirection = options.sendDirection;
     this.receiveDirection = options.receiveDirection;
     this.onMessage = options.onMessage;
+    this.onData = options.onData;
     this.onClosed = options.onClosed;
     this.onError = options.onError;
   }
@@ -300,12 +337,34 @@ export class EncryptedNodeRelayChannel {
   }
 
   send(message: NodeRelaySessionMessage) {
-    if (this.closed) throw nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED");
     const parsed = NodeRelaySessionMessageSchema.parse(message);
     const plaintext = Buffer.from(JSON.stringify(parsed));
     const packed = packRelayPayload(plaintext, (input) => deflateRawSync(input));
-    const sealed = nacl.secretbox(packed.payload, sequenceNonce(this.sendDirection, this.sendCounter++), this.key);
-    this.socket.send(Buffer.from(encodeRelayFrame({ kind: "data", sequence: this.sendSequence++, payload: sealed, flags: packed.flags })));
+    // Most control frames are small but latency-sensitive: channel accepts,
+    // stream resumes and heartbeats must not sit behind a multi-megabyte data
+    // burst. `channel-close` is ordered with data so a close cannot overtake
+    // bytes already accepted from the local stream.
+    this.enqueuePlaintext(packed.payload, packed.flags, parsed.type !== "channel-close");
+  }
+
+  /** Sends one tunnel payload without JSON, base64 or compression overhead. */
+  sendData(streamId: number, data: string | Uint8Array, binary: boolean) {
+    const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : bufferView(data);
+    if (bytes.byteLength > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
+    if (bytes.byteLength === 0) {
+      this.enqueuePlaintext(encodeNodeRelayDataFrame({ streamId, data: bytes, binary, more: false }), 0, false);
+      return;
+    }
+    // Reserve the whole logical message before enqueueing its first fragment.
+    // Otherwise a queue-limit failure mid-message leaves the receiver waiting
+    // for a final fragment that can never be sent.
+    const fragments = Math.ceil(bytes.byteLength / NODE_RELAY_DATA_MAX_BYTES);
+    const wireBytes = bytes.byteLength + fragments * (NODE_RELAY_DATA_HEADER_BYTES + 40);
+    if (this.outboundBytes + wireBytes > NODE_RELAY_SOCKET_MAX_QUEUED_BYTES) throw nodeRelaySessionError("NODE_RELAY_BACKPRESSURE_LIMIT");
+    for (let offset = 0; offset < bytes.byteLength; offset += NODE_RELAY_DATA_MAX_BYTES) {
+      const end = Math.min(offset + NODE_RELAY_DATA_MAX_BYTES, bytes.byteLength);
+      this.enqueuePlaintext(encodeNodeRelayDataFrame({ streamId, data: bytes.subarray(offset, end), binary, more: end < bytes.byteLength }), 0, false);
+    }
   }
 
   close(reason = "normal") {
@@ -318,6 +377,16 @@ export class EncryptedNodeRelayChannel {
     }
   }
 
+  /**
+   * Large HTTP/WebSocket streams read from local disk or memory much faster
+   * than a cloud link drains. Pause those readers at a small queue high-water
+   * mark instead of letting them fill the hard 16 MiB safety limit and fail.
+   */
+  waitForOutboundCapacity() {
+    if (this.closed || this.outboundBytes <= NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES) return Promise.resolve();
+    return new Promise<void>((resolve) => this.outboundCapacityWaiters.push(resolve));
+  }
+
   private async receive(raw: unknown, isBinary: boolean) {
     if (this.closed) return;
     if (!isBinary) throw nodeRelaySessionError("NODE_RELAY_FRAME_ENCODING_INVALID");
@@ -327,9 +396,76 @@ export class EncryptedNodeRelayChannel {
     if (frame.sequence !== this.receiveSequence++) throw nodeRelaySessionError("NODE_RELAY_FRAME_SEQUENCE_INVALID");
     const opened = nacl.secretbox.open(frame.payload, sequenceNonce(this.receiveDirection, this.receiveCounter++), this.key);
     if (!opened) throw nodeRelaySessionError("NODE_RELAY_DECRYPT_FAILED");
-    const plaintext = unpackRelayPayload(Buffer.from(opened), frame.flags ?? 0, (input) => inflateRawSync(input));
-    const message = NodeRelaySessionMessageSchema.parse(JSON.parse(Buffer.from(plaintext).toString("utf8")));
+    const plaintext = unpackRelayPayload(bufferView(opened), frame.flags ?? 0, (input) => inflateRawSync(input));
+    if (isNodeRelayDataFrame(plaintext)) {
+      if (!this.onData) throw nodeRelaySessionError("NODE_RELAY_DATA_FRAME_UNSUPPORTED");
+      const dataFrame = decodeNodeRelayDataFrame(plaintext);
+      if (dataFrame.more) {
+        const assembly = this.dataAssemblies.get(dataFrame.streamId);
+        if (assembly && assembly.binary !== dataFrame.binary) throw nodeRelaySessionError("NODE_RELAY_DATA_FRAGMENT_INVALID");
+        const next = assembly ?? { streamId: dataFrame.streamId, binary: dataFrame.binary, bytes: 0, chunks: [] };
+        next.bytes += dataFrame.data.byteLength;
+        if (next.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
+        next.chunks.push(dataFrame.data);
+        this.dataAssemblies.set(dataFrame.streamId, next);
+        return;
+      }
+      const assembly = this.dataAssemblies.get(dataFrame.streamId);
+      if (assembly) {
+        if (assembly.binary !== dataFrame.binary) throw nodeRelaySessionError("NODE_RELAY_DATA_FRAGMENT_INVALID");
+        assembly.bytes += dataFrame.data.byteLength;
+        if (assembly.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
+        assembly.chunks.push(dataFrame.data);
+        this.dataAssemblies.delete(dataFrame.streamId);
+        await this.onData({ streamId: dataFrame.streamId, binary: assembly.binary, more: false, data: Buffer.concat(assembly.chunks, assembly.bytes) });
+        return;
+      }
+      await this.onData(dataFrame);
+      return;
+    }
+    const json = bufferView(plaintext);
+    if (json.byteLength === 0 || json[0] !== 0x7b) throw nodeRelaySessionError("NODE_RELAY_FRAME_PAYLOAD_INVALID");
+    const message = NodeRelaySessionMessageSchema.parse(JSON.parse(json.toString("utf8")));
     await this.onMessage(message);
+  }
+
+  private sendPlaintext(payload: Uint8Array, flags: number) {
+    if (this.closed) throw nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED");
+    const sealed = nacl.secretbox(payload, sequenceNonce(this.sendDirection, this.sendCounter++), this.key);
+    this.socket.send(encodeRelayFrame({ kind: "data", sequence: this.sendSequence++, payload: sealed, flags }));
+  }
+
+  private enqueuePlaintext(payload: Uint8Array, flags: number, control: boolean) {
+    if (this.closed) throw nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED");
+    const bytes = payload.byteLength + 40;
+    if (this.outboundBytes + bytes > NODE_RELAY_SOCKET_MAX_QUEUED_BYTES) throw nodeRelaySessionError("NODE_RELAY_BACKPRESSURE_LIMIT");
+    (control ? this.outboundControl : this.outboundData).push({ payload, flags, bytes });
+    this.outboundBytes += bytes;
+    this.flushOutbound();
+  }
+
+  private flushOutbound() {
+    if (this.closed || (this.outboundControl.length === 0 && this.outboundData.length === 0)) return;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    while (this.outboundControl.length || this.outboundData.length) {
+      if ((this.socket.bufferedAmount ?? 0) > NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES) {
+        this.flushTimer = setTimeout(() => {
+          this.flushTimer = undefined;
+          try { this.flushOutbound(); }
+          catch (error) { this.fail(error); }
+        }, 5);
+        this.flushTimer.unref?.();
+        return;
+      }
+      const next = this.outboundControl.shift() ?? this.outboundData.shift()!;
+      this.outboundBytes -= next.bytes;
+      this.releaseOutboundCapacity();
+      try { this.sendPlaintext(next.payload, next.flags); }
+      catch (error) { this.fail(error); return; }
+    }
   }
 
   private fail(error: unknown) {
@@ -341,13 +477,25 @@ export class EncryptedNodeRelayChannel {
   private finish(reason: string, failed = false) {
     if (this.closed) return;
     this.closed = true;
+    this.dataAssemblies.clear();
+    this.outboundControl.length = 0;
+    this.outboundData.length = 0;
+    this.outboundBytes = 0;
+    this.releaseOutboundCapacity();
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
     this.onClosed?.(reason);
     if (failed) {
       try {
         if (this.socket.readyState === undefined || this.socket.readyState < 2) this.socket.close(4400, reason.slice(0, 120));
       } catch {
-        // Local state is already finalized.
+      // Local state is already finalized.
       }
     }
+  }
+
+  private releaseOutboundCapacity() {
+    if (this.outboundBytes > NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES || this.outboundCapacityWaiters.length === 0) return;
+    for (const resolve of this.outboundCapacityWaiters.splice(0)) resolve();
   }
 }

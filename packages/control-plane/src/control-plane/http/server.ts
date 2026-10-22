@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import type { Readable } from "node:stream";
 import Fastify from "fastify";
 import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
@@ -79,6 +80,7 @@ import { AuthorizationConnectionRegistry } from "../auth/authorization-connectio
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
 import { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
+import { decodeCloudRelayRequestBody } from "./relay-request-body.ts";
 import {
   CLOUD_ENVIRONMENT_VARIABLES,
   configuredCloudEnvironmentVariables,
@@ -520,7 +522,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin });
   const cloudRelayActors = new Map<string, ControlPlaneActor>();
   const cloudRelayBridge = {
-    async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown }) {
+    async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
       const authorization = routeAuthorization(method, requestPath);
@@ -532,11 +534,27 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
       try {
+        // A streamed body has no content-length; a stale one from the client
+        // would truncate or reject the local request, so it is dropped.
+        const dropped = input.bodyStream ? ["content-length"] : [];
         const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => {
           const lower = name.toLowerCase();
-          return !isControlPlaneCredentialHeader(lower) && !["host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(lower);
+          return !isControlPlaneCredentialHeader(lower) && !["host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(lower) && !dropped.includes(lower);
         }).map(([name, value]) => [name, String(value)]));
-        const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(input.body === undefined ? {} : { payload: input.body as any }) });
+        const requestBody = input.bodyStream ?? decodeCloudRelayRequestBody(input.body);
+        const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(requestBody === undefined ? {} : { payload: requestBody as any }) });
+        if (input.binaryResponse && response.statusCode < 400) {
+          const contentType = response.headers["content-type"];
+          const filename = cloudRelayResponseFilename(response.headers["content-disposition"]);
+          return {
+            status: response.statusCode,
+            binary: {
+              bytes: new Uint8Array(response.rawPayload.buffer, response.rawPayload.byteOffset, response.rawPayload.byteLength),
+              ...(typeof contentType === "string" && contentType ? { contentType } : {}),
+              ...(filename ? { filename } : {}),
+            },
+          };
+        }
         let body: unknown; try { body = response.json(); } catch { body = response.body; }
         return { status: response.statusCode, body };
       } finally { cloudRelayActors.delete(token); }
@@ -606,7 +624,17 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
           : undefined;
         return { nodeId: node.id, ...(pairing ? { pairing } : {}) };
       },
-      ensure: (input: { nodeHandle: string; displayName?: string }) => service.ensureCloudRelayNode(input),
+      inspectNode: (nodeId: string) => {
+        const node = service.nodes.get(nodeId);
+        if (!node) return undefined;
+        return {
+          nodeId: node.id,
+          connectionKind: node.connectionPath.kind,
+          ...(node.connectionPath.kind === "cloud-relay" ? { nodeHandle: node.connectionPath.nodeHandle } : {}),
+        };
+      },
+      linkNode: async (nodeId: string, nodeHandle: string) => { await service.linkNodeToCloudAccount(nodeId, nodeHandle); },
+      ensure: (input: { nodeHandle: string; nodeId: string; displayName?: string }) => service.ensureCloudRelayNode(input),
       savePairing: async (nodeId: string, pairing: { keyId: string; secret: string }) => { await service.saveCloudRelayNodePairing(nodeId, pairing); },
       connected: async (nodeId: string) => { await service.setCloudRelayNodeConnection(nodeId, true); publishCloudRelayNodeState(nodeId); },
       disconnected: async (nodeId: string, input: { reason: string }) => { await service.setCloudRelayNodeConnection(nodeId, false, input.reason); publishCloudRelayNodeState(nodeId); },
@@ -1528,6 +1556,17 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   }, DEFAULT_MAINTENANCE_INTERVAL_MS);
   persistenceMaintenanceTimer.unref();
   return app;
+}
+
+function cloudRelayResponseFilename(disposition: unknown) {
+  if (typeof disposition !== "string") return undefined;
+  const raw = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)?.[1]?.trim();
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 // Desktop waits for the Control Plane's HTTP listener, and a cold packaged

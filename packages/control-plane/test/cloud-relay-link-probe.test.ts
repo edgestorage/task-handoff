@@ -208,7 +208,7 @@ test("a pushed node allocation starts attaching through the event path", async (
   const connected: string[] = [];
   const nodes = {
     resolve: () => undefined,
-    ensure: () => ({ nodeId: "node_alpha" }),
+    ensure: (input: { nodeId: string }) => ({ nodeId: input.nodeId }),
     savePairing: () => undefined,
     connected: (nodeId: string) => connected.push(nodeId),
     disconnected: () => undefined,
@@ -227,7 +227,7 @@ test("a pushed node allocation starts attaching through the event path", async (
         async connect(input: any) {
           await attachGate;
           const pairing = input.createPairing();
-          return { socket: {}, key: new Uint8Array(32), paired: false, issuedPairing: pairing, allocationId: input.allocation.allocationId, channelId: "channel_a" };
+          return { socket: {}, key: new Uint8Array(32), nodeId: "node_alpha", paired: false, issuedPairing: pairing, allocationId: input.allocation.allocationId, channelId: "channel_a" };
         },
       },
       transport: () => transport,

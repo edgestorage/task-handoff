@@ -153,6 +153,20 @@ test("Control Plane always advertises resumable Relay sessions", async () => {
   }
 });
 
+test("a rejected pushed event closes the control socket without crashing the runtime", async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent?.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    assert.ok(sockets[0]);
+    sockets[0].receive({ type: "event", event: { type: "relay-session-grant", grant: {} } });
+    for (let attempt = 0; attempt < 100 && sockets[0].readyState !== 3; attempt += 1) await wait(5);
+    assert.equal(sockets[0].readyState, 3);
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test("a pending revocation reconnects, revokes remotely and re-registers unbound for sign-in", async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const { runtime, sockets, state } = runtimeHarness({ bindingId: "binding_a", pendingRevocation: true });

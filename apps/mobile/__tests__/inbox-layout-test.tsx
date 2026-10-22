@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react-native';
 
 import InboxLayout from '../app/(tabs)/(main)/inbox/_layout';
+import { mobileLightColors } from '../src/components/theme';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('@expo/ui/community/menu', () => {
@@ -19,6 +20,7 @@ jest.mock('../src/components/PrimaryTabStack', () => {
       return React.createElement(Text, { testID: 'header-items' }, JSON.stringify(items.map((item) => ({
         sharesBackground: item.sharesBackground,
         spacing: item.spacing,
+        tintColor: item.tintColor,
         type: item.type,
       }))));
     },
@@ -30,9 +32,9 @@ describe('<InboxLayout />', () => {
     const screen = await render(<InboxLayout />);
 
     expect(screen.getByTestId('header-items').props.children).toBe(JSON.stringify([
-      { sharesBackground: false, type: 'button' },
-      { spacing: 8, type: 'spacing' },
-      { sharesBackground: false, type: 'menu' },
+      { sharesBackground: false, tintColor: mobileLightColors.primary, type: 'button' },
+      { spacing: 8, tintColor: undefined, type: 'spacing' },
+      { sharesBackground: false, tintColor: mobileLightColors.primary, type: 'menu' },
     ]));
   });
 });

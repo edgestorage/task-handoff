@@ -171,6 +171,7 @@ export class NodeAgentCloudRelayClient {
     // an invalid, expired or replayed token leaves the node exactly as it was.
     const redeemed = await cloud.redeem({
       bindingToken: input.bindingToken,
+      nodeId: this.options.nodeId,
       publicKey: relayKeys.publicKey,
       ...(input.displayName ? { displayName: input.displayName } : {}),
     });
@@ -338,6 +339,7 @@ export class NodeAgentCloudRelayClient {
       if (!current || current.status !== "active") return;
       const refreshControlPlaneIds = [...this.refreshControlPlaneIds];
       const allocations = await (await this.cloudClient(current.cloudOrigin)).allocations(current.credential, {
+        nodeId: this.options.nodeId,
         ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
       });
       for (const controlPlaneId of refreshControlPlaneIds) this.refreshControlPlaneIds.delete(controlPlaneId);
@@ -527,7 +529,7 @@ export class NodeAgentCloudRelayClient {
           bindingRevision: grant.bindingRevision,
           controlPlanePublicKey: grant.controlPlanePublicKey ?? "",
         },
-        node: relayKeySigner(binding),
+        node: { ...relayKeySigner(binding), nodeId: this.options.nodeId },
         ...(storedPairing ? { pairing: storedPairing } : {}),
       });
       if (this.channels.get(entry.controlPlaneId) !== entry || this.stopped) throw relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED");

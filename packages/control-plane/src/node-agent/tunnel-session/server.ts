@@ -82,7 +82,9 @@ function decodeLocalRequestBody(value: unknown): string | Buffer | undefined {
   // `Buffer` is itself a `Uint8Array`, so check it first: a Node-side decode
   // already returns a Buffer and must not be copied per proxied body.
   if (Buffer.isBuffer(body)) return body;
-  return body instanceof Uint8Array ? Buffer.from(body) : body;
+  return body instanceof Uint8Array
+    ? Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength)
+    : body;
 }
 
 function socketIsOpen(socket: NodeTunnelSessionSocket) {
@@ -372,7 +374,7 @@ export class NodeTunnelSessionServer {
         const response = await fetch(this.localNodeAgentHttpUrl(route), {
           method,
           headers: this.options.buildLocalHeaders(route, method, body, requestHeaders),
-          body: Buffer.isBuffer(body) ? new Uint8Array(body) : body,
+          body: body as unknown as BodyInit,
           signal: controller.signal,
         });
         await sendFrame(JSON.stringify({ type: "node-agent.http.head", streamId, status: response.status, headers: Object.fromEntries(response.headers.entries()) }));
@@ -381,7 +383,7 @@ export class NodeTunnelSessionServer {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            await sendFrame(Buffer.from(value), true);
+            await sendFrame(Buffer.from(value.buffer as ArrayBuffer, value.byteOffset, value.byteLength), true);
           }
         }
         await sendFrame(JSON.stringify({ type: "node-agent.http.end", streamId }));

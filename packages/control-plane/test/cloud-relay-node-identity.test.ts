@@ -14,7 +14,7 @@ import { SecretEnvelopeService } from "../src/control-plane/persistence/secret-e
 const NODE_HANDLE = "nrh_cloud_relay_identity_test";
 const MACHINE_NODE_ID = "node_agent_machine_identity";
 
-function cloudRelayTransport() {
+function cloudRelayTransport(reportedNodeId = MACHINE_NODE_ID) {
   return {
     async request(_node: unknown, route: string) {
       assert.equal(route, "/health");
@@ -22,7 +22,7 @@ function cloudRelayTransport() {
         data: {
           ok: true,
           role: "node-agent",
-          nodeId: MACHINE_NODE_ID,
+          nodeId: reportedNodeId,
           protocolVersion: "2026-10-02",
           serverTime: new Date().toISOString(),
         },
@@ -37,7 +37,7 @@ function cloudRelayTransport() {
   };
 }
 
-test("checking a cloud-relay node preserves its local handle identity across restart", async () => {
+test("a cloud-relay node uses the node agent identity across restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-identity-"));
   const paths = controlPlaneStorePaths(root);
   let database = await createControlPlaneDatabase(paths);
@@ -46,15 +46,14 @@ test("checking a cloud-relay node preserves its local handle identity across res
   let service = new ControlPlaneService(paths, { database, secrets });
   try {
     await service.init();
-    const created = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, displayName: "Relay identity" });
+    const created = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID, displayName: "Relay identity" });
     service.setCloudRelayNodeAgentTransport(cloudRelayTransport());
 
+    assert.equal(created.nodeId, MACHINE_NODE_ID);
     const checked = await service.checkNode(created.nodeId);
     assert.deepEqual([checked.id, checked.status], [created.nodeId, "online"]);
     assert.equal(service.findCloudRelayNode(NODE_HANDLE)?.id, created.nodeId);
-    assert.equal(service.listNodes().some((node) => node.id === MACHINE_NODE_ID), false);
     assert.ok(await database.nodes.get(created.nodeId));
-    assert.equal(await database.nodes.get(MACHINE_NODE_ID), undefined);
 
     service.dispose();
     await database.close();
@@ -65,6 +64,30 @@ test("checking a cloud-relay node preserves its local handle identity across res
     await service.init();
 
     assert.equal(service.findCloudRelayNode(NODE_HANDLE)?.id, created.nodeId);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a cloud-relay node rejects a health document with a different node identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-identity-mismatch-"));
+  const paths = controlPlaneStorePaths(root);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const service = new ControlPlaneService(paths, { database, secrets });
+  try {
+    await service.init();
+    await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+    service.setCloudRelayNodeAgentTransport(cloudRelayTransport("node_agent_other_identity"));
+
+    const checked = await service.checkNode(MACHINE_NODE_ID);
+
+    assert.equal(checked.status, "offline");
+    assert.match(checked.error ?? "", /different identity/);
+    assert.deepEqual(service.listNodes().map((node) => node.id), [MACHINE_NODE_ID]);
   } finally {
     service.dispose();
     await database.close();
@@ -97,7 +120,7 @@ test("publishing a managed node links its account handle without changing the lo
       updatedAt: timestamp,
     });
     await service.nodes.put(local);
-    const duplicate = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, displayName: "Local Node" });
+    const duplicate = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: "node_agent_duplicate", displayName: "Local Node" });
 
     const linked = await service.linkNodeToCloudAccount(local.id, NODE_HANDLE);
 
@@ -109,8 +132,48 @@ test("publishing a managed node links its account handle without changing the lo
     assert.deepEqual(linked.duplicateNodeIds, [duplicate.nodeId]);
     assert.equal(service.findNodeByCloudAccountHandle(NODE_HANDLE)?.id, local.id);
     await service.deleteNode(duplicate.nodeId);
-    assert.deepEqual(await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE }), { nodeId: local.id, preserveLocalConnection: true });
+    assert.deepEqual(await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: local.id }), { nodeId: local.id, preserveLocalConnection: true });
     assert.deepEqual(service.listNodes().map((node) => node.id), [local.id]);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a relay claim reuses an already-managed node with the same machine identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-same-machine-"));
+  const paths = controlPlaneStorePaths(root);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const service = new ControlPlaneService(paths, { database, secrets });
+  const timestamp = "2026-10-18T00:00:00.000Z";
+  try {
+    await service.init();
+    await service.nodes.put(NodeSchema.parse({
+      id: MACHINE_NODE_ID,
+      name: "Direct Node",
+      connectionMode: "local-ipc",
+      connectionPath: { kind: "direct" },
+      connectionEnabled: true,
+      auth: { mode: "paired-hmac", keyId: "key_local", secret: "local-secret", pairing: { status: "paired" } },
+      status: "online",
+      health: "ok",
+      capabilities: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+
+    const result = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+
+    assert.deepEqual(result, { nodeId: MACHINE_NODE_ID, preserveLocalConnection: true });
+    const node = service.requireNode(MACHINE_NODE_ID);
+    assert.equal(node.connectionMode, "local-ipc");
+    assert.deepEqual(node.connectionPath, { kind: "direct" });
+    assert.equal(node.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL], NODE_HANDLE);
+    assert.deepEqual(service.listNodes().map((candidate) => candidate.id), [MACHINE_NODE_ID]);
   } finally {
     service.dispose();
     await database.close();

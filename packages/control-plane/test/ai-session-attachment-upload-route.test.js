@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import Fastify from "fastify";
+import { Readable } from "node:stream";
 
 import { registerSessionRoutes } from "../src/control-plane/http/session-routes.ts";
 import { AiSessionAttachmentCache } from "../src/control-plane/sessions/ai-session-attachment-cache.ts";
@@ -68,6 +69,52 @@ test("managed upload forwards bounded chunks while retaining a non-blocking cach
   }
   assert.ok(cached);
   assert.deepEqual(fs.readFileSync(cached.path), content);
+});
+
+test("a streamed payload (the cloud-relay path) forwards chunks as it arrives", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-upload-stream-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  const downstream = [];
+  let attachmentId;
+  const service = {
+    async requireControlledInstance() {
+      return { config: { aiSessionMaxFileAttachmentBytes: 1024 * 1024 } };
+    },
+    async proxyInstanceHttp(_instanceId, route, init) {
+      if (route === "/api/ai-session-attachments/draft-streams") {
+        attachmentId = JSON.parse(init.body).attachmentId;
+        return streamedJson({ attachmentId, offset: 0 }, 201);
+      }
+      if (route.endsWith("/complete")) {
+        return streamedJson({ id: attachmentId, kind: "file", name: "asset.bin", mime: "application/octet-stream", size: downstream.reduce((sum, chunk) => sum + chunk.length, 0), expiresAt: "2026-08-21T00:00:00.000Z" });
+      }
+      if (init.method === "PUT") {
+        downstream.push(Buffer.from(init.body));
+        return streamedJson({ attachmentId, offset: downstream.reduce((sum, chunk) => sum + chunk.length, 0) });
+      }
+      return streamedJson({ removed: true });
+    },
+  };
+  registerSessionRoutes({
+    app,
+    service,
+    events: { publish() {} },
+    appSessionAggregator: {},
+    aiSessionAggregator: {},
+    aiSessionAttachments: {},
+    aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
+  });
+  const content = Buffer.alloc(700 * 1024, 9);
+  const source = Readable.from([content.subarray(0, 300 * 1024), content.subarray(300 * 1024)]);
+  const query = new URLSearchParams({ scopeType: "session", scopeId: "session-1", kind: "file", name: "asset.bin", mime: "application/octet-stream", size: String(content.length) });
+  const response = await app.inject({ method: "POST", url: `/api/controlled-instances/instance-1/ai-session-attachments/drafts?${query}`, headers: { "content-type": "application/octet-stream" }, payload: source });
+  assert.equal(response.statusCode, 201);
+  assert.ok(downstream.length >= 3);
+  assert.ok(downstream.every((chunk) => chunk.length <= 256 * 1024));
+  assert.deepEqual(Buffer.concat(downstream), content);
 });
 
 test("managed upload reports malformed controlled-instance responses as a bad gateway", async (t) => {

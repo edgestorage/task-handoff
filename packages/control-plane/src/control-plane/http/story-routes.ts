@@ -35,6 +35,7 @@ import {
 } from "@task-handoff/protocol/story-agent-tools";
 import { nodeAgentCapabilitiesFromPublicNode } from "@task-handoff/protocol/node-agent-capabilities";
 import type { ControlPlaneService } from "../application/service.ts";
+import { nodeStoryJson, projectNodeAgentStory } from "./node-agent-story.ts";
 import { nodeJson } from "./node-agent-request.ts";
 
 const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).optional() }).strict();
@@ -45,7 +46,7 @@ const StoryDecisionRouteSchema = StoryRouteSchema.extend({ decisionId: z.string(
 const StoryRouteQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
 
 async function requireStoryOnNode(service: ControlPlaneService, storyId: string, nodeId: string) {
-  const story = StorySchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`));
+  const story = await nodeStoryJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`);
   if (story.ownerNodeId !== nodeId) {
     throw Object.assign(new Error("Story and requested node do not match."), {
       statusCode: 409,
@@ -66,7 +67,7 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
         const payload = await nodeJson(service, node.id, "/stories");
         const parsed = StoryListSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Invalid Story list response.");
-        stories.push(...parsed.data.stories);
+        stories.push(...parsed.data.stories.map((story) => projectNodeAgentStory(node, story)));
       } catch {
         unavailableNodeIds.push(node.id);
       }
@@ -77,19 +78,19 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
   app.get<{ Params: { storyId: string }; Querystring: { nodeId: string } }>("/api/stories/:storyId", async (request) => {
     const { storyId } = StoryRouteSchema.parse(request.params);
     const { nodeId } = StoryRouteQuerySchema.parse(request.query);
-    return { data: StorySchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`)) };
+    return { data: await nodeStoryJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`) };
   });
 
   app.post("/api/stories", async (request, reply) => {
     const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryCreateInputSchema }).strict().parse(request.body);
-    const story = StorySchema.parse(await nodeJson(service, body.nodeId, "/stories", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) }));
+    const story = await nodeStoryJson(service, body.nodeId, "/stories", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) });
     return reply.code(201).send({ data: story });
   });
 
   app.patch<{ Params: { storyId: string } }>("/api/stories/:storyId", async (request) => {
     const { storyId } = StoryRouteSchema.parse(request.params);
     const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryUpdateInputSchema }).strict().parse(request.body);
-    return { data: StorySchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) })) };
+    return { data: await nodeStoryJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) }) };
   });
 
   app.get<{ Params: { storyId: string } }>("/api/stories/:storyId/settings", async (request) => {
@@ -188,7 +189,7 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     app.post<{ Params: { storyId: string } }>(`/api/stories/:storyId/${action}`, async (request) => {
       const { storyId } = StoryRouteSchema.parse(request.params);
       const body = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict().parse(request.body);
-      return { data: StorySchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/${action}`, { method: "POST" })) };
+      return { data: await nodeStoryJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/${action}`, { method: "POST" }) };
     });
   }
 
@@ -269,13 +270,13 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     const params = request.params as unknown as { storyId: string; "*": string };
     const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryDocumentUpdateInputSchema }).strict().parse(request.body);
     const storyPath = StoryPathSchema.parse(decodeURIComponent(params["*"]));
-    return { data: StorySchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(StoryRouteSchema.parse({ storyId: params.storyId }).storyId)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) })) };
+    return { data: await nodeStoryJson(service, body.nodeId, `/stories/${encodeURIComponent(StoryRouteSchema.parse({ storyId: params.storyId }).storyId)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) }) };
   });
 
   app.post<{ Params: { storyId: string } }>("/api/stories/:storyId/documents/order", async (request) => {
     const { storyId } = StoryRouteSchema.parse(request.params);
     const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryDocumentOrderInputSchema }).strict().parse(request.body);
-    return { data: StorySchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/documents/order`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) })) };
+    return { data: await nodeStoryJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/documents/order`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) }) };
   });
 
   app.delete<{ Params: { storyId: string } }>("/api/stories/:storyId/documents/*", async (request) => {

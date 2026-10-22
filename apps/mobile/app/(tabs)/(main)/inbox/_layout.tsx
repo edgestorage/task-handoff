@@ -55,7 +55,7 @@ export default function InboxLayout() {
       label: t('sessions.newAccessibility'),
       onPress: openNewSession,
       sharesBackground: false,
-      tintColor: '#ffffff',
+      tintColor: colors.primary,
       type: 'button' as const,
     },
     { type: 'spacing' as const, spacing: 8 },
@@ -65,7 +65,7 @@ export default function InboxLayout() {
       identifier: 'ai-session-list-options',
       label: t('sessions.inbox.options'),
       sharesBackground: false,
-      tintColor: '#ffffff',
+      tintColor: colors.primary,
       type: 'menu' as const,
       menu: {
         title: t('sessions.inbox.options'),

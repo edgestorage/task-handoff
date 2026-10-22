@@ -112,7 +112,9 @@ internal final class NativeRelaySocket: NSObject, URLSessionWebSocketDelegate, U
     case .string(let value):
       emit("onRelaySocketMessage", ["id": id, "type": "text", "data": value])
     case .data(let data):
-      emit("onRelaySocketMessage", ["id": id, "type": "binary", "data": data.base64EncodedString()])
+      // Expo Modules converts NSData to a JS Uint8Array without the base64
+      // expansion the bridge previously paid in both directions.
+      emit("onRelaySocketMessage", ["id": id, "type": "binary", "data": data])
     @unknown default:
       handleFailure(NSError(domain: "TaskHandoffRelaySocket", code: 2, userInfo: [NSLocalizedDescriptionKey: "Unsupported Relay WebSocket message type."]))
     }

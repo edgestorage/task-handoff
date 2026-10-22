@@ -18,6 +18,7 @@ import {
   nodeRelayFingerprint,
   type NodeRelayFrameSocket,
 } from "../../src/shared/cloud-relay/node-relay-session.ts";
+import { NODE_RELAY_MAIN_STREAM_ID, type NodeRelayDataFrame } from "@task-handoff/protocol/node-relay-channel";
 import { linkedFrameSockets, ed25519Identity, type InMemoryFrameSocket } from "./cloud-relay-node-harness.ts";
 
 /** Signs cloud capabilities exactly like the Coordinator's SignedCapabilityKeyring. */
@@ -65,7 +66,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     registryRevoked: false,
     unreachable: false,
     unbinds: 0,
-    redemptions: [] as Array<{ displayName?: string }>,
+    redemptions: [] as Array<{ nodeId?: string; displayName?: string }>,
     allocationRequests: [] as Array<{ controlPlaneId?: string; refreshControlPlaneIds?: string[] }>,
     claims: new Map<string, CloudClaim>(),
     issued: new Map<string, any>(),
@@ -91,7 +92,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
       if (path === "/api/v1/node-relay/v1/redeem") {
         if (body.token !== state.bindingToken || state.redeemed) return failure(409, "NODE_RELAY_BINDING_TOKEN_INVALID");
         state.redeemed = true;
-        state.redemptions.push({ ...(body.displayName ? { displayName: body.displayName } : {}) });
+        state.redemptions.push({ ...(body.nodeId ? { nodeId: body.nodeId } : {}), ...(body.displayName ? { displayName: body.displayName } : {}) });
         return json(200, {
           data: NodeRelayBindingRedemptionSchema.parse({
             nodeHandle: options.nodeHandle ?? "nrh_test_node_handle",
@@ -318,6 +319,7 @@ export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSo
 
 type AuxState = {
   accepted: boolean;
+  streamId?: number;
   data?: Buffer;
   head?: any;
   ended?: boolean;
@@ -374,9 +376,10 @@ export async function startCloudRelayControlPlanePeer(input: {
   const messages: any[] = [];
   const pendingResponses = new Map<string, (value: any) => void>();
   const pendingAux = new Map<string, AuxState>();
-  const mainChannelId = "main";
+  const auxByStreamId = new Map<number, AuxState>();
+  const streamIdByChannelId = new Map<string, number>();
   const send = (message: any) => session.send(message);
-  const sendMain = (value: unknown) => send({ type: "channel-data", channelId: mainChannelId, data: JSON.stringify(value) });
+  const sendMain = (value: unknown) => session.sendData(NODE_RELAY_MAIN_STREAM_ID, JSON.stringify(value), false);
   const session = new EncryptedNodeRelayChannel({
     socket: input.socket,
     key: accepted.key,
@@ -386,7 +389,13 @@ export async function startCloudRelayControlPlanePeer(input: {
       if (message.type === "relay-ping") return send({ type: "relay-pong" });
       if (message.type === "channel-accept") {
         const aux = pendingAux.get(message.channelId);
-        if (aux) { aux.accepted = true; aux.resolveAccept?.(); }
+        if (aux) {
+          aux.accepted = true;
+          aux.streamId = message.streamId;
+          auxByStreamId.set(message.streamId, aux);
+          streamIdByChannelId.set(message.channelId, message.streamId);
+          aux.resolveAccept?.();
+        }
         return;
       }
       if (message.type === "channel-reject") {
@@ -396,44 +405,50 @@ export async function startCloudRelayControlPlanePeer(input: {
       }
       if (message.type === "channel-open") {
         // The node dials auxiliary channels back; accept immediately.
-        const existing = pendingAux.get(message.channelId);
-        if (existing) {
-          existing.accepted = true;
-          existing.resolveAccept?.();
-        } else {
-          pendingAux.set(message.channelId, { accepted: true, frames: [] });
-        }
-        send({ type: "channel-accept", channelId: message.channelId });
+        const aux = pendingAux.get(message.channelId) ?? { accepted: true, frames: [] };
+        aux.accepted = true;
+        aux.streamId = message.streamId;
+        pendingAux.set(message.channelId, aux);
+        auxByStreamId.set(message.streamId, aux);
+        streamIdByChannelId.set(message.channelId, message.streamId);
+        aux.resolveAccept?.();
+        send({ type: "channel-accept", channelId: message.channelId, streamId: message.streamId });
         return;
       }
-      if (message.type === "channel-data") {
-        if (message.channelId === mainChannelId) {
-          const value = JSON.parse(message.data);
-          messages.push(value);
-          if (value?.type === "node-agent.response" && typeof value.requestId === "string") pendingResponses.get(value.requestId)?.(value);
-          return;
-        }
+      if (message.type === "channel-close") {
         const aux = pendingAux.get(message.channelId);
-        if (!aux) return;
-        if (message.binary === true) {
-          const frame = Buffer.from(message.data, "base64");
-          aux.frames.push({ data: frame, binary: true });
-          aux.data = Buffer.concat([aux.data ?? Buffer.alloc(0), frame]);
-        } else {
-          aux.frames.push({ data: message.data, binary: false });
-          let value: any;
-          try {
-            value = JSON.parse(message.data);
-          } catch {
-            value = undefined;
-          }
-          if (value?.type === "node-agent.http.head") aux.head = value;
-          if (value?.type === "node-agent.http.end") aux.ended = true;
-          if (value?.type === "node-agent.http.error") aux.error = value.message;
-        }
+        pendingAux.delete(message.channelId);
+        if (aux?.streamId !== undefined) auxByStreamId.delete(aux.streamId);
+        streamIdByChannelId.delete(message.channelId);
+      }
+    },
+    onData(frame: NodeRelayDataFrame) {
+      if (frame.streamId === NODE_RELAY_MAIN_STREAM_ID) {
+        if (frame.binary) return;
+        const value = JSON.parse(Buffer.from(frame.data).toString("utf8"));
+        messages.push(value);
+        if (value?.type === "node-agent.response" && typeof value.requestId === "string") pendingResponses.get(value.requestId)?.(value);
         return;
       }
-      if (message.type === "channel-close") pendingAux.delete(message.channelId);
+      const aux = auxByStreamId.get(frame.streamId);
+      if (!aux) return;
+      if (frame.binary) {
+        const bytes = Buffer.from(frame.data);
+        aux.frames.push({ data: bytes, binary: true });
+        aux.data = Buffer.concat([aux.data ?? Buffer.alloc(0), bytes]);
+        return;
+      }
+      const text = Buffer.from(frame.data).toString("utf8");
+      aux.frames.push({ data: text, binary: false });
+      let value: any;
+      try {
+        value = JSON.parse(text);
+      } catch {
+        value = undefined;
+      }
+      if (value?.type === "node-agent.http.head") aux.head = value;
+      if (value?.type === "node-agent.http.end") aux.ended = true;
+      if (value?.type === "node-agent.http.error") aux.error = value.message;
     },
   });
   session.start();
@@ -492,9 +507,9 @@ export async function startCloudRelayControlPlanePeer(input: {
             protocol: opened.protocol,
             frames: aux.frames,
             send(data: string | Buffer) {
-              send(typeof data === "string"
-                ? { type: "channel-data", channelId: streamId, data, binary: false }
-                : { type: "channel-data", channelId: streamId, data: Buffer.from(data).toString("base64"), binary: true });
+              const numericStreamId = streamIdByChannelId.get(streamId);
+              if (numericStreamId === undefined) throw new Error(`websocket ${streamId} has no relay stream id`);
+              session.sendData(numericStreamId, data, typeof data !== "string");
             },
             async waitForText(predicate: (value: any) => boolean, waitMs = timeoutMs) {
               const until = Date.now() + waitMs;

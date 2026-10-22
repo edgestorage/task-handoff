@@ -1,3 +1,4 @@
+import { diagnosticAppContext, diagnosticLog, initializeDiagnosticLogs, installFatalErrorDiagnosticHandler, setDiagnosticAppPhase, setDiagnosticRoute } from '../src/observability/diagnostic-logs';
 import { DarkTheme, DefaultTheme, SplashScreen, Stack, ThemeProvider, usePathname } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -21,13 +22,16 @@ import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 import { StoryNodeFilterProvider } from '../src/stories/use-story-node-filter';
 import { mobileCloudDiscovery } from '../src/cloud-discovery';
 import { subscribeToNetworkState } from '../src/platform/network';
-import { initializeDiagnosticLogs } from '../src/observability/diagnostic-logs';
+import { subscribeToAppLifecycle } from '../src/platform/lifecycle';
 
+void initializeDiagnosticLogs();
+installFatalErrorDiagnosticHandler();
+diagnosticLog.info('app.start', diagnosticAppContext());
 void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   useEffect(() => {
-    void initializeDiagnosticLogs();
+    return subscribeToAppLifecycle(setDiagnosticAppPhase);
   }, []);
   useEffect(() => {
     if (!mobileCloudDiscovery.enabled) return;
@@ -43,6 +47,9 @@ function LocalizedRootLayout() {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const pathname = usePathname();
+  useEffect(() => {
+    setDiagnosticRoute(pathname);
+  }, [pathname]);
   useEffect(() => {
     if (pathname === '/') return;
     const frame = requestAnimationFrame(() => { void SplashScreen.hideAsync(); });
