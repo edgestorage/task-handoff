@@ -19,6 +19,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Expo evaluates app.config.js again while Gradle/Xcode bundle the JavaScript.
+  # Keeping the variant at workflow scope prevents a production shell from
+  # embedding the development manifest and its test-mode behavior.
+  TASK_HANDOFF_MOBILE_VARIANT: production
   TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '1' }}
   TASK_HANDOFF_AGENT_RUNS_ENABLED: ${{ vars.TASK_HANDOFF_AGENT_RUNS_ENABLED || '0' }}
   TASK_HANDOFF_CLOUD_ENV: production
@@ -37,6 +41,7 @@ jobs:
     outputs:
       release_tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      build_number: ${{ steps.release.outputs.build_number }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -70,35 +75,22 @@ jobs:
             exit 1
           fi
           version="${tag#mobile-v}"
-          node apps/mobile/scripts/set-release-version.mjs "$version"
+          node apps/mobile/scripts/set-release-version.mjs "$version" "$GITHUB_RUN_NUMBER"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Validate production Expo configuration
         env:
-          TASK_HANDOFF_MOBILE_VARIANT: production
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ steps.release.outputs.build_number }}
         working-directory: apps/mobile
         shell: bash
         run: |
           config="$(pnpm exec expo config --type public --json)"
-          node -e '
-            const config = JSON.parse(process.argv[1]);
-            if (config.name !== "TaskHandoff") throw new Error(`Unexpected app name: ${config.name}`);
-            if (config.version !== process.env.RELEASE_VERSION) {
-              throw new Error(`Expo version ${config.version} does not match tag version ${process.env.RELEASE_VERSION}.`);
-            }
-            if (config.ios?.bundleIdentifier !== "com.taskhandoff.mobile") {
-              throw new Error(`Unexpected iOS bundle identifier: ${config.ios?.bundleIdentifier}`);
-            }
-            if (config.android?.package !== "com.taskhandoff.mobile") {
-              throw new Error(`Unexpected Android package: ${config.android?.package}`);
-            }
-            const expectedOfficialAccount = process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED === "1";
-            if (config.extra?.featureFlags?.officialAccount !== expectedOfficialAccount) {
-              throw new Error(`Unexpected official account feature state: ${config.extra?.featureFlags?.officialAccount}`);
-            }
-          ' "$config"
+          config_path="$RUNNER_TEMP/mobile-production-expo-config.json"
+          printf '%s' "$config" > "$config_path"
+          node scripts/check-release-manifest.mjs "$config_path"
 
       - run: pnpm --filter @task-handoff/mobile release:check
         env:
@@ -118,7 +110,8 @@ jobs:
       - name: Apply tag version to Expo configuration
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
-        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION"
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
+        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION" "$RELEASE_BUILD_NUMBER"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -175,11 +168,12 @@ jobs:
           TASK_HANDOFF_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           TASK_HANDOFF_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
         working-directory: apps/mobile/android
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew :app:assembleRelease --no-daemon -PtaskHandoffVersionCode="$GITHUB_RUN_NUMBER"
+          ./gradlew :app:assembleRelease --no-daemon -PtaskHandoffVersionCode="$RELEASE_BUILD_NUMBER"
           built_apk="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
           if [[ -z "$built_apk" ]]; then
             echo "::error::Gradle produced no release APK"
@@ -194,6 +188,28 @@ jobs:
           artifact="$RUNNER_TEMP/TaskHandoff-$VERSION-android.apk"
           cp "$built_apk" "$artifact"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Validate signed Android production artifact
+        env:
+          ARTIFACT: ${{ steps.android.outputs.artifact }}
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aapt2_path="$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -type f -name aapt2 -print | sort -V | tail -n 1)"
+          if [[ -z "$aapt2_path" ]]; then
+            echo "::error::Android SDK contains no aapt2"
+            exit 1
+          fi
+          badging="$("$aapt2_path" dump badging "$ARTIFACT")"
+          if ! grep -Fq "package: name='com.taskhandoff.mobile' versionCode='$RELEASE_BUILD_NUMBER' versionName='$RELEASE_VERSION'" <<< "$badging"; then
+            echo "::error::Android artifact version metadata does not match the release."
+            exit 1
+          fi
+          manifest_path="$RUNNER_TEMP/TaskHandoff-android-app.config.json"
+          unzip -p "$ARTIFACT" assets/app.config > "$manifest_path"
+          node apps/mobile/scripts/check-release-manifest.mjs "$manifest_path"
 
       - name: Publish Android APK to GitHub Release
         env:
@@ -230,7 +246,8 @@ jobs:
       - name: Apply tag version to Expo configuration
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
-        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION"
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
+        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION" "$RELEASE_BUILD_NUMBER"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -352,6 +369,7 @@ jobs:
           APP_PROFILE_NAME: ${{ steps.signing.outputs.app_profile_name }}
           WIDGET_PROFILE_NAME: ${{ steps.signing.outputs.widget_profile_name }}
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
         working-directory: apps/mobile
         shell: bash
         run: |
@@ -359,7 +377,7 @@ jobs:
           archive_path="$RUNNER_TEMP/TaskHandoff.xcarchive"
           export_path="$RUNNER_TEMP/TaskHandoff-iOS"
           export_options_path="$RUNNER_TEMP/TaskHandoff-ExportOptions.plist"
-          build_number="$GITHUB_RUN_NUMBER"
+          build_number="$RELEASE_BUILD_NUMBER"
 
           ruby <<'RUBY'
           require "xcodeproj"
@@ -427,6 +445,67 @@ jobs:
             exit 1
           fi
           echo "IOS_IPA_PATH=$ipa_path" >> "$GITHUB_ENV"
+
+      - name: Validate signed iOS production artifact
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.verify.outputs.build_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          validation_dir="$RUNNER_TEMP/TaskHandoff-iOS-validation"
+          mkdir -p "$validation_dir"
+          unzip -q "$IOS_IPA_PATH" -d "$validation_dir"
+          app_path="$validation_dir/Payload/TaskHandoff.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error::The IPA does not contain TaskHandoff.app"
+            exit 1
+          fi
+
+          app_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Info.plist")"
+          app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app_path/Info.plist")"
+          app_build="$(plutil -extract CFBundleVersion raw -o - "$app_path/Info.plist")"
+          if [[ "$app_bundle_id" != "com.taskhandoff.mobile" ]]; then
+            echo "::error::Unexpected main app bundle identifier: $app_bundle_id"
+            exit 1
+          fi
+          if [[ "$app_version" != "$RELEASE_VERSION" ]]; then
+            echo "::error::Unexpected main app version: $app_version"
+            exit 1
+          fi
+          if [[ "$app_build" != "$RELEASE_BUILD_NUMBER" ]]; then
+            echo "::error::Unexpected main app build number: $app_build"
+            exit 1
+          fi
+
+          extension_count=0
+          for extension_path in "$app_path"/PlugIns/*.appex; do
+            [[ -d "$extension_path" ]] || continue
+            extension_count=$((extension_count + 1))
+            extension_info="$extension_path/Info.plist"
+            extension_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$extension_info")"
+            extension_version="$(plutil -extract CFBundleShortVersionString raw -o - "$extension_info")"
+            extension_build="$(plutil -extract CFBundleVersion raw -o - "$extension_info")"
+            if [[ "$extension_bundle_id" != com.taskhandoff.mobile.* ]]; then
+              echo "::error::Unexpected extension bundle identifier: $extension_bundle_id"
+              exit 1
+            fi
+            if [[ "$extension_version" != "$RELEASE_VERSION" || "$extension_build" != "$RELEASE_BUILD_NUMBER" ]]; then
+              echo "::error::Extension $extension_bundle_id has version $extension_version ($extension_build), expected $RELEASE_VERSION ($RELEASE_BUILD_NUMBER)."
+              exit 1
+            fi
+          done
+          if [[ "$extension_count" -eq 0 ]]; then
+            echo "::error::The IPA contains no app extensions"
+            exit 1
+          fi
+
+          manifest_path="$(find "$app_path" -type f -name app.config -print -quit)"
+          if [[ -z "$manifest_path" ]]; then
+            echo "::error::The IPA does not contain an embedded Expo app.config"
+            exit 1
+          fi
+          node apps/mobile/scripts/check-release-manifest.mjs "$manifest_path"
 
       - name: Upload iOS application to App Store Connect
         env:

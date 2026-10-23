@@ -6,6 +6,10 @@ const version = process.argv[2];
 if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version || '')) {
   throw new Error(`Expected a semantic release version, got: ${version || '<empty>'}`);
 }
+const buildNumber = process.argv[3];
+if (!/^[1-9]\d*$/.test(buildNumber || '') || Number(buildNumber) > 2_100_000_000) {
+  throw new Error(`Expected a positive Android-compatible build number, got: ${buildNumber || '<empty>'}`);
+}
 
 const mobileRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const appJsonPath = process.env.TASK_HANDOFF_MOBILE_APP_JSON || path.join(mobileRoot, 'app.json');
@@ -14,5 +18,7 @@ if (!appJson.expo || typeof appJson.expo !== 'object') {
   throw new Error('apps/mobile/app.json has no Expo configuration.');
 }
 appJson.expo.version = version;
+appJson.expo.ios = { ...appJson.expo.ios, buildNumber };
+appJson.expo.android = { ...appJson.expo.android, versionCode: Number(buildNumber) };
 fs.writeFileSync(appJsonPath, `${JSON.stringify(appJson, undefined, 2)}\n`);
-console.log(`Configured mobile release version ${version}.`);
+console.log(`Configured mobile release version ${version} with build number ${buildNumber}.`);

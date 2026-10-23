@@ -69,7 +69,7 @@ Restrict both production environments to the `mobile-v*` tag namespace.
 
 ## Release
 
-Create one stable mobile tag from a reviewed release commit. It is the only release-version source; the workflow writes that version into `app.json` only in its temporary CI checkout. Mobile tags must contain exactly three numeric components and cannot use prerelease suffixes because the same value becomes the iOS `CFBundleShortVersionString`:
+Create one stable mobile tag from a reviewed release commit. It is the only release-version source; the workflow writes that version and the GitHub Actions run number into `app.json` only in its temporary CI checkout. The run number becomes both the iOS `CFBundleVersion` and the Android `versionCode`. Mobile tags must contain exactly three numeric components and cannot use prerelease suffixes because the same value becomes the iOS `CFBundleShortVersionString`:
 
 ```sh
 git tag mobile-v1.0.0 <release-commit>
@@ -78,10 +78,10 @@ git push oss mobile-v1.0.0
 
 The `oss` remote is the public GitHub repository in the standard local checkout. If a checkout uses different remote names, push the tag to `edgestorage/task-handoff`, where the public GitHub Actions workflow runs.
 
-The `Mobile Release` workflow validates the production Expo configuration and runs the complete mobile release check, then starts two independent jobs:
+The `Mobile Release` workflow runs every Expo, Gradle, and Xcode step with `TASK_HANDOFF_MOBILE_VARIANT=production` and the production `TASK_HANDOFF_CLOUD_*` identity. This ensures the JavaScript bundle, embedded Expo manifest, native projects, and release checks all use the same `cloud.thandoff.com` configuration. The workflow validates the production Expo configuration and runs the complete mobile release check, then starts two independent jobs:
 
-- Android waits at the protected `android-production` environment, generates the native project, builds a signed release APK with Gradle, verifies its signature, and attaches it as `TaskHandoff-<version>-android.apk` to the tag's GitHub Release. Its integer version code is the monotonically increasing GitHub Actions run number.
-- iOS waits at the protected `ios-production` environment. After approval, a GitHub-hosted macOS runner generates the native project, imports the Apple Distribution certificate and both provisioning profiles into temporary signing stores, archives and exports the IPA with Xcode, and uploads it to App Store Connect. The build number is the monotonically increasing GitHub Actions run number.
+- Android waits at the protected `android-production` environment, generates the native project, builds a signed release APK with Gradle, verifies its signature and embedded production manifest, and attaches it as `TaskHandoff-<version>-android.apk` to the tag's GitHub Release.
+- iOS waits at the protected `ios-production` environment. After approval, a GitHub-hosted macOS runner generates the native project, imports the Apple Distribution certificate and both provisioning profiles into temporary signing stores, archives and exports the IPA with Xcode, verifies the IPA's version, build number, extensions, and embedded production manifest, and uploads it to App Store Connect.
 
 ## App Store review: Sign in with Apple
 
