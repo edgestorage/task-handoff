@@ -194,11 +194,11 @@ function channelHarness(overrides: Partial<EncryptedRelayChannel> = {}): Channel
   return { channel, drop: (error) => closeListener(error), control: (notice) => controlListener(notice), emit: (value) => listener(value) };
 }
 
-function harness(options: { probe?: jest.Mock; winnerCache?: RelayWinnerCache; sessionStore?: RelaySessionStore; e2eRekeyIntervalMs?: number; maxE2eHandshakeTimeouts?: number; networkFingerprint?: () => string } = {}) {
+function harness(options: { probe?: jest.Mock; winnerCache?: RelayWinnerCache; sessionStore?: RelaySessionStore; e2eRekeyIntervalMs?: number; maxE2eHandshakeTimeouts?: number; maxResumeFailures?: number; networkFingerprint?: () => string } = {}) {
   const probe = options.probe ?? fastestProbe();
   const account = accountStub(probe) as any;
   const channels: ChannelHarness[] = [];
-  const open = jest.fn(async () => {
+  const open = jest.fn(async (_input: any) => {
     const created = channelHarness();
     channels.push(created);
     return created.channel;
@@ -210,6 +210,7 @@ function harness(options: { probe?: jest.Mock; winnerCache?: RelayWinnerCache; s
     ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
     ...(options.e2eRekeyIntervalMs === undefined ? {} : { e2eRekeyIntervalMs: options.e2eRekeyIntervalMs }),
     ...(options.maxE2eHandshakeTimeouts === undefined ? {} : { maxE2eHandshakeTimeouts: options.maxE2eHandshakeTimeouts }),
+    ...(options.maxResumeFailures === undefined ? {} : { maxResumeFailures: options.maxResumeFailures }),
     ...(options.networkFingerprint ? { networkFingerprint: options.networkFingerprint } : {}),
   });
   return { account, channels, open, probe, transport };
@@ -673,6 +674,22 @@ test('a transient resume failure keeps the grant and retries the same resume', a
   expect(open.mock.calls.map(([input]: any[]) => input.mode)).toEqual(['attach', 'resume', 'resume']);
 });
 
+test('consecutive resume transport failures abandon a stale grant and reselect', async () => {
+  const { account, channels, open, transport } = harness({ maxResumeFailures: 3 });
+  const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+  await transport.request('/api/bootstrap', schema);
+  channels[0].drop(new MobileControlPlaneTransportError('RELAY_CHANNEL_CLOSED', 'closed', true));
+  const closed = () => new MobileControlPlaneTransportError('RELAY_SOCKET_CLOSED', 'socket unavailable', true, undefined, 1006, 'Socket is not connected');
+  open.mockRejectedValueOnce(closed()).mockRejectedValueOnce(closed()).mockRejectedValueOnce(closed());
+
+  await expect(transport.request('/api/bootstrap', schema)).rejects.toMatchObject({ code: 'RELAY_SOCKET_CLOSED' });
+  await expect(transport.request('/api/bootstrap', schema)).rejects.toMatchObject({ code: 'RELAY_SOCKET_CLOSED' });
+  await expect(transport.request('/api/bootstrap', schema)).resolves.toEqual({ data: { ok: true } });
+  expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(2);
+  expect(account.confirmRelaySession).toHaveBeenCalledTimes(2);
+  expect(open.mock.calls.map(([input]: any[]) => input.mode)).toEqual(['attach', 'resume', 'resume', 'resume', 'attach']);
+});
+
 test('an authoritative revoked resume falls back to a fresh bootstrap and confirm', async () => {
   const { account, channels, open, transport } = harness();
   const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
@@ -719,6 +736,69 @@ test('revalidate resumes the existing session rather than selecting another Rela
   await transport.revalidate();
   expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(1);
   expect(open.mock.calls.map(([input]: any[]) => input.mode)).toEqual(['attach', 'resume']);
+});
+
+test('a newer revalidate cancels a frozen resume and rejects its late channel', async () => {
+  const { account, channels, open, transport } = harness();
+  const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+  await transport.request('/api/bootstrap', schema);
+  channels[0].drop();
+
+  let firstSignal: AbortSignal | undefined;
+  let resolveFirst: ((channel: EncryptedRelayChannel) => void) | undefined;
+  open.mockImplementationOnce((input: any) => {
+    firstSignal = input.signal;
+    return new Promise<EncryptedRelayChannel>((resolve) => { resolveFirst = resolve; });
+  });
+  const frozen = transport.revalidate();
+  await waitForCondition(() => Boolean(firstSignal && resolveFirst));
+
+  const replacement = channelHarness();
+  channels.push(replacement);
+  let replacementSignal: AbortSignal | undefined;
+  open.mockImplementationOnce((input: any) => {
+    replacementSignal = input.signal;
+    return Promise.resolve(replacement.channel);
+  });
+  await transport.revalidate();
+
+  expect(firstSignal?.aborted).toBe(true);
+  expect(replacementSignal?.aborted).toBe(false);
+  await expect(frozen).rejects.toMatchObject({ code: 'RELAY_ATTEMPT_CANCELLED' });
+
+  const late = channelHarness();
+  channels.push(late);
+  resolveFirst?.(late.channel);
+  await flushMicrotasks();
+  expect(late.channel.close).toHaveBeenCalledWith(1000, 'attempt-cancelled');
+
+  await transport.request('/api/bootstrap', schema);
+  expect(replacement.channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'request' }));
+  expect(late.channel.send).not.toHaveBeenCalled();
+  expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(1);
+});
+
+test('suspending cancels a frozen resume and keeps the grant for the next foreground', async () => {
+  const { account, channels, open, transport } = harness();
+  const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+  await transport.request('/api/bootstrap', schema);
+  channels[0].drop();
+
+  let suspendedSignal: AbortSignal | undefined;
+  open.mockImplementationOnce((input: any) => {
+    suspendedSignal = input.signal;
+    return new Promise<EncryptedRelayChannel>(() => undefined);
+  });
+  const frozen = transport.revalidate();
+  await waitForCondition(() => Boolean(suspendedSignal));
+
+  transport.suspend();
+  expect(suspendedSignal?.aborted).toBe(true);
+  await expect(frozen).rejects.toMatchObject({ code: 'RELAY_ATTEMPT_CANCELLED' });
+
+  await expect(transport.request('/api/bootstrap', schema)).resolves.toEqual({ data: { ok: true } });
+  expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(1);
+  expect(open.mock.calls.map(([input]: any[]) => input.mode)).toEqual(['attach', 'resume', 'resume']);
 });
 
 test('lease renewal runs on the same Relay socket without replacing the channel', async () => {

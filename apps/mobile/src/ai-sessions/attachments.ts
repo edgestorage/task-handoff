@@ -1,5 +1,5 @@
 import * as Crypto from 'expo-crypto';
-import { File, Paths } from 'expo-file-system';
+import { File, FileMode, Paths } from 'expo-file-system';
 import {
   classifyAiSessionPastedText,
   type AiSessionPastedTextPresentation,
@@ -7,6 +7,7 @@ import {
 } from '@task-handoff/control-plane-client';
 import {
   AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+  AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES,
   AI_SESSION_MAX_ATTACHMENT_BYTES,
   isAiSessionInlineImageMime,
   type AiSessionMessageAttachmentRef,
@@ -125,7 +126,7 @@ export async function uploadMobileAttachment(
   client: ControlPlaneClient,
   identity: { instanceId: string; sessionId: string; scopeType?: 'session' | 'create-request' },
   local: MobileLocalFile,
-  options: { readBytes?(uri: string): Promise<Uint8Array>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; onProgress?(progress: number): void } = {},
+  options: { readChunks?(uri: string): AsyncIterable<Uint8Array>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; onProgress?(progress: number): void } = {},
 ): Promise<MobilePendingAttachment> {
   const startedAt = Date.now();
   let phase: 'read' | 'request' = 'read';
@@ -134,10 +135,10 @@ export async function uploadMobileAttachment(
   let completed = false;
   diagnosticLog.info('attachment.upload.start', { kind: file.kind, mime: file.mime, size: file.size });
   try {
-    const bytes = await (options.readBytes ? options.readBytes(file.uri) : new File(file.uri).bytes());
+    const chunks = options.readChunks ? options.readChunks(file.uri) : mobileFileChunks(file.uri, file.size);
     phase = 'request';
     const uploaded = await client.aiSessions.uploadAttachment(
-      { ...identity, kind: file.kind, name: file.name, mime: file.mime, bytes },
+      { ...identity, kind: file.kind, name: file.name, mime: file.mime, size: file.size, chunks },
       options.onProgress,
     );
     if (uploaded.expiresAt && Date.parse(uploaded.expiresAt) <= (options.now ?? Date.now())) throw attachmentError('ATTACHMENT_EXPIRED', 'The uploaded attachment expired before it could be used.');
@@ -162,6 +163,24 @@ export async function uploadMobileAttachment(
         // The upload ref is already independent from the device cache copy.
       }
     }
+  }
+}
+
+export async function* mobileFileChunks(uri: string, size: number, chunkBytes = AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES): AsyncIterable<Uint8Array> {
+  const handle = new File(uri).open(FileMode.ReadOnly);
+  try {
+    if (handle.size !== null && handle.size !== size) {
+      throw attachmentError('ATTACHMENT_FILE_CHANGED', 'The selected file changed before it could be uploaded.');
+    }
+    let remaining = size;
+    while (remaining > 0) {
+      const chunk = handle.readBytes(Math.min(chunkBytes, remaining));
+      if (chunk.byteLength === 0) throw attachmentError('ATTACHMENT_READ_TRUNCATED', 'The selected file ended before its reported size.');
+      remaining -= chunk.byteLength;
+      yield chunk;
+    }
+  } finally {
+    handle.close();
   }
 }
 

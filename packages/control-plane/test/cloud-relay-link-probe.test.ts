@@ -218,9 +218,17 @@ test("a pushed node allocation starts attaching through the event path", async (
     detachNode: () => true,
     connected: () => false,
   };
+  const observedRelayUrls: string[] = [];
   const runtime = new CloudConnectivityBackgroundRuntime({
     state, identity, webSocket: FakeSocket as any,
     fetch: (async () => probeResponse("relay_a")) as unknown as typeof fetch,
+    relayLinks: {
+      start() {},
+      stop() {},
+      observe(url: unknown) { if (typeof url === "string") observedRelayUrls.push(url); },
+      refresh: async () => [],
+      links: () => [],
+    } as any,
     relayLinkProbeIntervalMs: 60_000,
     nodeRelay: {
       connector: {
@@ -252,5 +260,11 @@ test("a pushed node allocation starts attaching through the event path", async (
   for (let index = 0; index < 100 && !connected.includes("transport:node_alpha"); index += 1) await wait(5);
   assert.ok(connected.includes("node_alpha"));
   assert.ok(connected.includes("transport:node_alpha"));
+  assert.deepEqual(observedRelayUrls, [event.relayUrl], "the event path feeds the node Relay into link probing");
+  await (runtime as any).handleRequest("node-relay-allocation", {
+    relayUrl: "wss://relay-request.cloud.example.com/connect",
+    invalid: true,
+  }).catch(() => undefined);
+  assert.equal(observedRelayUrls.at(-1), "wss://relay-request.cloud.example.com/connect", "the request path observes it too");
   void runtime.stop();
 });

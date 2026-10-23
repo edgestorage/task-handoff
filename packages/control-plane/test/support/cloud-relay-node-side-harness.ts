@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import {
+  NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE,
   NodeRelayAllocationResponseSchema,
   NodeRelayClaimGrantSchema,
   NodeRelayBindingRedemptionSchema,
   NodeRelayCredentialSchema,
   NodeRelayNodeAllocationSchema,
+  NodeRelayProbeTargetsResponseSchema,
   OfficialAudience,
   OUTBOUND_CONNECTION_PROTOCOL_VERSION,
   RELAY_FRAMING_PROTOCOL_VERSION,
@@ -68,6 +70,13 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     unbinds: 0,
     redemptions: [] as Array<{ nodeId?: string; displayName?: string }>,
     allocationRequests: [] as Array<{ controlPlaneId?: string; refreshControlPlaneIds?: string[] }>,
+    adaptiveSelection: false,
+    failAdaptiveAllocations: false,
+    probeTargetFailure: undefined as { status: number; code: string; message?: string } | undefined,
+    probeTargetRequests: [] as Array<{ nodeId?: string; controlPlaneIds?: string[] }>,
+    allocationV2Requests: [] as Array<{ controlPlaneId?: string; refreshControlPlaneIds?: string[]; probeEvidence?: any }>,
+    probeTargets: undefined as Array<{ relayId: string; relayUrl: string }> | undefined,
+    relayByControlPlane: new Map<string, { relayId: string; relayUrl: string }>(),
     claims: new Map<string, CloudClaim>(),
     issued: new Map<string, any>(),
     transformAllocation: undefined as ((allocation: any) => any) | undefined,
@@ -75,6 +84,75 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     relayId: "relay_test_1",
   };
   let allocationSequence = 0;
+  const issueAllocations = (body: { controlPlaneId?: string; refreshControlPlaneIds?: string[] }) => {
+    const refresh = new Set<string>(body.refreshControlPlaneIds ?? []);
+    const nodeHandle = options.nodeHandle ?? "nrh_test_node_handle";
+    return [...state.claims.values()]
+      .filter((claim) => !body.controlPlaneId || claim.controlPlaneId === body.controlPlaneId)
+      .map((claim) => {
+        if (refresh.has(claim.controlPlaneId)) state.issued.delete(claim.controlPlaneId);
+        const existing = state.issued.get(claim.controlPlaneId);
+        if (existing) return existing;
+        const relay = state.relayByControlPlane.get(claim.controlPlaneId) ?? { relayId: state.relayId, relayUrl: state.relayUrl };
+        const allocationId = `allocation_test_${++allocationSequence}`;
+        const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+        const shared = claim.accessMode === "shared" ? {
+          ownerAccountId: claim.ownerAccountId,
+          accessMode: "shared" as const,
+          shareGrantId: claim.shareGrantId,
+          shareRevision: claim.shareRevision,
+          shareRole: "use" as const,
+        } : {};
+        const base = {
+          protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION,
+          channelKind: "node" as const,
+          allocationId,
+          relayId: relay.relayId,
+          controlPlaneId: claim.controlPlaneId,
+          accountId: claim.accountId ?? options.accountId ?? "account_test",
+          bindingId: claim.bindingId ?? "binding_test",
+          bindingRevision: claim.bindingRevision ?? 1,
+          nodeHandle,
+          trafficClass: "interactive" as const,
+          issuedAt: new Date().toISOString(),
+          expiresAt,
+          ...shared,
+        };
+        const nodeAttach = { ...base, audience: OfficialAudience.RelayNodeAgentAttach, role: "node-agent", nonce: crypto.randomBytes(24).toString("base64url"), signature: "s".repeat(43) };
+        const grantPayload = {
+          protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION,
+          audience: OfficialAudience.RelayNodeClaimGrant,
+          grantId: `grant_${allocationId}`,
+          allocationId,
+          nodeHandle,
+          controlPlaneId: claim.controlPlaneId,
+          accountId: claim.accountId ?? options.accountId ?? "account_test",
+          bindingId: claim.bindingId ?? "binding_test",
+          bindingRevision: claim.bindingRevision ?? 1,
+          relayId: relay.relayId,
+          relayRegion: "test-region",
+          relayUrl: relay.relayUrl,
+          nonce: crypto.randomBytes(24).toString("base64url"),
+          issuedAt: base.issuedAt,
+          expiresAt,
+          ...shared,
+          controlPlanePublicKey: claim.controlPlanePublicKey,
+        };
+        const claimGrant = NodeRelayClaimGrantSchema.parse({ ...grantPayload, signature: signingKey.sign("node-relay-claim-grant", grantPayload) });
+        const allocation = NodeRelayNodeAllocationSchema.parse({
+          allocationId,
+          relayId: relay.relayId,
+          relayRegion: "test-region",
+          relayUrl: relay.relayUrl,
+          claimGrant,
+          nodeAttach,
+          expiresAt,
+        });
+        const transformed = state.transformAllocation ? state.transformAllocation(allocation) : allocation;
+        state.issued.set(claim.controlPlaneId, transformed);
+        return transformed;
+      });
+  };
   const fetchImpl: typeof fetch = async (input, init) => {
     if (state.unreachable) throw new TypeError("cloud relay test stack is unreachable");
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
@@ -113,72 +191,26 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
       if (path === "/api/v1/node-relay/v1/allocations") {
         authenticate();
         state.allocationRequests.push(body);
-        const refresh = new Set<string>(body.refreshControlPlaneIds ?? []);
-        const nodeHandle = options.nodeHandle ?? "nrh_test_node_handle";
-        const allocations = [...state.claims.values()]
-          .filter((claim) => !body.controlPlaneId || claim.controlPlaneId === body.controlPlaneId)
-          .map((claim) => {
-            if (refresh.has(claim.controlPlaneId)) state.issued.delete(claim.controlPlaneId);
-            const existing = state.issued.get(claim.controlPlaneId);
-            if (existing) return existing;
-            const allocationId = `allocation_test_${++allocationSequence}`;
-            const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-            const shared = claim.accessMode === "shared" ? {
-              ownerAccountId: claim.ownerAccountId,
-              accessMode: "shared" as const,
-              shareGrantId: claim.shareGrantId,
-              shareRevision: claim.shareRevision,
-              shareRole: "use" as const,
-            } : {};
-            const base = {
-              protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION,
-              channelKind: "node" as const,
-              allocationId,
-              relayId: state.relayId,
-              controlPlaneId: claim.controlPlaneId,
-              accountId: claim.accountId ?? options.accountId ?? "account_test",
-              bindingId: claim.bindingId ?? "binding_test",
-              bindingRevision: claim.bindingRevision ?? 1,
-              nodeHandle,
-              trafficClass: "interactive" as const,
-              issuedAt: new Date().toISOString(),
-              expiresAt,
-              ...shared,
-            };
-            const nodeAttach = { ...base, audience: OfficialAudience.RelayNodeAgentAttach, role: "node-agent", nonce: crypto.randomBytes(24).toString("base64url"), signature: "s".repeat(43) };
-            const grantPayload = {
-              protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION,
-              audience: OfficialAudience.RelayNodeClaimGrant,
-              grantId: `grant_${allocationId}`,
-              allocationId,
-              nodeHandle,
-              controlPlaneId: claim.controlPlaneId,
-              accountId: claim.accountId ?? options.accountId ?? "account_test",
-              bindingId: claim.bindingId ?? "binding_test",
-              bindingRevision: claim.bindingRevision ?? 1,
-              relayId: state.relayId,
-              relayRegion: "test-region",
-              relayUrl: state.relayUrl,
-              nonce: crypto.randomBytes(24).toString("base64url"),
-              issuedAt: base.issuedAt,
-              expiresAt,
-              ...shared,
-              controlPlanePublicKey: claim.controlPlanePublicKey,
-            };
-            const claimGrant = NodeRelayClaimGrantSchema.parse({ ...grantPayload, signature: signingKey.sign("node-relay-claim-grant", grantPayload) });
-            const allocation = NodeRelayNodeAllocationSchema.parse({
-              allocationId,
-              relayId: state.relayId,
-              relayRegion: "test-region",
-              relayUrl: state.relayUrl,
-              claimGrant,
-              nodeAttach,
-              expiresAt,
-            });
-            const transformed = state.transformAllocation ? state.transformAllocation(allocation) : allocation;
-            state.issued.set(claim.controlPlaneId, transformed);
-            return transformed;
-          });
+        const allocations = issueAllocations(body);
+        return json(200, { data: NodeRelayAllocationResponseSchema.parse({ allocations }) });
+      }
+      if (path === "/api/v1/node-relay/v2/probe-targets") {
+        authenticate();
+        state.probeTargetRequests.push(body);
+        if (!state.adaptiveSelection) return failure(404, NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE);
+        if (state.probeTargetFailure) {
+          const { status, code, message } = state.probeTargetFailure;
+          return failure(status, code, message);
+        }
+        const targets = (state.probeTargets ?? [{ relayId: state.relayId, relayUrl: state.relayUrl }]).slice(0, 3);
+        return json(200, { data: NodeRelayProbeTargetsResponseSchema.parse({ targets }) });
+      }
+      if (path === "/api/v1/node-relay/v2/allocations") {
+        authenticate();
+        state.allocationV2Requests.push(body);
+        if (!state.adaptiveSelection) return failure(404, NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE);
+        if (state.failAdaptiveAllocations) return failure(503, "NODE_RELAY_ALLOCATION_UNAVAILABLE");
+        const allocations = issueAllocations(body);
         return json(200, { data: NodeRelayAllocationResponseSchema.parse({ allocations }) });
       }
       if (path === "/api/v1/node-relay/v1/unbind") {
@@ -190,7 +222,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
       const failureRecord = error as { status?: number; code?: string };
       return failure(failureRecord.status ?? 500, failureRecord.code ?? "NODE_RELAY_REQUEST_FAILED");
     }
-    return failure(404, "NOT_FOUND");
+    return failure(404, "NOT_FOUND", "Route not found.");
   };
   return {
     fetchImpl,
@@ -217,6 +249,15 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     },
     setRelayUrl(relayUrl: string) {
       state.relayUrl = relayUrl;
+    },
+    setAdaptiveSelection(enabled: boolean) {
+      state.adaptiveSelection = enabled;
+    },
+    setRelayForControlPlane(controlPlaneId: string, relay: { relayId: string; relayUrl: string }) {
+      state.relayByControlPlane.set(controlPlaneId, relay);
+    },
+    setProbeTargets(targets: Array<{ relayId: string; relayUrl: string }>) {
+      state.probeTargets = targets;
     },
     setUnreachable(unreachable: boolean) {
       state.unreachable = unreachable;

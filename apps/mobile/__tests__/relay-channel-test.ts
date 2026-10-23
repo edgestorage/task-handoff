@@ -195,6 +195,31 @@ describe('createMobileRelayChannelFactory', () => {
     channel.close();
   });
 
+  test('aborting an in-flight attach closes the socket without waiting for the phase timeout', async () => {
+    const socket = new FakeSocket();
+    const controller = new AbortController();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({
+      relayUrl: grant.relayUrl,
+      mode: 'attach',
+      grant,
+      proof,
+      attach: clientAttach,
+      targetPublicKeyFingerprint: fingerprint,
+      epoch: 1,
+      signal: controller.signal,
+    });
+    socket.open();
+    await flush();
+    expect(socket.listenerCount('message')).toBe(1);
+
+    controller.abort();
+
+    await expect(creating).rejects.toMatchObject({ code: 'RELAY_ATTEMPT_CANCELLED', retryable: true });
+    expect(socket.closed).toEqual({ code: 1000, reason: 'attempt-cancelled' });
+    expect(socket.listenerCount('message')).toBe(0);
+  });
+
   test('resumes with session-attach and accepts the full session acknowledgement', async () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
@@ -211,7 +236,7 @@ describe('createMobileRelayChannelFactory', () => {
     expect((await creating).leaseExpiresAt).toBe(attached.leaseExpiresAt);
   });
 
-  test('keeps the Relay close code and reason when the socket error fires first', async () => {
+  test('rejects an attach from a structured session-closed message without waiting for the socket to close', async () => {
     const socket = new FakeSocket();
     const logError = jest.spyOn(diagnosticLog, 'error').mockImplementation(() => undefined);
     try {
@@ -219,23 +244,51 @@ describe('createMobileRelayChannelFactory', () => {
       const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
       socket.open();
       await flush();
-      socket.emit('error', { message: 'WebSocket receive failed.' });
-      socket.emit('close', { code: 4400, reason: 'RELAY_SESSION_GENERATION_STALE' });
+      socket.emit('message', { data: JSON.stringify({ type: 'session-closed', sessionId: 'session_a', code: 'RELAY_SESSION_NOT_FOUND', retryable: false }) });
 
       await expect(creating).rejects.toMatchObject({
-        code: 'RELAY_SESSION_GENERATION_STALE',
+        code: 'RELAY_SESSION_NOT_FOUND',
         retryable: false,
         relayCloseCode: 4400,
-        relayCloseReason: 'RELAY_SESSION_GENERATION_STALE',
+        relayCloseReason: 'RELAY_SESSION_NOT_FOUND',
       });
       expect(logError).toHaveBeenCalledWith('relay.channel.failed', expect.objectContaining({
-        errorCode: 'RELAY_SESSION_GENERATION_STALE',
+        errorCode: 'RELAY_SESSION_NOT_FOUND',
         relayCloseCode: 4400,
-        relayCloseReason: 'RELAY_SESSION_GENERATION_STALE',
+        relayCloseReason: 'RELAY_SESSION_NOT_FOUND',
       }));
+      expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
     } finally {
       logError.mockRestore();
     }
+  });
+
+  test('keeps the Relay close code and reason when close arrives without a preceding error', async () => {
+    const { channel, socket } = await connected();
+    const closed: unknown[] = [];
+    channel.subscribe(() => undefined, (error) => closed.push(error));
+
+    socket.emit('close', { code: 4400, reason: 'RELAY_SESSION_GENERATION_STALE' });
+
+    expect(closed).toEqual([expect.objectContaining({
+      code: 'RELAY_SESSION_GENERATION_STALE',
+      retryable: false,
+      relayCloseCode: 4400,
+      relayCloseReason: 'RELAY_SESSION_GENERATION_STALE',
+    })]);
+    expect(socket.listenerCount('message')).toBe(0);
+    expect(socket.listenerCount('error')).toBe(0);
+    expect(socket.listenerCount('close')).toBe(0);
+  });
+
+  test('fails a connected channel immediately on a socket error', async () => {
+    const { channel, socket } = await connected();
+    const closed: unknown[] = [];
+    channel.subscribe(() => undefined, (error) => closed.push(error));
+    socket.emit('error', { message: 'WebSocket receive failed.' });
+
+    expect(closed).toEqual([expect.objectContaining({ code: 'RELAY_SOCKET_ERROR', retryable: true })]);
+    expect(socket.listenerCount('message')).toBe(0);
   });
 
   test('renews on the same socket without advancing the encrypted frame sequence', async () => {

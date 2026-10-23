@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES,
   AiSessionApprovalInputSchema,
   AiSessionActionCompatibleResponseSchema,
   AiSessionCreateRefInputSchema,
@@ -30,6 +31,8 @@ import {
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
   AiSessionClearResultSchema,
+  AiSessionAttachmentDraftSchema,
+  AiSessionAttachmentDraftStreamOffsetSchema,
   AiSessionCommandInputSchema,
   AiSessionCommandResultSchema,
   AiSessionResumeInputSchema,
@@ -95,6 +98,19 @@ export const AiSessionUploadedAttachmentSchema = z.object({
   size: z.number().int().nonnegative(),
   expiresAt: z.string().datetime().optional(),
 }).strict();
+
+export type AiSessionAttachmentUploadInput = {
+  instanceId: string;
+  sessionId: string;
+  scopeType?: "session" | "create-request";
+  kind: "image" | "file";
+  name: string;
+  mime: string;
+} & (
+  | { data: string; bytes?: never; chunks?: never; size?: never }
+  | { bytes: Uint8Array; data?: never; chunks?: never; size?: never }
+  | { chunks: AsyncIterable<Uint8Array>; size: number; data?: never; bytes?: never }
+);
 
 export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (
@@ -229,21 +245,20 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     pauseQueue(instanceId: string, sessionId: string, input: { paused: boolean }) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/pause`, AiSessionQueueMutationResponseSchema, jsonRequest("POST", AiSessionQueuePauseInputSchema.parse(input)));
     },
-    async uploadAttachment(input: {
-      instanceId: string;
-      sessionId: string;
-      scopeType?: "session" | "create-request";
-      kind: "image" | "file";
-      name: string;
-      mime: string;
-    } & ({ data: string; bytes?: never } | { bytes: Uint8Array; data?: never }), onProgress?: (progress: number) => void) {
+    async uploadAttachment(input: AiSessionAttachmentUploadInput, onProgress?: (progress: number) => void) {
       onProgress?.(0);
+      if ("chunks" in input) {
+        return uploadAttachmentChunks(transport, input as AiSessionAttachmentUploadInput & { chunks: AsyncIterable<Uint8Array>; size: number }, onProgress);
+      }
       // Native clients pass the file bytes directly. Only the browser/legacy
       // callers decode data URLs; React Native rejects large data: fetches
       // before the upload transport is ever entered.
-      const fetched = input.bytes ? undefined : await fetch(input.data).then((response) => response.arrayBuffer()) as ArrayBuffer | Iterable<number>;
-      const content = input.bytes
-        ? attachmentArrayBuffer(input.bytes)
+      const bytes = "bytes" in input ? input.bytes : undefined;
+      const data = "data" in input ? input.data : undefined;
+      if (!bytes && !data) throw attachmentStreamError("AI_SESSION_ATTACHMENT_CONTENT_REQUIRED", "Attachment content is required.");
+      const fetched = bytes ? undefined : await fetch(data!).then((response) => response.arrayBuffer()) as ArrayBuffer | Iterable<number>;
+      const content = bytes
+        ? attachmentArrayBuffer(bytes)
         : fetched instanceof ArrayBuffer ? fetched : new Uint8Array(Array.from(fetched!)).buffer;
       const query = new URLSearchParams({
         scopeType: input.scopeType || "session",
@@ -262,7 +277,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
           onProgress,
         );
       } catch (error) {
-        if (!input.data || !isMissingScopedAttachmentUploadRoute(error)) throw error;
+        if (!("data" in input) || !input.data || !isMissingScopedAttachmentUploadRoute(error)) throw error;
         // Compatibility for v0.0.21: its public upload endpoint accepts the same
         // attachment content and scopes create requests by clientRequestId.
         response = await transport.request(
@@ -320,6 +335,81 @@ function isMissingScopedAttachmentUploadRoute(error: unknown) {
     || candidate.status === 405
     || candidate.code === "ROUTE_NOT_FOUND"
     || candidate.code === "HTTP_404";
+}
+
+async function uploadAttachmentChunks(
+  transport: ControlPlaneClientTransport,
+  input: AiSessionAttachmentUploadInput & { chunks: AsyncIterable<Uint8Array>; size: number },
+  onProgress?: (progress: number) => void,
+) {
+  if (!Number.isSafeInteger(input.size) || input.size <= 0) {
+    throw attachmentStreamError("AI_SESSION_ATTACHMENT_SIZE_INVALID", "Attachment size must be a positive integer.");
+  }
+  const query = new URLSearchParams({
+    scopeType: input.scopeType || "session",
+    scopeId: input.sessionId,
+    kind: input.kind,
+    name: input.name,
+    mime: input.mime,
+    size: String(input.size),
+  });
+  const streamRoute = `/api/controlled-instances/${encodeURIComponent(input.instanceId)}/ai-session-attachments/draft-streams`;
+  let created = false;
+  let attachmentId: string | undefined;
+  try {
+    const started = (await transport.request(
+      `${streamRoute}?${query}`,
+      DataSchema(AiSessionAttachmentDraftStreamOffsetSchema),
+      { method: "POST" },
+    )).data;
+    created = true;
+    attachmentId = started.attachmentId;
+    if (started.offset !== 0) throw attachmentStreamError("AI_SESSION_ATTACHMENT_OFFSET_MISMATCH", "The Control Plane returned an invalid attachment upload offset.", 502);
+
+    let offset = 0;
+    let received = 0;
+    const chunkRoute = `${streamRoute}/${encodeURIComponent(attachmentId)}`;
+    for await (const value of input.chunks) {
+      if (!(value instanceof Uint8Array)) throw attachmentStreamError("AI_SESSION_ATTACHMENT_CHUNK_INVALID", "Attachment chunks must be Uint8Array values.");
+      for (let start = 0; start < value.byteLength; start += AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES) {
+        const chunk = value.subarray(start, Math.min(start + AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, value.byteLength));
+        if (chunk.byteLength === 0) continue;
+        received += chunk.byteLength;
+        if (received > input.size) throw attachmentStreamError("AI_SESSION_ATTACHMENT_SIZE_MISMATCH", "Attachment content exceeded its declared size.", 400);
+        const acknowledged = (await transport.request(
+          `${chunkRoute}?offset=${offset}`,
+          DataSchema(AiSessionAttachmentDraftStreamOffsetSchema),
+          { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: chunk as unknown as BodyInit },
+        )).data;
+        if (acknowledged.attachmentId !== attachmentId || acknowledged.offset !== offset + chunk.byteLength) {
+          throw attachmentStreamError("AI_SESSION_ATTACHMENT_OFFSET_MISMATCH", "The Control Plane returned an invalid attachment upload offset.", 502);
+        }
+        offset = acknowledged.offset;
+        if (offset < input.size) onProgress?.(offset / input.size);
+      }
+    }
+    if (received !== input.size) throw attachmentStreamError("AI_SESSION_ATTACHMENT_SIZE_MISMATCH", "Attachment content did not match its declared size.", 400);
+    const draft = (await transport.request(
+      `${chunkRoute}/complete`,
+      DataSchema(AiSessionAttachmentDraftSchema),
+      { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+    )).data;
+    onProgress?.(1);
+    return draft;
+  } catch (error) {
+    if (created && attachmentId) {
+      void transport.request(
+        `${streamRoute}/${encodeURIComponent(attachmentId)}`,
+        DataSchema(z.object({}).passthrough()),
+        { method: "DELETE" },
+      ).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+function attachmentStreamError(code: string, message: string, status?: number) {
+  return Object.assign(new Error(message), { code, ...(status === undefined ? {} : { status }) });
 }
 
 export type ControlPlaneAiSessions = z.infer<typeof ControlPlaneAiSessionsSchema>;

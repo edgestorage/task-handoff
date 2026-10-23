@@ -222,6 +222,8 @@ export type CreateNodeAgentAppOptions = {
   /** Test-only managed-update capability override. */
   managedUpdateSupport?: (selection: { packageName: string; installPrefix: string }) => { supported: boolean; reason?: string };
   fetchImpl?: typeof fetch;
+  /** Test-only Relay /probe injection; ordinary Cloud API calls keep using fetchImpl. */
+  relayProbeFetch?: typeof fetch;
   cloudDiscovery?: CloudDiscovery;
   discoveryCachePath?: string;
   /** Test-only Relay socket injection for the cloud relay client. */
@@ -1178,6 +1180,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       currentListenerPort: () => state.currentListenerPort,
     },
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.relayProbeFetch ? { relayProbeFetch: options.relayProbeFetch } : {}),
     ...(cloudDiscovery ? { cloudDiscovery } : {}),
     discoveryCachePath,
     ...(options.webSocket ? { webSocket: options.webSocket } : {}),

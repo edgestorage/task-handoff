@@ -5,6 +5,7 @@ import type { Story } from '@task-handoff/protocol/stories';
 
 import { StoryInbox } from '../src/stories/StoryInbox';
 import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
+import { mobileLightColors } from '../src/components/theme';
 import { useMobileControlPlaneRuntime, type MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 import { useStoryNodeFilter } from '../src/stories/use-story-node-filter';
@@ -82,7 +83,7 @@ describe('<StoryInbox />', () => {
       api: { stories: { list } },
       coordinator: { register },
     } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
-    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
 
     const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
@@ -122,7 +123,7 @@ describe('<StoryInbox />', () => {
       api: { stories: { list } },
       coordinator: { register },
     } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
-    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
 
     const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
@@ -152,7 +153,7 @@ describe('<StoryInbox />', () => {
 
   test('shows an unavailable error in a compact empty state when nodes cannot return Stories', async () => {
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [], unavailableNodeIds: ['node-a'] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
-    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
 
     const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
@@ -172,7 +173,7 @@ describe('<StoryInbox />', () => {
     const list = jest.fn().mockResolvedValue({ stories: [alpha, beta], unavailableNodeIds: ['node-b'] });
     mockRuntime.mockReturnValue({ api: { stories: { list } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: {
-      nodes: [{ id: 'node-a', name: 'Node A' }, { id: 'node-b', name: 'Node B' }],
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }, { id: 'node-b', name: 'Node B', status: 'online', health: 'ok' }],
       instances: [],
     } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
@@ -187,6 +188,54 @@ describe('<StoryInbox />', () => {
     await screen.unmount();
   });
 
+  test('dims and disables a Story when its owner node is offline', async () => {
+    const story: Story = {
+      id: 'story-offline', ownerNodeId: 'node-a', title: 'Offline Story', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'offline', health: 'unknown' }],
+      instances: [],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+    const onOpen = jest.fn();
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={onOpen} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Offline Story')).toBeTruthy());
+    expect(StyleSheet.flatten(screen.getByTestId('story-row-node-a:story-offline').props.style).opacity).toBe(0.5);
+    expect(StyleSheet.flatten(screen.getByText('Offline Story').props.style).color).toBe(mobileLightColors.textMuted);
+    await fireEvent.press(screen.getByText('Offline Story'));
+    expect(onOpen).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  test('mutes an archived Story title while keeping the Story selectable', async () => {
+    const story: Story = {
+      id: 'story-archived', ownerNodeId: 'node-a', title: 'Archived Story', actions: [], documents: [],
+      archivedAt: '2026-09-05T00:00:00.000Z',
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
+      instances: [],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+    const onOpen = jest.fn();
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={onOpen} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Archived Story')).toBeTruthy());
+    const titleStyle = StyleSheet.flatten(screen.getByText('Archived Story').props.style);
+    expect(titleStyle.color).toBe(mobileLightColors.textMuted);
+    expect(titleStyle.fontWeight).toBe('400');
+    await fireEvent.press(screen.getByText('Archived Story'));
+    expect(onOpen).toHaveBeenCalledWith(story);
+    await screen.unmount();
+  });
+
   test('manual mode exposes reorder handles and updates the rendered Story order', async () => {
     const alpha: Story = {
       id: 'story-a', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
@@ -194,7 +243,7 @@ describe('<StoryInbox />', () => {
     };
     const beta: Story = { ...alpha, id: 'story-b', title: 'Beta' };
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [alpha, beta], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
-    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
     updateStoryViewPreferences({ manualKeys: ['node-a:story-a', 'node-a:story-b'], sortMode: 'manual' });
 
@@ -216,7 +265,7 @@ describe('<StoryInbox />', () => {
     };
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: {
-      nodes: [{ id: 'node-a', name: 'Node A' }],
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
       instances: [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }],
     } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({
@@ -265,7 +314,7 @@ describe('<StoryInbox />', () => {
     };
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: {
-      nodes: [{ id: 'node-a', name: 'Node A' }],
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
       instances: [
         { id: 'instance-a', nodeId: 'node-a', name: 'Instance A', ready: true },
         { id: 'instance-b', nodeId: 'node-a', name: 'Instance B', ready: true },
@@ -303,7 +352,7 @@ describe('<StoryInbox />', () => {
       createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
     };
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
-    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({
       updatedAt: '2026-09-04T00:00:00.000Z', instances: [{ instanceId: 'instance-a', streamId: 'stream-a', aiSessions: {
         updatedAt: '2026-09-04T00:00:00.000Z', sessions: [{ id: 'session-a', agent: 'codex', status: 'idle', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false }],

@@ -140,6 +140,7 @@ export class CloudConnectivityBackgroundRuntime {
       // the node-relay channel state.
       if ((event as any)?.type === "node-relay-allocation") {
         if (!this.nodeRelayChannels) return;
+        this.relayLinks.observe((event as any)?.relayUrl);
         void this.nodeRelayChannels.attach(event).catch(() => undefined);
         return;
       }
@@ -385,6 +386,7 @@ export class CloudConnectivityBackgroundRuntime {
     if (operation === "relay-session-grant") return this.dataConnections.applyGrant(payload);
     if (operation === "node-relay-allocation") {
       if (!this.nodeRelayChannels) throw runtimeError("NODE_RELAY_UNAVAILABLE");
+      this.relayLinks.observe(payload?.relayUrl);
       return this.nodeRelayChannels.attach(payload);
     }
     throw runtimeError("CLOUD_CONTROL_OPERATION_UNSUPPORTED");

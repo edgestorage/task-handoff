@@ -212,9 +212,73 @@ export const NodeRelayAllocationResponseSchema = z.strictObject({
   allocations: z.array(NodeRelayNodeAllocationSchema),
 });
 
+/** Reconnect probing is deliberately small: at most three peers, two samples, one shared budget. */
+export const NODE_RELAY_PROBE_TARGET_LIMIT = 3;
+export const NODE_RELAY_PROBE_SAMPLE_COUNT = 2;
+export const NODE_RELAY_PROBE_BUDGET_MS = 1_200;
+export const NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE = "NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED";
+
+export const NodeRelayProbeTargetSchema = z.strictObject({
+  relayId: IdSchema,
+  relayUrl: z.string().url(),
+});
+
+/**
+ * Attempt-scoped target discovery. The response deliberately carries no CP
+ * hint, server score, claim grant or attach capability: those stay server-side
+ * until one winner has been selected.
+ */
+export const NodeRelayProbeTargetsRequestSchema = z.strictObject({
+  nodeId: IdSchema.optional(),
+  controlPlaneIds: z.array(IdSchema).max(8).optional(),
+});
+
+export const NodeRelayProbeTargetsResponseSchema = z.strictObject({
+  targets: z.array(NodeRelayProbeTargetSchema).max(NODE_RELAY_PROBE_TARGET_LIMIT),
+});
+
+/**
+ * Numeric and sample bounds are validated again by the Coordinator and invalid
+ * rows are ignored, so one malformed measurement cannot fail a whole reconnect.
+ */
+export const NodeRelayProbeMeasurementSchema = z.strictObject({
+  relayId: IdSchema,
+  rttMs: z.number().finite().nonnegative().optional(),
+  sampleCount: z.number().int().nonnegative(),
+  failureCount: z.number().int().nonnegative(),
+  measuredAt: DateTimeSchema.optional(),
+});
+
+export const NodeRelayProbeEvidenceSchema = z.strictObject({
+  measurements: z.array(NodeRelayProbeMeasurementSchema).max(32),
+});
+
+/** Node Relay allocation v2. The winner is still the unchanged v1 allocation shape. */
+export const NodeRelayAllocationRequestV2Schema = z.strictObject({
+  nodeId: IdSchema.optional(),
+  controlPlaneId: IdSchema.optional(),
+  refreshControlPlaneIds: z.array(IdSchema).max(8).optional(),
+  probeEvidence: NodeRelayProbeEvidenceSchema.optional(),
+});
+
+export const NodeRelayAllocationErrorSchema = z.strictObject({
+  error: z.strictObject({
+    code: z.string().trim().min(1).max(80),
+    message: z.string().trim().min(1).max(512),
+    retryable: z.boolean().optional(),
+  }),
+});
+
 export type NodeRelayRegistryProjection = z.infer<typeof NodeRelayRegistryProjectionSchema>;
 export type RelayNodeChannelAttachCapability = z.infer<typeof RelayNodeChannelAttachCapabilitySchema>;
 export type NodeRelayClaimGrant = z.infer<typeof NodeRelayClaimGrantSchema>;
 export type NodeRelayNodeAllocation = z.infer<typeof NodeRelayNodeAllocationSchema>;
 export type NodeRelayAllocationEvent = z.infer<typeof NodeRelayAllocationEventSchema>;
 export type NodeRelayBindingRedemption = z.infer<typeof NodeRelayBindingRedemptionSchema>;
+export type NodeRelayProbeTarget = z.infer<typeof NodeRelayProbeTargetSchema>;
+export type NodeRelayProbeTargetsRequest = z.infer<typeof NodeRelayProbeTargetsRequestSchema>;
+export type NodeRelayProbeTargetsResponse = z.infer<typeof NodeRelayProbeTargetsResponseSchema>;
+export type NodeRelayProbeMeasurement = z.infer<typeof NodeRelayProbeMeasurementSchema>;
+export type NodeRelayProbeEvidence = z.infer<typeof NodeRelayProbeEvidenceSchema>;
+export type NodeRelayAllocationRequestV2 = z.infer<typeof NodeRelayAllocationRequestV2Schema>;
+export type NodeRelayAllocationError = z.infer<typeof NodeRelayAllocationErrorSchema>;

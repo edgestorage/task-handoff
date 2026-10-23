@@ -267,6 +267,7 @@ class CloudRelayNodeChannel {
     if (channelId !== "main") {
       const socket = this.aux.get(channelId);
       if (!socket) return;
+      this.session.discardDataAssembly(socket.streamId);
       this.aux.delete(channelId);
       this.auxByStreamId.delete(socket.streamId);
       this.sendClose(channelId, code, reason);
@@ -319,6 +320,7 @@ class CloudRelayNodeChannel {
     if (message.type === "channel-close") {
       const target = message.channelId === "main" ? this.mainSocket : this.aux.get(message.channelId);
       if (!target) return;
+      this.session.discardDataAssembly(target.streamId);
       if (message.channelId !== "main") {
         this.aux.delete(message.channelId);
         this.auxByStreamId.delete(target.streamId);

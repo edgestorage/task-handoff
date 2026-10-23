@@ -81,7 +81,10 @@ export interface MobileControlPlaneTransport extends ControlPlaneClientTransport
   readonly currentCapabilities?: ControlPlanePublicCapabilities;
   request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit, onUploadProgress?: (progress: number) => void): Promise<T>;
   requestBinary(path: string, init?: RequestInit): Promise<{ body: Uint8Array; filename?: string; contentType?: string }>;
-  revalidate?(): Promise<void>;
+  /** Recreates the transport connection for a new runtime epoch. */
+  revalidate?(signal?: AbortSignal): Promise<void>;
+  /** Drops live transport state while the app is not allowed to stay connected. */
+  suspend?(): void;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
 }

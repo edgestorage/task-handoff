@@ -74,7 +74,6 @@ export class MobileControlPlaneConnectionCoordinator {
   private mobileSessionRenewalTimer?: ReturnType<typeof setTimeout>;
   private connectTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
-  private revalidation?: Promise<void>;
   private epoch = 0;
   private connectionSequence = 0;
   private foreground = false;
@@ -146,6 +145,7 @@ export class MobileControlPlaneConnectionCoordinator {
     this.connection = undefined;
     for (const domain of this.activeDomains) domain.stop();
     this.activeDomains = [];
+    this.transport.suspend?.();
     this.publish({ phase: 'idle' });
   }
 
@@ -220,12 +220,14 @@ export class MobileControlPlaneConnectionCoordinator {
     for (const domain of this.activeDomains) domain.stop();
     this.activeDomains = desired;
     if (!this.connected) {
+      this.transport.suspend?.();
       for (const domain of this.domains.values()) domain.offline?.();
       diagnosticLog.info('runtime.connect.skipped', { reason: 'offline', previousPhase: this.snapshotValue.phase });
       this.publish({ phase: 'offline' });
       return;
     }
     if (!desired.length) {
+      this.transport.suspend?.();
       diagnosticLog.info('runtime.connect.skipped', { reason: 'no-domains', previousPhase: this.snapshotValue.phase });
       this.publish({ phase: 'idle' });
       return;
@@ -247,7 +249,7 @@ export class MobileControlPlaneConnectionCoordinator {
       this.publish({ phase: this.controlPlaneClosed
         ? 'control-plane-closed'
         : this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
-      await this.revalidateTransport();
+      await this.revalidateTransport(abortController.signal);
       diagnosticLog.info('runtime.transport.ready', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
       if (!this.live(epoch, abortController)) return;
       if (this.profile.access.kind === 'direct' && this.mobileSessionRenewalSupported) {
@@ -384,14 +386,10 @@ export class MobileControlPlaneConnectionCoordinator {
     }, delay);
   }
 
-  private revalidateTransport() {
-    if (!this.revalidation) {
-      const revalidation = Promise.resolve(this.transport.revalidate?.()).finally(() => {
-        if (this.revalidation === revalidation) this.revalidation = undefined;
-      });
-      this.revalidation = revalidation;
-    }
-    return this.revalidation;
+  private revalidateTransport(signal: AbortSignal) {
+    // Each runtime epoch owns its reconnect attempt. Coalescing this across epochs
+    // can make a foreground restart wait forever on an attempt frozen by iOS.
+    return Promise.resolve(this.transport.revalidate?.(signal));
   }
 
   private live(epoch: number, abortController: AbortController) {

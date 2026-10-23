@@ -10,8 +10,12 @@ import {
   CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
   ControlPlaneDirectoryEntrySchema,
   DeviceSessionSchema,
+  NodeRelayAllocationErrorSchema,
   NodeRelayAllocationEventSchema,
+  NodeRelayAllocationRequestSchema,
+  NodeRelayAllocationRequestV2Schema,
   NodeRelayClaimGrantPayloadSchema,
+  NodeRelayProbeTargetsResponseSchema,
   OfficialAudience,
   OutboundConnectionRegistrationSchema,
   OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION,
@@ -59,6 +63,37 @@ test("public package does not export Cloud persistence or credential models", ()
   for (const internalName of ["OfficialAccountSchema", "TokenFamilySchema", "SecurityEventSchema", "StoredRecordEnvelopeSchema", "parseStoredRecord"]) {
     assert.equal(internalName in publicContracts, false, `${internalName} must remain Cloud-internal`);
   }
+});
+
+test("node relay v2 contracts are additive and keep the allocation winner opaque", () => {
+  const v1Request = { nodeId: "node_machine", refreshControlPlaneIds: ["control_plane_a"] };
+  assert.equal(NodeRelayAllocationRequestSchema.safeParse(v1Request).success, true);
+  assert.equal(NodeRelayAllocationRequestSchema.safeParse({ ...v1Request, probeEvidence: { measurements: [] } }).success, false);
+
+  const targets = {
+    targets: [
+      { relayId: "relay_a", relayUrl: "wss://relay-a.example.test/connect" },
+      { relayId: "relay_b", relayUrl: "wss://relay-b.example.test/connect" },
+      { relayId: "relay_c", relayUrl: "wss://relay-c.example.test/connect" },
+    ],
+  };
+  assert.deepEqual(NodeRelayProbeTargetsResponseSchema.parse(targets), targets);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [...targets.targets, targets.targets[0]] }).success, false);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [{ ...targets.targets[0], claimGrant: "leak" }] }).success, false);
+
+  const v2Request = {
+    nodeId: "node_machine",
+    refreshControlPlaneIds: ["control_plane_a"],
+    probeEvidence: {
+      measurements: [{ relayId: "relay_a", rttMs: 24.5, sampleCount: 2, failureCount: 0, measuredAt: at }],
+    },
+  };
+  assert.deepEqual(NodeRelayAllocationRequestV2Schema.parse(v2Request), v2Request);
+  assert.equal(NodeRelayAllocationRequestV2Schema.safeParse({ ...v2Request, batchId: "batch_a" }).success, false);
+  assert.equal(NodeRelayAllocationRequestV2Schema.safeParse({ ...v2Request, unexpected: true }).success, false);
+  assert.equal(NodeRelayAllocationRequestV2Schema.safeParse({ ...v2Request, probeEvidence: { measurements: [{ ...v2Request.probeEvidence.measurements[0], rttMs: -1 }] } }).success, false);
+  assert.equal(NodeRelayAllocationErrorSchema.safeParse({ error: { code: "NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED", message: "Not available." } }).success, true);
+  assert.equal(NodeRelayAllocationErrorSchema.safeParse({ error: { code: "NO", message: "Not available.", secret: "leak" } }).success, false);
 });
 
 test("binding directory excludes node, instance, endpoint, and business state", () => {

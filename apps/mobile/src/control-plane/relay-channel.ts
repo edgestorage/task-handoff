@@ -45,10 +45,6 @@ export const MOBILE_RELAY_CHANNEL_TIMEOUTS: Readonly<MobileRelayChannelTimeouts>
   handshakeMs: 8_000,
 });
 const RENEWAL_REPLY_TIMEOUT_MS = 10_000;
-// Browsers and URLSession may dispatch `error` immediately before the terminal
-// `close`. Waiting briefly lets the close code/reason win instead of replacing
-// an actionable Relay rejection with a generic socket failure.
-const SOCKET_ERROR_CLOSE_GRACE_MS = 100;
 
 export function createMobileRelayChannelFactory(options: { webSocketFactory?: SocketFactory; allowRelayUrl?: (url: URL) => boolean; timeouts?: Partial<MobileRelayChannelTimeouts> } = {}): RelayChannelFactory {
   const timeouts = {
@@ -71,6 +67,7 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
     let phase: 'socket' | 'attach' | 'handshake' = 'socket';
     let phaseStartedAt = startedAt;
     try {
+      throwIfAborted(input.signal);
       const url = new URL(input.relayUrl);
       relayHost = url.hostname;
       // Test builds may use the plain-HTTP test cloud stack: allow ws:// there just like
@@ -84,12 +81,14 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       const socketStartedAt = Date.now();
       const createdSocket = (options.webSocketFactory ?? defaultRelaySocketFactory)(url.toString());
       socket = createdSocket instanceof Promise
-        ? await withTimeout(createdSocket, timeouts.socketOpenMs, 'RELAY_SOCKET_OPEN_TIMEOUT', closeLateSocket)
+        ? await withTimeout(createdSocket, timeouts.socketOpenMs, 'RELAY_SOCKET_OPEN_TIMEOUT', closeLateSocket, input.signal)
         : createdSocket;
+      throwIfAborted(input.signal);
       // Frames are binary; attach and the later session-renew acknowledgements
       // are the only text exchanges on this socket.
       socket.binaryType = 'arraybuffer';
-      await waitForOpen(socket, remainingTimeout(timeouts.socketOpenMs, socketStartedAt));
+      await waitForOpen(socket, remainingTimeout(timeouts.socketOpenMs, socketStartedAt), input.signal);
+      throwIfAborted(input.signal);
       diagnosticLog.info('relay.socket.open', { ...base, relayHost, durationMs: Date.now() - socketStartedAt });
       const attach = input.mode === 'attach'
         ? { type: 'attach', capability: input.attach, grant: input.grant, proof: input.proof }
@@ -98,9 +97,18 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       const attachStartedAt = Date.now();
       phase = 'attach';
       phaseStartedAt = attachStartedAt;
+      throwIfAborted(input.signal);
       socket.send(JSON.stringify(attach));
       diagnosticLog.info('relay.attach.sent', { ...base, relayHost });
-      const rawAttached = await nextMessage(socket, (value) => value?.type === 'attached', timeouts.attachMs, 'RELAY_SESSION_ATTACH_TIMEOUT');
+      const rawAttached = await nextMessage(
+        socket,
+        (value) => value?.type === 'attached',
+        timeouts.attachMs,
+        'RELAY_SESSION_ATTACH_TIMEOUT',
+        (value) => sessionClosedRejection(value, input.grant.sessionId),
+        input.signal,
+      );
+      throwIfAborted(input.signal);
       const attached = RelaySessionResumeResultSchema.safeParse(rawAttached);
       if (!attached.success || attached.data.sessionId !== input.grant.sessionId
         || attached.data.allocationId !== input.grant.allocationId
@@ -120,8 +128,10 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       const e2eStartedAt = Date.now();
       phase = 'handshake';
       phaseStartedAt = e2eStartedAt;
+      throwIfAborted(input.signal);
       socket.send(encodeRelayFrame({ kind: 'handshake', sequence: sendSequence++, payload: new TextEncoder().encode(JSON.stringify(hello)) }));
-      const handshakeFrame = await nextFrame(socket, (frame) => frame.kind === 'handshake', timeouts.handshakeMs, 'RELAY_E2E_HANDSHAKE_TIMEOUT');
+      const handshakeFrame = await nextFrame(socket, (frame) => frame.kind === 'handshake', timeouts.handshakeMs, 'RELAY_E2E_HANDSHAKE_TIMEOUT', input.signal);
+      throwIfAborted(input.signal);
       const response = JSON.parse(new TextDecoder().decode(handshakeFrame.payload));
       const identityKey = fromBase64Url(response.controlPlanePublicKey);
       const fingerprint = `sha256:${base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, identityKey)))}`;
@@ -132,6 +142,7 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       // box HSalsa20 transform on top, so the two sides would never agree.
       const shared = nacl.scalarMult(keyPair.secretKey, fromBase64Url(response.serverEphemeralPublicKey));
       const sessionKey = new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, concat(shared, new TextEncoder().encode(transcript), new TextEncoder().encode('task-handoff:control-plane-access:e2e:v1'))));
+      throwIfAborted(input.signal);
       diagnosticLog.info('relay.e2e.ready', { ...base, relayHost, durationMs: Date.now() - e2eStartedAt });
       diagnosticLog.info('relay.channel.ready', { ...base, relayHost, durationMs: Date.now() - startedAt, appliedGeneration: attached.data.generation });
       return new WebSocketEncryptedRelayChannel(socket, sessionKey, sendSequence, {
@@ -145,8 +156,9 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
     } catch (error) {
       // The caller only ever sees the rejection, so a socket left behind by a failed
       // attach/handshake would stay open for the lifetime of the native WebSocket.
-      try { socket?.close(4400, 'handshake-failed'); } catch { /* the socket may already be closed */ }
-      diagnosticLog.error('relay.channel.failed', {
+      const cancelled = isAttemptCancelled(error);
+      try { socket?.close(cancelled ? 1000 : 4400, cancelled ? 'attempt-cancelled' : 'handshake-failed'); } catch { /* the socket may already be closed */ }
+      const details = {
         ...base,
         relayHost,
         phase,
@@ -154,7 +166,9 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
         phaseTimeoutMs: phase === 'socket' ? timeouts.socketOpenMs : phase === 'attach' ? timeouts.attachMs : timeouts.handshakeMs,
         durationMs: Date.now() - startedAt,
         ...diagnosticErrorDetails(error),
-      });
+      };
+      if (cancelled) diagnosticLog.info('relay.channel.cancelled', details);
+      else diagnosticLog.error('relay.channel.failed', details);
       throw error;
     }
   };
@@ -407,26 +421,28 @@ function defaultRelaySocketFactory(url: string): SocketLike | Promise<SocketLike
   return new WebSocket(url) as unknown as SocketLike;
 }
 
-function waitForOpen(socket: SocketLike, timeoutMs: number) {
+function waitForOpen(socket: SocketLike, timeoutMs: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    let errorTimer: ReturnType<typeof setTimeout> | undefined;
+    if (signal?.aborted) {
+      reject(attemptCancelledError());
+      return;
+    }
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError('RELAY_SOCKET_OPEN_TIMEOUT', true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
-      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('open', opened);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
+      signal?.removeEventListener('abort', aborted);
     };
+    const aborted = () => { cleanup(); reject(attemptCancelledError()); };
     const opened = () => { cleanup(); resolve(); };
-    const failed = (event: SocketDefaultEvent) => {
-      if (errorTimer) return;
-      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
-    };
+    const failed = (event: SocketDefaultEvent) => { cleanup(); reject(socketError(event)); };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
+    signal?.addEventListener('abort', aborted, { once: true });
     socket.addEventListener('open', opened);
     socket.addEventListener('error', failed);
     socket.addEventListener('close', closed);
@@ -435,23 +451,40 @@ function waitForOpen(socket: SocketLike, timeoutMs: number) {
 
 // A one-shot wait must stop listening the moment it settles: a long-lived channel would
 // otherwise keep parsing every incoming frame once per completed wait.
-function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, timeoutMs: number, timeoutCode: string) {
+function nextMessage(
+  socket: SocketLike,
+  predicate: (value: any) => boolean,
+  timeoutMs: number,
+  timeoutCode: string,
+  rejection?: (value: any) => unknown,
+  signal?: AbortSignal,
+) {
   return new Promise<any>((resolve, reject) => {
-    let errorTimer: ReturnType<typeof setTimeout> | undefined;
+    if (signal?.aborted) {
+      reject(attemptCancelledError());
+      return;
+    }
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError(timeoutCode, true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
-      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
+      signal?.removeEventListener('abort', aborted);
     };
+    const aborted = () => { cleanup(); reject(attemptCancelledError()); };
     const message = (event: SocketDefaultEvent) => {
       try {
         const value = JSON.parse(String(event.data));
+        const rejected = rejection?.(value);
+        if (rejected) {
+          cleanup();
+          reject(rejected);
+          return;
+        }
         if (!predicate(value)) return;
         cleanup();
         resolve(value);
@@ -460,11 +493,9 @@ function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, tim
         reject(relayError('RELAY_PROTOCOL_INVALID'));
       }
     };
-    const failed = (event: SocketDefaultEvent) => {
-      if (errorTimer) return;
-      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
-    };
+    const failed = (event: SocketDefaultEvent) => { cleanup(); reject(socketError(event)); };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
+    signal?.addEventListener('abort', aborted, { once: true });
     socket.addEventListener('message', message);
     socket.addEventListener('error', failed);
     socket.addEventListener('close', closed);
@@ -474,20 +505,24 @@ function nextMessage(socket: SocketLike, predicate: (value: any) => boolean, tim
 // Binary frames travel as ArrayBuffer once `binaryType` is set; the React Native
 // WebSocket normalizes to ArrayBuffer the same way the browser does.
 // Everything after attach is binary; a text message here is a protocol violation.
-function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => boolean, timeoutMs: number, timeoutCode: string) {
+function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => boolean, timeoutMs: number, timeoutCode: string, signal?: AbortSignal) {
   return new Promise<RelayFramePayload>((resolve, reject) => {
-    let errorTimer: ReturnType<typeof setTimeout> | undefined;
+    if (signal?.aborted) {
+      reject(attemptCancelledError());
+      return;
+    }
     const timer = setTimeout(() => {
       cleanup();
       reject(relayError(timeoutCode, true));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
-      if (errorTimer) clearTimeout(errorTimer);
       socket.removeEventListener?.('message', message);
       socket.removeEventListener?.('error', failed);
       socket.removeEventListener?.('close', closed);
+      signal?.removeEventListener('abort', aborted);
     };
+    const aborted = () => { cleanup(); reject(attemptCancelledError()); };
     const message = (event: SocketDefaultEvent) => {
       try {
         const bytes = frameBytes(event.data);
@@ -501,11 +536,9 @@ function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => 
         reject(error);
       }
     };
-    const failed = (event: SocketDefaultEvent) => {
-      if (errorTimer) return;
-      errorTimer = setTimeout(() => { cleanup(); reject(socketError(event)); }, SOCKET_ERROR_CLOSE_GRACE_MS);
-    };
+    const failed = (event: SocketDefaultEvent) => { cleanup(); reject(socketError(event)); };
     const closed = (event: SocketDefaultEvent) => { cleanup(); reject(closeError(event)); };
+    signal?.addEventListener('abort', aborted, { once: true });
     socket.addEventListener('message', message);
     socket.addEventListener('error', failed);
     socket.addEventListener('close', closed);
@@ -526,13 +559,29 @@ function timeoutOption(value: number | undefined, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutCode: string, onLateValue?: (value: T) => void) {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutCode: string, onLateValue?: (value: T) => void, signal?: AbortSignal) {
   return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(attemptCancelledError());
+      return;
+    }
     let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', aborted);
+    };
     const timer = setTimeout(() => {
       settled = true;
+      cleanup();
       reject(relayError(timeoutCode, true));
     }, timeoutMs);
+    const aborted = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(attemptCancelledError());
+    };
+    signal?.addEventListener('abort', aborted, { once: true });
     promise.then(
       (value) => {
         if (settled) {
@@ -540,13 +589,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutCode: str
           return;
         }
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         resolve(value);
       },
       (error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         reject(error);
       },
     );
@@ -619,6 +668,18 @@ function closeError(event: SocketDefaultEvent) {
   return relayError('RELAY_SOCKET_CLOSED', true, message, close);
 }
 
+function sessionClosedRejection(value: any, sessionId: string) {
+  if (value?.type !== 'session-closed') return undefined;
+  const parsed = RelaySessionClosedMessageSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) return relayError('RELAY_PROTOCOL_INVALID');
+  return relayError(
+    parsed.data.code,
+    parsed.data.retryable,
+    `Cloud Relay rejected the session (${parsed.data.code}).`,
+    { relayCloseCode: 4400, relayCloseReason: parsed.data.code },
+  );
+}
+
 function socketError(event: SocketDefaultEvent, code = 'RELAY_SOCKET_FAILED') {
   const detail = closeDetailText(event);
   const message = typeof event.message === 'string' && event.message
@@ -647,6 +708,18 @@ function closeDetailText(event: SocketDefaultEvent) {
 
 function retryableRelayClose(reason: string) {
   return ['RELAY_SESSION_REVOCATION_SYNC_PENDING', 'RELAY_DRAINING', 'RELAY_PROTOCOL_ERROR'].includes(reason);
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw attemptCancelledError();
+}
+
+function attemptCancelledError() {
+  return relayError('RELAY_ATTEMPT_CANCELLED', true, 'Cloud Relay connection attempt was superseded.');
+}
+
+function isAttemptCancelled(error: unknown) {
+  return (error as { code?: unknown } | null)?.code === 'RELAY_ATTEMPT_CANCELLED';
 }
 
 function relayError(code: string, retryable = false, message = 'Cloud Relay channel failed.', close?: { relayCloseCode?: number; relayCloseReason?: string }) {

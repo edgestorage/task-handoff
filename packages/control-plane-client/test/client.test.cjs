@@ -462,6 +462,75 @@ test("shared AI Session attachment upload scopes a create request", async () => 
   assert.equal(uploaded.id, "attachment-1");
 });
 
+test("shared AI Session attachment chunk upload streams bounded PUTs", async () => {
+  const attachmentId = `cia_${"a".repeat(24)}`;
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path.startsWith("/api/controlled-instances/instance-1/ai-session-attachments/draft-streams?")) {
+        return schema.parse({ data: { attachmentId, offset: 0 } });
+      }
+      if (path.endsWith("/complete")) {
+        return schema.parse({ data: { id: attachmentId, kind: "file", name: "note.txt", mime: "text/plain", size: 11, expiresAt: "2026-08-21T00:00:00.000Z" } });
+      }
+      if (init.method === "PUT") {
+        const offset = Number(new URL(path, "https://control-plane.test").searchParams.get("offset"));
+        return schema.parse({ data: { attachmentId, offset: offset + init.body.byteLength } });
+      }
+      return schema.parse({ data: { removed: true } });
+    },
+  };
+  const progress = [];
+  const first = new Uint8Array([104, 101, 108, 108, 111, 32]);
+  const second = new Uint8Array([119, 111, 114, 108, 100]);
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "session-1",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    size: 11,
+    chunks: (async function* () { yield first; yield second; })(),
+  }, (value) => progress.push(value));
+
+  assert.equal(uploaded.id, attachmentId);
+  assert.equal(requests.length, 4);
+  assert.match(requests[0].path, /^\/api\/controlled-instances\/instance-1\/ai-session-attachments\/draft-streams\?/);
+  assert.equal(requests[1].init.body.buffer, first.buffer, "bounded chunks are forwarded without another full-file copy");
+  assert.equal(requests[2].init.body.buffer, second.buffer, "bounded chunks are forwarded without another full-file copy");
+  assert.equal(requests[3].path, `/api/controlled-instances/instance-1/ai-session-attachments/draft-streams/${attachmentId}/complete`);
+  assert.deepEqual(progress, [0, 6 / 11, 1]);
+});
+
+test("shared AI Session chunk upload cancels the draft after a failed chunk", async () => {
+  const attachmentId = `cia_${"b".repeat(24)}`;
+  const calls = [];
+  const transport = {
+    async request(path, schema, init) {
+      calls.push(`${init?.method || "GET"} ${path}`);
+      if (path.includes("?") && init?.method === "POST" && !path.endsWith("/complete")) {
+        return schema.parse({ data: { attachmentId, offset: 0 } });
+      }
+      if (init?.method === "PUT") throw Object.assign(new Error("connection reset"), { status: 503, retryable: true });
+      return schema.parse({ data: { removed: true } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  await assert.rejects(api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "session-1",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    size: 3,
+    chunks: (async function* () { yield new Uint8Array([1, 2, 3]); })(),
+  }), /connection reset/);
+
+  assert.equal(calls.at(-1), `DELETE /api/controlled-instances/instance-1/ai-session-attachments/draft-streams/${attachmentId}`);
+});
+
 test("shared AI Session attachment upload falls back to the v0.0.21 endpoint", async () => {
   const requests = [];
   const transport = {

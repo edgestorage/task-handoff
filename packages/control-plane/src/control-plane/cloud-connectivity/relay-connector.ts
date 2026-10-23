@@ -8,6 +8,7 @@ import {
   RelayAttachCapabilitySchema,
   RelayRoleProofSchema,
   RelaySessionClosedMessageSchema,
+  RelaySessionDetachedMessageSchema,
   RelaySessionGrantSchema,
   RELAY_SESSION_PROTOCOL_VERSION,
   decodeRelayFrame,
@@ -269,9 +270,18 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
   let session: { close(reason?: string): Promise<void> | void } | undefined;
   let closeReason: string | undefined;
   let intentional = false;
+  let disconnected = false;
   let latestGrant = grant;
-  socket.once("close", () => { if (!intentional) onDisconnected?.(); });
-  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, trace).then((value) => {
+  // Relay control messages can arrive before the close frame is observed by the
+  // peer. Treat either signal as one logical disconnect so the session manager
+  // can resume immediately without waiting on socket teardown.
+  const reportDisconnected = () => {
+    if (intentional || disconnected) return;
+    disconnected = true;
+    onDisconnected?.();
+  };
+  socket.once("close", reportDisconnected);
+  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, reportDisconnected, trace).then((value) => {
     session = value;
     if (closeReason !== undefined) void value.close(closeReason);
     return value;
@@ -293,7 +303,7 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
   };
 }
 
-async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, trace?: RelayTraceRecorder) {
+async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onPeerDetached?: () => void, trace?: RelayTraceRecorder) {
   const handshake = await socketFrame(socket, (frame) => frame.kind === "handshake");
   if (handshake.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
   const hello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
@@ -314,7 +324,7 @@ async function establishEncryptedSession(socket: WebSocket, channelId: string, t
       shareRole: ticket.shareRole,
     } : {}),
   };
-  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, bridge, trace);
+  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, bridge, trace, onPeerDetached);
   session.start();
   return { close: (reason = "normal") => session.close(reason) };
 }
@@ -341,7 +351,8 @@ export class EncryptedControlPlaneRelaySession {
   private readonly actor: ControlPlaneActor;
   private readonly bridge: RelaySessionBridge;
   private readonly trace?: RelayTraceRecorder;
-  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; }
+  private readonly onPeerDetached?: () => void;
+  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder, onPeerDetached?: () => void) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; this.onPeerDetached = onPeerDetached; }
   start() {
     this.socket.on("message", (raw, isBinary) => { void this.receive(raw, isBinary).catch(() => this.socket.close(4400, "encrypted-protocol-error")); });
     this.socket.once("close", (code, reason) => {
@@ -369,7 +380,13 @@ export class EncryptedControlPlaneRelaySession {
       // Relay control text is separate from the E2E data path. Grant updates
       // arrive over the Coordinator channel; this is only an acknowledgement.
       if (control?.type === "session-closed") { RelaySessionClosedMessageSchema.parse(control); return; }
-      if (control?.type === "renewed" || control?.type === "peer-detached") return;
+      if (control?.type === "peer-detached") {
+        RelaySessionDetachedMessageSchema.parse(control);
+        this.onPeerDetached?.();
+        if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, "peer-detached");
+        return;
+      }
+      if (control?.type === "renewed") return;
       throw relayError("RELAY_FRAME_ENCODING_INVALID");
     }
     const frame = decodeRelayFrame(rawBytes(raw));

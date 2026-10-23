@@ -469,6 +469,7 @@ test("Control Plane validates shared node allocation identity against both owner
 
 test("relay attach acknowledges the Coordinator before the client completes the end-to-end handshake", { timeout: 5_000 }, async () => {
   const sockets = [];
+  let disconnected = 0;
   class FakeSocket {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -497,7 +498,11 @@ test("relay attach acknowledges the Coordinator before the client completes the 
   const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt: grant.issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const identity = { acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey: new Uint8Array(32) }), publicIdentity: () => ({ publicKey: "c".repeat(43) }), signRelayRoleProof: (payload) => ({ ...payload, signature: "s".repeat(64) }) };
   const connector = new CloudRelayConnector({ identity, bridge: {}, webSocket: FakeSocket });
-  const connection = await connector.connect({ relayUrl: "ws://localhost:8080/connect", allocation: { attach, grant } });
+  const connection = await connector.connect({
+    relayUrl: "ws://localhost:8080/connect",
+    allocation: { attach, grant },
+    onDisconnected: () => { disconnected += 1; },
+  });
   assert.deepEqual(sockets[0].sent.map((message) => message.type), ["attach"]);
   assert.equal(sockets[0].sent[0].grant.grantId, grant.grantId);
   assert.equal(sockets[0].sent[0].proof.role, "control-plane");
@@ -508,8 +513,14 @@ test("relay attach acknowledges the Coordinator before the client completes the 
   sockets[0].emit("message", Buffer.from(JSON.stringify({ type: "session-closed", sessionId: grant.sessionId, code: "idle-timeout", retryable: true })), false);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(sockets[0].readyState, FakeSocket.OPEN);
+  assert.equal(disconnected, 0);
+  sockets[0].emit("message", Buffer.from(JSON.stringify({ type: "peer-detached", sessionId: grant.sessionId, retryable: true })), false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
+  assert.equal(disconnected, 1);
   await connection.close("test-done");
   assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
+  assert.equal(disconnected, 1);
 });
 
 test("relay heartbeat terminates a half-open socket and reports the disconnect", { timeout: 5_000 }, async () => {

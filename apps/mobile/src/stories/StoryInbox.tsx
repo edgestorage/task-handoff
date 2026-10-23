@@ -221,12 +221,14 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         const key = storyTreeKey(story);
         const expanded = expandedStoryKeys.has(key);
         const unavailable = unavailableNodeIds.includes(story.ownerNodeId);
+        const storyUnavailable = unavailable || nodesById.get(story.ownerNodeId)?.status !== 'online';
+        const storyMuted = storyUnavailable || Boolean(story.archivedAt);
         const storySessions = sessionsByStory.get(key) ?? [];
         const documents = visibleStoryTreeDocuments(story.documents, expandedDocumentKeys.has(key));
         const newSessionDefaults = storyAiSessionCreationDefaults(directory.instances, sessions, story.id, story.ownerNodeId);
         return <View
           onLayout={(event) => storyRowHeights.current.set(key, event.nativeEvent.layout.height)}
-          style={[styles.storyGroup, { backgroundColor: colors.surface, borderColor: colors.border }, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
+          style={[styles.storyGroup, { backgroundColor: colors.surface, borderColor: colors.border }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
           testID={`story-row-${key}`}
         >
         <View style={[styles.storyRow, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}>
@@ -265,11 +267,11 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             style={styles.storyMenu}
             title={story.title}
           >
-          <Pressable accessibilityRole="button" onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.storyIcon}><Icon color={colors.primary} name="book-outline" size={21} /></View>
+          <Pressable accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable }} disabled={storyUnavailable} onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && !storyUnavailable && { backgroundColor: colors.surfaceMuted }]}>
+            <View style={styles.storyIcon}><Icon color={storyMuted ? colors.textMuted : colors.primary} name="book-outline" size={21} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
-                <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{story.title}</Text>
+                <Text numberOfLines={1} style={[styles.title, { color: storyMuted ? colors.textMuted : colors.text }]}>{story.title}</Text>
                 {story.archivedAt ? <Text style={[styles.archived, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{t('stories.archived')}</Text> : null}
               </View>
               {preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{nodeLabel(story.ownerNodeId)}</Text> : null}
@@ -359,6 +361,7 @@ const styles = StyleSheet.create({
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
   storyGroup: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
+  storyGroupUnavailable: { opacity: 0.5 },
   storyGroupDragging: { opacity: 0.72 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
@@ -376,7 +379,7 @@ const styles = StyleSheet.create({
   rowCopy: { flex: 1, gap: 1, justifyContent: 'center', minWidth: 0 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   sessionTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  title: { flexShrink: 1, fontSize: 16, fontWeight: '700', lineHeight: 21 },
+  title: { flexShrink: 1, fontSize: 16, fontWeight: '400', lineHeight: 21 },
   childTitle: { flexShrink: 1, fontSize: 15, fontWeight: '500', lineHeight: 20 },
   archived: { borderRadius: 6, fontSize: 11, fontWeight: '600', overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 2 },
   meta: { fontSize: 12, lineHeight: 16 },

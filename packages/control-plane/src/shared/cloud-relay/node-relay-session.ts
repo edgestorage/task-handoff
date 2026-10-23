@@ -47,12 +47,22 @@ type NodeRelayDataAssembly = {
   binary: boolean;
   bytes: number;
   chunks: Uint8Array[];
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 type PendingNodeRelayWrite = { payload: Uint8Array; flags: number; bytes: number };
 
 const NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const NODE_RELAY_SOCKET_MAX_QUEUED_BYTES = 16 * 1024 * 1024;
+const NODE_RELAY_DATA_MAX_ASSEMBLIES = 8;
+const NODE_RELAY_DATA_MAX_ASSEMBLED_BYTES = 16 * 1024 * 1024;
+const NODE_RELAY_DATA_ASSEMBLY_IDLE_MS = 30_000;
+
+export type NodeRelayDataAssemblyLimits = {
+  maxStreams?: number;
+  maxBytes?: number;
+  idleMs?: number;
+};
 
 /** Direction bytes keep the two senders' secretbox counters in disjoint nonce spaces. */
 export const NODE_RELAY_DIRECTION_NODE = 1;
@@ -307,6 +317,9 @@ export class EncryptedNodeRelayChannel {
   private readonly onData?: (frame: NodeRelayDataFrame) => void | Promise<void>;
   private readonly onClosed?: (reason: string) => void;
   private readonly onError?: (error: Error) => void;
+  private readonly dataAssemblyMaxStreams: number;
+  private readonly dataAssemblyMaxBytes: number;
+  private readonly dataAssemblyIdleMs: number;
 
   constructor(options: {
     socket: NodeRelayFrameSocket;
@@ -317,6 +330,7 @@ export class EncryptedNodeRelayChannel {
     onData?(frame: NodeRelayDataFrame): void | Promise<void>;
     onClosed?(reason: string): void;
     onError?(error: Error): void;
+    dataAssemblyLimits?: NodeRelayDataAssemblyLimits;
   }) {
     this.socket = options.socket;
     this.key = options.key;
@@ -326,6 +340,9 @@ export class EncryptedNodeRelayChannel {
     this.onData = options.onData;
     this.onClosed = options.onClosed;
     this.onError = options.onError;
+    this.dataAssemblyMaxStreams = positiveInteger(options.dataAssemblyLimits?.maxStreams, NODE_RELAY_DATA_MAX_ASSEMBLIES);
+    this.dataAssemblyMaxBytes = positiveInteger(options.dataAssemblyLimits?.maxBytes, NODE_RELAY_DATA_MAX_ASSEMBLED_BYTES);
+    this.dataAssemblyIdleMs = positiveInteger(options.dataAssemblyLimits?.idleMs, NODE_RELAY_DATA_ASSEMBLY_IDLE_MS);
   }
 
   start() {
@@ -387,6 +404,14 @@ export class EncryptedNodeRelayChannel {
     return new Promise<void>((resolve) => this.outboundCapacityWaiters.push(resolve));
   }
 
+  /** Drops a partial message when its multiplexed stream is closed. */
+  discardDataAssembly(streamId: number) {
+    const assembly = this.dataAssemblies.get(streamId);
+    if (!assembly) return;
+    if (assembly.timer) clearTimeout(assembly.timer);
+    this.dataAssemblies.delete(streamId);
+  }
+
   private async receive(raw: unknown, isBinary: boolean) {
     if (this.closed) return;
     if (!isBinary) throw nodeRelaySessionError("NODE_RELAY_FRAME_ENCODING_INVALID");
@@ -403,10 +428,17 @@ export class EncryptedNodeRelayChannel {
       if (dataFrame.more) {
         const assembly = this.dataAssemblies.get(dataFrame.streamId);
         if (assembly && assembly.binary !== dataFrame.binary) throw nodeRelaySessionError("NODE_RELAY_DATA_FRAGMENT_INVALID");
-        const next = assembly ?? { streamId: dataFrame.streamId, binary: dataFrame.binary, bytes: 0, chunks: [] };
+        if (!assembly && this.dataAssemblies.size >= this.dataAssemblyMaxStreams) {
+          throw nodeRelaySessionError("NODE_RELAY_DATA_ASSEMBLY_LIMIT");
+        }
+        if (this.assembledBytes() + dataFrame.data.byteLength > this.dataAssemblyMaxBytes) {
+          throw nodeRelaySessionError("NODE_RELAY_DATA_ASSEMBLY_BYTES_LIMIT");
+        }
+        const next = assembly ?? this.beginDataAssembly(dataFrame.streamId, dataFrame.binary);
         next.bytes += dataFrame.data.byteLength;
         if (next.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
         next.chunks.push(dataFrame.data);
+        this.armDataAssemblyTimer(next);
         this.dataAssemblies.set(dataFrame.streamId, next);
         return;
       }
@@ -416,7 +448,7 @@ export class EncryptedNodeRelayChannel {
         assembly.bytes += dataFrame.data.byteLength;
         if (assembly.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
         assembly.chunks.push(dataFrame.data);
-        this.dataAssemblies.delete(dataFrame.streamId);
+        this.discardDataAssembly(dataFrame.streamId);
         await this.onData({ streamId: dataFrame.streamId, binary: assembly.binary, more: false, data: Buffer.concat(assembly.chunks, assembly.bytes) });
         return;
       }
@@ -477,6 +509,9 @@ export class EncryptedNodeRelayChannel {
   private finish(reason: string, failed = false) {
     if (this.closed) return;
     this.closed = true;
+    for (const assembly of this.dataAssemblies.values()) {
+      if (assembly.timer) clearTimeout(assembly.timer);
+    }
     this.dataAssemblies.clear();
     this.outboundControl.length = 0;
     this.outboundData.length = 0;
@@ -498,4 +533,30 @@ export class EncryptedNodeRelayChannel {
     if (this.outboundBytes > NODE_RELAY_SOCKET_MAX_BUFFERED_BYTES || this.outboundCapacityWaiters.length === 0) return;
     for (const resolve of this.outboundCapacityWaiters.splice(0)) resolve();
   }
+
+  private beginDataAssembly(streamId: number, binary: boolean): NodeRelayDataAssembly {
+    return { streamId, binary, bytes: 0, chunks: [] };
+  }
+
+  private armDataAssemblyTimer(assembly: NodeRelayDataAssembly) {
+    if (assembly.timer) clearTimeout(assembly.timer);
+    const timer = setTimeout(() => {
+      const current = this.dataAssemblies.get(assembly.streamId);
+      if (!current || current.timer !== timer) return;
+      this.dataAssemblies.delete(assembly.streamId);
+      this.fail(nodeRelaySessionError("NODE_RELAY_DATA_ASSEMBLY_TIMEOUT"));
+    }, this.dataAssemblyIdleMs);
+    timer.unref?.();
+    assembly.timer = timer;
+  }
+
+  private assembledBytes() {
+    let bytes = 0;
+    for (const assembly of this.dataAssemblies.values()) bytes += assembly.bytes;
+    return bytes;
+  }
+}
+
+function positiveInteger(value: number | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }

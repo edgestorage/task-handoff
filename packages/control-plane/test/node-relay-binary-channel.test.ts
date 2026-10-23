@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import nacl from "tweetnacl";
-import { decodeRelayFrame } from "@task-handoff/cloud-contracts";
+import { decodeRelayFrame, encodeRelayFrame } from "@task-handoff/cloud-contracts";
 import {
   NODE_RELAY_DATA_HEADER_BYTES,
   NODE_RELAY_DATA_MAGIC,
@@ -10,6 +10,7 @@ import {
   NODE_RELAY_DATA_MAX_MESSAGE_BYTES,
   NODE_RELAY_MAIN_STREAM_ID,
   NODE_RELAY_STREAM_HIGH_WATER_BYTES,
+  encodeNodeRelayDataFrame,
   type NodeRelayDataFrame,
   type NodeRelaySessionMessage,
 } from "@task-handoff/protocol/node-relay-channel";
@@ -17,6 +18,7 @@ import {
   EncryptedNodeRelayChannel,
   NODE_RELAY_DIRECTION_CONTROL_PLANE,
   NODE_RELAY_DIRECTION_NODE,
+  type NodeRelayDataAssemblyLimits,
 } from "../src/shared/cloud-relay/node-relay-session.ts";
 import { MultiplexedNodeRelaySocket } from "../src/control-plane/nodes/cloud-relay-transport.ts";
 import { NodeRelayNodeChannel } from "../src/node-agent/cloud-relay/channel.ts";
@@ -37,10 +39,17 @@ async function waitFor(check: () => boolean, message: string, timeoutMs = 2_000)
   }
 }
 
-function sessionPair() {
+function relayDataFragment(socket: { send(data: string | Uint8Array): void }, key: Uint8Array, sequence: number, streamId: number, data: Uint8Array, more: boolean) {
+  const plaintext = encodeNodeRelayDataFrame({ streamId, data, binary: true, more });
+  const sealed = nacl.secretbox(plaintext, directionNonce(NODE_RELAY_DIRECTION_CONTROL_PLANE, sequence - 1), key);
+  socket.send(encodeRelayFrame({ kind: "data", sequence, payload: sealed, flags: 0 }));
+}
+
+function sessionPair(options: { dataAssemblyLimits?: NodeRelayDataAssemblyLimits } = {}) {
   const key = nacl.randomBytes(32);
   const sockets = linkedFrameSockets();
   const sent: Buffer[] = [];
+  const errors: Error[] = [];
   const originalSend = sockets.left.send.bind(sockets.left);
   sockets.left.send = (data: string | Uint8Array) => {
     sent.push(Buffer.from(data));
@@ -64,10 +73,12 @@ function sessionPair() {
     receiveDirection: NODE_RELAY_DIRECTION_CONTROL_PLANE,
     onMessage: (message) => { control.push(message); order.push("control"); },
     onData: (frame) => { received.push(frame); order.push("data"); },
+    onError: (error) => { errors.push(error); },
+    ...(options.dataAssemblyLimits ? { dataAssemblyLimits: options.dataAssemblyLimits } : {}),
   });
   controlPlane.start();
   node.start();
-  return { controlPlane, node, key, sent, received, control, order, sockets };
+  return { controlPlane, node, key, sent, received, control, order, sockets, errors };
 }
 
 test("node relay binary data is sealed verbatim without base64 or deflate", async () => {
@@ -119,6 +130,81 @@ test("node relay fragments messages above one frame and reassembles them in orde
   assert.equal(received[0]!.streamId, 5);
   assert.equal(received[0]!.binary, true);
   assert.equal(received[0]!.more, false);
+});
+
+test("node relay bounds the number of concurrent partial messages", async () => {
+  const { key, sockets, node, errors } = sessionPair({ dataAssemblyLimits: { maxStreams: 2 } });
+  relayDataFragment(sockets.left, key, 1, 1, Uint8Array.from([1]), true);
+  relayDataFragment(sockets.left, key, 2, 2, Uint8Array.from([2]), true);
+  await waitFor(() => (node as any).dataAssemblies.size === 2, "two partial assemblies");
+
+  relayDataFragment(sockets.left, key, 3, 3, Uint8Array.from([3]), true);
+  await waitFor(() => errors.length === 1, "the assembly-count failure");
+  assert.equal((errors[0] as Error & { code?: string }).code, "NODE_RELAY_DATA_ASSEMBLY_LIMIT");
+});
+
+test("node relay bounds the total bytes held by partial messages", async () => {
+  const { key, sockets, errors } = sessionPair({ dataAssemblyLimits: { maxBytes: 8 } });
+  relayDataFragment(sockets.left, key, 1, 1, new Uint8Array(5), true);
+  relayDataFragment(sockets.left, key, 2, 2, new Uint8Array(4), true);
+  await waitFor(() => errors.length === 1, "the assembly-byte failure");
+  assert.equal((errors[0] as Error & { code?: string }).code, "NODE_RELAY_DATA_ASSEMBLY_BYTES_LIMIT");
+});
+
+test("node relay expires partial messages that stop making progress", async () => {
+  const { key, sockets, errors } = sessionPair({ dataAssemblyLimits: { idleMs: 20 } });
+  relayDataFragment(sockets.left, key, 1, 1, Uint8Array.from([1]), true);
+  await waitFor(() => errors.length === 1, "the idle assembly timeout", 1_000);
+  assert.equal((errors[0] as Error & { code?: string }).code, "NODE_RELAY_DATA_ASSEMBLY_TIMEOUT");
+});
+
+test("discarding a partial message cancels its idle timer", async () => {
+  const { key, sockets, node, errors } = sessionPair({ dataAssemblyLimits: { idleMs: 20 } });
+  relayDataFragment(sockets.left, key, 1, 1, Uint8Array.from([1]), true);
+  await waitFor(() => (node as any).dataAssemblies.size === 1, "the partial assembly");
+  node.discardDataAssembly(1);
+  assert.equal((node as any).dataAssemblies.size, 0);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(errors, []);
+});
+
+test("an auxiliary channel close discards its partial message immediately", async () => {
+  const sockets = linkedFrameSockets();
+  const key = nacl.randomBytes(32);
+  const controlPlane = new EncryptedNodeRelayChannel({
+    socket: sockets.left,
+    key,
+    sendDirection: NODE_RELAY_DIRECTION_CONTROL_PLANE,
+    receiveDirection: NODE_RELAY_DIRECTION_NODE,
+    onMessage: () => undefined,
+    onData: () => undefined,
+  });
+  const node = new NodeRelayNodeChannel({
+    nodeId: "node_agent_test",
+    pairing: { keyId: "pairing_test", secret: nacl.randomBytes(32).toString("base64url") },
+    host: {
+      log: { warn: () => undefined },
+      currentListenerPort: () => 1,
+      inject: async () => { throw new Error("unexpected inject"); },
+    },
+    socket: sockets.right,
+    key,
+    onClosed: () => undefined,
+  });
+  controlPlane.start();
+  node.start();
+  (controlPlane as any).sendPlaintext(encodeNodeRelayDataFrame({ streamId: 42, data: Uint8Array.from([1]), binary: true, more: true }), 0);
+  const session = (node as any).session as EncryptedNodeRelayChannel;
+  await waitFor(() => (session as any).dataAssemblies.size === 1, "the partial assembly");
+
+  let remoteClosed = false;
+  const socket = { streamId: 42, remoteClosed: () => { remoteClosed = true; } };
+  (node as any).aux.set("aux_42", socket);
+  (node as any).auxByStreamId.set(42, socket);
+  controlPlane.send({ type: "channel-close", channelId: "aux_42", code: 1000, reason: "done" });
+
+  await waitFor(() => (session as any).dataAssemblies.size === 0 && remoteClosed, "the channel close cleanup");
+  assert.equal((node as any).aux.has("aux_42"), false);
 });
 
 test("node relay data frames reject payloads that would exceed the relay ceiling", () => {

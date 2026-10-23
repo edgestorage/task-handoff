@@ -19,6 +19,7 @@ test("managed upload forwards bounded chunks while retaining a non-blocking cach
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const app = Fastify({ logger: false });
   t.after(() => app.close());
+  app.setErrorHandler((error, _request, reply) => reply.code(error.statusCode || 500).send({ error: { code: error.code, message: error.message } }));
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const cache = new AiSessionAttachmentCache(dataDir, { maxBytes: 2 * 1024 * 1024 });
   const downstream = [];
@@ -115,6 +116,78 @@ test("a streamed payload (the cloud-relay path) forwards chunks as it arrives", 
   assert.ok(downstream.length >= 3);
   assert.ok(downstream.every((chunk) => chunk.length <= 256 * 1024));
   assert.deepEqual(Buffer.concat(downstream), content);
+});
+
+test("managed chunk streams proxy bounded create, append and complete calls", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-upload-chunk-route-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  app.setErrorHandler((error, _request, reply) => reply.code(error.statusCode || 500).send({ error: { code: error.code, message: error.message } }));
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  const downstream = [];
+  const calls = [];
+  let attachmentId;
+  const service = {
+    async requireControlledInstance() {
+      return { config: { aiSessionMaxFileAttachmentBytes: 1024 * 1024 } };
+    },
+    async proxyInstanceHttp(_instanceId, route, init) {
+      calls.push(`${init.method} ${route}`);
+      if (route === "/api/ai-session-attachments/draft-streams") {
+        attachmentId = JSON.parse(init.body).attachmentId;
+        assert.match(attachmentId, /^cia_[a-f0-9]{24}$/);
+        return streamedJson({ attachmentId, offset: 0 }, 201);
+      }
+      if (route.endsWith("/complete")) {
+        return streamedJson({ id: attachmentId, kind: "file", name: "asset.bin", mime: "application/octet-stream", size: downstream.reduce((sum, chunk) => sum + chunk.length, 0), expiresAt: "2026-08-21T00:00:00.000Z" });
+      }
+      if (init.method === "PUT") {
+        downstream.push(Buffer.from(init.body));
+        return streamedJson({ attachmentId, offset: downstream.reduce((sum, chunk) => sum + chunk.length, 0) });
+      }
+      return streamedJson({ removed: true });
+    },
+  };
+  registerSessionRoutes({
+    app,
+    service,
+    events: { publish() {} },
+    appSessionAggregator: {},
+    aiSessionAggregator: {},
+    aiSessionAttachments: {},
+    aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
+  });
+
+  const content = Buffer.alloc(400 * 1024, 9);
+  const query = new URLSearchParams({ scopeType: "session", scopeId: "session-1", kind: "file", name: "asset.bin", mime: "application/octet-stream", size: String(content.length) });
+  const streamUrl = "/api/controlled-instances/instance-1/ai-session-attachments/draft-streams";
+  const create = await app.inject({ method: "POST", url: `${streamUrl}?${query}` });
+  assert.equal(create.statusCode, 201);
+  const created = create.json().data;
+  assert.match(created.attachmentId, /^cia_[a-f0-9]{24}$/);
+  assert.equal(created.offset, 0);
+
+  for (const [offset, chunk] of [[0, content.subarray(0, 256 * 1024)], [256 * 1024, content.subarray(256 * 1024)]]) {
+    const response = await app.inject({
+      method: "PUT",
+      url: `${streamUrl}/${created.attachmentId}?offset=${offset}`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: chunk,
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().data.offset, offset + chunk.length);
+  }
+  const complete = await app.inject({ method: "POST", url: `${streamUrl}/${created.attachmentId}/complete`, payload: {} });
+  assert.equal(complete.statusCode, 200);
+  assert.equal(complete.json().data.id, attachmentId);
+  assert.deepEqual(Buffer.concat(downstream), content);
+  assert.deepEqual(calls, [
+    "POST /api/ai-session-attachments/draft-streams",
+    `PUT /api/ai-session-attachments/draft-streams/${created.attachmentId}?offset=0`,
+    `PUT /api/ai-session-attachments/draft-streams/${created.attachmentId}?offset=${256 * 1024}`,
+    `POST /api/ai-session-attachments/draft-streams/${created.attachmentId}/complete`,
+  ]);
 });
 
 test("managed upload reports malformed controlled-instance responses as a bad gateway", async (t) => {

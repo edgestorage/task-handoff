@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import { PROXY_HOP_BY_HOP_HEADERS } from "@task-handoff/core/core/http-proxy";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, AiSessionsSyncRequestSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer, type AiSessionsSyncResponse } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT, AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamIdSchema, AiSessionAttachmentDraftStreamOffsetQuerySchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, AiSessionsSyncRequestSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer, type AiSessionsSyncResponse } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
@@ -32,6 +32,10 @@ const AiSessionProjectionQuerySchema = z.object({ revision: z.string().trim().mi
 const AiSessionTranscriptQuerySchema = z.object({ tail: z.coerce.number().int().min(1).max(1000).optional() }).strict();
 const AppSessionLogsQuerySchema = z.object({ maxBytes: z.coerce.number().int().min(1024).max(512 * 1024).optional() }).strict();
 const StoryContentFileQuerySchema = z.object({ storyPath: z.string().trim().min(1).max(1024) }).strict();
+const AttachmentDraftStreamParamsSchema = z.object({
+  id: z.string().trim().min(1),
+  attachmentId: AiSessionAttachmentDraftStreamIdSchema,
+}).strict();
 
 type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
 
@@ -121,6 +125,33 @@ function parseAttachmentProtocolResponse<T>(schema: z.ZodType<T>, value: unknown
     statusCode: 502,
     code: "AI_SESSION_ATTACHMENT_PROTOCOL_INVALID",
   });
+}
+
+function assertAttachmentUploadSize(kind: "image" | "file", size: number, maxFileAttachmentBytes: number) {
+  if (kind === "file" && size >= maxFileAttachmentBytes) {
+    throw Object.assign(new Error(`File attachment must be smaller than ${maxFileAttachmentBytes} bytes.`), {
+      statusCode: 413,
+      code: "AI_SESSION_ATTACHMENTS_TOO_LARGE",
+    });
+  }
+}
+
+async function attachmentChunkBuffer(body: Readable | Buffer | Uint8Array | undefined) {
+  if (Buffer.isBuffer(body)) return body;
+  if (body instanceof Uint8Array) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (!body) throw Object.assign(new Error("Attachment chunk body is required."), { statusCode: 400, code: "AI_SESSION_ATTACHMENT_CHUNK_REQUIRED" });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const raw of body) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    size += chunk.length;
+    if (size > AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT) {
+      throw Object.assign(new Error("Attachment chunk is too large."), { statusCode: 413, code: "AI_SESSION_ATTACHMENT_CHUNK_TOO_LARGE" });
+    }
+    chunks.push(chunk);
+  }
+  if (size === 0) throw Object.assign(new Error("Attachment chunk body is required."), { statusCode: 400, code: "AI_SESSION_ATTACHMENT_CHUNK_REQUIRED" });
+  return chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size);
 }
 
 export function registerSessionRoutes({
@@ -291,17 +322,66 @@ export function registerSessionRoutes({
     const query = AiSessionProjectionQuerySchema.parse(request.query || {});
     return { data: await service.getAiSessionTurnBody(params.id, params.sessionId, params.turnId, query.revision) };
   });
+  app.post<{ Params: { id: string }; Querystring: Record<string, unknown> }>("/api/controlled-instances/:id/ai-session-attachments/draft-streams", async (request, reply) => {
+    const params = IdParamsSchema.parse(request.params);
+    const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
+    const instance = await service.requireControlledInstance(params.id, true);
+    const maxFileAttachmentBytes = instance.config.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES;
+    assertAttachmentUploadSize(input.kind, input.size, maxFileAttachmentBytes);
+    const attachmentId = `cia_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const target = "/api/ai-session-attachments/draft-streams";
+    let created = false;
+    try {
+      const response = await proxyData(await service.proxyInstanceHttp(params.id, target, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(AiSessionAttachmentDraftStreamCreateInputSchema.parse({ attachmentId, ...input })),
+      }));
+      created = true;
+      const started = parseAttachmentProtocolResponse(AiSessionAttachmentDraftStreamOffsetSchema, response, "start");
+      if (started.attachmentId !== attachmentId || started.offset !== 0) {
+        throw Object.assign(new Error("Controlled instance returned an invalid attachment upload offset."), { statusCode: 502, code: "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH" });
+      }
+      return reply.code(201).send({ data: started });
+    } catch (error) {
+      if (created) void service.proxyInstanceHttp(params.id, `${target}/${encodeURIComponent(attachmentId)}`, { method: "DELETE" }).catch(() => undefined);
+      throw error;
+    }
+  });
+  app.put<{ Params: { id: string; attachmentId: string }; Querystring: Record<string, unknown>; Body: Readable | Buffer }>("/api/controlled-instances/:id/ai-session-attachments/draft-streams/:attachmentId", { bodyLimit: AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT }, async (request) => {
+    const params = AttachmentDraftStreamParamsSchema.parse(request.params);
+    const { offset } = AiSessionAttachmentDraftStreamOffsetQuerySchema.parse(request.query);
+    const chunk = await attachmentChunkBuffer(request.body);
+    const acknowledged = parseAttachmentProtocolResponse(AiSessionAttachmentDraftStreamOffsetSchema, await proxyData(await service.proxyInstanceHttp(params.id, `/api/ai-session-attachments/draft-streams/${encodeURIComponent(params.attachmentId)}?offset=${offset}`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream", "content-length": String(chunk.length) },
+      body: chunk,
+    })), "chunk");
+    if (acknowledged.attachmentId !== params.attachmentId || acknowledged.offset !== offset + chunk.length) {
+      throw Object.assign(new Error("Controlled instance returned an invalid attachment upload offset."), { statusCode: 502, code: "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH" });
+    }
+    return { data: acknowledged };
+  });
+  app.post<{ Params: { id: string; attachmentId: string } }>("/api/controlled-instances/:id/ai-session-attachments/draft-streams/:attachmentId/complete", async (request) => {
+    const params = AttachmentDraftStreamParamsSchema.parse(request.params);
+    const draft = parseAttachmentProtocolResponse(AiSessionAttachmentDraftSchema, await proxyData(await service.proxyInstanceHttp(params.id, `/api/ai-session-attachments/draft-streams/${encodeURIComponent(params.attachmentId)}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })), "completion");
+    return { data: draft };
+  });
+  app.delete<{ Params: { id: string; attachmentId: string } }>("/api/controlled-instances/:id/ai-session-attachments/draft-streams/:attachmentId", async (request) => {
+    const params = AttachmentDraftStreamParamsSchema.parse(request.params);
+    await proxyData(await service.proxyInstanceHttp(params.id, `/api/ai-session-attachments/draft-streams/${encodeURIComponent(params.attachmentId)}`, { method: "DELETE" }));
+    return { data: { removed: true } };
+  });
   app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
     const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
     const instance = await service.requireControlledInstance(params.id, true);
     const maxFileAttachmentBytes = instance.config.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES;
-    if (input.kind === "file" && input.size >= maxFileAttachmentBytes) {
-      throw Object.assign(new Error(`File attachment must be smaller than ${maxFileAttachmentBytes} bytes.`), {
-        statusCode: 413,
-        code: "AI_SESSION_ATTACHMENTS_TOO_LARGE",
-      });
-    }
+    assertAttachmentUploadSize(input.kind, input.size, maxFileAttachmentBytes);
     const attachmentId = `cia_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const target = "/api/ai-session-attachments/draft-streams";
     const controller = new AbortController();

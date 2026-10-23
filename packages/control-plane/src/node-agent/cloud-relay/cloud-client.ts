@@ -1,9 +1,15 @@
 import {
+  NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE,
   NodeRelayAllocationResponseSchema,
+  NodeRelayAllocationRequestV2Schema,
   NodeRelayBindingRedemptionRequestSchema,
   NodeRelayBindingRedemptionSchema,
   NodeRelayCredentialRenewalRequestSchema,
   NodeRelayCredentialSchema,
+  NodeRelayProbeTargetsRequestSchema,
+  NodeRelayProbeTargetsResponseSchema,
+  type NodeRelayProbeEvidence,
+  type NodeRelayProbeTarget,
   type NodeRelayNodeAllocation,
 } from "@task-handoff/cloud-contracts";
 import { nodeRelayFingerprint } from "../../shared/cloud-relay/node-relay-session.ts";
@@ -80,6 +86,26 @@ export class NodeRelayCloudClient {
     return NodeRelayAllocationResponseSchema.parse(data).allocations;
   }
 
+  async probeTargets(credential: string, input: { nodeId: string; controlPlaneIds?: string[] }): Promise<NodeRelayProbeTarget[]> {
+    const body = NodeRelayProbeTargetsRequestSchema.parse({
+      nodeId: input.nodeId,
+      ...(input.controlPlaneIds?.length ? { controlPlaneIds: input.controlPlaneIds } : {}),
+    });
+    const data = await this.post("/api/v1/node-relay/v2/probe-targets", body, { credential });
+    return NodeRelayProbeTargetsResponseSchema.parse(data).targets;
+  }
+
+  async allocationsV2(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[]; probeEvidence?: NodeRelayProbeEvidence }): Promise<NodeRelayNodeAllocation[]> {
+    const body = NodeRelayAllocationRequestV2Schema.parse({
+      nodeId: input.nodeId,
+      ...(input.controlPlaneId ? { controlPlaneId: input.controlPlaneId } : {}),
+      ...(input.refreshControlPlaneIds?.length ? { refreshControlPlaneIds: input.refreshControlPlaneIds } : {}),
+      ...(input.probeEvidence ? { probeEvidence: input.probeEvidence } : {}),
+    });
+    const data = await this.post("/api/v1/node-relay/v2/allocations", body, { credential });
+    return NodeRelayAllocationResponseSchema.parse(data).allocations;
+  }
+
   async unbind(credential: string) {
     const body = NodeRelayCredentialRenewalRequestSchema.parse({ credential });
     const data = await this.post("/api/v1/node-relay/v1/unbind", body, { credential });
@@ -105,11 +131,24 @@ export class NodeRelayCloudClient {
       if (response.status >= 500) this.onOriginFailure?.(origin);
       const code = typeof payload.error?.code === "string" ? payload.error.code : `NODE_AGENT_CLOUD_RELAY_HTTP_${response.status}`;
       const message = typeof payload.error?.message === "string" ? payload.error.message : `Cloud relay request failed with HTTP ${response.status}.`;
-      throw Object.assign(cloudRelayClientError(code, message), { statusCode: response.status });
+      throw Object.assign(cloudRelayClientError(code, message), {
+        statusCode: response.status,
+        unsupported: isAdaptiveSelectionUnsupported(response.status, code, message),
+      });
     }
     this.onOriginSuccess?.(origin);
     return payload.data;
   }
+}
+
+/**
+ * Only an explicit capability signal or a real missing route may disable the
+ * v2 path. A business 404 (for example a missing pairing) must stay retryable,
+ * otherwise one transient error would pin the node to v1 for that origin.
+ */
+function isAdaptiveSelectionUnsupported(status: number, code: string, message: string) {
+  if (code === NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE || status === 405) return true;
+  return status === 404 && code === "NOT_FOUND" && /route not found/i.test(message);
 }
 
 export function cloudRelayClientError(code: string, message: string) {

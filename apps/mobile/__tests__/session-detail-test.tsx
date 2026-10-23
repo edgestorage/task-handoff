@@ -1433,7 +1433,12 @@ test('running composer sends in auto mode so the authoritative runtime queues th
 
 test('composer uploads images received from the native input paste action', async () => {
   const fileInfo = jest.spyOn(File.prototype, 'info').mockReturnValue({ exists: true, size: 5 });
-  const fileBytes = jest.spyOn(File.prototype, 'bytes').mockResolvedValue(new Uint8Array([104, 101, 108, 108, 111]));
+  const closeFile = jest.fn();
+  const fileOpen = jest.spyOn(File.prototype, 'open').mockReturnValue({
+    size: 5,
+    readBytes: jest.fn(() => new Uint8Array([104, 101, 108, 108, 111])),
+    close: closeFile,
+  } as never);
   const fileDelete = jest.spyOn(File.prototype, 'delete').mockImplementation(() => undefined);
   let resolveUpload!: (value: unknown) => void;
   const uploadAttachment = jest.fn().mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
@@ -1457,7 +1462,8 @@ test('composer uploads images received from the native input paste action', asyn
   });
 
   await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
-    bytes: new Uint8Array([104, 101, 108, 108, 111]),
+    size: 5,
+    chunks: expect.anything(),
     instanceId: 'instance',
     kind: 'image',
     mime: 'image/png',
@@ -1469,7 +1475,7 @@ test('composer uploads images received from the native input paste action', asyn
   await waitFor(() => screen.getByText('clipboard.png'));
   await screen.unmount();
   fileInfo.mockRestore();
-  fileBytes.mockRestore();
+  fileOpen.mockRestore();
   fileDelete.mockRestore();
 });
 

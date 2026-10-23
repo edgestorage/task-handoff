@@ -9,6 +9,7 @@ import type { NodeAgentIdentityService } from "../identity/service.ts";
 import { NodeRelayCloudClient } from "./cloud-client.ts";
 import { verifyNodeRelayClaimGrant } from "./claim-grant.ts";
 import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
+import { probeNodeRelayTargets } from "./probe.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
 import { resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
 import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
@@ -43,6 +44,7 @@ export type NodeAgentCloudRelayClientOptions = {
   host: NodeRelayTunnelHost;
   nodeId: string;
   fetchImpl?: typeof fetch;
+  relayProbeFetch?: typeof fetch;
   cloudDiscovery?: CloudDiscoveryConfig;
   discoveryCachePath?: string;
   webSocket?: typeof WebSocket;
@@ -135,6 +137,7 @@ export class NodeAgentCloudRelayClient {
   private polling = false;
   private pollAgain = false;
   private stopped = true;
+  private readonly adaptiveSelectionUnsupported = new Set<string>();
   private lastError?: NodeAgentCloudRelayStoredError;
 
   constructor(options: NodeAgentCloudRelayClientOptions) {
@@ -338,10 +341,7 @@ export class NodeAgentCloudRelayClient {
       const current = this.binding();
       if (!current || current.status !== "active") return;
       const refreshControlPlaneIds = [...this.refreshControlPlaneIds];
-      const allocations = await (await this.cloudClient(current.cloudOrigin)).allocations(current.credential, {
-        nodeId: this.options.nodeId,
-        ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
-      });
+      const allocations = await this.reconnectAllocations(current, refreshControlPlaneIds);
       for (const controlPlaneId of refreshControlPlaneIds) this.refreshControlPlaneIds.delete(controlPlaneId);
       if (this.stopped) return;
       if (this.applyAllocations(current, allocations)) this.lastError = undefined;
@@ -371,6 +371,39 @@ export class NodeAgentCloudRelayClient {
 
   private pollIntervalMs() {
     return this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  }
+
+  private async reconnectAllocations(binding: NodeAgentCloudRelayBinding, refreshControlPlaneIds: string[]) {
+    const cloud = await this.cloudClient(binding.cloudOrigin);
+    const request = {
+      nodeId: this.options.nodeId,
+      ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
+    };
+    if (!refreshControlPlaneIds.length || this.adaptiveSelectionUnsupported.has(binding.serviceOrigin)) {
+      return cloud.allocations(binding.credential, request);
+    }
+    try {
+      const targets = await cloud.probeTargets(binding.credential, { nodeId: this.options.nodeId, controlPlaneIds: refreshControlPlaneIds });
+      if (!targets.length) return cloud.allocations(binding.credential, request);
+      const probe = await probeNodeRelayTargets({
+        targets,
+        serviceOrigin: binding.serviceOrigin,
+        fetchImpl: this.options.relayProbeFetch ?? fetch,
+        now: () => this.now(),
+      });
+      return await cloud.allocationsV2(binding.credential, {
+        ...request,
+        probeEvidence: { measurements: probe.measurements },
+      });
+    } catch (error) {
+      if ((error as { unsupported?: unknown })?.unsupported === true) this.adaptiveSelectionUnsupported.add(binding.serviceOrigin);
+      this.options.host.log.warn({
+        nodeId: this.options.nodeId,
+        code: (error as { code?: unknown })?.code ?? "NODE_AGENT_CLOUD_RELAY_ADAPTIVE_FALLBACK",
+        reason: this.adaptiveSelectionUnsupported.has(binding.serviceOrigin) ? "unsupported" : "request-failed",
+      }, "node agent cloud relay adaptive selection fell back to v1");
+      return cloud.allocations(binding.credential, request);
+    }
   }
 
   private idlePollIntervalMs() {

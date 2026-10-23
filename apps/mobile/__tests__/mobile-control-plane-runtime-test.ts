@@ -48,6 +48,7 @@ function harness() {
   const updateTopics = jest.fn((topics: readonly string[]) => { if (handlers) handlers.topics = [...topics]; });
   const updateAiSessionTransient = jest.fn();
   const revalidate = jest.fn().mockResolvedValue(undefined);
+  const suspend = jest.fn();
   const connectEvents = jest.fn((next: MobileControlPlaneEventHandlers) => {
     handlers = next;
     next.onOpen();
@@ -69,6 +70,7 @@ function harness() {
   const transport = {
     profile,
     revalidate,
+    suspend,
     connectEvents,
   } as unknown as MobileControlPlaneTransport;
   return {
@@ -80,6 +82,7 @@ function harness() {
     renewMobileSession,
     get handlers() { return handlers; },
     revalidate,
+    suspend,
     updateAiSessionTransient,
     updateTopics,
   };
@@ -153,12 +156,15 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     runtime.coordinator.stop();
   });
 
-  test('coalesces revalidation when a newer startup supersedes one already in flight', async () => {
+  test('aborts a superseded revalidation instead of waiting on its frozen attempt', async () => {
     const runtime = harness();
     const ai = domain('ai', ['ai.sessions'], true);
     const directories = domain('directories', ['instances', 'nodes']);
-    let releaseRevalidation: (() => void) | undefined;
-    runtime.revalidate.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseRevalidation = resolve; }));
+    let firstSignal: AbortSignal | undefined;
+    runtime.revalidate.mockImplementationOnce((signal?: AbortSignal) => new Promise<void>((resolve) => {
+      firstSignal = signal;
+      signal?.addEventListener('abort', () => resolve(), { once: true });
+    }));
 
     runtime.coordinator.setEnvironment({ foreground: true, connected: true });
     runtime.coordinator.register(ai);
@@ -168,15 +174,29 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
 
     runtime.coordinator.register(directories);
     await flushCoordinator();
-    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
-
-    releaseRevalidation?.();
-    await flushCoordinator();
+    expect(firstSignal?.aborted).toBe(true);
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
     expect(runtime.authSession).toHaveBeenCalledTimes(1);
     expect(ai.start).toHaveBeenCalledTimes(1);
     expect(directories.start).toHaveBeenCalledTimes(1);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
     expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('suspends the transport when the app has no foreground work', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    runtime.coordinator.setEnvironment({ foreground: false });
+    await flushCoordinator();
+
+    expect(runtime.suspend).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('idle');
     runtime.coordinator.stop();
   });
 

@@ -47,6 +47,7 @@ function authorizationHeaders() {
 
 async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: {
   fetchImpl?: typeof fetch;
+  relayProbeFetch?: typeof fetch;
   cloudDiscovery?: CloudDiscovery;
   discoveryCachePath?: string;
 } = {}) {
@@ -59,6 +60,7 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
     token: AUTH_TOKEN,
     logger: false,
     fetchImpl: options.fetchImpl ?? stub.fetchImpl,
+    ...(options.relayProbeFetch ? { relayProbeFetch: options.relayProbeFetch } : {}),
     ...(options.cloudDiscovery ? { cloudDiscovery: options.cloudDiscovery } : {}),
     ...(options.discoveryCachePath ? { discoveryCachePath: options.discoveryCachePath } : {}),
     webSocket: fakeRelayWebSocket({
@@ -183,6 +185,19 @@ async function status(app: FastifyInstance, headers: Record<string, string> = au
   const response = await app.inject({ method: "GET", url: "/api/node-agent/cloud-relay", headers });
   assert.equal(response.statusCode, 200, response.body);
   return response.json().data;
+}
+
+function relayProbeFetch(idsByHost: Record<string, string>, calls: Array<{ url: string; init?: RequestInit }> = []) {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push({ url: url.href, init });
+    const relayId = idsByHost[url.hostname];
+    if (!relayId) throw new Error(`unexpected probe host ${url.hostname}`);
+    return new Response(JSON.stringify({ relayId, region: null, now: new Date().toISOString(), draining: false, loadBucket: "low" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
 }
 
 test("binding redeems the token, persists the account binding and never exposes secrets in status", async (t) => {
@@ -554,4 +569,129 @@ test("unbind confirms with the cloud, drops only relay pairings and leaves bound
   assert.equal(repeat.statusCode, 200, repeat.body);
   assert.deepEqual(repeat.json().data, { unbound: false, cloudUnbind: "not-bound" });
   assert.equal(stub.state.unbinds, 1);
+});
+
+test("first connect never probes and an old Coordinator is retried through v1 only once", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, planes, planeFor, connect } = await cloudRelayFixture(t, stub);
+  const plane = planeFor("control_plane_legacy_server");
+  await bind(app, stub);
+  relay.pollNow();
+  const first = await connect("control_plane_legacy_server");
+  assert.equal(stub.state.probeTargetRequests.length, 0, "a first bind uses the fast v1 allocation path");
+
+  first.close("legacy-server-drop-one");
+  relay.pollNow();
+  await waitFor(() => stub.state.probeTargetRequests.length === 1 ? true : undefined, "the first adaptive discovery attempt");
+  const second = await waitFor(() => plane.peers.length >= 2 ? plane.peers[1] : undefined, "v1 fallback reconnect");
+  assert.ok(second);
+  assert.ok(stub.state.allocationRequests.length >= 2, "the unsupported v2 route fell back to v1");
+
+  second!.close("legacy-server-drop-two");
+  relay.pollNow();
+  await waitFor(() => plane.peers.length >= 3 ? plane.peers[2] : undefined, "second v1 fallback reconnect");
+  assert.equal(stub.state.probeTargetRequests.length, 1, "an unsupported server is remembered for the service origin");
+});
+
+test("a business 404 during probe discovery does not disable adaptive selection", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  stub.setAdaptiveSelection(true);
+  stub.state.probeTargetFailure = { status: 404, code: "NODE_RELAY_PAIRING_NOT_FOUND", message: "No active pairing for this Control Plane." };
+  const { app, relay, planes, planeFor, connect } = await cloudRelayFixture(t, stub);
+  planeFor("control_plane_pairing_404");
+  await bind(app, stub);
+  relay.pollNow();
+  const first = await connect("control_plane_pairing_404");
+  first.close("pairing-404-drop-one");
+  relay.pollNow();
+  const second = await waitFor(() => planes.get("control_plane_pairing_404")!.peers.length >= 2
+    ? planes.get("control_plane_pairing_404")!.peers[1]
+    : undefined, "v1 fallback after a business 404");
+  assert.ok(second);
+
+  second!.close("pairing-404-drop-two");
+  relay.pollNow();
+  await waitFor(() => planes.get("control_plane_pairing_404")!.peers.length >= 3
+    ? planes.get("control_plane_pairing_404")!.peers[2]
+    : undefined, "adaptive discovery after a business 404");
+  assert.equal(stub.state.probeTargetRequests.length, 2, "a business 404 must not be cached as unsupported");
+  assert.equal(stub.state.allocationV2Requests.length, 0);
+});
+
+test("one probe batch serves two Control Planes and each reconnect attaches only its selected Relay", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  stub.setAdaptiveSelection(true);
+  const probeCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const { app, relay, planes, planeFor, connect } = await cloudRelayFixture(t, stub, {
+    relayProbeFetch: relayProbeFetch({
+      "relay-a.cloud.example.com": "relay_a",
+      "relay-c.cloud.example.com": "relay_c",
+    }, probeCalls),
+  });
+  const one = planeFor("control_plane_adaptive_one");
+  const two = planeFor("control_plane_adaptive_two");
+  stub.setRelayForControlPlane("control_plane_adaptive_one", { relayId: "relay_a", relayUrl: "wss://relay-a.cloud.example.com/connect" });
+  stub.setRelayForControlPlane("control_plane_adaptive_two", { relayId: "relay_a", relayUrl: "wss://relay-a.cloud.example.com/connect" });
+  await bind(app, stub);
+  relay.pollNow();
+  const [firstOne, firstTwo] = await Promise.all([connect("control_plane_adaptive_one"), connect("control_plane_adaptive_two")]);
+  assert.equal(stub.state.probeTargetRequests.length, 0);
+
+  stub.setRelayForControlPlane("control_plane_adaptive_one", { relayId: "relay_c", relayUrl: "wss://relay-c.cloud.example.com/connect" });
+  stub.setRelayForControlPlane("control_plane_adaptive_two", { relayId: "relay_a", relayUrl: "wss://relay-a.cloud.example.com/connect" });
+  stub.setProbeTargets([
+    { relayId: "relay_a", relayUrl: "wss://relay-a.cloud.example.com/connect" },
+    { relayId: "relay_c", relayUrl: "wss://relay-c.cloud.example.com/connect" },
+  ]);
+  firstOne.close("adaptive-drop-one");
+  firstTwo.close("adaptive-drop-two");
+  relay.pollNow();
+
+  await waitFor(() => stub.state.allocationV2Requests.length === 1 ? true : undefined, "one v2 allocation with shared evidence");
+  assert.equal(stub.state.probeTargetRequests.length, 1);
+  assert.deepEqual(stub.state.probeTargetRequests[0].controlPlaneIds?.sort(), ["control_plane_adaptive_one", "control_plane_adaptive_two"]);
+  assert.equal(probeCalls.length, 4, "two targets by two samples in one reconnect attempt");
+  const evidence = stub.state.allocationV2Requests[0].probeEvidence;
+  assert.deepEqual(evidence.measurements.map((measurement: any) => [measurement.relayId, measurement.sampleCount, measurement.failureCount]).sort(), [
+    ["relay_a", 2, 0],
+    ["relay_c", 2, 0],
+  ]);
+  assert.equal(stub.state.allocationRequests.filter((request) => request.refreshControlPlaneIds?.length).length, 0, "successful v2 never falls back to a refresh request on v1");
+
+  const [secondOne, secondTwo] = await Promise.all([
+    waitFor(() => one.peers.length >= 2 ? one.peers[1] : undefined, "adaptive relay-a peer reconnect"),
+    waitFor(() => two.peers.length >= 2 ? two.peers[1] : undefined, "adaptive relay-c peer reconnect"),
+  ]);
+  assert.ok(secondOne);
+  assert.ok(secondTwo);
+  assert.equal(stub.issuedAllocation("control_plane_adaptive_one").relayUrl, "wss://relay-c.cloud.example.com/connect");
+  assert.equal(stub.issuedAllocation("control_plane_adaptive_two").relayUrl, "wss://relay-a.cloud.example.com/connect");
+  assert.equal((await secondOne!.request("/health")).status, 200);
+  assert.equal((await secondTwo!.request("/health")).status, 200);
+});
+
+test("a v2 allocation failure falls back to v1 while an all-failure probe still reports evidence", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  stub.setAdaptiveSelection(true);
+  stub.setProbeTargets([{ relayId: "relay_test_1", relayUrl: "wss://relay.cloud.example.com/relay" }]);
+  stub.state.failAdaptiveAllocations = true;
+  const { app, relay, planes, planeFor, connect } = await cloudRelayFixture(t, stub, {
+    relayProbeFetch: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
+  });
+  planeFor("control_plane_fallback");
+  await bind(app, stub);
+  relay.pollNow();
+  const first = await connect("control_plane_fallback");
+  first.close("v2-failure-drop");
+  relay.pollNow();
+
+  await waitFor(() => stub.state.allocationV2Requests.length === 1 ? true : undefined, "v2 allocation attempt");
+  assert.deepEqual(stub.state.allocationV2Requests[0].probeEvidence?.measurements, [
+    { relayId: "relay_test_1", sampleCount: 2, failureCount: 2 },
+  ]);
+  const second = await waitFor(() => planes.get("control_plane_fallback")!.peers.length >= 2
+    ? planes.get("control_plane_fallback")!.peers[1]
+    : undefined, "v1 fallback after a failed v2 allocation");
+  assert.ok(second);
+  assert.equal((await second!.request("/health")).status, 200);
 });
