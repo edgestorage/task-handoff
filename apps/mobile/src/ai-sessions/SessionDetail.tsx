@@ -1,6 +1,5 @@
 import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
-import { ScrollViewMarker } from 'react-native-screens/experimental';
 import * as Clipboard from 'expo-clipboard';
 import { Check, ChevronDown, ChevronRight, Copy, Sparkles, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
@@ -249,7 +248,7 @@ export function SessionDetail({
   </View> : null;
   return (
     <Profiler id="detail" onRender={recordDetailRender}>
-      <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
+      <>
         <FlatList
           key={`${session.id}:${selectedMode}`}
           ref={listRef}
@@ -323,7 +322,7 @@ export function SessionDetail({
             <Icon color="#ffffff" name="chevron-down" size={21} />
           </Pressable>
         ) : null}
-      </ScrollViewMarker>
+      </>
     </Profiler>
   );
 }

@@ -99,12 +99,12 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="index" options={{ headerShown: false }} />
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                     <Stack.Screen name="profiles" options={{ title: t('nav.settings'), ...iosTransparentHeaderOptions(dark) }} />
-                    <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane') }} />
+                    <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="cloud-account" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="cloud-account-totp" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
-                    <Stack.Screen name="cloud-account-security" options={{ title: t('cloudAccount.settings') }} />
-                    <Stack.Screen name="cloud-control-planes" options={{ title: t('nav.controlPlanes') }} />
+                    <Stack.Screen name="cloud-account-security" options={{ title: t('cloudAccount.settings'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="cloud-control-planes" options={{ title: t('nav.controlPlanes'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />

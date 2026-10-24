@@ -37,6 +37,7 @@ describe('<InboxRoute />', () => {
     );
 
     expect(idle.getByLabelText('Loading AI Sessions')).toBeTruthy();
+    expect(idle.getByTestId('swipe-action-list')).toBeTruthy();
     expect(idle.queryByText('No AI Sessions yet')).toBeNull();
     await idle.unmount();
 
@@ -45,6 +46,7 @@ describe('<InboxRoute />', () => {
     );
 
     expect(loading.getByLabelText('Loading AI Sessions')).toBeTruthy();
+    expect(loading.getByTestId('swipe-action-list')).toBeTruthy();
     expect(loading.queryByText('No AI Sessions yet')).toBeNull();
     expect(inboxIsAwaitingInitialSync({ sync: { phase: 'idle' } })).toBe(true);
     expect(inboxIsAwaitingInitialSync({ sync: { phase: 'loading' } })).toBe(true);

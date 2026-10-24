@@ -104,14 +104,13 @@ export function AiSessionInbox({
 
   return (
     <Profiler id="inbox" onRender={recordInboxRender}>
-      <>
-      {awaitingInitialSync ? <ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} style={styles.loading} /> : (
-        <SwipeActionList
+      <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
+          contentContainerStyle={awaitingInitialSync ? styles.loadingContent : undefined}
           data={rows}
           itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : [styles.cardContainer, item.depth ? { marginLeft: 20 + item.depth * 14 } : null]}
           keyExtractor={(item) => item.type === 'group' ? item.key : `${item.instanceId}:${item.session.id}`}
-          ListHeaderComponent={<View style={styles.header}>
+          ListHeaderComponent={awaitingInitialSync ? null : <View style={styles.header}>
             <View
               accessibilityRole="tablist"
               onLayout={(event) => setStatusFilterTrackWidth(event.nativeEvent.layout.width)}
@@ -132,14 +131,16 @@ export function AiSessionInbox({
             </View>
             {statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
           </View>}
-          ListEmptyComponent={<EmptyState
-            icon={state.sync.phase === 'error'
-              ? 'alert-circle-outline'
-              : 'chatbubbles-outline'}
-            iconColor={state.sync.phase === 'error' ? colors.error : undefined}
-            message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
-            style={styles.empty}
-          />}
+          ListEmptyComponent={awaitingInitialSync
+            ? <View style={styles.loading}><ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} /></View>
+            : <EmptyState
+              icon={state.sync.phase === 'error'
+                ? 'alert-circle-outline'
+                : 'chatbubbles-outline'}
+              iconColor={state.sync.phase === 'error' ? colors.error : undefined}
+              message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
+              style={styles.empty}
+            />}
           onRefresh={pullToRefresh.onRefresh}
           refreshing={pullToRefresh.refreshing}
           swipeAction={(item) => {
@@ -206,8 +207,6 @@ export function AiSessionInbox({
             );
           }}
           />
-      )}
-      </>
     </Profiler>
   );
 
@@ -249,7 +248,8 @@ const styles = StyleSheet.create({
   screen: { backgroundColor: '#f8fafc', flex: 1 },
   header: { alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingBottom: 12, paddingTop: 16 },
   notice: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#854d0e', fontSize: 13, lineHeight: 18, padding: 12, width: '100%' },
-  loading: { flex: 1 },
+  loading: { alignItems: 'center', flex: 1, justifyContent: 'center' },
+  loadingContent: { flexGrow: 1 },
   empty: { minHeight: 240 },
   statusFilters: { borderRadius: 999, flexDirection: 'row', padding: STATUS_FILTER_PADDING, position: 'relative', width: '100%' },
   statusFilterSelection: { borderRadius: 999, bottom: STATUS_FILTER_PADDING, left: STATUS_FILTER_PADDING, position: 'absolute', top: STATUS_FILTER_PADDING },
