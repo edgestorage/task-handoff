@@ -4,6 +4,12 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import PrimaryTabsLayout from '../app/(tabs)/(main)/_layout';
 import { ScreenFlatList } from '../src/components/ScreenFlatList';
 
+let mockRuntimePhase = 'connected';
+
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({
+  useMobileControlPlaneRuntime: () => ({ phase: mockRuntimePhase }),
+}));
+
 jest.mock('expo-router/unstable-native-tabs', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const { Text, View } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -57,5 +63,24 @@ describe('<PrimaryTabsLayout />', () => {
     );
 
     expect(screen.getByTestId('screen-list').props.contentInsetAdjustmentBehavior).toBe('automatic');
+  });
+
+  test('floats the Control Plane status above the native tab bar instead of using a bottom accessory', async () => {
+    mockRuntimePhase = 'control-plane-closed';
+    const screen = await render(
+      <SafeAreaProvider initialMetrics={{
+        frame: { x: 0, y: 0, width: 390, height: 844 },
+        insets: { top: 47, right: 0, bottom: 34, left: 0 },
+      }}>
+        <PrimaryTabsLayout />
+      </SafeAreaProvider>,
+    );
+
+    expect(screen.getByTestId('control-plane-closed-banner')).toBeTruthy();
+    expect(screen.getByTestId('control-plane-closed-banner-position')).toHaveStyle({
+      bottom: 90,
+      position: 'absolute',
+    });
+    mockRuntimePhase = 'connected';
   });
 });

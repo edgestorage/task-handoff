@@ -16,7 +16,6 @@ import { TaskStatusSettingsProvider } from '../src/task-status/settings';
 import { CarPlaySurface } from '../src/carplay/CarPlaySurface';
 import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { MobileSessionRecovery } from '../src/control-plane/MobileSessionRecovery';
-import { MobileControlPlaneStatusBanner } from '../src/control-plane/MobileControlPlaneStatusBanner';
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 import { StoryNodeFilterProvider } from '../src/stories/use-story-node-filter';
@@ -128,7 +127,6 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]/triggers" options={{ title: t('triggers.sessionTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="icon-gallery" options={{ title: 'Ionicons 图标选择' }} />
                   </Stack>
-                  <MobileControlPlaneStatusBanner />
                   </ActiveTriggersProvider>
                   </ActiveAppSessionsProvider>
                 </ActiveAiSessionsProvider>

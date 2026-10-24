@@ -2,6 +2,7 @@ import { Button, HStack, Host, Image, Label, List, Section, Spacer, Text, Toggle
 import {
   accessibilityLabel,
   buttonStyle,
+  disabled as disabledModifier,
   font,
   foregroundStyle,
   frame,
@@ -18,6 +19,7 @@ import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled
 import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
 import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity } from './profile';
+import type { CloudAccountState } from './use-cloud-account-state';
 
 export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
@@ -49,6 +51,7 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
     <View style={{ flex: 1 }}>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }}>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
+          {props.cloudAccount ? <CloudAccountSection cloudAccount={props.cloudAccount} onOpen={props.onOpenCloudAccount} /> : null}
           {!props.profilesLoaded ? (
             <Section>
               <Label title={t('profiles.loading')} systemImage="arrow.triangle.2.circlepath" />
@@ -102,6 +105,39 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
         </List>
       </Host>
     </View>
+  );
+}
+
+function CloudAccountSection({ cloudAccount, onOpen }: { cloudAccount: CloudAccountState; onOpen(): void }) {
+  const { t } = useI18n();
+  const loading = cloudAccount.phase === 'loading';
+  const signedIn = cloudAccount.phase === 'signed-in';
+  const email = signedIn ? cloudAccount.profile?.email : undefined;
+  const label = loading ? t('common.loading') : signedIn ? email ?? t('cloudAccount.title') : t('cloudAccount.signIn');
+  const detail = loading ? t('cloudAccount.title') : signedIn ? t('cloudAccount.settings') : t('cloudAccount.optional');
+
+  return (
+    <Section title={t('cloudAccount.title')}>
+      <Button
+        modifiers={[
+          buttonStyle('plain'),
+          frame({ maxWidth: Infinity, alignment: 'leading' }),
+          accessibilityLabel(label),
+          ...(loading ? [disabledModifier(true)] : []),
+        ]}
+        onPress={onOpen}
+      >
+        <HStack alignment="center" spacing={12}>
+          <Image size={22} systemName={signedIn ? 'person.crop.circle.fill' : 'person.crop.circle'} />
+          <VStack alignment="leading" spacing={3}>
+            <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{label}</Text>
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{detail}</Text>
+          </VStack>
+          <Spacer />
+          <Image size={12} systemName="chevron.right" />
+        </HStack>
+      </Button>
+    </Section>
   );
 }
 

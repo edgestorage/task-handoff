@@ -9,6 +9,7 @@ import {
   MobileDirectControlPlaneProfileSchema,
 } from '../src/control-plane/profile';
 import { mobileProfileStore } from '../src/control-plane/runtime';
+import { useCloudAccountState } from '../src/control-plane/use-cloud-account-state';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -16,11 +17,14 @@ jest.mock('expo-router', () => ({
   Stack: { Screen: () => null },
 }));
 jest.mock('../src/control-plane/NativeProfilesScreen', () => ({ NativeProfilesScreen: () => null }));
+jest.mock('../src/control-plane/use-cloud-account-state', () => ({ useCloudAccountState: jest.fn() }));
 jest.mock('../src/control-plane/runtime', () => ({
   mobileProfileStore: { active: jest.fn(), list: jest.fn(), subscribe: jest.fn(() => () => undefined) },
 }));
+jest.mock('../src/platform/build-variant', () => ({ isMobileFeatureEnabled: () => true, isMobileTestMode: false }));
 
 const mockStore = jest.mocked(mobileProfileStore);
+const mockCloudAccount = jest.mocked(useCloudAccountState);
 const metrics = { frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { bottom: 34, left: 0, right: 0, top: 47 } };
 const fingerprint = `sha256:${'a'.repeat(43)}`;
 const profileBase = {
@@ -44,6 +48,10 @@ const relay = MobileCloudRelayControlPlaneProfileSchema.parse({
 const originalPlatform = Platform.OS;
 beforeAll(() => { Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android', writable: true }); });
 afterAll(() => { Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform, writable: true }); });
+beforeEach(() => {
+  mockPush.mockClear();
+  mockCloudAccount.mockReturnValue({ phase: 'signed-out' });
+});
 
 test('keeps diagnostic logging out of the initial profile screen', async () => {
   const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesWelcome onAdd={jest.fn()} /></SafeAreaProvider>);
@@ -71,4 +79,27 @@ test('marks only the active profile when a direct and cloud Relay profile share 
   expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
     params: expect.objectContaining({ controlPlaneId: 'cp_01', fingerprint, kind: 'direct' }),
   }));
+});
+
+test('opens Thandoff account settings when the account is signed in', async () => {
+  mockStore.list.mockResolvedValue([direct]);
+  mockStore.active.mockResolvedValue(direct);
+  mockCloudAccount.mockReturnValue({ phase: 'signed-in', profile: { email: 'user@example.com' } });
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
+
+  expect(await screen.findByText('user@example.com')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Thandoff account settings'));
+
+  expect(mockPush).toHaveBeenCalledWith('/cloud-account-security');
+});
+
+test('opens Thandoff sign-in from the empty settings screen when signed out', async () => {
+  mockStore.list.mockResolvedValue([]);
+  mockStore.active.mockResolvedValue(undefined);
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
+
+  const accountEntry = await screen.findByLabelText('Sign in to Thandoff account');
+  await fireEvent.press(accountEntry);
+
+  expect(mockPush).toHaveBeenCalledWith('/cloud-account');
 });

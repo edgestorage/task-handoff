@@ -8,8 +8,9 @@ import { Icon, type IconName } from '../src/components/Icon';
 import { Screen } from '../src/components/Screen';
 import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity, type MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
+import { useCloudAccountState, type CloudAccountState } from '../src/control-plane/use-cloud-account-state';
 import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
-import { isMobileTestMode } from '../src/platform/build-variant';
+import { isMobileFeatureEnabled, isMobileTestMode } from '../src/platform/build-variant';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { useI18n, type LocalePreference } from '../src/i18n';
@@ -18,10 +19,17 @@ import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled
 export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInTabs?: boolean }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const cloudAccount = useCloudAccountState();
+  const cloudAccountEnabled = isMobileFeatureEnabled('officialAccount');
   const [error, setError] = useState<string>();
   const [savedProfiles, setSavedProfiles] = useState<MobileControlPlaneProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<MobileControlPlaneProfile>();
   const [profilesLoaded, setProfilesLoaded] = useState(false);
+
+  const openCloudAccount = () => {
+    if (cloudAccount.phase === 'loading') return;
+    router.push(cloudAccount.phase === 'signed-in' ? '/cloud-account-security' as never : '/cloud-account' as never);
+  };
 
   useEffect(() => {
     let live = true;
@@ -54,7 +62,11 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       <SafeAreaView edges={embeddedInTabs ? [] : ['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}>
         <Stack.Screen options={{ headerShown: false, title: t('nav.settings') }} />
         <Screen alwaysBounceVertical={false}>
-          <ProfilesWelcome onAdd={() => router.push('/control-planes/add')} />
+          <ProfilesWelcome
+            cloudAccount={cloudAccountEnabled ? cloudAccount : undefined}
+            onAdd={() => router.push('/control-planes/add')}
+            onOpenCloudAccount={openCloudAccount}
+          />
         </Screen>
       </SafeAreaView>
     );
@@ -63,11 +75,13 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   if (Platform.OS === 'ios') {
     return <><Stack.Screen options={{ headerShown: true, title: t('nav.settings') }} /><NativeProfilesScreen
       activeProfile={activeProfile}
+      cloudAccount={cloudAccountEnabled ? cloudAccount : undefined}
       error={error}
       profiles={savedProfiles}
       profilesLoaded={profilesLoaded}
       testMode={isMobileTestMode}
       onAdd={() => router.push('/control-planes/add')}
+      onOpenCloudAccount={openCloudAccount}
       onOpen={(profile) => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId, fingerprint: profile.identity.publicKeyFingerprint, kind: profile.access.kind } })}
     /></>;
   }
@@ -77,6 +91,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       <Stack.Screen options={{ headerShown: true, title: t('nav.settings') }} />
       <Screen>
         <View style={styles.saved}>
+          {cloudAccountEnabled ? <CloudAccountRow cloudAccount={cloudAccount} onPress={openCloudAccount} /> : null}
           {!embeddedInTabs ? <View style={styles.savedHeading}>
             <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('nav.controlPlanes')}</Text>
           </View> : null}
@@ -130,7 +145,11 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   );
 }
 
-export function ProfilesWelcome({ onAdd }: { onAdd: () => void }) {
+export function ProfilesWelcome({ cloudAccount, onAdd, onOpenCloudAccount }: {
+  cloudAccount?: CloudAccountState;
+  onAdd: () => void;
+  onOpenCloudAccount?: () => void;
+}) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
 
@@ -154,12 +173,44 @@ export function ProfilesWelcome({ onAdd }: { onAdd: () => void }) {
         <NativeActionButton label={t('profiles.connect')} onPress={onAdd} />
       </View>
 
+      {cloudAccount && onOpenCloudAccount ? <CloudAccountRow cloudAccount={cloudAccount} onPress={onOpenCloudAccount} /> : null}
+
       <View style={styles.welcomeFooter}>
         <LanguageRow compact />
         <AppearanceRow compact />
         <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? t('profiles.requirementTest') : t('profiles.requirement')}</Text>
       </View>
     </View>
+  );
+}
+
+function CloudAccountRow({ cloudAccount, onPress }: { cloudAccount: CloudAccountState; onPress(): void }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const loading = cloudAccount.phase === 'loading';
+  const signedIn = cloudAccount.phase === 'signed-in';
+  const email = signedIn ? cloudAccount.profile?.email : undefined;
+  const label = loading ? t('common.loading') : signedIn ? email ?? t('cloudAccount.title') : t('cloudAccount.signIn');
+  const detail = loading ? t('cloudAccount.title') : signedIn ? t('cloudAccount.settings') : t('cloudAccount.optional');
+
+  return (
+    <Pressable
+      accessibilityLabel={loading ? t('common.loading') : signedIn ? t('cloudAccount.settings') : t('cloudAccount.signIn')}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: loading }}
+      disabled={loading}
+      onPress={onPress}
+      style={({ pressed }) => [styles.accountRow, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.buttonPressed, loading && styles.accountRowDisabled]}
+    >
+      <View style={[styles.accountAvatar, { backgroundColor: colors.surfaceMuted }]}>
+        {email ? <Text style={[styles.accountInitial, { color: colors.text }]}>{email.slice(0, 1).toUpperCase()}</Text> : <Icon color={colors.textMuted} name="person-outline" size={19} />}
+      </View>
+      <View style={styles.accountCopy}>
+        <Text numberOfLines={1} style={[styles.accountLabel, { color: colors.text }]}>{label}</Text>
+        <Text numberOfLines={1} style={[styles.accountDetail, { color: colors.textMuted }]}>{detail}</Text>
+      </View>
+      <Icon color={colors.textMuted} name="chevron-forward" size={13} />
+    </Pressable>
   );
 }
 
@@ -280,6 +331,13 @@ const styles = StyleSheet.create({
   guideDivider: { height: StyleSheet.hairlineWidth, marginLeft: 36 },
   welcomeFooter: { gap: 10, marginTop: 'auto' },
   requirement: { fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  accountRow: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, minHeight: 64, paddingHorizontal: 12, paddingVertical: 9 },
+  accountRowDisabled: { opacity: 0.55 },
+  accountAvatar: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
+  accountInitial: { fontSize: 14, fontWeight: '700' },
+  accountCopy: { flex: 1, gap: 2 },
+  accountLabel: { fontSize: 16, fontWeight: '600' },
+  accountDetail: { fontSize: 13, lineHeight: 18 },
   saved: { gap: 12, marginBottom: 18 },
   savedHeading: { alignItems: 'baseline', flexDirection: 'row' },
   profileGroup: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },

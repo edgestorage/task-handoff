@@ -28,6 +28,10 @@ describe('<ControlPlaneClosedBanner />', () => {
     expect(screen.getByTestId('control-plane-closed-banner')).toBeTruthy();
     expect(screen.getByText('controlPlane.closedTitle')).toBeTruthy();
     expect(screen.getByText('controlPlane.closedDescription')).toBeTruthy();
+    expect(screen.getByTestId('control-plane-closed-banner-position')).toHaveStyle({
+      bottom: 90,
+      position: 'absolute',
+    });
   });
 
   test('disappears once the connection recovers', async () => {

@@ -151,7 +151,37 @@ export default function AddControlPlaneScreen() {
             ) : null}
 
             <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon="shield-checkmark-outline" label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
-            {isMobileFeatureEnabled('officialAccount') ? <NativeActionButton compact disabled={busy} label={t('enroll.cloudAccount')} onPress={() => { void openCloudAccount(); }} /> : null}
+            {isMobileFeatureEnabled('officialAccount') ? (
+              <View style={styles.accountOption}>
+                <View style={styles.accountDivider}>
+                  <View style={[styles.accountDividerLine, { backgroundColor: colors.border }]} />
+                  <Text style={[styles.accountDividerLabel, { color: colors.textMuted }]}>{t('enroll.or')}</Text>
+                  <View style={[styles.accountDividerLine, { backgroundColor: colors.border }]} />
+                </View>
+                <Pressable
+                  accessibilityHint={t('enroll.cloudAccountDescription')}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: busy }}
+                  disabled={busy}
+                  onPress={() => { void openCloudAccount(); }}
+                  style={({ pressed }) => [
+                    styles.accountCard,
+                    { backgroundColor: colors.surface, borderColor: colors.border },
+                    pressed && styles.accountCardPressed,
+                    busy && styles.accountCardDisabled,
+                  ]}
+                >
+                  <View style={[styles.accountIcon, { backgroundColor: colors.primarySoft }]}>
+                    <Icon color={colors.primary} name="cloud-outline" size={21} />
+                  </View>
+                  <View style={styles.accountCopy}>
+                    <Text style={[styles.accountTitle, { color: colors.text }]}>{t('enroll.cloudAccount')}</Text>
+                    <Text style={[styles.accountDescription, { color: colors.textMuted }]}>{t('enroll.cloudAccountDescription')}</Text>
+                  </View>
+                  <Icon color={colors.textMuted} name="chevron-forward" size={17} />
+                </Pressable>
+              </View>
+            ) : null}
           </>
         ) : null}
 
@@ -295,6 +325,17 @@ const styles = StyleSheet.create({
   verifiedNote: { alignItems: 'flex-start', flexDirection: 'row', gap: 10, paddingHorizontal: 4 },
   verifiedText: { flex: 1, fontSize: 13, lineHeight: 19 },
   primaryAction: { alignSelf: 'stretch' },
+  accountOption: { gap: 14, paddingTop: 4 },
+  accountDivider: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  accountDividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
+  accountDividerLabel: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
+  accountCard: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 72, paddingHorizontal: 14, paddingVertical: 12 },
+  accountCardPressed: { opacity: 0.72 },
+  accountCardDisabled: { opacity: 0.55 },
+  accountIcon: { alignItems: 'center', borderRadius: 11, height: 40, justifyContent: 'center', width: 40 },
+  accountCopy: { flex: 1, gap: 3 },
+  accountTitle: { fontSize: 15, fontWeight: '600', lineHeight: 20 },
+  accountDescription: { fontSize: 13, lineHeight: 18 },
   busyRow: { alignItems: 'center', flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 32 },
   busyText: { fontSize: 13 },
   errorGroup: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, padding: 12 },

@@ -3,6 +3,8 @@ import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { Platform, View, type ColorValue } from 'react-native';
 
 import { useMobileTheme } from '../../../src/components/theme';
+import { MobileControlPlaneStatusBanner } from '../../../src/control-plane/MobileControlPlaneStatusBanner';
+import { useMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../src/i18n';
 
 const TAB_ICON_SIZE = 25;
@@ -34,6 +36,7 @@ const storyTabIconFamily = {
 export default function PrimaryTabsLayout() {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
+  const runtime = useMobileControlPlaneRuntime();
   const android = Platform.OS === 'android';
   const liquidGlassTabs = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
   const nativeTabBlur = Platform.OS === 'ios' && !liquidGlassTabs
@@ -83,6 +86,7 @@ export default function PrimaryTabsLayout() {
           <NativeTabs.Trigger.Label>{t('nav.instances')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
       </NativeTabs>
+      {runtime.phase === 'control-plane-closed' ? <MobileControlPlaneStatusBanner /> : null}
     </View>
   );
 }

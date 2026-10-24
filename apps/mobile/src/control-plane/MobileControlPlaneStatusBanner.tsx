@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon } from '../components/Icon';
@@ -6,13 +6,19 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { useMobileControlPlaneRuntime } from './use-mobile-control-plane-runtime';
 
+const FLOATING_TAB_BAR_OFFSET = Platform.select({ android: 88, default: 56 });
+
 export function ControlPlaneClosedBanner({ visible }: { visible: boolean }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   if (!visible) return null;
   return (
-    <View pointerEvents="none" style={[styles.position, { top: Math.max(insets.top, 8) + 8 }]}>
+    <View
+      pointerEvents="none"
+      style={[styles.position, { bottom: Math.max(insets.bottom, 8) + FLOATING_TAB_BAR_OFFSET }]}
+      testID="control-plane-closed-banner-position"
+    >
       <View
         accessibilityLiveRegion="assertive"
         accessibilityRole="alert"
