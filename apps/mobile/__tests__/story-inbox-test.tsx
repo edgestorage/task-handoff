@@ -15,7 +15,7 @@ jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => { const
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessionsRuntime: () => ({}), useActiveAiSessionsSnapshot: jest.fn() }));
 jest.mock('../src/stories/use-story-node-filter', () => ({ useStoryNodeFilter: jest.fn() }));
-jest.mock('@expo/ui/community/menu', () => {
+jest.mock('@react-native-menu/menu', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const { Pressable, Text } = jest.requireActual<typeof import('react-native')>('react-native');
   return { MenuView: ({ actions, children, onPressAction }: { actions: { id: string; title: string }[]; children: React.ReactNode; onPressAction(event: { nativeEvent: { event: string } }): void }) => React.createElement(

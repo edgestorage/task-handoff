@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { MenuView, type MenuAction } from '../components/MenuView';
+import { MenuView, type MenuAction } from './StoryMenuView';
 import * as Crypto from 'expo-crypto';
 import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
@@ -268,7 +268,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             title={story.title}
           >
           <Pressable accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable }} disabled={storyUnavailable} onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && !storyUnavailable && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.storyIcon}><Icon color={storyMuted ? colors.textMuted : colors.primary} name="book-outline" size={21} /></View>
+            <View style={styles.storyIcon}><Icon color={storyMuted ? colors.textMuted : colors.primary} name="book-outline" size={18} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: storyMuted ? colors.textMuted : colors.text }]}>{story.title}</Text>
@@ -367,10 +367,10 @@ const styles = StyleSheet.create({
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
   disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 34 },
-  storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 10, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
-  storyIcon: { alignItems: 'center', height: 26, justifyContent: 'center', width: 28 },
+  storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 6, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
+  storyIcon: { alignItems: 'center', height: 22, justifyContent: 'center', width: 24 },
   children: { marginBottom: 8, marginLeft: 31, marginTop: 2, overflow: 'hidden' },
-  childrenInner: { paddingHorizontal: 6, paddingTop: 6 },
+  childrenInner: { left: 0, paddingHorizontal: 6, paddingTop: 6, position: 'absolute', right: 0, top: 0 },
   childRow: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 10, minHeight: 44, paddingHorizontal: 0, paddingVertical: 4 },
   childMenu: { alignSelf: 'stretch' },
   moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40 },
