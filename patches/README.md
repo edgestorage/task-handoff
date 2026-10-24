@@ -11,3 +11,9 @@ Remove this patch after upgrading to an upstream release that assigns the subtit
 `expo-paste-input@0.2.2.patch` adds opt-in, pre-insertion interception for large text pastes while retaining the package's existing image-first behavior. The public upstream contribution should expose `interceptTextPasteAbove` and the optional `intercepted` text-event flag with the same iOS and Android semantics.
 
 Remove this patch only after upgrading to an upstream release that provides the equivalent API and after the native paste integration tests pass unchanged on both iOS and Android, including context-menu selection replacement, IME input, image priority, and single-event dispatch.
+
+## `react-native-screens@4.26.2`
+
+`react-native-screens@4.26.2.patch` applies the native change from upstream pull request [#5014](https://github.com/software-mansion/react-native-screens/pull/5014). Reattaching a screen or `ScrollViewMarker` to its container resets an explicitly configured scroll-edge effect back to `automatic`; on iOS 27 that renders as a hard edge, so switching tabs or returning from a pushed screen can change the header treatment.
+
+Remove this patch after upgrading to a release that reapplies non-automatic scroll-edge effects from both `RNSScreenView` and `ScrollViewMarker` in `didMoveToWindow`, and after verifying transparent-header soft edges across tab switches, push/pop, and list remounts on iOS 26 and iOS 27.
