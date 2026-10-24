@@ -87,6 +87,14 @@ const RELAY_RESPONSE_STALL_TIMEOUT_MS = 15_000;
 // is detected even when the operating system has not reported a close.
 const RELAY_HEARTBEAT_INTERVAL_MS = 15_000;
 const RELAY_HEARTBEAT_TIMEOUT_MS = 10_000;
+// The Coordinator waits 15 seconds for the allocation request. Timing out here
+// first turns a silent Relay attach into a definite failure instead of leaving
+// the request pending until the Coordinator has to treat delivery as unknown.
+const DEFAULT_RELAY_ATTACH_TIMEOUT_MS = 10_000;
+// After the Relay accepts the channel, the client still has to complete the
+// end-to-end handshake. Bound that background wait too, otherwise a client that
+// disappears after attach leaves the socket and session pending indefinitely.
+const DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export function verifyCoordinatorRelayAllocation(raw: unknown, state: { snapshot(): any }) {
   const event = raw as any;
@@ -187,6 +195,8 @@ type CloudRelayConnectorOptions = {
   trace?: RelayTraceRecorder;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  attachTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
 };
 
 export class CloudRelayConnector {
@@ -204,7 +214,7 @@ export class CloudRelayConnector {
     startRelayHeartbeat(socket, this.options.heartbeatIntervalMs, this.options.heartbeatTimeoutMs);
     try {
       socket.send(JSON.stringify({ type: "attach", capability: attach, grant, proof: this.roleProof(grant) }));
-      const attached = await socketMessage(socket, (value) => value?.type === "attached");
+      const attached = await socketMessage(socket, (value) => value?.type === "attached", positiveDuration(this.options.attachTimeoutMs, DEFAULT_RELAY_ATTACH_TIMEOUT_MS));
       this.options.trace?.record({
         channelId: String(attached.channelId),
         direction: "in",
@@ -225,7 +235,7 @@ export class CloudRelayConnector {
           ticketMs: Number.isFinite(Date.parse(String(ticket.expiresAt))) ? Date.parse(String(ticket.expiresAt)) - Date.now() : undefined,
         },
       });
-      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options.identity, this.options.bridge, input.onDisconnected, this.options.trace);
+      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options.identity, this.options.bridge, input.onDisconnected, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
       throw error;
@@ -240,7 +250,7 @@ export class CloudRelayConnector {
     startRelayHeartbeat(socket, this.options.heartbeatIntervalMs, this.options.heartbeatTimeoutMs);
     try {
       socket.send(JSON.stringify({ type: "session-attach", grant, proof: this.roleProof(grant) }));
-      const attached = await socketMessage(socket, (value) => value?.type === "attached");
+      const attached = await socketMessage(socket, (value) => value?.type === "attached", positiveDuration(this.options.attachTimeoutMs, DEFAULT_RELAY_ATTACH_TIMEOUT_MS));
       this.options.trace?.record({
         channelId: String(attached.channelId),
         direction: "in",
@@ -250,7 +260,7 @@ export class CloudRelayConnector {
         wireBytes: 0,
         detail: { channelId: boundedText(attached.channelId, 64), allocationId: boundedText(attached.allocationId, 64), generation: grant.generation },
       });
-      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options.identity, this.options.bridge, input.onDisconnected, this.options.trace);
+      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options.identity, this.options.bridge, input.onDisconnected, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
       throw error;
@@ -266,7 +276,7 @@ export class CloudRelayConnector {
 // acknowledges the allocation, while the encrypted handshake can only finish once that
 // client joins the Relay. Acknowledge as soon as the Relay accepted this peer and keep
 // completing the handshake in the background so both sides cannot wait on each other.
-function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onDisconnected?: () => void, trace?: RelayTraceRecorder) {
+function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onDisconnected?: () => void, trace?: RelayTraceRecorder, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
   let session: { close(reason?: string): Promise<void> | void } | undefined;
   let closeReason: string | undefined;
   let intentional = false;
@@ -281,7 +291,7 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
     onDisconnected?.();
   };
   socket.once("close", reportDisconnected);
-  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, reportDisconnected, trace).then((value) => {
+  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, reportDisconnected, trace, handshakeTimeoutMs).then((value) => {
     session = value;
     if (closeReason !== undefined) void value.close(closeReason);
     return value;
@@ -303,8 +313,8 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
   };
 }
 
-async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onPeerDetached?: () => void, trace?: RelayTraceRecorder) {
-  const handshake = await socketFrame(socket, (frame) => frame.kind === "handshake");
+async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onPeerDetached?: () => void, trace?: RelayTraceRecorder, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
+  const handshake = await socketFrame(socket, (frame) => frame.kind === "handshake", handshakeTimeoutMs);
   if (handshake.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
   const hello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
   const accepted = identity.acceptCloudAccessHandshake(ticket, hello);
@@ -782,18 +792,61 @@ function positiveDuration(value: number | undefined, fallback: number) {
 }
 function unrefTimer(timer: ReturnType<typeof setTimeout>) { (timer as unknown as { unref?(): void }).unref?.(); }
 function socketOpen(socket: WebSocket) { return new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); socket.once("close", (code, reason) => reject(relaySocketClosedError(code, reason))); }); }
-function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) { return new Promise<any>((resolve, reject) => { const onMessage = (raw: WebSocket.RawData) => { try { const value = JSON.parse(raw.toString()); if (predicate(value)) { cleanup(); resolve(value); } } catch (error) { cleanup(); reject(error); } }; const onClose = (code: number, reason: Buffer) => { cleanup(); reject(relaySocketClosedError(code, reason)); }; const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); }; socket.on("message", onMessage); socket.once("close", onClose); }); }
-function socketFrame(socket: WebSocket, predicate: (frame: RelayFramePayload) => boolean) {
+function socketMessage(socket: WebSocket, predicate: (value: any) => boolean, timeoutMs: number) {
+  return new Promise<any>((resolve, reject) => {
+    let settled = false;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action();
+    };
+    const onMessage = (raw: WebSocket.RawData) => {
+      try {
+        const value = JSON.parse(raw.toString());
+        if (predicate(value)) finish(() => resolve(value));
+      } catch (error) {
+        finish(() => reject(error));
+      }
+    };
+    const onClose = (code: number, reason: Buffer) => finish(() => reject(relaySocketClosedError(code, reason)));
+    const timer = setTimeout(() => finish(() => reject(Object.assign(new Error("Cloud Relay attach timed out."), {
+      code: "RELAY_ATTACH_TIMEOUT",
+      retryable: true,
+    }))), timeoutMs);
+    unrefTimer(timer);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+    };
+    socket.on("message", onMessage);
+    socket.once("close", onClose);
+  });
+}
+function socketFrame(socket: WebSocket, predicate: (frame: RelayFramePayload) => boolean, timeoutMs: number) {
   return new Promise<RelayFramePayload>((resolve, reject) => {
+    let settled = false;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action();
+    };
     const onMessage = (raw: WebSocket.RawData, isBinary: boolean) => {
       try {
         if (!isBinary) throw relayError("RELAY_FRAME_ENCODING_INVALID");
         const frame = decodeRelayFrame(rawBytes(raw));
-        if (predicate(frame)) { cleanup(); resolve(frame); }
-      } catch (error) { cleanup(); reject(error); }
+        if (predicate(frame)) finish(() => resolve(frame));
+      } catch (error) { finish(() => reject(error)); }
     };
-    const onClose = (code: number, reason: Buffer) => { cleanup(); reject(relaySocketClosedError(code, reason)); };
-    const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); };
+    const onClose = (code: number, reason: Buffer) => finish(() => reject(relaySocketClosedError(code, reason)));
+    const timer = setTimeout(() => finish(() => reject(Object.assign(new Error("Cloud Relay encrypted handshake timed out."), {
+      code: "RELAY_HANDSHAKE_TIMEOUT",
+      retryable: true,
+    }))), timeoutMs);
+    unrefTimer(timer);
+    const cleanup = () => { clearTimeout(timer); socket.off("message", onMessage); socket.off("close", onClose); };
     socket.on("message", onMessage); socket.once("close", onClose);
   });
 }

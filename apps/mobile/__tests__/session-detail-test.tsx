@@ -878,10 +878,14 @@ test('workspace retries a failed authoritative turn timeline request', async () 
   const turnTimeline = jest.fn()
     .mockRejectedValueOnce(new Error('offline'))
     .mockResolvedValueOnce({
-      sessionId: completed.id,
-      turnId: 'turn-timeline-load',
-      items: [{ id: 'answer', turnId: 'turn-timeline-load', type: 'ai-message', text: 'Done' }],
-      generatedAt: session.updatedAt,
+      kind: 'updated',
+      revision: 'timeline-r1',
+      timeline: {
+        sessionId: completed.id,
+        turnId: 'turn-timeline-load',
+        items: [{ id: 'answer', turnId: 'turn-timeline-load', type: 'ai-message', text: 'Done' }],
+        generatedAt: session.updatedAt,
+      },
   });
   const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
   function Harness() {
@@ -955,10 +959,14 @@ test('workspace keeps an in-flight timeline request authoritative across Turn li
   await act(async () => completeTurn());
   await act(async () => {
     resolveTimeline({
-      sessionId: running.id,
-      turnId: running.turns![0].id,
-      items: [{ id: 'answer', turnId: running.turns![0].id, type: 'ai-message', text: 'Done' }],
-      generatedAt: completed.updatedAt,
+      kind: 'updated',
+      revision: 'timeline-lifecycle-r1',
+      timeline: {
+        sessionId: running.id,
+        turnId: running.turns![0].id,
+        items: [{ id: 'answer', turnId: running.turns![0].id, type: 'ai-message', text: 'Done' }],
+        generatedAt: completed.updatedAt,
+      },
     });
     await timelineRead;
   });
@@ -1001,9 +1009,13 @@ test('session-read capability loads a recovery snapshot while live items remain 
     ],
   });
   const timeline = jest.fn().mockResolvedValue({
-    sessionId: running.id,
-    items: [{ id: 'old-answer', turnId: 'provider-turn-old', type: 'ai-message', text: 'Old answer' }],
-    generatedAt: session.updatedAt,
+    kind: 'updated',
+    revision: 'timeline-session-read-r1',
+    timeline: {
+      sessionId: running.id,
+      items: [{ id: 'old-answer', turnId: 'provider-turn-old', type: 'ai-message', text: 'Old answer' }],
+      generatedAt: session.updatedAt,
+    },
   });
   const client = { aiSessions: { timeline } } as unknown as ControlPlaneClient;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
@@ -1030,10 +1042,14 @@ test('workspace loads the latest queued turn timeline to recover items emitted b
     turns: [{ ...session.turns![0], id: 'turn-timeline-queued', status: 'queued' }],
   });
   const turnTimeline = jest.fn().mockResolvedValue({
-    sessionId: queued.id,
-    turnId: 'turn-timeline-queued',
-    items: [{ id: 'queued-user', turnId: 'turn-timeline-queued', type: 'user-message', text: 'Queued prompt' }],
-    generatedAt: session.updatedAt,
+    kind: 'updated',
+    revision: 'timeline-queued-r1',
+    timeline: {
+      sessionId: queued.id,
+      turnId: 'turn-timeline-queued',
+      items: [{ id: 'queued-user', turnId: 'turn-timeline-queued', type: 'user-message', text: 'Queued prompt' }],
+      generatedAt: session.updatedAt,
+    },
   });
   const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
@@ -1051,6 +1067,242 @@ test('workspace loads the latest queued turn timeline to recover items emitted b
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-queued', 'instance-timeline-queued', queued.id, queued.turns![0]).status).toBe('ready'));
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-queued');
+});
+
+test('switching sessions and returning conditionally refreshes the cached timeline', async () => {
+  const controlPlaneId = 'cp-timeline-switch';
+  const instanceId = 'instance-timeline-switch';
+  const sessionA = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-switch-a',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-switch-a', status: 'completed' }],
+  });
+  const sessionB = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-switch-b',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-switch-b', status: 'completed' }],
+  });
+  const calls = new Map<string, number>();
+  const turnTimeline = jest.fn(async (_instanceId: string, sessionId: string, turnId: string, revision?: string) => {
+    const count = (calls.get(sessionId) || 0) + 1;
+    calls.set(sessionId, count);
+    const itemId = sessionId === sessionA.id && revision === 'timeline-a-r1' ? 'message-during-b' : `message-${count}`;
+    return {
+      kind: 'updated' as const,
+      revision: sessionId === sessionA.id ? `timeline-a-r${count}` : `timeline-b-r${count}`,
+      timeline: {
+        sessionId,
+        turnId,
+        items: [{ id: itemId, turnId, type: 'ai-message' as const, text: itemId }],
+        generatedAt: session.updatedAt,
+      },
+    };
+  });
+  const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
+  let selectSession!: (next: typeof sessionA) => void;
+  function Harness() {
+    const [current, select] = useReducer((_previous: typeof sessionA, next: typeof sessionA) => next, sessionA);
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    selectSession = select;
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, current.id, rerender), [current.id]);
+    const turn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [turn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
+  await act(async () => selectSession(sessionB));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
+  await act(async () => selectSession(sessionA));
+  await waitFor(() => expect(turnTimeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).items.map((item) => item.id)).toContain('message-during-b'));
+
+  const sessionACalls = turnTimeline.mock.calls.filter((call) => call[1] === sessionA.id);
+  expect(sessionACalls[0]).toHaveLength(3);
+  expect(sessionACalls[1]).toEqual([
+    instanceId,
+    sessionA.id,
+    sessionA.turns![0].id,
+    'timeline-a-r1',
+  ]);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
+test('returning to a mobile session applies only changed Timeline items from HTTP sync', async () => {
+  const controlPlaneId = 'cp-timeline-sync-switch';
+  const instanceId = 'instance-timeline-sync-switch';
+  const sessionA = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-sync-a',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-sync-a', providerTurnId: 'provider-turn-timeline-sync-a', status: 'completed' }],
+  });
+  const sessionB = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-sync-b',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-sync-b', providerTurnId: 'provider-turn-timeline-sync-b', status: 'completed' }],
+  });
+  const syncTurnTimeline = jest.fn(async (_instanceId: string, sessionId: string, _turnId: string, knownItems: Array<{ id: string; revision: string }>) => {
+    if (sessionId === sessionB.id) {
+      return {
+        kind: 'snapshot' as const,
+        revision: 'timeline-sync-b-r1',
+        items: [{
+          revision: 'timeline-sync-b-item-1',
+          item: { id: 'message-b1', turnId: 'provider-turn-timeline-sync-b', type: 'ai-message' as const, text: 'Session B' },
+        }],
+      };
+    }
+    if (!knownItems.length) {
+      return {
+        kind: 'snapshot' as const,
+        revision: 'timeline-sync-a-r1',
+        items: [{
+          revision: 'timeline-sync-a-item-1',
+          item: { id: 'message-a1', turnId: 'provider-turn-timeline-sync-a', type: 'ai-message' as const, text: 'Before switching' },
+        }],
+      };
+    }
+    return {
+      kind: 'delta' as const,
+      revision: 'timeline-sync-a-r2',
+      upserted: [{
+        revision: 'timeline-sync-a-item-2',
+        item: { id: 'message-a2', turnId: 'provider-turn-timeline-sync-a', type: 'ai-message' as const, text: 'During session B' },
+      }],
+      removed: [],
+    };
+  });
+  const client = { aiSessions: { syncTurnTimeline } } as unknown as ControlPlaneClient;
+  let selectSession!: (next: typeof sessionA) => void;
+  function Harness() {
+    const [current, select] = useReducer((_previous: typeof sessionA, next: typeof sessionA) => next, sessionA);
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    selectSession = select;
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, current.id, rerender), [current.id]);
+    const turn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      detailMode="conversation"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [turn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
+  const untouchedItem = mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).items[0];
+  await act(async () => selectSession(sessionB));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
+  await act(async () => selectSession(sessionA));
+  await waitFor(() => expect(syncTurnTimeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
+
+  const sessionACalls = syncTurnTimeline.mock.calls.filter((call) => call[1] === sessionA.id);
+  expect(sessionACalls[1]).toEqual([
+    instanceId,
+    sessionA.id,
+    sessionA.turns![0].id,
+    [{ id: 'message-a1', revision: 'timeline-sync-a-item-1' }],
+  ]);
+  const refreshed = mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]);
+  expect(refreshed.items.map((item) => item.id)).toEqual(['message-a1', 'message-a2']);
+  expect(refreshed.items[0]).toBe(untouchedItem);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
+test('session-read timelines recover content accumulated while another session was open', async () => {
+  const controlPlaneId = 'cp-session-read-switch';
+  const instanceId = 'instance-session-read-switch';
+  const sessionA = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-read-switch-a',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-session-read-switch-a', status: 'completed' }],
+  });
+  const sessionB = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-read-switch-b',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-session-read-switch-b', status: 'completed' }],
+  });
+  const calls = new Map<string, number>();
+  const timeline = jest.fn(async (_instanceId: string, sessionId: string, revision?: string) => {
+    const count = (calls.get(sessionId) || 0) + 1;
+    calls.set(sessionId, count);
+    const changed = sessionId === sessionA.id && revision === 'session-read-a-r1';
+    const turnId = sessionId === sessionA.id ? 'turn-session-read-switch-a' : 'turn-session-read-switch-b';
+    return {
+      kind: 'updated' as const,
+      revision: sessionId === sessionA.id
+        ? `session-read-a-r${changed ? 2 : 1}`
+        : `session-read-b-r${count}`,
+      timeline: {
+        sessionId,
+        providerSessionId: `provider-${sessionId}`,
+        items: [
+          { id: `message-${sessionId}-${count}`, turnId, type: 'ai-message' as const, text: 'Before switching' },
+          ...(changed ? [{ id: 'message-during-b', turnId, type: 'ai-message' as const, text: 'During session B' }] : []),
+        ],
+        generatedAt: session.updatedAt,
+      },
+    };
+  });
+  const client = { aiSessions: { timeline } } as unknown as ControlPlaneClient;
+  let selectSession!: (next: typeof sessionA) => void;
+  function Harness() {
+    const [current, select] = useReducer((_previous: typeof sessionA, next: typeof sessionA) => next, sessionA);
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    selectSession = select;
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, current.id, rerender), [current.id]);
+    const turn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      detailMode="conversation"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [turn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
+  await act(async () => selectSession(sessionB));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
+  await act(async () => selectSession(sessionA));
+  await waitFor(() => expect(timeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).items.map((item) => item.id)).toContain('message-during-b'));
+
+  const sessionACalls = timeline.mock.calls.filter((call) => call[1] === sessionA.id);
+  expect(sessionACalls[0]).toHaveLength(2);
+  expect(sessionACalls[1]).toEqual([instanceId, sessionA.id, 'session-read-a-r1']);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
 test('safe markdown normalizes protocol text and rejects executable schemes', () => {

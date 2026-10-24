@@ -31,6 +31,22 @@ import { isStoryDecisionResumePending, pendingStoryDecisionsForSession, type Sto
 
 export const OFFLINE_NOTICE_DELAY_MS = 2_000;
 
+const timelineSyncUnsupportedInstances = new Set<string>();
+
+function timelineSyncKey(controlPlaneId: string, instanceId: string) {
+  return JSON.stringify([controlPlaneId, instanceId]);
+}
+
+function missingTimelineSyncRoute(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown };
+  const status = candidate.statusCode ?? candidate.status;
+  return status === 404
+    || status === 405
+    || candidate.code === 'HTTP_404'
+    || candidate.code === 'ROUTE_NOT_FOUND';
+}
+
 export function SessionWorkspace({
   controlPlaneId,
   instanceId,
@@ -181,6 +197,7 @@ export function SessionWorkspace({
   const supportsLiveTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'live-items') : false;
   const timelineRecoveryRevision = mobileAiSessionStore.timelineRecoveryRevision(controlPlaneId);
   const timelineLoadInputs = useRef({ session, timelines });
+  const timelineRefreshScope = useRef<string | undefined>(undefined);
   useEffect(() => actions?.subscribe(() => rerender((value) => value + 1)), [actions]);
   useEffect(() => {
     let live = true;
@@ -300,11 +317,14 @@ export function SessionWorkspace({
     const timelineSession = timelineLoadInputs.current.session;
     const timelineStates = timelineLoadInputs.current.timelines;
     if (!client || !timelineSession || (!supportsTurnTimeline && !supportsSessionTimeline)) return;
+    const refreshScope = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, timelineRecoveryRevision]);
+    const resumed = timelineRefreshScope.current !== refreshScope;
+    timelineRefreshScope.current = refreshScope;
     const turns = aiSessionDisplayTurns(timelineSession);
     const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
     const loadableTurns = visibleTurns.filter((turn) => {
       const state = timelineStates[turn.id];
-      if (state?.status && !['idle', 'stale'].includes(state.status)) return false;
+      if (state?.status && !['idle', 'stale'].includes(state.status) && !(resumed && state.status === 'ready')) return false;
       return true;
     });
     if (!loadableTurns.length) return;
@@ -314,9 +334,34 @@ export function SessionWorkspace({
         const requestToken = Symbol(requestKey);
         timelineRequests.current.set(requestKey, requestToken);
         mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
-        void client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id).then((timeline) => {
-          if (timelineRequests.current.get(requestKey) === requestToken) {
-            mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+        const revision = timelineStates[turn.id]?.revision;
+        const syncKey = timelineSyncKey(controlPlaneId, instanceId);
+        const knownItems = mobileAiSessionStore.turnTimelineSyncItems(controlPlaneId, instanceId, timelineSession.id, turn);
+        const syncSupported = !timelineSyncUnsupportedInstances.has(syncKey) && Boolean(client.aiSessions.syncTurnTimeline);
+        const request = syncSupported
+          ? client.aiSessions.syncTurnTimeline(instanceId, timelineSession.id, turn.id, knownItems).catch((cause) => {
+            if (!missingTimelineSyncRoute(cause)) throw cause;
+            timelineSyncUnsupportedInstances.add(syncKey);
+            return client.aiSessions.turnTimeline(
+              instanceId,
+              timelineSession.id,
+              turn.id,
+              revision,
+            );
+          })
+          : revision
+            ? client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id, revision)
+            : client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id);
+        void request.then((read) => {
+          if (timelineRequests.current.get(requestKey) !== requestToken) return;
+          if (read.kind === 'not-modified') {
+            mobileAiSessionStore.resolveTurnTimelineNotModified(controlPlaneId, instanceId, timelineSession.id, turn, read.revision);
+          } else if (read.kind === 'snapshot') {
+            mobileAiSessionStore.resolveTurnTimelineSyncSnapshot(controlPlaneId, instanceId, timelineSession.id, turn, read.items, read.revision);
+          } else if (read.kind === 'delta') {
+            mobileAiSessionStore.applyTurnTimelineSyncDelta(controlPlaneId, instanceId, timelineSession.id, turn, read);
+          } else {
+            mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, read.timeline.items, read.revision);
           }
         }).catch((cause) => {
           if (timelineRequests.current.get(requestKey) === requestToken) {
@@ -330,12 +375,32 @@ export function SessionWorkspace({
       const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, '']);
       const requestToken = Symbol(requestKey);
       timelineRequests.current.set(requestKey, requestToken);
-      for (const turn of turns) mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
-      void client.aiSessions.timeline(instanceId, timelineSession.id).then((timeline) => {
+      const sessionRevision = mobileAiSessionStore.timelineSessionRevision(controlPlaneId, instanceId, timelineSession.id);
+      const revision = sessionRevision && turns.every((turn) => timelineStates[turn.id]?.revision === sessionRevision)
+        ? sessionRevision
+        : undefined;
+      const syncKey = timelineSyncKey(controlPlaneId, instanceId);
+      const knownItems = mobileAiSessionStore.timelineSyncItems(controlPlaneId, instanceId, timelineSession.id, turns);
+      const syncSupported = !timelineSyncUnsupportedInstances.has(syncKey) && Boolean(client.aiSessions.syncTimeline);
+      const request = syncSupported
+        ? client.aiSessions.syncTimeline(instanceId, timelineSession.id, knownItems).catch((cause) => {
+          if (!missingTimelineSyncRoute(cause)) throw cause;
+          timelineSyncUnsupportedInstances.add(syncKey);
+          return client.aiSessions.timeline(instanceId, timelineSession.id, revision);
+        })
+        : revision
+          ? client.aiSessions.timeline(instanceId, timelineSession.id, revision)
+          : client.aiSessions.timeline(instanceId, timelineSession.id);
+      void request.then((read) => {
         if (timelineRequests.current.get(requestKey) !== requestToken) return;
-        for (const turn of turns) {
-          const identities = new Set([turn.id, turn.providerTurnId].filter(Boolean));
-          mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items.filter((item) => identities.has(item.turnId)));
+        if (read.kind === 'not-modified') {
+          mobileAiSessionStore.resolveSessionTimelineNotModified(controlPlaneId, instanceId, timelineSession.id, read.revision);
+        } else if (read.kind === 'snapshot') {
+          mobileAiSessionStore.resolveSessionTimelineSyncSnapshot(controlPlaneId, instanceId, timelineSession.id, turns, read.items, read.revision);
+        } else if (read.kind === 'delta') {
+          mobileAiSessionStore.applySessionTimelineSyncDelta(controlPlaneId, instanceId, timelineSession.id, turns, read);
+        } else {
+          mobileAiSessionStore.resolveSessionTimeline(controlPlaneId, instanceId, timelineSession.id, turns, read.timeline.items, read.revision);
         }
       }).catch((cause) => {
         if (timelineRequests.current.get(requestKey) !== requestToken) return;

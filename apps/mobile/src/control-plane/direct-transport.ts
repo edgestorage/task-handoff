@@ -466,16 +466,14 @@ function aggregateTransientDemand(subscribers: Iterable<MobileControlPlaneEventH
   const timelineSessions = new Map<string, { instanceId: string; sessionId: string }>();
   let allInstances = false;
   let timelineAllSessions = false;
-  let replaySince: string | undefined;
   for (const entry of selected) {
     const demand = entry.aiSessionTransient!;
     allInstances ||= demand.messageDeltas.allInstances;
     timelineAllSessions ||= demand.timelineAllSessions;
     for (const id of demand.messageDeltas.instanceIds) instanceIds.add(id);
     for (const session of demand.timelineSessions) timelineSessions.set(`${session.instanceId}\0${session.sessionId}`, session);
-    if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
   }
-  return { ...(replaySince ? { replaySince } : {}), messageDeltas: { allInstances, instanceIds: [...instanceIds] }, timelineAllSessions, timelineSessions: [...timelineSessions.values()] };
+  return { messageDeltas: { allInstances, instanceIds: [...instanceIds] }, timelineAllSessions, timelineSessions: [...timelineSessions.values()] };
 }
 
 async function parseJson(response: Response) {

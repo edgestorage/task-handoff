@@ -8,6 +8,7 @@ import {
   GitProvisioningTerminalEventType,
   GitProvisioningTerminalFinishedSchema,
   GitProvisioningTerminalOutputSchema,
+  InstanceResourceMetricsEventType,
   controlledInstanceAcceptsTraffic,
   instanceLifecycleHeartbeat,
   instanceLifecycleSignalKey,
@@ -77,6 +78,12 @@ function splitTerminalReplay(data: string, maxLength = 60_000) {
   return chunks;
 }
 
+function parseMetricInstanceScope(value: unknown): { success: true; data: Set<string> | undefined } | { success: false } {
+  if (value === undefined) return { success: true, data: undefined };
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return { success: false };
+  return { success: true, data: new Set(value.map((entry) => entry.trim()).filter(Boolean)) };
+}
+
 function bufferedByteCount(value: unknown) {
   const bytes = Number(value);
   return Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0;
@@ -87,6 +94,13 @@ const AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES = 256 * 1024;
 const AI_SESSION_AUTHORITY_MAX_EVENT_BYTES = 4 * 1024 * 1024;
 const AI_SESSION_AUTHORITY_FLUSH_RETRY_MS = 25;
 const EVENT_TRANSPORT_RECOVERY_NOTICE_MS = 5 * 60 * 1000;
+/**
+ * A controlled instance reports every 10 seconds, but the directory only needs a
+ * fresh liveness clock well inside its 30-second offline threshold. Forwarding
+ * every report to a remote Control Plane doubles an always-on stream for no
+ * observable state change.
+ */
+const DEFAULT_LIFECYCLE_HEARTBEAT_INTERVAL_MS = 20_000;
 
 type EventTransportCongestionIncident = {
   congestedSince: string;
@@ -104,6 +118,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
   private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
+  private readonly outputMetricInstanceIds = new Map<WebSocket, Set<string> | undefined>();
   private readonly outputEnvelopeVersions = new Map<WebSocket, 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION>();
   private readonly outputHierarchy = new Map<WebSocket, AiSessionHierarchyCapabilities>();
   private readonly outputDiagnostics = new Map<WebSocket, EventOutputDiagnostic>();
@@ -120,10 +135,13 @@ export class NodeAgentInstanceEventForwarder {
   // republishes every observation, and an observation that only moves the timestamps
   // must not repeat the provisioning/workspace/runtime payload consumers already hold.
   private readonly lifecycleSignalKeyByInstance = new Map<string, string>();
+  private readonly lifecycleHeartbeatPublishedAt = new Map<string, number>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
   private readonly logger?: Logger;
   private readonly safetyIntervalMs: number;
+  private readonly lifecycleHeartbeatIntervalMs: number;
+  private readonly now: () => number;
   private readonly lastAiSessionEventByInstance = new Map<string, { streamId?: string; revision?: number }>();
   private readonly lastAppSessionEventByInstance = new Map<string, { streamId?: string; revision?: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -138,11 +156,15 @@ export class NodeAgentInstanceEventForwarder {
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly clearTimeoutFn: typeof clearTimeout;
 
-  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval; setTimeoutFn?: typeof setTimeout; clearTimeoutFn?: typeof clearTimeout } = {}) {
+  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; lifecycleHeartbeatIntervalMs?: number; now?: () => number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval; setTimeoutFn?: typeof setTimeout; clearTimeoutFn?: typeof clearTimeout } = {}) {
     this.state = state;
     this.token = token;
     this.logger = options.logger;
     this.safetyIntervalMs = eventConnectionSafetyIntervalMs(options.safetyIntervalMs);
+    this.lifecycleHeartbeatIntervalMs = options.lifecycleHeartbeatIntervalMs !== undefined && Number.isFinite(options.lifecycleHeartbeatIntervalMs) && options.lifecycleHeartbeatIntervalMs >= 0
+      ? options.lifecycleHeartbeatIntervalMs
+      : DEFAULT_LIFECYCLE_HEARTBEAT_INTERVAL_MS;
+    this.now = options.now || Date.now;
     this.createSocket = options.createSocket || ((url, socketOptions) => new WebSocket(url, socketOptions));
     this.setIntervalFn = options.setIntervalFn || setInterval;
     this.clearIntervalFn = options.clearIntervalFn || clearInterval;
@@ -174,6 +196,7 @@ export class NodeAgentInstanceEventForwarder {
     this.retries.clear();
     this.outputs.clear();
     this.outputSubscriptions.clear();
+    this.outputMetricInstanceIds.clear();
     this.outputEnvelopeVersions.clear();
     this.outputHierarchy.clear();
     this.outputDiagnostics.clear();
@@ -185,6 +208,7 @@ export class NodeAgentInstanceEventForwarder {
     this.sessionStreamsHelloByInstance.clear();
     this.sessionAuthorityReplayedOutputs.clear();
     this.lifecycleSignalKeyByInstance.clear();
+    this.lifecycleHeartbeatPublishedAt.clear();
   }
 
   addOutput(socket: WebSocket, options: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number } = {}) {
@@ -199,6 +223,7 @@ export class NodeAgentInstanceEventForwarder {
     });
     // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
     this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
+    this.outputMetricInstanceIds.set(socket, undefined);
     this.outputEnvelopeVersions.set(socket, 1);
     // Compatibility for v0.0.28: an unnegotiated control-plane consumes a flat Session stream.
     this.outputHierarchy.set(socket, AiSessionHierarchyCapabilitiesSchema.parse(undefined));
@@ -218,6 +243,7 @@ export class NodeAgentInstanceEventForwarder {
       removed = true;
       this.outputs.delete(socket);
       this.outputSubscriptions.delete(socket);
+      this.outputMetricInstanceIds.delete(socket);
       this.outputEnvelopeVersions.delete(socket);
       this.outputHierarchy.delete(socket);
       this.outputDiagnostics.delete(socket);
@@ -273,14 +299,16 @@ export class NodeAgentInstanceEventForwarder {
     return remove;
   }
 
-  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown) {
+  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown, metricInstanceIds?: unknown) {
     if (!this.outputs.has(socket)) return false;
     const parsed = AiSessionTransientSubscriptionSchema.safeParse(input);
     const parsedHierarchy = AiSessionHierarchyCapabilitiesSchema.safeParse(aiSessionHierarchy);
-    if (!parsed.success || !parsedHierarchy.success) return false;
+    const parsedMetricInstanceIds = parseMetricInstanceScope(metricInstanceIds);
+    if (!parsed.success || !parsedHierarchy.success || !parsedMetricInstanceIds.success) return false;
     this.outputSubscriptions.set(socket, parsed.data);
     this.outputEnvelopeVersions.set(socket, eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? COMPACT_EVENT_ENVELOPE_VERSION : 1);
     this.outputHierarchy.set(socket, parsedHierarchy.data);
+    this.outputMetricInstanceIds.set(socket, parsedMetricInstanceIds.data);
     // Receiving the current subscription cancels the compatibility hold-open
     // and is the authority to establish controlled-instance inputs.
     this.replaySessionAuthority(socket);
@@ -342,8 +370,12 @@ export class NodeAgentInstanceEventForwarder {
     const snapshot = instanceLifecycleSnapshot(instance);
     const signalKey = instanceLifecycleSignalKey(snapshot);
     const previousSignalKey = this.lifecycleSignalKeyByInstance.get(instance.id);
+    const changed = previousSignalKey !== signalKey;
+    const now = this.now();
     this.lifecycleSignalKeyByInstance.set(instance.id, signalKey);
-    if (previousSignalKey === signalKey) {
+    if (!changed) {
+      const publishedAt = this.lifecycleHeartbeatPublishedAt.get(instance.id);
+      if (publishedAt !== undefined && now - publishedAt < this.lifecycleHeartbeatIntervalMs) return;
       this.publish(
         InstanceLifecycleEventType.Heartbeat,
         instanceLifecycleHeartbeat(snapshot),
@@ -356,6 +388,7 @@ export class NodeAgentInstanceEventForwarder {
         { instanceId: instance.id },
       );
     }
+    this.lifecycleHeartbeatPublishedAt.set(instance.id, now);
     const terminal = this.imagePullTerminalByInstance.get(instance.id);
     if (instance.imageProvisioning?.phase === "ready" && terminal?.finished?.outcome === "succeeded") {
       this.imagePullTerminalByInstance.delete(instance.id);
@@ -381,6 +414,7 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sendForwarded(output: WebSocket, event: EventEnvelope) {
+    if (!this.outputAcceptsEvent(output, event)) return false;
     const authorityEvent = parseAiSessionAuthorityEvent(event);
     const projectedAuthorityEvent = authorityEvent
       ? projectAiSessionStreamEventForConsumer(authorityEvent, this.outputHierarchy.get(output))
@@ -402,6 +436,14 @@ export class NodeAgentInstanceEventForwarder {
       : outputEvent;
     const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event: wireEvent });
     this.sendOutput(output, encoded, outputEvent);
+  }
+
+  private outputAcceptsEvent(output: WebSocket, event: EventEnvelope) {
+    if (event.type !== InstanceResourceMetricsEventType.Snapshot) return true;
+    const metricInstanceIds = this.outputMetricInstanceIds.get(output);
+    if (metricInstanceIds === undefined) return true;
+    const instanceId = event.scope?.instanceId;
+    return typeof instanceId === "string" && metricInstanceIds.has(instanceId);
   }
 
   private sendOutput(output: WebSocket, encoded: string, event?: ForwardedInstanceEvent) {

@@ -16,6 +16,7 @@ import {
   nodeRelaySessionError,
   type NodeRelayFrameSocket,
 } from "../../shared/cloud-relay/node-relay-session.ts";
+import type { NodeRelayTraceRecorder } from "../cloud-connectivity/node-relay-trace.ts";
 
 /**
  * A ws-like socket whose frames ride one multiplexed relay node channel. The
@@ -199,15 +200,21 @@ class CloudRelayNodeChannel {
   private readonly session: EncryptedNodeRelayChannel;
   private readonly ingress: NodeTunnelIngress;
   private readonly nodeId: string;
+  private readonly trace?: NodeRelayTraceRecorder;
+  private readonly nodeHandle?: string;
+  private readonly relayChannelId?: string;
   private readonly aux = new Map<string, MultiplexedNodeRelaySocket>();
   private readonly auxByStreamId = new Map<number, MultiplexedNodeRelaySocket>();
   private readonly onClosed: (reason: string) => void;
   private closed = false;
 
-  constructor(options: { nodeId: string; socket: NodeRelayFrameSocket; key: Uint8Array; ingress: NodeTunnelIngress; onClosed(reason: string): void }) {
+  constructor(options: { nodeId: string; socket: NodeRelayFrameSocket; key: Uint8Array; ingress: NodeTunnelIngress; onClosed(reason: string): void; trace?: NodeRelayTraceRecorder; nodeHandle?: string; relayChannelId?: string }) {
     this.nodeId = options.nodeId;
     this.ingress = options.ingress;
     this.onClosed = options.onClosed;
+    this.trace = options.trace;
+    this.nodeHandle = options.nodeHandle;
+    this.relayChannelId = options.relayChannelId;
     this.mainSocket = new MultiplexedNodeRelaySocket(this, "main", NODE_RELAY_MAIN_STREAM_ID);
     this.session = new EncryptedNodeRelayChannel({
       socket: options.socket,
@@ -217,6 +224,13 @@ class CloudRelayNodeChannel {
       onMessage: (message) => this.handleMessage(message),
       onData: (frame) => this.handleData(frame),
       onClosed: (reason) => this.finish(reason),
+      onTrace: (event) => this.trace?.record({
+        channelId: this.relayChannelId ?? this.nodeId,
+        nodeId: this.nodeId,
+        ...(this.nodeHandle ? { nodeHandle: this.nodeHandle } : {}),
+        ...(this.relayChannelId ? { relayChannelId: this.relayChannelId } : {}),
+        ...event,
+      }),
     });
   }
 
@@ -374,14 +388,16 @@ class CloudRelayNodeChannel {
 export class CloudRelayNodeAgentTransport implements NodeAgentTransport {
   private readonly tunnel: ControlPlaneNodeAgentTunnelTransport;
   private readonly ingress: NodeTunnelIngress;
+  private readonly trace?: NodeRelayTraceRecorder;
   private readonly channels = new Map<string, CloudRelayNodeChannel>();
 
-  constructor(options: { tunnel: ControlPlaneNodeAgentTunnelTransport; onIdentified?: (nodeId: string) => void | Promise<void> }) {
+  constructor(options: { tunnel: ControlPlaneNodeAgentTunnelTransport; onIdentified?: (nodeId: string) => void | Promise<void>; trace?: NodeRelayTraceRecorder }) {
     this.tunnel = options.tunnel;
     this.ingress = new NodeTunnelIngress(options.tunnel, { onIdentified: options.onIdentified });
+    this.trace = options.trace;
   }
 
-  attachNode(nodeId: string, input: { socket: NodeRelayFrameSocket; key: Uint8Array; onClosed?(reason: string): void }) {
+  attachNode(nodeId: string, input: { socket: NodeRelayFrameSocket; key: Uint8Array; onClosed?(reason: string): void; nodeHandle?: string; relayChannelId?: string }) {
     const existing = this.channels.get(nodeId);
     existing?.close("replaced-by-new-channel");
     const channel = new CloudRelayNodeChannel({
@@ -389,6 +405,9 @@ export class CloudRelayNodeAgentTransport implements NodeAgentTransport {
       socket: input.socket,
       key: input.key,
       ingress: this.ingress,
+      trace: this.trace,
+      nodeHandle: input.nodeHandle,
+      relayChannelId: input.relayChannelId,
       onClosed: (reason) => {
         if (this.channels.get(nodeId) === channel) this.channels.delete(nodeId);
         this.tunnel.disconnect(nodeId, `Cloud relay channel closed: ${reason}`);

@@ -16,7 +16,7 @@ export type ReverseTunnelHost = {
   }): Promise<NodeAgentInjectResponse>;
   nodeAgentEventForwarder?: {
     addOutput(socket: NodeTunnelSessionSocket, options?: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number }): () => void;
-    setOutputSubscription?(socket: NodeTunnelSessionSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown): boolean;
+    setOutputSubscription?(socket: NodeTunnelSessionSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown, metricInstanceIds?: unknown): boolean;
   };
   nodeAgentState?: {
     currentListenerPort: number;

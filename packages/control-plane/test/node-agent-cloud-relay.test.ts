@@ -50,10 +50,14 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
   relayProbeFetch?: typeof fetch;
   cloudDiscovery?: CloudDiscovery;
   discoveryCachePath?: string;
+  cloudRelayAttachTimeoutMs?: number;
+  relaySocketCloseDelayMs?: number;
+  relayAttach?: (input: { controlPlaneId: string; allocationId: string; attempt: number }) => boolean;
 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-cloud-relay-"));
   const planes = new Map<string, PlaneState>();
-  const connections: Array<{ controlPlaneId: string; url: string }> = [];
+  const connections: Array<{ controlPlaneId: string; url: string; allocationId: string; attempt: number }> = [];
+  let attachmentSequence = 0;
   const app = await createNodeAgentApp({
     dataDir,
     nodeId: "node_cloud_relay",
@@ -63,7 +67,9 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
     ...(options.relayProbeFetch ? { relayProbeFetch: options.relayProbeFetch } : {}),
     ...(options.cloudDiscovery ? { cloudDiscovery: options.cloudDiscovery } : {}),
     ...(options.discoveryCachePath ? { discoveryCachePath: options.discoveryCachePath } : {}),
+    ...(options.cloudRelayAttachTimeoutMs ? { cloudRelayAttachTimeoutMs: options.cloudRelayAttachTimeoutMs } : {}),
     webSocket: fakeRelayWebSocket({
+      ...(options.relaySocketCloseDelayMs ? { closeDelayMs: options.relaySocketCloseDelayMs } : {}),
       onConnection(peer, url) {
         // The Relay routes by the attach capability; the test relay reads the
         // capability to learn which Control Plane dialed before handing the
@@ -89,7 +95,10 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
             peer.close(4404, "no-allocation");
             return;
           }
-          connections.push({ controlPlaneId, url });
+          const allocationId = String(value.capability?.allocationId ?? allocation.allocationId);
+          const attempt = ++attachmentSequence;
+          connections.push({ controlPlaneId, url, allocationId, attempt });
+          if (options.relayAttach && !options.relayAttach({ controlPlaneId, allocationId, attempt })) return;
           // A real Relay answers asynchronously; the node registers the
           // "attached" listener right after sending the attach frame.
           queueMicrotask(() => {
@@ -318,6 +327,109 @@ test("a claiming Control Plane gets a paired channel, tunnel requests round-trip
   assert.deepEqual(identityService.cloudRelayBinding()?.pairedControlPlaneIds, [controlPlaneId]);
   const reconnected = await second!.request("/health");
   assert.equal(reconnected.status, 200);
+});
+
+test("a stalled relay attach times out and reconnects with a fresh allocation", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  let acceptAttachments = false;
+  const { app, relay, planeFor, connect, localHeaders, connections } = await cloudRelayFixture(t, stub, {
+    cloudRelayAttachTimeoutMs: 100,
+    relayAttach: () => acceptAttachments,
+  });
+  const controlPlaneId = "control_plane_attach_timeout";
+  planeFor(controlPlaneId);
+  await bind(app, stub);
+  relay.pollNow();
+
+  const failed = await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    const channel = snapshot.channels.find((item: any) => item.controlPlaneId === controlPlaneId);
+    return channel?.status === "failed" && /timed out/i.test(channel.error ?? "") ? snapshot : undefined;
+  }, "the stalled attach to time out");
+  assert.equal(failed.channels[0].status, "failed");
+
+  acceptAttachments = true;
+  relay.pollNow();
+  const peer = await connect(controlPlaneId);
+  assert.equal((await peer.request("/health")).status, 200);
+  const recovered = await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    const channel = snapshot.channels.find((item: any) => item.controlPlaneId === controlPlaneId);
+    return channel?.status === "connected" ? snapshot : undefined;
+  }, "the attach timeout to refresh the allocation and recover");
+  assert.equal(recovered.channels[0].error, undefined);
+  assert.ok(connections.length >= 2);
+  assert.notEqual(connections[connections.length - 1].allocationId, connections[0].allocationId);
+  assert.ok(stub.state.allocationRequests.some((request) =>
+    request.refreshControlPlaneIds?.includes(controlPlaneId)), "the timeout must request a fresh attach capability");
+});
+
+test("a stale allocation returned after refresh is never attached a second time", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  stub.setIgnoreRefresh(true);
+  let acceptAttachments = false;
+  const { app, relay, planeFor, connect, localHeaders, connections } = await cloudRelayFixture(t, stub, {
+    cloudRelayAttachTimeoutMs: 60,
+    relayAttach: () => acceptAttachments,
+  });
+  const controlPlaneId = "control_plane_stale_refresh";
+  planeFor(controlPlaneId);
+  await bind(app, stub);
+  relay.pollNow();
+
+  await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    const channel = snapshot.channels.find((item: any) => item.controlPlaneId === controlPlaneId);
+    return channel?.status === "failed" ? snapshot : undefined;
+  }, "the stalled attach to fail before the refresh");
+  assert.equal(connections.length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(connections.length, 1, "the consumed allocation must not be dialed again while it is still cached");
+  assert.ok(stub.state.allocationRequests.some((request) =>
+    request.refreshControlPlaneIds?.includes(controlPlaneId)), "the failed attach must keep requesting a fresh allocation");
+
+  acceptAttachments = true;
+  stub.setIgnoreRefresh(false);
+  relay.pollNow();
+  const peer = await connect(controlPlaneId);
+  assert.equal((await peer.request("/health")).status, 200);
+  await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    const channel = snapshot.channels.find((item: any) => item.controlPlaneId === controlPlaneId);
+    return channel?.status === "connected" ? snapshot : undefined;
+  }, "the node to recover once the Coordinator issues a new allocation");
+  assert.ok(connections.length >= 2);
+  assert.notEqual(connections[connections.length - 1].allocationId, connections[0].allocationId);
+});
+
+test("a new allocation supersedes a stalled attach before the old socket closes", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  let attachments = 0;
+  const { app, relay, planeFor, connect, localHeaders, connections } = await cloudRelayFixture(t, stub, {
+    cloudRelayAttachTimeoutMs: 5_000,
+    relaySocketCloseDelayMs: 1_000,
+    relayAttach: () => ++attachments > 1,
+  });
+  const controlPlaneId = "control_plane_attach_superseded";
+  planeFor(controlPlaneId);
+  await bind(app, stub);
+  relay.pollNow();
+  await waitFor(() => connections.length === 1 ? connections[0] : undefined, "the first attach to stall");
+  const firstAllocationId = connections[0].allocationId;
+
+  stub.invalidateAllocation(controlPlaneId);
+  relay.pollNow();
+  const second = await waitFor(() => connections.length >= 2 ? connections[1] : undefined,
+    "the new allocation to attach without waiting for the old socket close", 700);
+  assert.notEqual(second.allocationId, firstAllocationId);
+
+  const peer = await connect(controlPlaneId);
+  assert.equal((await peer.request("/health")).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+  const channel = snapshot.channels.find((item: any) => item.controlPlaneId === controlPlaneId);
+  assert.equal(channel?.status, "connected", "the superseded attempt must not overwrite the recovered channel");
+  assert.equal(channel?.error, undefined);
 });
 
 test("two Control Planes claim one node and run independent channels", async (t) => {

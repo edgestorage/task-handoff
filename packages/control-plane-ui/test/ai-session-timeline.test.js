@@ -1,11 +1,45 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import ts from "typescript";
+import * as vue from "vue";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd, turnElapsedSeconds } from "../src/components/ai-session/timelineActivities.ts";
 import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessionTimelineStore.ts";
 
 const panelUrl = new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url);
+const presentationSource = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionTimelinePresentation.ts", import.meta.url), "utf8");
+
+function loadTimelinePresentation(readTimeline, readTurnTimeline, syncTimeline, syncTurnTimeline) {
+  const compiled = ts.transpileModule(presentationSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  const modules = {
+    vue,
+    "vue-i18n": { useI18n: () => ({ t: (key) => key }) },
+    "@task-handoff/protocol/control-plane": { supportsAiSessionTimelineCapability },
+    "../../api/queries": {
+      getAiSessionTimeline: readTimeline,
+      getAiSessionTurnTimeline: readTurnTimeline,
+      syncAiSessionTimeline: syncTimeline,
+      syncAiSessionTurnTimeline: syncTurnTimeline,
+    },
+    "../../i18n/apiError": { translateApiError: (error) => error instanceof Error ? error.message : String(error) },
+    "../../components/ai-session/timelineActivities": { compactTimelineForTurn },
+    "./useInstanceSessions": { aiSessionTurns: (session) => session?.turns || [] },
+    "./useAiSessionTimelineStore": { useAiSessionTimelineStore },
+  };
+  new Function("require", "exports", "module", compiled)((name) => {
+    if (name in modules) return modules[name];
+    throw new Error(`Unexpected Timeline presentation import: ${name}`);
+  }, module.exports, module);
+  return module.exports.useAiSessionTimelinePresentation;
+}
 
 test("live Timeline store replaces item lifecycle updates in place", () => {
   const store = useAiSessionTimelineStore();
@@ -117,6 +151,300 @@ test("turn Timeline cache merges authoritative snapshots with live item upserts"
       output: "ok",
     }],
   });
+});
+
+test("turn Timeline delta derives a tail append without the full order payload", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-turn-delta-order";
+  const sessionId = "session-turn-delta-order";
+  const turn = { id: "turn-delta-order", providerTurnId: "provider-turn-delta-order" };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, turn, [
+    { id: "message-1", turnId: "provider-turn-delta-order", type: "ai-message", text: "One" },
+    { id: "message-2", turnId: "provider-turn-delta-order", type: "ai-message", text: "Two" },
+  ], "timeline-turn-r1");
+
+  store.applyTurnSyncDelta(instanceId, sessionId, turn, {
+    kind: "delta",
+    revision: "timeline-turn-r2",
+    upserted: [{
+      revision: "revision-message-3",
+      item: { id: "message-3", turnId: "provider-turn-delta-order", type: "ai-message", text: "Three" },
+    }],
+    removed: ["message-1"],
+  });
+
+  assert.deepEqual(
+    store.turnState(instanceId, sessionId, turn).items.map((item) => item.id),
+    ["message-2", "message-3"],
+  );
+  store.cleanupInstance(instanceId);
+});
+
+test("not-modified Timeline reads preserve cached items and keep the revision", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-not-modified";
+  const sessionId = "session-not-modified";
+  const turn = { id: "turn-not-modified", revision: 1 };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, turn, [{
+    id: "command-not-modified",
+    turnId: turn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "completed",
+  }], "timeline-r1");
+  store.recoverConnection();
+  assert.equal(store.turnState(instanceId, sessionId, turn).status, "stale");
+
+  store.resolveTurnNotModified(instanceId, sessionId, turn, "timeline-r1");
+  const state = store.turnState(instanceId, sessionId, turn);
+  assert.equal(state.status, "ready");
+  assert.equal(state.revision, "timeline-r1");
+  assert.deepEqual(state.items.map((item) => item.id), ["command-not-modified"]);
+
+  store.resolveTurn(instanceId, sessionId, turn, [{
+    id: "command-after-resume",
+    turnId: turn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "After resume",
+    status: "completed",
+  }], "timeline-r2");
+  assert.equal(store.turnState(instanceId, sessionId, turn).revision, "timeline-r2");
+  store.cleanupInstance(instanceId);
+});
+
+test("returning to a session refreshes its cached Timeline through the HTTP revision read", async () => {
+  const timelineStore = useAiSessionTimelineStore();
+  const instanceId = "instance-session-switch";
+  const instance = {
+    id: instanceId,
+    capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: [],
+      liveItemAgents: [],
+    } } },
+  };
+  const turns = [{ id: "turn-a", providerTurnId: "provider-turn-a", revision: 1 }];
+  const sessionA = { id: "session-a", agent: "codex", turns };
+  const sessionB = { id: "session-b", agent: "codex", turns: [{ id: "turn-b", providerTurnId: "provider-turn-b", revision: 1 }] };
+  const currentSession = vue.ref(sessionA);
+  const reads = [];
+  const useAiSessionTimelinePresentation = loadTimelinePresentation(async (_instanceId, sessionId, revision) => {
+    reads.push({ sessionId, revision });
+    if (sessionId === "session-b") {
+      return {
+        kind: "updated",
+        revision: "revision-b1",
+        timeline: {
+          sessionId,
+          providerSessionId: "provider-session-b",
+          items: [{ id: "message-b", turnId: "provider-turn-b", type: "ai-message", text: "Session B" }],
+          generatedAt: "2026-10-24T00:00:00.000Z",
+        },
+      };
+    }
+    const changed = revision === "revision-a1";
+    return {
+      kind: "updated",
+      revision: changed ? "revision-a2" : "revision-a1",
+      timeline: {
+        sessionId,
+        providerSessionId: "provider-session-a",
+        items: [
+          { id: "message-a1", turnId: "provider-turn-a", type: "ai-message", text: "Before switching" },
+          ...(changed ? [{ id: "message-a2", turnId: "provider-turn-a", type: "ai-message", text: "During session B" }] : []),
+        ],
+        generatedAt: "2026-10-24T00:00:00.000Z",
+      },
+    };
+  }, async () => { throw new Error("Turn Timeline reads are not expected"); });
+
+  timelineStore.cleanupInstance(instanceId);
+  const scope = vue.effectScope();
+  let presentation;
+  scope.run(() => {
+    presentation = useAiSessionTimelinePresentation({
+      instance: () => instance,
+      promptIndex: () => 0,
+      session: currentSession,
+    });
+  });
+
+  try {
+    await presentation.loadFullTimeline(sessionA);
+    assert.deepEqual(reads, [{ sessionId: "session-a", revision: undefined }]);
+
+    currentSession.value = sessionB;
+    await vue.nextTick();
+    await presentation.loadFullTimeline(sessionB);
+
+    currentSession.value = sessionA;
+    await vue.nextTick();
+    await vue.nextTick();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(reads.at(-1), { sessionId: "session-a", revision: "revision-a1" });
+    assert.deepEqual(
+      timelineStore.turnState(instanceId, "session-a", turns[0]).items.map((item) => item.id),
+      ["message-a1", "message-a2"],
+    );
+  } finally {
+    scope.stop();
+    timelineStore.cleanupInstance(instanceId);
+  }
+});
+
+test("returning to a session applies only changed Timeline items and leaves untouched Turns intact", async () => {
+  const timelineStore = useAiSessionTimelineStore();
+  const instanceId = "instance-session-delta";
+  const instance = {
+    id: instanceId,
+    capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: [],
+      liveItemAgents: [],
+    } } },
+  };
+  const turns = [
+    { id: "turn-a1", providerTurnId: "provider-turn-a1", revision: 1 },
+    { id: "turn-a2", providerTurnId: "provider-turn-a2", revision: 1 },
+  ];
+  const sessionA = { id: "session-a-delta", agent: "codex", turns };
+  const sessionB = { id: "session-b-delta", agent: "codex", turns: [{ id: "turn-b", providerTurnId: "provider-turn-b", revision: 1 }] };
+  const currentSession = vue.ref(sessionA);
+  const syncCalls = [];
+  const useAiSessionTimelinePresentation = loadTimelinePresentation(
+    async () => { throw new Error("The full Timeline read must not be used when sync is available"); },
+    async () => { throw new Error("Turn Timeline reads are not expected"); },
+    async (_instanceId, sessionId, knownItems) => {
+      syncCalls.push({ sessionId, knownItems: knownItems.map((entry) => ({ ...entry })) });
+      if (sessionId === sessionB.id) {
+        return {
+          kind: "snapshot",
+          revision: "revision-b1",
+          items: [{
+            revision: "revision-b-message",
+            item: { id: "message-b", turnId: "provider-turn-b", type: "ai-message", text: "Session B" },
+          }],
+        };
+      }
+      if (!knownItems.length) {
+        return {
+          kind: "snapshot",
+          revision: "revision-a1",
+          items: [
+            {
+              revision: "revision-a1-message",
+              item: { id: "message-a1", turnId: "provider-turn-a1", type: "ai-message", text: "Before switching" },
+            },
+            {
+              revision: "revision-a2-message",
+              item: { id: "message-a2", turnId: "provider-turn-a2", type: "ai-message", text: "Earlier answer" },
+            },
+          ],
+        };
+      }
+      return {
+        kind: "delta",
+        revision: "revision-a2",
+        upserted: [{
+          revision: "revision-a3-message",
+          item: { id: "message-a3", turnId: "provider-turn-a2", type: "ai-message", text: "During session B" },
+        }],
+        removed: [],
+      };
+    },
+    async () => { throw new Error("Turn Timeline sync is not expected"); },
+  );
+
+  timelineStore.cleanupInstance(instanceId);
+  const scope = vue.effectScope();
+  let presentation;
+  scope.run(() => {
+    presentation = useAiSessionTimelinePresentation({
+      instance: () => instance,
+      promptIndex: () => 0,
+      session: currentSession,
+    });
+  });
+
+  try {
+    await presentation.loadFullTimeline(sessionA);
+    const untouchedBefore = timelineStore.turnState(instanceId, sessionA.id, turns[0]).items[0];
+    assert.deepEqual(
+      timelineStore.turnState(instanceId, sessionA.id, turns[1]).items.map((item) => item.id),
+      ["message-a2"],
+    );
+
+    currentSession.value = sessionB;
+    await vue.nextTick();
+    await presentation.loadFullTimeline(sessionB);
+
+    currentSession.value = sessionA;
+    await vue.nextTick();
+    await vue.nextTick();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const sessionACalls = syncCalls.filter((call) => call.sessionId === sessionA.id);
+    assert.deepEqual(sessionACalls.at(-1).knownItems, [
+      { id: "message-a1", revision: "revision-a1-message" },
+      { id: "message-a2", revision: "revision-a2-message" },
+    ]);
+    assert.deepEqual(
+      timelineStore.turnState(instanceId, sessionA.id, turns[1]).items.map((item) => item.id),
+      ["message-a2", "message-a3"],
+    );
+    assert.equal(timelineStore.turnState(instanceId, sessionA.id, turns[0]).items[0], untouchedBefore);
+  } finally {
+    scope.stop();
+    timelineStore.cleanupInstance(instanceId);
+  }
+});
+
+test("session Timeline delta reconciles unchanged Turn revisions without replacing cached items", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-session-delta-metadata";
+  const sessionId = "session-session-delta-metadata";
+  const initialTurns = [
+    { id: "turn-delta-a", providerTurnId: "provider-turn-delta-a", revision: 1 },
+    { id: "turn-delta-b", providerTurnId: "provider-turn-delta-b", revision: 1 },
+  ];
+  const itemA = { id: "item-delta-a", turnId: "provider-turn-delta-a", type: "ai-message", text: "A" };
+  const itemB = { id: "item-delta-b", turnId: "provider-turn-delta-b", type: "ai-message", text: "B" };
+
+  store.cleanupInstance(instanceId);
+  store.resolveSessionSyncSnapshot(instanceId, sessionId, initialTurns, [
+    { revision: "revision-item-a", item: itemA },
+    { revision: "revision-item-b", item: itemB },
+  ], "timeline-delta-r1");
+  const untouchedItem = store.turnState(instanceId, sessionId, initialTurns[1]).items[0];
+
+  const reconciledTurns = [
+    { ...initialTurns[0], revision: 2 },
+    { ...initialTurns[1], revision: 2 },
+  ];
+  store.applySessionSyncDelta(instanceId, sessionId, reconciledTurns, {
+    kind: "delta",
+    revision: "timeline-delta-r2",
+    upserted: [{
+      revision: "revision-item-a2",
+      item: { id: "item-delta-a2", turnId: "provider-turn-delta-a", type: "ai-message", text: "A2" },
+    }],
+    removed: [],
+    order: ["item-delta-a", "item-delta-a2", "item-delta-b"],
+  });
+
+  const changed = store.turnState(instanceId, sessionId, reconciledTurns[0]);
+  assert.deepEqual(changed.items.map((item) => item.id), ["item-delta-a", "item-delta-a2"]);
+  assert.equal(changed.revision, "timeline-delta-r2");
+  const untouched = store.turnState(instanceId, sessionId, reconciledTurns[1]);
+  assert.equal(untouched.status, "ready");
+  assert.equal(untouched.revision, "timeline-delta-r2");
+  assert.equal(untouched.items[0], untouchedItem);
+  store.cleanupInstance(instanceId);
 });
 
 test("Turn Timeline cache becomes stale when the authoritative Turn revision advances", () => {
@@ -422,7 +750,7 @@ test("AI session turns render immediately while Timeline loads per turn", () => 
   assert.match(panel, /:turn-timelines="conversationTurnTimelines"/);
   assert.match(panel, /@load-turn-timeline="loadTurnTimeline"/);
   assert.match(conversation, /<AiSessionTimelineView/);
-  assert.match(presentation, /getAiSessionTurnTimeline\(instanceId, current\.id, turn\.id\)/);
+  assert.match(presentation, /getAiSessionTurnTimeline\(instanceId, current\.id, turn\.id, cachedRevision\)/);
   assert.doesNotMatch(presentation, /shouldDeferTurnTimelineLoad/);
   assert.match(presentation, /if \(!supportsTurnRead\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimeline\(current, true\)/);
   assert.match(panel, /selectedTimelineTurn\.value\.id}:\$\{selectedTimelineTurn\.value\.status}/);
@@ -465,7 +793,8 @@ test("Timeline history reads are disclosure-driven, including v0.0.28 session-re
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
   const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
-  assert.doesNotMatch(presentation, /\bwatch\(|loadSelectedTurnTimeline/);
+  assert.doesNotMatch(presentation, /loadSelectedTurnTimeline/);
+  assert.match(presentation, /timelineStore\.sessionState\(currentInstance\.id, current\.id\)[\s\S]*state\.status !== "idle"/);
   for (const source of [panel, board]) assert.doesNotMatch(source, /loadSelectedTurnTimeline/);
   assert.match(history, /const historyOpen = ref\(false\)/);
   assert.match(history, /watch\(\(\) => historyOpen\.value && props\.loadable, \(load\) => \{\s*if \(load\) emit\("load"\);\s*\}\);/);

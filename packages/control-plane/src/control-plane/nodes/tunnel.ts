@@ -11,7 +11,7 @@ import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normaliz
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
-import type { ControlPlaneAiSessionTransientDemand } from "../events/bus.ts";
+import type { ControlPlaneAiSessionTransientDemand, ControlPlaneResourceMetricDemand } from "../events/bus.ts";
 import { hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { NODE_TUNNEL_ROUTE } from "../http/auth-boundary.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
@@ -132,6 +132,11 @@ type ReverseTunnelConnection = {
   failureReason?: string;
 };
 
+type NodeTunnelEventSubscription = {
+  transient: ControlPlaneAiSessionTransientDemand;
+  metricInstanceIds?: string[];
+};
+
 export type PendingNodeTunnelChannel = {
   id: string;
   attach: (socket: NodeAgentTunnelSocket) => boolean;
@@ -213,7 +218,7 @@ function requestHeaders(headers: HeadersInit | undefined) {
 
 export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport {
   private readonly sockets = new Map<string, ReverseTunnelConnection>();
-  private readonly eventSubscriptions = new Map<string, ControlPlaneAiSessionTransientDemand>();
+  private readonly eventSubscriptions = new Map<string, NodeTunnelEventSubscription>();
   private readonly eventRouter: NodeTunnelEventRouter;
   private readonly httpStreamHeaderTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -312,19 +317,22 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     }
   }
 
-  setEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand) {
-    this.eventSubscriptions.set(nodeId, demand);
-    this.sendEventSubscription(nodeId, demand);
+  setEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand, metricInstanceIds?: string[]) {
+    const subscription = { transient: demand, ...(metricInstanceIds === undefined ? {} : { metricInstanceIds }) };
+    this.eventSubscriptions.set(nodeId, subscription);
+    this.sendEventSubscription(nodeId, subscription);
   }
 
-  private sendEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand) {
+  private sendEventSubscription(nodeId: string, subscription: NodeTunnelEventSubscription) {
     const current = this.sockets.get(nodeId);
     if (!current) return;
+    const { transient: demand } = subscription;
     try {
       current.socket.send(JSON.stringify({
         type: "control-plane.event-subscribe",
         eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
         aiSessionHierarchy: { subagents: true },
+        ...(subscription.metricInstanceIds === undefined ? {} : { metricInstanceIds: subscription.metricInstanceIds }),
         aiSessionTransient: {
           ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
           messageDeltas: demand.messageDeltas,
@@ -437,7 +445,12 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       entry.reject(error);
       return true;
     }
-    entry.resolve(new Response(body, { status, headers }));
+    // Fetch rejects a body for 204/205/304, including an empty string. A node
+    // agent reports those responses with `body: ""`, so reconstruct them with a
+    // null body instead of throwing inside the tunnel message handler (which
+    // would tear down the whole channel).
+    const bodyless = status === 204 || status === 205 || status === 304;
+    entry.resolve(new Response(bodyless ? null : body, { status, headers }));
     return true;
   }
 
@@ -906,6 +919,7 @@ export class ControlPlaneNodeEventSubscriber {
     timelineAllSessions: false,
     timelineSessions: [],
   };
+  private resourceMetricDemand: ControlPlaneResourceMetricDemand = { all: true, instanceIds: [] };
 
   constructor(
     service: ControlPlaneService,
@@ -969,22 +983,43 @@ export class ControlPlaneNodeEventSubscriber {
 
   setAiSessionTransientDemand(demand: ControlPlaneAiSessionTransientDemand) {
     this.transientDemand = demand;
-    const encoded = JSON.stringify({
+    this.sendEventSubscription();
+  }
+
+  setResourceMetricDemand(demand: ControlPlaneResourceMetricDemand) {
+    this.resourceMetricDemand = { all: demand.all, instanceIds: [...demand.instanceIds] };
+    this.sendEventSubscription();
+  }
+
+  private sendEventSubscription() {
+    const demand = this.transientDemand;
+    const encoded = JSON.stringify(this.eventSubscriptionMessage());
+    for (const socket of this.sockets.values()) socket.sendUpstream(encoded);
+    for (const node of this.service.listNodes()) {
+      if (nodeCarriesEventsOnMainTunnel(node)) this.tunnel.setEventSubscription(node.id, demand, this.metricScope());
+    }
+  }
+
+  private eventSubscriptionMessage() {
+    const demand = this.transientDemand;
+    const metricInstanceIds = this.metricScope();
+    return {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
       aiSessionHierarchy: { subagents: true },
+      ...(metricInstanceIds === undefined ? {} : { metricInstanceIds }),
       aiSessionTransient: {
         ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
         messageDeltas: demand.messageDeltas,
         timelineAllSessions: demand.timelineAllSessions,
         timelineSessions: demand.timelineSessions,
       },
-    });
-    for (const socket of this.sockets.values()) socket.sendUpstream(encoded);
-    for (const node of this.service.listNodes()) {
-      if (node.connectionMode === "reverse-wss") this.tunnel.setEventSubscription(node.id, demand);
-    }
+    };
+  }
+
+  private metricScope() {
+    return this.resourceMetricDemand.all ? undefined : this.resourceMetricDemand.instanceIds;
   }
 
   diagnostics() {
@@ -996,6 +1031,7 @@ export class ControlPlaneNodeEventSubscriber {
       safetyIntervalMs: this.safetyIntervalMs,
       connections: [...this.supervisors.entries()].map(([nodeId, supervisor]) => ({ nodeId, ...supervisor.diagnostics() })),
       aiSessionTransientDemand: this.transientDemand,
+      resourceMetricDemand: this.resourceMetricDemand,
     };
   }
 
@@ -1142,18 +1178,7 @@ export class ControlPlaneNodeEventSubscriber {
       socket.opened();
       const control = this.service.resolveNodeAgentTransport(node).proxyWebSocket(node, socket, "/events?aiSessionTransient=1");
       socket.control(control && control.ping, control && control.onPong, control && control.send);
-      socket.sendUpstream(JSON.stringify({
-        v: 1,
-        type: "subscribe",
-        eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
-        aiSessionHierarchy: { subagents: true },
-        aiSessionTransient: {
-          ...(this.transientDemand.replaySince ? { replaySince: this.transientDemand.replaySince } : {}),
-          messageDeltas: this.transientDemand.messageDeltas,
-          timelineAllSessions: this.transientDemand.timelineAllSessions,
-          timelineSessions: this.transientDemand.timelineSessions,
-        },
-      }));
+      socket.sendUpstream(JSON.stringify(this.eventSubscriptionMessage()));
     } catch {
       socket.close(1011, "Node event transport failed.");
     }
@@ -1187,15 +1212,20 @@ export class ControlPlaneNodeEventSubscriber {
 
   private nodeEventConnectionKey(node: Node) {
     if (node.connectionEnabled === false) return undefined;
-    // Reverse nodes already carry node-agent events on their main tunnel. Every
-    // other connection mode opens the same /events capability through its
-    // NodeAgentTransport adapter (direct, local IPC, or trusted proxy).
-    if (node.connectionMode === "reverse-wss") return undefined;
+    // Reverse-WSS and cloud-relay nodes already carry node-agent events on
+    // their main tunnel. Every other connection mode opens the same /events
+    // capability through its NodeAgentTransport adapter (direct, local IPC, or
+    // trusted proxy).
+    if (nodeCarriesEventsOnMainTunnel(node)) return undefined;
     const connectionIdentity = node.connectionMode === "control-plane-proxy"
       ? node.connectionPath
       : { endpoint: node.controlEndpoint || node.endpoint, auth: node.auth };
     return `transport:${node.connectionMode}:${sha256Hex(JSON.stringify(connectionIdentity))}`;
   }
+}
+
+function nodeCarriesEventsOnMainTunnel(node: Node) {
+  return node.connectionMode === "reverse-wss" || node.connectionMode === "cloud-relay";
 }
 
 export function registerNodeAgentTunnelRoutes(options: {

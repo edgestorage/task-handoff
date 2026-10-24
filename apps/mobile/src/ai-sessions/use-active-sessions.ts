@@ -145,16 +145,14 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
   const bodyRetryAttempt = useRef(0);
   useEffect(() => {
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !instanceId || !sessionId || !runtime.coordinator) return;
-    const replaySince = new Date().toISOString();
     const dispose = runtime.coordinator.registerAiSessionTransientDemand({
-      replaySince,
       messageDeltas: { allInstances: false, instanceIds: [instanceId] },
       timelineAllSessions: false,
       timelineSessions: [{ instanceId, sessionId }],
     });
-    // Persistent AI Session events already keep the store authoritative. The
-    // replay cursor only opens the transient message/timeline window and must
-    // not refetch the complete session fleet on every detail selection.
+    // Persistent AI Session events already keep the store authoritative. This
+    // only opens the live transient window; history recovers through the
+    // Timeline/Turn HTTP sync reads instead of a WebSocket replay cursor.
     return dispose;
   }, [controlPlaneId, instanceId, runtime.controlPlaneId, runtime.coordinator, sessionId]);
   useEffect(() => {

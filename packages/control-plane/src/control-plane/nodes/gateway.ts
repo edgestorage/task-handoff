@@ -45,6 +45,7 @@ import {
   type ApplyUpdateRequest,
   type UpdateNodeAgentModelRelay,
 } from "@task-handoff/protocol/control-plane";
+import type { AiSessionsSnapshot } from "@task-handoff/protocol/ai-sessions";
 import { ControlPlaneNodeAgentClient, nodeAgentScopedError, type NodeAgentScopedError } from "./client.ts";
 import type {
   ControlPlaneFleetResource,
@@ -58,6 +59,11 @@ import {
   type NodeGitCredentialAuthorizationSet,
   type NodeGitCredentialPayload,
 } from "@task-handoff/protocol/managed-git-credentials";
+import {
+  INSTANCE_DIRECTORY_PROJECTION,
+  INSTANCE_PROJECTION_HEADER,
+  projectInstancesForFleetComparison,
+} from "../../shared/instances/fleet-projection.ts";
 
 export type NodeAgentFleetResult<T> = {
   items: T[];
@@ -82,6 +88,8 @@ export type InstanceLifecycleApplyResult = "applied" | "ignored" | "missing";
 type NodeAgentListResult<T> = {
   items: T[];
   nodeErrors: NodeAgentScopedError[];
+  notModified?: boolean;
+  etag?: string;
 };
 
 type NodeAgentInstanceParseResult = {
@@ -104,7 +112,13 @@ type NodeAgentFleetSnapshot<T> = {
 // afterwards. Keep enough headroom for those links while still bounding a
 // genuinely unavailable node.
 const DEFAULT_FLEET_REQUEST_TIMEOUT_MS = 5_000;
-const DEFAULT_FLEET_SNAPSHOT_FRESH_MS = 15_000;
+// Directory consumers (notably the desktop tray) poll every 15 seconds. A
+// 15-second freshness window therefore misses on nearly every poll and turns
+// an unchanged snapshot into a full request/revalidation across the node
+// transport. Lifecycle and mutation paths update or invalidate snapshots
+// directly, so the periodic read only needs to reconcile less volatile
+// directory fields.
+const DEFAULT_FLEET_SNAPSHOT_FRESH_MS = 30_000;
 const DEFAULT_FLEET_RETRY_BASE_MS = 1_000;
 const DEFAULT_FLEET_RETRY_MAX_MS = 30_000;
 
@@ -145,10 +159,12 @@ export class ControlPlaneNodeAgentGateway {
   private readonly runtimeSnapshots = new Map<string, NodeAgentFleetSnapshot<NodeRuntime>>();
   private readonly instanceSnapshots = new Map<string, NodeAgentFleetSnapshot<ControlledInstance>>();
   private readonly modelSnapshots = new Map<string, NodeAgentFleetSnapshot<NodeModelPublicRecord>>();
+  private readonly fleetEtags = new Map<string, string>();
   private readonly fleetRefreshes = new Map<string, Promise<void>>();
   private readonly fleetRevisions = new Map<string, number>();
   private readonly fleetRetryAttempts = new Map<string, number>();
   private readonly fleetRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private aiSessionSnapshots: ((instanceId: string) => AiSessionsSnapshot | undefined) | undefined;
   private disposed = false;
 
   constructor(client: ControlPlaneNodeAgentClient, options: ControlPlaneNodeAgentGatewayOptions = {}) {
@@ -172,10 +188,22 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.request(node, route, init);
   }
 
+  /**
+   * Instance directory snapshots intentionally omit Session detail. The
+   * Control Plane's revisioned Session aggregator is the authority for that
+   * detail, so every instance read is enriched at this single boundary.
+   */
+  setAiSessionSnapshotProvider(provider: (instanceId: string) => AiSessionsSnapshot | undefined) {
+    this.aiSessionSnapshots = provider;
+  }
+
   forgetNode(nodeId: string) {
     this.runtimeSnapshots.delete(nodeId);
     this.instanceSnapshots.delete(nodeId);
     this.modelSnapshots.delete(nodeId);
+    for (const resource of ["runtimes", "instances", "models"] as const) {
+      this.fleetEtags.delete(this.fleetEtagKey(nodeId, resource));
+    }
     for (const resource of ["runtimes", "instances", "models"] as const) {
       this.resetFleetRetry(`${resource}:${nodeId}`);
     }
@@ -578,26 +606,24 @@ export class ControlPlaneNodeAgentGateway {
 
   readFleetInstances(nodes: Node[]): NodeAgentFleetResult<ControlledInstance> {
     const result = this.readFleetSnapshots(nodes, "instances", this.instanceSnapshots);
-    return { ...result, items: result.items.map(({ item }) => item) };
+    return { ...result, items: result.items.map(({ item }) => this.withAiSessionSnapshot(item)) };
   }
 
   refreshFleetModels(nodes: Node[], init: RequestInit = {}, force = false) {
-    return this.refreshFleetSnapshots(nodes, "models", "/models", init, this.modelSnapshots, async (node, requestInit) => ({
-      items: await this.listModels(node, requestInit),
-      nodeErrors: [],
-    }), force);
+    return this.refreshFleetSnapshots(nodes, "models", "/models", init, this.modelSnapshots, (node, requestInit, options) => (
+      this.loadModelsWithDiagnostics(node, requestInit, options)
+    ), force);
   }
 
   refreshFleetRuntimes(nodes: Node[], init: RequestInit = {}, force = false) {
-    return this.refreshFleetSnapshots(nodes, "runtimes", "/runtimes", init, this.runtimeSnapshots, async (node, requestInit) => ({
-      items: await this.listRuntimes(node, requestInit),
-      nodeErrors: [],
-    }), force);
+    return this.refreshFleetSnapshots(nodes, "runtimes", "/runtimes", init, this.runtimeSnapshots, (node, requestInit, options) => (
+      this.loadRuntimesWithDiagnostics(node, requestInit, options)
+    ), force);
   }
 
   refreshFleetInstances(nodes: Node[], init: RequestInit = {}, force = false) {
-    return this.refreshFleetSnapshots(nodes, "instances", "/instances", init, this.instanceSnapshots, (node, requestInit) => (
-      this.loadInstancesWithDiagnostics(node, requestInit)
+    return this.refreshFleetSnapshots(nodes, "instances", "/instances", init, this.instanceSnapshots, (node, requestInit, requestOptions) => (
+      this.loadInstancesWithDiagnostics(node, requestInit, requestOptions)
     ), force);
   }
 
@@ -605,15 +631,53 @@ export class ControlPlaneNodeAgentGateway {
     return this.listInstancesWithDiagnostics(node, init).then((result) => result.items);
   }
 
-  async listInstancesWithDiagnostics(node: Node, init: RequestInit = {}): Promise<NodeAgentListResult<ControlledInstance>> {
-    const result = await this.loadInstancesWithDiagnostics(node, init);
-    this.setTargetedSnapshot(node, "instances", this.instanceSnapshots, result);
-    return result;
+  async listInstancesWithAiSessions(node: Node, init: RequestInit = {}) {
+    const result = await this.listInstancesWithDiagnostics(node, init, { fullAiSessions: true });
+    return result.items;
   }
 
-  private async loadInstancesWithDiagnostics(node: Node, init: RequestInit = {}): Promise<NodeAgentListResult<ControlledInstance>> {
-    return this.client.requestSchema(node, "/instances", z.array(z.unknown()), init)
-      .then((items) => items.reduce<NodeAgentListResult<ControlledInstance>>((current, item) => {
+  async listInstancesWithDiagnostics(
+    node: Node,
+    init: RequestInit = {},
+    options: { fullAiSessions?: boolean } = {},
+  ): Promise<NodeAgentListResult<ControlledInstance>> {
+    const previous = this.instanceSnapshots.get(node.id);
+    // Direct list calls (for example ownership checks) must not become more
+    // expensive than the background fleet refresh. Revalidate any usable
+    // snapshot against the same validator the fleet path already recorded.
+    const ifNoneMatch = !options.fullAiSessions && previous?.connectionKey === this.fleetConnectionKey(node) && previous.phase === "ready"
+      ? this.fleetEtags.get(this.fleetEtagKey(node.id, "instances"))
+      : undefined;
+    const result = await this.loadInstancesWithDiagnostics(node, init, { ifNoneMatch, fullAiSessions: options.fullAiSessions });
+    if (result.notModified) {
+      const current = this.instanceSnapshots.get(node.id);
+      if (!current || current.connectionKey !== this.fleetConnectionKey(node)) {
+        throw Object.assign(new Error(`Node agent ${node.id} returned an unrequested not-modified response for /instances.`), {
+          statusCode: 502,
+          code: "NODE_AGENT_UNEXPECTED_NOT_MODIFIED",
+          nodeId: node.id,
+          route: "/instances",
+        });
+      }
+      return { items: current.items.map((item) => this.withAiSessionSnapshot(item)), nodeErrors: current.error ? [current.error] : [] };
+    }
+    this.setTargetedSnapshot(node, "instances", this.instanceSnapshots, result);
+    return { ...result, items: result.items.map((item) => this.withAiSessionSnapshot(item)) };
+  }
+
+  private async loadInstancesWithDiagnostics(
+    node: Node,
+    init: RequestInit = {},
+    options: { ifNoneMatch?: string; fullAiSessions?: boolean } = {},
+  ): Promise<NodeAgentListResult<ControlledInstance>> {
+    const headers = new Headers(init.headers);
+    if (!options.fullAiSessions) headers.set(INSTANCE_PROJECTION_HEADER, INSTANCE_DIRECTORY_PROJECTION);
+    const response = await this.client.requestSchemaConditional(node, "/instances", z.array(z.unknown()), { ...init, headers }, {
+      ifNoneMatch: options.fullAiSessions ? undefined : options.ifNoneMatch,
+    });
+    if (!options.fullAiSessions) this.recordFleetEtag(node.id, "instances", response.etag);
+    if (response.notModified) return { items: [], nodeErrors: [], notModified: true, ...(response.etag ? { etag: response.etag } : {}) };
+    return (response.data || []).reduce<NodeAgentListResult<ControlledInstance>>((current, item) => {
         const result = this.normalizeInstance(node, item);
         if (result.instance) {
           current.items.push(result.instance);
@@ -622,7 +686,33 @@ export class ControlPlaneNodeAgentGateway {
           current.nodeErrors.push(result.error);
         }
         return current;
-      }, { items: [], nodeErrors: [] }));
+      }, { items: [], nodeErrors: [], ...(response.etag ? { etag: response.etag } : {}) });
+  }
+
+  private async loadModelsWithDiagnostics(
+    node: Node,
+    init: RequestInit = {},
+    options: { ifNoneMatch?: string } = {},
+  ): Promise<NodeAgentListResult<NodeModelPublicRecord>> {
+    const response = await this.client.requestSchemaConditional(node, "/models", z.array(NodeModelPublicRecordSchema), init, options);
+    this.recordFleetEtag(node.id, "models", response.etag);
+    if (response.notModified) return { items: [], nodeErrors: [], notModified: true, ...(response.etag ? { etag: response.etag } : {}) };
+    return { items: response.data || [], nodeErrors: [], ...(response.etag ? { etag: response.etag } : {}) };
+  }
+
+  private async loadRuntimesWithDiagnostics(
+    node: Node,
+    init: RequestInit = {},
+    options: { ifNoneMatch?: string } = {},
+  ): Promise<NodeAgentListResult<NodeRuntime>> {
+    const response = await this.client.requestSchemaConditional(node, "/runtimes", NodeRuntimeConsumerListSchema, init, options);
+    this.recordFleetEtag(node.id, "runtimes", response.etag);
+    if (response.notModified) return { items: [], nodeErrors: [], notModified: true, ...(response.etag ? { etag: response.etag } : {}) };
+    return {
+      items: (response.data || []).map((runtime) => this.projectNodeResource(node, runtime)),
+      nodeErrors: [],
+      ...(response.etag ? { etag: response.etag } : {}),
+    };
   }
 
   instanceFromSnapshot(nodes: Node[], instanceId: string) {
@@ -630,7 +720,7 @@ export class ControlPlaneNodeAgentGateway {
       const snapshot = this.instanceSnapshots.get(node.id);
       if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) continue;
       const instance = snapshot.items.find((item) => item.id === instanceId);
-      if (instance) return instance;
+      if (instance) return this.withAiSessionSnapshot(instance);
     }
     return undefined;
   }
@@ -841,7 +931,7 @@ export class ControlPlaneNodeAgentGateway {
     route: string,
     init: RequestInit,
     snapshots: Map<string, NodeAgentFleetSnapshot<T>>,
-    load: (node: Node, init: RequestInit) => Promise<NodeAgentListResult<T>>,
+    load: (node: Node, init: RequestInit, options: { ifNoneMatch?: string }) => Promise<NodeAgentListResult<T>>,
     force: boolean,
   ) {
     this.reconcileFleetConnections(nodes, resource, snapshots);
@@ -854,7 +944,7 @@ export class ControlPlaneNodeAgentGateway {
     route: string,
     init: RequestInit,
     snapshots: Map<string, NodeAgentFleetSnapshot<T>>,
-    load: (node: Node, init: RequestInit) => Promise<NodeAgentListResult<T>>,
+    load: (node: Node, init: RequestInit, options: { ifNoneMatch?: string }) => Promise<NodeAgentListResult<T>>,
     force: boolean,
   ) {
     if (this.disposed) return Promise.resolve();
@@ -896,8 +986,34 @@ export class ControlPlaneNodeAgentGateway {
     const refresh = (async () => {
       try {
         this.requireFleetNodeReady(node, route);
-        const loaded = await this.withFleetDeadline(node, route, init, (requestInit) => load(node, requestInit));
+        // `force` bypasses the freshness cache, not conditional revalidation. A
+        // validator still proves that the authoritative directory is unchanged.
+        const ifNoneMatch = previous?.phase !== "ready" ? undefined : this.fleetEtags.get(this.fleetEtagKey(node.id, resource));
+        const loaded = await this.withFleetDeadline(node, route, init, (requestInit) => load(node, requestInit, { ifNoneMatch }));
         if (snapshots.get(node.id)?.revision !== revision) return;
+        if (loaded.notModified) {
+          if (!previous) {
+            throw Object.assign(new Error(`Node agent ${node.id} returned an unrequested not-modified response for ${route}.`), {
+              statusCode: 502,
+              code: "NODE_AGENT_UNEXPECTED_NOT_MODIFIED",
+              nodeId: node.id,
+              route,
+            });
+          }
+          const unchanged: NodeAgentFleetSnapshot<T> = {
+            connectionKey,
+            items: [...previous.items],
+            phase: "ready",
+            revision,
+            updatedAt: new Date().toISOString(),
+          };
+          snapshots.set(node.id, unchanged);
+          this.resetFleetRetry(key);
+          if (!this.sameFleetState(resource, previous, unchanged)) {
+            this.emitFleetState(node.id, resource, unchanged, { contentChanged: false });
+          }
+          return;
+        }
         const invalidPayloadError = loaded.nodeErrors[0];
         const ready: NodeAgentFleetSnapshot<T> = {
           connectionKey,
@@ -961,6 +1077,7 @@ export class ControlPlaneNodeAgentGateway {
       const snapshot = snapshots.get(node.id);
       if (snapshot && snapshot.connectionKey !== this.fleetConnectionKey(node)) {
         snapshots.delete(node.id);
+        this.fleetEtags.delete(this.fleetEtagKey(node.id, resource));
         this.resetFleetRetry(`${resource}:${node.id}`);
       }
     }
@@ -974,6 +1091,7 @@ export class ControlPlaneNodeAgentGateway {
     if (!current) return;
     this.resetFleetRetry(`${resource}:${node.id}`);
     snapshots.delete(node.id);
+    this.fleetEtags.delete(this.fleetEtagKey(node.id, resource));
     this.onFleetStateChanged?.({
       nodeId: node.id,
       resource,
@@ -1027,53 +1145,7 @@ export class ControlPlaneNodeAgentGateway {
 
   private fleetItemsForComparison<T>(resource: NodeFleetResource, items: T[]) {
     if (resource !== "instances") return items;
-    return items.map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-      const {
-        stateRevision: _stateRevision,
-        updatedAt: _updatedAt,
-        lastHeartbeatAt: _lastHeartbeatAt,
-        status: _status,
-        health: _health,
-        connectionStatus: _connectionStatus,
-        agentStatus: _agentStatus,
-        targetStatus: _targetStatus,
-        uiAccessStatus: _uiAccessStatus,
-        imageProvisioning: _imageProvisioning,
-        workspace: _workspace,
-        runtime: _runtime,
-        runtimeVersion: _runtimeVersion,
-        ready: _ready,
-        aiSessions: _aiSessions,
-        apps: _apps,
-        triggers: _triggers,
-        appInventory,
-        access,
-        target,
-        ...semantic
-      } = item as Record<string, unknown>;
-      // Lifecycle, AI/App Session, and trigger events own their respective
-      // projections. Fleet comparison only detects directory/config changes;
-      // heartbeat observations must not request another authoritative snapshot.
-      // The probe statuses never leave the control plane (publicInstance() drops
-      // them), so a reachability probe answering differently must not fan out a
-      // directory refetch either.
-      const comparableAppInventory = appInventory && typeof appInventory === "object" && !Array.isArray(appInventory)
-        ? (({ observedAt: _observedAt, ...inventory }) => inventory)(appInventory as Record<string, unknown>)
-        : appInventory;
-      const comparableAccess = access && typeof access === "object" && !Array.isArray(access)
-        ? (({ status: _status, ...topology }) => topology)(access as Record<string, unknown>)
-        : access;
-      const comparableTarget = target && typeof target === "object" && !Array.isArray(target)
-        ? (({ status: _targetProbe, ...topology }) => topology)(target as Record<string, unknown>)
-        : target;
-      return {
-        ...semantic,
-        ...(comparableAccess ? { access: comparableAccess } : {}),
-        ...(comparableTarget ? { target: comparableTarget } : {}),
-        ...(comparableAppInventory ? { appInventory: comparableAppInventory } : {}),
-      };
-    });
+    return projectInstancesForFleetComparison(items) as T[];
   }
 
   private sameFleetState<T>(resource: NodeFleetResource, left: NodeAgentFleetSnapshot<T>, right: NodeAgentFleetSnapshot<T>) {
@@ -1206,6 +1278,21 @@ export class ControlPlaneNodeAgentGateway {
       node.auth.mode,
       node.auth.keyId,
     ]);
+  }
+
+  private fleetEtagKey(nodeId: string, resource: NodeFleetResource) {
+    return `${resource}:${nodeId}`;
+  }
+
+  private withAiSessionSnapshot(instance: ControlledInstance) {
+    const snapshot = this.aiSessionSnapshots?.(instance.id);
+    return snapshot ? { ...instance, aiSessions: snapshot } : instance;
+  }
+
+  private recordFleetEtag(nodeId: string, resource: NodeFleetResource, etag: string | undefined) {
+    const key = this.fleetEtagKey(nodeId, resource);
+    if (etag) this.fleetEtags.set(key, etag);
+    else this.fleetEtags.delete(key);
   }
 
   private upsertInstanceSnapshot(node: Node, instance: ControlledInstance) {

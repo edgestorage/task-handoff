@@ -58,6 +58,40 @@ test("node tunnel ingress owns hello and main message handling", () => {
   assert.equal(JSON.parse(socket.sent.at(-1).data).type, "control-plane.identified");
 });
 
+test("node tunnel ingress treats peer error frames as terminal", () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const socket = attachMain(transport);
+  const initialMessages = socket.sent.length;
+
+  socket.emit("message", JSON.stringify({ type: "node-agent.unknown" }));
+  assert.equal(JSON.parse(socket.sent.at(-1).data).code, "UNSUPPORTED_MESSAGE");
+  const afterUnsupported = socket.sent.length;
+
+  socket.emit("message", JSON.stringify({ type: "node-agent.error", code: "UNSUPPORTED_MESSAGE" }));
+  assert.equal(socket.sent.length, afterUnsupported);
+  assert.equal(socket.sent.length, initialMessages + 1);
+});
+
+test("node tunnel ingress reconstructs bodyless 304 responses without failing the tunnel", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const socket = attachMain(transport);
+  const pending = transport.request({ id: "node_a" }, "/instances");
+  const request = socket.sent.map((entry) => JSON.parse(entry.data)).find((message) => message.type === "control-plane.request");
+
+  assert.doesNotThrow(() => socket.emit("message", JSON.stringify({
+    type: "node-agent.response",
+    requestId: request.requestId,
+    status: 304,
+    headers: { etag: '"instances-v1"' },
+    body: "",
+  })));
+  const response = await pending;
+  assert.equal(response.status, 304);
+  assert.equal(response.headers.get("etag"), '"instances-v1"');
+  assert.equal(await response.text(), "");
+  assert.equal(transport.isCurrentSocket("node_a", socket), true);
+});
+
 test("node tunnel ingress refreshes the identified node without destabilizing the tunnel", async () => {
   const transport = new ControlPlaneNodeAgentTunnelTransport();
   const identified = [];

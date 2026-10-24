@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { conditionalJsonResponse } from "../conditional-json.ts";
 import {
   CreateLocalFolderSchema,
   CreateNodeRuntimeSchema,
@@ -22,7 +23,9 @@ type RuntimeRouteOperations = {
 };
 
 export function registerRuntimeRoutes(app: FastifyInstance, operations: RuntimeRouteOperations) {
-  app.get("/api/node-agent/runtimes", async () => ({ data: operations.listRuntimes() }));
+  app.get("/api/node-agent/runtimes", async (request, reply) => (
+    conditionalJsonResponse(request, reply, operations.listRuntimes())
+  ));
   app.post("/api/node-agent/runtimes", async (request, reply) => reply.code(201).send({
     data: operations.createRuntime(CreateNodeRuntimeSchema.parse(request.body)),
   }));

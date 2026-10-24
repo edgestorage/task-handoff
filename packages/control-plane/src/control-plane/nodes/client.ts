@@ -64,6 +64,31 @@ export class ControlPlaneNodeAgentClient {
   }
 
   async request(node: Node, route: string, init: RequestInit = {}) {
+    const response = await this.performRequest(node, route, init);
+    return this.decodeResponse(node, route, init.method || "GET", response);
+  }
+
+  async requestSchemaConditional<T>(
+    node: Node,
+    route: string,
+    schema: z.ZodType<T>,
+    init: RequestInit = {},
+    options: { ifNoneMatch?: string } = {},
+  ): Promise<{ notModified: boolean; data?: T; etag?: string }> {
+    const method = init.method || "GET";
+    const headers = new Headers(init.headers);
+    if (options.ifNoneMatch) headers.set("if-none-match", options.ifNoneMatch);
+    const response = await this.performRequest(node, route, { ...init, headers });
+    const etag = response.headers.get("etag") || undefined;
+    if (response.status === 304) {
+      this.logger?.info?.({ nodeId: node.id, route, method, statusCode: response.status }, "node agent request not modified");
+      return { notModified: true, etag: etag || options.ifNoneMatch };
+    }
+    const value = await this.decodeResponse(node, route, method, response);
+    return { notModified: false, data: this.parse(node, route, schema, value, method), etag };
+  }
+
+  private async performRequest(node: Node, route: string, init: RequestInit) {
     const method = init.method || "GET";
     let response: Response;
     try {
@@ -78,7 +103,10 @@ export class ControlPlaneNodeAgentClient {
       }, "node agent transport failed");
       throw error;
     }
+    return response;
+  }
 
+  private async decodeResponse(node: Node, route: string, method: string, response: Response) {
     let payload: { data?: unknown; error?: { message?: string; code?: string; details?: unknown } };
     try {
       payload = (await response.json()) as { data?: unknown; error?: { message?: string; code?: string; details?: unknown } };

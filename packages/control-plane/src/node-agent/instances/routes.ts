@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
@@ -9,6 +11,36 @@ import {
   type ControlledInstanceRegister,
 } from "@task-handoff/protocol/control-plane";
 import { CreateNodeInstanceSchema, UpdateNodeInstanceSchema } from "../schemas.ts";
+import {
+  INSTANCE_DIRECTORY_PROJECTION,
+  INSTANCE_PROJECTION_HEADER,
+  projectInstancesForConditionalGet,
+  projectInstancesForDirectory,
+} from "../../shared/instances/fleet-projection.ts";
+
+const InstanceFleetQuerySchema = z.object({
+  projection: z.literal("directory").optional(),
+}).strict();
+
+function instanceFleetEtag(instances: ControlledInstance[]) {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(projectInstancesForConditionalGet(instances)))
+    .digest("base64url");
+  return `"${digest}"`;
+}
+
+function normalizedEtag(value: string) {
+  return value.trim().replace(/^W\//, "");
+}
+
+function ifNoneMatchMatches(header: string | string[] | undefined, etag: string) {
+  if (!header) return false;
+  const values = Array.isArray(header) ? header : [header];
+  const expected = normalizedEtag(etag);
+  return values
+    .flatMap((value) => value.split(","))
+    .some((value) => value.trim() === "*" || normalizedEtag(value) === expected);
+}
 
 function bearerToken(headers: Record<string, unknown>) {
   const authorization = headers.authorization;
@@ -34,7 +66,20 @@ type Operations = {
 };
 
 export function registerInstanceManagementRoutes(app: FastifyInstance, operations: Operations) {
-  app.get("/api/node-agent/instances", async () => ({ data: operations.list() }));
+  app.get("/api/node-agent/instances", async (request, reply) => {
+    const query = InstanceFleetQuerySchema.parse(request.query || {});
+    const listed = operations.list();
+    const directory = query.projection === INSTANCE_DIRECTORY_PROJECTION
+      || request.headers[INSTANCE_PROJECTION_HEADER] === INSTANCE_DIRECTORY_PROJECTION;
+    const instances = directory ? projectInstancesForDirectory(listed) : listed;
+    const etag = instanceFleetEtag(instances);
+    reply
+      .header("etag", etag)
+      .header("cache-control", "no-cache")
+      .header("vary", INSTANCE_PROJECTION_HEADER);
+    if (ifNoneMatchMatches(request.headers["if-none-match"], etag)) return reply.code(304).send();
+    return { data: instances };
+  });
 
   app.post("/api/node-agent/instances", async (request, reply) => {
     const instance = await operations.create(CreateNodeInstanceSchema.parse(request.body));

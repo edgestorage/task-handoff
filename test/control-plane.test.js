@@ -4026,6 +4026,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     logger: false,
     token: "agent-secret",
     port: 0,
+    instanceLifecycleHeartbeatIntervalMs: 0,
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "image" && args[1] === "inspect") {
@@ -4381,6 +4382,10 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("task-handoff.node-id=node_exec"));
   assert.ok(args.includes("task-handoff.runtime-id=runtime_local_docker"));
   assert.ok(args.includes("task-handoff.image-id=img_1"));
+  assert.ok(args.includes("--log-driver"));
+  assert.ok(args.includes("json-file"));
+  assert.ok(args.includes("max-size=20m"));
+  assert.ok(args.includes("max-file=5"));
   assert.ok(args.includes("TASK_HANDOFF_NODE_ID=node_exec"));
   assert.ok(args.includes("TASK_HANDOFF_NODE_AGENT_URL=http://127.0.0.1:8091"));
   assert.ok(args.includes("TASK_HANDOFF_RUNTIME_ID=runtime_local_docker"));

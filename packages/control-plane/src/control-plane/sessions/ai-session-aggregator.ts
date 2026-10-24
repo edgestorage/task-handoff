@@ -135,6 +135,10 @@ export class ControlPlaneAiSessionAggregator {
     this.advertisedStreams.delete(instanceId);
   }
 
+  snapshotForInstance(instanceId: string) {
+    return this.snapshots.get(instanceId)?.snapshot;
+  }
+
   applyPatch(payload: AiSessionPatchEvent) {
     return this.apply({ type: AiSessionEventType.Patch, payload });
   }

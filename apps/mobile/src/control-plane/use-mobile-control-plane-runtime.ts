@@ -59,6 +59,7 @@ type RuntimeSnapshot = {
 
 const CONNECT_TIMEOUT_MS = 12_000;
 const STABLE_CONNECTION_MS = 15_000;
+const IDEMPOTENCY_PENDING_RECONNECT_DELAY_MS = 10_000;
 const MOBILE_SESSION_RENEWAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 const MINIMUM_MOBILE_SESSION_RENEWAL_DELAY_MS = 60_000;
 
@@ -287,10 +288,7 @@ export class MobileControlPlaneConnectionCoordinator {
       const aiSessionTransient = this.aggregateTransientDemand();
       this.connection = this.transport.connectEvents({
         topics,
-        aiSessionTransient: {
-          ...aiSessionTransient,
-          ...(this.transientDemands.size ? { replaySince: new Date().toISOString() } : {}),
-        },
+        aiSessionTransient,
         onOpen: () => {
           if (!this.live(epoch, abortController)) return;
           this.clearConnectTimer();
@@ -334,10 +332,8 @@ export class MobileControlPlaneConnectionCoordinator {
   }
 
   private updateTransientDemand() {
-    this.connection?.updateAiSessionTransient?.({
-      ...this.aggregateTransientDemand(),
-      ...(this.transientDemands.size ? { replaySince: new Date().toISOString() } : {}),
-    });
+    const next = this.aggregateTransientDemand();
+    this.connection?.updateAiSessionTransient?.(next);
   }
 
   private aggregateTransientDemand(): AiSessionTransientSubscription {
@@ -345,16 +341,13 @@ export class MobileControlPlaneConnectionCoordinator {
     const timelineSessions = new Map<string, { instanceId: string; sessionId: string }>();
     let allInstances = false;
     let timelineAllSessions = false;
-    let replaySince: string | undefined;
     for (const demand of this.transientDemands.values()) {
       allInstances ||= demand.messageDeltas.allInstances;
       timelineAllSessions ||= demand.timelineAllSessions;
       for (const instanceId of demand.messageDeltas.instanceIds) instanceIds.add(instanceId);
       for (const session of demand.timelineSessions) timelineSessions.set(`${session.instanceId}\0${session.sessionId}`, session);
-      if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
     }
     return {
-      ...(replaySince ? { replaySince } : {}),
       messageDeltas: { allInstances, instanceIds: [...instanceIds] },
       timelineAllSessions,
       timelineSessions: [...timelineSessions.values()],
@@ -377,8 +370,9 @@ export class MobileControlPlaneConnectionCoordinator {
     this.publish(this.controlPlaneClosed
       ? { phase: 'control-plane-closed', error }
       : { phase: 'reconnecting', ...(error ? { error } : {}) });
-    const { attempt, delay } = this.reconnectBackoff.next();
-    diagnosticLog.warn('runtime.reconnect.scheduled', { attempt, delayMs: delay, errorPresent: Boolean(error) });
+    const backoff = this.reconnectBackoff.next();
+    const delay = Math.max(backoff.delay, idempotencyPendingError(cause) ? IDEMPOTENCY_PENDING_RECONNECT_DELAY_MS : 0);
+    diagnosticLog.warn('runtime.reconnect.scheduled', { attempt: backoff.attempt, delayMs: delay, errorPresent: Boolean(error) });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.live(epoch, abortController)) return;
@@ -429,6 +423,10 @@ export class MobileControlPlaneConnectionCoordinator {
     this.snapshotValue = snapshot;
     for (const listener of this.listeners) listener();
   }
+}
+
+function idempotencyPendingError(error: unknown) {
+  return String((error as { code?: unknown } | null)?.code ?? '') === 'IDEMPOTENCY_REQUEST_IN_PROGRESS';
 }
 
 function mobileConnectionError(cause: unknown) {

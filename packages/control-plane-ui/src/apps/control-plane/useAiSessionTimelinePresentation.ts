@@ -1,8 +1,8 @@
-import { computed, toValue, type MaybeRefOrGetter } from "vue";
+import { computed, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useI18n } from "vue-i18n";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import type { AiSessionSummary, InstanceWithAiSessions } from "../../api/types";
-import { getAiSessionTimeline, getAiSessionTurnTimeline } from "../../api/queries";
+import { getAiSessionTimeline, getAiSessionTurnTimeline, syncAiSessionTimeline, syncAiSessionTurnTimeline } from "../../api/queries";
 import { translateApiError } from "../../i18n/apiError";
 import { compactTimelineForTurn } from "../../components/ai-session/timelineActivities";
 import { aiSessionTurns } from "./useInstanceSessions";
@@ -10,6 +10,19 @@ import { useAiSessionTimelineStore } from "./useAiSessionTimelineStore";
 
 const activeTurnTimelineLoads = new Map<string, Promise<void>>();
 const activeSessionTimelineLoads = new Map<string, Promise<void>>();
+const latestTurnTimelineRequests = new Map<string, symbol>();
+const latestSessionTimelineRequests = new Map<string, symbol>();
+const timelineSyncUnsupportedInstances = new Set<string>();
+
+function missingTimelineSyncRoute(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown };
+  const status = candidate.statusCode ?? candidate.status;
+  return status === 404
+    || status === 405
+    || candidate.code === "HTTP_404"
+    || candidate.code === "ROUTE_NOT_FOUND";
+}
 
 function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string, revision?: number | string) {
   return JSON.stringify([instanceId, sessionId, turnId || "", revision ?? ""]);
@@ -25,6 +38,7 @@ export function useAiSessionTimelinePresentation(options: {
   const instance = computed(() => toValue(options.instance));
   const session = computed(() => toValue(options.session));
   const promptIndex = computed(() => toValue(options.promptIndex));
+  const timelineRefreshEpoch = ref(0);
   const supportsSessionRead = computed(() => {
     const current = session.value;
     return Boolean(current && supportsAiSessionTimelineCapability(instance.value?.capabilities, current.agent, "session-read"));
@@ -73,21 +87,54 @@ export function useAiSessionTimelinePresentation(options: {
     if (!currentInstance || !supportsSessionRead.value) return;
     const instanceId = currentInstance.id;
     const turns = aiSessionTurns(current);
-    const key = timelineLoadKey(instanceId, current.id, undefined, turns.map((turn) => `${turn.id}:${turn.revision}`).join("|"));
+    const state = timelineStore.sessionState(instanceId, current.id);
+    const cachedRevision = state.revision;
+    const requestRevision = cachedRevision && turns.every((turn) => (
+      timelineStore.turnState(instanceId, current.id, turn).revision === cachedRevision
+    )) ? cachedRevision : undefined;
+    const requestKey = timelineLoadKey(instanceId, current.id);
+    const key = timelineLoadKey(instanceId, current.id, undefined, `${force ? timelineRefreshEpoch.value : ""}:${turns.map((turn) => `${turn.id}:${turn.revision}`).join("|")}:${requestRevision || ""}`);
     const existing = activeSessionTimelineLoads.get(key);
     if (existing) return existing;
-    const state = timelineStore.sessionState(instanceId, current.id);
     if (!force && state.status === "ready") return;
+    const requestToken = Symbol(requestKey);
+    latestSessionTimelineRequests.set(requestKey, requestToken);
     timelineStore.beginSessionLoad(instanceId, current.id);
-    for (const turn of turns) timelineStore.beginTurnLoad(instanceId, current.id, turn);
-    const load = getAiSessionTimeline(instanceId, current.id)
-      .then((result) => timelineStore.resolveSession(instanceId, current.id, turns, result))
+    const knownItems = timelineStore.knownSessionTimelineItems(instanceId, current.id, turns);
+    const syncSupported = typeof syncAiSessionTimeline === "function" && !timelineSyncUnsupportedInstances.has(instanceId);
+    const load = (syncSupported
+      ? syncAiSessionTimeline(instanceId, current.id, knownItems).catch((error) => {
+        if (!missingTimelineSyncRoute(error)) throw error;
+        timelineSyncUnsupportedInstances.add(instanceId);
+        return getAiSessionTimeline(instanceId, current.id, requestRevision);
+      })
+      : getAiSessionTimeline(instanceId, current.id, requestRevision))
+      .then((read) => {
+        if (latestSessionTimelineRequests.get(requestKey) !== requestToken) return;
+        if (read.kind === "not-modified") {
+          timelineStore.resolveSessionNotModified(instanceId, current.id, turns, read.revision);
+          return;
+        }
+        if (read.kind === "snapshot") {
+          timelineStore.resolveSessionSyncSnapshot(instanceId, current.id, turns, read.items, read.revision);
+          return;
+        }
+        if (read.kind === "delta") {
+          timelineStore.applySessionSyncDelta(instanceId, current.id, turns, read);
+          return;
+        }
+        timelineStore.resolveSession(instanceId, current.id, turns, read.timeline, read.revision);
+      })
       .catch((error) => {
+        if (latestSessionTimelineRequests.get(requestKey) !== requestToken) return;
         const message = translateApiError(error, t, t("sessions.timeline.loadFailed"));
         timelineStore.rejectSession(instanceId, current.id, message);
         for (const turn of turns) timelineStore.rejectTurn(instanceId, current.id, turn, message);
       })
-      .finally(() => activeSessionTimelineLoads.delete(key));
+      .finally(() => {
+        activeSessionTimelineLoads.delete(key);
+        if (latestSessionTimelineRequests.get(requestKey) === requestToken) latestSessionTimelineRequests.delete(requestKey);
+      });
     activeSessionTimelineLoads.set(key, load);
     return load;
   }
@@ -101,29 +148,94 @@ export function useAiSessionTimelinePresentation(options: {
     const turn = turns.find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
     if (!turn) return;
     const state = timelineStore.turnState(instanceId, current.id, turn);
+    const cachedRevision = state.revision;
     if (!supportsTurnRead.value) {
       if (!force && (state.status === "ready" || state.status === "loading")) return;
       return loadFullTimeline(current, true);
     }
     if (!force && (state.status === "ready" || state.status === "loading")) return;
-    const key = timelineLoadKey(instanceId, current.id, turn.id, turn.revision);
+    const requestKey = timelineLoadKey(instanceId, current.id, turn.id);
+    const key = timelineLoadKey(instanceId, current.id, turn.id, `${force ? timelineRefreshEpoch.value : ""}:${turn.revision}:${cachedRevision || ""}`);
     const existing = activeTurnTimelineLoads.get(key);
     if (existing) return existing;
+    const requestToken = Symbol(requestKey);
+    latestTurnTimelineRequests.set(requestKey, requestToken);
     timelineStore.beginTurnLoad(instanceId, current.id, turn);
-    const load = getAiSessionTurnTimeline(instanceId, current.id, turn.id)
-      .then((result) => {
-        timelineStore.resolveTurn(instanceId, current.id, turn, result.items);
+    const knownItems = timelineStore.knownTurnTimelineItems(instanceId, current.id, turn);
+    const syncSupported = typeof syncAiSessionTurnTimeline === "function" && !timelineSyncUnsupportedInstances.has(instanceId);
+    const load = (syncSupported
+      ? syncAiSessionTurnTimeline(instanceId, current.id, turn.id, knownItems).catch((error) => {
+        if (!missingTimelineSyncRoute(error)) throw error;
+        timelineSyncUnsupportedInstances.add(instanceId);
+        return getAiSessionTurnTimeline(instanceId, current.id, turn.id, cachedRevision);
       })
-      .catch((error) => timelineStore.rejectTurn(
-        instanceId,
-        current.id,
-        turn,
-        translateApiError(error, t, t("sessions.timeline.loadFailed")),
-      ))
-      .finally(() => activeTurnTimelineLoads.delete(key));
+      : getAiSessionTurnTimeline(instanceId, current.id, turn.id, cachedRevision))
+      .then((read) => {
+        if (latestTurnTimelineRequests.get(requestKey) !== requestToken) return;
+        if (read.kind === "not-modified") {
+          timelineStore.resolveTurnNotModified(instanceId, current.id, turn, read.revision);
+          return;
+        }
+        if (read.kind === "snapshot") {
+          timelineStore.resolveTurnSyncSnapshot(instanceId, current.id, turn, read.items, read.revision);
+          return;
+        }
+        if (read.kind === "delta") {
+          timelineStore.applyTurnSyncDelta(instanceId, current.id, turn, read);
+          return;
+        }
+        timelineStore.resolveTurn(instanceId, current.id, turn, read.timeline.items, read.revision);
+      })
+      .catch((error) => {
+        if (latestTurnTimelineRequests.get(requestKey) !== requestToken) return;
+        timelineStore.rejectTurn(
+          instanceId,
+          current.id,
+          turn,
+          translateApiError(error, t, t("sessions.timeline.loadFailed")),
+        );
+      })
+      .finally(() => {
+        activeTurnTimelineLoads.delete(key);
+        if (latestTurnTimelineRequests.get(requestKey) === requestToken) latestTurnTimelineRequests.delete(requestKey);
+      });
     activeTurnTimelineLoads.set(key, load);
     return load;
   }
+
+  function refreshCachedTimeline() {
+    const current = session.value;
+    const currentInstance = instance.value;
+    if (!currentInstance || !current || !supportsTimelineReads.value) return;
+    const turns = aiSessionTurns(current);
+    if (supportsSessionRead.value) {
+      const state = timelineStore.sessionState(currentInstance.id, current.id);
+      if (state.status !== "idle") {
+        void loadFullTimeline(current, true);
+        return;
+      }
+    }
+    if (!supportsTurnRead.value) return;
+    for (const turn of turns) {
+      const state = timelineStore.turnState(currentInstance.id, current.id, turn);
+      if (state.status !== "idle") void loadTurnTimeline(turn.id, true);
+    }
+  }
+
+  watch(
+    () => {
+      const current = session.value;
+      const currentInstance = instance.value;
+      if (!currentInstance || !current) return "";
+      const turns = aiSessionTurns(current).map((turn) => turn.id).join(",");
+      return `${currentInstance.id}\u0000${current.id}\u0000${turns}\u0000${timelineStore.recoveryRevision.value}`;
+    },
+    () => {
+      timelineRefreshEpoch.value += 1;
+      refreshCachedTimeline();
+    },
+    { immediate: true, flush: "post" },
+  );
 
   return {
     conversationTurnTimelines,

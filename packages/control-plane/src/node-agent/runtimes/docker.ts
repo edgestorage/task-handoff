@@ -69,6 +69,8 @@ type DockerContainerMount = {
 };
 
 const DOCKER_BOOTSTRAP_ABI = "1";
+const DOCKER_LOG_MAX_SIZE = "20m";
+const DOCKER_LOG_MAX_FILES = "5";
 const DOCKER_BOOTSTRAP_CONTAINER_DIR = "/run/task-handoff/bootstrap";
 const DOCKER_BOOTSTRAP_ENTRYPOINT = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/entrypoint.sh`;
 const DOCKER_BOOTSTRAP_EXECUTABLE = "/bin/bash";
@@ -1319,6 +1321,12 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   const args = [
     "run",
     "-d",
+    "--log-driver",
+    "json-file",
+    "--log-opt",
+    `max-size=${DOCKER_LOG_MAX_SIZE}`,
+    "--log-opt",
+    `max-file=${DOCKER_LOG_MAX_FILES}`,
     "--name",
     containerName,
     "--user",

@@ -190,7 +190,9 @@ export async function aiSessionTimeline(context: CliContext, invocation: CliInvo
   const instanceId = requireArgument(invocation, "instanceId");
   const sessionId = requireArgument(invocation, "sessionId");
   const connection = await openConnection(context);
-  const timeline = await connection.client.aiSessions.timeline(instanceId, sessionId, context.signal);
+  const read = await connection.client.aiSessions.timeline(instanceId, sessionId, undefined, context.signal);
+  const timeline = read.kind === "updated" ? read.timeline : undefined;
+  if (!timeline) return { data: [], columns: TIMELINE_COLUMNS, message: `AI session \`${sessionId}\` timeline is unchanged.` };
   if (context.output.json) return { data: timeline };
   return {
     data: timelineRows(timeline.items),
@@ -204,7 +206,9 @@ export async function aiSessionTurnTimeline(context: CliContext, invocation: Cli
   const sessionId = requireArgument(invocation, "sessionId");
   const turnId = requireArgument(invocation, "turnId");
   const connection = await openConnection(context);
-  const timeline = await connection.client.aiSessions.turnTimeline(instanceId, sessionId, turnId, context.signal);
+  const read = await connection.client.aiSessions.turnTimeline(instanceId, sessionId, turnId, undefined, context.signal);
+  const timeline = read.kind === "updated" ? read.timeline : undefined;
+  if (!timeline) return { data: [], columns: TIMELINE_COLUMNS, message: `Turn \`${turnId}\` timeline is unchanged.` };
   if (context.output.json) return { data: timeline };
   return {
     data: timelineRows(timeline.items),

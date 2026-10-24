@@ -27,6 +27,8 @@ export const NodeRelayRegistryProjectionSchema = z.strictObject({
   revision: z.number().int().positive(),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
+  /** Aggregate node-channel bytes settled for this handle; optional for N-1 Coordinators. */
+  usageBytes: z.number().int().nonnegative().optional(),
   access: ResourceAccessSchema.optional(),
 });
 

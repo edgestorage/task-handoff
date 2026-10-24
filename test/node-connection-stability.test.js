@@ -800,6 +800,44 @@ test("fleet revalidation publishes only semantic state changes after the initial
   assert.equal(gateway.readFleetRuntimes([node]).items[0].name, "Runtime B");
 });
 
+test("default fleet freshness absorbs the desktop tray's 15-second directory poll", async () => {
+  let requests = 0;
+  const runtime = {
+    id: "runtime_cached",
+    nodeId: "node_cached",
+    name: "Cached runtime",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: "2026-08-22T00:00:00.000Z",
+    updatedAt: "2026-08-22T00:00:00.000Z",
+  };
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [runtime] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: "node_cached",
+    connectionMode: "direct-http",
+    endpoint: "http://node-cached.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_cached" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  await gateway.refreshFleetRuntimes([node]);
+  assert.equal(requests, 1);
+});
+
 test("runtime checks update the fleet snapshot without exposing an empty directory", async () => {
   const timestamp = "2026-08-22T00:00:00.000Z";
   let checked = false;
@@ -995,6 +1033,186 @@ test("reachability probe observations do not publish fleet content changes", asy
   assert.deepEqual(observed.map((state) => ({ resource: state.resource, contentChanged: state.contentChanged })), [
     { resource: "instances", contentChanged: true },
   ]);
+});
+
+test("background instance refreshes use an ETag and retain the cached fleet on 304", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_conditional",
+    name: "Conditional instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_conditional",
+    runtimeId: "runtime_conditional",
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const requestHeaders = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (_node, _route, init) => {
+      const headers = new Headers(init.headers);
+      requestHeaders.push(headers.get("if-none-match"));
+      if (requestHeaders.length === 1) {
+        return new Response(JSON.stringify({ data: [instance()] }), {
+          status: 200,
+          headers: { "content-type": "application/json", etag: '"fleet-v1"' },
+        });
+      }
+      return new Response(null, { status: 304, headers: { etag: '"fleet-v1"' } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetSnapshotFreshMs: 0 });
+  const node = {
+    id: "node_conditional",
+    connectionMode: "direct-http",
+    endpoint: "http://node-conditional.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_conditional" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  await gateway.refreshFleetInstances([node]);
+  await gateway.refreshFleetInstances([node], {}, true);
+
+  assert.deepEqual(requestHeaders, [null, '"fleet-v1"', '"fleet-v1"']);
+  assert.deepEqual(gateway.readFleetInstances([node]).items.map((item) => item.id), ["inst_conditional"]);
+});
+
+test("direct instance list calls reuse the cached fleet validator", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_direct_conditional",
+    name: "Direct conditional instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_direct_conditional",
+    runtimeId: "runtime_direct_conditional",
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const requestHeaders = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (_node, _route, init) => {
+      const headers = new Headers(init.headers);
+      requestHeaders.push(headers.get("if-none-match"));
+      if (requestHeaders.length === 1) {
+        return new Response(JSON.stringify({ data: [instance()] }), {
+          status: 200,
+          headers: { "content-type": "application/json", etag: '"direct-fleet-v1"' },
+        });
+      }
+      return new Response(null, { status: 304, headers: { etag: '"direct-fleet-v1"' } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetSnapshotFreshMs: 0 });
+  const node = {
+    id: "node_direct_conditional",
+    connectionMode: "direct-http",
+    endpoint: "http://node-direct-conditional.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_direct_conditional" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  const instances = await gateway.listInstances(node);
+
+  assert.deepEqual(requestHeaders, [null, '"direct-fleet-v1"']);
+  assert.deepEqual(instances.map((item) => item.id), ["inst_direct_conditional"]);
+});
+
+test("fleet directory requests omit Session detail and overlay the live Session aggregator", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const session = (overrides = {}) => ({
+    id: "session_directory_overlay",
+    agent: "codex",
+    creationSource: "app-session",
+    lineage: {},
+    status: "running",
+    phase: "thinking",
+    startedAt: timestamp,
+    updatedAt: timestamp,
+    ...overrides,
+  });
+  const instance = (sessions) => ControlledInstanceSchema.parse({
+    id: "inst_directory_overlay",
+    name: "Directory overlay instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_directory_overlay",
+    runtimeId: "runtime_directory_overlay",
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    aiSessions: {
+      runningCount: sessions.length,
+      waitingCount: 0,
+      staleCount: 0,
+      sessions,
+      updatedAt: timestamp,
+    },
+  });
+  const requests = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (_node, route, init) => {
+      const headers = new Headers(init.headers);
+      requests.push({
+        route,
+        projection: headers.get("x-task-handoff-instance-projection"),
+        ifNoneMatch: headers.get("if-none-match"),
+      });
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({ data: [instance([])] }), {
+          status: 200,
+          headers: { "content-type": "application/json", etag: '"compact-v1"' },
+        });
+      }
+      if (requests.length === 2) {
+        return new Response(JSON.stringify({ data: [instance([session({ userPrompt: "full bootstrap" })])] }), {
+          status: 200,
+          headers: { "content-type": "application/json", etag: '"full-v1"' },
+        });
+      }
+      return new Response(null, { status: 304, headers: { etag: '"compact-v1"' } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetSnapshotFreshMs: 0 });
+  gateway.setAiSessionSnapshotProvider((instanceId) => instanceId === "inst_directory_overlay" ? {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    sessions: [session({ title: "Live Session title" })],
+    updatedAt: "2026-08-22T00:00:10.000Z",
+  } : undefined);
+  const node = {
+    id: "node_directory_overlay",
+    connectionMode: "direct-http",
+    endpoint: "http://node-directory-overlay.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_directory_overlay" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  await gateway.listInstancesWithAiSessions(node);
+  await gateway.refreshFleetInstances([node]);
+
+  assert.deepEqual(requests, [
+    { route: "/instances", projection: "directory", ifNoneMatch: null },
+    { route: "/instances", projection: null, ifNoneMatch: null },
+    { route: "/instances", projection: "directory", ifNoneMatch: '"compact-v1"' },
+  ]);
+  assert.deepEqual(gateway.readFleetInstances([node]).items[0].aiSessions.sessions.map((item) => item.title), ["Live Session title"]);
+  assert.equal(gateway.instanceFromSnapshot([node], "inst_directory_overlay").aiSessions.sessions[0].title, "Live Session title");
 });
 
 test("AI Session projections do not publish fleet content changes", async () => {
@@ -1271,6 +1489,70 @@ test("proxy node event subscriber opens the authoritative node-agent event strea
   assert.equal(subscriber.diagnostics().activeConnections, 1);
 });
 
+test("cloud-relay nodes carry events and transient demand on the main relay tunnel", async (t) => {
+  let openedAuxiliaryConnections = 0;
+  class Socket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = 1;
+      this.sent = [];
+    }
+    send(value) {
+      this.sent.push(String(value));
+    }
+    ping() {}
+    close() {
+      this.readyState = 3;
+      this.emit("close");
+    }
+  }
+  const node = {
+    id: "node_cloud_relay_events",
+    connectionMode: "cloud-relay",
+    connectionEnabled: true,
+    connectionPath: { kind: "cloud-relay", nodeHandle: "nrh_cloud_relay_events" },
+    auth: { mode: "paired-hmac" },
+  };
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport();
+  const ingress = new NodeTunnelIngress(tunnel);
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    {
+      listNodes: () => [node],
+      resolveNodeAgentTransport: () => ({
+        proxyWebSocket() {
+          openedAuxiliaryConnections += 1;
+        },
+      }),
+    },
+    tunnel,
+    { safetyIntervalMs: 60_000 },
+  );
+  t.after(() => subscriber.stop());
+  subscriber.setAiSessionTransientDemand({
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  subscriber.setResourceMetricDemand({ all: false, instanceIds: ["instance-metrics"] });
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(openedAuxiliaryConnections, 0);
+  assert.equal(subscriber.diagnostics().activeConnections, 0);
+
+  const main = new Socket();
+  ingress.attachMain(node.id, main);
+  main.emit("message", JSON.stringify({ type: "node-agent.identify", nodeId: node.id }));
+  const subscription = main.sent.map((message) => JSON.parse(message)).find((message) => message.type === "control-plane.event-subscribe");
+  assert.deepEqual(subscription.aiSessionTransient, {
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  assert.deepEqual(subscription.metricInstanceIds, ["instance-metrics"]);
+});
+
 test("proxy node event subscriber logs authoritative app-session frames before routing", async (t) => {
   const logs = [];
   const node = {
@@ -1374,6 +1656,7 @@ test("node event subscriber sends aggregated transient demand over the reused up
     timelineAllSessions: false,
     timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
   });
+  subscriber.setResourceMetricDemand({ all: false, instanceIds: ["instance-metrics"] });
   subscriber.start();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(sent.at(-1).aiSessionTransient, {
@@ -1381,6 +1664,7 @@ test("node event subscriber sends aggregated transient demand over the reused up
     timelineAllSessions: false,
     timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
   });
+  assert.deepEqual(sent.at(-1).metricInstanceIds, ["instance-metrics"]);
   failControlSend = true;
   assert.doesNotThrow(() => subscriber.setAiSessionTransientDemand({
     legacyAll: false,

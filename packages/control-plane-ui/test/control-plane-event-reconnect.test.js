@@ -92,8 +92,9 @@ test("Control Plane events declare list delta demand separately from detail time
   assert.match(source, /const messageDeltaDemand = aiSessionMessageDeltaDemand\.value/);
   assert.match(source, /messageDeltas: instanceId[\s\S]*scopedMessageDeltaDemanded \? \[instanceId\] : \[\]/);
   assert.match(source, /timelineSessions: aiSessionTimelineDemand\.value\.filter/);
-  assert.match(source, /watch\(\[aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince\]/);
+  assert.match(source, /watch\(\[aiSessionMessageDeltaDemand, aiSessionTimelineDemand\]/);
   assert.match(source, /watch\(\(\) => JSON\.stringify\(toValue\(input\.resourceMetricInstanceIds \|\| \[\]\)\)[\s\S]*?sendSubscription\(socket\);/);
+  assert.doesNotMatch(source, /replaySince/);
   assert.doesNotMatch(source, /replaySince[\s\S]{0,320}invalidateQueries/);
   assert.doesNotMatch(source, /messageDeltas: \{ allInstances: true/);
 });

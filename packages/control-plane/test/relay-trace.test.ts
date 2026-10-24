@@ -242,3 +242,185 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
   trace.close();
   assert.equal(sockets[0].readyState, FakeSocket.CLOSED);
 });
+
+test("relay connector times out when the Relay never acknowledges attach", { timeout: 2_000 }, async () => {
+  const sockets: any[] = [];
+  class HangingSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = HangingSocket.CONNECTING;
+    listeners = new Map<string, ((...args: any[]) => void)[]>();
+    constructor(url: string) {
+      (this as any).url = url;
+      sockets.push(this);
+      queueMicrotask(() => { this.readyState = HangingSocket.OPEN; this.emit("open"); });
+    }
+    on(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
+    once(event: string, listener: (...args: any[]) => void) { const wrapper = (...args: any[]) => { this.off(event, wrapper); listener(...args); }; this.on(event, wrapper); }
+    off(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
+    emit(event: string, ...args: any[]) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
+    send() { /* deliberately never acknowledges the attach */ }
+    close(code?: number, reason?: string) { this.readyState = HangingSocket.CLOSED; queueMicrotask(() => this.emit("close", code, reason)); }
+  }
+
+  const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
+  const issuedAt = new Date(now - 1_000).toISOString();
+  const expiresAt = new Date(now + 14 * 60_000).toISOString();
+  const transcriptTicket = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Transcript,
+    transcriptTicketId: "transcript_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    nonce: "t".repeat(24),
+    issuedAt,
+    expiresAt,
+  };
+  const grant = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Grant,
+    sessionId: "relay_session_a",
+    grantId: "grant_a",
+    generation: 1,
+    allocationId: "allocation_a",
+    accessTicketId: "access_ticket_a",
+    relayId: "relay_a",
+    relayRegion: "eu-west",
+    relayUrl: "ws://localhost:8080/connect",
+    accountId: transcriptTicket.accountId,
+    deviceSessionId: transcriptTicket.deviceSessionId,
+    controlPlaneId: transcriptTicket.controlPlaneId,
+    bindingId: transcriptTicket.bindingId,
+    bindingRevision: transcriptTicket.bindingRevision,
+    targetPublicKeyFingerprint: fingerprint,
+    clientProofPublicKey: "b".repeat(43),
+    controlPlaneProofPublicKey: "c".repeat(43),
+    trafficClass: "interactive",
+    sessionTranscriptTicket: transcriptTicket,
+    revocationEpoch: 0,
+    issuedAt,
+    expiresAt,
+    signature: "s".repeat(86),
+  } as const;
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const connector = new CloudRelayConnector({
+    identity: {
+      acceptCloudAccessHandshake: () => ({ response: {}, transcript: "transcript", signature: "s".repeat(32) }),
+      publicIdentity: () => ({ publicKey: "c".repeat(43) }),
+      signRelayRoleProof: (payload: Record<string, unknown>) => ({ ...payload, signature: "s".repeat(86) }),
+    },
+    bridge: { request: async () => ({ status: 200 }) } as any,
+    webSocket: HangingSocket as any,
+    attachTimeoutMs: 25,
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(() => connector.connect({ relayUrl: grant.relayUrl, allocation: { attach, grant } }), { code: "RELAY_ATTACH_TIMEOUT" });
+  assert.ok(Date.now() - startedAt >= 20, "the attach wait must be bounded by the configured timeout");
+  assert.equal(sockets[0].readyState, HangingSocket.CLOSED);
+});
+
+test("relay connector bounds the encrypted handshake wait", { timeout: 2_000 }, async () => {
+  let disconnected = false;
+  let closeCode: number | undefined;
+  class AttachOnlySocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = AttachOnlySocket.CONNECTING;
+    listeners = new Map<string, ((...args: any[]) => void)[]>();
+    constructor(url: string) {
+      (this as any).url = url;
+      queueMicrotask(() => { this.readyState = AttachOnlySocket.OPEN; this.emit("open"); });
+    }
+    on(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
+    once(event: string, listener: (...args: any[]) => void) { const wrapper = (...args: any[]) => { this.off(event, wrapper); listener(...args); }; this.on(event, wrapper); }
+    off(event: string, listener: (...args: any[]) => void) { this.listeners.set(event, (this.listeners.get(event) ?? []).filter((item) => item !== listener)); }
+    emit(event: string, ...args: any[]) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
+    send(raw: string) {
+      if (JSON.parse(raw).type !== "attach") return;
+      queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify({
+        type: "attached",
+        channelId: "channel_a",
+        allocationId: "allocation_a",
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })), false));
+    }
+    close(code?: number, reason?: string) {
+      closeCode = code;
+      this.readyState = AttachOnlySocket.CLOSED;
+      queueMicrotask(() => this.emit("close", code, reason));
+    }
+    ping() {}
+    terminate() { this.close(1006, "terminated"); }
+  }
+
+  const now = Date.now(); const fingerprint = `sha256:${"a".repeat(43)}`;
+  const issuedAt = new Date(now - 1_000).toISOString();
+  const expiresAt = new Date(now + 14 * 60_000).toISOString();
+  const transcriptTicket = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Transcript,
+    transcriptTicketId: "transcript_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    nonce: "t".repeat(24),
+    issuedAt,
+    expiresAt,
+  };
+  const grant = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Grant,
+    sessionId: "relay_session_a",
+    grantId: "grant_a",
+    generation: 1,
+    allocationId: "allocation_a",
+    accessTicketId: "access_ticket_a",
+    relayId: "relay_a",
+    relayRegion: "eu-west",
+    relayUrl: "ws://localhost:8080/connect",
+    accountId: transcriptTicket.accountId,
+    deviceSessionId: transcriptTicket.deviceSessionId,
+    controlPlaneId: transcriptTicket.controlPlaneId,
+    bindingId: transcriptTicket.bindingId,
+    bindingRevision: transcriptTicket.bindingRevision,
+    targetPublicKeyFingerprint: fingerprint,
+    clientProofPublicKey: "b".repeat(43),
+    controlPlaneProofPublicKey: "c".repeat(43),
+    trafficClass: "interactive",
+    sessionTranscriptTicket: transcriptTicket,
+    revocationEpoch: 0,
+    issuedAt,
+    expiresAt,
+    signature: "s".repeat(86),
+  } as const;
+  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const connector = new CloudRelayConnector({
+    identity: {
+      acceptCloudAccessHandshake: () => ({ response: {}, transcript: "transcript", signature: "s".repeat(32) }),
+      publicIdentity: () => ({ publicKey: "c".repeat(43) }),
+      signRelayRoleProof: (payload: Record<string, unknown>) => ({ ...payload, signature: "s".repeat(86) }),
+    },
+    bridge: { request: async () => ({ status: 200 }) } as any,
+    webSocket: AttachOnlySocket as any,
+    attachTimeoutMs: 100,
+    handshakeTimeoutMs: 25,
+  });
+
+  // The connection object is returned once attach succeeds; the encrypted
+  // handshake continues in the background and must still be time-bounded.
+  await connector.connect({ relayUrl: grant.relayUrl, allocation: { attach, grant }, onDisconnected: () => { disconnected = true; } });
+  await waitFor(() => disconnected, 500);
+  assert.equal(closeCode, 4400);
+});

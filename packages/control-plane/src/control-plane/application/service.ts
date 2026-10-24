@@ -1,6 +1,7 @@
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   CLOUD_ACCOUNT_NODE_HANDLE_LABEL,
+  CLOUD_RELAY_CLAIM_DISABLED_LABEL,
   AppManagementJobResponseSchema,
   AppManagementUpdateCheckResponseSchema,
   AppManagementSnapshotSchema,
@@ -503,6 +504,31 @@ export class ControlPlaneService {
     return this.listNodes().find((node) => node.connectionPath.kind === "cloud-relay" && node.connectionPath.nodeHandle === nodeHandle);
   }
 
+  /**
+   * Cloud-relay nodes this Control Plane should reclaim after a fresh
+   * Coordinator connection. The opt-out label is persisted by an explicit
+   * unbind so restart recovery cannot undo that operator decision.
+   */
+  listCloudRelayNodesToClaim() {
+    return this.listNodes().flatMap((node) => node.connectionPath.kind === "cloud-relay"
+      && node.connectionEnabled !== false
+      && node.labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL] !== "true"
+      ? [{ nodeHandle: node.connectionPath.nodeHandle }]
+      : []);
+  }
+
+  async setCloudRelayNodeClaimEnabled(nodeHandle: string, enabled: boolean) {
+    const node = this.findCloudRelayNode(nodeHandle);
+    if (!node) return false;
+    const disabled = node.labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL] === "true";
+    if (enabled === !disabled) return true;
+    const labels = { ...node.labels };
+    if (enabled) delete labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL];
+    else labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL] = "true";
+    await this.nodes.put(NodeSchema.parse({ ...node, labels, updatedAt: now() }));
+    return true;
+  }
+
   /** The locally managed node already linked to an account handle, if any. */
   findNodeByCloudAccountHandle(nodeHandle: string) {
     return this.listNodes().find((node) => node.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL] === nodeHandle);
@@ -613,6 +639,10 @@ export class ControlPlaneService {
 
   setAiSessionSnapshotProvider(provider: (options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; aiSessions: AiSessionsSnapshot; revision: number; lastEventAt: string }> }>) {
     this.aiSessionSnapshotProvider = provider;
+  }
+
+  setAiSessionInstanceSnapshotProvider(provider: (instanceId: string) => AiSessionsSnapshot | undefined) {
+    this.nodeAgentGateway.setAiSessionSnapshotProvider(provider);
   }
 
   async listAiSessions(options: { refresh?: boolean } = {}) {
@@ -1655,7 +1685,7 @@ export class ControlPlaneService {
   }
 
   async bootstrapAiSessionsFromInstances() {
-    const instances = await this.listBootstrapNodeInstances();
+    const instances = await this.listBootstrapNodeInstancesWithAiSessions();
     const states = await Promise.all(
       instances.map(async (instance) => {
         if (!controlledInstanceAcceptsTraffic(instance) || !instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
@@ -1917,12 +1947,25 @@ export class ControlPlaneService {
     return this.aiSessionActionService.historyDetail(instanceId, aiSessionId);
   }
 
-  getAiSessionTimeline(instanceId: string, aiSessionId: string) {
-    return this.aiSessionActionService.timeline(instanceId, aiSessionId);
+  getAiSessionTimeline(instanceId: string, aiSessionId: string, revision?: string) {
+    return this.aiSessionActionService.timeline(instanceId, aiSessionId, revision);
   }
 
-  getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string) {
-    return this.aiSessionActionService.turnTimeline(instanceId, aiSessionId, turnId);
+  getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, revision?: string) {
+    return this.aiSessionActionService.turnTimeline(instanceId, aiSessionId, turnId, revision);
+  }
+
+  syncAiSessionTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>) {
+    return this.aiSessionActionService.syncTimeline(instanceId, aiSessionId, knownItems);
+  }
+
+  syncAiSessionTurnTimeline(
+    instanceId: string,
+    aiSessionId: string,
+    turnId: string,
+    knownItems: ReadonlyArray<{ id: string; revision: string }>,
+  ) {
+    return this.aiSessionActionService.syncTurnTimeline(instanceId, aiSessionId, turnId, knownItems);
   }
 
   resumeAiSession(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}) {
@@ -2413,6 +2456,24 @@ export class ControlPlaneService {
     const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
     await this.nodeAgentGateway.refreshFleetInstances(nodes);
     return this.nodeAgentGateway.readFleetInstances(nodes).items;
+  }
+
+  /**
+   * Session bootstrap and recovery are the only paths that need the complete
+   * Session summary. Normal fleet refreshes use the directory projection so
+   * Session activity cannot invalidate the whole instance directory.
+   */
+  private async listBootstrapNodeInstancesWithAiSessions() {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    const items = await Promise.all(nodes.map(async (node) => {
+      try {
+        return await this.nodeAgentGateway.listInstancesWithAiSessions(node);
+      } catch (error) {
+        this.logWarn({ nodeId: node.id, error: errorMessage(error) }, "control plane AI Session bootstrap instance refresh failed");
+        return this.nodeAgentGateway.readFleetInstances([node]).items;
+      }
+    }));
+    return items.flat();
   }
 
   private async listTriggerMutationInstances() {

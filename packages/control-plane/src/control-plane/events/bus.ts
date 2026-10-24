@@ -47,6 +47,11 @@ const EVENT_TRANSPORT_KEEPALIVE_INTERVAL_MS = 20_000;
 
 export type ControlPlaneAiSessionTransientDemand = AiSessionTransientSubscription & { legacyAll: boolean };
 
+export type ControlPlaneResourceMetricDemand = {
+  all: boolean;
+  instanceIds: string[];
+};
+
 function eventId() {
   return `evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
 }
@@ -55,7 +60,9 @@ export class ControlPlaneEventBus {
   private readonly clients = new Set<EventSocket>();
   private readonly listeners = new Set<(event: EventEnvelope) => void>();
   private readonly transientDemandListeners = new Set<(demand: ControlPlaneAiSessionTransientDemand) => void>();
+  private readonly resourceMetricDemandListeners = new Set<(demand: ControlPlaneResourceMetricDemand) => void>();
   private readonly externalTransientDemands = new Map<symbol, AiSessionTransientSubscription | undefined>();
+  private readonly externalResourceMetricDemands = new Map<symbol, string[] | undefined>();
   private seq = 0;
   private droppedUnscopedNodeEvents = 0;
   private lastUnscopedNodeEvent?: { type: string; topic: string; createdAt: string };
@@ -71,7 +78,7 @@ export class ControlPlaneEventBus {
     // a temporary full-stream demand spike before the first frame arrives.
     socket.subscriptionReceived = options.authorization ? false : options.expectsTransientSubscription !== true;
     this.clients.add(socket);
-    this.publishTransientDemand();
+    this.publishDemand();
     const keepaliveTimer = socket.ping ? setInterval(() => {
       if (socket.readyState !== socket.OPEN) return;
       try {
@@ -84,7 +91,7 @@ export class ControlPlaneEventBus {
     socket.on("close", () => {
       if (keepaliveTimer) clearInterval(keepaliveTimer);
       this.clients.delete(socket);
-      this.publishTransientDemand();
+      this.publishDemand();
     });
     socket.on("message", (value) => {
       const message = parseClientMessage(value);
@@ -105,7 +112,7 @@ export class ControlPlaneEventBus {
         socket.eventEnvelopeVersion = message.eventEnvelopeVersion ?? 1;
         socket.aiSessionHierarchy = message.aiSessionHierarchy;
         socket.subscriptionReceived = true;
-        this.publishTransientDemand();
+        this.publishDemand();
       }
     });
   }
@@ -136,14 +143,14 @@ export class ControlPlaneEventBus {
         if ((client.bufferedAmount ?? 0) + frame.bytes > MAX_EVENT_CLIENT_BUFFERED_BYTES) {
           this.clients.delete(client);
           try { client.close?.(1013, "Event consumer is too slow."); } catch { /* Consumer cleanup is already complete. */ }
-          this.publishTransientDemand();
+          this.publishDemand();
           continue;
         }
         try {
           client.send(frame.encoded);
         } catch {
           this.clients.delete(client);
-          this.publishTransientDemand();
+          this.publishDemand();
         }
       }
     }
@@ -164,7 +171,7 @@ export class ControlPlaneEventBus {
       this.clients.delete(client);
       try { client.close?.(4001, "Authorization changed. Reconnect for a current snapshot."); } catch { /* Connection is already invalidated. */ }
     }
-    this.publishTransientDemand();
+    this.publishDemand();
   }
 
   on(listener: (event: EventEnvelope) => void) {
@@ -180,6 +187,12 @@ export class ControlPlaneEventBus {
     return () => this.transientDemandListeners.delete(listener);
   }
 
+  onResourceMetricDemand(listener: (demand: ControlPlaneResourceMetricDemand) => void) {
+    this.resourceMetricDemandListeners.add(listener);
+    listener(this.resourceMetricDemand());
+    return () => this.resourceMetricDemandListeners.delete(listener);
+  }
+
   registerAiSessionTransientDemand(subscription?: AiSessionTransientSubscription) {
     const token = Symbol("ai-session-transient-demand");
     this.externalTransientDemands.set(token, subscription);
@@ -187,6 +200,21 @@ export class ControlPlaneEventBus {
     return () => {
       this.externalTransientDemands.delete(token);
       this.publishTransientDemand();
+    };
+  }
+
+  /**
+   * Registers demand from a consumer that receives events through a broker
+   * rather than a directly connected browser socket. `undefined` retains the
+   * legacy full stream; an explicit empty array means no resource metrics.
+   */
+  registerResourceMetricDemand(instanceIds?: string[]) {
+    const token = Symbol("resource-metric-demand");
+    this.externalResourceMetricDemands.set(token, instanceIds === undefined ? undefined : normalizedInstanceIds(instanceIds));
+    this.publishResourceMetricDemand();
+    return () => {
+      this.externalResourceMetricDemands.delete(token);
+      this.publishResourceMetricDemand();
     };
   }
 
@@ -244,6 +272,27 @@ export class ControlPlaneEventBus {
     };
   }
 
+  resourceMetricDemand(): ControlPlaneResourceMetricDemand {
+    let all = false;
+    const instanceIds = new Set<string>();
+    for (const client of this.clients) {
+      if (!subscribed(client.topics, "instances", "instance.metrics.snapshot")) continue;
+      if (client.metricInstanceIds === undefined) {
+        all = true;
+        continue;
+      }
+      for (const instanceId of client.metricInstanceIds) instanceIds.add(instanceId);
+    }
+    for (const demand of this.externalResourceMetricDemands.values()) {
+      if (demand === undefined) {
+        all = true;
+        continue;
+      }
+      for (const instanceId of demand) instanceIds.add(instanceId);
+    }
+    return { all, instanceIds: [...instanceIds] };
+  }
+
   send<T>(socket: { send: (value: string) => void }, type: string, payload: T, options: { scope?: EventScope; topic?: string } = {}) {
     const event = this.createEvent(type, payload, options);
     socket.send(JSON.stringify(event));
@@ -274,6 +323,26 @@ export class ControlPlaneEventBus {
       }
     }
   }
+
+  private publishResourceMetricDemand() {
+    const demand = this.resourceMetricDemand();
+    for (const listener of this.resourceMetricDemandListeners) {
+      try {
+        listener(demand);
+      } catch {
+        // One transport failure must not prevent other nodes from receiving the aggregate demand.
+      }
+    }
+  }
+
+  private publishDemand() {
+    this.publishTransientDemand();
+    this.publishResourceMetricDemand();
+  }
+}
+
+function normalizedInstanceIds(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function earlierReplaySince(current: string | undefined, candidate: string | undefined) {

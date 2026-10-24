@@ -573,6 +573,51 @@ test('a lost confirm response retries the same confirmation without a second boo
   expect(sessionStore.pending).toBeUndefined();
 });
 
+test('a reconnect reuses an in-flight confirm instead of replaying it', async () => {
+  const { account, open, transport } = harness();
+  const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+  let resolveConfirm!: (value: any) => void;
+  account.confirmRelaySession.mockImplementationOnce((_selectionId: string, input: { winnerAllocationId: string }) => new Promise((resolve) => {
+    const candidate = candidates.find((entry) => entry.allocationId === input.winnerAllocationId) ?? candidates[0];
+    resolveConfirm = () => resolve({ ...candidate, grant: grantFor(candidate), substituted: false });
+  }));
+
+  const initial = transport.request('/api/bootstrap', schema).catch((error) => error);
+  await waitForCondition(() => account.confirmRelaySession.mock.calls.length === 1);
+  const revalidating = transport.revalidate();
+  await flushMicrotasks();
+  expect(account.confirmRelaySession).toHaveBeenCalledTimes(1);
+
+  resolveConfirm(undefined);
+  await expect(revalidating).resolves.toBeUndefined();
+  await initial;
+  expect(account.confirmRelaySession).toHaveBeenCalledTimes(1);
+  expect(open).toHaveBeenCalledTimes(1);
+});
+
+test('an idempotency pending response waits and replays the same confirmation key', async () => {
+  jest.useFakeTimers();
+  try {
+    const { account, transport } = harness();
+    const schema = z.object({ data: z.object({ ok: z.literal(true) }) });
+    account.confirmRelaySession.mockRejectedValueOnce(Object.assign(new Error('still in progress'), {
+      code: 'IDEMPOTENCY_REQUEST_IN_PROGRESS',
+      status: 409,
+      retryable: true,
+    }));
+
+    const request = transport.request('/api/bootstrap', schema);
+    await flushMicrotasks();
+    expect(account.confirmRelaySession).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1_000);
+    await expect(request).resolves.toEqual({ data: { ok: true } });
+    expect(account.confirmRelaySession).toHaveBeenCalledTimes(2);
+    expect(account.confirmRelaySession.mock.calls[0][2]).toBe(account.confirmRelaySession.mock.calls[1][2]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('a socket loss resumes the same grant without another bootstrap or confirm', async () => {
   const { account, channels, open, transport } = harness();
   const schema = z.object({ data: z.object({ ok: z.literal(true) }) });

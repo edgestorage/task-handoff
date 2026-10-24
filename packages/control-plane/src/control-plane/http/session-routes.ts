@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import { PROXY_HOP_BY_HOP_HEADERS } from "@task-handoff/core/core/http-proxy";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT, AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamIdSchema, AiSessionAttachmentDraftStreamOffsetQuerySchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionWorkspaceCheckoutInputSchema, AiSessionsSyncRequestSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer, type AiSessionsSyncResponse } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT, AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamIdSchema, AiSessionAttachmentDraftStreamOffsetQuerySchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueuePauseInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionTimelineSyncInputSchema, AiSessionWorkspaceCheckoutInputSchema, AiSessionsSyncRequestSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer, type AiSessionsSyncResponse } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import { AppProfileCreateInputSchema, AppProfileRenameInputSchema } from "@task-handoff/protocol/app-profiles";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
@@ -544,11 +544,23 @@ export function registerSessionRoutes({
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/timeline", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionTimeline(params.id, params.sessionId) };
+    const query = AiSessionProjectionQuerySchema.parse(request.query);
+    return { data: await service.getAiSessionTimeline(params.id, params.sessionId, query.revision) };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/timeline/sync", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
+    return { data: await service.syncAiSessionTimeline(params.id, params.sessionId, input.knownItems) };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId/timeline", async (request) => {
     const params = InstanceSessionTurnParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionTurnTimeline(params.id, params.sessionId, params.turnId) };
+    const query = AiSessionProjectionQuerySchema.parse(request.query);
+    return { data: await service.getAiSessionTurnTimeline(params.id, params.sessionId, params.turnId, query.revision) };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId/timeline/sync", async (request) => {
+    const params = InstanceSessionTurnParamsSchema.parse(request.params);
+    const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
+    return { data: await service.syncAiSessionTurnTimeline(params.id, params.sessionId, params.turnId, input.knownItems) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

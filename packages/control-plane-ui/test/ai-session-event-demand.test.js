@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { computed, effectScope, nextTick, ref } from "vue";
 
+const aiSessionEventDemand = await import("../src/apps/control-plane/useAiSessionEventDemand.ts");
 const {
   aiSessionMessageDeltaDemand,
   aiSessionTimelineDemand,
-  aiSessionTransientReplaySince,
   useAiSessionMessageDeltaDemand,
   useAiSessionTimelineDemand,
-} = await import("../src/apps/control-plane/useAiSessionEventDemand.ts");
+} = aiSessionEventDemand;
 
 test("AI session transient demand is the union of live consumers and is released with their scopes", async () => {
   const firstInstanceIds = ref(["instance-a"]);
@@ -28,16 +28,14 @@ test("AI session transient demand is the union of live consumers and is released
     { instanceId: "instance-a", sessionId: "session-a" },
     { instanceId: "instance-b", sessionId: "session-b" },
   ]);
-  assert.match(aiSessionTransientReplaySince.value, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal("aiSessionTransientReplaySince" in aiSessionEventDemand, false);
 
   const stableMessageDemand = aiSessionMessageDeltaDemand.value;
   const stableTimelineDemand = aiSessionTimelineDemand.value;
-  const stableReplaySince = aiSessionTransientReplaySince.value;
   firstInstanceIds.value = ["instance-a"];
   await nextTick();
   assert.equal(aiSessionMessageDeltaDemand.value, stableMessageDemand);
   assert.equal(aiSessionTimelineDemand.value, stableTimelineDemand);
-  assert.equal(aiSessionTransientReplaySince.value, stableReplaySince);
 
   firstInstanceIds.value = [];
   await nextTick();
@@ -46,13 +44,11 @@ test("AI session transient demand is the union of live consumers and is released
   second.stop();
   assert.deepEqual(aiSessionMessageDeltaDemand.value, { allInstances: false, instanceIds: [] });
   assert.deepEqual(aiSessionTimelineDemand.value, [{ instanceId: "instance-a", sessionId: "session-a" }]);
-  assert.equal(aiSessionTransientReplaySince.value, undefined);
   first.stop();
   assert.deepEqual(aiSessionTimelineDemand.value, []);
-  assert.equal(aiSessionTransientReplaySince.value, undefined);
 });
 
-test("AI session transient demand publishes a replay barrier only for semantic expansion", async () => {
+test("AI session message demand updates only when its semantic scope changes", async () => {
   const instances = ref([{ id: "instance-a", heartbeatAgeMs: 1 }]);
   const scope = effectScope();
   scope.run(() => {
@@ -60,11 +56,9 @@ test("AI session transient demand publishes a replay barrier only for semantic e
   });
 
   const initialDemand = aiSessionMessageDeltaDemand.value;
-  const initialReplaySince = aiSessionTransientReplaySince.value;
   instances.value = [{ id: "instance-a", heartbeatAgeMs: 2 }];
   await nextTick();
   assert.equal(aiSessionMessageDeltaDemand.value, initialDemand);
-  assert.equal(aiSessionTransientReplaySince.value, initialReplaySince);
 
   instances.value = [
     { id: "instance-a", heartbeatAgeMs: 3 },
@@ -72,11 +66,28 @@ test("AI session transient demand publishes a replay barrier only for semantic e
   ];
   await nextTick();
   assert.deepEqual(aiSessionMessageDeltaDemand.value.instanceIds, ["instance-a", "instance-b"]);
-  assert.match(aiSessionTransientReplaySince.value, /^\d{4}-\d{2}-\d{2}T/);
 
   instances.value = [{ id: "instance-a", heartbeatAgeMs: 4 }];
   await nextTick();
   assert.deepEqual(aiSessionMessageDeltaDemand.value.instanceIds, ["instance-a"]);
-  assert.equal(aiSessionTransientReplaySince.value, undefined);
+  scope.stop();
+});
+
+test("switching sessions only changes the live timeline subscription", async () => {
+  const target = ref({ instanceId: "instance-switch", sessionId: "session-a" });
+  const scope = effectScope();
+  scope.run(() => {
+    useAiSessionTimelineDemand(computed(() => target.value));
+  });
+
+  assert.deepEqual(aiSessionTimelineDemand.value, [{ instanceId: "instance-switch", sessionId: "session-a" }]);
+
+  target.value = { instanceId: "instance-switch", sessionId: "session-b" };
+  await nextTick();
+  assert.deepEqual(aiSessionTimelineDemand.value, [{ instanceId: "instance-switch", sessionId: "session-b" }]);
+
+  target.value = { instanceId: "instance-switch", sessionId: "session-a" };
+  await nextTick();
+  assert.deepEqual(aiSessionTimelineDemand.value, [{ instanceId: "instance-switch", sessionId: "session-a" }]);
   scope.stop();
 });

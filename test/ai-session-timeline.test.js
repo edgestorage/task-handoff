@@ -22,12 +22,12 @@ require.extensions[".ts"] = (module, filename) => {
 };
 const { codexItemTimeline } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
-const { aiSessionTurnBodyRevision, aiSessionTurnsRevision, createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { aiSessionTimelineRevision, aiSessionTurnBodyRevision, aiSessionTurnsRevision, createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { CodexAppServerRpcError, codexPaginatedTimelineSupported } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 const { codexNotification } = require("../packages/ai-session-runtime/src/codex-app-server/protocol/events.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
-const { AiSessionEventType, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionEventType, AiSessionTimelineReadSchema, AiSessionTimelineSchema, AiSessionTurnTimelineReadSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
@@ -84,6 +84,20 @@ test("Turn body revisions ignore adapter observation metadata", () => {
   assert.notEqual(aiSessionTurnBodyRevision({ ...opened, lastMessage: "changed" }), aiSessionTurnBodyRevision(opened));
   assert.notEqual(aiSessionTurnBodyRevision({ ...opened, status: "running" }), aiSessionTurnBodyRevision(opened));
   assert.notEqual(aiSessionTurnBodyRevision({ ...opened, completedAt: "2026-10-10T12:48:00.000Z" }), aiSessionTurnBodyRevision(opened));
+});
+
+test("Timeline revisions follow item content rather than response timestamps", () => {
+  const items = [
+    { id: "prompt_1", turnId: "turn_1", type: "user-message", text: "Inspect" },
+    { id: "command_1", turnId: "turn_1", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed", output: "ok" },
+  ];
+  assert.equal(aiSessionTimelineRevision(items), aiSessionTimelineRevision(JSON.parse(JSON.stringify(items))));
+  assert.notEqual(aiSessionTimelineRevision(items), aiSessionTimelineRevision([
+    items[0],
+    { ...items[1], output: "changed" },
+  ]));
+  assert.equal(AiSessionTimelineReadSchema.safeParse({ kind: "updated", revision: "timeline-r1", timeline: { sessionId: "ais_1", providerSessionId: "thread_1", items, generatedAt: "2026-08-16T00:00:00.000Z" } }).success, true);
+  assert.equal(AiSessionTimelineReadSchema.safeParse({ kind: "not-modified", revision: "timeline-r1" }).success, true);
 });
 
 test("AI session controller routes Timeline reads through provider capabilities", async () => {
@@ -584,9 +598,11 @@ test("complete-session Timeline forwarding is capability-gated by the canonical 
     },
     requireRuntime: async () => ({}),
   });
-  const timeline = await service.timeline("instance_1", "ais_1");
+  const read = await service.timeline("instance_1", "ais_1");
   assert.equal(requestedPath, "/ai-sessions/ais_1/timeline");
-  assert.equal(timeline.sessionId, "ais_1");
+  assert.equal(read.kind, "updated");
+  assert.equal(read.timeline.sessionId, "ais_1");
+  assert.equal(AiSessionTimelineReadSchema.safeParse(read).success, true);
 
   const unsupported = new AiSessionActionService({
     requireInstance: async () => ({ capabilities: { features: {} } }),
@@ -610,9 +626,11 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
     },
     requireRuntime: async () => ({}),
   });
-  const timeline = await service.turnTimeline("instance_1", "ais_1", "turn_2");
+  const read = await service.turnTimeline("instance_1", "ais_1", "turn_2");
   assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/timeline");
-  assert.equal(AiSessionTurnTimelineSchema.safeParse(timeline).success, true);
+  assert.equal(read.kind, "updated");
+  assert.equal(AiSessionTurnTimelineSchema.safeParse(read.timeline).success, true);
+  assert.equal(AiSessionTurnTimelineReadSchema.safeParse(read).success, true);
 
   const unsupported = new AiSessionActionService({
     requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
@@ -627,6 +645,42 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
     () => unsupported.turnTimeline("instance_unsupported", "ais_1", "turn_2"),
     (error) => error.code === "AI_SESSION_TURN_TIMELINE_UNSUPPORTED",
   );
+});
+
+test("Timeline forwarding returns not-modified for a matching revision", async () => {
+  const item = {
+    id: "message_1",
+    turnId: "turn_1",
+    type: "ai-message",
+    text: "Complete timeline",
+  };
+  const requests = [];
+  const service = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: [],
+    } } } }),
+    request: async (_instance, route) => {
+      requests.push(route);
+      if (route.includes("/turns/")) {
+        return { sessionId: "ais_1", turnId: "turn_1", items: [item], generatedAt: "2026-08-16T00:00:00.000Z" };
+      }
+      return { sessionId: "ais_1", providerSessionId: "thread_1", items: [item], generatedAt: "2026-08-16T00:00:00.000Z" };
+    },
+    requireRuntime: async () => ({}),
+  });
+
+  const first = await service.timeline("instance_1", "ais_1");
+  const unchanged = await service.timeline("instance_1", "ais_1", first.revision);
+  assert.equal(unchanged.kind, "not-modified");
+  assert.equal(unchanged.revision, first.revision);
+  assert.match(requests[1], new RegExp(`\\?revision=${encodeURIComponent(first.revision)}$`));
+
+  const turn = await service.turnTimeline("instance_1", "ais_1", "turn_1");
+  const unchangedTurn = await service.turnTimeline("instance_1", "ais_1", "turn_1", turn.revision);
+  assert.equal(unchangedTurn.kind, "not-modified");
+  assert.equal(unchangedTurn.revision, turn.revision);
 });
 
 test("Timeline forwarding accepts provider-scoped capabilities", async () => {

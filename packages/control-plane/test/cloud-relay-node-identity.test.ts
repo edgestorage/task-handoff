@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL, ControlledInstanceSchema, CONTROL_PLANE_PROTOCOL_VERSION, NodeSchema } from "@task-handoff/protocol/control-plane";
+import {
+  CLOUD_ACCOUNT_NODE_HANDLE_LABEL,
+  CLOUD_RELAY_CLAIM_DISABLED_LABEL,
+  ControlledInstanceSchema,
+  CONTROL_PLANE_PROTOCOL_VERSION,
+  NodeSchema,
+} from "@task-handoff/protocol/control-plane";
 import { ControlPlaneService } from "../src/control-plane/application/service.ts";
 import { ControlPlaneNodeAgentClient } from "../src/control-plane/nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../src/control-plane/nodes/gateway.ts";
@@ -64,6 +70,41 @@ test("a cloud-relay node uses the node agent identity across restart", async () 
     await service.init();
 
     assert.equal(service.findCloudRelayNode(NODE_HANDLE)?.id, created.nodeId);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit cloud-relay unbind survives restart and disables automatic reclaim", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-claim-intent-"));
+  const paths = controlPlaneStorePaths(root);
+  let database = await createControlPlaneDatabase(paths);
+  let secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  let service = new ControlPlaneService(paths, { database, secrets });
+  try {
+    await service.init();
+    await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), [{ nodeHandle: NODE_HANDLE }]);
+
+    assert.equal(await service.setCloudRelayNodeClaimEnabled(NODE_HANDLE, false), true);
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), []);
+    assert.equal(service.requireNode(MACHINE_NODE_ID).labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL], "true");
+
+    service.dispose();
+    await database.close();
+    database = await createControlPlaneDatabase(paths);
+    secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+    secrets.init();
+    service = new ControlPlaneService(paths, { database, secrets });
+    await service.init();
+
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), []);
+    assert.equal(await service.setCloudRelayNodeClaimEnabled(NODE_HANDLE, true), true);
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), [{ nodeHandle: NODE_HANDLE }]);
+    assert.equal(service.requireNode(MACHINE_NODE_ID).labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL], undefined);
   } finally {
     service.dispose();
     await database.close();

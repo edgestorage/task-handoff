@@ -18,9 +18,19 @@ const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_IDLE_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_LEASE_RENEWAL_RATIO = 0.15;
 const DEFAULT_CREDENTIAL_RENEW_BEFORE_MS = 5 * 24 * 60 * 60 * 1000;
+const DEFAULT_ATTACH_TIMEOUT_MS = 10_000;
 const CREDENTIAL_GRACE_MS = 5 * 60 * 1000;
 
 type VerifiedAllocation = { allocation: NodeRelayNodeAllocation; grant: NodeRelayClaimGrant };
+
+type ChannelAttempt = {
+  id: number;
+  allocationId: string;
+  phase: "dialing" | "attaching" | "handshaking";
+  startedAt: number;
+  controller: AbortController;
+  socket?: WebSocket;
+};
 
 type ChannelEntry = {
   controlPlaneId: string;
@@ -31,7 +41,7 @@ type ChannelEntry = {
   socket?: WebSocket;
   supervisor?: WebSocketConnectionSupervisor;
   retry: EventConnectionRetryTimer;
-  opening?: boolean;
+  attempt?: ChannelAttempt;
   missingPolls: number;
   connectedAt?: string;
   lastDisconnectedAt?: string;
@@ -50,6 +60,7 @@ export type NodeAgentCloudRelayClientOptions = {
   webSocket?: typeof WebSocket;
   pollIntervalMs?: number;
   idlePollIntervalMs?: number;
+  attachTimeoutMs?: number;
   leaseRenewalRatio?: number;
   credentialRenewBeforeMs?: number;
   now?: () => number;
@@ -74,38 +85,96 @@ function relayKeySigner(binding: NodeAgentCloudRelayBinding) {
   };
 }
 
-function socketOpen(socket: WebSocket) {
+function relayErrorCode(error: unknown) {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : "NODE_AGENT_CLOUD_RELAY_CONNECT_FAILED";
+}
+
+function socketCloseMessage(code: number, reason: Buffer | string) {
+  const text = Buffer.from(reason).toString("utf8").trim();
+  return text ? `Cloud relay socket closed (${code}: ${text}).` : `Cloud relay socket closed (${code}).`;
+}
+
+function socketOpen(socket: WebSocket, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    socket.once("open", resolve);
-    socket.once("error", reject);
-    socket.once("close", () => reject(relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED")));
+    if (socket.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      socket.off("open", onOpen);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onOpen = () => finish();
+    const onError = (error: Error) => finish(error);
+    const onClose = (code: number, reason: Buffer) => finish(relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED", socketCloseMessage(code, reason)));
+    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : relayError("NODE_AGENT_CLOUD_RELAY_ATTEMPT_ABORTED"));
+    socket.once("open", onOpen);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
   });
 }
 
-function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) {
+function socketMessage(socket: WebSocket, predicate: (value: any) => boolean, options: {
+  signal: AbortSignal;
+  timeoutMs: number;
+  timeoutCode: string;
+  timeoutMessage: string;
+}) {
   return new Promise<any>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => finish(relayError(options.timeoutCode, options.timeoutMessage)), options.timeoutMs);
+    timer.unref?.();
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+      socket.off("error", onError);
+      options.signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (error?: unknown, value?: any) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve(value);
+      else reject(error);
+    };
     const onMessage = (raw: WebSocket.RawData) => {
       try {
         const value = JSON.parse(raw.toString());
+        if (value?.type === "error" || value?.type === "relay-error") {
+          const code = typeof value.code === "string" ? value.code : "NODE_AGENT_CLOUD_RELAY_ATTACH_REJECTED";
+          const message = typeof value.message === "string" ? value.message : "The relay rejected the node channel attach.";
+          finish(relayError(code, message));
+          return;
+        }
         if (predicate(value)) {
-          cleanup();
-          resolve(value);
+          finish(undefined, value);
         }
       } catch (error) {
-        cleanup();
-        reject(error);
+        finish(error);
       }
     };
-    const onClose = () => {
-      cleanup();
-      reject(relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED"));
-    };
-    const cleanup = () => {
-      socket.off("message", onMessage);
-      socket.off("close", onClose);
-    };
+    const onClose = (code: number, reason: Buffer) => finish(relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED", socketCloseMessage(code, reason)));
+    const onError = (error: Error) => finish(error);
+    const onAbort = () => finish(options.signal.reason instanceof Error ? options.signal.reason : relayError("NODE_AGENT_CLOUD_RELAY_ATTEMPT_ABORTED"));
     socket.on("message", onMessage);
     socket.once("close", onClose);
+    socket.once("error", onError);
+    options.signal.addEventListener("abort", onAbort, { once: true });
+    if (options.signal.aborted) onAbort();
   });
 }
 
@@ -137,6 +206,7 @@ export class NodeAgentCloudRelayClient {
   private polling = false;
   private pollAgain = false;
   private stopped = true;
+  private attemptSequence = 0;
   private readonly adaptiveSelectionUnsupported = new Set<string>();
   private lastError?: NodeAgentCloudRelayStoredError;
 
@@ -342,7 +412,6 @@ export class NodeAgentCloudRelayClient {
       if (!current || current.status !== "active") return;
       const refreshControlPlaneIds = [...this.refreshControlPlaneIds];
       const allocations = await this.reconnectAllocations(current, refreshControlPlaneIds);
-      for (const controlPlaneId of refreshControlPlaneIds) this.refreshControlPlaneIds.delete(controlPlaneId);
       if (this.stopped) return;
       if (this.applyAllocations(current, allocations)) this.lastError = undefined;
       this.schedulePoll(allocations.length || this.channels.size ? this.pollIntervalMs() : this.idlePollIntervalMs());
@@ -459,7 +528,18 @@ export class NodeAgentCloudRelayClient {
       seen.add(verified.grant.controlPlaneId);
       const entry = this.ensureEntry(verified.grant.controlPlaneId);
       entry.missingPolls = 0;
-      const live = entry.status === "connected" || entry.opening;
+      // A refresh is complete only when the Coordinator actually issues a new
+      // allocation id. Reusing the old id would replay an attach capability
+      // that the Relay has already consumed.
+      if (this.refreshControlPlaneIds.has(verified.grant.controlPlaneId) && entry.allocationId === allocation.allocationId) {
+        complete = false;
+        entry.status = "failed";
+        entry.error ??= "The Coordinator reused a consumed cloud relay allocation after a refresh request.";
+        this.scheduleEntryRetry(entry);
+        continue;
+      }
+      this.refreshControlPlaneIds.delete(verified.grant.controlPlaneId);
+      const live = entry.status === "connected" || Boolean(entry.attempt);
       if (live && entry.allocationId === allocation.allocationId) {
         entry.expiresAt = allocation.expiresAt;
         continue;
@@ -479,7 +559,6 @@ export class NodeAgentCloudRelayClient {
         entry.error ??= "The cloud withdrew this Control Plane's allocation.";
         this.releaseChannel(entry, "allocation-withdrawn");
         this.channels.delete(controlPlaneId);
-        this.refreshControlPlaneIds.delete(controlPlaneId);
       }
     }
     return complete;
@@ -533,21 +612,75 @@ export class NodeAgentCloudRelayClient {
   }
 
   private async openEntry(entry: ChannelEntry, verified: VerifiedAllocation) {
-    if (entry.opening || this.stopped) return;
     const binding = this.binding();
-    if (!binding || binding.status !== "active") return;
-    entry.opening = true;
+    if (this.stopped || !binding || binding.status !== "active") return;
+    if (entry.attempt?.allocationId === verified.allocation.allocationId) return;
+    if (entry.attempt) this.abortAttempt(entry, entry.attempt, "allocation-superseded");
+    const attempt: ChannelAttempt = {
+      id: ++this.attemptSequence,
+      allocationId: verified.allocation.allocationId,
+      phase: "dialing",
+      startedAt: this.now(),
+      controller: new AbortController(),
+    };
+    entry.attempt = attempt;
     entry.status = entry.connectedAt ? "reconnecting" : "connecting";
     entry.error = undefined;
     entry.nextRetryAt = undefined;
     const Socket = this.options.webSocket ?? WebSocket;
     const socket = new Socket(verified.allocation.relayUrl, { followRedirects: false, handshakeTimeout: 10_000, perMessageDeflate: false });
+    attempt.socket = socket;
     entry.socket = socket;
+    socket.on("error", (error) => this.log("debug", {
+      nodeId: this.options.nodeId,
+      controlPlaneId: entry.controlPlaneId,
+      allocationId: attempt.allocationId,
+      attemptId: attempt.id,
+      phase: attempt.phase,
+      error: error.message,
+    }, "node agent cloud relay socket error"));
+    this.log("info", {
+      nodeId: this.options.nodeId,
+      controlPlaneId: entry.controlPlaneId,
+      allocationId: attempt.allocationId,
+      attemptId: attempt.id,
+      relayUrl: verified.allocation.relayUrl,
+    }, "node agent cloud relay connecting");
     try {
-      await socketOpen(socket);
+      await socketOpen(socket, attempt.controller.signal);
+      this.assertCurrentAttempt(entry, attempt);
+      attempt.phase = "attaching";
+      this.log("debug", {
+        nodeId: this.options.nodeId,
+        controlPlaneId: entry.controlPlaneId,
+        allocationId: attempt.allocationId,
+        attemptId: attempt.id,
+      }, "node agent cloud relay websocket opened");
       socket.send(JSON.stringify({ type: "attach", capability: verified.allocation.nodeAttach }));
-      await socketMessage(socket, (value) => value?.type === "attached");
-      if (this.channels.get(entry.controlPlaneId) !== entry || this.stopped) throw relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED");
+      this.log("debug", {
+        nodeId: this.options.nodeId,
+        controlPlaneId: entry.controlPlaneId,
+        allocationId: attempt.allocationId,
+        attemptId: attempt.id,
+      }, "node agent cloud relay attach sent");
+      const attachTimeoutMs = this.options.attachTimeoutMs ?? DEFAULT_ATTACH_TIMEOUT_MS;
+      const attached = await socketMessage(socket, (value) => value?.type === "attached", {
+        signal: attempt.controller.signal,
+        timeoutMs: attachTimeoutMs,
+        timeoutCode: "NODE_AGENT_CLOUD_RELAY_ATTACH_TIMEOUT",
+        timeoutMessage: `Cloud relay attach timed out after ${attachTimeoutMs}ms.`,
+      });
+      this.assertCurrentAttempt(entry, attempt);
+      if (attached.allocationId !== undefined && String(attached.allocationId) !== attempt.allocationId) {
+        throw relayError("NODE_AGENT_CLOUD_RELAY_ATTACH_MISMATCH", "The relay attached the node to an unexpected allocation.");
+      }
+      this.log("info", {
+        nodeId: this.options.nodeId,
+        controlPlaneId: entry.controlPlaneId,
+        allocationId: attempt.allocationId,
+        attemptId: attempt.id,
+      }, "node agent cloud relay attach accepted");
+      attempt.phase = "handshaking";
       const grant = verified.grant;
       const storedPairing = this.options.identity.cloudRelayPairing(grant.controlPlaneId);
       const handshake = await initiateNodeRelayHandshake({
@@ -565,7 +698,7 @@ export class NodeAgentCloudRelayClient {
         node: { ...relayKeySigner(binding), nodeId: this.options.nodeId },
         ...(storedPairing ? { pairing: storedPairing } : {}),
       });
-      if (this.channels.get(entry.controlPlaneId) !== entry || this.stopped) throw relayError("NODE_AGENT_CLOUD_RELAY_SOCKET_CLOSED");
+      this.assertCurrentAttempt(entry, attempt);
       let pairing = storedPairing;
       if (handshake.pairing) {
         this.options.identity.saveCloudRelayPairing({ controlPlaneId: grant.controlPlaneId, keyId: handshake.pairing.keyId, secret: handshake.pairing.secret });
@@ -599,7 +732,15 @@ export class NodeAgentCloudRelayClient {
       entry.connectedAt = new Date(this.now()).toISOString();
       entry.error = undefined;
       entry.retry.reset();
+      this.log("info", {
+        nodeId: this.options.nodeId,
+        controlPlaneId: entry.controlPlaneId,
+        allocationId: attempt.allocationId,
+        attemptId: attempt.id,
+        durationMs: Math.max(0, this.now() - attempt.startedAt),
+      }, "node agent cloud relay connected");
     } catch (error) {
+      if (!this.attemptCurrent(entry, attempt)) return;
       if (entry.socket === socket) entry.socket = undefined;
       try {
         if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "node-relay-handshake-failed");
@@ -609,9 +750,19 @@ export class NodeAgentCloudRelayClient {
       entry.status = "failed";
       entry.lastDisconnectedAt = new Date(this.now()).toISOString();
       entry.error = error instanceof Error ? error.message : String(error);
+      this.log("warn", {
+        nodeId: this.options.nodeId,
+        controlPlaneId: entry.controlPlaneId,
+        allocationId: attempt.allocationId,
+        attemptId: attempt.id,
+        phase: attempt.phase,
+        code: relayErrorCode(error),
+        error: entry.error,
+        durationMs: Math.max(0, this.now() - attempt.startedAt),
+      }, "node agent cloud relay connect failed");
       this.scheduleEntryRetry(entry);
     } finally {
-      entry.opening = false;
+      if (entry.attempt === attempt) entry.attempt = undefined;
     }
   }
 
@@ -652,6 +803,7 @@ export class NodeAgentCloudRelayClient {
   private releaseChannel(entry: ChannelEntry, reason: string) {
     entry.retry.cancel();
     entry.nextRetryAt = undefined;
+    if (entry.attempt) this.abortAttempt(entry, entry.attempt, reason);
     const channel = entry.channel;
     entry.channel = undefined;
     entry.supervisor?.close();
@@ -666,6 +818,43 @@ export class NodeAgentCloudRelayClient {
         // The socket is already gone.
       }
     }
+  }
+
+  private attemptCurrent(entry: ChannelEntry, attempt: ChannelAttempt) {
+    return !this.stopped && !attempt.controller.signal.aborted && entry.attempt === attempt && this.channels.get(entry.controlPlaneId) === entry;
+  }
+
+  private assertCurrentAttempt(entry: ChannelEntry, attempt: ChannelAttempt) {
+    if (!this.attemptCurrent(entry, attempt)) throw relayError("NODE_AGENT_CLOUD_RELAY_ATTEMPT_SUPERSEDED", "The cloud relay connection attempt was superseded.");
+  }
+
+  private abortAttempt(entry: ChannelEntry, attempt: ChannelAttempt, reason: string) {
+    if (entry.attempt === attempt) entry.attempt = undefined;
+    attempt.controller.abort(relayError("NODE_AGENT_CLOUD_RELAY_ATTEMPT_ABORTED", `Cloud relay connection attempt was aborted: ${reason}.`));
+    const socket = attempt.socket;
+    if (socket) {
+      try {
+        if (socket.readyState < WebSocket.CLOSING) socket.close(1000, reason.slice(0, 120));
+      } catch {
+        // The socket may already be gone.
+      }
+    }
+    this.log("debug", {
+      nodeId: this.options.nodeId,
+      controlPlaneId: entry.controlPlaneId,
+      allocationId: attempt.allocationId,
+      attemptId: attempt.id,
+      phase: attempt.phase,
+      reason,
+    }, "node agent cloud relay attempt aborted");
+  }
+
+  private log(level: "debug" | "info" | "warn", data: Record<string, unknown>, message: string) {
+    if (level === "warn") {
+      this.options.host.log.warn(data, message);
+      return;
+    }
+    this.options.host.log[level]?.(data, message);
   }
 
   private closeAllChannels(reason: string) {

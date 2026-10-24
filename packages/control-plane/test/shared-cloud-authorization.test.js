@@ -85,6 +85,7 @@ test("shared actors cannot reach administration and binding routes through gener
     "/api/roles",
     "/api/identity-providers",
     "/api/control-plane/settings",
+    "/api/control-plane/node-relay-trace",
     "/api/git-credentials",
     "/api/chat-gateway/status",
     "/api/cloud-connectivity",
@@ -98,6 +99,7 @@ test("shared actors cannot reach administration and binding routes through gener
     assert.equal(sharedCloudRouteAllowed(path), true, `shared access should retain ${path}`);
   }
   assert.equal(routeAuthorization("GET", "/api/users").resource.type, "user");
+  assert.equal(routeAuthorization("GET", "/api/control-plane/node-relay-trace").resource.type, "control-plane-settings");
   assert.equal(routeAuthorization("POST", "/api/controlled-instances/instance_a/start").action, "start");
   assert.equal(routeAuthorization("PATCH", "/api/shares/share_a").resource.type, "control-plane-settings");
 });

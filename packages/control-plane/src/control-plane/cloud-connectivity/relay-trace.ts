@@ -21,8 +21,10 @@ import { appendRotatingLogSync, DEFAULT_OPEN_LOG_BACKUP_COUNT, DEFAULT_OPEN_LOG_
  */
 export type RelayTraceDirection = "in" | "out";
 
+export type RelayTraceEntryType = "relay-trace-entry" | "node-relay-trace-entry";
+
 export type RelayTraceEntry = {
-  type: "relay-trace-entry";
+  type: RelayTraceEntryType;
   at: string;
   channelId: string;
   direction: RelayTraceDirection;
@@ -69,6 +71,8 @@ export type RelayTraceRecorderOptions = {
   maxBytes?: number;
   backupCount?: number;
   maxEntryBytes?: number;
+  fileName?: string;
+  entryType?: RelayTraceEntryType;
   clock?: () => number;
 };
 
@@ -78,6 +82,7 @@ export class RelayTraceRecorder {
   private readonly maxBytes: number;
   private readonly backupCount: number;
   private readonly maxEntryBytes: number;
+  private readonly entryType: RelayTraceEntryType;
   private readonly clock: () => number;
   private writtenBytes = 0;
   private writtenEntries = 0;
@@ -86,10 +91,11 @@ export class RelayTraceRecorder {
 
   constructor(options: RelayTraceRecorderOptions = {}) {
     this.enabledFlag = options.enabled ?? false;
-    this.filePath = options.directory ? path.join(options.directory, RELAY_TRACE_FILE_NAME) : undefined;
+    this.filePath = options.directory ? path.join(options.directory, options.fileName ?? RELAY_TRACE_FILE_NAME) : undefined;
     this.maxBytes = positive(options.maxBytes) ?? DEFAULT_RELAY_TRACE_MAX_BYTES;
     this.backupCount = nonNegative(options.backupCount) ?? DEFAULT_RELAY_TRACE_BACKUP_COUNT;
     this.maxEntryBytes = positive(options.maxEntryBytes) ?? DEFAULT_RELAY_TRACE_ENTRY_BYTES;
+    this.entryType = options.entryType ?? "relay-trace-entry";
     this.clock = options.clock ?? Date.now;
   }
 
@@ -98,7 +104,7 @@ export class RelayTraceRecorder {
   record(input: RelayTraceRecordInput) {
     if (!this.enabledFlag || this.failed) return;
     const entry: RelayTraceEntry = {
-      type: "relay-trace-entry",
+      type: this.entryType,
       at: new Date(this.clock()).toISOString(),
       channelId: input.channelId,
       direction: input.direction,

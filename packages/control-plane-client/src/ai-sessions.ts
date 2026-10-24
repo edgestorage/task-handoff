@@ -12,7 +12,11 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
   AiSessionTimelineSchema,
+  AiSessionTimelineReadSchema,
+  AiSessionTimelineSyncInputSchema,
+  AiSessionTimelineSyncReadSchema,
   AiSessionTurnTimelineSchema,
+  AiSessionTurnTimelineReadSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageRefInputSchema,
@@ -66,6 +70,24 @@ import { jsonRequest } from "./json-request.ts";
 import { binaryUnsupported } from "./errors.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
+
+const CompatibleAiSessionTimelineReadSchema = z.union([
+  AiSessionTimelineReadSchema,
+  AiSessionTimelineSchema.transform((timeline) => ({
+    kind: "updated" as const,
+    revision: `legacy:${timeline.generatedAt}`,
+    timeline,
+  })),
+]);
+
+const CompatibleAiSessionTurnTimelineReadSchema = z.union([
+  AiSessionTurnTimelineReadSchema,
+  AiSessionTurnTimelineSchema.transform((timeline) => ({
+    kind: "updated" as const,
+    revision: `legacy:${timeline.generatedAt}`,
+    timeline,
+  })),
+]);
 
 function attachmentArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
@@ -158,11 +180,21 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}${query}`, AiSessionTurnBodyReadSchema, { signal });
     },
-    timeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline`, AiSessionTimelineSchema, { signal });
+    timeline(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+      const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline${query}`, CompatibleAiSessionTimelineReadSchema, { signal });
     },
-    turnTimeline(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline`, AiSessionTurnTimelineSchema, { signal });
+    turnTimeline(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
+      const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline${query}`, CompatibleAiSessionTurnTimelineReadSchema, { signal });
+    },
+    syncTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
+      const input = AiSessionTimelineSyncInputSchema.parse({ knownItems });
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline/sync`, AiSessionTimelineSyncReadSchema, jsonRequest("POST", input, signal));
+    },
+    syncTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
+      const input = AiSessionTimelineSyncInputSchema.parse({ knownItems });
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline/sync`, AiSessionTimelineSyncReadSchema, jsonRequest("POST", input, signal));
     },
     resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, jsonRequest("POST", AiSessionResumeInputSchema.parse(input)));

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
-import { decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, type RelayFramePayload } from "@task-handoff/cloud-contracts";
+import { decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, RELAY_FRAME_HEADER_BYTES, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import {
   NODE_RELAY_CHANNEL_PROTOCOL_VERSION,
   NODE_RELAY_HANDSHAKE_AUDIENCE,
@@ -46,6 +46,9 @@ type NodeRelayDataAssembly = {
   streamId: number;
   binary: boolean;
   bytes: number;
+  sealedBytes: number;
+  wireBytes: number;
+  fragments: number;
   chunks: Uint8Array[];
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -57,11 +60,22 @@ const NODE_RELAY_SOCKET_MAX_QUEUED_BYTES = 16 * 1024 * 1024;
 const NODE_RELAY_DATA_MAX_ASSEMBLIES = 8;
 const NODE_RELAY_DATA_MAX_ASSEMBLED_BYTES = 16 * 1024 * 1024;
 const NODE_RELAY_DATA_ASSEMBLY_IDLE_MS = 30_000;
+const NODE_RELAY_SECRETBOX_OVERHEAD_BYTES = 16;
 
 export type NodeRelayDataAssemblyLimits = {
   maxStreams?: number;
   maxBytes?: number;
   idleMs?: number;
+};
+
+/** One decoded logical frame with the exact relay-frame bytes it occupied. */
+export type NodeRelayTraceEvent = {
+  direction: "in" | "out";
+  kind: string;
+  plaintext: Uint8Array;
+  sealedBytes: number;
+  wireBytes: number;
+  detail?: Record<string, unknown>;
 };
 
 /** Direction bytes keep the two senders' secretbox counters in disjoint nonce spaces. */
@@ -317,6 +331,7 @@ export class EncryptedNodeRelayChannel {
   private readonly onData?: (frame: NodeRelayDataFrame) => void | Promise<void>;
   private readonly onClosed?: (reason: string) => void;
   private readonly onError?: (error: Error) => void;
+  private readonly onTrace?: (event: NodeRelayTraceEvent) => void;
   private readonly dataAssemblyMaxStreams: number;
   private readonly dataAssemblyMaxBytes: number;
   private readonly dataAssemblyIdleMs: number;
@@ -330,6 +345,7 @@ export class EncryptedNodeRelayChannel {
     onData?(frame: NodeRelayDataFrame): void | Promise<void>;
     onClosed?(reason: string): void;
     onError?(error: Error): void;
+    onTrace?(event: NodeRelayTraceEvent): void;
     dataAssemblyLimits?: NodeRelayDataAssemblyLimits;
   }) {
     this.socket = options.socket;
@@ -340,6 +356,7 @@ export class EncryptedNodeRelayChannel {
     this.onData = options.onData;
     this.onClosed = options.onClosed;
     this.onError = options.onError;
+    this.onTrace = options.onTrace;
     this.dataAssemblyMaxStreams = positiveInteger(options.dataAssemblyLimits?.maxStreams, NODE_RELAY_DATA_MAX_ASSEMBLIES);
     this.dataAssemblyMaxBytes = positiveInteger(options.dataAssemblyLimits?.maxBytes, NODE_RELAY_DATA_MAX_ASSEMBLED_BYTES);
     this.dataAssemblyIdleMs = positiveInteger(options.dataAssemblyLimits?.idleMs, NODE_RELAY_DATA_ASSEMBLY_IDLE_MS);
@@ -362,14 +379,28 @@ export class EncryptedNodeRelayChannel {
     // burst. `channel-close` is ordered with data so a close cannot overtake
     // bytes already accepted from the local stream.
     this.enqueuePlaintext(packed.payload, packed.flags, parsed.type !== "channel-close");
+    const sealedBytes = packed.payload.byteLength + NODE_RELAY_SECRETBOX_OVERHEAD_BYTES;
+    this.emitTrace({
+      direction: "out",
+      kind: parsed.type,
+      plaintext,
+      sealedBytes,
+      wireBytes: sealedBytes + RELAY_FRAME_HEADER_BYTES,
+      detail: {
+        flags: packed.flags,
+        ...("streamId" in parsed ? { streamId: parsed.streamId } : {}),
+        ...("channelId" in parsed ? { channelId: parsed.channelId } : {}),
+      },
+    });
   }
 
-  /** Sends one tunnel payload without JSON, base64 or compression overhead. */
+  /** Sends one tunnel payload without JSON or base64; text frames use outer-frame deflate when it shrinks them. */
   sendData(streamId: number, data: string | Uint8Array, binary: boolean) {
     const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : bufferView(data);
     if (bytes.byteLength > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
     if (bytes.byteLength === 0) {
       this.enqueuePlaintext(encodeNodeRelayDataFrame({ streamId, data: bytes, binary, more: false }), 0, false);
+      this.traceData("out", streamId, bytes, binary, 1);
       return;
     }
     // Reserve the whole logical message before enqueueing its first fragment.
@@ -378,10 +409,22 @@ export class EncryptedNodeRelayChannel {
     const fragments = Math.ceil(bytes.byteLength / NODE_RELAY_DATA_MAX_BYTES);
     const wireBytes = bytes.byteLength + fragments * (NODE_RELAY_DATA_HEADER_BYTES + 40);
     if (this.outboundBytes + wireBytes > NODE_RELAY_SOCKET_MAX_QUEUED_BYTES) throw nodeRelaySessionError("NODE_RELAY_BACKPRESSURE_LIMIT");
+    let sealedBytes = 0;
+    let measuredWireBytes = 0;
+    let compressedFragments = 0;
     for (let offset = 0; offset < bytes.byteLength; offset += NODE_RELAY_DATA_MAX_BYTES) {
       const end = Math.min(offset + NODE_RELAY_DATA_MAX_BYTES, bytes.byteLength);
-      this.enqueuePlaintext(encodeNodeRelayDataFrame({ streamId, data: bytes.subarray(offset, end), binary, more: end < bytes.byteLength }), 0, false);
+      const plaintext = encodeNodeRelayDataFrame({ streamId, data: bytes.subarray(offset, end), binary, more: end < bytes.byteLength });
+      // JSON event and HTTP payloads dominate relay traffic and compress well.
+      // Binary tunnel data usually carries already-compressed app content, so
+      // paying another deflate pass there only adds latency.
+      const packed = binary ? { payload: plaintext, flags: 0 } : packRelayPayload(plaintext, (input) => deflateRawSync(input));
+      this.enqueuePlaintext(packed.payload, packed.flags, false);
+      sealedBytes += packed.payload.byteLength + NODE_RELAY_SECRETBOX_OVERHEAD_BYTES;
+      measuredWireBytes += packed.payload.byteLength + NODE_RELAY_SECRETBOX_OVERHEAD_BYTES + RELAY_FRAME_HEADER_BYTES;
+      if (packed.flags) compressedFragments += 1;
     }
+    this.traceData("out", streamId, bytes, binary, fragments, { sealedBytes, wireBytes: measuredWireBytes, compressedFragments });
   }
 
   close(reason = "normal") {
@@ -415,7 +458,9 @@ export class EncryptedNodeRelayChannel {
   private async receive(raw: unknown, isBinary: boolean) {
     if (this.closed) return;
     if (!isBinary) throw nodeRelaySessionError("NODE_RELAY_FRAME_ENCODING_INVALID");
-    const frame: RelayFramePayload = decodeRelayFrame(rawBytes(raw));
+    const rawFrame = rawBytes(raw);
+    const wireBytes = rawFrame.byteLength;
+    const frame: RelayFramePayload = decodeRelayFrame(rawFrame);
     if (frame.kind === "close") return this.finish("peer-closed");
     if (frame.kind !== "data") throw nodeRelaySessionError("NODE_RELAY_FRAME_KIND_INVALID");
     if (frame.sequence !== this.receiveSequence++) throw nodeRelaySessionError("NODE_RELAY_FRAME_SEQUENCE_INVALID");
@@ -436,6 +481,9 @@ export class EncryptedNodeRelayChannel {
         }
         const next = assembly ?? this.beginDataAssembly(dataFrame.streamId, dataFrame.binary);
         next.bytes += dataFrame.data.byteLength;
+        next.sealedBytes += frame.payload.byteLength;
+        next.wireBytes += wireBytes;
+        next.fragments += 1;
         if (next.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
         next.chunks.push(dataFrame.data);
         this.armDataAssemblyTimer(next);
@@ -446,19 +494,56 @@ export class EncryptedNodeRelayChannel {
       if (assembly) {
         if (assembly.binary !== dataFrame.binary) throw nodeRelaySessionError("NODE_RELAY_DATA_FRAGMENT_INVALID");
         assembly.bytes += dataFrame.data.byteLength;
+        assembly.sealedBytes += frame.payload.byteLength;
+        assembly.wireBytes += wireBytes;
+        assembly.fragments += 1;
         if (assembly.bytes > NODE_RELAY_DATA_MAX_MESSAGE_BYTES) throw nodeRelaySessionError("NODE_RELAY_DATA_MESSAGE_TOO_LARGE");
         assembly.chunks.push(dataFrame.data);
         this.discardDataAssembly(dataFrame.streamId);
-        await this.onData({ streamId: dataFrame.streamId, binary: assembly.binary, more: false, data: Buffer.concat(assembly.chunks, assembly.bytes) });
+        const data = Buffer.concat(assembly.chunks, assembly.bytes);
+        this.traceData("in", dataFrame.streamId, data, assembly.binary, assembly.fragments, assembly);
+        await this.onData({ streamId: dataFrame.streamId, binary: assembly.binary, more: false, data });
         return;
       }
+      this.traceData("in", dataFrame.streamId, dataFrame.data, dataFrame.binary, 1, { sealedBytes: frame.payload.byteLength, wireBytes });
       await this.onData(dataFrame);
       return;
     }
     const json = bufferView(plaintext);
     if (json.byteLength === 0 || json[0] !== 0x7b) throw nodeRelaySessionError("NODE_RELAY_FRAME_PAYLOAD_INVALID");
     const message = NodeRelaySessionMessageSchema.parse(JSON.parse(json.toString("utf8")));
+    this.emitTrace({
+      direction: "in",
+      kind: message.type,
+      plaintext: json,
+      sealedBytes: frame.payload.byteLength,
+      wireBytes,
+      detail: {
+        flags: frame.flags ?? 0,
+        ...("streamId" in message ? { streamId: message.streamId } : {}),
+        ...("channelId" in message ? { channelId: message.channelId } : {}),
+      },
+    });
     await this.onMessage(message);
+  }
+
+  private traceData(direction: "in" | "out", streamId: number, data: Uint8Array, binary: boolean, fragments: number, measured?: { sealedBytes: number; wireBytes: number; compressedFragments?: number }) {
+    const sealedBytes = measured?.sealedBytes
+      ?? data.byteLength + fragments * (NODE_RELAY_DATA_HEADER_BYTES + NODE_RELAY_SECRETBOX_OVERHEAD_BYTES);
+    this.emitTrace({
+      direction,
+      kind: relayPayloadKind(data),
+      plaintext: data,
+      sealedBytes,
+      wireBytes: measured?.wireBytes ?? sealedBytes + fragments * RELAY_FRAME_HEADER_BYTES,
+      detail: { streamId, binary, fragments, ...(measured?.compressedFragments ? { compressedFragments: measured.compressedFragments } : {}) },
+    });
+  }
+
+  private emitTrace(event: NodeRelayTraceEvent) {
+    if (!this.onTrace) return;
+    try { this.onTrace(event); }
+    catch { /* Diagnostics must never interfere with the relay session. */ }
   }
 
   private sendPlaintext(payload: Uint8Array, flags: number) {
@@ -535,7 +620,7 @@ export class EncryptedNodeRelayChannel {
   }
 
   private beginDataAssembly(streamId: number, binary: boolean): NodeRelayDataAssembly {
-    return { streamId, binary, bytes: 0, chunks: [] };
+    return { streamId, binary, bytes: 0, sealedBytes: 0, wireBytes: 0, fragments: 0, chunks: [] };
   }
 
   private armDataAssemblyTimer(assembly: NodeRelayDataAssembly) {
@@ -559,4 +644,11 @@ export class EncryptedNodeRelayChannel {
 
 function positiveInteger(value: number | undefined, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+/** Reads the envelope's leading `type` without parsing a potentially multi-megabyte payload. */
+function relayPayloadKind(bytes: Uint8Array) {
+  if (bytes.byteLength === 0 || bytes[0] !== 0x7b) return "data";
+  const prefix = Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, Math.min(bytes.byteLength, 4 * 1024)).toString("utf8");
+  return /^\s*\{\s*"type"\s*:\s*"([^"]{1,120})"/.exec(prefix)?.[1] ?? "data";
 }

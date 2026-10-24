@@ -17,8 +17,36 @@ const DOCKER_STATS_FORMAT = JSON.stringify({
   pids: "{{.PIDs}}",
 });
 const DOCKER_STATS_TIMEOUT_MS = 5_000;
+export const DEFAULT_RESOURCE_METRICS_BROADCAST_INTERVAL_MS = 10_000;
 
 type DockerMetricsTarget = Pick<ControlledInstance, "id" | "status" | "runtime">;
+
+/**
+ * Metrics are still sampled every few seconds for local reads, but forwarding
+ * every sample to every event output unnecessarily amplifies Node Agent to
+ * Control Plane traffic. Keep state transitions immediate so consumers never
+ * miss a stopped or unavailable runtime.
+ */
+export function createThrottledResourceMetricsPublisher(
+  publish: (metrics: InstanceResourceMetrics) => void,
+  options: { intervalMs?: number; now?: () => number } = {},
+) {
+  const configuredInterval = options.intervalMs;
+  const intervalMs = configuredInterval !== undefined && Number.isFinite(configuredInterval) && configuredInterval >= 0
+    ? configuredInterval
+    : DEFAULT_RESOURCE_METRICS_BROADCAST_INTERVAL_MS;
+  const now = options.now || Date.now;
+  const lastPublished = new Map<string, { at: number; state: InstanceResourceMetrics["state"] }>();
+
+  return (metrics: InstanceResourceMetrics) => {
+    const at = now();
+    const previous = lastPublished.get(metrics.instanceId);
+    if (previous && previous.state === metrics.state && at - previous.at < intervalMs) return false;
+    lastPublished.set(metrics.instanceId, { at, state: metrics.state });
+    publish(metrics);
+    return true;
+  };
+}
 
 export class DockerRuntimeMetricsCollector {
   private readonly snapshots = new Map<string, InstanceResourceMetrics>();

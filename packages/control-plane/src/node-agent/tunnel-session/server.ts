@@ -24,11 +24,13 @@ export type NodeTunnelEventForwardSocket = { send(data: string): void };
 
 export type NodeTunnelSessionEventForwarder = {
   addOutput(socket: NodeTunnelEventForwardSocket, options?: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number }): () => void;
-  setOutputSubscription?(socket: NodeTunnelEventForwardSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown): boolean;
+  setOutputSubscription?(socket: NodeTunnelEventForwardSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown, metricInstanceIds?: unknown): boolean;
 };
 
 export type NodeTunnelSessionHost = {
   log: {
+    debug?(data: Record<string, unknown>, message: string): void;
+    info?(data: Record<string, unknown>, message: string): void;
     warn(data: Record<string, unknown>, message: string): void;
   };
   inject(input: {
@@ -221,8 +223,19 @@ export class NodeTunnelSessionServer {
       this.identify();
       return;
     }
+    if (record.type === "control-plane.identified") {
+      return;
+    }
+    if (record.type === "control-plane.error") {
+      this.options.host.log.warn({
+        nodeId: this.options.nodeId,
+        code: typeof record.code === "string" ? record.code : "UNKNOWN",
+        ...(typeof record.message === "string" ? { message: record.message } : {}),
+      }, `node agent ${this.options.labels.topic} received control-plane error`);
+      return;
+    }
     if (record.type === "control-plane.event-subscribe") {
-      this.options.host.nodeAgentEventForwarder?.setOutputSubscription?.(this.options.socket, record.aiSessionTransient, record.eventEnvelopeVersion, record.aiSessionHierarchy);
+      this.options.host.nodeAgentEventForwarder?.setOutputSubscription?.(this.options.socket, record.aiSessionTransient, record.eventEnvelopeVersion, record.aiSessionHierarchy, record.metricInstanceIds);
       return;
     }
     if (record.type === "control-plane.request.cancel") {
@@ -300,12 +313,13 @@ export class NodeTunnelSessionServer {
         signal: controller.signal,
       });
       if (controller.signal.aborted) return;
+      const bodyless = response.statusCode === 204 || response.statusCode === 205 || response.statusCode === 304;
       this.sendMain({
         type: "node-agent.response",
         requestId,
         status: response.statusCode,
         headers: response.headers,
-        body: response.body,
+        ...(bodyless ? {} : { body: response.body }),
       });
     } catch (error) {
       if (controller.signal.aborted) return;

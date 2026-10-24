@@ -20,6 +20,10 @@ import type {
   AiSessionSource,
   AiSessionStatus,
   AiSessionSummary,
+  AiSessionTimelineItem,
+  AiSessionTimelineItemRevision,
+  AiSessionTimelineSyncRead,
+  AiSessionTimelineVersionedItem,
   AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionConversationAttachmentStore, type RetainedAiSessionMessageAttachment } from "./ai-session-conversation-attachment-store";
@@ -204,6 +208,72 @@ export function aiSessionTurnsRevision(session: AiSessionStatus) {
     .slice(0, 22);
   aiSessionTurnsRevisionCache.set(session, revision);
   return revision;
+}
+
+export function aiSessionTimelineRevision(items: readonly AiSessionTimelineItem[]) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(items)))
+    .digest("base64url")
+    .slice(0, 22);
+}
+
+export function aiSessionTimelineItemRevision(item: AiSessionTimelineItem) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(item)))
+    .digest("base64url")
+    .slice(0, 22);
+}
+
+export function syncAiSessionTimelineItems(
+  items: readonly AiSessionTimelineItem[],
+  knownItems: readonly AiSessionTimelineItemRevision[],
+): AiSessionTimelineSyncRead {
+  const revision = aiSessionTimelineRevision(items);
+  // An empty client cursor always needs an explicit snapshot. It must not be
+  // mistaken for an empty Timeline that is already in sync.
+  if (!knownItems.length) {
+    return {
+      kind: "snapshot",
+      revision,
+      items: items.map((item) => ({ revision: aiSessionTimelineItemRevision(item), item })),
+    };
+  }
+  const versioned = items.map((item): AiSessionTimelineVersionedItem => ({
+    revision: aiSessionTimelineItemRevision(item),
+    item,
+  }));
+  if (knownItems.length === versioned.length && knownItems.every((known, index) => (
+    known.id === versioned[index].item.id && known.revision === versioned[index].revision
+  ))) {
+    return { kind: "not-modified", revision };
+  }
+  const knownRevisions = new Map(knownItems.map((item) => [item.id, item.revision]));
+  const currentIds = new Set(versioned.map((entry) => entry.item.id));
+  const removed = knownItems.filter((item) => !currentIds.has(item.id)).map((item) => item.id);
+  const removedIds = new Set(removed);
+  const knownIds = new Set(knownItems.map((item) => item.id));
+  const survivingKnownOrder = knownItems.filter((item) => !removedIds.has(item.id)).map((item) => item.id);
+  const currentKnownOrder = versioned.filter((entry) => knownIds.has(entry.item.id)).map((entry) => entry.item.id);
+  let seenNewItem = false;
+  const appendsOnly = versioned.every((entry) => {
+    if (!knownIds.has(entry.item.id)) {
+      seenNewItem = true;
+      return true;
+    }
+    return !seenNewItem;
+  });
+  const orderDerivable = appendsOnly
+    && survivingKnownOrder.length === currentKnownOrder.length
+    && survivingKnownOrder.every((id, index) => id === currentKnownOrder[index]);
+  return {
+    kind: "delta",
+    revision,
+    upserted: versioned.filter((entry) => knownRevisions.get(entry.item.id) !== entry.revision),
+    removed,
+    // Tail appends and removals are fully recoverable from the client cursor.
+    // Keep the full order only when an item moved or was inserted mid-stream.
+    ...(orderDerivable ? {} : { order: versioned.map((entry) => entry.item.id) }),
+  };
 }
 
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {

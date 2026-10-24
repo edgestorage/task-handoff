@@ -42,7 +42,7 @@ import { loadBuiltinProjectDefinitions, packagedBuiltinProjectsDir, type Builtin
 import { createBuiltinProjectFolderProjection } from "./builtin-projects/catalog.ts";
 import { DockerImageService } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
-import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
+import { createThrottledResourceMetricsPublisher, DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
 import { folderPlaces, listFolderTree } from "./folders.ts";
 import { nodeAgentStorePaths, type NodeAgentStorePaths } from "./persistence/paths.ts";
 import { NodeAgentPersistenceMaintenance } from "./persistence/maintenance.ts";
@@ -228,6 +228,10 @@ export type CreateNodeAgentAppOptions = {
   discoveryCachePath?: string;
   /** Test-only Relay socket injection for the cloud relay client. */
   webSocket?: typeof import("ws").default;
+  /** Test-only override for the lifecycle liveness coalescing window. */
+  instanceLifecycleHeartbeatIntervalMs?: number;
+  /** Test-only override for the Relay attach acknowledgement timeout. */
+  cloudRelayAttachTimeoutMs?: number;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
   /** Test-only built-in project catalog override. Production always reads the shipped bundle. */
@@ -1093,7 +1097,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentIdentityService", identity);
   app.decorate("nodeAgentResolveInstanceNodeAgentUrl", resolveNodeAgentUrlForInstance);
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
-  const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
+  const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, {
+    logger: app.log,
+    safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined,
+    lifecycleHeartbeatIntervalMs: options.instanceLifecycleHeartbeatIntervalMs,
+  });
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, desiredControlledInstanceVersion, {
     isInstalled: async (instance, desiredVersion) => {
       const artifact = await resolveArtifactForInstance(instance, desiredVersion);
@@ -1184,6 +1192,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     ...(cloudDiscovery ? { cloudDiscovery } : {}),
     discoveryCachePath,
     ...(options.webSocket ? { webSocket: options.webSocket } : {}),
+    ...(options.cloudRelayAttachTimeoutMs ? { attachTimeoutMs: options.cloudRelayAttachTimeoutMs } : {}),
   });
   app.decorate("nodeAgentCloudRelay", cloudRelay);
   registerNodeAgentCloudRelayRoutes(app, { client: cloudRelay });
@@ -1319,10 +1328,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     }, { nodeId: story.ownerNodeId });
     void storyIdleRetention.reconcile();
   });
+  const runtimeMetricsBroadcastIntervalMs = Number(process.env.TASK_HANDOFF_NODE_AGENT_RESOURCE_METRICS_BROADCAST_INTERVAL_MS);
+  const publishRuntimeMetrics = createThrottledResourceMetricsPublisher(
+    (metrics: InstanceResourceMetrics) => eventForwarder.publish(InstanceResourceMetricsEventType.Snapshot, metrics, { instanceId: metrics.instanceId }),
+    { intervalMs: Number.isFinite(runtimeMetricsBroadcastIntervalMs) ? runtimeMetricsBroadcastIntervalMs : undefined },
+  );
   const runtimeMetrics = new DockerRuntimeMetricsCollector(
     dockerCommandRunner,
     () => state.listInstances().filter((instance) => state.requireRuntime(instance.runtimeId).type === "docker"),
-    (metrics: InstanceResourceMetrics) => eventForwarder.publish(InstanceResourceMetricsEventType.Snapshot, metrics, { instanceId: metrics.instanceId }),
+    publishRuntimeMetrics,
   );
   runtimeMetrics.start();
   app.decorate("nodeAgentRuntimeMetrics", runtimeMetrics);
@@ -2043,8 +2057,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     ws.on("message", (raw) => {
       try {
         const message = JSON.parse(String(raw)) as Record<string, unknown>;
-        if (message.type === "subscribe" && message.aiSessionTransient !== undefined) {
-          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient, message.eventEnvelopeVersion, message.aiSessionHierarchy);
+        if (message.type === "subscribe" && (message.aiSessionTransient !== undefined || message.metricInstanceIds !== undefined)) {
+          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient ?? {}, message.eventEnvelopeVersion, message.aiSessionHierarchy, message.metricInstanceIds);
         }
       } catch {
         // Event subscription updates are additive; malformed updates leave the compatibility stream unchanged.

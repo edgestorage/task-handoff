@@ -263,6 +263,30 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     runtime.coordinator.stop();
   });
 
+  test('does not reconnect immediately while an idempotent relay request is still pending', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileControlPlaneTransportError(
+      'IDEMPOTENCY_REQUEST_IN_PROGRESS',
+      'The idempotent request is still in progress.',
+      true,
+      409,
+    ));
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(9_999);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(1);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
   test('route domain registration and removal update one live connection in place', async () => {
     const runtime = harness();
     const ai = domain('ai', ['ai.sessions'], true);
@@ -326,10 +350,11 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     });
     await flushCoordinator();
 
-    expect(runtime.updateAiSessionTransient).toHaveBeenCalledWith(expect.objectContaining({
+    expect(runtime.updateAiSessionTransient).toHaveBeenCalledWith({
       messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineAllSessions: false,
       timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
-    }));
+    });
     expect(runtime.revalidate).toHaveBeenCalledTimes(1);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
     expect(runtime.close).not.toHaveBeenCalled();
@@ -338,6 +363,54 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     dispose();
     await flushCoordinator();
     expect(runtime.close).not.toHaveBeenCalled();
+    runtime.coordinator.stop();
+  });
+
+  test('returning to a session changes live demand without requesting a WebSocket replay', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    const sessionA = { instanceId: 'instance-1', sessionId: 'session-1' };
+    const sessionB = { instanceId: 'instance-1', sessionId: 'session-2' };
+    const demand = (session: typeof sessionA) => ({
+      messageDeltas: { allInstances: false, instanceIds: [session.instanceId] },
+      timelineAllSessions: false,
+      timelineSessions: [session],
+    });
+
+    const disposeA = runtime.coordinator.registerAiSessionTransientDemand(demand(sessionA));
+    await flushCoordinator();
+    expect(runtime.updateAiSessionTransient).toHaveBeenLastCalledWith({
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineAllSessions: false,
+      timelineSessions: [sessionA],
+    });
+
+    disposeA();
+    const disposeB = runtime.coordinator.registerAiSessionTransientDemand(demand(sessionB));
+    await flushCoordinator();
+    expect(runtime.updateAiSessionTransient).toHaveBeenLastCalledWith({
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineAllSessions: false,
+      timelineSessions: [sessionB],
+    });
+
+    disposeB();
+    const disposeAgain = runtime.coordinator.registerAiSessionTransientDemand(demand(sessionA));
+    await flushCoordinator();
+    expect(runtime.updateAiSessionTransient).toHaveBeenLastCalledWith({
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      timelineAllSessions: false,
+      timelineSessions: [sessionA],
+    });
+    for (const [subscription] of runtime.updateAiSessionTransient.mock.calls) {
+      expect(subscription).not.toHaveProperty('replaySince');
+    }
+
+    disposeAgain();
     runtime.coordinator.stop();
   });
 

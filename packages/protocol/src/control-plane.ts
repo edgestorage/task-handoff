@@ -2183,6 +2183,14 @@ export const NodeControlPlaneProxyStateSchema = z.object({
  */
 export const CLOUD_ACCOUNT_NODE_HANDLE_LABEL = "cloudAccountNodeHandle";
 
+/**
+ * Internal opt-out for automatic node-relay claim restoration. Existing
+ * cloud-relay nodes without this label are restored after every fresh
+ * Coordinator connection; an explicit unbind sets it so a restart cannot
+ * silently reclaim a node the operator removed.
+ */
+export const CLOUD_RELAY_CLAIM_DISABLED_LABEL = "cloudRelayClaimDisabled";
+
 export const NodeSchema = z
   .object({
     id: IdSchema,

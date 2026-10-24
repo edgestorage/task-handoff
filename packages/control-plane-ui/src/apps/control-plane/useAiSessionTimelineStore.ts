@@ -1,11 +1,12 @@
 import { shallowRef } from "vue";
-import { mergeAiSessionTimelineItems, type AiSessionTimeline, type AiSessionTimelineItem, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import { mergeAiSessionTimelineItems, type AiSessionTimeline, type AiSessionTimelineItem, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionTimelineItemRevision, type AiSessionTimelineSyncRead, type AiSessionTimelineVersionedItem, type AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 
 export type AiSessionTurnTimelineStatus = "idle" | "loading" | "ready" | "stale" | "error";
 export type AiSessionTurnTimelineState = {
   status: AiSessionTurnTimelineStatus;
   items: AiSessionTimelineItem[];
   error?: string;
+  revision?: string;
 };
 
 type TurnIdentity = Pick<AiSessionTurn, "id" | "providerTurnId"> & Partial<Pick<AiSessionTurn, "revision" | "status">>;
@@ -15,7 +16,8 @@ type StoredTurnTimelineState = AiSessionTurnTimelineState & {
   identities: string[];
   turnRevision?: number;
 };
-type SessionTimelineState = { status: AiSessionTurnTimelineStatus; error?: string };
+type SessionTimelineState = { status: AiSessionTurnTimelineStatus; error?: string; revision?: string };
+type TimelineSyncDelta = Extract<AiSessionTimelineSyncRead, { kind: "delta" }>;
 type LiveTurnTimeline = {
   instanceId: string;
   sessionId: string;
@@ -28,6 +30,8 @@ const liveTurns = new Map<string, LiveTurnTimeline>();
 const liveTurnKeysBySession = new Map<string, Set<string>>();
 const turnStates = new Map<string, StoredTurnTimelineState>();
 const sessionStates = new Map<string, SessionTimelineState>();
+const sessionTimelineOrder = new Map<string, string[]>();
+const timelineItemRevisions = new Map<string, Map<string, string>>();
 const pendingDeltas = new Map<string, AiSessionTimelineItemDeltaEvent>();
 const revision = shallowRef(0);
 const recoveryRevision = shallowRef(0);
@@ -45,6 +49,87 @@ function itemKey(instanceId: string, sessionId: string, turnId: string, itemId: 
 
 function turnIdentities(turn: TurnIdentity) {
   return [...new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)))];
+}
+
+function revisionMap(instanceId: string, sessionId: string) {
+  const key = sessionKey(instanceId, sessionId);
+  let revisions = timelineItemRevisions.get(key);
+  if (!revisions) {
+    revisions = new Map();
+    timelineItemRevisions.set(key, revisions);
+  }
+  return revisions;
+}
+
+function applyVersionedItemRevisions(instanceId: string, sessionId: string, items: readonly AiSessionTimelineVersionedItem[], removedIds: readonly string[] = []) {
+  const revisions = revisionMap(instanceId, sessionId);
+  for (const entry of items) revisions.set(entry.item.id, entry.revision);
+  for (const id of removedIds) revisions.delete(id);
+}
+
+function replaceVersionedItemRevisions(instanceId: string, sessionId: string, items: readonly AiSessionTimelineVersionedItem[]) {
+  const revisions = revisionMap(instanceId, sessionId);
+  revisions.clear();
+  for (const entry of items) revisions.set(entry.item.id, entry.revision);
+}
+
+function sessionStoredItems(instanceId: string, sessionId: string) {
+  const byId = new Map<string, AiSessionTimelineItem>();
+  for (const state of turnStates.values()) {
+    if (state.instanceId !== instanceId || state.sessionId !== sessionId) continue;
+    for (const item of state.items) byId.set(item.id, item);
+  }
+  return byId;
+}
+
+function knownSessionTimelineItems(instanceId: string, sessionId: string, turns: readonly AiSessionTurn[]): AiSessionTimelineItemRevision[] {
+  const revisions = revisionMap(instanceId, sessionId);
+  const available = sessionStoredItems(instanceId, sessionId);
+  const storedOrder = sessionTimelineOrder.get(sessionKey(instanceId, sessionId));
+  const ids = storedOrder || turns.flatMap((turn) => {
+    const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+    return state?.items.map((item) => item.id) || [];
+  });
+  const known: AiSessionTimelineItemRevision[] = [];
+  for (const id of ids) {
+    const revision = revisions.get(id);
+    if (!revision || !available.has(id)) continue;
+    known.push({ id, revision });
+  }
+  // The sync request is intentionally bounded. A Timeline too large for the
+  // cursor gets one snapshot rather than an unbounded request body.
+  return known.length > 10_000 ? [] : known;
+}
+
+function knownTurnTimelineItems(instanceId: string, sessionId: string, turn: TurnIdentity): AiSessionTimelineItemRevision[] {
+  const revisions = revisionMap(instanceId, sessionId);
+  const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+  if (!state) return [];
+  const known: AiSessionTimelineItemRevision[] = [];
+  for (const item of state.items) {
+    const revision = revisions.get(item.id);
+    if (revision) known.push({ id: item.id, revision });
+  }
+  return known.length > 10_000 ? [] : known;
+}
+
+function timelineOrderAfterDelta(previousOrder: readonly string[], delta: TimelineSyncDelta) {
+  if (delta.order) return delta.order;
+  const removed = new Set(delta.removed);
+  const order = previousOrder.filter((id) => !removed.has(id));
+  const seen = new Set(order);
+  for (const entry of delta.upserted) {
+    if (seen.has(entry.item.id)) continue;
+    seen.add(entry.item.id);
+    order.push(entry.item.id);
+  }
+  return order;
+}
+
+function storedSessionOrder(instanceId: string, sessionId: string, turns: readonly AiSessionTurn[]) {
+  return sessionTimelineOrder.get(sessionKey(instanceId, sessionId)) || turns.flatMap((turn) => (
+    turnStates.get(turnKey(instanceId, sessionId, turn.id))?.items.map((item) => item.id) || []
+  ));
 }
 
 function removeLiveTurn(key: string) {
@@ -168,6 +253,7 @@ function turnState(instanceId: string, sessionId: string, turn: TurnIdentity): A
     status: stale ? "stale" : stored?.status || "idle",
     items: mergeAiSessionTimelineItems(stored?.items || [], liveItems),
     ...(stored?.error ? { error: stored.error } : {}),
+    ...(stored?.revision ? { revision: stored.revision } : {}),
   };
 }
 
@@ -208,15 +294,20 @@ function beginTurnLoad(instanceId: string, sessionId: string, turn: TurnIdentity
   setTurnState(instanceId, sessionId, turn, {
     status: "loading",
     items: existing?.items || [],
+    ...(existing?.revision ? { revision: existing.revision } : {}),
   });
 }
 
-function resolveTurn(instanceId: string, sessionId: string, turn: TurnIdentity, turnItems: readonly AiSessionTimelineItem[]) {
+function resolveTurn(instanceId: string, sessionId: string, turn: TurnIdentity, turnItems: readonly AiSessionTimelineItem[], timelineRevision?: string) {
   if (storedTurnRevisionIsNewer(turnStates.get(turnKey(instanceId, sessionId, turn.id)), turn)) return false;
   const identities = turnIdentities(turn);
   const merged = mergeAiSessionTimelineItems(turnItems, liveItemsForTurn(instanceId, sessionId, identities));
   clearLiveTurn(instanceId, sessionId, identities);
-  const resolved = setTurnState(instanceId, sessionId, turn, { status: "ready", items: merged });
+  const resolved = setTurnState(instanceId, sessionId, turn, {
+    status: "ready",
+    items: merged,
+    ...(timelineRevision ? { revision: timelineRevision } : {}),
+  });
   if (resolved) {
     for (const delta of [...pendingDeltas.values()]) {
       if (delta.instanceId === instanceId && delta.sessionId === sessionId && identities.includes(delta.turnId)) applyDelta(delta);
@@ -225,12 +316,22 @@ function resolveTurn(instanceId: string, sessionId: string, turn: TurnIdentity, 
   return resolved;
 }
 
+function resolveTurnNotModified(instanceId: string, sessionId: string, turn: TurnIdentity, timelineRevision: string) {
+  const existing = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+  return setTurnState(instanceId, sessionId, turn, {
+    status: "ready",
+    items: existing?.items || [],
+    revision: timelineRevision,
+  });
+}
+
 function rejectTurn(instanceId: string, sessionId: string, turn: TurnIdentity, error: string) {
   const existing = turnStates.get(turnKey(instanceId, sessionId, turn.id));
   setTurnState(instanceId, sessionId, turn, {
     status: "error",
     items: existing?.items || [],
     error,
+    ...(existing?.revision ? { revision: existing.revision } : {}),
   });
 }
 
@@ -248,19 +349,182 @@ function setSessionState(instanceId: string, sessionId: string, state: SessionTi
 }
 
 function beginSessionLoad(instanceId: string, sessionId: string) {
-  setSessionState(instanceId, sessionId, { status: "loading" });
+  const existing = sessionStates.get(sessionKey(instanceId, sessionId));
+  setSessionState(instanceId, sessionId, {
+    status: "loading",
+    ...(existing?.revision ? { revision: existing.revision } : {}),
+  });
 }
 
-function resolveSession(instanceId: string, sessionId: string, turns: readonly AiSessionTurn[], timeline: AiSessionTimeline) {
+function resolveSession(instanceId: string, sessionId: string, turns: readonly AiSessionTurn[], timeline: AiSessionTimeline, timelineRevision?: string) {
   for (const turn of turns) {
     const identities = new Set(turnIdentities(turn));
-    resolveTurn(instanceId, sessionId, turn, timeline.items.filter((item) => identities.has(item.turnId)));
+    resolveTurn(instanceId, sessionId, turn, timeline.items.filter((item) => identities.has(item.turnId)), timelineRevision);
   }
-  setSessionState(instanceId, sessionId, { status: "ready" });
+  setSessionState(instanceId, sessionId, {
+    status: "ready",
+    ...(timelineRevision ? { revision: timelineRevision } : {}),
+  });
+}
+
+function resolveSessionNotModified(instanceId: string, sessionId: string, turns: readonly AiSessionTurn[], timelineRevision: string) {
+  setSessionState(instanceId, sessionId, { status: "ready", revision: timelineRevision });
+  for (const turn of turns) {
+    const key = turnKey(instanceId, sessionId, turn.id);
+    const state = turnStates.get(key);
+    if (!state) continue;
+    turnStates.set(key, {
+      ...state,
+      status: "ready",
+      revision: timelineRevision,
+      error: undefined,
+      ...(turn.revision !== undefined ? { turnRevision: turn.revision } : {}),
+    });
+  }
+  revision.value += 1;
+}
+
+function resolveSessionSyncSnapshot(
+  instanceId: string,
+  sessionId: string,
+  turns: readonly AiSessionTurn[],
+  items: readonly AiSessionTimelineVersionedItem[],
+  timelineRevision: string,
+) {
+  replaceVersionedItemRevisions(instanceId, sessionId, items);
+  sessionTimelineOrder.set(sessionKey(instanceId, sessionId), items.map((entry) => entry.item.id));
+  for (const turn of turns) {
+    const identities = new Set(turnIdentities(turn));
+    resolveTurn(instanceId, sessionId, turn, items.filter((entry) => identities.has(entry.item.turnId)).map((entry) => entry.item), timelineRevision);
+  }
+  setSessionState(instanceId, sessionId, { status: "ready", revision: timelineRevision });
+}
+
+function applySessionSyncDelta(
+  instanceId: string,
+  sessionId: string,
+  turns: readonly AiSessionTurn[],
+  delta: TimelineSyncDelta,
+) {
+  applyVersionedItemRevisions(instanceId, sessionId, delta.upserted, delta.removed);
+  const order = timelineOrderAfterDelta(storedSessionOrder(instanceId, sessionId, turns), delta);
+  sessionTimelineOrder.set(sessionKey(instanceId, sessionId), order);
+
+  const ownerById = new Map<string, AiSessionTurn>();
+  for (const turn of turns) {
+    const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+    for (const item of state?.items || []) ownerById.set(item.id, turn);
+  }
+  const upsertedById = new Map<string, AiSessionTimelineItem>();
+  const upsertedByTurn = new Map<string, Map<string, AiSessionTimelineItem>>();
+  for (const entry of delta.upserted) {
+    const turn = turns.find((candidate) => turnIdentities(candidate).includes(entry.item.turnId));
+    upsertedById.set(entry.item.id, entry.item);
+    if (!turn) continue;
+    ownerById.set(entry.item.id, turn);
+    const bucket = upsertedByTurn.get(turn.id) || new Map<string, AiSessionTimelineItem>();
+    bucket.set(entry.item.id, entry.item);
+    upsertedByTurn.set(turn.id, bucket);
+  }
+
+  const affected = new Set<string>();
+  for (const id of delta.removed) {
+    const owner = ownerById.get(id);
+    if (owner) affected.add(owner.id);
+  }
+  for (const entry of delta.upserted) {
+    const owner = ownerById.get(entry.item.id);
+    if (owner) affected.add(owner.id);
+  }
+
+  const ownerKeyById = new Map<string, string>();
+  for (const [id, turn] of ownerById) ownerKeyById.set(id, turn.id);
+  for (const turn of turns) {
+    const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+    const expectedIds = order.filter((id) => ownerKeyById.get(id) === turn.id);
+    const currentIds = state?.items.map((item) => item.id) || [];
+    if (expectedIds.length !== currentIds.length || expectedIds.some((id, index) => id !== currentIds[index])) {
+      affected.add(turn.id);
+    }
+  }
+
+  for (const turn of turns) {
+    if (!affected.has(turn.id)) continue;
+    const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+    const existingById = new Map((state?.items || []).map((item) => [item.id, item]));
+    const upserted = upsertedByTurn.get(turn.id);
+    const expectedIds = order.filter((id) => ownerKeyById.get(id) === turn.id);
+    const nextItems = expectedIds
+      .map((id) => upserted?.get(id) || upsertedById.get(id) || existingById.get(id))
+      .filter((item): item is AiSessionTimelineItem => Boolean(item));
+    resolveTurn(instanceId, sessionId, turn, nextItems, delta.revision);
+  }
+  // The session delta is authoritative for every item, including Turns whose
+  // item set did not change. Reconcile their Turn metadata without replacing
+  // cached items or forcing another body read on the next render.
+  for (const turn of turns) {
+    if (affected.has(turn.id)) continue;
+    const key = turnKey(instanceId, sessionId, turn.id);
+    const state = turnStates.get(key);
+    if (!state) continue;
+    const identities = turnIdentities(turn);
+    const turnRevision = turn.revision;
+    if (
+      state.status === "ready"
+      && state.revision === delta.revision
+      && state.error === undefined
+      && sameStrings(state.identities, identities)
+      && (turnRevision === undefined || state.turnRevision === turnRevision)
+    ) continue;
+    turnStates.delete(key);
+    turnStates.set(key, {
+      ...state,
+      status: "ready",
+      revision: delta.revision,
+      error: undefined,
+      identities,
+      ...(turnRevision !== undefined ? { turnRevision } : {}),
+    });
+  }
+  setSessionState(instanceId, sessionId, { status: "ready", revision: delta.revision });
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function resolveTurnSyncSnapshot(
+  instanceId: string,
+  sessionId: string,
+  turn: TurnIdentity,
+  items: readonly AiSessionTimelineVersionedItem[],
+  timelineRevision: string,
+) {
+  const revisions = revisionMap(instanceId, sessionId);
+  const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+  for (const item of state?.items || []) revisions.delete(item.id);
+  for (const entry of items) revisions.set(entry.item.id, entry.revision);
+  resolveTurn(instanceId, sessionId, turn, items.map((entry) => entry.item), timelineRevision);
+}
+
+function applyTurnSyncDelta(instanceId: string, sessionId: string, turn: TurnIdentity, delta: TimelineSyncDelta) {
+  applyVersionedItemRevisions(instanceId, sessionId, delta.upserted, delta.removed);
+  const state = turnStates.get(turnKey(instanceId, sessionId, turn.id));
+  const existingById = new Map((state?.items || []).map((item) => [item.id, item]));
+  const upsertedById = new Map(delta.upserted.map((entry) => [entry.item.id, entry.item]));
+  const nextItems = timelineOrderAfterDelta(state?.items.map((item) => item.id) || [], delta)
+    .map((id) => upsertedById.get(id) || existingById.get(id))
+    .filter((item): item is AiSessionTimelineItem => Boolean(item));
+  resolveTurn(instanceId, sessionId, turn, nextItems, delta.revision);
 }
 
 function rejectSession(instanceId: string, sessionId: string, error: string) {
-  setSessionState(instanceId, sessionId, { status: "error", error });
+  const existing = sessionStates.get(sessionKey(instanceId, sessionId));
+  setSessionState(instanceId, sessionId, {
+    status: "error",
+    error,
+    ...(existing?.revision ? { revision: existing.revision } : {}),
+  });
 }
 
 function cleanupInstance(instanceId: string) {
@@ -268,7 +532,10 @@ function cleanupInstance(instanceId: string) {
   for (const [key, state] of turnStates) if (state.instanceId === instanceId) turnStates.delete(key);
   for (const key of sessionStates.keys()) {
     const [storedInstanceId] = JSON.parse(key) as [string, string];
-    if (storedInstanceId === instanceId) sessionStates.delete(key);
+    if (storedInstanceId !== instanceId) continue;
+    sessionStates.delete(key);
+    sessionTimelineOrder.delete(key);
+    timelineItemRevisions.delete(key);
   }
   for (const [key, event] of pendingDeltas) if (event.instanceId === instanceId) pendingDeltas.delete(key);
   revision.value += 1;
@@ -292,17 +559,25 @@ export function useAiSessionTimelineStore() {
   return {
     apply,
     applyDelta,
+    applySessionSyncDelta,
+    applyTurnSyncDelta,
     beginSessionLoad,
     beginTurnLoad,
     cleanupInstance,
     items,
+    knownSessionTimelineItems,
+    knownTurnTimelineItems,
     recoverConnection,
     recoveryRevision,
     rejectSession,
     rejectTurn,
+    resolveSessionSyncSnapshot,
+    resolveSessionNotModified,
     realtimeTurnState,
     resolveSession,
     resolveTurn,
+    resolveTurnSyncSnapshot,
+    resolveTurnNotModified,
     revision,
     sessionState,
     turnState,

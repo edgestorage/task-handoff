@@ -109,7 +109,6 @@ test('one root provider owns one AI session connection for multiple screens', as
     topics: ['ai.sessions'],
     aiSessionTransient: {
       messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
-      replaySince: expect.any(String),
       timelineAllSessions: false,
       timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
     },

@@ -14,7 +14,7 @@ export type CloudNodeRelayChannelConnector = {
 };
 
 export type CloudNodeRelayChannelTransport = {
-  attachNode(nodeId: string, input: { socket: NodeRelayFrameSocket; key: Uint8Array; onClosed?(reason: string): void }): unknown;
+  attachNode(nodeId: string, input: { socket: NodeRelayFrameSocket; key: Uint8Array; onClosed?(reason: string): void; nodeHandle?: string; relayChannelId?: string }): unknown;
   detachNode(nodeId: string, reason: string): boolean;
   connected(nodeId: string): boolean;
 };
@@ -27,6 +27,8 @@ export type CloudNodeRelayChannelsOptions = {
   nodes: {
     resolve(nodeHandle: string): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | undefined;
     inspectNode?(nodeId: string): { nodeId: string; connectionKind: string; nodeHandle?: string } | undefined;
+    /** Nodes whose claim should be restored after a fresh Coordinator connection. */
+    listForClaim?(): Array<{ nodeHandle: string }> | Promise<Array<{ nodeHandle: string }>>;
     linkNode?(nodeId: string, nodeHandle: string): void | Promise<void>;
     ensure(input: { nodeHandle: string; nodeId: string; displayName?: string }): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | Promise<{ nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean }>;
     savePairing(nodeId: string, pairing: { keyId: string; secret: string }): void | Promise<void>;
@@ -58,6 +60,14 @@ export class CloudNodeRelayChannels {
   /** A Control Plane claim was accepted; the channel follows when the node asks for allocations. */
   noteClaim(nodeHandle: string) {
     this.claims.set(nodeHandle, { requestedAt: new Date(this.now()).toISOString() });
+  }
+
+  hasClaimOrChannel(nodeHandle: string) {
+    return this.claims.has(nodeHandle) || this.channels.has(nodeHandle);
+  }
+
+  recordClaimFailure(nodeHandle: string, error: unknown) {
+    this.recordError(nodeHandle, error);
   }
 
   forgetClaim(nodeHandle: string) {
@@ -172,6 +182,8 @@ export class CloudNodeRelayChannels {
     transport.attachNode(identity.nodeId, {
       socket: connection.socket,
       key: connection.key,
+      nodeHandle: verified.nodeHandle,
+      ...(connection.channelId ? { relayChannelId: connection.channelId } : {}),
       onClosed: (reason) => this.handleClosed(verified.nodeHandle, reason),
     });
     await this.options.nodes.connected(identity.nodeId, { nodeHandle: verified.nodeHandle });

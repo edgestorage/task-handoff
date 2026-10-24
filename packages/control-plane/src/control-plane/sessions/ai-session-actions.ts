@@ -9,7 +9,11 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
   AiSessionTimelineSchema,
+  AiSessionTimelineReadSchema,
+  AiSessionTimelineSyncInputSchema,
+  AiSessionTimelineSyncReadSchema,
   AiSessionTurnTimelineSchema,
+  AiSessionTurnTimelineReadSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
@@ -43,8 +47,10 @@ import {
   type AiSessionOpenAppResult,
   type AiSessionHistoryDetail,
   type AiSessionHistoryList,
-  type AiSessionTimeline,
-  type AiSessionTurnTimeline,
+  type AiSessionTimelineItem,
+  type AiSessionTimelineRead,
+  type AiSessionTimelineSyncRead,
+  type AiSessionTurnTimelineRead,
   type AiSessionMessageAttachment,
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
@@ -156,6 +162,19 @@ function legacyAiSessionTurnBodyRevision(turn: AiSessionTurn) {
   return createHash("sha256").update(JSON.stringify(turn)).digest("base64url").slice(0, 22);
 }
 
+function legacyAiSessionTimelineRevision(items: readonly AiSessionTimelineItem[]) {
+  return createHash("sha256").update(JSON.stringify(canonicalTimelineValue(items))).digest("base64url").slice(0, 22);
+}
+
+function canonicalTimelineValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalTimelineValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, canonicalTimelineValue(entry)]));
+}
+
 export class AiSessionActionService {
   private readonly options: AiSessionActionServiceOptions;
   private resumeSnapshotRefreshFailures = 0;
@@ -242,27 +261,88 @@ export class AiSessionActionService {
     return parseResponse(AiSessionStatusSchema, await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`));
   }
 
-  async timeline(instanceId: string, aiSessionId: string): Promise<AiSessionTimeline> {
+  async timeline(instanceId: string, aiSessionId: string, revision?: string): Promise<AiSessionTimelineRead> {
     const instance = await this.options.requireInstance(instanceId);
     if (!instanceSupportsAiSessionTimeline(instance)) {
       throw aiSessionTimelineUnsupported();
     }
-    return parseResponse(AiSessionTimelineSchema, await this.options.request(
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const response = await this.options.request(
       instance,
-      sessionRoute(aiSessionId, "timeline"),
+      `${sessionRoute(aiSessionId, "timeline")}${query}`,
       { method: "GET" },
-    ));
+    );
+    const current = AiSessionTimelineReadSchema.safeParse(response);
+    if (current.success) return current.data;
+    const legacy = parseResponse(AiSessionTimelineSchema, response);
+    const legacyRevision = legacyAiSessionTimelineRevision(legacy.items);
+    if (revision === legacyRevision) {
+      return AiSessionTimelineReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+    }
+    return AiSessionTimelineReadSchema.parse({ kind: "updated", revision: legacyRevision, timeline: legacy });
   }
 
-  async turnTimeline(instanceId: string, aiSessionId: string, turnId: string): Promise<AiSessionTurnTimeline> {
+  async turnTimeline(instanceId: string, aiSessionId: string, turnId: string, revision?: string): Promise<AiSessionTurnTimelineRead> {
     const instance = await this.options.requireInstance(instanceId);
     if (!instanceSupportsAiSessionTurnTimeline(instance)) {
       throw aiSessionTurnTimelineUnsupported();
     }
-    return parseResponse(AiSessionTurnTimelineSchema, await this.options.request(
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const response = await this.options.request(
       instance,
-      `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}/timeline`,
+      `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}/timeline${query}`,
       { method: "GET" },
+    );
+    const current = AiSessionTurnTimelineReadSchema.safeParse(response);
+    if (current.success) return current.data;
+    const legacy = parseResponse(AiSessionTurnTimelineSchema, response);
+    const legacyRevision = legacyAiSessionTimelineRevision(legacy.items);
+    if (revision === legacyRevision) {
+      return AiSessionTurnTimelineReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+    }
+    return AiSessionTurnTimelineReadSchema.parse({ kind: "updated", revision: legacyRevision, timeline: legacy });
+  }
+
+  async syncTimeline(
+    instanceId: string,
+    aiSessionId: string,
+    knownItems: ReadonlyArray<{ id: string; revision: string }>,
+  ): Promise<AiSessionTimelineSyncRead> {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!instanceSupportsAiSessionTimeline(instance)) {
+      throw aiSessionTimelineUnsupported();
+    }
+    const input = AiSessionTimelineSyncInputSchema.parse({ knownItems });
+    return parseResponse(AiSessionTimelineSyncReadSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "timeline/sync"),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      },
+    ));
+  }
+
+  async syncTurnTimeline(
+    instanceId: string,
+    aiSessionId: string,
+    turnId: string,
+    knownItems: ReadonlyArray<{ id: string; revision: string }>,
+  ): Promise<AiSessionTimelineSyncRead> {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!instanceSupportsAiSessionTurnTimeline(instance)) {
+      throw aiSessionTurnTimelineUnsupported();
+    }
+    const input = AiSessionTimelineSyncInputSchema.parse({ knownItems });
+    return parseResponse(AiSessionTimelineSyncReadSchema, await this.options.request(
+      instance,
+      `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}/timeline/sync`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      },
     ));
   }
 

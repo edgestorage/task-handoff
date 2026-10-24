@@ -910,6 +910,60 @@ export const AiSessionTurnBodyReadSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+export const AiSessionTimelineReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    timeline: AiSessionTimelineSchema,
+  }).strict(),
+]);
+
+export const AiSessionTurnTimelineReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    timeline: AiSessionTurnTimelineSchema,
+  }).strict(),
+]);
+
+export const AiSessionTimelineItemRevisionSchema = z.object({
+  id: z.string().trim().min(1).max(240),
+  revision: AiSessionProjectionRevisionSchema,
+}).strict();
+
+export const AiSessionTimelineVersionedItemSchema = z.object({
+  revision: AiSessionProjectionRevisionSchema,
+  item: AiSessionTimelineItemSchema,
+}).strict();
+
+// Timeline sync is deliberately stateless on the server: the client sends the
+// revisions it already holds and receives only items that moved. This avoids a
+// server-side replay window without forcing clients to refetch the full body.
+export const AiSessionTimelineSyncInputSchema = z.object({
+  knownItems: z.array(AiSessionTimelineItemRevisionSchema).max(10_000).default([]),
+}).strict();
+
+export const AiSessionTimelineSyncReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("snapshot"),
+    revision: AiSessionProjectionRevisionSchema,
+    items: z.array(AiSessionTimelineVersionedItemSchema),
+  }).strict(),
+  z.object({
+    kind: z.literal("delta"),
+    revision: AiSessionProjectionRevisionSchema,
+    upserted: z.array(AiSessionTimelineVersionedItemSchema),
+    removed: z.array(z.string().trim().min(1).max(240)),
+    // The client already holds the previous order. Servers omit this field
+    // when removed items and tail-appended upserts fully determine the next
+    // order; a full ID list is only needed for middle insertion or reordering.
+    order: z.array(z.string().trim().min(1).max(240)).optional(),
+  }).strict(),
+]);
+
 export const AiSessionActionResultSchema = z.object({
   session: AiSessionStatusSchema,
   provider: z.string().trim().min(1).max(80),
@@ -1613,6 +1667,12 @@ export type AiSessionTimelineActivity = z.infer<typeof AiSessionTimelineActivity
 export type AiSessionTimelineItem = z.infer<typeof AiSessionTimelineItemSchema>;
 export type AiSessionTimeline = z.infer<typeof AiSessionTimelineSchema>;
 export type AiSessionTurnTimeline = z.infer<typeof AiSessionTurnTimelineSchema>;
+export type AiSessionTimelineRead = z.infer<typeof AiSessionTimelineReadSchema>;
+export type AiSessionTurnTimelineRead = z.infer<typeof AiSessionTurnTimelineReadSchema>;
+export type AiSessionTimelineItemRevision = z.infer<typeof AiSessionTimelineItemRevisionSchema>;
+export type AiSessionTimelineVersionedItem = z.infer<typeof AiSessionTimelineVersionedItemSchema>;
+export type AiSessionTimelineSyncInput = z.infer<typeof AiSessionTimelineSyncInputSchema>;
+export type AiSessionTimelineSyncRead = z.infer<typeof AiSessionTimelineSyncReadSchema>;
 export type AiSessionSubAgentStatus = z.infer<typeof AiSessionSubAgentStatusSchema>;
 export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivitySchema>;
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;

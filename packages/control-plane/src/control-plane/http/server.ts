@@ -73,6 +73,7 @@ import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
 import { relayTraceFromEnvironment } from "../cloud-connectivity/relay-trace.ts";
+import { nodeRelayTraceFromEnvironment } from "../cloud-connectivity/node-relay-trace.ts";
 import { CloudAccountSessionService } from "../cloud-connectivity/account-session.ts";
 import { CloudRelayNodeAgentTransport } from "../nodes/cloud-relay-transport.ts";
 import { nodeRelayInstallCommand } from "../cloud-connectivity/node-install-command.ts";
@@ -582,9 +583,16 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const stopTransientDemand = aiSessionTransient
         ? events.registerAiSessionTransientDemand(aiSessionTransient)
         : events.registerLegacyAiSessionTransientDemand(selected);
+      const wantsResourceMetrics = selected.has("*")
+        || selected.has("instances")
+        || selected.has("instance.metrics.snapshot");
+      const stopResourceMetricDemand = wantsResourceMetrics
+        ? events.registerResourceMetricDemand(resourceMetricInstanceIds)
+        : () => undefined;
       return () => {
         stopEvents();
         stopTransientDemand();
+        stopResourceMetricDemand();
       };
     },
     async openTty(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: any) => void) {
@@ -610,10 +618,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // only receives a lazy resolver; the local node record stays the single
   // mapping between a cloud handle and business code.
   let cloudRelayNodeTransport: CloudRelayNodeAgentTransport | undefined;
+  const nodeRelayTrace = nodeRelayTraceFromEnvironment(process.env, paths.dataDir);
   const publishCloudRelayNodeState = (nodeId: string) => events.publish("node.checked", { nodeId }, { topic: "node.state", scope: { nodeId } });
   const cloudRelayNodeRelay = {
     transport: () => cloudRelayNodeTransport,
     nodes: {
+      listForClaim: () => service.listCloudRelayNodesToClaim(),
       resolve: (nodeHandle: string) => {
         const linked = service.findNodeByCloudAccountHandle(nodeHandle);
         if (linked) return { nodeId: linked.id, preserveLocalConnection: true };
@@ -642,6 +652,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
     state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
+    logger: { info: (data, message) => app.log.info(data, message), warn: (data, message) => app.log.warn(data, message) },
     fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir),
     cloudRelaySessionsPath: paths.cloudRelaySessionsPath, coordinatorOrigins: cloudServiceOrigins,
     ...(cloudDiscovery ? { cloudDiscovery } : {}),
@@ -682,6 +693,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));
+  service.setAiSessionInstanceSnapshotProvider((instanceId) => aiSessionAggregator.snapshotForInstance(instanceId));
   const agentAggregator = new ControlPlaneAgentAggregator();
   const aiSessionAttachmentCache = new AiSessionAttachmentCache(paths.dataDir, {
     onWarning: (reason) => app.log.warn(reason),
@@ -794,6 +806,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   if (cloudConnectivityEnabled) {
     cloudRelayNodeTransport = new CloudRelayNodeAgentTransport({
       tunnel: nodeAgentTunnel,
+      trace: nodeRelayTrace,
       onIdentified: async (nodeId) => {
         await service.checkNode(nodeId);
         publishCloudRelayNodeState(nodeId);
@@ -840,6 +853,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const stopAiSessionTransientDemand = events.onAiSessionTransientDemand((demand) => {
     nodeEventSubscriber.setAiSessionTransientDemand(demand);
   });
+  const stopResourceMetricDemand = events.onResourceMetricDemand((demand) => {
+    nodeEventSubscriber.setResourceMetricDemand(demand);
+  });
   nodeEventSubscriber.start();
   await app.register(cookie);
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
@@ -854,6 +870,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     proxyStateSubscriber.stop();
     nodeEventSubscriber.stop();
     stopAiSessionTransientDemand();
+    stopResourceMetricDemand();
     chatGateway.stopAll();
     service.dispose();
     await auth.close();
@@ -1072,13 +1089,19 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.post("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
     await requireCloudConnectivityAdmin(request);
     const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
-    return { data: await cloudConnectivityRuntime.claimAccountNode(nodeHandle) };
+    const data = await cloudConnectivityRuntime.claimAccountNode(nodeHandle);
+    await service.setCloudRelayNodeClaimEnabled(nodeHandle, true);
+    return { data };
   });
 
   // Revoking one claim leaves every other Control Plane's channel untouched.
   app.delete("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
     await requireCloudConnectivityAdmin(request);
     const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
+    // Persist the operator's intent before the remote call. A later restart
+    // must not silently reclaim a node that was explicitly unbound, even if
+    // the Coordinator is temporarily unreachable during this request.
+    await service.setCloudRelayNodeClaimEnabled(nodeHandle, false);
     return { data: await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle) };
   });
 
@@ -1179,6 +1202,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // Relay payload capture is opt-in through its own flag and lands in its own JSONL files,
   // never in the log stream; this route only reports whether it is on and where it writes.
   app.get("/api/control-plane/relay-trace", async () => ({ data: cloudConnectivityRuntime.relayTrace.status() }));
+  app.get("/api/control-plane/node-relay-trace", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: nodeRelayTrace.status() };
+  });
   app.get("/api/session-streams/diagnostics", async () => ({
     data: {
       aiSessions: aiSessionAggregator.diagnostics(),

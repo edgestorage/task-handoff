@@ -56,7 +56,7 @@ export function sharedCloudRouteAllowed(url: string) {
   if (path.startsWith("/api/chat-gateway/bridges") || path === "/api/chat-gateway/status" || path === "/api/chat-gateway/poll-ai-sessions") return false;
   if (path.startsWith("/api/control-plane-proxy") || path.startsWith("/api/node-proxy")) return false;
   if (path.startsWith("/api/operation-approvals") || path.startsWith("/api/pending-routes")) return false;
-  if (path.startsWith("/api/control-plane/settings") || path.startsWith("/api/control-plane/diagnostic-logs") || path.startsWith("/api/control-plane/relay-trace") || path === "/api/control-plane/status") return false;
+  if (path.startsWith("/api/control-plane/settings") || path.startsWith("/api/control-plane/diagnostic-logs") || path.startsWith("/api/control-plane/relay-trace") || path.startsWith("/api/control-plane/node-relay-trace") || path === "/api/control-plane/status") return false;
   if (path.startsWith("/api/node-join/")) return false;
   if (/^\/api\/nodes\/[^/]+\/(cloud-relay-binding|control-plane-connections|control-plane-pairings|pairing\/invites|settings\/|updates\/)/.test(path)) return false;
   return true;
@@ -74,7 +74,7 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/session-streams/diagnostics") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
-  if (path === "/api/control-plane/relay-trace" || path.startsWith("/api/control-plane/relay-trace/")) {
+  if (path === "/api/control-plane/relay-trace" || path.startsWith("/api/control-plane/relay-trace/") || path === "/api/control-plane/node-relay-trace" || path.startsWith("/api/control-plane/node-relay-trace/")) {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
   if (path.startsWith("/api/control-plane/settings")) {

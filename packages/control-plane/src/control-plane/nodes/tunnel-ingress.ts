@@ -53,6 +53,9 @@ export class NodeTunnelIngress {
       return;
     }
     const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+    // Error frames are terminal. Answering a peer error with another error
+    // creates an unbounded error loop on transports that answer unknowns.
+    if (record.type === "node-agent.error") return;
     const handled = this.transport.handleSocketMessage(nodeId, socket, record);
     if (handled === undefined || handled) return;
     if (record.type === "node-agent.ping") {

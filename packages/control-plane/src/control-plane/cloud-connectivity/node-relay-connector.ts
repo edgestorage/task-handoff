@@ -4,6 +4,9 @@ import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-s
 import { acceptNodeRelayHandshake } from "../../shared/cloud-relay/node-relay-session.ts";
 import { trustedRelayUrl } from "./relay-connector.ts";
 
+const DEFAULT_ATTACH_TIMEOUT_MS = 15_000;
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+
 export type VerifiedNodeRelayAllocation = {
   allocationId: string;
   relayUrl: string;
@@ -34,8 +37,8 @@ export type ConnectedNodeRelayChannel = {
  * (first claim) is sealed inside the handshake accept.
  */
 export class CloudNodeRelayConnector {
-  private readonly options: { identity: ControlPlaneIdentityService; webSocket?: typeof WebSocket };
-  constructor(options: { identity: ControlPlaneIdentityService; webSocket?: typeof WebSocket }) {
+  private readonly options: { identity: ControlPlaneIdentityService; webSocket?: typeof WebSocket; attachTimeoutMs?: number; handshakeTimeoutMs?: number };
+  constructor(options: { identity: ControlPlaneIdentityService; webSocket?: typeof WebSocket; attachTimeoutMs?: number; handshakeTimeoutMs?: number }) {
     this.options = options;
   }
 
@@ -52,10 +55,12 @@ export class CloudNodeRelayConnector {
     const event = input.allocation.event;
     const Socket = this.options.webSocket ?? WebSocket;
     const socket = new Socket(relayUrl.href, { followRedirects: false, handshakeTimeout: 10_000, perMessageDeflate: false });
+    const attachTimeoutMs = positiveDuration(this.options.attachTimeoutMs, DEFAULT_ATTACH_TIMEOUT_MS);
+    const handshakeTimeoutMs = positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_HANDSHAKE_TIMEOUT_MS);
     try {
-      await socketOpen(socket);
+      await socketOpen(socket, attachTimeoutMs);
       socket.send(JSON.stringify({ type: "attach", capability: attach }));
-      const attached = await socketMessage(socket, (value) => value?.type === "attached");
+      const attached = await socketMessage(socket, (value) => value?.type === "attached", attachTimeoutMs);
       const accepted = await acceptNodeRelayHandshake({
         socket: socket as unknown as NodeRelayFrameSocket,
         identity: {
@@ -75,6 +80,7 @@ export class CloudNodeRelayConnector {
         },
         ...(input.pairing ? { pairing: input.pairing } : {}),
         createPairing: input.createPairing,
+        timeoutMs: handshakeTimeoutMs,
       });
       return {
         socket: socket as unknown as NodeRelayFrameSocket,
@@ -92,15 +98,28 @@ export class CloudNodeRelayConnector {
   }
 }
 
-function socketOpen(socket: WebSocket) {
+function socketOpen(socket: WebSocket, timeoutMs: number) {
   return new Promise<void>((resolve, reject) => {
-    socket.once("open", resolve);
-    socket.once("error", reject);
-    socket.once("close", () => reject(channelError("NODE_RELAY_SOCKET_CLOSED")));
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      clearTimeout(timer);
+      socket.off("open", onOpen);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const onOpen = () => { if (settled) return; cleanup(); resolve(); };
+    const onError = (error: Error) => { if (settled) return; cleanup(); reject(error); };
+    const onClose = () => { if (settled) return; cleanup(); reject(channelError("NODE_RELAY_SOCKET_CLOSED")); };
+    const timer = setTimeout(() => { if (settled) return; cleanup(); reject(channelError("NODE_RELAY_ATTACH_TIMEOUT")); }, timeoutMs);
+    timer.unref?.();
+    socket.once("open", onOpen);
+    socket.once("error", onError);
+    socket.once("close", onClose);
   });
 }
 
-function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) {
+function socketMessage(socket: WebSocket, predicate: (value: any) => boolean, timeoutMs: number) {
   return new Promise<any>((resolve, reject) => {
     const onMessage = (raw: WebSocket.RawData) => {
       try {
@@ -109,7 +128,9 @@ function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) {
       } catch (error) { cleanup(); reject(error); }
     };
     const onClose = () => { cleanup(); reject(channelError("NODE_RELAY_SOCKET_CLOSED")); };
-    const cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); };
+    const cleanup = () => { clearTimeout(timer); socket.off("message", onMessage); socket.off("close", onClose); };
+    const timer = setTimeout(() => { cleanup(); reject(channelError("NODE_RELAY_ATTACH_TIMEOUT")); }, timeoutMs);
+    timer.unref?.();
     socket.on("message", onMessage);
     socket.once("close", onClose);
   });
@@ -117,4 +138,8 @@ function socketMessage(socket: WebSocket, predicate: (value: any) => boolean) {
 
 function channelError(code: string) {
   return Object.assign(new Error("Cloud relay node channel is unavailable."), { code, retryable: true });
+}
+
+function positiveDuration(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }

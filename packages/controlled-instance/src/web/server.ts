@@ -49,6 +49,8 @@ import {
   createAiSessionRegistry,
   aiSessionConversationTurns,
   aiSessionDetailRevision,
+  aiSessionTimelineRevision,
+  syncAiSessionTimelineItems,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
   type AiSessionRegistry,
@@ -138,7 +140,11 @@ import {
   projectAiSessionHistoryItemForConsumer,
   projectAiSessionsSnapshotForConsumer,
   AiSessionTimelineSchema,
+  AiSessionTimelineReadSchema,
+  AiSessionTimelineSyncInputSchema,
+  AiSessionTimelineSyncReadSchema,
   AiSessionTurnTimelineSchema,
+  AiSessionTurnTimelineReadSchema,
   AiSessionTurnIndexSchema,
   AiSessionTurnIndexReadSchema,
   AiSessionTurnBodySchema,
@@ -262,6 +268,10 @@ function normalizeProxyRequestBody(value: unknown): Buffer | string | undefined 
   }
   return JSON.stringify(value);
 }
+
+const AiSessionTimelineReadQuerySchema = z.object({
+  revision: z.string().trim().min(1).max(64).optional(),
+}).strict();
 
 type RunWebServerOptions = {
   host: string;
@@ -2464,17 +2474,49 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
     try {
-      return { data: AiSessionTimelineSchema.parse(await aiSessionController.timeline(request.params.id)) };
+      const query = AiSessionTimelineReadQuerySchema.parse(request.query);
+      const timeline = AiSessionTimelineSchema.parse(await aiSessionController.timeline(request.params.id));
+      const revision = aiSessionTimelineRevision(timeline.items);
+      if (query.revision === revision) {
+        return { data: AiSessionTimelineReadSchema.parse({ kind: "not-modified", revision }) };
+      }
+      return { data: AiSessionTimelineReadSchema.parse({ kind: "updated", revision, timeline }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
   });
 
-  app.get<{ Params: { id: string; turnId: string } }>("/api/ai-sessions/:id/turns/:turnId/timeline", async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/timeline/sync", async (request, reply) => {
     try {
-      return { data: AiSessionTurnTimelineSchema.parse(await aiSessionController.turnTimeline(request.params.id, request.params.turnId)) };
+      const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
+      const timeline = AiSessionTimelineSchema.parse(await aiSessionController.timeline(request.params.id));
+      return { data: AiSessionTimelineSyncReadSchema.parse(syncAiSessionTimelineItems(timeline.items, input.knownItems)) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string; turnId: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/turns/:turnId/timeline", async (request, reply) => {
+    try {
+      const query = AiSessionTimelineReadQuerySchema.parse(request.query);
+      const timeline = AiSessionTurnTimelineSchema.parse(await aiSessionController.turnTimeline(request.params.id, request.params.turnId));
+      const revision = aiSessionTimelineRevision(timeline.items);
+      if (query.revision === revision) {
+        return { data: AiSessionTurnTimelineReadSchema.parse({ kind: "not-modified", revision }) };
+      }
+      return { data: AiSessionTurnTimelineReadSchema.parse({ kind: "updated", revision, timeline }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string; turnId: string }; Body: unknown }>("/api/ai-sessions/:id/turns/:turnId/timeline/sync", async (request, reply) => {
+    try {
+      const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
+      const timeline = AiSessionTurnTimelineSchema.parse(await aiSessionController.turnTimeline(request.params.id, request.params.turnId));
+      return { data: AiSessionTimelineSyncReadSchema.parse(syncAiSessionTimelineItems(timeline.items, input.knownItems)) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

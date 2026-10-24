@@ -27,15 +27,17 @@ type CloudAccountScope = "account:sign-in" | "control-plane:bind";
 type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
 const ACCOUNT_REQUEST_POLL_MS = 3_000;
 const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
+const DEFAULT_CONTROL_REGISTRATION_TIMEOUT_MS = 15_000;
+const DEFAULT_CONTROL_REQUEST_TIMEOUT_MS = 30_000;
 // Check often, but refresh only after the cached access token enters its expiry window. A remote
 // revocation therefore surfaces within one access-token lifetime instead of waiting half a day.
 const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
-  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean };
+  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number };
 
-  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean }) {
+  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number }) {
     this.options = options;
   }
 
@@ -63,7 +65,9 @@ export class CloudCoordinatorConnector {
       onEvent: input.onEvent,
       onRegistered: this.options.onRegistered,
       onRequest: this.options.onRequest,
-      onDisconnected: () => { if (this.current === connection) this.current = undefined; this.options.onDisconnected(); },
+      registrationTimeoutMs: this.options.registrationTimeoutMs,
+      requestTimeoutMs: this.options.requestTimeoutMs,
+      onDisconnected: (details) => { if (this.current === connection) this.current = undefined; this.options.onDisconnected(details); },
     });
     this.current = connection;
     return connection;
@@ -93,6 +97,11 @@ export class CloudConnectivityBackgroundRuntime {
   private reconciling?: Promise<void>;
   private revoking?: Promise<void>;
   private rotatingCredentials?: Promise<void>;
+  private nodeRelayRestore?: Promise<void>;
+  private readonly nodeRelayClaimsInFlight = new Set<string>();
+  private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly nodeRelayRecoveryAttempts = new Map<string, number>();
+  private readonly nodeRelayRecoveryInFlight = new Set<string>();
   private accessToken?: { value: string; expiresAt: number };
   private readonly nodeRelayChannels?: CloudNodeRelayChannels;
   private readonly onboardingHints = new Map<string, { tokenId?: string; at: string }>();
@@ -107,7 +116,11 @@ export class CloudConnectivityBackgroundRuntime {
     const verifyGrant = options.verifyRelaySessionGrant ?? ((grant) => verifyCoordinatorRelaySessionGrant(grant, options.state));
     const persistResume = Boolean(options.cloudRelaySessionsPath)
       && typeof (relayConnector as { resume?: unknown }).resume === "function";
-    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onDisconnected: () => { this.control.disconnected(); this.schedule(); }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
+    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onDisconnected: (details) => {
+      this.control.disconnected();
+      this.schedule();
+      this.options.logger?.warn?.({ code: "CLOUD_CONTROL_CONNECTION_CLOSED", ...details }, "cloud_control_connection_closed");
+    }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
     this.dataConnections = new CloudRelayDataConnectionManager({
       verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)),
       verifyGrant,
@@ -140,8 +153,22 @@ export class CloudConnectivityBackgroundRuntime {
       // the node-relay channel state.
       if ((event as any)?.type === "node-relay-allocation") {
         if (!this.nodeRelayChannels) return;
+        const nodeHandle = (event as any)?.nodeHandle;
         this.relayLinks.observe((event as any)?.relayUrl);
-        void this.nodeRelayChannels.attach(event).catch(() => undefined);
+        void this.nodeRelayChannels.attach(event).then(() => {
+          if (typeof nodeHandle === "string") this.resetNodeRelayRecovery(nodeHandle);
+        }).catch((error) => {
+          if (typeof nodeHandle !== "string") return;
+          const retryable = (error as { retryable?: unknown } | undefined)?.retryable !== false;
+          this.nodeRelayChannels?.forgetClaim(nodeHandle);
+          this.options.logger?.warn?.({
+            code: "NODE_RELAY_CHANNEL_ATTACH_FAILED",
+            nodeHandle,
+            errorCode: errorCode(error) ?? "NODE_RELAY_CHANNEL_FAILED",
+            retryable,
+          }, "node_relay_channel_attach_failed");
+          if (retryable) this.scheduleNodeRelayRecovery(nodeHandle);
+        });
         return;
       }
       if ((event as any)?.type === "relay-session-grant") {
@@ -204,6 +231,10 @@ export class CloudConnectivityBackgroundRuntime {
     if (this.accountTimer) clearTimeout(this.accountTimer);
     if (this.accountRenewalTimer) clearInterval(this.accountRenewalTimer);
     this.accountRenewalTimer = undefined;
+    for (const timer of this.nodeRelayRecoveryTimers.values()) clearTimeout(timer);
+    this.nodeRelayRecoveryTimers.clear();
+    this.nodeRelayRecoveryAttempts.clear();
+    this.nodeRelayRecoveryInFlight.clear();
     this.relayLinks.stop();
     this.relayTrace.close();
     this.nodeRelayChannels?.closeAll("runtime-stopped");
@@ -238,10 +269,19 @@ export class CloudConnectivityBackgroundRuntime {
    * Claims an account node for this Control Plane. The Relay allocation arrives
    * as a pushed event once the node asks for it; nothing is created here.
    */
-  async claimAccountNode(nodeHandle: string) {
-    const result = await this.request("claim-node-relay-node", this.nodeRelayBindingPayload({ nodeHandle })) as { status?: string };
-    this.nodeRelayChannels?.noteClaim(nodeHandle);
-    return result;
+  async claimAccountNode(nodeHandle: string, options: { refreshAllocation?: boolean } = {}) {
+    if (this.nodeRelayClaimsInFlight.has(nodeHandle)) return { status: "pending" as const };
+    this.nodeRelayClaimsInFlight.add(nodeHandle);
+    try {
+      const result = await this.request("claim-node-relay-node", this.nodeRelayBindingPayload({
+        nodeHandle,
+        ...(options.refreshAllocation === true ? { refreshAllocation: true } : {}),
+      })) as { status?: string };
+      this.nodeRelayChannels?.noteClaim(nodeHandle);
+      return result;
+    } finally {
+      this.nodeRelayClaimsInFlight.delete(nodeHandle);
+    }
   }
 
   /** Removes this Control Plane's claim; other Control Planes keep their channels. */
@@ -381,7 +421,15 @@ export class CloudConnectivityBackgroundRuntime {
       // learns a concrete host that actually resolves, so let the background prober
       // measure it for the next selection.
       this.relayLinks.observe(payload?.relayUrl);
-      return this.dataConnections.attach(payload);
+      const startedAt = this.clock();
+      try {
+        const result = await this.dataConnections.attach(payload);
+        this.options.logger?.info?.({ code: "CLOUD_RELAY_ALLOCATION_ATTACHED", allocationId: boundedText(payload?.allocationId, 64), relayUrl: boundedText(payload?.relayUrl, 256), durationMs: Math.max(0, this.clock() - startedAt) }, "cloud_relay_allocation_attached");
+        return result;
+      } catch (error) {
+        this.options.logger?.warn?.({ code: "CLOUD_RELAY_ALLOCATION_ATTACH_FAILED", allocationId: boundedText(payload?.allocationId, 64), relayUrl: boundedText(payload?.relayUrl, 256), errorCode: errorCode(error) ?? "UNKNOWN", errorMessage: boundedErrorMessage(error), retryable: isRetryable(error), durationMs: Math.max(0, this.clock() - startedAt) }, "cloud_relay_allocation_attach_failed");
+        throw error;
+      }
     }
     if (operation === "relay-session-grant") return this.dataConnections.applyGrant(payload);
     if (operation === "node-relay-allocation") {
@@ -401,7 +449,78 @@ export class CloudConnectivityBackgroundRuntime {
     // local pending revocation can be confirmed without another remote call.
     if (result.revocationFallback) this.options.state.confirmRevocation();
     else if (this.options.state.snapshot().status === "pending-revocation") await this.completePendingRevocation();
+    // Claims live in the Coordinator and the Control Plane's in-memory channel
+    // index. A process restart or Coordinator reconnect therefore has to ask
+    // for the existing cloud-relay nodes again; node records and pairings stay
+    // intact, so this is not a re-add or a re-pair operation.
+    if (!result.reused) this.restoreNodeRelayClaims();
     if (!result.reused && !this.reconciling) this.reconciling = this.reconcileAccount().catch(() => undefined).finally(() => { this.reconciling = undefined; });
+  }
+
+  private restoreNodeRelayClaims() {
+    if (!this.running || !this.nodeRelayChannels || !this.options.nodeRelay?.nodes.listForClaim) return;
+    if (this.nodeRelayRestore) return;
+    const snapshot = this.options.state.snapshot();
+    if (snapshot.status !== "active" || !snapshot.scopes.nodeRelay || !snapshot.bindingId) return;
+    const bindingId = snapshot.bindingId;
+    this.nodeRelayRestore = (async () => {
+      const nodes = await Promise.resolve(this.options.nodeRelay!.nodes.listForClaim!());
+      for (const node of nodes) {
+        if (!this.running) return;
+        const current = this.options.state.snapshot();
+        if (current.status !== "active" || !current.scopes.nodeRelay || current.bindingId !== bindingId) return;
+        if (this.nodeRelayChannels?.hasClaimOrChannel(node.nodeHandle)) continue;
+        try {
+          await this.claimAccountNode(node.nodeHandle);
+        } catch (error) {
+          this.nodeRelayChannels?.recordClaimFailure(node.nodeHandle, error);
+        }
+      }
+    })().catch(() => undefined).finally(() => { this.nodeRelayRestore = undefined; });
+  }
+
+  private scheduleNodeRelayRecovery(nodeHandle: string) {
+    if (!this.running || !this.nodeRelayChannels || this.nodeRelayRecoveryTimers.has(nodeHandle) || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
+    const attempt = (this.nodeRelayRecoveryAttempts.get(nodeHandle) ?? 0) + 1;
+    this.nodeRelayRecoveryAttempts.set(nodeHandle, attempt);
+    const delayMs = Math.min(30_000, 250 * (2 ** Math.min(7, attempt - 1)));
+    const timer = setTimeout(() => {
+      this.nodeRelayRecoveryTimers.delete(nodeHandle);
+      void this.recoverNodeRelayClaim(nodeHandle);
+    }, delayMs);
+    timer.unref?.();
+    this.nodeRelayRecoveryTimers.set(nodeHandle, timer);
+  }
+
+  private async recoverNodeRelayClaim(nodeHandle: string) {
+    if (!this.running || !this.nodeRelayChannels || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
+    const snapshot = this.options.state.snapshot();
+    if (snapshot.status !== "active" || snapshot.scopes.nodeRelay !== true) return;
+    this.nodeRelayRecoveryInFlight.add(nodeHandle);
+    let failure: unknown;
+    let pending = false;
+    try {
+      const result = await this.claimAccountNode(nodeHandle, { refreshAllocation: true });
+      pending = (result as { status?: unknown } | undefined)?.status === "pending";
+    } catch (error) {
+      failure = error;
+      this.nodeRelayChannels.recordClaimFailure(nodeHandle, error);
+      this.options.logger?.warn?.({
+        code: "NODE_RELAY_ALLOCATION_REFRESH_FAILED",
+        nodeHandle,
+        errorCode: errorCode(error) ?? "NODE_RELAY_CHANNEL_FAILED",
+      }, "node_relay_allocation_refresh_failed");
+    } finally {
+      this.nodeRelayRecoveryInFlight.delete(nodeHandle);
+    }
+    if (failure !== undefined || pending) this.scheduleNodeRelayRecovery(nodeHandle);
+  }
+
+  private resetNodeRelayRecovery(nodeHandle: string) {
+    const timer = this.nodeRelayRecoveryTimers.get(nodeHandle);
+    if (timer) clearTimeout(timer);
+    this.nodeRelayRecoveryTimers.delete(nodeHandle);
+    this.nodeRelayRecoveryAttempts.delete(nodeHandle);
   }
 
   /**
@@ -524,26 +643,57 @@ export class CloudConnectivityBackgroundRuntime {
   }
 }
 
-function openRpcConnection(socket: WebSocket, options: { register: unknown; onEvent(event: unknown): void; onRegistered?(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest?(operation: string, payload: unknown): Promise<unknown>; onDisconnected(): void }): Promise<RpcConnection> {
+function openRpcConnection(socket: WebSocket, options: { register: unknown; onEvent(event: unknown): void; onRegistered?(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest?(operation: string, payload: unknown): Promise<unknown>; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; registrationTimeoutMs?: number; requestTimeoutMs?: number }): Promise<RpcConnection> {
   return new Promise((resolve, reject) => {
     const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
     let registered = false;
     let intentional = false;
+    let lastErrorCode: string | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const requestTimeoutMs = positiveDuration(options.requestTimeoutMs, DEFAULT_CONTROL_REQUEST_TIMEOUT_MS);
+    let registrationTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearRegistrationTimer = () => {
+      if (!registrationTimer) return;
+      clearTimeout(registrationTimer);
+      registrationTimer = undefined;
+    };
     const fail = (error: Error) => { for (const item of pending.values()) item.reject(error); pending.clear(); if (!registered) reject(error); };
+    registrationTimer = setTimeout(() => {
+      registrationTimer = undefined;
+      if (registered) return;
+      fail(runtimeError("CLOUD_CONTROL_REGISTRATION_TIMEOUT"));
+      try { socket.terminate(); } catch { try { socket.close(); } catch { /* already closed */ } }
+    }, positiveDuration(options.registrationTimeoutMs, DEFAULT_CONTROL_REGISTRATION_TIMEOUT_MS));
+    registrationTimer.unref?.();
     const connection: RpcConnection = {
       request(operation, payload) {
         if (socket.readyState !== WebSocket.OPEN) return Promise.reject(runtimeError("CLOUD_CONTROL_CONNECTION_UNAVAILABLE"));
         const requestId = `request_${crypto.randomUUID().replaceAll("-", "_")}`;
-        socket.send(JSON.stringify({ type: "request", requestId, operation, payload }));
-        return new Promise((requestResolve, requestReject) => pending.set(requestId, { resolve: requestResolve, reject: requestReject }));
+        return new Promise((requestResolve, requestReject) => {
+          const timer = setTimeout(() => {
+            if (!pending.delete(requestId)) return;
+            requestReject(runtimeError("CLOUD_CONTROL_REQUEST_TIMEOUT"));
+          }, requestTimeoutMs);
+          timer.unref?.();
+          pending.set(requestId, {
+            resolve(value) { clearTimeout(timer); requestResolve(value); },
+            reject(error) { clearTimeout(timer); requestReject(error); },
+          });
+          try {
+            socket.send(JSON.stringify({ type: "request", requestId, operation, payload }));
+          } catch (error) {
+            pending.delete(requestId);
+            clearTimeout(timer);
+            requestReject(error instanceof Error ? error : runtimeError("CLOUD_CONTROL_REQUEST_FAILED"));
+          }
+        });
       },
       async close(reason = "normal") { intentional = true; if (heartbeat) clearInterval(heartbeat); socket.close(1000, reason.slice(0, 120)); },
     };
     socket.on("open", () => socket.send(JSON.stringify(options.register)));
     const handleMessage = async (raw: WebSocket.RawData) => {
       let message: any; try { message = JSON.parse(raw.toString()); } catch { return socket.close(1002, "invalid-json"); }
-      if (message.type === "registered") { const registration = OutboundConnectionRegistrationResponseSchema.parse(message); options.onRegistered?.(registration); registered = true; heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000); heartbeat.unref(); return resolve(connection); }
+      if (message.type === "registered") { const registration = OutboundConnectionRegistrationResponseSchema.parse(message); options.onRegistered?.(registration); registered = true; clearRegistrationTimer(); heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000); heartbeat.unref(); return resolve(connection); }
       if (message.type === "event") return await options.onEvent(message.event);
       if (message.type === "response") { const item = pending.get(message.requestId); if (!item) return; pending.delete(message.requestId); return message.error ? item.reject(Object.assign(new Error(message.error.message), { code: message.error.code })) : item.resolve(message.data); }
       if (message.type === "request" && options.onRequest) {
@@ -556,15 +706,26 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
         if (socket.readyState === WebSocket.OPEN) socket.close(1011, "message-handler-failed");
       });
     });
-    socket.on("error", (error) => fail(error));
-    socket.on("close", () => { if (heartbeat) clearInterval(heartbeat); fail(runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED")); if (!intentional) options.onDisconnected(); });
+    socket.on("error", (error) => { clearRegistrationTimer(); lastErrorCode = errorCode(error); fail(error); });
+    socket.on("close", (code, reason) => {
+      clearRegistrationTimer();
+      if (heartbeat) clearInterval(heartbeat);
+      fail(runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED"));
+      if (!intentional) options.onDisconnected({ closeCode: code, closeReason: boundedText(reason.toString("utf8"), 120), ...(lastErrorCode ? { errorCode: lastErrorCode } : {}) });
+    });
   });
 }
+
+type CloudRuntimeLogger = {
+  info?: (data: Record<string, unknown>, message?: string) => void;
+  warn?: (data: Record<string, unknown>, message?: string) => void;
+};
 
 type CloudRuntimeOptions = {
   state: CloudConnectivityService;
   accountSession: CloudAccountSessionService;
   identity: ControlPlaneIdentityService;
+  logger?: CloudRuntimeLogger;
   relayBridge?: RelaySessionBridge;
   relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
   relayTrace?: RelayTraceRecorder;
@@ -594,5 +755,12 @@ function accessTokenLifetimeSeconds(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 300;
 }
 
+function positiveDuration(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
 function runtimeError(code: string) { return Object.assign(new Error("Cloud background connection is unavailable."), { code, retryable: true }); }
 function accountError(code: string) { return Object.assign(new Error("Cloud account session is unavailable."), { code, statusCode: 409 }); }
+function errorCode(error: unknown) { return error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined; }
+function isRetryable(error: unknown) { return error !== null && typeof error === "object" && "retryable" in error && error.retryable === true; }
+function boundedText(value: unknown, limit: number) { return typeof value === "string" ? value.slice(0, limit) : undefined; }
+function boundedErrorMessage(error: unknown) { const message = error instanceof Error ? error.message : String(error ?? ""); return message.slice(0, 240); }

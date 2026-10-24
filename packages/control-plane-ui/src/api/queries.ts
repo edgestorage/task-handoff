@@ -692,12 +692,20 @@ export function getAiSessionTurnBody(instanceId: string, aiSessionId: string, tu
   return sharedAiSessionsApi.turnBody(instanceId, aiSessionId, turnId, revision, signal);
 }
 
-export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-  return sharedAiSessionsApi.timeline(instanceId, aiSessionId, signal);
+export function getAiSessionTimeline(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.timeline(instanceId, aiSessionId, revision, signal);
 }
 
-export function getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
-  return sharedAiSessionsApi.turnTimeline(instanceId, aiSessionId, turnId, signal);
+export function getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnTimeline(instanceId, aiSessionId, turnId, revision, signal);
+}
+
+export function syncAiSessionTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
+  return sharedAiSessionsApi.syncTimeline(instanceId, aiSessionId, knownItems, signal);
+}
+
+export function syncAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
+  return sharedAiSessionsApi.syncTurnTimeline(instanceId, aiSessionId, turnId, knownItems, signal);
 }
 
 export function resumeAiSession(instanceId: string, aiSessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionResumeInput = {}) {

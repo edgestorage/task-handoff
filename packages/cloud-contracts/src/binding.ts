@@ -43,7 +43,9 @@ export const ControlPlaneDirectoryEntrySchema = z.strictObject({
   scopes: CloudRelayScopesSchema.optional(),
   leaseExpiresAt: DateTimeSchema.optional(),
   lastConnectedAt: DateTimeSchema.optional(),
+  /** Cumulative Control Plane access traffic through Relay; Node Agent traffic is reported separately. */
   relayUsageBytes: z.number().int().nonnegative(),
+  /** @deprecated Account-level quota is not a per-binding value; accepted only for N-1 server compatibility. */
   relayQuotaBytes: z.number().int().nonnegative().optional(),
   versionWarning: z.string().trim().min(1).max(500).optional(),
   errorCode: z.string().trim().min(1).max(160).optional(),

@@ -67,6 +67,9 @@ const E2E_REKEY_RETRY_MS = 30_000;
 // idempotency key even after that selection has expired.
 const PENDING_BOOTSTRAP_TTL_MS = 15_000;
 const PENDING_CONFIRM_TTL_MS = 5 * 60_000;
+const IDEMPOTENCY_PENDING_RETRY_INITIAL_MS = 1_000;
+const IDEMPOTENCY_PENDING_RETRY_MAX_MS = 5_000;
+const IDEMPOTENCY_PENDING_WAIT_MAX_MS = 20_000;
 // Binary uploads keep four 256 KiB chunks in flight: 1 MiB of unacknowledged
 // bytes stays well under the 2 MiB socket backpressure limit while still
 // hiding one round trip behind the next chunk on mobile networks.
@@ -208,6 +211,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private sessionStoreChain: Promise<void> = Promise.resolve();
   private memoryPending?: RelayPendingOperation;
   private pendingStoreChain: Promise<void> = Promise.resolve();
+  private readonly relayOperationFlights = new Map<string, Promise<unknown>>();
   constructor(profile: MobileCloudRelayControlPlaneProfile, private readonly account: CloudMobileAccountClient, private readonly openChannel: RelayChannelFactory, options: RelayTransportOptions = {}) {
     this.profile = profile;
     this.winnerCache = options.winnerCache;
@@ -764,6 +768,63 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     return channel;
   }
 
+  private async executeIdempotentRelayOperation<T>(
+    operation: 'bootstrap' | 'confirm',
+    key: string,
+    attemptId: string,
+    attempt: RelayAttempt,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    let retryDelay = IDEMPOTENCY_PENDING_RETRY_INITIAL_MS;
+    for (;;) {
+      this.assertAttemptCurrent(attempt);
+      try {
+        return await this.singleFlightRelayOperation(`${operation}:${key}`, attemptId, run);
+      } catch (error) {
+        if (!this.isAttemptCurrent(attempt)) throw attemptCancelled();
+        if (!idempotencyOperationPending(error)) throw error;
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= IDEMPOTENCY_PENDING_WAIT_MAX_MS) throw error;
+        const waitMs = Math.min(retryDelay, IDEMPOTENCY_PENDING_WAIT_MAX_MS - elapsedMs);
+        diagnosticLog.info('relay.idempotency.pending', { attemptId, operation, elapsedMs, retryInMs: waitMs });
+        await this.waitForAttempt(waitMs, attempt);
+        retryDelay = Math.min(IDEMPOTENCY_PENDING_RETRY_MAX_MS, retryDelay * 2);
+      }
+    }
+  }
+
+  private singleFlightRelayOperation<T>(key: string, attemptId: string, run: () => Promise<T>): Promise<T> {
+    const existing = this.relayOperationFlights.get(key) as Promise<T> | undefined;
+    if (existing) {
+      diagnosticLog.info('relay.idempotency.reuse', { attemptId, operation: key.slice(0, key.indexOf(':')) });
+      return existing;
+    }
+    const flight = Promise.resolve().then(run).finally(() => {
+      if (this.relayOperationFlights.get(key) === flight) this.relayOperationFlights.delete(key);
+    });
+    this.relayOperationFlights.set(key, flight);
+    return flight;
+  }
+
+  private waitForAttempt(delayMs: number, attempt: RelayAttempt) {
+    return new Promise<void>((resolve, reject) => {
+      if (!this.isAttemptCurrent(attempt)) {
+        reject(attemptCancelled());
+        return;
+      }
+      const timer = setTimeout(() => {
+        attempt.controller.signal.removeEventListener('abort', aborted);
+        resolve();
+      }, delayMs);
+      const aborted = () => {
+        clearTimeout(timer);
+        reject(attemptCancelled());
+      };
+      attempt.controller.signal.addEventListener('abort', aborted, { once: true });
+    });
+  }
+
   private async runSelection(allowCachedWinner: boolean, freshRetry = false, attemptId = this.nextRelayAttemptId(), attempt = this.attempt ?? this.beginAttempt()): Promise<EncryptedRelayChannel> {
     const startedAt = Date.now();
     const controlPlaneId = this.profile.identity.controlPlaneId;
@@ -777,7 +838,8 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       diagnosticLog.info('relay.confirm.replay.start', { attemptId, cacheHit: Boolean(cached) });
       let confirmed;
       try {
-        confirmed = await this.account.confirmRelaySession(pending.selectionId, pending.body, pending.key);
+        confirmed = await this.executeIdempotentRelayOperation('confirm', pending.key, attemptId, attempt,
+          () => this.account.confirmRelaySession(pending.selectionId, pending.body, pending.key));
       } catch (error) {
         if (!this.isAttemptCurrent(attempt)) throw attemptCancelled();
         if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
@@ -816,12 +878,14 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       };
       await this.savePendingOperation(bootstrapOperation);
     }
+    const bootstrapRequest = bootstrapOperation;
 
     const bootstrapStartedAt = Date.now();
     diagnosticLog.info('relay.bootstrap.start', { attemptId, replay: bootstrapReplay, candidateLimit: RELAY_CANDIDATE_COUNT });
     let bootstrap;
     try {
-      bootstrap = await this.account.bootstrapRelaySession(bootstrapOperation.body, bootstrapOperation.key);
+      bootstrap = await this.executeIdempotentRelayOperation('bootstrap', bootstrapRequest.key, attemptId, attempt,
+        () => this.account.bootstrapRelaySession(bootstrapRequest.body, bootstrapRequest.key));
     } catch (error) {
       if (!this.isAttemptCurrent(attempt)) throw attemptCancelled();
       if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
@@ -867,7 +931,8 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     diagnosticLog.info('relay.confirm.start', { attemptId, winnerRelayId: winner.relayId, fallback: winner.confirmation.fallback, cacheHit: Boolean(cached) });
     let confirmed;
     try {
-      confirmed = await this.account.confirmRelaySession(confirmOperation.selectionId, confirmOperation.body, confirmOperation.key);
+      confirmed = await this.executeIdempotentRelayOperation('confirm', confirmOperation.key, attemptId, attempt,
+        () => this.account.confirmRelaySession(confirmOperation.selectionId, confirmOperation.body, confirmOperation.key));
     } catch (error) {
       if (!this.isAttemptCurrent(attempt)) throw attemptCancelled();
       if (!pendingOperationRetryable(error)) await this.clearPendingOperation();
@@ -1599,16 +1664,14 @@ function aggregateTransientDemand(events: Iterable<MobileControlPlaneEventHandle
   const sessions = new Map<string, { instanceId: string; sessionId: string }>();
   let allInstances = false;
   let timelineAllSessions = false;
-  let replaySince: string | undefined;
   for (const entry of selected) {
     const demand = entry.aiSessionTransient!;
     allInstances ||= demand.messageDeltas.allInstances;
     timelineAllSessions ||= demand.timelineAllSessions;
     for (const id of demand.messageDeltas.instanceIds) instances.add(id);
     for (const session of demand.timelineSessions) sessions.set(`${session.instanceId}\0${session.sessionId}`, session);
-    if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
   }
-  return { ...(replaySince ? { replaySince } : {}), messageDeltas: { allInstances, instanceIds: [...instances] }, timelineAllSessions, timelineSessions: [...sessions.values()] };
+  return { messageDeltas: { allInstances, instanceIds: [...instances] }, timelineAllSessions, timelineSessions: [...sessions.values()] };
 }
 
 function idempotencyKey(operation: 'bootstrap' | 'confirm' | 'renew') {
@@ -1643,6 +1706,10 @@ function pendingOperationRetryable(error: unknown) {
   // A reset, timeout, or a response lost after the server committed is
   // ambiguous, so the pending operation must remain replayable.
   return true;
+}
+
+function idempotencyOperationPending(error: unknown) {
+  return String((error as { code?: unknown } | null)?.code ?? '') === 'IDEMPOTENCY_REQUEST_IN_PROGRESS';
 }
 
 function pendingOperationSelectionExpired(error: unknown) {

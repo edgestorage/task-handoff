@@ -233,7 +233,11 @@ export class NodeRelayNodeChannel {
       onMessage: (message) => this.handleMessage(message),
       onData: (frame) => this.handleData(frame),
       onClosed: (reason) => this.finish(reason),
-      onError: (error) => options.host.log.warn({ nodeId: options.nodeId, error: error.message }, "node agent cloud relay channel error"),
+      onError: (error) => options.host.log.warn({
+        nodeId: options.nodeId,
+        code: (error as { code?: unknown }).code,
+        error: error.message,
+      }, "node agent cloud relay channel error"),
     });
     this.protocol = new NodeTunnelSessionServer({
       nodeId: options.nodeId,

@@ -9,6 +9,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import type { NodeModelRegistry } from "./registry.ts";
 import { discoverModels, testModelEndpoint } from "../../shared/models/model-endpoint.ts";
+import { conditionalJsonResponse } from "../conditional-json.ts";
 
 const NodeModelDiscoveryInputSchema = z.object({
   endpoint: z.string().trim().url().max(2048),
@@ -37,7 +38,9 @@ export function registerNodeModelRoutes(
     }
   };
 
-  app.get("/api/node-agent/models", async () => ({ data: registry.list() }));
+  app.get("/api/node-agent/models", async (request, reply) => (
+    conditionalJsonResponse(request, reply, registry.list())
+  ));
 
   app.post("/api/node-agent/models", async (request, reply) => reply.code(201).send({
     data: registry.create(CreateNodeModelSchema.parse(request.body)),

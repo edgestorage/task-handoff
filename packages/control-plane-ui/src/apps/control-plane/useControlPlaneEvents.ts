@@ -31,7 +31,7 @@ import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
 import { applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
-import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
+import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand } from "./useAiSessionEventDemand.ts";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -136,7 +136,7 @@ export function useControlPlaneEvents(input: {
       const recovering = hasOpened;
       hasOpened = true;
       const instanceId = toValue(input.instanceId || "");
-      sendSubscription(current, new Date().toISOString());
+      sendSubscription(current);
       startKeepalive(current);
       for (const recovery of authoritativeRecoveries) void recovery.start();
       void input.appManagement?.recoverOpen();
@@ -163,7 +163,7 @@ export function useControlPlaneEvents(input: {
     });
   }
 
-  function sendSubscription(target = socket, replaySince: string | undefined = undefined) {
+  function sendSubscription(target = socket) {
     if (!target || target.readyState !== WebSocket.OPEN) return;
     const instanceId = toValue(input.instanceId || "");
     const messageDeltaDemand = aiSessionMessageDeltaDemand.value;
@@ -179,7 +179,6 @@ export function useControlPlaneEvents(input: {
       ...(instanceId ? { instanceIds: [instanceId] } : {}),
       ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),
       aiSessionTransient: {
-        ...(replaySince ? { replaySince } : {}),
         messageDeltas: instanceId
           ? { allInstances: false, instanceIds: scopedMessageDeltaDemanded ? [instanceId] : [] }
           : messageDeltaDemand,
@@ -436,13 +435,11 @@ export function useControlPlaneEvents(input: {
     closing = false;
     connect();
   });
-  watch([aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince], () => {
-    const replaySince = aiSessionTransientReplaySince.value;
-    sendSubscription(socket, replaySince);
-    // Timeline/detail queries establish their own authoritative snapshot before
-    // consuming replayed transient events. Reconnect recovery is descriptor-
-    // driven, so expanding transient demand must not refetch the full AI Session
-    // list for every card selection.
+  watch([aiSessionMessageDeltaDemand, aiSessionTimelineDemand], () => {
+    sendSubscription(socket);
+    // Transient demand only controls the live WebSocket stream. Timeline and
+    // message history recover through their HTTP sync/snapshot reads, so a
+    // demand expansion never asks the transport to replay an old event window.
   }, { deep: false });
   watch(() => JSON.stringify(toValue(input.resourceMetricInstanceIds || [])), () => {
     // Metrics scope is independent from AI transient replay. Re-sending an old

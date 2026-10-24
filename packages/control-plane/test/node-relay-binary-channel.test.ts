@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import nacl from "tweetnacl";
-import { decodeRelayFrame, encodeRelayFrame } from "@task-handoff/cloud-contracts";
+import { RELAY_FRAME_FLAG_DEFLATE, decodeRelayFrame, encodeRelayFrame } from "@task-handoff/cloud-contracts";
 import {
   NODE_RELAY_DATA_HEADER_BYTES,
   NODE_RELAY_DATA_MAGIC,
@@ -100,6 +100,25 @@ test("node relay binary data is sealed verbatim without base64 or deflate", asyn
   assert.deepEqual(Buffer.from(received[0]!.data), content);
   assert.equal(received[0]!.streamId, 3);
   assert.equal(received[0]!.binary, true);
+});
+
+test("large textual tunnel data is deflate-packed while binary data stays verbatim", async () => {
+  const { controlPlane, sent, received } = sessionPair();
+  const text = JSON.stringify({ items: Array.from({ length: 200 }, (_, index) => ({ id: `item-${index}`, message: "relay text payload" })) });
+
+  controlPlane.sendData(4, text, false);
+  controlPlane.sendData(5, Buffer.alloc(600 * 1024), true);
+  await waitFor(() => received.length === 2, "the node to receive text and binary data");
+
+  const textFrame = decodeRelayFrame(sent[0]!);
+  const binaryFrame = decodeRelayFrame(sent[1]!);
+  assert.equal(textFrame.flags, RELAY_FRAME_FLAG_DEFLATE);
+  assert.equal(binaryFrame.flags, 0);
+  assert.equal(received[0]!.streamId, 4);
+  assert.equal(Buffer.from(received[0]!.data).toString("utf8"), text);
+  assert.equal(received[1]!.streamId, 5);
+  assert.equal(received[1]!.binary, true);
+  assert.ok(textFrame.payload.byteLength < Buffer.byteLength(text), "the compressed text frame must be smaller on the wire");
 });
 
 test("node relay stream ids multiplex main text, auxiliary text and auxiliary binary frames", async () => {

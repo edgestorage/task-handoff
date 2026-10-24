@@ -70,6 +70,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     unbinds: 0,
     redemptions: [] as Array<{ nodeId?: string; displayName?: string }>,
     allocationRequests: [] as Array<{ controlPlaneId?: string; refreshControlPlaneIds?: string[] }>,
+    ignoreRefresh: false,
     adaptiveSelection: false,
     failAdaptiveAllocations: false,
     probeTargetFailure: undefined as { status: number; code: string; message?: string } | undefined,
@@ -90,7 +91,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     return [...state.claims.values()]
       .filter((claim) => !body.controlPlaneId || claim.controlPlaneId === body.controlPlaneId)
       .map((claim) => {
-        if (refresh.has(claim.controlPlaneId)) state.issued.delete(claim.controlPlaneId);
+        if (refresh.has(claim.controlPlaneId) && !state.ignoreRefresh) state.issued.delete(claim.controlPlaneId);
         const existing = state.issued.get(claim.controlPlaneId);
         if (existing) return existing;
         const relay = state.relayByControlPlane.get(claim.controlPlaneId) ?? { relayId: state.relayId, relayUrl: state.relayUrl };
@@ -262,6 +263,12 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     setUnreachable(unreachable: boolean) {
       state.unreachable = unreachable;
     },
+    invalidateAllocation(controlPlaneId: string) {
+      state.issued.delete(controlPlaneId);
+    },
+    setIgnoreRefresh(ignoreRefresh: boolean) {
+      state.ignoreRefresh = ignoreRefresh;
+    },
   };
 }
 
@@ -269,7 +276,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
  * ws-compatible socket for the node client: each instance is linked to a peer
  * frame socket the Control Plane side of the test drives.
  */
-export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSocket, url: string): void; }): typeof import("ws").default {
+export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSocket, url: string): void; closeDelayMs?: number; }): typeof import("ws").default {
   class FakeWebSocket {
     static readonly CONNECTING = 0;
     static readonly OPEN = 1;
@@ -277,7 +284,7 @@ export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSo
     static readonly CLOSED = 3;
     readonly url: string;
     readonly peer: InMemoryFrameSocket;
-    readyState = 1;
+    readyState = 0;
     bufferedAmount = 0;
     private readonly listeners = new Map<string, Set<(...args: any[]) => void>>();
     private readonly pendingInbound: Buffer[] = [];
@@ -301,7 +308,8 @@ export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSo
         drop: () => { for (const listener of [...this.peerCloseListeners]) listener(1006, "dropped"); },
       };
       queueMicrotask(() => {
-        if (this.readyState !== 1) return;
+        if (this.readyState !== 0) return;
+        this.readyState = 1;
         this.emit("open");
         options.onConnection(this.peer, url);
       });
@@ -347,8 +355,16 @@ export function fakeRelayWebSocket(options: { onConnection(peer: InMemoryFrameSo
     close(code = 1000, reason = "") {
       if (this.readyState === 3) return;
       this.readyState = 3;
-      this.peer.drop();
-      this.emit("close", code, reason);
+      const finish = () => {
+        this.peer.drop();
+        this.emit("close", code, reason);
+      };
+      if (options.closeDelayMs && options.closeDelayMs > 0) {
+        const timer = setTimeout(finish, options.closeDelayMs);
+        timer.unref?.();
+      } else {
+        finish();
+      }
     }
     terminate() {
       this.close(1006, "terminated");

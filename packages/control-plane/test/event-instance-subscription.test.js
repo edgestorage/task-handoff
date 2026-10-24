@@ -144,6 +144,28 @@ test("a resource-metric scope narrows only metrics, so a Relay subscription keep
   assert.equal(acceptsResourceMetricInstance(new Set(["a"]), { type: "instance.lifecycle.snapshot", scope: { instanceId: "b" } }), true);
 });
 
+test("resource metric demand aggregates browser scopes and relayed consumers", () => {
+  const events = new ControlPlaneEventBus();
+  const active = socket();
+  const disabled = socket();
+  events.connect(active.value, { expectsMetricSubscription: true });
+  events.connect(disabled.value, { expectsMetricSubscription: true });
+  active.listeners.message(JSON.stringify({ type: "subscribe", topics: ["instances"], metricInstanceIds: ["instance-a"] }));
+  disabled.listeners.message(JSON.stringify({ type: "subscribe", topics: ["instances"], metricInstanceIds: [] }));
+  const stopRelayed = events.registerResourceMetricDemand(["instance-b", "instance-a", " "]);
+
+  assert.deepEqual(events.resourceMetricDemand(), { all: false, instanceIds: ["instance-a", "instance-b"] });
+
+  stopRelayed();
+  active.listeners.close();
+  assert.deepEqual(events.resourceMetricDemand(), { all: false, instanceIds: [] });
+
+  const stopLegacyRelayed = events.registerResourceMetricDemand();
+  assert.deepEqual(events.resourceMetricDemand(), { all: true, instanceIds: [] });
+  stopLegacyRelayed();
+  disabled.listeners.close();
+});
+
 test("global events without instance scope remain visible to scoped clients", () => {
   const events = new ControlPlaneEventBus();
   const client = socket();

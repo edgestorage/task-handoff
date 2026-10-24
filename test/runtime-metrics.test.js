@@ -167,12 +167,102 @@ test("node agent publishes metric snapshots through the authoritative event stre
   assert.equal(frames[0].event.scope.instanceId, "inst_1");
 });
 
-test("node agent republishes lifecycle liveness without repeating the snapshot payload", () => {
+test("node agent forwards resource metrics only to outputs that demand the instance", () => {
   const frames = [];
   const output = new EventEmitter();
   output.readyState = WebSocket.OPEN;
   output.send = (value) => frames.push(JSON.parse(String(value)));
   const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [] });
+  forwarder.addOutput(output, { expectsTransientSubscription: true });
+
+  assert.equal(forwarder.setOutputSubscription(output, {}, undefined, undefined, ["inst_one"]), true);
+  forwarder.publish("instance.metrics.snapshot", { instanceId: "inst_one" }, { instanceId: "inst_one" });
+  forwarder.publish("instance.metrics.snapshot", { instanceId: "inst_two" }, { instanceId: "inst_two" });
+  assert.deepEqual(frames.map((frame) => frame.event.scope.instanceId), ["inst_one"]);
+
+  assert.equal(forwarder.setOutputSubscription(output, {}, undefined, undefined, []), true);
+  forwarder.publish("instance.metrics.snapshot", { instanceId: "inst_one" }, { instanceId: "inst_one" });
+  assert.equal(frames.length, 1);
+
+  assert.equal(forwarder.setOutputSubscription(output, {}, undefined, undefined, undefined), true);
+  forwarder.publish("instance.metrics.snapshot", { instanceId: "inst_two" }, { instanceId: "inst_two" });
+  assert.deepEqual(frames.map((frame) => frame.event.scope.instanceId), ["inst_one", "inst_two"]);
+  forwarder.stop();
+});
+
+test("node agent throttles lifecycle liveness while publishing signal changes immediately", () => {
+  const frames = [];
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = (value) => frames.push(JSON.parse(String(value)));
+  let now = 0;
+  const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [] }, undefined, {
+    lifecycleHeartbeatIntervalMs: 20_000,
+    now: () => now,
+  });
+  forwarder.addOutput(output);
+  const instance = (overrides = {}) => ControlledInstanceSchema.parse({
+    id: "inst_throttled_heartbeat",
+    name: "Throttled heartbeat instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_heartbeat",
+    runtimeId: "runtime_heartbeat",
+    stateRevision: 1,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    ready: true,
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: "2026-07-17T00:00:00.000Z",
+    updatedAt: "2026-07-17T00:00:00.000Z",
+    lastHeartbeatAt: "2026-07-17T00:00:00.000Z",
+    ...overrides,
+  });
+
+  forwarder.publishInstanceLifecycle(instance());
+  assert.equal(frames.at(-1).event.type, "instance.lifecycle.snapshot");
+
+  now = 10_000;
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 2,
+    updatedAt: "2026-07-17T00:00:10.000Z",
+    lastHeartbeatAt: "2026-07-17T00:00:10.000Z",
+  }));
+  assert.equal(frames.length, 1);
+
+  now = 20_000;
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 3,
+    updatedAt: "2026-07-17T00:00:20.000Z",
+    lastHeartbeatAt: "2026-07-17T00:00:20.000Z",
+  }));
+  assert.equal(frames.at(-1).event.type, "instance.lifecycle.heartbeat");
+  assert.equal(frames.at(-1).event.payload.revision, 3);
+
+  now = 21_000;
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 4,
+    status: "stopped",
+    connectionStatus: "offline",
+    ready: false,
+    updatedAt: "2026-07-17T00:00:21.000Z",
+    lastHeartbeatAt: "2026-07-17T00:00:21.000Z",
+  }));
+  assert.equal(frames.at(-1).event.type, "instance.lifecycle.snapshot");
+  assert.equal(frames.at(-1).event.payload.status, "stopped");
+  forwarder.stop();
+});
+
+test("node agent republishes lifecycle liveness without repeating the snapshot payload", () => {
+  const frames = [];
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = (value) => frames.push(JSON.parse(String(value)));
+  const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [] }, undefined, { lifecycleHeartbeatIntervalMs: 0 });
   forwarder.addOutput(output);
   const instance = (overrides = {}) => ControlledInstanceSchema.parse({
     id: "inst_heartbeat",

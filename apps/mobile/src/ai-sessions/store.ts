@@ -18,6 +18,9 @@ import {
   type AiSessionStreamEvent,
   type AiSessionTimelineItem,
   type AiSessionTimelineItemEvent,
+  type AiSessionTimelineItemRevision,
+  type AiSessionTimelineSyncRead,
+  type AiSessionTimelineVersionedItem,
   type AiSessionTurn,
   type AiSessionTurnIndex,
 } from '@task-handoff/protocol/ai-sessions';
@@ -74,6 +77,7 @@ export type MobileTurnTimelineState = {
   status: 'idle' | 'loading' | 'ready' | 'stale' | 'error';
   items: readonly AiSessionTimelineItem[];
   error?: string;
+  revision?: string;
 };
 
 type StoredTurnTimelineState = MobileTurnTimelineState & {
@@ -108,6 +112,9 @@ export class MobileAiSessionStore {
   private readonly sessionViewKeysByControlPlane = new Map<string, Set<string>>();
   private readonly messageTurnsByControlPlane = new Map<string, Set<string>>();
   private readonly timelineStates = new Map<string, StoredTurnTimelineState>();
+  private readonly timelineSessionRevisions = new Map<string, string>();
+  private readonly timelineSessionOrder = new Map<string, string[]>();
+  private readonly timelineItemRevisions = new Map<string, Map<string, string>>();
   private readonly liveTimelineItems = new Map<string, Map<string, AiSessionTimelineItem>>();
   private readonly evictedTimelineItemIds = new Map<string, Set<string>>();
   private readonly timelineRecoveryRevisions = new Map<string, number>();
@@ -381,12 +388,85 @@ export class MobileAiSessionStore {
     this.notifyTimelineSession(controlPlaneId, event.instanceId, event.sessionId);
   }
 
-  beginTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
-    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
-    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'loading', items: current?.items ?? [] });
+  private timelineRevisions(controlPlaneId: string, instanceId: string, sessionId: string) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    let revisions = this.timelineItemRevisions.get(key);
+    if (!revisions) {
+      revisions = new Map();
+      this.timelineItemRevisions.set(key, revisions);
+    }
+    return revisions;
   }
 
-  resolveTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, snapshot: readonly AiSessionTimelineItem[]) {
+  private applyTimelineRevisions(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    items: readonly AiSessionTimelineVersionedItem[],
+    removed: readonly string[] = [],
+  ) {
+    const revisions = this.timelineRevisions(controlPlaneId, instanceId, sessionId);
+    for (const entry of items) revisions.set(entry.item.id, entry.revision);
+    for (const id of removed) revisions.delete(id);
+  }
+
+  private replaceTimelineRevisions(controlPlaneId: string, instanceId: string, sessionId: string, items: readonly AiSessionTimelineVersionedItem[]) {
+    const revisions = this.timelineRevisions(controlPlaneId, instanceId, sessionId);
+    revisions.clear();
+    for (const entry of items) revisions.set(entry.item.id, entry.revision);
+  }
+
+  private sessionTimelineStates(controlPlaneId: string, instanceId: string, sessionId: string) {
+    const prefix = `${JSON.stringify([controlPlaneId, instanceId, sessionId]).slice(0, -1)},`;
+    return [...this.timelineStates.entries()].filter(([key]) => key.startsWith(prefix));
+  }
+
+  timelineSyncItems(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turns: readonly Pick<AiSessionTurn, 'id' | 'providerTurnId'>[],
+  ): AiSessionTimelineItemRevision[] {
+    const revisions = this.timelineRevisions(controlPlaneId, instanceId, sessionId);
+    const states = this.sessionTimelineStates(controlPlaneId, instanceId, sessionId);
+    const available = new Set(states.flatMap(([, state]) => state.items.map((item) => item.id)));
+    const order = this.timelineSessionOrder.get(mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId))
+      || turns.flatMap((turn) => this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn)?.items.map((item) => item.id) || []);
+    const known: AiSessionTimelineItemRevision[] = [];
+    for (const id of order) {
+      const revision = revisions.get(id);
+      if (!revision || !available.has(id)) continue;
+      known.push({ id, revision });
+    }
+    return known.length > 10_000 ? [] : known;
+  }
+
+  turnTimelineSyncItems(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>,
+  ): AiSessionTimelineItemRevision[] {
+    const revisions = this.timelineRevisions(controlPlaneId, instanceId, sessionId);
+    const state = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    const known: AiSessionTimelineItemRevision[] = [];
+    for (const item of state?.items ?? []) {
+      const revision = revisions.get(item.id);
+      if (revision) known.push({ id: item.id, revision });
+    }
+    return known.length > 10_000 ? [] : known;
+  }
+
+  beginTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, {
+      status: 'loading',
+      items: current?.items ?? [],
+      ...(current?.revision ? { revision: current.revision } : {}),
+    });
+  }
+
+  resolveTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, snapshot: readonly AiSessionTimelineItem[], revision?: string) {
     const identities = mobileTurnIdentities(turn);
     const items = mergeAiSessionTimelineItems(snapshot, this.liveItemsForTurn(controlPlaneId, instanceId, sessionId, identities));
     for (const identity of identities) {
@@ -394,18 +474,180 @@ export class MobileAiSessionStore {
       this.liveTimelineItems.delete(key);
       this.evictedTimelineItemIds.delete(key);
     }
-    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'ready', items });
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, {
+      status: 'ready',
+      items,
+      ...(revision ? { revision } : {}),
+    });
+  }
+
+  resolveTurnTimelineNotModified(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, revision: string) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, {
+      status: 'ready',
+      items: current?.items ?? [],
+      revision,
+    });
+  }
+
+  resolveTurnTimelineSyncSnapshot(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>,
+    items: readonly AiSessionTimelineVersionedItem[],
+    revision: string,
+  ) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    const revisions = this.timelineRevisions(controlPlaneId, instanceId, sessionId);
+    for (const item of current?.items ?? []) revisions.delete(item.id);
+    this.applyTimelineRevisions(controlPlaneId, instanceId, sessionId, items);
+    this.resolveTurnTimeline(controlPlaneId, instanceId, sessionId, turn, items.map((entry) => entry.item), revision);
+  }
+
+  applyTurnTimelineSyncDelta(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>,
+    delta: Extract<AiSessionTimelineSyncRead, { kind: 'delta' }>,
+  ) {
+    this.applyTimelineRevisions(controlPlaneId, instanceId, sessionId, delta.upserted, delta.removed);
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    const existing = new Map((current?.items ?? []).map((item) => [item.id, item]));
+    const upserted = new Map(delta.upserted.map((entry) => [entry.item.id, entry.item]));
+    const items = mobileTimelineOrderAfterDelta(current?.items.map((item) => item.id) ?? [], delta)
+      .map((id) => upserted.get(id) ?? existing.get(id))
+      .filter((item): item is AiSessionTimelineItem => Boolean(item));
+    this.resolveTurnTimeline(controlPlaneId, instanceId, sessionId, turn, items, delta.revision);
+  }
+
+  timelineSessionRevision(controlPlaneId: string, instanceId: string, sessionId: string) {
+    return this.timelineSessionRevisions.get(mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId));
+  }
+
+  resolveSessionTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turns: readonly Pick<AiSessionTurn, 'id' | 'providerTurnId'>[], items: readonly AiSessionTimelineItem[], revision: string) {
+    this.timelineSessionRevisions.set(mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId), revision);
+    for (const turn of turns) {
+      const identities = new Set(mobileTurnIdentities(turn));
+      this.resolveTurnTimeline(controlPlaneId, instanceId, sessionId, turn, items.filter((item) => identities.has(item.turnId)), revision);
+    }
+  }
+
+  resolveSessionTimelineSyncSnapshot(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turns: readonly Pick<AiSessionTurn, 'id' | 'providerTurnId'>[],
+    items: readonly AiSessionTimelineVersionedItem[],
+    revision: string,
+  ) {
+    this.replaceTimelineRevisions(controlPlaneId, instanceId, sessionId, items);
+    this.timelineSessionOrder.set(
+      mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId),
+      items.map((entry) => entry.item.id),
+    );
+    this.timelineSessionRevisions.set(mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId), revision);
+    for (const turn of turns) {
+      const identities = new Set(mobileTurnIdentities(turn));
+      this.resolveTurnTimeline(
+        controlPlaneId,
+        instanceId,
+        sessionId,
+        turn,
+        items.filter((entry) => identities.has(entry.item.turnId)).map((entry) => entry.item),
+        revision,
+      );
+    }
+  }
+
+  applySessionTimelineSyncDelta(
+    controlPlaneId: string,
+    instanceId: string,
+    sessionId: string,
+    turns: readonly Pick<AiSessionTurn, 'id' | 'providerTurnId'>[],
+    delta: Extract<AiSessionTimelineSyncRead, { kind: 'delta' }>,
+  ) {
+    this.applyTimelineRevisions(controlPlaneId, instanceId, sessionId, delta.upserted, delta.removed);
+    const sessionKey = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    const previousOrder = this.timelineSessionOrder.get(sessionKey) ?? turns.flatMap((turn) => (
+      this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn)?.items.map((item) => item.id) ?? []
+    ));
+    const order = mobileTimelineOrderAfterDelta(previousOrder, delta);
+    this.timelineSessionOrder.set(sessionKey, order);
+    this.timelineSessionRevisions.set(sessionKey, delta.revision);
+
+    const ownerById = new Map<string, Pick<AiSessionTurn, 'id' | 'providerTurnId'>>();
+    for (const turn of turns) {
+      const state = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+      for (const item of state?.items ?? []) ownerById.set(item.id, turn);
+    }
+    const upsertedByTurn = new Map<string, Map<string, AiSessionTimelineItem>>();
+    for (const entry of delta.upserted) {
+      const turn = turns.find((candidate) => mobileTurnIdentities(candidate).includes(entry.item.turnId));
+      if (!turn) continue;
+      ownerById.set(entry.item.id, turn);
+      const bucket = upsertedByTurn.get(turn.id) ?? new Map<string, AiSessionTimelineItem>();
+      bucket.set(entry.item.id, entry.item);
+      upsertedByTurn.set(turn.id, bucket);
+    }
+
+    const ownerKeyById = new Map([...ownerById].map(([id, turn]) => [id, turn.id]));
+    const affected = new Set<string>();
+    for (const id of delta.removed) {
+      const owner = ownerById.get(id);
+      if (owner) affected.add(owner.id);
+    }
+    for (const turn of turns) {
+      const state = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+      const expected = order.filter((id) => ownerKeyById.get(id) === turn.id);
+      const current = state?.items.map((item) => item.id) ?? [];
+      if (expected.length !== current.length || expected.some((id, index) => id !== current[index])) affected.add(turn.id);
+    }
+
+    for (const turn of turns) {
+      if (!affected.has(turn.id)) continue;
+      const state = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+      const existing = new Map((state?.items ?? []).map((item) => [item.id, item]));
+      const upserted = upsertedByTurn.get(turn.id);
+      const expected = order.filter((id) => ownerKeyById.get(id) === turn.id);
+      const items = expected
+        .map((id) => upserted?.get(id) ?? existing.get(id))
+        .filter((item): item is AiSessionTimelineItem => Boolean(item));
+      this.resolveTurnTimeline(controlPlaneId, instanceId, sessionId, turn, items, delta.revision);
+    }
+    this.notifyTimelineSession(controlPlaneId, instanceId, sessionId);
+  }
+
+  resolveSessionTimelineNotModified(controlPlaneId: string, instanceId: string, sessionId: string, revision: string) {
+    const sessionKey = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    this.timelineSessionRevisions.set(sessionKey, revision);
+    const prefix = `${JSON.stringify([controlPlaneId, instanceId, sessionId]).slice(0, -1)},`;
+    for (const [key, state] of this.timelineStates) {
+      if (!key.startsWith(prefix)) continue;
+      this.timelineStates.set(key, { ...state, status: 'ready', revision, error: undefined });
+    }
+    this.notifyTimelineSession(controlPlaneId, instanceId, sessionId);
   }
 
   rejectTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, error: string) {
     const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
-    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'error', items: current?.items ?? [], error });
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, {
+      status: 'error',
+      items: current?.items ?? [],
+      error,
+      ...(current?.revision ? { revision: current.revision } : {}),
+    });
   }
 
   retryTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
     const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
     this.timelineRecoveryRevisions.set(controlPlaneId, this.timelineRecoveryRevision(controlPlaneId) + 1);
-    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'stale', items: current?.items ?? [] });
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, {
+      status: 'stale',
+      items: current?.items ?? [],
+      ...(current?.revision ? { revision: current.revision } : {}),
+    });
   }
 
   timelineTurnState(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): MobileTurnTimelineState {
@@ -414,6 +656,7 @@ export class MobileAiSessionStore {
       status: stored?.status ?? 'idle',
       items: mergeAiSessionTimelineItems(stored?.items ?? [], this.liveItemsForTurn(controlPlaneId, instanceId, sessionId, mobileTurnIdentities(turn))),
       ...(stored?.error ? { error: stored.error } : {}),
+      ...(stored?.revision ? { revision: stored.revision } : {}),
     };
   }
 
@@ -439,6 +682,9 @@ export class MobileAiSessionStore {
     this.timelineRecoveryRevisions.delete(controlPlaneId);
     for (const [key, state] of this.timelineStates) if (state.controlPlaneId === controlPlaneId) this.timelineStates.delete(key);
     const timelinePrefix = `${JSON.stringify([controlPlaneId]).slice(0, -1)},`;
+    for (const key of this.timelineSessionRevisions.keys()) if (key.startsWith(timelinePrefix)) this.timelineSessionRevisions.delete(key);
+    for (const key of this.timelineSessionOrder.keys()) if (key.startsWith(timelinePrefix)) this.timelineSessionOrder.delete(key);
+    for (const key of this.timelineItemRevisions.keys()) if (key.startsWith(timelinePrefix)) this.timelineItemRevisions.delete(key);
     for (const key of this.liveTimelineItems.keys()) if (key.startsWith(timelinePrefix)) this.liveTimelineItems.delete(key);
     for (const key of this.evictedTimelineItemIds.keys()) if (key.startsWith(timelinePrefix)) this.evictedTimelineItemIds.delete(key);
     this.generations.set(controlPlaneId, this.generation(controlPlaneId) + 1);
@@ -650,6 +896,22 @@ function mobileTimelineTurnKey(controlPlaneId: string, instanceId: string, sessi
 
 function mobileTurnIdentities(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
   return [...new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)))];
+}
+
+function mobileTimelineOrderAfterDelta(
+  previousOrder: readonly string[],
+  delta: Extract<AiSessionTimelineSyncRead, { kind: 'delta' }>,
+) {
+  if (delta.order) return delta.order;
+  const removed = new Set(delta.removed);
+  const order = previousOrder.filter((id) => !removed.has(id));
+  const seen = new Set(order);
+  for (const entry of delta.upserted) {
+    if (seen.has(entry.item.id)) continue;
+    seen.add(entry.item.id);
+    order.push(entry.item.id);
+  }
+  return order;
 }
 
 function addIndex(index: Map<string, Set<string>>, owner: string, key: string) {

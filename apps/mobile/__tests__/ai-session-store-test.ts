@@ -440,6 +440,45 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.timelineRecoveryRevision('cp-timeline')).toBe(1);
   });
 
+  test('timeline revisions survive reconnect and not-modified responses keep cached items', () => {
+    const store = new MobileAiSessionStore();
+    const turn = { id: 'turn-revision', providerTurnId: 'provider-turn-revision' };
+    store.resolveTurnTimeline('cp-revision', 'instance-1', 'session-1', turn, [
+      { id: 'message-1', turnId: 'provider-turn-revision', type: 'ai-message', text: 'Before reconnect' },
+    ], 'timeline-r1');
+    expect(store.timelineTurnState('cp-revision', 'instance-1', 'session-1', turn).revision).toBe('timeline-r1');
+
+    store.recoverTimelines('cp-revision');
+    expect(store.timelineTurnState('cp-revision', 'instance-1', 'session-1', turn).status).toBe('stale');
+    store.resolveTurnTimelineNotModified('cp-revision', 'instance-1', 'session-1', turn, 'timeline-r1');
+
+    expect(store.timelineTurnState('cp-revision', 'instance-1', 'session-1', turn)).toMatchObject({
+      status: 'ready',
+      revision: 'timeline-r1',
+      items: [expect.objectContaining({ id: 'message-1' })],
+    });
+  });
+
+  test('session timeline revisions are reused only with the complete cached turn set', () => {
+    const store = new MobileAiSessionStore();
+    const turns = [
+      { id: 'turn-1', providerTurnId: 'provider-turn-1' },
+      { id: 'turn-2', providerTurnId: 'provider-turn-2' },
+    ];
+    store.resolveSessionTimeline('cp-session-revision', 'instance-1', 'session-1', turns, [
+      { id: 'message-1', turnId: 'provider-turn-1', type: 'ai-message', text: 'One' },
+      { id: 'message-2', turnId: 'provider-turn-2', type: 'ai-message', text: 'Two' },
+    ], 'timeline-session-r1');
+
+    expect(store.timelineSessionRevision('cp-session-revision', 'instance-1', 'session-1')).toBe('timeline-session-r1');
+    expect(store.timelineTurnState('cp-session-revision', 'instance-1', 'session-1', turns[0])).toMatchObject({
+      status: 'ready',
+      revision: 'timeline-session-r1',
+    });
+    store.resolveSessionTimelineNotModified('cp-session-revision', 'instance-1', 'session-1', 'timeline-session-r1');
+    expect(store.timelineTurnState('cp-session-revision', 'instance-1', 'session-1', turns[1]).status).toBe('ready');
+  });
+
   test('reconnect preserves live-only timeline items until an authoritative reader can replace them', () => {
     const store = new MobileAiSessionStore();
     const turn = { id: 'turn-local', providerTurnId: 'turn-provider' };
