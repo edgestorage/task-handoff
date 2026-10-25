@@ -120,7 +120,7 @@ async function createRuntime() {
 test("Controlled-instance Timeline reads use content revisions for conditional recovery", async () => {
   const { aiSessions, app, restore, setItems } = await createRuntime();
   try {
-    const session = aiSessions.start({ agent: "codex", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
+    const session = aiSessions.start({ agent: "codex", creationSource: "ai-session", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
     const firstResponse = await app.inject({ method: "GET", url: `/api/ai-sessions/${session.id}/timeline` });
     assert.equal(firstResponse.statusCode, 200, firstResponse.body);
     const first = AiSessionTimelineReadSchema.parse(firstResponse.json().data);
@@ -159,7 +159,7 @@ test("Controlled-instance Timeline reads use content revisions for conditional r
 test("Controlled-instance Timeline sync returns only changed items", async () => {
   const { aiSessions, app, restore, setItems } = await createRuntime();
   try {
-    const session = aiSessions.start({ agent: "codex", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
+    const session = aiSessions.start({ agent: "codex", creationSource: "ai-session", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
     const sync = async (knownItems) => app.inject({
       method: "POST",
       url: `/api/ai-sessions/${session.id}/timeline/sync`,
@@ -254,7 +254,7 @@ test("Controlled-instance Timeline sync returns only changed items", async () =>
 test("Controlled-instance Timeline sync sends order only when it cannot be derived", async () => {
   const { aiSessions, app, restore, setItems } = await createRuntime();
   try {
-    const session = aiSessions.start({ agent: "codex", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
+    const session = aiSessions.start({ agent: "codex", creationSource: "ai-session", status: "running" }, { timestamp: "2026-10-24T00:00:00.000Z" });
     const sync = async (knownItems) => app.inject({
       method: "POST",
       url: `/api/ai-sessions/${session.id}/timeline/sync`,
