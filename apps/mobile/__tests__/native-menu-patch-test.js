@@ -31,6 +31,9 @@ test('the native menu keeps the presented UIKit menu event target enabled until 
     expect(source).toMatch(/let subviewPoint = subview\.convert\(point, from: self\)/);
     expect(source).toMatch(/subview\.hitTest\(subviewPoint, with: event\)/);
   }
+  expect(patch).toContain('@@ -126,2 +127,24 @@');
+  expect(patch).not.toMatch(/@@ -\d+,0 \+\d+,22 @@/);
+  expect(nativeMenuButton).toMatch(/\n {4}\}\n\n {4}@objc private func primaryMenuTriggered/);
 });
 
 test('the iOS model selector remains a native UIMenu with subtitles and controlled states', () => {

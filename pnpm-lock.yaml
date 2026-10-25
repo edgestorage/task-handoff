@@ -12,7 +12,7 @@ catalogs:
 
 patchedDependencies:
   '@react-native-menu/menu@2.0.0':
-    hash: jk4543ewdngarrpkly7lirkb7e
+    hash: n3ch3hplfhjhyfwfbs2qsl5osi
     path: patches/@react-native-menu__menu@2.0.0.patch
   expo-paste-input@0.2.2:
     hash: htaeyyjmdlkat5buzm362in2am
@@ -277,7 +277,7 @@ importers:
         version: 15.1.1(expo-font@57.0.4)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@react-native-menu/menu':
         specifier: ^2.0.0
-        version: 2.0.0(patch_hash=jk4543ewdngarrpkly7lirkb7e)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
+        version: 2.0.0(patch_hash=n3ch3hplfhjhyfwfbs2qsl5osi)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@task-handoff/cloud-contracts':
         specifier: workspace:*
         version: link:../../packages/cloud-contracts
@@ -10366,7 +10366,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3)
 
-  '@react-native-menu/menu@2.0.0(patch_hash=jk4543ewdngarrpkly7lirkb7e)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)':
+  '@react-native-menu/menu@2.0.0(patch_hash=n3ch3hplfhjhyfwfbs2qsl5osi)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)':
     dependencies:
       react: 19.2.3
       react-native: 0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3)

@@ -136,9 +136,12 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
 diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
 --- a/ios/Shared/MenuViewImplementation.swift
 +++ b/ios/Shared/MenuViewImplementation.swift
-@@ -57,0 +58 @@
+@@ -57,2 +57,3 @@
+         let interaction = UIContextMenuInteraction(delegate: self)
 +        self.addTarget(self, action: #selector(primaryMenuTriggered), for: .menuActionTriggered)
-@@ -60,0 +62,22 @@
+         self.addInteraction(interaction)
+@@ -126,2 +127,24 @@
+     }
 +
 +    @objc private func primaryMenuTriggered() {
 +        sendMenuOpen()
@@ -161,6 +164,7 @@ diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplem
 +        }
 +        return super.hitTest(point, with: event)
 +    }
+ }
 diff --git a/ios/Shared/RCTMenuItem.swift b/ios/Shared/RCTMenuItem.swift
 index f5d510d..a5ecaf7 100644
 --- a/ios/Shared/RCTMenuItem.swift
