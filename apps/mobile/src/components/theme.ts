@@ -4,15 +4,21 @@ import { Appearance, useColorScheme, type ColorSchemeName } from 'react-native';
 import { setApplicationNightMode } from '../../modules/task-handoff-appearance/src';
 
 export const mobileLightColors = {
-  background: '#f2f2f7', surface: '#ffffff', surfaceMuted: '#e9e9ef', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
+  background: '#f8f8fa', surface: '#ffffff', surfaceMuted: '#e9e9ef', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
+  sessionActivityMuted: '#636366', sessionActivityHighlight: '#1c1c1e', statusFilterSelectedBackground: '#ffffff',
+  sessionRunningIndicator: 'rgba(0, 0, 0, 0.30)', sessionRunningTrack: 'rgba(0, 0, 0, 0.10)',
   primary: '#007aff', primaryButton: '#007aff', destructiveButton: '#c9342f', primarySoft: '#e5f1ff', notice: '#fff4ce', noticeText: '#7a4b00', error: '#c9342f', errorSoft: '#ffe9e7', code: '#1c1c1e', codeText: '#f2f2f7',
+  workbenchCardBorder: '#e5e5ea', workbenchSelectionBackground: '#e9e9ef', workbenchSelectionBorder: '#60a7f6',
   sessionActive: '#0f9f8f', sessionActiveSoft: '#dff7f3', sessionWaiting: '#b76e00', sessionWaitingSoft: '#fff4ce', sessionIdle: '#7c7c80', sessionIdleSoft: '#eeeef2',
   syntaxComment: '#6e7781', syntaxKeyword: '#cf222e', syntaxString: '#116329', syntaxNumber: '#9a6700', syntaxTitle: '#0969da', syntaxType: '#8250df', tableStripe: '#f8f8fa',
 } as const;
 
 export const mobileDarkColors = {
-  background: '#000000', surface: '#1c1c1e', surfaceMuted: '#2c2c2e', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#38383a',
+  background: '#101012', surface: '#17181c', surfaceMuted: '#173038', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#2a2c32',
+  sessionActivityMuted: '#8fa5ad', sessionActivityHighlight: '#f3fbfc', statusFilterSelectedBackground: '#101012',
+  sessionRunningIndicator: 'rgba(255, 255, 255, 0.30)', sessionRunningTrack: 'rgba(255, 255, 255, 0.10)',
   primary: '#0a84ff', primaryButton: '#0a84ff', destructiveButton: '#b3261e', primarySoft: '#0c3158', notice: '#3b2f05', noticeText: '#ffd76a', error: '#ff6961', errorSoft: '#3f1715', code: '#1c1c1e', codeText: '#f2f2f7',
+  workbenchCardBorder: '#2a2c32', workbenchSelectionBackground: '#23252a', workbenchSelectionBorder: '#2a2c32',
   sessionActive: '#2dd4bf', sessionActiveSoft: '#123b38', sessionWaiting: '#f59e0b', sessionWaitingSoft: '#3b2f05', sessionIdle: '#94a3b8', sessionIdleSoft: '#283038',
   syntaxComment: '#8b949e', syntaxKeyword: '#ff7b72', syntaxString: '#7ee787', syntaxNumber: '#e3b341', syntaxTitle: '#79c0ff', syntaxType: '#d2a8ff', tableStripe: '#242426',
 } as const;

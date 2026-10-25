@@ -15,14 +15,17 @@ import {
 } from '@expo/ui/swift-ui';
 import {
   accessibilityLabel,
+  background,
   buttonStyle,
   font,
   foregroundStyle,
   frame,
   lineLimit,
+  listRowBackground,
   listStyle,
   pickerStyle,
   refreshable,
+  scrollContentBackground,
   tag,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
@@ -56,7 +59,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
-        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
+        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), scrollContentBackground('hidden'), background(colors.background)]}>
         <DirectoryStateSections state={state} />
         {!state.nodes.length ? <EmptySection loading={state.phase === 'loading'} systemImage="server.rack" /> : null}
         {state.nodes.map((node) => {
@@ -106,9 +109,10 @@ type InstancesDirectoryProps = {
   nodeId?: string;
   onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void;
   onRefresh?: () => Promise<void>;
+  selectedInstanceId?: string;
 };
 
-export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: InstancesDirectoryProps) {
+export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedInstanceId }: InstancesDirectoryProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
@@ -128,7 +132,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: Instanc
   return (
     <SafeAreaView edges={[]} style={[styles.screen, { backgroundColor: colors.background }]}>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
-        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), ...(onRefresh ? [refreshable(onRefresh)] : [])]}>
+        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), scrollContentBackground('hidden'), background(colors.background), ...(onRefresh ? [refreshable(onRefresh)] : [])]}>
         <DirectoryStateSections state={state} />
         {nodeId ? (
           <Section title={t('directories.status')}>
@@ -151,7 +155,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: Instanc
         {visibleNodeIds.map((visibleNodeId) => (
           <Section key={visibleNodeId} title={nodeId ? `${t('directories.instances')} (${instances.length})` : nodeLabel(state, visibleNodeId)}>
             {(instancesByNode.get(visibleNodeId) ?? []).map((instance) => (
-              <InstanceButton instance={instance} key={instance.id} onPress={() => onOpen?.(instance)} />
+              <InstanceButton instance={instance} key={instance.id} onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} />
             ))}
           </Section>
         ))}
@@ -161,14 +165,20 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: Instanc
   );
 }
 
-function InstanceButton({ instance, onPress }: { instance: ControlPlaneInstanceDirectoryEntry; onPress(): void }) {
+function InstanceButton({ instance, onPress, selected }: { instance: ControlPlaneInstanceDirectoryEntry; onPress(): void; selected: boolean }) {
+  const { colors } = useMobileTheme();
   const { t } = useI18n();
   return (
-    <Button modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('directories.open', { name: instance.name }))]} onPress={onPress}>
+    <Button modifiers={[
+      buttonStyle('plain'),
+      frame({ maxWidth: Infinity, alignment: 'leading' }),
+      accessibilityLabel(t('directories.open', { name: instance.name })),
+      ...(selected ? [listRowBackground(colors.workbenchSelectionBackground)] : []),
+    ]} onPress={onPress}>
       <HStack alignment="center" spacing={12}>
         <InstanceIdentity instance={instance} />
         <Spacer />
-        <Image size={12} systemName="chevron.right" />
+        <Image color={selected ? colors.primary : colors.textMuted} size={12} systemName={selected ? 'checkmark.circle.fill' : 'chevron.right'} />
       </HStack>
     </Button>
   );

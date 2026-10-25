@@ -1,6 +1,8 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import { InstanceDrawerContent } from '../src/instance-scope/InstanceDrawerContent';
+import { mobileDarkColors, mobileLightColors } from '../src/components/theme';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useCloudAccountState } from '../src/control-plane/use-cloud-account-state';
 import { useActiveDirectories } from '../src/directories/use-directories';
@@ -9,6 +11,14 @@ import { useStoryNodeFilter } from '../src/stories/use-story-node-filter';
 
 let mockPathname = '/stories';
 let mockCloudRelayEnabled = false;
+let mockDarkTheme = false;
+jest.mock('../src/components/theme', () => {
+  const actual = jest.requireActual<typeof import('../src/components/theme')>('../src/components/theme');
+  return {
+    ...actual,
+    useMobileTheme: () => ({ colors: mockDarkTheme ? actual.mobileDarkColors : actual.mobileLightColors, dark: mockDarkTheme, preference: 'system', setPreference: async () => undefined }),
+  };
+});
 jest.mock('expo-router', () => ({ router: { push: jest.fn() }, usePathname: () => mockPathname }));
 jest.mock('expo-router/drawer', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -36,6 +46,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPathname = '/stories';
   mockCloudRelayEnabled = false;
+  mockDarkTheme = false;
   mockRuntime.mockReturnValue({ triggerCapability: false } as ReturnType<typeof useMobileControlPlaneRuntime>);
   mockCloudAccount.mockReturnValue({ phase: 'signed-out' } as ReturnType<typeof useCloudAccountState>);
   mockDirectories.mockReturnValue({ controlPlaneOrigin: 'https://control.example', state: {
@@ -82,6 +93,7 @@ test('Story drawer switches to node multi-select without changing other tab inst
   const storyScreen = await render(<InstanceDrawerContent {...drawerProps} />);
 
   expect(storyScreen.getByText('All Nodes')).toBeTruthy();
+  expect(StyleSheet.flatten(storyScreen.getByTestId('drawer-all-nodes').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
   expect(storyScreen.getAllByRole('checkbox')).toHaveLength(2);
   expect(storyScreen.queryByText('Instance A')).toBeNull();
   await fireEvent.press(storyScreen.getByText('Node A'));
@@ -94,4 +106,27 @@ test('Story drawer switches to node multi-select without changing other tab inst
   expect(instanceScreen.getByText('Instance A')).toBeTruthy();
   expect(instanceScreen.queryByText('All Nodes')).toBeNull();
   await instanceScreen.unmount();
+});
+
+test('Story drawer node checkboxes share the workbench selection background', async () => {
+  mockStoryNodeFilter.mockReturnValue({ filter: { kind: 'selected', nodeIds: ['node-a'] }, setFilter: jest.fn() });
+  const screen = await render(<InstanceDrawerContent {...drawerProps} />);
+
+  expect(StyleSheet.flatten(screen.getByTestId('drawer-node-node-a').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+  expect(StyleSheet.flatten(screen.getByTestId('drawer-node-node-b').props.style).backgroundColor).toBeUndefined();
+  await screen.unmount();
+});
+
+test('drawer footer circles reuse the workbench selection token', async () => {
+  mockCloudRelayEnabled = true;
+  mockCloudAccount.mockReturnValue({ phase: 'signed-in', profile: { email: 'test@example.com' } } as ReturnType<typeof useCloudAccountState>);
+
+  for (const [colors, dark] of [[mobileLightColors, false], [mobileDarkColors, true]] as const) {
+    mockDarkTheme = dark;
+    const screen = await render(<InstanceDrawerContent {...drawerProps} />);
+    expect(StyleSheet.flatten(screen.getByTestId('drawer-all-nodes').props.style).backgroundColor).toBe(colors.workbenchSelectionBackground);
+    expect(StyleSheet.flatten(screen.getByTestId('drawer-account-avatar').props.style).backgroundColor).toBe(colors.workbenchSelectionBackground);
+    expect(StyleSheet.flatten(screen.getByTestId('drawer-settings-button').props.style).backgroundColor).toBe(colors.workbenchSelectionBackground);
+    await screen.unmount();
+  }
 });

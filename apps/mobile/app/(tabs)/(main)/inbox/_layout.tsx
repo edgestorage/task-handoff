@@ -13,9 +13,11 @@ import {
   subscribeAiSessionInboxViewPreferences,
   updateAiSessionInboxViewPreferences,
   type AiSessionInboxGroupBy,
+  type AiSessionInboxLayout,
 } from '../../../../src/ai-sessions/inbox-view-preferences';
 
 const GROUP_MODES = ['none', 'path', 'instance', 'node', 'agent'] as const;
+const LAYOUT_MODES = ['cards', 'list'] as const;
 
 export default function InboxLayout() {
   const { colors } = useMobileTheme();
@@ -30,15 +32,22 @@ export default function InboxLayout() {
     ? { pathname: '/sessions/new', params: { instanceId: scope.instanceId } }
     : '/sessions/new');
   const selectPreference = (id: string) => {
-    if (id === 'sort-status') updateAiSessionInboxViewPreferences({ sortByStatus: !preferences.sortByStatus });
+    if (id.startsWith('layout-')) updateAiSessionInboxViewPreferences({ layout: id.slice(7) as AiSessionInboxLayout });
+    else if (id === 'sort-status') updateAiSessionInboxViewPreferences({ sortByStatus: !preferences.sortByStatus });
     else if (id.startsWith('group-')) updateAiSessionInboxViewPreferences({ groupBy: id.slice(6) as AiSessionInboxGroupBy });
   };
+  const layoutActions = LAYOUT_MODES.map((layout) => ({
+    id: `layout-${layout}`,
+    state: preferences.layout === layout ? 'on' as const : 'off' as const,
+    title: t(`sessions.inbox.layout.${layout}` as 'sessions.inbox.layout.cards'),
+  }));
   const groupActions = GROUP_MODES.map((groupBy) => ({
     id: `group-${groupBy}`,
     state: preferences.groupBy === groupBy ? 'on' as const : 'off' as const,
     title: t(`sessions.inbox.group.${groupBy}` as 'sessions.inbox.group.none'),
   }));
   const androidMenuActions: MenuAction[] = [
+    { displayInline: true, id: 'layout-section', subactions: layoutActions, title: t('sessions.inbox.layout') },
     {
       displayInline: true,
       id: 'sort-section',
@@ -70,6 +79,12 @@ export default function InboxLayout() {
       menu: {
         title: t('sessions.inbox.options'),
         items: [
+          {
+            type: 'submenu' as const,
+            label: t('sessions.inbox.layout'),
+            inline: true,
+            items: layoutActions.map((action) => ({ type: 'action' as const, label: action.title, onPress: () => selectPreference(action.id), state: action.state })),
+          },
           {
             type: 'submenu' as const,
             label: t('sessions.inbox.sort'),

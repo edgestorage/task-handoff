@@ -8,6 +8,7 @@ const kotlin = fs.readFileSync(path.join(moduleRoot, 'android/src/main/java/expo
 const kotlinChannel = fs.readFileSync(path.join(moduleRoot, 'android/src/main/java/expo/modules/taskhandoffbrowser/BrowserTunnelChannel.kt'), 'utf8');
 const kotlinContext = fs.readFileSync(path.join(moduleRoot, 'android/src/main/java/expo/modules/taskhandoffbrowser/MobileBrowserContextManager.kt'), 'utf8');
 const browserRoute = fs.readFileSync(path.resolve(__dirname, '../app/browser/[instanceId]/[browserTabId].tsx'), 'utf8');
+const browserScreen = fs.readFileSync(path.resolve(__dirname, '../src/browser/BrowserTabScreen.tsx'), 'utf8');
 const webModule = fs.readFileSync(path.join(moduleRoot, 'src/TaskHandoffBrowserModule.web.ts'), 'utf8');
 const appsRoute = fs.readFileSync(path.resolve(__dirname, '../app/(tabs)/(main)/apps/index.tsx'), 'utf8');
 const browserList = fs.readFileSync(path.resolve(__dirname, '../src/browser/BrowserTabList.tsx'), 'utf8');
@@ -37,15 +38,16 @@ test('native diagnostics expose counts without credential or browsing content fi
 });
 
 test('mobile Browser keeps one mounted native view per instance tab and suspends on route blur', () => {
-  expect(browserRoute).toMatch(/instanceTabs\.map\(\(candidate\) =>[\s\S]*?<TaskHandoffBrowserView/);
-  expect(browserRoute).toMatch(/key=\{candidate\.id\}/);
-  expect(browserRoute).toMatch(/!active && styles\.hiddenWebViewLayer/);
-  expect(browserRoute).toMatch(/router\.setParams\(\{ browserTabId: candidate\.id \}\)/);
-  expect(browserRoute).not.toMatch(/router\.replace\(`/);
-  expect(browserRoute).toMatch(/const requestedTab = instanceTabs\.find/);
-  expect(browserRoute).toMatch(/const tab = requestedTab \|\| instanceTabs\.find\(\(candidate\) => candidate\.id === snapshot\.activeTabId\)/);
-  expect(browserRoute).toMatch(/return \(\) => \{[\s\S]*?mobileBrowserController\.suspend\(tabControlPlaneId, tabInstanceId\)/);
-  expect(browserRoute).toMatch(/\{contextId \? instanceTabs\.map/);
+  expect(browserRoute).toMatch(/<BrowserTabScreen/);
+  expect(browserScreen).toMatch(/instanceTabs\.map\(\(candidate\) =>[\s\S]*?<TaskHandoffBrowserView/);
+  expect(browserScreen).toMatch(/key=\{candidate\.id\}/);
+  expect(browserScreen).toMatch(/!active && styles\.hiddenWebViewLayer/);
+  expect(browserScreen).toMatch(/router\.setParams\(\{ browserTabId: candidate\.id \}\)/);
+  expect(browserScreen).not.toMatch(/router\.replace\(`/);
+  expect(browserScreen).toMatch(/const requestedTab = instanceTabs\.find/);
+  expect(browserScreen).toMatch(/const tab = requestedTab \|\| instanceTabs\.find\(\(candidate\) => candidate\.id === snapshot\.activeTabId\)/);
+  expect(browserScreen).toMatch(/return \(\) => \{[\s\S]*?mobileBrowserController\.suspend\(tabControlPlaneId, tabInstanceId\)/);
+  expect(browserScreen).toMatch(/\{contextId \? instanceTabs\.map/);
 });
 
 test('Android Browser Tunnel processes inbound binary frames through one FIFO consumer', () => {
@@ -71,11 +73,12 @@ test('web Browser module keeps the native context API shape', () => {
 test('App Sessions keeps local browser tabs visible after leaving the browser route', () => {
   expect(appsRoute).toMatch(/import \{ BrowserTabList \} from .*browser\/BrowserTabList/);
   expect(appsRoute).toMatch(/function SectionTabs/);
+  expect(appsRoute).toMatch(/const header = <SectionTabs/);
   expect(appsRoute).toMatch(/section === 'browser'[\s\S]*?<BrowserTabList/);
-  expect(appsRoute).toMatch(/section === 'browser'[\s\S]*?<BrowserTabList[\s\S]*?header=\{<SectionTabs/);
-  expect(appsRoute).toMatch(/: <AppSessionList[\s\S]*?header=\{<SectionTabs/);
+  expect(appsRoute.match(/header=\{header\}/g)).toHaveLength(2);
+  expect(appsRoute).toMatch(/router\.push\(`\/browser/);
   expect(browserList).toMatch(/mobileBrowserTabStore\.subscribe/);
-  expect(browserList).toMatch(/router\.push\(`\/browser/);
+  expect(browserList).toMatch(/onOpen\?\.\(tab\.instanceId, tab\.id\)/);
   expect(browserList).toMatch(/tab\.title/);
   expect(browserList).toMatch(/tab\.currentUrl/);
 });

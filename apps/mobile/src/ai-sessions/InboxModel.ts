@@ -3,10 +3,12 @@ import {
   aiSessionStableSortKey,
   aiSessionStatusGroup,
   compareAiSessionsByLastUserMessage,
+  controlPlaneLocalFolderDisplayName,
   sortedAiSessionInboxEntries,
   type AiSessionInboxEntry,
   type ControlPlaneAiSessions,
   type ControlPlaneAiSessionSummary,
+  type ControlPlaneNodeLocalFolder,
 } from '@task-handoff/control-plane-client';
 
 import type { MobileDirectoryProfileState } from '../directories/store';
@@ -25,13 +27,23 @@ const english: Translate = (key, params) => translate('en-US', key, params);
 export type SessionStatusFilter = 'all' | 'active' | 'waiting' | 'idle' | 'problem';
 export type SessionScopeOption = { label: string; scope: AiSessionScope };
 export type AiSessionInboxPresentationRow =
-  | { type: 'group'; key: string; label: string; count: number }
+  | { type: 'group'; key: string; label: string; count: number; collapsed: boolean }
   | ({ type: 'session' } & AiSessionHierarchyInboxEntry);
+export type AiSessionInboxGroupSection = {
+  collapsed: boolean;
+  count: number;
+  entries: AiSessionHierarchyInboxEntry[];
+  key: string;
+  label: string;
+  type: 'group';
+};
+export type AiSessionInboxSection = AiSessionInboxGroupSection | ({ type: 'session' } & AiSessionHierarchyInboxEntry);
 export type AiSessionHierarchyInboxEntry = AiSessionInboxEntry<ControlPlaneAiSessionSummary> & {
   depth?: number;
   hasChildren?: boolean;
   rootSession?: ControlPlaneAiSessionSummary;
 };
+export type AiSessionInboxFolder = Pick<ControlPlaneNodeLocalFolder, 'id' | 'name' | 'nodeId' | 'path' | 'localizedNames'>;
 
 export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages: readonly MobileStreamingMessage[] = [], t: Translate = english) {
   const turns = aiSessionDisplayTurns(session);
@@ -100,9 +112,31 @@ export function aiSessionInboxRows(
   groupBy: AiSessionInboxGroupBy,
   sortByStatus: boolean,
   t: Translate = english,
+  collapsedGroupKeys: ReadonlySet<string> = new Set(),
+  folders: readonly AiSessionInboxFolder[] = [],
+  locale?: string,
 ): AiSessionInboxPresentationRow[] {
+  return aiSessionInboxSections(entries, directory, groupBy, sortByStatus, t, collapsedGroupKeys, folders, locale).flatMap((section) => section.type === 'session'
+    ? [section]
+    : [
+      { type: 'group' as const, key: section.key, label: section.label, count: section.count, collapsed: section.collapsed },
+      ...(section.collapsed ? [] : section.entries.map((entry) => ({ type: 'session' as const, ...entry }))),
+    ]);
+}
+
+export function aiSessionInboxSections(
+  entries: readonly AiSessionHierarchyInboxEntry[],
+  directory: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'> | undefined,
+  groupBy: AiSessionInboxGroupBy,
+  sortByStatus: boolean,
+  t: Translate = english,
+  collapsedGroupKeys: ReadonlySet<string> = new Set(),
+  folders: readonly AiSessionInboxFolder[] = [],
+  locale?: string,
+): AiSessionInboxSection[] {
   const instances = new Map((directory?.instances ?? []).map((instance) => [instance.id, instance]));
   const nodes = new Map((directory?.nodes ?? []).map((node) => [node.id, node]));
+  const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
   const hierarchical = entries.some((entry) => entry.depth !== undefined);
   const sorted = hierarchical ? [...entries] : [...entries].sort((left, right) => (
     compareAiSessionsByLastUserMessage(left.session, right.session, sortByStatus)
@@ -115,15 +149,24 @@ export function aiSessionInboxRows(
   const groups = new Map<string, { label: string; entries: typeof sorted }>();
   for (const entry of sorted) {
     const instance = instances.get(entry.instanceId);
-    const group = aiSessionInboxGroup(entry, groupBy, instance, instance ? nodes.get(instance.nodeId) : undefined, t);
+    const rootSession = entry.rootSession || entry.session;
+    const folder = rootSession.cwdFolderId ? foldersById.get(rootSession.cwdFolderId) : undefined;
+    const group = aiSessionInboxGroup(entry, groupBy, instance, instance ? nodes.get(instance.nodeId) : undefined, folder, t, locale);
     const current = groups.get(group.key) ?? { label: group.label, entries: [] };
     current.entries.push(entry);
     groups.set(group.key, current);
   }
-  return [...groups].flatMap(([key, group]) => [
-    { type: 'group' as const, key: `group:${groupBy}:${key}`, label: group.label, count: group.entries.filter((entry) => !entry.depth).length },
-    ...group.entries.map((entry) => ({ type: 'session' as const, ...entry })),
-  ]);
+  return [...groups].map(([key, group]) => {
+    const groupKey = `group:${groupBy}:${key}`;
+    return {
+      type: 'group' as const,
+      key: groupKey,
+      label: group.label,
+      count: group.entries.filter((entry) => !entry.depth).length,
+      collapsed: collapsedGroupKeys.has(groupKey),
+      entries: group.entries,
+    };
+  });
 }
 
 function aiSessionInboxGroup(
@@ -131,19 +174,33 @@ function aiSessionInboxGroup(
   groupBy: Exclude<AiSessionInboxGroupBy, 'none'>,
   instance: MobileDirectoryProfileState['instances'][number] | undefined,
   node: MobileDirectoryProfileState['nodes'][number] | undefined,
+  folder: AiSessionInboxFolder | undefined,
   t: Translate,
+  locale?: string,
 ) {
   if (groupBy === 'instance') return { key: entry.instanceId, label: instance?.name || entry.instanceId };
   if (groupBy === 'node') return { key: instance?.nodeId || '__unknown_node__', label: node?.name || instance?.nodeId || t('sessions.inbox.unknownNode') };
   const groupingSession = entry.rootSession || entry.session;
   if (groupBy === 'agent') return { key: groupingSession.agent, label: appDisplayName(groupingSession.agent) };
   const path = groupingSession.cwd?.trim() || '';
-  return { key: normalizeFolderPath(path) || '__unknown_path__', label: path || t('sessions.inbox.unknownPath') };
+  return {
+    key: normalizeFolderPath(path) || '__unknown_path__',
+    label: folder
+      ? controlPlaneLocalFolderDisplayName(folder, locale)
+      : pathDisplayName(path) || t('sessions.inbox.unknownPath'),
+  };
 }
 
 function normalizeFolderPath(value: string) {
   if (/^[A-Za-z]:[\\/]/u.test(value)) return value.replace(/\\/gu, '/').replace(/\/+$/u, '').toLocaleLowerCase();
   return value.replace(/\/+$/u, '');
+}
+
+function pathDisplayName(path: string) {
+  if (!path) return '';
+  const normalized = path.replace(/[\\/]+$/u, '');
+  const index = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+  return index <= 0 ? normalized || path : normalized.slice(index + 1) || normalized;
 }
 
 function appDisplayName(id: string) {
@@ -193,6 +250,5 @@ export function sameScope(left: AiSessionScope, right: AiSessionScope) {
 }
 
 export function workspaceLabel(cwd?: string, t: Translate = english) {
-  const normalized = cwd?.replace(/\/+$/, '');
-  return normalized?.split('/').filter(Boolean).at(-1) || cwd || t('sessions.unknownWorkspace');
+  return cwd?.trim() ? pathDisplayName(cwd.trim()) || cwd.trim() : t('sessions.unknownWorkspace');
 }

@@ -1,6 +1,7 @@
 import {
   createContext,
   createElement,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -37,6 +38,13 @@ type ActiveAiSessions = {
 const ActiveAiSessionsContext = createContext<ActiveAiSessions | undefined>(undefined);
 const ActiveAiSessionsRuntimeContext = createContext<Omit<ActiveAiSessions, 'state'> | undefined>(undefined);
 const emptySessionView: MobileAiSessionViewState = { messages: [], timelines: {}, syncPhase: 'idle' };
+
+type SessionViewReadKind = 'detail' | 'turns' | 'body';
+type SessionViewReadFailure = {
+  key: string;
+  message: string;
+  kind: SessionViewReadKind;
+};
 
 export type ActiveAiSessionsDependencies = {
   activeProfile(): Promise<MobileControlPlaneProfile | undefined>;
@@ -126,6 +134,7 @@ export function useActiveAiSessionsSnapshot() {
 
 export function useActiveAiSessionView(controlPlaneId: string | undefined, instanceId: string, sessionId: string) {
   const runtime = useMobileControlPlaneRuntime();
+  const viewKey = JSON.stringify([controlPlaneId || '', instanceId, sessionId]);
   const summary = useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)
@@ -143,6 +152,23 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
   const detailRetryAttempt = useRef(0);
   const indexRetryAttempt = useRef(0);
   const bodyRetryAttempt = useRef(0);
+  const [readFailure, setReadFailure] = useState<SessionViewReadFailure>();
+  const failRead = useCallback((kind: SessionViewReadKind, cause: unknown) => {
+    setReadFailure({
+      key: viewKey,
+      kind,
+      message: cause instanceof Error ? cause.message : 'Could not load the AI Session.',
+    });
+  }, [viewKey]);
+  const clearReadFailure = useCallback((kind: SessionViewReadKind) => {
+    setReadFailure((current) => current?.key === viewKey && current.kind === kind ? undefined : current);
+  }, [viewKey]);
+  const retryReads = useCallback(() => {
+    setReadFailure(undefined);
+    setDetailRetry((value) => value + 1);
+    setIndexRetry((value) => value + 1);
+    setBodyRetry((value) => value + 1);
+  }, []);
   useEffect(() => {
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !instanceId || !sessionId || !runtime.coordinator) return;
     const dispose = runtime.coordinator.registerAiSessionTransientDemand({
@@ -166,14 +192,16 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
         mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, read.revision, read.detail);
       }
       detailRetryAttempt.current = 0;
-    }).catch(() => {
+      clearReadFailure('detail');
+    }).catch((cause) => {
       if (abort.signal.aborted) return;
+      failRead('detail', cause);
       const delay = Math.min(4_000, 400 * (2 ** detailRetryAttempt.current));
       detailRetryAttempt.current = Math.min(detailRetryAttempt.current + 1, 4);
       setTimeout(() => { if (!abort.signal.aborted) setDetailRetry((value) => value + 1); }, delay);
     });
     return () => abort.abort();
-  }, [controlPlaneId, detailRetry, detailRevision, instanceId, runtime.api, runtime.controlPlaneId, sessionId]);
+  }, [clearReadFailure, controlPlaneId, detailRetry, detailRevision, failRead, instanceId, runtime.api, runtime.controlPlaneId, sessionId]);
   useEffect(() => {
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !runtime.api || !turnsRevision) return;
     const abort = new AbortController();
@@ -185,23 +213,30 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
         mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, read.revision, read.index);
       }
       indexRetryAttempt.current = 0;
+      clearReadFailure('turns');
       if (current?.latestTurnRef) return;
       const indexedLatest = mobileAiSessionStore.sessionTurnIndex(controlPlaneId, instanceId, sessionId)?.turns.at(-1);
       const latest = indexedLatest ? { id: indexedLatest.id, bodyRevision: indexedLatest.bodyRevision } : undefined;
       if (!latest) return;
       const cachedRevision = mobileAiSessionStore.sessionTurnRevision(controlPlaneId, instanceId, sessionId, latest.id);
-      const bodyRead = await runtime.api!.aiSessions.turnBody(instanceId, sessionId, latest.id, cachedRevision, abort.signal);
-      if (!abort.signal.aborted && bodyRead.kind === 'updated' && latest.bodyRevision === bodyRead.revision) {
-        mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, bodyRead.revision, bodyRead.body.turn);
+      try {
+        const bodyRead = await runtime.api!.aiSessions.turnBody(instanceId, sessionId, latest.id, cachedRevision, abort.signal);
+        if (!abort.signal.aborted && bodyRead.kind === 'updated' && latest.bodyRevision === bodyRead.revision) {
+          mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, bodyRead.revision, bodyRead.body.turn);
+        }
+        clearReadFailure('body');
+      } catch (cause) {
+        if (!abort.signal.aborted) failRead('body', cause);
       }
-    }).catch(() => {
+    }).catch((cause) => {
       if (abort.signal.aborted) return;
+      failRead('turns', cause);
       const delay = Math.min(4_000, 400 * (2 ** indexRetryAttempt.current));
       indexRetryAttempt.current = Math.min(indexRetryAttempt.current + 1, 4);
       setTimeout(() => { if (!abort.signal.aborted) setIndexRetry((value) => value + 1); }, delay);
     });
     return () => abort.abort();
-  }, [controlPlaneId, indexRetry, instanceId, runtime.api, runtime.controlPlaneId, sessionId, turnsRevision]);
+  }, [clearReadFailure, controlPlaneId, failRead, indexRetry, instanceId, runtime.api, runtime.controlPlaneId, sessionId, turnsRevision]);
   useEffect(() => {
     const latest = latestTurnId && latestTurnRevision ? { id: latestTurnId, bodyRevision: latestTurnRevision } : undefined;
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !runtime.api || !latest) return;
@@ -214,15 +249,17 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
         mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, read.revision, read.body.turn, current.bodyRevision);
       }
       bodyRetryAttempt.current = 0;
-    }).catch(() => {
+      clearReadFailure('body');
+    }).catch((cause) => {
       if (abort.signal.aborted) return;
+      failRead('body', cause);
       const delay = Math.min(4_000, 400 * (2 ** bodyRetryAttempt.current));
       bodyRetryAttempt.current = Math.min(bodyRetryAttempt.current + 1, 4);
       setTimeout(() => { if (!abort.signal.aborted) setBodyRetry((value) => value + 1); }, delay);
     });
     return () => abort.abort();
-  }, [bodyRetry, controlPlaneId, instanceId, latestTurnId, latestTurnRevision, runtime.api, runtime.controlPlaneId, sessionId]);
-  return useSyncExternalStore(
+  }, [bodyRetry, clearReadFailure, controlPlaneId, failRead, instanceId, latestTurnId, latestTurnRevision, runtime.api, runtime.controlPlaneId, sessionId]);
+  const view = useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)
       : () => undefined,
@@ -231,4 +268,9 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
       : emptySessionView,
     () => emptySessionView,
   );
+  return {
+    ...view,
+    readError: readFailure?.key === viewKey ? readFailure : undefined,
+    retryReads,
+  };
 }

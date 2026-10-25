@@ -1,7 +1,7 @@
 import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Check, ChevronDown, ChevronRight, Copy, Sparkles, Split, Timer } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
@@ -19,6 +19,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
 import { NativeSessionModePicker } from './NativeSessionModePicker';
 import { ToolActivityText } from './ToolActivityText';
+import { RetryWarning } from './RetryWarning';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { translate, useI18n, type Translate } from '../i18n';
 import { TimelineActivityGroup } from './TimelineActivityGroup';
@@ -65,6 +66,8 @@ export function SessionDetail({
   showModePicker = true,
   bottomInset = 0,
   contentLoading = false,
+  contentError,
+  onRetryContent,
   recovering = false,
   keyboardViewportRevision = 0,
 }: {
@@ -85,6 +88,8 @@ export function SessionDetail({
   showModePicker?: boolean;
   bottomInset?: number;
   contentLoading?: boolean;
+  contentError?: string;
+  onRetryContent?(): void;
   /** The session is expected to reappear after a transient connection recovery. */
   recovering?: boolean;
   keyboardViewportRevision?: number;
@@ -238,6 +243,11 @@ export function SessionDetail({
   );
   const sessionStatusLabel = mobileAiSessionStatusLabel(session, t);
   const listHeader = <View style={styles.header}>
+    {contentError ? <Pressable accessibilityRole="button" onPress={onRetryContent} style={[styles.contentError, { backgroundColor: colors.errorSoft }]} testID="session-content-load-error">
+      <Icon color={colors.error} name="alert-circle" size={16} />
+      <Text numberOfLines={3} style={[styles.contentErrorText, { color: colors.error }]}>{contentError}</Text>
+      {onRetryContent ? <Text style={[styles.contentErrorAction, { color: colors.error }]}>{t('common.retry')}</Text> : null}
+    </Pressable> : null}
     {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
     <View style={styles.sessionBar}>
       <View style={styles.metaRow}>
@@ -252,7 +262,7 @@ export function SessionDetail({
     </View>
   </View>;
   const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length ? <View style={styles.footer}>
-    {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><Sparkles color={colors.textMuted} size={mobileWebMetric(14)} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
+    {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
     <SubAgents agents={session.subAgents} locale={locale} />
   </View> : null;
   return (
@@ -262,7 +272,7 @@ export function SessionDetail({
           key={`${session.id}:${selectedMode}`}
           ref={listRef}
           contentContainerStyle={adaptiveContentContainerStyle([styles.list, {
-            backgroundColor: colors.surface,
+            backgroundColor: colors.background,
             paddingBottom: Math.max(28, bottomInset + 16),
           }], adaptive.contentInsets)}
           contentInsetAdjustmentBehavior="automatic"
@@ -302,7 +312,7 @@ export function SessionDetail({
           renderItem={({ index, item }) => <View
             testID={`session-detail-item-${item.role}`}
           ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={displayItems[index + 1]?.role === 'current'} /></View>}
-          style={[styles.fill, { backgroundColor: colors.surface }]}
+          style={[styles.fill, { backgroundColor: colors.background }]}
           testID="session-detail-scroll"
           windowSize={7}
         />
@@ -429,7 +439,8 @@ export function detailItems(
       });
     }
     const currentActivity = isLatest ? sessionActivityText(session, t) : undefined;
-    return timelineEnabled && currentActivity ? appendCurrentActivity(projected, currentActivity, turn, session.status === 'running') : projected;
+    const withCurrentActivity = timelineEnabled && currentActivity ? appendCurrentActivity(projected, currentActivity, turn, session.status === 'running') : projected;
+    return placeRetryWarningBeforeResponse(withCurrentActivity);
   }
   const items: DetailItem[] = [];
   if (session.userPrompt) items.push({ id: 'session:user', role: 'user', text: session.userPrompt, actions: { timestamp: session.startedAt } });
@@ -470,15 +481,30 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
 function compactMobileTimeline(items: DetailItem[], turn: DetailTurn) {
   const primaryUserIndex = items.findIndex((item) => item.role === 'user');
   const latestResponseIndex = items.findLastIndex((item) => item.role === 'assistant');
+  const retryWarning = items.findLast((item) => item.role === 'warning');
   if (latestResponseIndex < 0) return items;
   const primaryUser = primaryUserIndex >= 0 ? items[primaryUserIndex] : undefined;
-  const history = items.slice(0, latestResponseIndex).filter((_item, index) => index !== primaryUserIndex);
-  const trailing = items.slice(latestResponseIndex + 1).filter((_item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex);
+  const history = items.slice(0, latestResponseIndex).filter((item, index) => index !== primaryUserIndex && item.role !== 'warning');
+  const trailing = items.slice(latestResponseIndex + 1).filter((item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex && item.role !== 'warning');
   return [
     ...(primaryUser ? [primaryUser] : []),
     ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history, turn }] : []),
     items[latestResponseIndex],
     ...trailing,
+    ...(retryWarning ? [retryWarning] : []),
+  ];
+}
+
+function placeRetryWarningBeforeResponse(items: DetailItem[]) {
+  const retryWarning = items.findLast((item) => item.role === 'warning');
+  if (!retryWarning) return items;
+  const withoutWarnings = items.filter((item) => item.role !== 'warning');
+  const responseIndex = withoutWarnings.findLastIndex((item) => item.role === 'assistant');
+  if (responseIndex < 0) return [...withoutWarnings, retryWarning];
+  return [
+    ...withoutWarnings.slice(0, responseIndex),
+    retryWarning,
+    ...withoutWarnings.slice(responseIndex),
   ];
 }
 
@@ -515,11 +541,11 @@ function DetailItemContent({
   if (item.role === 'activity') return <TimelineActivityGroup activities={item.activities ?? []} />;
   if (item.role === 'history') return <TimelineHistory error={item.historyError} items={item.history ?? []} onRetry={item.turn && onRetryTimeline ? () => onRetryTimeline(item.turn!) : undefined} status={item.historyStatus} turn={item.turn} />;
   if (item.role === 'current') return <TimelineCurrentActivity item={item} />;
-  if (conversation && item.role === 'user') return <View style={styles.userMessage}><View style={[styles.conversationUser, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (conversation && item.role === 'user') return <View style={styles.userMessage}><View style={[styles.conversationUser, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message"><SafeMarkdown nativeSelectable={false} trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message"><SafeMarkdown nativeSelectable={false} trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'warning') return <View style={[styles.errorBlock, { backgroundColor: colors.notice }]}><Icon color={colors.noticeText} name="warning" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.noticeText }]}>{t('sessions.retryWarning')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
+  if (item.role === 'warning') return <RetryWarning text={item.text ?? ''} />;
   return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
 }
 
@@ -627,8 +653,7 @@ function TimelineCurrentActivity({ item }: { item: DetailItem }) {
   const nodes = item.history ?? [];
   const interactive = Boolean(item.interactive);
   const content = <>
-    {interactive ? expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} />
-      : <Sparkles color={colors.textMuted} size={mobileWebMetric(15)} />}
+    {interactive ? expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} /> : null}
     <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
   </>;
   return <View style={styles.currentActivity}>
@@ -752,6 +777,9 @@ const styles = StyleSheet.create({
   conversationUser: { borderRadius: 18, borderTopRightRadius: 6, paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
   conversationResponse: { alignSelf: 'flex-start', maxWidth: '98%', paddingHorizontal: 2, paddingVertical: 4 },
   errorBlock: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
+  contentError: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
+  contentErrorText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  contentErrorAction: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
   errorText: { flex: 1, gap: 6 },
   role: { fontSize: mobileWebType.meta, fontWeight: '600', lineHeight: mobileWebType.metaLine, textTransform: 'capitalize' },
   timelineHistory: { gap: mobileWebMetric(12) },

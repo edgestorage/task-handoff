@@ -148,12 +148,14 @@ class StreamingMarkdownBlockAccumulator {
 export function SafeMarkdown({
   children,
   compact = false,
+  nativeSelectable: allowNativeSelectable = true,
   streamKey,
   streaming = false,
   trimEnd = false,
 }: {
   children: string;
   compact?: boolean;
+  nativeSelectable?: boolean;
   streamKey?: string;
   streaming?: boolean;
   trimEnd?: boolean;
@@ -166,7 +168,7 @@ export function SafeMarkdown({
   // UITextView cannot host Animated.Text nodes. Keep the animated RN text tree
   // while authoritative output is changing (or the local reveal is catching
   // up), then switch the settled block to the native selectable text tree.
-  const nativeSelectable = Platform.OS === 'ios' && !streaming && paced.visible === source;
+  const nativeSelectable = allowNativeSelectable && Platform.OS === 'ios' && !streaming && paced.visible === source;
   const blockAccumulator = useMemo(() => new StreamingMarkdownBlockAccumulator(streamKey), [streamKey]);
   const blocks = streaming
     ? blockAccumulator.advance(paced.visible)

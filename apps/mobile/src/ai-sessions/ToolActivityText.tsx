@@ -80,7 +80,7 @@ export function ToolActivityText({
       <Text
         numberOfLines={numberOfLines}
         onLayout={(event) => setTextWidth(event.nativeEvent.layout.width)}
-        style={[textStyle, styles.baseText, { color: colors.textMuted }]}
+        style={[textStyle, styles.baseText, { color: colors.sessionActivityMuted }]}
         testID="tool-activity-label"
       >
         {children}
@@ -102,11 +102,12 @@ export function ToolActivityText({
                 <Animated.Text
                   numberOfLines={numberOfLines}
                   style={[textStyle, styles.highlightText, {
-                    color: colors.text,
+                    color: colors.sessionActivityHighlight,
                     left: -offset,
                     transform: [{ translateX: inverseSweep }],
                     width: containerWidth,
                   }]}
+                  testID="tool-activity-highlight"
                 >
                   {children}
                 </Animated.Text>

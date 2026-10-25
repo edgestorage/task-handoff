@@ -8,10 +8,23 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
  }
  
  + (ComponentDescriptorProvider)componentDescriptorProvider
-@@ -65,29 +66,64 @@ using namespace facebook::react;
+@@ -65,29 +66,77 @@ using namespace facebook::react;
      return std::static_pointer_cast<MenuViewEventEmitter const>(self->_eventEmitter);
  }
  
++- (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
++{
++  // Fabric mounts children on the component host, while the menu implementation
++  // is installed as its contentView. Keep the children inside that UIButton so
++  // the long-press wrapper owns the row instead of covering it as a sibling.
++  [_view insertSubview:childComponentView atIndex:index];
++}
++
++- (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
++{
++  [childComponentView removeFromSuperview];
++}
++
 +- (void)retainPresentedEventEmitter:(std::shared_ptr<const MenuViewEventEmitter>)eventEmitter
 +{
 +    if (_presentedEventEmitter != eventEmitter) {
@@ -83,7 +96,7 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
          eventEmitter->onOpenMenu({});
      }
  }
-@@ -103,8 +133,28 @@ using namespace facebook::react;
+@@ -103,8 +146,28 @@ using namespace facebook::react;
      for (const MenuViewActionsStruct &action : actions) {
          // first convert the subactions if they exist
          NSMutableArray<NSDictionary *> *subactionsArray = [NSMutableArray arrayWithCapacity:actions.size()];
@@ -112,7 +125,7 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
                  NSDictionary *subactionDict = @{
                      @"id": [NSString stringWithUTF8String:subaction.id.c_str()],
                      @"title": [NSString stringWithUTF8String:subaction.title.c_str()],
-@@ -119,6 +169,7 @@ using namespace facebook::react;
+@@ -119,6 +182,7 @@ using namespace facebook::react;
                          @"disabled": @(subaction.attributes.disabled),
                          @"hidden": @(subaction.attributes.hidden),
                      },
@@ -123,12 +136,30 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
 diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
 --- a/ios/Shared/MenuViewImplementation.swift
 +++ b/ios/Shared/MenuViewImplementation.swift
-@@ -58,0 +59 @@
+@@ -57,0 +58 @@
 +        self.addTarget(self, action: #selector(primaryMenuTriggered), for: .menuActionTriggered)
-@@ -61,0 +63,4 @@
+@@ -60,0 +62,22 @@
 +
 +    @objc private func primaryMenuTriggered() {
 +        sendMenuOpen()
++    }
++
++    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
++        guard shouldOpenOnLongPress, isUserInteractionEnabled, !isHidden, alpha > 0.01, self.point(inside: point, with: event) else {
++            return super.hitTest(point, with: event)
++        }
++
++        // UIButton claims every touch before its React Native subviews can
++        // receive one. Long-press menus wrap an interactive row, so route the
++        // hit to the row while the parent context-menu interaction remains
++        // attached and can still recognize the long press.
++        for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
++            let subviewPoint = subview.convert(point, from: self)
++            if let hitView = subview.hitTest(subviewPoint, with: event) {
++                return hitView
++            }
++        }
++        return super.hitTest(point, with: event)
 +    }
 diff --git a/ios/Shared/RCTMenuItem.swift b/ios/Shared/RCTMenuItem.swift
 index f5d510d..a5ecaf7 100644

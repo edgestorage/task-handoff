@@ -46,17 +46,25 @@ beforeEach(() => {
 });
 
 describe('<StoryInbox />', () => {
-  test('keeps the Story list mounted while the initial snapshot loads', async () => {
+  test('shows the shared initial sync state before the Story snapshot arrives', async () => {
     let resolveInitial!: (value: { stories: Story[]; unavailableNodeIds: string[] }) => void;
     const list = jest.fn(() => new Promise<{ stories: Story[]; unavailableNodeIds: string[] }>((resolve) => { resolveInitial = resolve; }));
-    mockRuntime.mockReturnValue({ api: { stories: { list } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockRuntime.mockReturnValue({
+      api: { stories: { list } },
+      phase: 'verifying',
+      profile: { access: { kind: 'cloud-relay' } },
+    } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: { nodes: [], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
     mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
 
     const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
 
-    await waitFor(() => expect(screen.getByLabelText('Loading…')).toBeTruthy());
-    expect(screen.getByTestId('story-list')).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText('Loading Stories')).toBeTruthy());
+    expect(screen.getByTestId('story-inbox-loading').props.accessibilityState).toEqual({ busy: true });
+    expect(screen.getByText('Connecting to Cloud Relay')).toBeTruthy();
+    expect(screen.getByText('Establishing a secure connection before syncing Stories')).toBeTruthy();
+    expect(screen.queryByTestId('story-list')).toBeNull();
+    expect(screen.queryByText('No Stories yet')).toBeNull();
 
     await act(async () => { resolveInitial({ stories: [], unavailableNodeIds: [] }); });
     await waitFor(() => expect(screen.getByText('No Stories yet')).toBeTruthy());
@@ -206,8 +214,91 @@ describe('<StoryInbox />', () => {
     await waitFor(() => expect(screen.getByText('Offline Story')).toBeTruthy());
     expect(StyleSheet.flatten(screen.getByTestId('story-row-node-a:story-offline').props.style).opacity).toBe(0.5);
     expect(StyleSheet.flatten(screen.getByText('Offline Story').props.style).color).toBe(mobileLightColors.textMuted);
+    expect((screen.getByTestId('story-icon-node-a:story-offline', { includeHiddenElements: true }).children[0] as unknown as { props: { stroke: string } }).props.stroke).toBe(mobileLightColors.textMuted);
     await fireEvent.press(screen.getByText('Offline Story'));
     expect(onOpen).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  test('highlights a Story node without selecting its expanded container in the wide master-detail pane', async () => {
+    const story: Story = {
+      id: 'story-selected', ownerNodeId: 'node-a', title: 'Selected Story', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
+      instances: [],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+
+    const screen = await render(<StoryInbox selected={{ nodeId: 'node-a', storyId: 'story-selected' }} onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Selected Story')).toBeTruthy());
+    expect((screen.getByTestId('story-icon-node-a:story-selected', { includeHiddenElements: true }).children[0] as unknown as { props: { stroke: string } }).props.stroke).toBe(StyleSheet.flatten(screen.getByText('Selected Story').props.style).color);
+    expect(StyleSheet.flatten(screen.getByTestId('story-row-node-a:story-selected').props.style)).toEqual(expect.objectContaining({
+      backgroundColor: mobileLightColors.surface,
+      borderColor: mobileLightColors.workbenchCardBorder,
+    }));
+    expect(StyleSheet.flatten(screen.getByTestId('story-node-node-a:story-selected').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+    await screen.unmount();
+  });
+
+  test('expands Story press feedback across the full row', async () => {
+    const story: Story = {
+      id: 'story-pressed', ownerNodeId: 'node-a', title: 'Pressed Story', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
+      instances: [],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+
+    const screen = await render(<StoryInbox selected={{ nodeId: 'node-a', storyId: story.id }} onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Pressed Story')).toBeTruthy());
+    const row = screen.getByTestId('story-node-node-a:story-pressed');
+    expect(StyleSheet.flatten(row.props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+    await fireEvent(screen.getByText('Pressed Story'), 'pressIn');
+    expect(StyleSheet.flatten(row.props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+    await fireEvent(screen.getByText('Pressed Story'), 'pressOut');
+    expect(StyleSheet.flatten(row.props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+    await screen.unmount();
+  });
+
+  test('highlights only the linked AI Session node when a Story session is selected', async () => {
+    const story: Story = {
+      id: 'story-selected-session', ownerNodeId: 'node-a', title: 'Selected Session Story', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }],
+      instances: [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({
+      updatedAt: '2026-09-04T00:00:00.000Z',
+      instances: [{ instanceId: 'instance-a', streamId: 'stream-a', aiSessions: {
+        updatedAt: '2026-09-04T00:00:00.000Z',
+        sessions: [{ id: 'session-a', agent: 'codex', storyId: story.id, title: 'Linked session', status: 'idle', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false }],
+      } }],
+    }));
+
+    const screen = await render(<StoryInbox selected={{ nodeId: 'node-a', storyId: story.id, instanceId: 'instance-a', sessionId: 'session-a' }} onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Selected Session Story')).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Expand Selected Session Story'));
+    await waitFor(() => expect(screen.getByText('Linked session')).toBeTruthy());
+    expect(StyleSheet.flatten(screen.getByTestId('story-node-node-a:story-selected-session').props.style).backgroundColor).toBe('transparent');
+    expect(StyleSheet.flatten(screen.getByTestId('story-session-node-a:story-selected-session:instance-a:session-a').props.style)).toEqual(expect.objectContaining({
+      backgroundColor: mobileLightColors.workbenchSelectionBackground,
+      borderRadius: 12,
+      minHeight: 38,
+      paddingLeft: 30,
+      width: '100%',
+    }));
     await screen.unmount();
   });
 
@@ -299,7 +390,7 @@ describe('<StoryInbox />', () => {
     await fireEvent.press(screen.getByText('Alpha'));
 
     expect(onOpenDocument).toHaveBeenCalledWith(story, story.documents[0]);
-    expect(onOpenSession).toHaveBeenCalledWith('instance-a', 'session-a');
+    expect(onOpenSession).toHaveBeenCalledWith(story, 'instance-a', 'session-a');
     expect(onOpen).toHaveBeenCalledWith(story);
 
     await fireEvent.press(screen.getByLabelText('Collapse Alpha'));

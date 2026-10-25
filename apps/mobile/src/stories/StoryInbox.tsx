@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MenuView, type MenuAction } from './StoryMenuView';
 import * as Crypto from 'expo-crypto';
+import { BookOpen, MessageSquare } from 'lucide-react-native';
 import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 
@@ -10,6 +11,7 @@ import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
 import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
+import { InitialSyncLoading } from '../components/InitialSyncLoading';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { Icon } from '../components/Icon';
 import {
@@ -39,15 +41,16 @@ import { useStoryNodeFilter } from './use-story-node-filter';
 type StoryInboxProps = {
   onOpen(story: Story): void;
   onOpenDocument(story: Story, document: StoryDocument): void;
-  onOpenSession(instanceId: string, sessionId: string): void;
+  onOpenSession(story: Story, instanceId: string, sessionId: string): void;
   onEdit(story: Story): void;
   onNewSession(story: Story, defaults: { instanceId: string; sessionId?: string; cwd?: string; cwdFolderId?: string }): void;
   onAddExisting?(story: Story): void;
   onAddAction?(story: Story): void;
   onAddAutomation?(story: Story): void;
+  selected?: { nodeId: string; storyId: string; instanceId?: string; sessionId?: string };
 };
 
-export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession }: StoryInboxProps) {
+export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession, selected }: StoryInboxProps) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const adaptive = useAdaptiveContentLayout();
@@ -64,6 +67,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [manualOrderPreview, setManualOrderPreview] = useState<string[]>();
   const [draggingStoryKey, setDraggingStoryKey] = useState<string>();
+  const [pressedStoryKey, setPressedStoryKey] = useState<string>();
   const [storyDragOffsetY, setStoryDragOffsetY] = useState(0);
   const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const storyRowHeights = useRef(new Map<string, number>());
@@ -204,6 +208,11 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const loadingInitialStories = stories.length === 0 && (phase === 'idle' || phase === 'loading');
   const emptyUnavailable = sortedStories.length === 0 && visibleUnavailableNodeIds.length > 0;
   const emptyError = phase === 'error' || emptyUnavailable;
+  if (loadingInitialStories) return <InitialSyncLoading
+    connection={{ phase: runtime.phase, relay: runtime.profile?.access.kind === 'cloud-relay' }}
+    resource="stories"
+    testID="story-inbox-loading"
+  />;
   return <><FlatList
     contentContainerStyle={adaptiveContentContainerStyle(
       [styles.content, sortedStories.length === 0 && styles.emptyContent],
@@ -212,14 +221,12 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     contentInsetAdjustmentBehavior="automatic"
     data={sortedStories}
     keyExtractor={storyTreeKey}
-    ListEmptyComponent={loadingInitialStories
-      ? <View style={styles.loadingState}><ActivityIndicator accessibilityLabel={t('common.loading')} /></View>
-      : <EmptyState
-        icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
-        iconColor={emptyError ? colors.error : undefined}
-        message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
-        style={styles.emptyState}
-      />}
+    ListEmptyComponent={<EmptyState
+      icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
+      iconColor={emptyError ? colors.error : undefined}
+      message={error || (emptyUnavailable ? t('stories.loadError') : t('stories.empty'))}
+      style={styles.emptyState}
+    />}
     onRefresh={pullToRefresh.onRefresh}
     refreshing={pullToRefresh.refreshing}
     scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
@@ -235,12 +242,27 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         const storySessions = sessionsByStory.get(key) ?? [];
         const documents = visibleStoryTreeDocuments(story.documents, expandedDocumentKeys.has(key));
         const newSessionDefaults = storyAiSessionCreationDefaults(directory.instances, sessions, story.id, story.ownerNodeId);
+        const isSelected = Boolean(
+          selected
+          && !selected.instanceId
+          && !selected.sessionId
+          && selected.storyId === story.id
+          && selected.nodeId === story.ownerNodeId,
+        );
+        const isPressed = pressedStoryKey === key;
+        const storyIconColor = storyMuted ? colors.textMuted : colors.text;
         return <View
           onLayout={(event) => storyRowHeights.current.set(key, event.nativeEvent.layout.height)}
-          style={[styles.storyGroup, { backgroundColor: colors.surface, borderColor: colors.border }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
+          style={[styles.storyGroup, {
+            backgroundColor: colors.surface,
+            borderColor: colors.workbenchCardBorder,
+          }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
           testID={`story-row-${key}`}
         >
-        <View style={[styles.storyRow, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}>
+        <View
+          style={[styles.storyRow, { backgroundColor: isPressed || isSelected ? colors.workbenchSelectionBackground : 'transparent' }, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}
+          testID={`story-node-${key}`}
+        >
           <StoryDisclosure
             accessibilityLabel={t(expanded ? 'stories.collapse' : 'stories.expand', { name: story.title })}
             color={colors.textMuted}
@@ -276,8 +298,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             style={styles.storyMenu}
             title={story.title}
           >
-          <Pressable accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable }} disabled={storyUnavailable} onPress={() => onOpen(story)} style={({ pressed }) => [styles.storyLink, pressed && !storyUnavailable && { backgroundColor: colors.surfaceMuted }]}>
-            <View style={styles.storyIcon}><Icon color={storyMuted ? colors.textMuted : colors.primary} name="book-outline" size={18} /></View>
+          <Pressable accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable, selected: isSelected }} disabled={storyUnavailable} onPress={() => onOpen(story)} onPressIn={() => setPressedStoryKey(key)} onPressOut={() => setPressedStoryKey((current) => current === key ? undefined : current)} style={styles.storyLink}>
+            <View style={styles.storyIcon} testID={`story-icon-${key}`}><BookOpen color={storyIconColor} size={18} /></View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: storyMuted ? colors.textMuted : colors.text }]}>{story.title}</Text>
@@ -312,21 +334,28 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             else if (nativeEvent.event === 'rename') setRenamingDocument({ story, document, title: document.title });
             else if (nativeEvent.event === 'delete') removeDocument(story, document);
           }} shouldOpenOnLongPress style={styles.childMenu} title={document.title}>
-          <Pressable accessibilityRole="button" onPress={() => onOpenDocument(story, document)} style={({ pressed }) => [styles.childRow, pressed && { backgroundColor: colors.surfaceMuted }]}>
+          <Pressable accessibilityRole="button" onPress={() => onOpenDocument(story, document)} style={({ pressed }) => [styles.childRow, pressed && { backgroundColor: colors.workbenchSelectionBackground }]} testID={`story-document-${key}:${document.storyPath}`}>
             <View style={styles.nodeIcon}><Icon color={colors.textMuted} name="document-text-outline" size={18} /></View>
             <View style={styles.rowCopy}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{document.title}</Text>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{document.storyPath}</Text> : null}</View>
           </Pressable></MenuView>)}
           {story.documents.length > STORY_TREE_DOCUMENT_LIMIT && !expandedDocumentKeys.has(key) ? <Pressable accessibilityRole="button" onPress={() => setExpandedDocumentKeys((current) => new Set(current).add(key))} style={({ pressed }) => [styles.moreRow, pressed && styles.pressed]}><Text style={[styles.moreText, { color: colors.primary }]}>{t('stories.moreDocuments')}</Text></Pressable> : null}
           {storySessions.map((entry) => {
             const statusGroup = aiSessionStatusGroup(entry.session);
+            const isSessionSelected = Boolean(
+              selected
+              && selected.storyId === story.id
+              && selected.nodeId === story.ownerNodeId
+              && selected.instanceId === entry.instanceId
+              && selected.sessionId === entry.session.id,
+            );
             return <MenuView actions={[
               { id: 'open', image: 'bubble.left', title: t('common.open') },
               { id: 'close', image: 'xmark.circle', title: t('sessions.closeSession'), attributes: { destructive: true, disabled: !aiSessionRuntime.actions } },
             ] as MenuAction[]} key={`${entry.instanceId}:${entry.session.id}`} onPressAction={({ nativeEvent }) => {
-              if (nativeEvent.event === 'open') onOpenSession(entry.instanceId, entry.session.id);
+              if (nativeEvent.event === 'open') onOpenSession(story, entry.instanceId, entry.session.id);
               else if (nativeEvent.event === 'close') closeSession(entry);
             }} shouldOpenOnLongPress style={styles.childMenu} title={entry.session.title || entry.session.userPrompt || entry.session.id}>
-            <Pressable accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, entry.depth ? { paddingLeft: entry.depth * 14 } : null, pressed && { backgroundColor: colors.surfaceMuted }]}>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: isSessionSelected }} onPress={() => onOpenSession(story, entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, entry.depth ? { paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING + entry.depth * 14 } : null, (isSessionSelected || pressed) && { backgroundColor: colors.workbenchSelectionBackground }]} testID={`story-session-${key}:${entry.instanceId}:${entry.session.id}`}>
               {entry.hasChildren ? <Pressable
                 accessibilityLabel={t(expandedSessionIds.has(entry.session.id) ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')}
                 accessibilityRole="button"
@@ -344,7 +373,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
                 testID="story-session-disclosure"
               ><Icon color={colors.textMuted} name={expandedSessionIds.has(entry.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : entry.session.status === 'running'
                 ? <View style={styles.nodeIcon}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={18} /></View>
-                : <View style={styles.sessionIcon}><Icon color={colors.textMuted} name="chatbubble-outline" size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
+                : <View style={styles.sessionIcon}><MessageSquare color={colors.textMuted} size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
               <View style={styles.rowCopy}><View style={styles.sessionTitleRow}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{entry.session.title || entry.session.userPrompt || entry.session.id}</Text>{entry.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={[styles.unread, { backgroundColor: colors.primary }]} /> : null}</View>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.instanceName} · {mobileAiSessionStatusLabel(entry.session, t)}</Text> : null}</View>
             </Pressable></MenuView>;
           })}
@@ -363,13 +392,17 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   </>;
 }
 
+const STORY_CHILD_ROW_INSET = 34;
+const STORY_CHILD_SPACING = 4;
+const STORY_GROUP_RADIUS = 16;
+const STORY_CHILD_RADIUS = STORY_GROUP_RADIUS - STORY_CHILD_SPACING;
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  loadingState: { alignItems: 'center', justifyContent: 'center', minHeight: 180 },
   content: { paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
-  storyGroup: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
+  storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: 1, marginBottom: 8, overflow: 'hidden' },
   storyGroupUnavailable: { opacity: 0.5 },
   storyGroupDragging: { opacity: 0.72 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
@@ -378,13 +411,13 @@ const styles = StyleSheet.create({
   disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 34 },
   storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 6, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
   storyIcon: { alignItems: 'center', height: 22, justifyContent: 'center', width: 24 },
-  children: { marginBottom: 8, marginLeft: 31, marginTop: 2, overflow: 'hidden' },
-  childrenInner: { left: 0, paddingHorizontal: 6, paddingTop: 6, position: 'absolute', right: 0, top: 0 },
-  childRow: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 10, minHeight: 44, paddingHorizontal: 0, paddingVertical: 4 },
+  children: { marginBottom: STORY_CHILD_SPACING, marginTop: 0, overflow: 'hidden' },
+  childrenInner: { gap: STORY_CHILD_SPACING, left: 0, paddingHorizontal: STORY_CHILD_SPACING, paddingTop: STORY_CHILD_SPACING, position: 'absolute', right: 0, top: 0 },
+  childRow: { alignItems: 'center', borderRadius: STORY_CHILD_RADIUS, flexDirection: 'row', gap: 6, minHeight: 38, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4, paddingVertical: 4, width: '100%' },
   childMenu: { alignSelf: 'stretch' },
-  moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40 },
-  emptyChild: { fontSize: 13, lineHeight: 40, minHeight: 40 },
-  nodeIcon: { alignItems: 'center', height: 20, justifyContent: 'center', width: 22 },
+  moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4 },
+  emptyChild: { fontSize: 13, lineHeight: 40, minHeight: 40, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4 },
+  nodeIcon: { alignItems: 'center', height: 22, justifyContent: 'center', width: 24 },
   rowCopy: { flex: 1, gap: 1, justifyContent: 'center', minWidth: 0 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   sessionTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
@@ -395,7 +428,7 @@ const styles = StyleSheet.create({
   unavailable: { fontSize: 12, lineHeight: 16 },
   moreText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   unread: { borderRadius: 4, height: 8, width: 8 },
-  sessionIcon: { alignItems: 'center', height: 20, justifyContent: 'center', position: 'relative', width: 22 },
+  sessionIcon: { alignItems: 'center', height: 22, justifyContent: 'center', position: 'relative', width: 24 },
   sessionIconStatus: { bottom: -4, position: 'absolute', right: -3, transform: [{ scale: 0.62 }] },
   pressed: { opacity: 0.62 },
   modalBackdrop: { alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.36)', flex: 1, justifyContent: 'center', padding: 24 },

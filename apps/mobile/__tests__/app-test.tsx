@@ -1,10 +1,11 @@
-import { act, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import { AccessibilityInfo, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
-import { aiSessionInboxRows, inboxHierarchyEntries, inboxIsAwaitingInitialSync, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { aiSessionInboxRows, aiSessionInboxSections, inboxHierarchyEntries, inboxIsAwaitingInitialSync, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { updateAiSessionInboxViewPreferences } from '../src/ai-sessions/inbox-view-preferences';
 import type { MobileDirectoryProfileState } from '../src/directories/store';
 import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
 import { SessionStatusIndicator, sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
@@ -29,6 +30,13 @@ const snapshot = ControlPlaneAiSessionsSchema.parse({
     },
   }],
 });
+
+beforeEach(() => updateAiSessionInboxViewPreferences({
+  collapsedGroupKeys: [],
+  groupBy: 'none',
+  layout: 'cards',
+  sortByStatus: false,
+}));
 
 describe('<InboxRoute />', () => {
   test('shows loading instead of an authoritative empty state before the first snapshot arrives', async () => {
@@ -107,17 +115,42 @@ describe('<InboxRoute />', () => {
     expect(StyleSheet.flatten(responsePreviews[0].props.style).fontSize).toBe(15);
     expect(StyleSheet.flatten(responsePreviews[0].props.style).lineHeight).toBe(20);
     expect(StyleSheet.flatten(responsePreviews[0].props.style).minHeight).toBe(60);
-    expect(StyleSheet.flatten(screen.getAllByTestId('session-card')[0].props.style).paddingVertical).toBe(12);
+    const firstCardStyle = StyleSheet.flatten(screen.getAllByTestId('session-card')[0].props.style);
+    expect(firstCardStyle.paddingTop).toBe(10);
+    expect(firstCardStyle.paddingBottom).toBe(12);
+    expect(firstCardStyle.gap).toBe(8);
+    expect(StyleSheet.flatten(screen.getAllByTestId('session-status-leading')[0].props.style)).toEqual(expect.objectContaining({ height: 14, width: 14 }));
+    expect(StyleSheet.flatten(screen.getAllByTestId('session-identity')[0].props.style).gap).toBe(6);
     expect(StyleSheet.flatten(screen.getAllByTestId('session-card-footer-row')[0].props.style).minHeight).toBe(18);
+    expect(screen.getAllByTestId('session-workspace-context')).toHaveLength(2);
+    expect(screen.getAllByTestId('session-instance-context')).toHaveLength(2);
+    expect(within(screen.getAllByTestId('session-workspace-context')[0]).getByText('instance-1')).toBeTruthy();
+    expect(screen.getByTestId('ai-agent-icon-codex')).toBeTruthy();
+    expect(screen.getByTestId('ai-agent-icon-claude')).toBeTruthy();
+    const workspaceLabels = screen.getAllByText('Unknown workspace');
+    expect(StyleSheet.flatten(workspaceLabels[0].props.style)).toEqual(expect.objectContaining({ fontSize: 13, fontWeight: '400' }));
     expect(screen.getAllByText('Active')).toHaveLength(1);
     expect(screen.getAllByText('Waiting')).toHaveLength(1);
     expect(screen.getByTestId('session-card-footer-activity')).toBeTruthy();
-    expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).fontSize).toBe(15);
+    expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style)).toEqual(expect.objectContaining({ fontSize: 14, fontWeight: '400' }));
     expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).lineHeight).toBe(20);
     expect(inboxEntries(snapshot).map((entry) => inboxCardContent(entry.session))).toEqual([
       expect.objectContaining({ prompt: 'Build mobile', turnCount: 2, turnIndex: 1 }),
       expect.objectContaining({ prompt: 'Approve change', turnCount: 1, turnIndex: 0 }),
     ]);
+  });
+
+  test('keeps status filters readable and horizontally scrollable in a narrow list pane', async () => {
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    expect(screen.getByTestId('session-status-filter-scroll').props.horizontal).toBe(true);
+    expect(screen.getByTestId('session-status-filters').props.accessibilityRole).toBe('tablist');
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-filters').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-filter-all').props.style).backgroundColor).toBe(mobileLightColors.statusFilterSelectedBackground);
+    expect(screen.getByText('Problem').props.numberOfLines).toBe(1);
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-filter-problem').props.style)).toEqual(expect.objectContaining({ flexGrow: 1, flexShrink: 0, minWidth: 44 }));
   });
 
   test('failed session cards preview the authoritative error without expanding the list', async () => {
@@ -193,10 +226,149 @@ describe('<InboxRoute />', () => {
       .filter((row) => row.type === 'group')
       .map((row) => [row.label, row.count]);
 
-    expect(groupLabels('path')).toEqual([['/work/mobile', 1], ['/work/server', 1]]);
+    expect(groupLabels('path')).toEqual([['mobile', 1], ['server', 1]]);
     expect(groupLabels('instance')).toEqual([['Phone', 1], ['Server', 1]]);
     expect(groupLabels('node')).toEqual([['Local Mac', 1], ['Build Node', 1]]);
     expect(groupLabels('agent')).toEqual([['Codex', 1], ['Open Code', 1]]);
+  });
+
+  test('prefers registered folder names and falls back to the final path segment', () => {
+    const originalEntries = inboxEntries(snapshot);
+    const entries = [
+      { ...originalEntries[0], session: { ...originalEntries[0].session, cwd: '/work/mobile', cwdFolderId: 'folder-mobile' } },
+      { ...originalEntries[1], instanceId: 'instance-2', session: { ...originalEntries[1].session, cwd: '/work/server' } },
+    ];
+    const directory = {
+      instances: [
+        { id: 'instance-1', name: 'Phone', nodeId: 'node-1' },
+        { id: 'instance-2', name: 'Server', nodeId: 'node-2' },
+      ],
+      nodes: [
+        { id: 'node-1', name: 'Local Mac' },
+        { id: 'node-2', name: 'Build Node' },
+      ],
+    } as unknown as Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
+    const folders = [{
+      id: 'folder-mobile',
+      name: 'Mobile App',
+      nodeId: 'node-1',
+      path: '/work/mobile',
+      localizedNames: { 'zh-CN': '移动端项目' },
+    }];
+    const pathGroupLabels = aiSessionInboxRows(entries, directory, 'path', false, undefined, new Set(), folders, 'zh-CN')
+      .filter((row) => row.type === 'group')
+      .map((row) => row.label);
+
+    expect(pathGroupLabels).toEqual(['移动端项目', 'server']);
+  });
+
+  test('omits a collapsed group’s sessions while keeping its header and count', () => {
+    const entries = inboxEntries(snapshot);
+    const directory = {
+      instances: [{ id: 'instance-1', name: 'Phone', nodeId: 'node-1' }],
+      nodes: [{ id: 'node-1', name: 'Local Mac' }],
+    } as unknown as Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
+    const rows = aiSessionInboxRows(entries, directory, 'instance', false, undefined, new Set(['group:instance:instance-1']));
+
+    expect(rows).toEqual([expect.objectContaining({
+      collapsed: true,
+      count: 2,
+      key: 'group:instance:instance-1',
+      label: 'Phone',
+      type: 'group',
+    })]);
+  });
+
+  test('keeps collapsed group children in section data for the height animation', () => {
+    const directory = {
+      instances: [{ id: 'instance-1', name: 'Phone', nodeId: 'node-1' }],
+      nodes: [{ id: 'node-1', name: 'Local Mac' }],
+    } as unknown as Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
+    const sections = aiSessionInboxSections(inboxEntries(snapshot), directory, 'instance', false, undefined, new Set(['group:instance:instance-1']));
+
+    expect(sections).toEqual([expect.objectContaining({
+      collapsed: true,
+      entries: expect.arrayContaining([
+        expect.objectContaining({ instanceId: 'instance-1', session: expect.objectContaining({ id: 'running' }) }),
+        expect.objectContaining({ instanceId: 'instance-1', session: expect.objectContaining({ id: 'approval' }) }),
+      ]),
+      key: 'group:instance:instance-1',
+      type: 'group',
+    })]);
+  });
+
+  test('collapses and expands groups from the list header', async () => {
+    updateAiSessionInboxViewPreferences({ groupBy: 'instance' });
+    const screen = await render(
+      <AiSessionInbox directory={{ instances: [{ id: 'instance-1', nodeId: 'node-1', name: 'Phone' }], nodes: [{ id: 'node-1', name: 'Local Mac' }] } as unknown as MobileDirectoryProfileState} state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    const header = screen.getByTestId('session-group-header');
+    expect(header.props.accessibilityState).toEqual({ expanded: true });
+    expect(screen.getAllByTestId('session-card')).toHaveLength(2);
+
+    await act(async () => { fireEvent.press(header); });
+
+    expect(screen.getByTestId('session-group-header').props.accessibilityState).toEqual({ expanded: false });
+    expect(screen.queryAllByTestId('session-card')).toHaveLength(0);
+    expect(screen.getByText('2')).toBeTruthy();
+
+    await act(async () => { fireEvent.press(screen.getByTestId('session-group-header')); });
+
+    expect(screen.getAllByTestId('session-card')).toHaveLength(2);
+  });
+
+  test('renders the persisted compact list layout with status, title, context, and time', async () => {
+    updateAiSessionInboxViewPreferences({ layout: 'list' });
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    const rows = screen.getAllByTestId('session-list-row');
+    expect(rows).toHaveLength(2);
+    expect(screen.queryAllByTestId('session-card')).toHaveLength(0);
+    expect(StyleSheet.flatten(rows[0].props.style).minHeight).toBe(50);
+    expect(within(rows[0]).getByText(/Approve change|Build mobile/)).toBeTruthy();
+    expect(within(rows[0]).getByText(/instance-1 · Unknown workspace/)).toBeTruthy();
+    expect(screen.getAllByTestId('session-status-leading')).toHaveLength(2);
+  });
+
+  test('aligns grouped list disclosure, status, path, and session title columns', async () => {
+    updateAiSessionInboxViewPreferences({ groupBy: 'instance', layout: 'list' });
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    const headerStyle = StyleSheet.flatten(screen.getByTestId('session-group-header').props.style);
+    const disclosureStyle = StyleSheet.flatten(screen.getByTestId('session-group-disclosure').props.style);
+    const rowStyle = StyleSheet.flatten(screen.getAllByTestId('session-list-row')[0].props.style);
+    const statusStyle = StyleSheet.flatten(screen.getAllByTestId('session-status-leading')[0].props.style);
+    const rowPaddingLeft = rowStyle.paddingLeft ?? rowStyle.paddingHorizontal;
+
+    expect(headerStyle.paddingLeft + disclosureStyle.width / 2).toBe(rowPaddingLeft + statusStyle.width / 2);
+    expect(headerStyle.paddingLeft + disclosureStyle.width + headerStyle.gap)
+      .toBe(rowPaddingLeft + statusStyle.width + rowStyle.gap);
+  });
+
+  test('hides the idle dot in compact list rows without collapsing the status slot', async () => {
+    updateAiSessionInboxViewPreferences({ layout: 'list' });
+    const idleSnapshot = ControlPlaneAiSessionsSchema.parse({
+      updatedAt: snapshot.updatedAt,
+      instances: [{
+        ...snapshot.instances[0],
+        aiSessions: {
+          ...snapshot.instances[0].aiSessions,
+          sessions: [{ ...snapshot.instances[0].aiSessions.sessions[0], phase: 'unknown', status: 'idle' }],
+        },
+      }],
+    });
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot: idleSnapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    expect(screen.queryByTestId('session-status-dot')).toBeNull();
+    expect(screen.queryByTestId('session-status-spinner')).toBeNull();
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-leading').props.style)).toEqual(expect.objectContaining({ height: 24, width: 20 }));
   });
 
   test('filters sessions through the normalized all, node, and instance scopes', () => {
@@ -285,6 +457,13 @@ describe('<InboxRoute />', () => {
 
     expect(screen.getByTestId('session-status-spinner')).toBeTruthy();
     expect(screen.queryByTestId('session-status-dot')).toBeNull();
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-spinner').props.style).borderColor).toBe(mobileLightColors.sessionRunningTrack);
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-spinner-arc').props.style)).toEqual(expect.objectContaining({
+      borderBottomColor: mobileLightColors.sessionRunningIndicator,
+      borderLeftColor: mobileLightColors.sessionRunningIndicator,
+      borderRightColor: mobileLightColors.sessionRunningIndicator,
+      borderTopColor: 'transparent',
+    }));
 
     await screen.rerender(<SessionStatusIndicator group="waiting" label="Waiting" />);
     expect(screen.queryByTestId('session-status-spinner')).toBeNull();

@@ -69,6 +69,8 @@ export function SessionWorkspace({
   detailMode: controlledDetailMode,
   onDetailModeChange,
   syncPhase = 'ready',
+  loadError,
+  onRetryLoad,
 }: {
   controlPlaneId: string;
   instanceId: string;
@@ -90,6 +92,8 @@ export function SessionWorkspace({
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
+  loadError?: string;
+  onRetryLoad?(): void;
 }) {
   const insets = useSafeAreaInsets();
   const composerBottomInset = Math.max(insets.bottom, 8);
@@ -153,6 +157,7 @@ export function SessionWorkspace({
   const timelineRequests = useRef(new Map<string, symbol>());
   const [turnBodyRetry, setTurnBodyRetry] = useState(0);
   const turnBodyRetryAttempt = useRef(0);
+  const [turnBodyFailure, setTurnBodyFailure] = useState<{ sessionId: string; turnId: string; message: string }>();
   useEffect(() => {
     if (syncPhase === 'ready') {
       setOfflineNoticeVisible(false);
@@ -236,6 +241,7 @@ export function SessionWorkspace({
       turnSelectionRequest.current += 1;
       setPendingTurnIndex(undefined);
       turnBodyRequests.current.clear();
+      setTurnBodyFailure(undefined);
     }
     selectionSessionScope.current = turnScope;
     knownTurnCount.current = turnCount;
@@ -300,10 +306,23 @@ export function SessionWorkspace({
     let selectedFailed = false;
     for (const index of new Set(indexes)) {
       const target = turns[index];
-      if (!target || !mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id)) continue;
-      void ensureTurnBody(target.id).catch(() => {
+      if (!target) continue;
+      if (!mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id)) {
+        if (index === selectedTurnIndex) setTurnBodyFailure((current) => current?.sessionId === sessionId && current.turnId === target.id ? undefined : current);
+        continue;
+      }
+      void ensureTurnBody(target.id).then((ready) => {
+        if (index === selectedTurnIndex && ready) {
+          setTurnBodyFailure((current) => current?.sessionId === sessionId && current.turnId === target.id ? undefined : current);
+        }
+      }).catch((cause) => {
         if (index !== selectedTurnIndex || selectedFailed) return;
         selectedFailed = true;
+        setTurnBodyFailure({
+          sessionId,
+          turnId: target.id,
+          message: cause instanceof Error ? cause.message : t('sessions.unavailableDescription'),
+        });
         const delay = Math.min(4_000, 400 * (2 ** turnBodyRetryAttempt.current));
         turnBodyRetryAttempt.current = Math.min(turnBodyRetryAttempt.current + 1, 4);
         setTimeout(() => {
@@ -311,7 +330,7 @@ export function SessionWorkspace({
         }, delay);
       });
     }
-  }, [client, controlPlaneId, detailMode, ensureTurnBody, instanceId, pendingTurnIndex, selectedTurnIndex, session, sessionId, timelineTurnSignature, turnBodyRetry, turnScope]);
+  }, [client, controlPlaneId, detailMode, ensureTurnBody, instanceId, pendingTurnIndex, selectedTurnIndex, session, sessionId, t, timelineTurnSignature, turnBodyRetry, turnScope]);
   useEffect(() => {
     timelineLoadInputs.current = { session, timelines };
   }, [session, timelines]);
@@ -444,6 +463,12 @@ export function SessionWorkspace({
   );
   if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail messages={messages} recovering={syncPhase !== 'ready'} session={session} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
+  const selectedTurnBodyFailure = selectedTurn && turnBodyFailure && turnBodyFailure.sessionId === sessionId && turnBodyFailure.turnId === selectedTurn.id
+    ? turnBodyFailure.message
+    : undefined;
+  const selectedTimeline = selectedTurn ? timelines?.[selectedTurn.id] : undefined;
+  const selectedTimelineFailed = Boolean(selectedTurnBodyFailure || selectedTimeline?.status === 'error');
+  const contentReadFailed = Boolean(loadError && !selectedTurn);
   const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
     controlPlaneId,
     instanceId,
@@ -453,14 +478,26 @@ export function SessionWorkspace({
   const initialTurnLoading = Boolean(
     session.turnsRevision
     && (session.turnCount ?? session.turns?.length ?? 0) > 0
+    && !contentReadFailed
+    && !selectedTimelineFailed
     && (!selectedTurn || !selectedTurnHasBody)
   );
-  const selectedTurnRefreshing = initialTurnLoading || Boolean(selectedTurn && mobileAiSessionStore.neededSessionTurn(
+  const selectedTurnRefreshing = initialTurnLoading || Boolean(!contentReadFailed && !selectedTimelineFailed && selectedTurn && mobileAiSessionStore.neededSessionTurn(
     controlPlaneId,
     instanceId,
     session.id,
     selectedTurn.id,
   ));
+  const effectiveTimelines = selectedTurn && selectedTurnBodyFailure && selectedTimeline?.status !== 'error'
+    ? {
+      ...timelines,
+      [selectedTurn.id]: {
+        ...(selectedTimeline ?? { items: [] }),
+        status: 'error' as const,
+        error: selectedTurnBodyFailure,
+      },
+    }
+    : timelines;
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
@@ -801,9 +838,9 @@ export function SessionWorkspace({
     ? { left: adaptive.contentInsets.left, right: adaptive.contentInsets.right }
     : undefined;
   return (
-    <View style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace-background">
-      <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace">
-      <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-content">
+    <View style={[styles.fill, { backgroundColor: colors.background }]} testID="session-workspace-background">
+      <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.background }]} testID="session-workspace">
+      <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.background }]} testID="session-content">
         <SessionDetail
           bottomInset={composerOverlayHeight}
           contentLoading={initialTurnLoading}
@@ -811,7 +848,14 @@ export function SessionWorkspace({
           messages={messages}
           mode={detailMode}
           onModeChange={setDetailMode}
-          onRetryTimeline={(turn) => mobileAiSessionStore.retryTurnTimeline(controlPlaneId, instanceId, session.id, turn)}
+          onRetryTimeline={(turn) => {
+            if (selectedTurnBodyFailure) {
+              setTurnBodyFailure(undefined);
+              setTurnBodyRetry((value) => value + 1);
+            }
+            mobileAiSessionStore.retryTurnTimeline(controlPlaneId, instanceId, session.id, turn);
+          }}
+          onRetryContent={onRetryLoad}
           onContinueFromTurn={continueFromTurn}
           onVisible={onVisible}
           onTurnIndexChange={requestTurnSelection}
@@ -820,9 +864,10 @@ export function SessionWorkspace({
           showModePicker={controlledDetailMode === undefined}
           timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}
           timelineHistoryEnabled={supportsTurnTimeline || supportsSessionTimeline}
-          timelines={timelines}
+          timelines={effectiveTimelines}
           turnLoading={pendingTurnIndex !== undefined || selectedTurnRefreshing}
           turnIndex={selectedTurnIndex}
+          contentError={loadError}
         />
       </View>
       <>
@@ -830,21 +875,21 @@ export function SessionWorkspace({
           <Svg height="100%" width="100%">
             <Defs>
               <LinearGradient id="session-composer-gradient" x1="0" x2="0" y1="0" y2="100%">
-                <Stop offset={0} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[0]} />
-                <Stop offset={1} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[1]} />
+                <Stop offset={0} stopColor={colors.background} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[0]} />
+                <Stop offset={1} stopColor={colors.background} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[1]} />
               </LinearGradient>
             </Defs>
             <Rect fill="url(#session-composer-gradient)" height="100%" width="100%" />
           </Svg>
         </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { backgroundColor: colors.surface, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { backgroundColor: colors.background, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
         <View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { bottom: 0, height: bottomBackdrop.height }]} testID="session-composer-bottom-backdrop">
           <Svg height="100%" width="100%">
             <Defs>
               <LinearGradient id="session-composer-bottom-gradient" x1="0" x2="0" y1="0" y2="100%">
-                <Stop offset={bottomBackdrop.locations[0]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[0]} />
-                <Stop offset={bottomBackdrop.locations[1]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[1]} />
-                <Stop offset={bottomBackdrop.locations[2]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[2]} />
+                <Stop offset={bottomBackdrop.locations[0]} stopColor={colors.background} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[0]} />
+                <Stop offset={bottomBackdrop.locations[1]} stopColor={colors.background} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[1]} />
+                <Stop offset={bottomBackdrop.locations[2]} stopColor={colors.background} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[2]} />
               </LinearGradient>
             </Defs>
             <Rect fill="url(#session-composer-bottom-gradient)" height="100%" width="100%" />

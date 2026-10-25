@@ -27,25 +27,34 @@ beforeEach(() => { secureStore.__store.clear(); });
 
 test('parses persisted preferences and rejects unknown payloads', () => {
   const { parseAiSessionInboxViewPreferences } = loadPreferences();
-  expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 1, groupBy: 'node', sortByStatus: true }))).toEqual({ groupBy: 'node', sortByStatus: true });
-  expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 1, groupBy: 'unsupported' }))).toEqual({ groupBy: 'none', sortByStatus: false });
+  expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 1, groupBy: 'node', sortByStatus: true }))).toEqual({
+    collapsedGroupKeys: [], groupBy: 'node', layout: 'cards', sortByStatus: true,
+  });
+  expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 1, groupBy: 'unsupported' }))).toEqual({
+    collapsedGroupKeys: [], groupBy: 'none', layout: 'cards', sortByStatus: false,
+  });
+  expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 1, collapsedGroupKeys: ['group:instance:one', 42, '', 'group:instance:one'], layout: 'list' }))).toEqual({
+    collapsedGroupKeys: ['group:instance:one'], groupBy: 'none', layout: 'list', sortByStatus: false,
+  });
   expect(parseAiSessionInboxViewPreferences(JSON.stringify({ version: 99, groupBy: 'node' }))).toBeUndefined();
   expect(parseAiSessionInboxViewPreferences('not json')).toBeUndefined();
   expect(parseAiSessionInboxViewPreferences(null)).toBeUndefined();
 });
 
-test('keeps the selected grouping and status sort after the module reloads', async () => {
+test('keeps the selected layout, grouping, collapsed groups, and status sort after the module reloads', async () => {
   const first = loadPreferences();
   const unsubscribe = first.subscribeAiSessionInboxViewPreferences(() => undefined);
-  first.updateAiSessionInboxViewPreferences({ groupBy: 'instance', sortByStatus: true });
+  first.updateAiSessionInboxViewPreferences({ collapsedGroupKeys: ['group:instance:instance-1'], groupBy: 'instance', layout: 'list', sortByStatus: true });
   await flush();
   expect(secureStore.__store.size).toBe(1);
   unsubscribe();
 
   const reloaded = loadPreferences();
-  expect(reloaded.getAiSessionInboxViewPreferences()).toEqual({ groupBy: 'none', sortByStatus: false });
+  expect(reloaded.getAiSessionInboxViewPreferences()).toEqual({ collapsedGroupKeys: [], groupBy: 'none', layout: 'cards', sortByStatus: false });
   const unsubscribeReloaded = reloaded.subscribeAiSessionInboxViewPreferences(() => undefined);
   await flush();
-  expect(reloaded.getAiSessionInboxViewPreferences()).toEqual({ groupBy: 'instance', sortByStatus: true });
+  expect(reloaded.getAiSessionInboxViewPreferences()).toEqual({
+    collapsedGroupKeys: ['group:instance:instance-1'], groupBy: 'instance', layout: 'list', sortByStatus: true,
+  });
   unsubscribeReloaded();
 });

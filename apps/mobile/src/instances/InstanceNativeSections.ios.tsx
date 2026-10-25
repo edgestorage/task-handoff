@@ -1,5 +1,5 @@
 import { Button, Form, Host, HStack, Image, Label, LabeledContent, ProgressView, Section, Text, VStack } from '@expo/ui/swift-ui';
-import { buttonStyle, font, foregroundStyle, frame, lineLimit, listSectionSpacing } from '@expo/ui/swift-ui/modifiers';
+import { background, buttonStyle, font, foregroundStyle, frame, lineLimit, listSectionSpacing, scrollContentBackground } from '@expo/ui/swift-ui/modifiers';
 import { StyleSheet } from 'react-native';
 
 import { useMobileTheme } from '../components/theme';
@@ -10,8 +10,8 @@ export function InstanceOverview(props: InstanceOverviewProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const overviewHeight = overviewBaseHeight + overviewActionCount * overviewActionHeight + overviewFormBottomInset;
-  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={[styles.overview, { height: overviewHeight }]}>
-    <Form modifiers={[listSectionSpacing('compact')]}>
+  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={[styles.overview, { backgroundColor: colors.background, height: overviewHeight }]}>
+    <Form modifiers={[listSectionSpacing('compact'), scrollContentBackground('hidden'), background(colors.background)]}>
       <Section title={t('nav.instance').toLocaleUpperCase()}>
         <ValueRow icon="server.rack" label={t('nav.node')} value={props.nodeName} />
         <ValueRow icon="shippingbox" label={t('instance.runtime')} value={props.runtime} />
@@ -41,8 +41,8 @@ export function InstanceHistory({ items, loading, onOpen, standalone = false }: 
   const { colors, dark } = useMobileTheme();
   const { locale, t } = useI18n();
   const height = loading || !items.length ? 138 : Math.min(72 + items.length * 66, 380);
-  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={standalone ? styles.historyStandalone : [styles.history, { height }]}>
-    <Form modifiers={[listSectionSpacing('compact')]}>
+  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={standalone ? [styles.historyStandalone, { backgroundColor: colors.background }] : [styles.history, { backgroundColor: colors.background, height }]}>
+    <Form modifiers={[listSectionSpacing('compact'), scrollContentBackground('hidden'), background(colors.background)]}>
       <Section title={standalone ? undefined : `${t('instance.history')}${items.length ? ` · ${items.length}` : ''}`}>
         {loading ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle('secondary')]}>{t('history.loading')}</Text></HStack> : null}
         {!loading && items.map((item) => <Button key={item.id} onPress={() => onOpen(item)} modifiers={[buttonStyle('plain')]}>

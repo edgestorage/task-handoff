@@ -45,7 +45,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </View>
       {storyMode ? <>
-        <DrawerRow active={storyNodeFilter.kind === 'all'} count={state.nodes.length} icon="nodes" label={t('directories.allNodes')} onPress={() => setStoryNodeFilter(allNodesVisible())} />
+        <DrawerRow active={storyNodeFilter.kind === 'all'} count={state.nodes.length} icon="nodes" label={t('directories.allNodes')} onPress={() => setStoryNodeFilter(allNodesVisible())} testID="drawer-all-nodes" />
         <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.node')}</Text>
         <View style={styles.storyNodeList}>
           {state.nodes.map((node) => {
@@ -57,7 +57,8 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
               accessibilityState={{ checked: selected }}
               key={node.id}
               onPress={() => setStoryNodeFilter(toggleNodeVisibility(storyNodeFilter, node.id, !selected, state.nodes.map((candidate) => candidate.id)))}
-              style={({ pressed }) => [styles.nodeRow, selected && { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.nodeRow, selected && { backgroundColor: colors.workbenchSelectionBackground }, pressed && styles.pressed]}
+              testID={`drawer-node-${node.id}`}
             >
               <Icon color={colors.textMuted} name="server-outline" size={16} />
               <View style={styles.nodeCopy}>
@@ -128,7 +129,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         }}
         style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}
       >
-        <View style={[styles.accountAvatar, { backgroundColor: colors.surfaceMuted }]}>
+        <View style={[styles.accountAvatar, { backgroundColor: colors.workbenchSelectionBackground }]} testID="drawer-account-avatar">
           {cloudAccount.phase === 'signed-in' && cloudAccount.profile?.email
             ? <Text style={[styles.accountInitial, { color: colors.text }]}>{cloudAccount.profile.email.slice(0, 1).toUpperCase()}</Text>
             : <Icon color={colors.textMuted} name="person-outline" size={20} />}
@@ -147,7 +148,8 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         accessibilityLabel={t('nav.settings')}
         accessibilityRole="button"
         onPress={() => { props.navigation.closeDrawer(); router.push('/profiles'); }}
-        style={({ pressed }) => [styles.settingsButton, { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.settingsButton, { backgroundColor: colors.workbenchSelectionBackground }, pressed && styles.pressed]}
+        testID="drawer-settings-button"
       >
         <Icon color={colors.text} name="settings-outline" size={23} />
       </Pressable>
@@ -155,10 +157,10 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   </View>;
 }
 
-function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'nodes' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string }) {
+function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle, testID }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'nodes' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string; testID?: string }) {
   const { colors } = useMobileTheme();
   const iconName: IconName = icon === 'all' ? 'grid-outline' : icon === 'nodes' ? 'server-outline' : icon === 'settings' ? 'settings-outline' : icon === 'triggers' ? 'flash' : 'layers-outline';
-  return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.row, active && { backgroundColor: colors.surfaceMuted }, pressed && !active && styles.pressed]}>
+  return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.row, active && { backgroundColor: colors.workbenchSelectionBackground }, pressed && !active && styles.pressed]} testID={testID}>
     <View style={[styles.rowContent, nested && styles.nestedRowContent]}>
       <Icon color={active ? colors.text : colors.textMuted} name={iconName} size={18} />
       <View style={styles.rowCopy}>

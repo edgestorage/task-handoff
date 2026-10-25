@@ -1,7 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ReactNode } from 'react';
-import { useRouter, type Href } from 'expo-router';
 
 import { useMobileTheme } from '../components/theme';
 import { EmptyState } from '../components/EmptyState';
@@ -16,15 +15,16 @@ import { mobileBrowserTabStore } from './store';
 
 type Props = {
   directory: MobileDirectoryProfileState;
+  onOpen?(instanceId: string, browserTabId: string): void;
+  selected?: { browserTabId: string; instanceId: string };
   scope: Extract<AiSessionScope, { kind: 'all' | 'instance' }>;
   header?: ReactNode;
 };
 
 /** Local browser tabs remain visible in the App Sessions area after leaving the browser route. */
-export function BrowserTabList({ directory, scope, header }: Props) {
+export function BrowserTabList({ directory, onOpen, scope, header, selected }: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const router = useRouter();
   const snapshot = useSyncExternalStore(mobileBrowserTabStore.subscribe, mobileBrowserTabStore.snapshot, mobileBrowserTabStore.snapshot);
   const [closingId, setClosingId] = useState('');
   const pullToRefresh = usePullToRefresh();
@@ -56,10 +56,15 @@ export function BrowserTabList({ directory, scope, header }: Props) {
     renderItem={({ item: tab }) => {
         const instance = directory.instances.find((candidate) => candidate.id === tab.instanceId);
         const title = tab.title || t('browser.untitled');
-        return <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        const isSelected = selected?.browserTabId === tab.id && selected.instanceId === tab.instanceId;
+        return <View style={[styles.card, {
+          backgroundColor: isSelected ? colors.workbenchSelectionBackground : colors.surface,
+          borderColor: isSelected ? colors.workbenchSelectionBorder : colors.workbenchCardBorder,
+        }]}>
           <Pressable
             accessibilityRole="button"
-            onPress={() => router.push(`/browser/${encodeURIComponent(tab.instanceId)}/${encodeURIComponent(tab.id)}` as Href)}
+            accessibilityState={{ selected: isSelected }}
+            onPress={() => onOpen?.(tab.instanceId, tab.id)}
             style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}
           >
             <View style={styles.titleRow}>
@@ -77,7 +82,7 @@ export function BrowserTabList({ directory, scope, header }: Props) {
 
 const styles = StyleSheet.create({
   list: { paddingTop: 16, paddingBottom: 24 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { minHeight: 240 },
-  card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, minHeight: 84, overflow: 'hidden' },
+  card: { borderRadius: 16, borderWidth: 1, minHeight: 84, overflow: 'hidden' },
   cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   title: { flex: 1, fontSize: 16, fontWeight: '500', lineHeight: 21 },

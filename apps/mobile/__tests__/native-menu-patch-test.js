@@ -17,6 +17,8 @@ test('the native menu keeps the presented UIKit menu event target enabled until 
     expect(source).toContain('releasePresentedEventEmitter');
     expect(source).toContain('prepareForRecycle');
     expect(source).not.toContain('experimental_flushSync');
+    expect(source).toMatch(/mountChildComponentView:[\s\S]*\[_view insertSubview:childComponentView atIndex:index\]/);
+    expect(source).toMatch(/unmountChildComponentView:[\s\S]*\[childComponentView removeFromSuperview\]/);
   }
   expect(nativeMenu).toMatch(/onPressAction:[\s\S]*auto eventEmitter = _presentedEventEmitter/);
   expect(nativeMenu).toMatch(/onPressAction:[\s\S]*eventEmitter->onPressAction/);
@@ -24,6 +26,10 @@ test('the native menu keeps the presented UIKit menu event target enabled until 
   for (const source of [patch, nativeMenuButton]) {
     expect(source).toContain('for: .menuActionTriggered');
     expect(source).toMatch(/primaryMenuTriggered[\s\S]*sendMenuOpen\(\)/);
+    expect(source).toMatch(/hitTest[\s\S]*guard shouldOpenOnLongPress/);
+    expect(source).toContain('subviews.reversed()');
+    expect(source).toMatch(/let subviewPoint = subview\.convert\(point, from: self\)/);
+    expect(source).toMatch(/subview\.hitTest\(subviewPoint, with: event\)/);
   }
 });
 

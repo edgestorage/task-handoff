@@ -84,3 +84,16 @@ test('the node scoped directory keeps its status summary and instance count with
 
   await screen.unmount();
 });
+
+test('selected instances expose their workbench state and only invoke the controlled open callback', async () => {
+  const onOpen = jest.fn();
+  const screen = await render(<MobileThemeProvider><InstancesDirectory onOpen={onOpen} selectedInstanceId="instance-1" state={state} /></MobileThemeProvider>);
+
+  expect(screen.getByRole('button', { name: 'Browser' }).props.accessibilityState).toEqual({ selected: true });
+  expect(screen.getByRole('button', { name: 'Builder' }).props.accessibilityState).toEqual({ selected: false });
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Browser' }));
+  expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'instance-1' }));
+
+  await screen.unmount();
+});

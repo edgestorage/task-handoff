@@ -14,6 +14,47 @@ index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..23cf2256c77f7abfb7d442adba8f75de
  }
  
  - (nullable RCTSurfaceTouchHandler *)touchHandler
+@@ -1417,6 +1422,39 @@
+   BOOL _isSwiping;
+   BOOL _shouldNotify;
+   BOOL _isRemovedFromParent;
++}
++
++#if !TARGET_OS_TV
++- (nullable UIScrollView *)firstDescendantScrollViewInView:(UIView *)view
++{
++  if ([view isKindOfClass:UIScrollView.class]) {
++    return static_cast<UIScrollView *>(view);
++  }
++
++  for (UIView *subview in view.subviews) {
++    UIScrollView *scrollView = [self firstDescendantScrollViewInView:subview];
++    if (scrollView != nil) {
++      return scrollView;
++    }
++  }
++
++  return nil;
++}
++
++- (nullable UIScrollView *)contentScrollViewForEdge:(NSDirectionalRectEdge)edge
++{
++  if (edge == NSDirectionalRectEdgeTop) {
++    // A master-detail pane can place an empty composited view before the list scroll view, which defeats
++    // UIKit's first-subview heuristic. Resolve the first real descendant so large titles and scroll-edge
++    // effects track the list pane across compact and split layouts.
++    UIScrollView *scrollView = [self firstDescendantScrollViewInView:self.view];
++    if (scrollView != nil) {
++      return scrollView;
++    }
++  }
++
++  return [super contentScrollViewForEdge:edge];
+ }
++#endif // !TARGET_OS_TV
+-
++
+ #pragma mark - Common
 diff --git a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
 index f0a72ccece723748ba57e9b54174a5f999bf6173..b0b35d899ea69fcb03f1006239e4ce7e686729e1 100644
 --- a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm

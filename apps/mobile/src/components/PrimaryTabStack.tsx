@@ -1,12 +1,24 @@
 import { Stack } from 'expo-router';
 import type { NativeStackHeaderItem } from 'expo-router';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 
 import { Icon } from './Icon';
 import { iosTransparentHeaderOptions } from './navigation-header';
 import { useMobileTheme } from './theme';
 import { InstanceScopeHeaderButton } from '../instance-scope/InstanceScopeHeaderButton';
+
+type PrimaryTabHeaderDefaults = {
+  headerRight?: () => ReactNode;
+  headerRightItems?: () => NativeStackHeaderItem[];
+  title: string;
+};
+
+const PrimaryTabHeaderDefaultsContext = createContext<PrimaryTabHeaderDefaults | undefined>(undefined);
+
+export function usePrimaryTabHeaderDefaults() {
+  return useContext(PrimaryTabHeaderDefaultsContext);
+}
 
 export function PrimaryTabStack({
   title,
@@ -32,25 +44,37 @@ export function PrimaryTabStack({
     onPress: onAdd,
     type: 'button' as const,
   } : undefined;
-  return <Stack screenOptions={{
-    contentStyle: { backgroundColor: colors.background },
-    headerShadowVisible: false,
-    headerTintColor: colors.primary,
-    headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '600' },
+  const iosHeaderRightItems = headerRightItems ?? (!headerRight && addItem ? () => [addItem] : undefined);
+  const iosHeaderRight = headerRightItems ? undefined : headerRight;
+  const androidHeaderRight = headerRight ?? (addItem && addAccessibilityLabel && onAdd
+    ? () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><Icon color={colors.primary} name="add" size={20} /></Pressable>
+    : undefined);
+  const headerDefaults: PrimaryTabHeaderDefaults = {
+    headerRight: Platform.OS === 'ios' ? iosHeaderRight : androidHeaderRight,
+    headerRightItems: Platform.OS === 'ios' ? iosHeaderRightItems : undefined,
     title,
-    ...(Platform.OS === 'ios' ? {
-      headerLargeStyle: { backgroundColor: 'transparent' },
-      headerLargeTitle: true,
-      headerLargeTitleShadowVisible: true,
-      ...iosTransparentHeaderOptions(dark),
-      headerLeft: () => scopeButton,
-      ...(headerRightItems ? { unstable_headerRightItems: headerRightItems } : headerRight ? { headerRight } : addItem ? { unstable_headerRightItems: () => [addItem] } : undefined),
-    } : {
-      headerStyle: { backgroundColor: colors.surface },
-      headerLeft: () => <View style={styles.androidHeaderLeft}>{scopeButton}</View>,
-      ...(headerRight ? { headerRight } : addItem ? { headerRight: () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><Icon color={colors.primary} name="add" size={20} /></Pressable> } : undefined),
-    }),
-  }} />;
+  };
+  return <PrimaryTabHeaderDefaultsContext.Provider value={headerDefaults}>
+    <Stack screenOptions={{
+      contentStyle: { backgroundColor: colors.background },
+      headerShadowVisible: false,
+      headerTintColor: colors.primary,
+      headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '600' },
+      title,
+      ...(Platform.OS === 'ios' ? {
+        headerLargeStyle: { backgroundColor: 'transparent' },
+        headerLargeTitle: true,
+        headerLargeTitleShadowVisible: true,
+        ...iosTransparentHeaderOptions(dark),
+        headerLeft: () => scopeButton,
+        ...(iosHeaderRightItems ? { unstable_headerRightItems: iosHeaderRightItems } : iosHeaderRight ? { headerRight: iosHeaderRight } : undefined),
+      } : {
+        headerStyle: { backgroundColor: colors.surface },
+        headerLeft: () => <View style={styles.androidHeaderLeft}>{scopeButton}</View>,
+        ...(androidHeaderRight ? { headerRight: androidHeaderRight } : undefined),
+      }),
+    }} />
+  </PrimaryTabHeaderDefaultsContext.Provider>;
 }
 
 const styles = StyleSheet.create({

@@ -1,11 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AppSessionRecord } from '@task-handoff/protocol/app-sessions';
 
 import { useMobileTheme } from '../components/theme';
-import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { EmptyState } from '../components/EmptyState';
+import { InitialSyncLoading, type InitialSyncConnection } from '../components/InitialSyncLoading';
 import { SwipeActionList } from '../components/SwipeActionList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import type { MobileDirectoryProfileState } from '../directories/store';
@@ -17,19 +16,20 @@ import { formatSessionUpdatedTime } from '../session-time';
 
 type Entry = { instanceId: string; instanceName: string; session: AppSessionRecord };
 type Props = {
+  connection?: InitialSyncConnection;
   directory: MobileDirectoryProfileState;
   onCloseSession(instanceId: string, sessionId: string): Promise<void>;
+  onOpen?(instanceId: string, sessionId: string): void;
   onRefresh?: () => Promise<void>;
   scope: Extract<AiSessionScope, { kind: 'all' | 'instance' }>;
+  selected?: { instanceId: string; sessionId: string };
   state: MobileAppSessionProfileState;
   header?: ReactNode;
 };
 
-export function AppSessionList({ state, directory, onCloseSession, onRefresh, scope, header }: Props) {
+export function AppSessionList({ connection, state, directory, onCloseSession, onOpen, onRefresh, scope, selected, header }: Props) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
-  const adaptive = useAdaptiveContentLayout();
-  const router = useRouter();
   const [closingKey, setClosingKey] = useState('');
   const pullToRefresh = usePullToRefresh(onRefresh);
   const entries = useMemo(() => {
@@ -54,7 +54,11 @@ export function AppSessionList({ state, directory, onCloseSession, onRefresh, sc
       },
     ]);
   };
-  if (state.sync.phase === 'loading' && !state.snapshot) return <View style={[styles.loading, adaptive.contentStyle]}><ActivityIndicator /></View>;
+  if (!state.snapshot && (state.sync.phase === 'idle' || state.sync.phase === 'loading')) return <InitialSyncLoading
+    connection={connection}
+    resource="appSessions"
+    testID="app-session-list-loading"
+  />;
   const statusMessage = state.sync.phase === 'offline' || state.sync.phase === 'stale'
     ? t('appSessions.cached')
     : state.sync.error;
@@ -80,20 +84,24 @@ export function AppSessionList({ state, directory, onCloseSession, onRefresh, sc
     renderItem={({ item }) => <AppSessionCard
       entry={item}
       locale={locale}
-      onPress={canOpenAppSession(item.session) ? () => router.push({ pathname: '/app-sessions/[instanceId]/[sessionId]', params: { instanceId: item.instanceId, sessionId: item.session.id } }) : undefined}
+      onPress={canOpenAppSession(item.session) && onOpen ? () => onOpen(item.instanceId, item.session.id) : undefined}
+      selected={selected?.instanceId === item.instanceId && selected.sessionId === item.session.id}
     />}
     style={{ backgroundColor: colors.background }}
   />;
 }
 
-function AppSessionCard({ entry, locale, onPress }: { entry: Entry; locale: string; onPress?: () => void }) {
-  const { colors, dark } = useMobileTheme();
+function AppSessionCard({ entry, locale, onPress, selected }: { entry: Entry; locale: string; onPress?: () => void; selected: boolean }) {
+  const { colors } = useMobileTheme();
   const { t } = useI18n();
   const value = entry.session.updatedAt || entry.session.createdAt;
   const title = entry.session.title || entry.session.appId || entry.session.id;
   const statusColor = entry.session.status === 'failed' ? colors.error : entry.session.status === 'running' ? colors.primary : colors.textMuted;
-  return <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: dark ? StyleSheet.hairlineWidth : 0 }]}>
-    <Pressable accessibilityRole={onPress ? 'button' : undefined} disabled={!onPress} onPress={onPress} style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}>
+  return <View style={[styles.card, {
+    backgroundColor: selected ? colors.workbenchSelectionBackground : colors.surface,
+    borderColor: selected ? colors.workbenchSelectionBorder : colors.workbenchCardBorder,
+  }]}>
+    <Pressable accessibilityRole={onPress ? 'button' : undefined} accessibilityState={{ selected }} disabled={!onPress} onPress={onPress} style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}>
       <View style={styles.heading}>
         <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{title}</Text>
         <View style={[styles.badge, { backgroundColor: colors.surfaceMuted }]}><View style={[styles.dot, { backgroundColor: statusColor }]} /><Text style={[styles.status, { color: statusColor }]}>{entry.session.status}</Text></View>
@@ -108,5 +116,5 @@ function AppSessionCard({ entry, locale, onPress }: { entry: Entry; locale: stri
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1 }, list: { paddingTop: 16 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { minHeight: 240 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, marginBottom: 12, marginHorizontal: 20, padding: 12 }, card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 17, fontWeight: '700', lineHeight: 22 }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 7, paddingVertical: 4 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', lineHeight: 17, textTransform: 'capitalize' }, meta: { fontSize: 14, lineHeight: 19 }, footer: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 19 }, cwd: { flex: 1, fontFamily: 'monospace', fontSize: 14, lineHeight: 19, minWidth: 0 }, time: { flexShrink: 0, fontSize: 12, lineHeight: 17, marginLeft: 'auto' },
+  list: { paddingTop: 16 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { minHeight: 240 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, marginBottom: 12, marginHorizontal: 20, padding: 12 }, card: { borderRadius: 16, borderWidth: 1, overflow: 'hidden' }, cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 17, fontWeight: '700', lineHeight: 22 }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 7, paddingVertical: 4 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', lineHeight: 17, textTransform: 'capitalize' }, meta: { fontSize: 14, lineHeight: 19 }, footer: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 19 }, cwd: { flex: 1, fontFamily: 'monospace', fontSize: 14, lineHeight: 19, minWidth: 0 }, time: { flexShrink: 0, fontSize: 12, lineHeight: 17, marginLeft: 'auto' },
 });

@@ -11,19 +11,20 @@ export function sessionStatusTone(group: AiSessionStatusGroup, colors: MobileThe
   return { foreground: colors.sessionIdle, background: colors.sessionIdleSoft };
 }
 
-export function SessionStatusIndicator({ group, label, size = 14 }: { group: AiSessionStatusGroup; label: string; size?: number }) {
+export function SessionStatusIndicator({ group, hideIdle = false, label, size = 14 }: { group: AiSessionStatusGroup; hideIdle?: boolean; label: string; size?: number }) {
   const { colors } = useMobileTheme();
   const tone = sessionStatusTone(group, colors);
+  const showVisual = !hideIdle || group !== 'idle';
   return (
     <View accessibilityLabel={label} style={[styles.container, { height: size, width: size }]}>
-      {group === 'active'
-        ? <RunningSpinner background={tone.background} foreground={tone.foreground} size={size} />
-        : <View style={[styles.halo, { backgroundColor: tone.background, borderRadius: size / 2, height: size, width: size }]} testID="session-status-dot"><View style={[styles.dot, { backgroundColor: tone.foreground, height: Math.max(6, size - 6), width: Math.max(6, size - 6) }]} /></View>}
+      {showVisual && (group === 'active'
+        ? <RunningSpinner indicator={colors.sessionRunningIndicator} size={size} track={colors.sessionRunningTrack} />
+        : <View style={[styles.halo, { backgroundColor: tone.background, borderRadius: size / 2, height: size, width: size }]} testID="session-status-dot"><View style={[styles.dot, { backgroundColor: tone.foreground, height: Math.max(6, size - 6), width: Math.max(6, size - 6) }]} /></View>)}
     </View>
   );
 }
 
-function RunningSpinner({ background, foreground, size }: { background: string; foreground: string; size: number }) {
+function RunningSpinner({ indicator, size, track }: { indicator: string; size: number; track: string }) {
   const [reduceMotion, setReduceMotion] = useState(false);
   const [rotation] = useState(() => new Animated.Value(0));
 
@@ -69,11 +70,11 @@ function RunningSpinner({ background, foreground, size }: { background: string; 
   }, [reduceMotion, rotation]);
 
   return (
-    <View style={[styles.spinnerTrack, { borderColor: background, borderRadius: (size - 2) / 2, height: size - 2, width: size - 2 }]} testID="session-status-spinner">
+    <View style={[styles.spinnerTrack, { borderColor: track, borderRadius: (size - 2) / 2, height: size - 2, width: size - 2 }]} testID="session-status-spinner">
       <Animated.View testID="session-status-spinner-arc" style={[styles.spinnerArc, {
-        borderBottomColor: foreground,
-        borderLeftColor: foreground,
-        borderRightColor: foreground,
+        borderBottomColor: indicator,
+        borderLeftColor: indicator,
+        borderRightColor: indicator,
         borderTopColor: 'transparent',
         borderRadius: size / 2,
         transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],

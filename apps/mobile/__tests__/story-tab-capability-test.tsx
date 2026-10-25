@@ -6,7 +6,7 @@ import { mobileLightColors } from '../src/components/theme';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { updateStoryViewPreferences } from '../src/stories/story-view-preferences';
 
-jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+jest.mock('expo-router', () => ({ router: { push: jest.fn() }, useFocusEffect: jest.fn() }));
 
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => {
   const useMobileControlPlaneRuntime = jest.fn();

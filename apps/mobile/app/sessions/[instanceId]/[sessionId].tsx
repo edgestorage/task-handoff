@@ -1,188 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { Alert, Pressable, StyleSheet } from 'react-native';
-import * as Crypto from 'expo-crypto';
-import { MenuView, type MenuAction } from '../../../src/components/MenuView';
+import { useLocalSearchParams } from 'expo-router';
 
-import { SessionWorkspace } from '../../../src/ai-sessions/SessionWorkspace';
-import type { SessionDetailMode } from '../../../src/ai-sessions/SessionDetail';
-import { mobileAiSessionBusyKey } from '../../../src/ai-sessions/actions';
-import { useActiveAiSessionView, useActiveAiSessionsRuntime } from '../../../src/ai-sessions/use-active-sessions';
-import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
-import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
-import { useActiveDirectories } from '../../../src/directories/use-directories';
-import { useMobileTheme } from '../../../src/components/theme';
-import { Icon } from '../../../src/components/Icon';
-import { SessionRenameModal } from '../../../src/components/SessionRenameModal';
-import { useI18n } from '../../../src/i18n';
-import { useTaskStatusSettings } from '../../../src/task-status/settings';
-import { useActiveTriggers } from '../../../src/triggers/use-active-triggers';
-import { deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
-import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
-import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
+import { AiSessionDetailScreen } from '../../../src/ai-sessions/AiSessionDetailScreen';
+import { useActiveAiSessionsRuntime } from '../../../src/ai-sessions/use-active-sessions';
+import { useMasterDetailLayout } from '../../../src/components/MasterDetailLayout';
+import { aiSessionDetailSelection } from '../../../src/master-detail/selection';
+import { useWideDetailRoute } from '../../../src/master-detail/use-wide-detail-route';
 
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
-  const router = useRouter();
-  const { actions, client, controlPlaneId, refresh } = useActiveAiSessionsRuntime();
-  const directories = useActiveDirectories();
-  const { colors } = useMobileTheme();
-  const { t } = useI18n();
-  const taskStatus = useTaskStatusSettings();
-  const triggers = useActiveTriggers();
-  const sessionView = useActiveAiSessionView(controlPlaneId, params.instanceId, params.sessionId);
-  const session = sessionView.session;
-  const messages = sessionView.messages;
-  const instance = directories.controlPlaneId === controlPlaneId
-    ? directories.state.instances.find((candidate) => candidate.id === params.instanceId)
-    : undefined;
-  const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
-  const [closing, setClosing] = useState(false);
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameError, setRenameError] = useState('');
-  const [renaming, setRenaming] = useState(false);
-  const renameRequestId = useRef('');
-  const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
-  const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
-  const markVisible = useCallback(() => {
-    if (!client || !controlPlaneId || !session?.unread) return;
-    void client.aiSessions.markRead(params.instanceId, params.sessionId).catch(() => undefined);
-  }, [client, controlPlaneId, params.instanceId, params.sessionId, session?.unread]);
-  const title = session?.title || session?.agent || 'AI Session';
-  const trackedSession = taskStatus.trackedSession;
-  const trackedHere = Boolean(trackedSession
-    && trackedSession.controlPlaneId === controlPlaneId
-    && trackedSession.instanceId === params.instanceId
-    && trackedSession.sessionId === params.sessionId);
-  const canTrack = session?.status === 'running' || session?.status === 'waiting';
-  const canRename = session?.actions?.rename === true;
-  const modelGroups = instance && session ? deriveAiSessionModelGroups({
-    entities: modelEntities,
-    assignment: instance.modelSelection,
-    agent: session.agent,
-    nodeId: instance.nodeId,
-    mode: 'existing',
-    currentSelection: session.modelSelection,
-    capability: directoryAiSessionProviderCapability(instance.capabilities, session.agent)?.modelSelection,
-  }) : [];
-  useEffect(() => {
-    const abort = new AbortController();
-    void mobileProfileStore.active().then(async (profile) => {
-      if (!profile || abort.signal.aborted) return;
-      const registry = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.models(abort.signal);
-      if (!abort.signal.aborted) setModelEntities(registry.models.map((group) => ({ ...group.model, locations: group.locations })));
-    }).catch(() => { if (!abort.signal.aborted) setModelEntities([]); });
-    return () => abort.abort();
-  }, [controlPlaneId]);
-  const liveActivityAction: MenuAction | undefined = taskStatus.available && taskStatus.loaded && !taskStatus.autoStart ? {
-    id: 'live-activity',
-    image: trackedHere ? 'waveform.slash' : 'waveform',
-    title: trackedHere ? t('liveActivity.stop') : t('liveActivity.start'),
-    attributes: { disabled: !trackedHere && (!canTrack || !controlPlaneId) },
-  } : undefined;
-  const closeSession = () => Alert.alert(t('sessions.closeConfirmTitle', { name: title }), t('sessions.closeConfirmDescription'), [
-    { text: t('common.cancel'), style: 'cancel' },
-    { text: t('sessions.closeSession'), style: 'destructive', onPress: () => {
-      if (!actions || !controlPlaneId) return;
-      setClosing(true);
-      void actions.close(params.instanceId, params.sessionId, Crypto.randomUUID()).then((result) => {
-        if (result.disposition === 'accepted') {
-          router.back();
-          return;
-        }
-        const actionState = actions.state(mobileAiSessionBusyKey(controlPlaneId, params.instanceId, params.sessionId, 'close'));
-        Alert.alert(t('sessions.closeFailed'), actionState.error);
-      }).finally(() => setClosing(false));
-    } },
-  ]);
-  const openRename = () => {
-    if (!canRename) return;
-    renameRequestId.current = Crypto.randomUUID();
-    setRenameError('');
-    setRenameOpen(true);
-  };
-  const submitRename = (nextTitle: string) => {
-    if (!actions || !session || !canRename || renaming) return;
-    setRenaming(true);
-    setRenameError('');
-    void actions.rename(params.instanceId, params.sessionId, {
-      title: nextTitle,
-      expectedTitle: session.title?.trim() || '',
-      clientRequestId: renameRequestId.current,
-    }).then((result) => {
-      if (result.disposition === 'accepted') {
-        setRenameOpen(false);
-        return;
-      }
-      setRenameError(result.disposition === 'duplicate-blocked' ? t('sessions.renameBusy') : result.error);
-    }).finally(() => setRenaming(false));
-  };
-  return <>
-    <Stack.Screen options={{
-      title,
-      headerRight: () => (
-        <MenuView
-          actions={[
-            { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
-            { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
-            ...(canRename ? [{ id: 'rename', image: 'pencil', title: renaming ? t('sessions.renaming') : t('sessions.rename'), attributes: { disabled: renaming || !actions || sessionView.syncPhase !== 'ready' } } as MenuAction] : []),
-            ...(liveActivityAction ? [liveActivityAction] : []),
-            ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
-            { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
-          ]}
-          onPressAction={({ nativeEvent }) => {
-            if (nativeEvent.event === 'view-turn') setDetailMode('turn');
-            else if (nativeEvent.event === 'view-conversation') setDetailMode('conversation');
-            else if (nativeEvent.event === 'rename') openRename();
-            else if (nativeEvent.event === 'live-activity') {
-              if (trackedHere) void taskStatus.stopTracking();
-              else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId: params.instanceId, sessionId: params.sessionId });
-            }
-            else if (nativeEvent.event === 'triggers') router.push({ pathname: '/sessions/[instanceId]/[sessionId]/triggers' as never, params: { instanceId: params.instanceId, sessionId: params.sessionId } });
-            else if (nativeEvent.event === 'close') closeSession();
-          }}
-          title={t('sessions.sessionView')}
-        >
-          <Pressable accessibilityLabel={t('sessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
-            <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
-          </Pressable>
-        </MenuView>
-      ),
-    }} />
-    <SessionWorkspace
-    actions={actions}
-    controlPlaneId={controlPlaneId || '__booting__'}
-    client={client}
-    refresh={refresh}
-    drafts={mobileDraftStore}
-    permissions={mobilePermissionStore}
-    defaultPermissionMode={defaultPermissionMode}
-    maxFileAttachmentBytes={instance?.config.aiSessionMaxFileAttachmentBytes}
-    modelGroups={modelGroups}
-    detailMode={detailMode}
-    instanceId={params.instanceId}
-    instanceCapabilities={instance?.capabilities}
-    messages={messages}
-    nodeId={instance?.nodeId}
-    onVisible={markVisible}
-    onOpenSession={(sessionId) => router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: params.instanceId, sessionId } })}
-    onDetailModeChange={setDetailMode}
-    session={session}
-    syncPhase={sessionView.syncPhase}
-    timelines={sessionView.timelines}
-    />
-    <SessionRenameModal
-      busy={renaming}
-      error={renameError}
-      initialTitle={title}
-      onClose={() => { if (!renaming) setRenameOpen(false); }}
-      onSubmit={submitRename}
-      open={renameOpen}
-    />
-  </>;
+  const instanceId = first(params.instanceId);
+  const sessionId = first(params.sessionId);
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  const { wide } = useMasterDetailLayout();
+  useWideDetailRoute({
+    href: '/(tabs)/(main)/inbox',
+    selectionKey: `${controlPlaneId || ''}:${instanceId}:${sessionId}`,
+    select: () => {
+      if (controlPlaneId) aiSessionDetailSelection.set({ controlPlaneId, instanceId, sessionId });
+    },
+    wide,
+  });
+  return wide ? null : <AiSessionDetailScreen instanceId={instanceId} sessionId={sessionId} />;
 }
 
-const styles = StyleSheet.create({
-  menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
-  menuButtonPressed: { opacity: 0.65 },
-});
+function first(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] || '' : value || '';
+}

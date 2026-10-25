@@ -21,6 +21,7 @@ import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
+import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
 import { useStoryEvents } from './use-story-events';
 import { groupStoryTreeSessions, storyTreeKey, unassignedStoryRootInstanceIds } from './story-tree-model';
 import { StoryDecisionAnswer } from './StoryDecisionAnswer';
@@ -30,7 +31,13 @@ type AutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[]
 type StorySection = 'actions' | 'documents' | 'sessions' | 'automations' | 'decisions';
 const storySections: StorySection[] = ['actions', 'documents', 'sessions', 'automations', 'decisions'];
 
-export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: string; nodeId?: string; onOpenSession(instanceId: string, sessionId: string): void }) {
+export function StoryDetail({ storyId, nodeId, onDeleted, onOpenSession, pane = false }: {
+  storyId?: string;
+  nodeId?: string;
+  onDeleted?(): void;
+  onOpenSession(instanceId: string, sessionId: string): void;
+  pane?: boolean;
+}) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const adaptive = useAdaptiveContentLayout();
@@ -255,7 +262,10 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       { text: t('common.remove'), style: 'destructive', onPress: () => {
         if (!runtime.api) return;
         setStoryMutation('delete');
-        void runtime.api.stories.remove(story.id, story.ownerNodeId).then(() => router.back()).catch((cause) => {
+        void runtime.api.stories.remove(story.id, story.ownerNodeId).then(() => {
+          if (onDeleted) onDeleted();
+          else router.back();
+        }).catch((cause) => {
           Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause));
         }).finally(() => setStoryMutation(undefined));
       } },
@@ -361,16 +371,15 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       ],
     },
   }] satisfies NativeStackHeaderItem[];
+  const storyMenu = <MenuView actions={menuActions} onPressAction={({ nativeEvent }) => handleStoryMenuAction(nativeEvent.event)} title={story.title}>
+    <Pressable accessibilityLabel={t('stories.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}>
+      <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
+    </Pressable>
+  </MenuView>;
   return <>
-    <Stack.Screen options={{
-      unstable_headerRightItems: nativeHeaderRightItems,
-      headerRight: () => <MenuView actions={menuActions} onPressAction={({ nativeEvent }) => handleStoryMenuAction(nativeEvent.event)} title={story.title}>
-        <Pressable accessibilityLabel={t('stories.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}>
-          <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
-        </Pressable>
-      </MenuView>,
-    }} />
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={adaptiveContentContainerStyle([styles.content, { backgroundColor: colors.background }], adaptive.contentInsets)} onScroll={updateActiveSection} ref={scrollRef} scrollEventThrottle={16} scrollIndicatorInsets={adaptive.scrollIndicatorInsets} stickyHeaderIndices={[1]} style={[{ backgroundColor: colors.background }]}>
+    <Stack.Screen options={{ unstable_headerRightItems: nativeHeaderRightItems, headerRight: () => storyMenu }} />
+    <PaneHeaderRestore pane={pane} />
+    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={adaptiveContentContainerStyle([styles.content, { backgroundColor: colors.background }], adaptive.contentInsets)} onScroll={updateActiveSection} ref={scrollRef} scrollEventThrottle={16} scrollIndicatorInsets={adaptive.scrollIndicatorInsets} stickyHeaderIndices={[1]} style={[styles.screen, { backgroundColor: colors.background }]}>
     <View style={styles.header}><View style={styles.titleRow}><Text style={[styles.title, { color: colors.text }]}>{story.title}</Text><Pressable accessibilityLabel={t('stories.edit')} onPress={() => router.push({ pathname: `/stories/${story.id}/edit` as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}><Icon color={colors.primary} name="pencil" size={20} /></Pressable></View><Text style={[styles.meta, { color: colors.textMuted }]}>{nodeNames.get(story.ownerNodeId) || story.ownerNodeId} · {new Date(story.updatedAt).toLocaleString()}</Text>{story.description ? <Text style={[styles.description, { color: colors.textMuted }]}>{story.description}</Text> : null}<Pressable accessibilityRole="button" accessibilityLabel={t('sessions.new')} disabled={archived || !newSessionDefaults.instanceId} onPress={openNewSession} style={[styles.newSession, { backgroundColor: colors.primary, opacity: archived || !newSessionDefaults.instanceId ? 0.5 : 1 }]}><Icon color="#fff" name="add-circle-outline" size={18} /><Text style={styles.newSessionText}>{t('sessions.new')}</Text></Pressable></View>
     <View onLayout={(event) => { const layout = layoutFromEvent(event); if (layout) setSectionNavHeight(layout.height); }} style={[styles.sectionNav, { backgroundColor: colors.background, borderBottomColor: colors.border }]}><ScrollView contentContainerStyle={styles.sectionNavContent} horizontal showsHorizontalScrollIndicator={false}>{storySections.filter((section) => section !== 'decisions' || decisionSupported).map((section) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeSection === section }} key={section} onPress={() => scrollToSection(section)} style={({ pressed }) => [styles.sectionTab, activeSection === section && { borderBottomColor: colors.primary }, pressed && styles.pressed]}><Text style={[styles.sectionTabText, { color: activeSection === section ? colors.primary : colors.textMuted }]}>{t(`stories.${section}Tab` as Parameters<Translate>[0])}</Text></Pressable>)}</ScrollView></View>
     <Section onLayout={(event) => recordSectionOffset('actions', event)} title={t('stories.actions')}>{story.actions.length ? story.actions.map((action) => <View key={action.id} style={[styles.action, { backgroundColor: colors.surface, borderColor: colors.border }]}><Pressable accessibilityLabel={action.title} accessibilityRole="button" accessibilityState={{ busy: runningActionId === action.id, disabled: archived || Boolean(runningActionId) }} disabled={archived || Boolean(runningActionId)} onPress={() => confirmAction(action)} style={[styles.actionMain, archived && styles.disabled]}>{runningActionId === action.id ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="play" size={18} />}<Text style={[styles.itemTitle, { color: colors.text }]}>{action.title}</Text></Pressable><View style={[styles.countBadge, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.textMuted} name="time-outline" size={13} /><Text style={[styles.countText, { color: colors.textMuted }]}>{automationCount(action.id)}</Text></View></View>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noActions')}</Text>}</Section>
@@ -433,6 +442,7 @@ export function layoutFromEvent(event: LayoutChangeEvent | null | undefined) {
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1 },
   loading: { flex: 1 }, errorState: { flex: 1 }, content: { gap: 22, padding: 16, paddingBottom: 32 }, header: { gap: 7 }, titleRow: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' }, title: { flex: 1, fontSize: 24, fontWeight: '700' }, description: { fontSize: 15, lineHeight: 21 }, meta: { fontSize: 13, lineHeight: 18 },
   newSession: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 8, justifyContent: 'center', marginTop: 5, minHeight: 44, paddingHorizontal: 14 }, newSessionText: { color: '#fff', fontSize: 15, fontWeight: '500' },
   section: { gap: 10 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 28 }, sectionTitle: { fontSize: 18, fontWeight: '600' }, sectionNav: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 46 }, sectionNavContent: { gap: 22, paddingHorizontal: 2 }, sectionTab: { borderBottomWidth: 2, borderBottomColor: 'transparent', justifyContent: 'center', minHeight: 46, paddingHorizontal: 2 }, sectionTabText: { fontSize: 14, fontWeight: '600' },

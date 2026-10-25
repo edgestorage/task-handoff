@@ -1,0 +1,313 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Stack, useRouter } from 'expo-router';
+import { TerminalView, type TerminalViewRef } from 'expo-libghostty';
+import { WebView } from 'react-native-webview';
+import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
+
+import { useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
+import { Icon } from '../components/Icon';
+import { MenuView, type MenuAction } from '../components/MenuView';
+import { useMobileToast } from '../components/MobileToast';
+import { SessionRenameModal } from '../components/SessionRenameModal';
+import { useMobileTheme } from '../components/theme';
+import type { MobileAppSessionTtyConnection } from '../control-plane/transport';
+import { useI18n } from '../i18n';
+import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
+import { subscribeToAppLifecycle } from '../platform/lifecycle';
+import { subscribeToNetworkState } from '../platform/network';
+import { AppSessionAccessLeaseController, shouldRenewAppSessionAccessAfterHttpStatus } from './access-lease';
+import { canCloseAppSession } from './status';
+import { AppSessionTerminalInputNormalizer } from './terminal-input';
+import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from './terminal-layout';
+import { useActiveAppSessions } from './use-active-app-sessions';
+
+type ActiveAppSessionAccess = AppSessionAccessLease & { instanceId: string; sessionId: string };
+type TerminalGrid = { cols: number; rows: number };
+type TerminalSnapshot = TerminalGrid & { data: string; pendingEscape: string };
+
+export function AppSessionDetailScreen({
+  instanceId,
+  onClosed,
+  pane = false,
+  sessionId,
+}: {
+  instanceId: string;
+  onClosed?(): void;
+  pane?: boolean;
+  sessionId: string;
+}) {
+  const router = useRouter();
+  const { closeSession, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
+  const aiSessionsSnapshot = useActiveAiSessionsSnapshot();
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const toast = useMobileToast();
+  const terminal = useRef<TerminalViewRef>(null);
+  const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
+  const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
+  const terminalGrid = useRef<TerminalGrid | undefined>(undefined);
+  const pendingTerminalSnapshot = useRef<TerminalSnapshot | undefined>(undefined);
+  const renewAccessRef = useRef<(invalidateCurrent?: boolean) => void>(() => undefined);
+  const [status, setStatus] = useState<'connecting' | 'connected' | 'closed' | 'exited' | 'error'>('connecting');
+  const [error, setError] = useState('');
+  const [closing, setClosing] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [access, setAccess] = useState<ActiveAppSessionAccess>();
+  const session = useMemo(() => state.snapshot?.instances
+    .find((entry) => entry.instanceId === instanceId)
+    ?.appSessions.sessions.find((entry) => entry.id === sessionId), [instanceId, sessionId, state.snapshot]);
+  const accessMode = session ? appSessionAccessMode(session) : undefined;
+  const linkedAiSession = aiSessionsSnapshot?.instances
+    .find((entry) => entry.instanceId === instanceId)
+    ?.aiSessions.sessions.find((entry) => entry.appSessionId === sessionId);
+  const renameSupported = !linkedAiSession || linkedAiSession.actions?.rename === true;
+  const activeAccess = session?.status === 'running' && access?.instanceId === instanceId && access.sessionId === sessionId ? access : undefined;
+
+  useEffect(() => {
+    if (!transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
+    const active = transport.connectAppSessionTty(instanceId, sessionId, {
+      onOpen: () => setStatus('connected'),
+      onSnapshot: (data, pendingEscape, cols, rows) => {
+        const grid = terminalGrid.current;
+        if (!grid || grid.cols !== cols || grid.rows !== rows) {
+          pendingTerminalSnapshot.current = { data, pendingEscape, cols, rows };
+          if (grid) connection.current?.resize(grid.cols, grid.rows);
+          return;
+        }
+        pendingTerminalSnapshot.current = undefined;
+        void terminal.current?.writeText(`\x1bc${data}${pendingEscape}`);
+      },
+      onOutput: (data) => {
+        if (!pendingTerminalSnapshot.current) void terminal.current?.writeText(data);
+      },
+      onResize: () => undefined,
+      onExit: (code) => {
+        void terminal.current?.finish(code ?? 0);
+        setStatus('exited');
+      },
+      onError: (cause) => {
+        setError(cause.message);
+        setStatus('error');
+      },
+      onClose: () => setStatus((current) => current === 'exited' ? current : 'closed'),
+    });
+    connection.current = active;
+    if (terminalGrid.current) active.resize(terminalGrid.current.cols, terminalGrid.current.rows);
+    return () => {
+      connection.current = undefined;
+      pendingTerminalSnapshot.current = undefined;
+      active.close();
+    };
+  }, [instanceId, session?.kind, session?.status, sessionId, transport]);
+
+  useEffect(() => {
+    if (!instanceId || !sessionId || accessMode !== 'vnc' || session?.status !== 'running') return;
+    let foreground = false;
+    let previousPhase: string | undefined;
+    let previousConnected: boolean | undefined;
+    const leases = new AppSessionAccessLeaseController({
+      create: async () => {
+        const created = await createAccess(instanceId, sessionId);
+        if (created.mode !== 'vnc') throw new Error('The Control Plane returned an unexpected App Session access mode.');
+        return created;
+      },
+      revoke: (token) => revokeAccess(instanceId, sessionId, token),
+      onError: (cause) => {
+        if (!cause) {
+          setError('');
+          return;
+        }
+        setError(cause instanceof Error ? cause.message : t('appSessions.viewUnavailable'));
+        setStatus('error');
+      },
+      onLease: (created) => {
+        setAccess(created ? { ...created, instanceId, sessionId } : undefined);
+        if (created) setStatus('connecting');
+      },
+    });
+    renewAccessRef.current = (invalidateCurrent) => { void leases.renew(invalidateCurrent); };
+    const unsubscribeLifecycle = subscribeToAppLifecycle((phase) => {
+      foreground = phase === 'active';
+      if (phase === 'active' && previousPhase !== 'active') void leases.renew();
+      previousPhase = phase;
+    });
+    const unsubscribeNetwork = subscribeToNetworkState((network) => {
+      if (foreground && network.connected && previousConnected === false) void leases.renew();
+      previousConnected = network.connected;
+    });
+    void leases.start();
+    return () => {
+      renewAccessRef.current = () => undefined;
+      unsubscribeLifecycle();
+      unsubscribeNetwork();
+      leases.stop();
+    };
+  }, [accessMode, createAccess, instanceId, revokeAccess, session?.status, sessionId, t]);
+
+  const title = session?.title || session?.appId || t('nav.appSessions');
+  const closeDisabled = closing || state.sync.phase !== 'ready' || session?.status === 'stopping';
+  const renameDisabled = renaming || state.sync.phase !== 'ready' || !renameSupported;
+  const openRename = () => {
+    setRenameDraft(title);
+    setRenameError('');
+    setRenameOpen(true);
+  };
+  const submitRename = (submittedTitle = renameDraft) => {
+    const nextTitle = submittedTitle.trim();
+    if (!nextTitle) {
+      setRenameError(t('appSessions.titleRequired'));
+      return;
+    }
+    if (nextTitle === title) {
+      setRenameOpen(false);
+      return;
+    }
+    setRenaming(true);
+    setRenameError('');
+    void renameSession(instanceId, sessionId, nextTitle).then(() => {
+      setRenameOpen(false);
+    }).catch((cause) => {
+      setRenameError(cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'));
+      toast.show({
+        detail: cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'),
+        title: t('toast.actionFailed', { action: t('appSessions.rename') }),
+        tone: 'error',
+      });
+    }).finally(() => setRenaming(false));
+  };
+  const confirmClose = () => Alert.alert(t('appSessions.closeConfirmTitle', { name: title }), t('appSessions.closeConfirmDescription'), [
+    { text: t('common.cancel'), style: 'cancel' },
+    { text: t('appSessions.closeSession'), style: 'destructive', onPress: () => {
+      setClosing(true);
+      void closeSession(instanceId, sessionId).then(() => {
+        connection.current?.close();
+        setClosing(false);
+        if (onClosed) onClosed();
+        else router.back();
+      }).catch((cause) => {
+        setClosing(false);
+        Alert.alert(t('appSessions.closeFailed'), cause instanceof Error ? cause.message : undefined);
+      });
+    } },
+  ]);
+  const menuActions: MenuAction[] = [
+    { id: 'rename', image: 'pencil', title: renameSupported ? (renaming ? t('appSessions.renaming') : t('appSessions.rename')) : t('appSessions.renameUnavailable'), attributes: { disabled: renameDisabled } },
+  ];
+  if (session && canCloseAppSession(session.status)) {
+    menuActions.push({ id: 'close', image: 'xmark.circle', title: closing || session.status === 'stopping' ? t('appSessions.closing') : t('appSessions.closeSession'), attributes: { destructive: true, disabled: closeDisabled } });
+  }
+  const menu = session ? <MenuView
+    actions={menuActions}
+    onPressAction={({ nativeEvent }) => {
+      if (nativeEvent.event === 'rename') openRename();
+      else if (nativeEvent.event === 'close') confirmClose();
+    }}
+    title={t('appSessions.moreActions')}
+  >
+    <Pressable accessibilityLabel={t('appSessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
+      <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
+    </Pressable>
+  </MenuView> : undefined;
+  const header = <><Stack.Screen options={pane
+    ? { headerRight: menu ? () => menu : undefined }
+    : { title, headerRight: menu ? () => menu : undefined }} />
+    <PaneHeaderRestore pane={pane} />
+  </>;
+
+  if (!session || (accessMode !== 'tty' && accessMode !== 'vnc')) {
+    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.code }]}><Text style={[styles.unavailableText, { color: colors.codeText }]}>{t('appSessions.viewUnavailable')}</Text></View></>;
+  }
+
+  const statusText = error || (status === 'connecting' ? t('appSessions.terminalConnecting') : status === 'connected' ? t('appSessions.terminalConnected') : status === 'exited' ? t('appSessions.terminalExited') : t('appSessions.terminalClosed'));
+  const content = accessMode === 'tty' ? <TerminalView
+    ref={terminal}
+    fontSize={APP_SESSION_TERMINAL_FONT_SIZE}
+    onInput={({ nativeEvent }) => {
+      const input = terminalInput.current.push(nativeEvent.text);
+      if (input) connection.current?.sendInput(input);
+    }}
+    onResize={({ nativeEvent }) => {
+      terminalGrid.current = nativeEvent;
+      const snapshot = pendingTerminalSnapshot.current;
+      if (snapshot && snapshot.cols === nativeEvent.cols && snapshot.rows === nativeEvent.rows) {
+        pendingTerminalSnapshot.current = undefined;
+        void terminal.current?.writeText(`\x1bc${snapshot.data}${snapshot.pendingEscape}`);
+        return;
+      }
+      connection.current?.resize(nativeEvent.cols, nativeEvent.rows);
+    }}
+    style={styles.terminal}
+    theme={{ background: colors.code, foreground: colors.codeText, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft }}
+  /> : activeAccess ? <WebView
+    key={activeAccess.token}
+    allowsFullscreenVideo
+    domStorageEnabled
+    javaScriptEnabled
+    onError={({ nativeEvent }) => {
+      setError(nativeEvent.description || t('appSessions.viewUnavailable'));
+      setStatus('error');
+    }}
+    onHttpError={({ nativeEvent }) => {
+      if (shouldRenewAppSessionAccessAfterHttpStatus(nativeEvent.statusCode)) {
+        setError('');
+        setStatus('connecting');
+        renewAccessRef.current(true);
+        return;
+      }
+      setError(`${t('appSessions.viewUnavailable')} (${nativeEvent.statusCode})`);
+      setStatus('error');
+    }}
+    onLoadEnd={() => setStatus((current) => current === 'error' ? current : 'connected')}
+    onLoadStart={() => setStatus('connecting')}
+    onShouldStartLoadWithRequest={({ url }) => sameOriginOrLocalDocument(url, activeAccess.url)}
+    originWhitelist={[new URL(activeAccess.url).origin]}
+    sharedCookiesEnabled={false}
+    source={{ uri: activeAccess.url }}
+    style={styles.webView}
+    thirdPartyCookiesEnabled={false}
+  /> : null;
+  const sessionContent = <>{content}
+    {status !== 'connected' ? <View pointerEvents="none" style={[styles.status, { backgroundColor: colors.surface }]}><Text numberOfLines={2} style={[styles.statusText, { color: status === 'error' ? colors.error : colors.textMuted }]}>{statusText}</Text></View> : null}</>;
+  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, styles.terminalKeyboardBackground]} testID="app-session-terminal-keyboard-background">
+    <KeyboardAvoidingView
+      behavior={appSessionTerminalKeyboardBehavior(Platform.OS)}
+      keyboardVerticalOffset={appSessionTerminalKeyboardOffset(Platform.OS, Platform.Version)}
+      style={[styles.screen, styles.terminalKeyboardBackground]}
+      testID="app-session-terminal-keyboard-area"
+    >{sessionContent}</KeyboardAvoidingView>
+  </View> : <View style={[styles.screen, { backgroundColor: colors.code }]}>{sessionContent}</View>}
+  <SessionRenameModal
+    busy={renaming}
+    error={renameError}
+    initialTitle={title}
+    onClose={() => { if (!renaming) setRenameOpen(false); }}
+    onSubmit={submitRename}
+    open={renameOpen}
+  /></>;
+}
+
+function sameOriginOrLocalDocument(url: string, accessUrl: string) {
+  if (url === 'about:blank') return true;
+  try {
+    return new URL(url).origin === new URL(accessUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  terminal: { flex: 1 },
+  terminalKeyboardBackground: { backgroundColor: '#000000' },
+  webView: { flex: 1 },
+  status: { borderRadius: 9, left: 12, maxWidth: '85%', paddingHorizontal: 10, paddingVertical: 7, position: 'absolute', top: 10 },
+  statusText: { fontSize: 12, lineHeight: 16 },
+  menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
+  menuButtonPressed: { opacity: 0.65 },
+  unavailable: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
+  unavailableText: { fontSize: 14, textAlign: 'center' },
+});

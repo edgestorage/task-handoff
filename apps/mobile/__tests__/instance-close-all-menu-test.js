@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.resolve(__dirname, '../app/instances/[instanceId].tsx'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../src/instances/InstanceDetailScreen.tsx'), 'utf8');
 const storyDetail = fs.readFileSync(path.resolve(__dirname, '../src/stories/StoryDetail.tsx'), 'utf8');
 
 test('instance detail menu closes sessions from the authoritative AI Session snapshot', () => {

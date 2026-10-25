@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { createContext, createElement, useContext, useMemo, type PropsWithChildren } from 'react';
 import {
   StyleSheet,
   useWindowDimensions,
@@ -11,6 +11,8 @@ import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 export const REGULAR_LAYOUT_MIN_WIDTH = 700;
 export const ADAPTIVE_CONTENT_MAX_WIDTH = 840;
 export const ADAPTIVE_READING_MAX_WIDTH = 780;
+
+const AdaptiveContentWidthContext = createContext<number | undefined>(undefined);
 
 export type AdaptiveHorizontalInsets = {
   left: number;
@@ -107,8 +109,21 @@ export function adaptiveScrollIndicatorInsets(
   };
 }
 
+/**
+ * Gives adaptive content its nearest pane width. A master-detail pane is
+ * already positioned inside the horizontal safe area, so its children must
+ * not apply the window safe area a second time.
+ */
+export function AdaptiveContentWidthProvider({ availableWidth, children }: PropsWithChildren<{ availableWidth?: number }>) {
+  return createElement(AdaptiveContentWidthContext.Provider, { value: availableWidth }, children);
+}
+
 export function useAdaptiveContentLayout(maxWidth = ADAPTIVE_CONTENT_MAX_WIDTH) {
   const { width } = useWindowDimensions();
   const safeAreaInsets = useContext(SafeAreaInsetsContext);
-  return adaptiveContentLayout(width, maxWidth, safeAreaInsets ?? {});
+  const paneWidth = useContext(AdaptiveContentWidthContext);
+  return useMemo(
+    () => adaptiveContentLayout(paneWidth ?? width, maxWidth, paneWidth === undefined ? safeAreaInsets ?? {} : {}),
+    [maxWidth, paneWidth, safeAreaInsets, width],
+  );
 }

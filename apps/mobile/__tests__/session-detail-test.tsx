@@ -20,6 +20,7 @@ import { mobileAiSessionStore, MobileAiSessionStore } from '../src/ai-sessions/s
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { TimelineActivityGroup, timelineActivityIcon } from '../src/ai-sessions/TimelineActivityGroup';
 import { mobileWebMetric, mobileWebType } from '../src/components/mobile-web-typography';
+import { mobileLightColors } from '../src/components/theme';
 
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1', agent: 'codex', title: 'Long session', status: 'running', phase: 'tool',
@@ -257,6 +258,44 @@ test('provider retry errors render as warnings until normal progress clears them
   expect(detailItems(session, [], undefined, undefined, recovered, true).some((item) => item.role === 'warning')).toBe(false);
 });
 
+test('renders the latest provider retry warning above the AI response and toggles its details', async () => {
+  const retrySession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], lastMessage: 'Recovered AI response' }],
+  });
+  const warning = 'Reconnecting... 2/5\n\nstream disconnected before completion: Transport error\n\nCodex error: responseStreamDisconnected';
+  const timelines = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [
+        { id: 'retry-1', turnId: 'turn-1', type: 'activity' as const, activityKind: 'codexRetry' as const, title: 'Codex retry', status: 'waiting' as const, summary: warning },
+        { id: 'assistant-1', turnId: 'turn-1', type: 'ai-message' as const, text: 'Recovered AI response' },
+      ],
+    },
+  };
+
+  expect(detailItems(retrySession, [], undefined, undefined, timelines, true).map((item) => item.role)).toEqual([
+    'user',
+    'history',
+    'warning',
+    'assistant',
+    'current',
+  ]);
+
+  const screen = await render(<SessionDetail messages={[]} session={retrySession} timelineEnabled timelines={timelines} />);
+  const collapsed = screen.getByTestId('session-retry-warning');
+  expect(collapsed.props.accessibilityState).toEqual({ expanded: false });
+  expect(screen.getByText('Reconnecting... 2/5')).toBeTruthy();
+  expect(screen.queryByText(/stream disconnected before completion/)).toBeNull();
+
+  await fireEvent.press(collapsed);
+  expect(screen.getByTestId('session-retry-warning').props.accessibilityState).toEqual({ expanded: true });
+  expect(screen.getByTestId('session-retry-warning-detail').props.children).toBe(warning);
+  await screen.unmount();
+});
+
 test('short detail content does not force a full viewport scroll range', async () => {
   const shortSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -272,7 +311,7 @@ test('short detail content does not force a full viewport scroll range', async (
   await screen.unmount();
 });
 
-test('AI detail allows selecting both user messages and assistant Markdown', async () => {
+test('AI detail keeps user bubble metrics on RN text while assistant Markdown uses native selection', async () => {
   const selectableSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     currentTool: undefined,
@@ -286,11 +325,24 @@ test('AI detail allows selecting both user messages and assistant Markdown', asy
   });
   const screen = await render(<SessionDetail messages={[]} session={selectableSession} />);
 
-  expect(screen.getAllByTestId('markdown-selectable-text')).toHaveLength(2);
-  for (const textHost of screen.getAllByTestId('markdown-selectable-text')) {
-    expect(textHost.props.selectable).toBe(true);
-    expect(textHost.props.uiTextView).toBe(true);
-  }
+  const markdownHosts = screen.getAllByTestId('markdown-selectable-text');
+  expect(markdownHosts).toHaveLength(2);
+  const userText = within(screen.getByTestId('session-user-message')).getByTestId('markdown-selectable-text');
+  expect(userText.props.selectable).toBe(true);
+  expect(userText.props.uiTextView).toBeUndefined();
+  const assistantText = markdownHosts.find((host) => host !== userText);
+  expect(assistantText?.props.selectable).toBe(true);
+  expect(assistantText?.props.uiTextView).toBe(true);
+  await screen.unmount();
+});
+
+test('uses the active workbench background for user messages in turn and conversation views', async () => {
+  const screen = await render(<SessionDetail messages={[]} session={session} />);
+
+  expect(StyleSheet.flatten(screen.getByTestId('session-user-message').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
+
+  await screen.rerender(<SessionDetail messages={[]} mode="conversation" session={session} />);
+  expect(StyleSheet.flatten(screen.getByTestId('session-user-message').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
   await screen.unmount();
 });
 
@@ -882,6 +934,7 @@ test('workspace retries a failed authoritative turn timeline request', async () 
     status: 'idle',
     currentTool: undefined,
     subAgents: [],
+    turnsRevision: 'turns-timeline-load',
     turns: [{ ...session.turns![0], id: 'turn-timeline-load', status: 'completed', lastMessage: 'Done' }],
   });
   const turnTimeline = jest.fn()
@@ -917,11 +970,43 @@ test('workspace retries a failed authoritative turn timeline request', async () 
   </SafeAreaProvider>);
 
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('error'));
+  expect(screen.queryByTestId('session-turn-loading-overlay')).toBeNull();
+  expect(screen.getByText(/Failed to load full activity/)).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: /Failed to load full activity/ }));
   await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('ready'));
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-load');
+});
+
+test('workspace replaces an unavailable initial timeline with a retryable error', async () => {
+  const unavailable = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-initial-load-failure',
+    subAgents: [],
+    status: 'idle',
+    turns: [],
+    turnCount: 3,
+    turnsRevision: 'turns-initial-load-failure',
+  });
+  const retry = jest.fn();
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <SessionWorkspace
+      controlPlaneId="cp-initial-load-failure"
+      instanceId="instance-initial-load-failure"
+      loadError="Reverse tunnel is offline."
+      messages={[]}
+      onRetryLoad={retry}
+      session={unavailable}
+    />
+  </SafeAreaProvider>);
+
+  expect(screen.queryByTestId('session-turn-loading-overlay')).toBeNull();
+  expect(screen.getByTestId('session-content-load-error')).toBeTruthy();
+  screen.getByText('Reverse tunnel is offline.');
+  await fireEvent.press(screen.getByRole('button', { name: /Reverse tunnel is offline/ }));
+  expect(retry).toHaveBeenCalledTimes(1);
+  await screen.unmount();
 });
 
 test('workspace keeps an in-flight timeline request authoritative across Turn lifecycle updates', async () => {
@@ -1871,9 +1956,8 @@ test('composer expands to a multiline editor while focused', async () => {
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
   const input = screen.getByTestId('session-message-input');
 
-  expect(screen.getByTestId('session-composer-blur')).toBeTruthy();
-  expect(StyleSheet.flatten(screen.getByTestId('session-composer').props.style).backgroundColor).toBe('transparent');
-  expect(screen.queryByTestId('session-composer-tint')).toBeNull();
+  expect(screen.queryByTestId('session-composer-blur')).toBeNull();
+  expect(StyleSheet.flatten(screen.getByTestId('session-composer').props.style).backgroundColor).toBe(mobileLightColors.surface);
   expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false);
   const permissionButton = screen.getByRole('button', { name: 'Permission mode: Ask for approval' });
   within(permissionButton).getByText('Ask for approval');
@@ -1914,7 +1998,7 @@ test('floating composer follows the keyboard without creating an opaque layout s
   expect(sessionKeyboardAvoidingBehavior('android')).toBeUndefined();
   expect(actionsStyle.position).toBe('absolute');
   expect(detailContentStyle.paddingBottom).toBe(122);
-  expect(workspaceStyle.backgroundColor).toBe('#ffffff');
+  expect(workspaceStyle.backgroundColor).toBe('#f8f8fa');
   expect(workspaceBackgroundStyle.backgroundColor).toBe(workspaceStyle.backgroundColor);
   await screen.unmount();
 });

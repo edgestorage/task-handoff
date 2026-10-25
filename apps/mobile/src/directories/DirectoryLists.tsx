@@ -32,7 +32,15 @@ export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfil
   }} /></View>;
 }
 
-export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void; onRefresh?: () => Promise<void> }) {
+type InstancesDirectoryProps = {
+  state: MobileDirectoryProfileState;
+  nodeId?: string;
+  onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void;
+  onRefresh?: () => Promise<void>;
+  selectedInstanceId?: string;
+};
+
+export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedInstanceId }: InstancesDirectoryProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
@@ -70,7 +78,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state
       </ScrollView>
     </View>
     <DirectoryListContent emptyIcon="layers-outline" state={state} data={instances} keyOf={(instance) => instance.id} onRefresh={pullToRefresh.onRefresh} refreshing={pullToRefresh.refreshing} render={(instance) => (
-      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
+      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{!nodeId ? `${nodeLabel(state, instance.nodeId, t)} · ` : ''}{runtimeSummary(instance)}</Text>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt, t) : t('directories.heartbeatMissing')}</Text>
       {aiSessionSummary(instance.aiSessions, t) ? <Text style={[styles.meta, { color: colors.textMuted }]}>AI · {aiSessionSummary(instance.aiSessions, t)}</Text> : null}
@@ -168,9 +176,12 @@ function filterValueLabel(value: string, t: Translate) {
   return value;
 }
 
-function DirectoryCard({ title, subtitle, children, icon, onPress }: React.PropsWithChildren<{ title: string; subtitle: string; icon: 'node' | 'instance'; onPress(): void }>) {
+function DirectoryCard({ title, subtitle, children, icon, onPress, selected = false }: React.PropsWithChildren<{ title: string; subtitle: string; icon: 'node' | 'instance'; onPress(): void; selected?: boolean }>) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.card, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.cardPressed]}>
+  return <Pressable accessibilityLabel={title} accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={({ pressed }) => [styles.card, {
+    backgroundColor: selected ? colors.workbenchSelectionBackground : colors.surface,
+    borderColor: selected ? colors.workbenchSelectionBorder : colors.workbenchCardBorder,
+  }, pressed && styles.cardPressed]}>
     <View style={styles.cardHeader}>
       <View style={[styles.cardIcon, { backgroundColor: colors.surfaceMuted }]}>
         <Icon color={colors.textMuted} name={icon === 'node' ? 'server-outline' : 'layers-outline'} size={20} />
@@ -192,7 +203,7 @@ const styles = StyleSheet.create({
   filterBar: { flexGrow: 0 }, filterBarContent: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingBottom: 4, paddingHorizontal: 16, paddingTop: 12 },
   filterPill: { alignItems: 'center', borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 6, maxWidth: 260, minHeight: 38, paddingHorizontal: 11 },
   filterPillLabel: { fontSize: 12, fontWeight: '700' }, filterPillValue: { flexShrink: 1, fontSize: 14, fontWeight: '600' }, pressed: { opacity: 0.72 },
-  card: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, gap: 10, padding: 14 }, cardPressed: { opacity: 0.72 },
+  card: { borderRadius: 16, borderWidth: 1, gap: 10, padding: 14 }, cardPressed: { opacity: 0.72 },
   cardHeader: { alignItems: 'center', flexDirection: 'row', gap: 11 }, cardIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 }, cardHeading: { flex: 1, gap: 2 }, cardBody: { gap: 6, paddingLeft: 49 }, cardTitle: { color: '#0f172a', fontSize: 16, fontWeight: '700' },
   subtitle: { color: '#334155', fontSize: 13, textTransform: 'capitalize' }, meta: { color: '#64748b', fontSize: 12 }, warning: { color: '#92400e', fontSize: 12 }, error: { color: '#b91c1c', fontSize: 12 },
   nodeSummary: { alignItems: 'baseline', flexDirection: 'row', gap: 5 }, nodeCount: { fontSize: 14, fontWeight: '700' }, summaryDivider: { marginHorizontal: 3 },
