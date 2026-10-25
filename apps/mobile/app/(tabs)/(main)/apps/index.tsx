@@ -121,7 +121,7 @@ function SectionTabs({ section, onChange }: { section: 'apps' | 'browser'; onCha
     return () => animation.stop();
   }, [offset, optionWidth, section]);
   return <View style={styles.tabsHeader}>
-    <View accessibilityRole="tablist" onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)} style={[styles.tabs, { backgroundColor: colors.surfaceMuted }]}>
+    <View accessibilityRole="tablist" onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)} style={[styles.tabs, { backgroundColor: colors.workbenchSelectionBackground }]}>
       {optionWidth > 0 ? <Animated.View pointerEvents="none" style={[styles.tabSelection, { backgroundColor: colors.surface, transform: [{ translateX: offset }], width: optionWidth }]} /> : null}
       {([['apps', t('nav.appSessions')], ['browser', t('browser.webSessions')]] as const).map(([value, label]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: section === value }} key={value} onPress={() => onChange(value)} style={styles.tab}>
         <Text style={[styles.tabLabel, { color: section === value ? colors.text : colors.textMuted }]}>{label}</Text>
