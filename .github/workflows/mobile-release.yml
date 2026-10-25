@@ -220,11 +220,13 @@ jobs:
         shell: bash
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --latest=false
             gh release upload "$RELEASE_TAG" "$ARTIFACT" --clobber
           else
             gh release create "$RELEASE_TAG" "$ARTIFACT" \
               --verify-tag \
               --generate-notes \
+              --latest=false \
               --title "TaskHandoff Mobile $VERSION"
           fi
 
