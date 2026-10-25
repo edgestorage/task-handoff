@@ -1,9 +1,9 @@
 export const OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION = "2026-08-10";
 export const CONTROL_PLANE_BINDING_PROTOCOL_VERSION = "2026-08-10";
-export const CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION = "2026-10-18";
-export const OUTBOUND_CONNECTION_PROTOCOL_VERSION = "2026-08-10";
-export const RELAY_FRAMING_PROTOCOL_VERSION = "2026-08-10";
-export const RELAY_SESSION_PROTOCOL_VERSION = "2026-10-20";
+export const CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION = "2026-10-25";
+export const OUTBOUND_CONNECTION_PROTOCOL_VERSION = "2026-10-25";
+export const RELAY_FRAMING_PROTOCOL_VERSION = "2026-10-25";
+export const RELAY_SESSION_PROTOCOL_VERSION = "2026-10-25";
 
 // Relay allocation leases are the one contractual value that spans both services:
 // the Coordinator stamps it onto every attach capability, and the Relay refuses an

@@ -21,6 +21,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const sharedAccess = props.profile.access.kind === 'cloud-relay' && props.profile.access.resourceAccess?.kind === 'shared' ? props.profile.access.resourceAccess : undefined;
+  const sharedRoleKey = sharedAccess ? controlPlaneRoleMessageKey(sharedAccess.role) : undefined;
 
   return (
     <Screen>
@@ -36,7 +37,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
           <DetailRow label={t('controlPlane.fingerprint')} value={props.profile.identity.publicKeyFingerprint} />
           {sharedAccess ? <>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
-            <DetailRow label={t('controlPlane.cloudAccess')} value={t('cloudControlPlanes.sharedRole', { role: t(sharedAccess.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer') })} />
+            <DetailRow label={t('controlPlane.cloudAccess')} value={t('cloudControlPlanes.sharedRole', { role: sharedRoleKey ? t(sharedRoleKey) : sharedAccess.role })} />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <DetailRow label={t('controlPlane.shareExpiry')} value={new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(sharedAccess.expiresAt))} />
           </> : null}

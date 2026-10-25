@@ -1,5 +1,6 @@
 import type { EventEnvelope } from "@task-handoff/protocol/events";
-import type { ControlPlaneAction, ControlPlaneResource } from "../auth/authorization.ts";
+import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
+import type { ControlPlaneAction, ControlPlaneCloudAccountActor, ControlPlaneResource } from "../auth/authorization.ts";
 
 const ROUTES_WITHOUT_RBAC = new Set([
   "/api/auth/session",
@@ -7,6 +8,7 @@ const ROUTES_WITHOUT_RBAC = new Set([
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/mobile/login",
+  "/api/auth/step-up",
   "/api/control-plane/identity",
   "/api/health",
   "/api/events",
@@ -30,36 +32,60 @@ export function cloudRelayRouteReachable(method: string, url: string) {
   return CLOUD_RELAY_ROUTES_WITHOUT_RBAC.has(url.split("?")[0] || "/");
 }
 
-/**
- * Shared cloud actors keep the existing account-level resource scope but never
- * inherit local administration. These prefixes cover routes that would
- * otherwise look like an ordinary directory read to the generic route mapper.
- */
-/**
- * Shared actors may follow ordinary resource events, but system/admin events
- * would expose management activity that their HTTP routes cannot reach.
- */
-export function sharedCloudEventAllowed(event: Pick<EventEnvelope, "type" | "topic">) {
-  const type = String(event.type);
-  if (/^(operation-approval|control-plane-proxy|user|role|identity-provider|settings|secret|chat|chat-bridge|git-credential|node-join)\./.test(type)) return false;
-  if (/^node\.(pairing-invite|remote-connect|control-plane-pairing|control-plane-connection)\./.test(type)) return false;
-  return event.topic !== "system" || /^(attachment|repository|market|story|agent)\./.test(type);
+/** Binding, credential and Cloud-sharing lifecycle stays with the owner identity. */
+export function cloudOwnerOnlyRoute(url: string) {
+  const path = url.split("?")[0] || "/";
+  return path === "/api/cloud-account"
+    || path.startsWith("/api/cloud-account/")
+    || path === "/api/cloud-connectivity"
+    || path.startsWith("/api/cloud-connectivity/");
 }
 
-export function sharedCloudRouteAllowed(url: string) {
-  const path = url.split("?")[0] || "/";
-  if (path.startsWith("/api/cloud-account") || path.startsWith("/api/cloud-connectivity")) return false;
-  if (path.startsWith("/api/users") || path.startsWith("/api/roles") || path === "/api/permissions") return false;
-  if (path.startsWith("/api/identity-providers") || path.startsWith("/api/external-identity-approvals")) return false;
-  if (path.startsWith("/api/git-credentials") || path.includes("/git-credential-assignments")) return false;
-  if (path.startsWith("/api/chat/")) return false;
-  if (path.startsWith("/api/chat-gateway/bridges") || path === "/api/chat-gateway/status" || path === "/api/chat-gateway/poll-ai-sessions") return false;
-  if (path.startsWith("/api/control-plane-proxy") || path.startsWith("/api/node-proxy")) return false;
-  if (path.startsWith("/api/operation-approvals") || path.startsWith("/api/pending-routes")) return false;
-  if (path.startsWith("/api/control-plane/settings") || path.startsWith("/api/control-plane/diagnostic-logs") || path.startsWith("/api/control-plane/relay-trace") || path.startsWith("/api/control-plane/node-relay-trace") || path === "/api/control-plane/status") return false;
-  if (path.startsWith("/api/node-join/")) return false;
-  if (/^\/api\/nodes\/[^/]+\/(cloud-relay-binding|control-plane-connections|control-plane-pairings|pairing\/invites|settings\/|updates\/)/.test(path)) return false;
-  return true;
+const EVENT_PERMISSION_PREFIXES: ReadonlyArray<readonly [string, ControlPlanePermissionId]> = [
+  ["ai-session", "ai-sessions:read"],
+  ["ai.session", "ai-sessions:read"],
+  ["app-session", "app-sessions:read"],
+  ["instance", "instances:read"],
+  ["node", "nodes:read"],
+  ["project", "projects:read"],
+  ["runtime", "runtimes:read"],
+  ["environment-template", "templates:read"],
+  ["model", "models:read"],
+  ["image", "images:read"],
+  ["trigger", "triggers:read"],
+  ["repository", "repositories:read"],
+  ["attachment", "attachments:read"],
+  ["market", "public-directory:read"],
+  ["story", "public-directory:read"],
+  ["document", "public-directory:read"],
+  ["agent", "ai-sessions:read"],
+  ["git.", "instances:read"],
+];
+
+/** Events are a read surface. Unknown families fail closed instead of inheriting a broad allow. */
+export function cloudEventPermission(event: Pick<EventEnvelope, "type">): ControlPlanePermissionId | undefined {
+  const type = String(event.type);
+  return EVENT_PERMISSION_PREFIXES.find(([prefix]) => type.startsWith(prefix))?.[1];
+}
+
+export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds">, event: Pick<EventEnvelope, "type" | "topic">) {
+  const permission = cloudEventPermission(event);
+  return Boolean(permission && actor.permissionIds.includes(permission));
+}
+
+export async function resolveCloudAccessActor(
+  users: { roleAuthorization(roleId: string): Promise<{ roleIds: string[]; permissionIds: ControlPlanePermissionId[]; authorizationRevision: number }> },
+  actor: ControlPlaneCloudAccountActor,
+): Promise<ControlPlaneCloudAccountActor> {
+  const authorization = await users.roleAuthorization(actor.accessRoleId);
+  return {
+    ...actor,
+    roleIds: authorization.roleIds,
+    permissionIds: authorization.permissionIds,
+    nodeScope: actor.nodeScope?.kind === "all" ? actor.nodeScope : { kind: "all" },
+    instanceScope: actor.instanceScope ?? { kind: "inherit-node-scope" },
+    authorizationRevision: authorization.authorizationRevision,
+  };
 }
 
 export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
@@ -119,10 +145,10 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: "manage-node-auth", resource: { type: "node" } };
   }
   // AI session aggregates are read surfaces: the reconnect sync route posts its
-  // known checkpoints but only reads the directory, so it shares the list route's
-  // non-sensitive directory policy and filters by visible instances in the handler.
+  // known checkpoints but only reads session metadata. Both routes share the AI
+  // Session read permission and filter by visible instances in the handler.
   if (path === "/api/ai-sessions" || path === "/api/ai-sessions/sync") {
-    return { action: "read", resource: { type: "public-directory" } };
+    return { action: "read", resource: { type: "ai-session" } };
   }
   if (path.startsWith("/api/control-plane-proxy")) {
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
@@ -140,6 +166,10 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     if (path.includes("/ai-sessions")) {
       if (path.includes("/triggers")) return { action, resource: { type: "trigger-deployment" } };
       if (/\/messages\/[^/]+\/attachments\/[^/]+\/content$/.test(path)) return { action: "read-file-content", resource: { type: "attachment" } };
+      // Timeline sync uses POST so the client can send its known item revisions,
+      // but it only reads conversation history. Keep it behind the same AI
+      // Session read permission as the GET timeline routes.
+      if (method === "POST" && /\/timeline\/sync$/.test(path)) return { action: "read", resource: { type: "ai-session" } };
       if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };
       if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
       if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };

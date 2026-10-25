@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 import { RELAY_BODY_CHUNK_BYTES } from '@task-handoff/protocol/relay-body';
-import type { RelaySessionGrant } from '@task-handoff/cloud-contracts/mobile';
+import { OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_SESSION_PROTOCOL_VERSION, type RelaySessionGrant } from '@task-handoff/cloud-contracts/mobile';
 import { RelayControlPlaneTransport, type EncryptedRelayChannel } from '../src/control-plane/relay-transport';
 import type { RelayProofKeyProvider } from '../src/control-plane/relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from '../src/control-plane/relay-session-store';
@@ -56,10 +56,11 @@ function selection(overrides: Record<string, unknown> = {}) {
 }
 
 function grantFor(candidate: (typeof candidates)[number], generation = 1, overrides: Partial<RelaySessionGrant> = {}): RelaySessionGrant {
-  const issuedAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const now = Date.now();
+  const issuedAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + 15 * 60_000).toISOString();
   return {
-    protocolVersion: '2026-10-20',
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
     audience: 'task-handoff:relay-session-grant',
     sessionId: 'session_a',
     grantId: `grant_${generation}`,
@@ -70,6 +71,9 @@ function grantFor(candidate: (typeof candidates)[number], generation = 1, overri
     relayRegion: candidate.relayRegion,
     relayUrl: candidate.relayUrl,
     accountId: 'account_a',
+    ownerAccountId: 'account_a',
+    accessMode: 'owner',
+    accessRoleId: 'role_admin',
     deviceSessionId: 'device_a',
     controlPlaneId: 'control_plane_a',
     bindingId: 'binding_a',
@@ -79,10 +83,13 @@ function grantFor(candidate: (typeof candidates)[number], generation = 1, overri
     controlPlaneProofPublicKey: 'p'.repeat(43),
     trafficClass: 'interactive',
     sessionTranscriptTicket: {
-      protocolVersion: '2026-10-20',
+      protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
       audience: 'task-handoff:relay-session-transcript',
       transcriptTicketId: 'rtt_ticket_a',
       accountId: 'account_a',
+      ownerAccountId: 'account_a',
+      accessMode: 'owner',
+      accessRoleId: 'role_admin',
       deviceSessionId: 'device_a',
       controlPlaneId: 'control_plane_a',
       bindingId: 'binding_a',
@@ -103,10 +110,13 @@ function grantFor(candidate: (typeof candidates)[number], generation = 1, overri
 function bootstrapResult(overrides: Record<string, unknown> = {}) {
   return {
     relayTicket: {
-      protocolVersion: '2026-08-10',
+      protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION,
       audience: 'official.control-plane-access',
       ticketId: 'ticket_a',
       accountId: 'account_a',
+      ownerAccountId: 'account_a',
+      accessMode: 'owner',
+      accessRoleId: 'role_admin',
       deviceSessionId: 'device_a',
       controlPlaneId: 'control_plane_a',
       bindingId: 'binding_a',
@@ -781,6 +791,28 @@ test('revalidate resumes the existing session rather than selecting another Rela
   await transport.revalidate();
   expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(1);
   expect(open.mock.calls.map(([input]: any[]) => input.mode)).toEqual(['attach', 'resume']);
+});
+
+test('revalidate does not report an intentional transport refresh as a network error', async () => {
+  const { transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const handlers = {
+    topics: ['ai.sessions'],
+    onOpen: jest.fn(),
+    onEvent: jest.fn(),
+    onError: jest.fn(),
+    onClose: jest.fn(),
+  };
+  const connection = transport.connectEvents(handlers);
+  await flushMicrotasks();
+
+  await transport.revalidate();
+  await flushMicrotasks();
+
+  expect(handlers.onOpen).toHaveBeenCalledTimes(1);
+  expect(handlers.onError).not.toHaveBeenCalled();
+  expect(handlers.onClose).not.toHaveBeenCalled();
+  connection.close();
 });
 
 test('a newer revalidate cancels a frozen resume and rejects its late channel', async () => {

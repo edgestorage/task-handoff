@@ -13,6 +13,10 @@ import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types
 import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
 import { Icon, type IconName } from '../components/Icon';
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from '../components/adaptive-layout';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
@@ -29,6 +33,7 @@ const storySections: StorySection[] = ['actions', 'documents', 'sessions', 'auto
 export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: string; nodeId?: string; onOpenSession(instanceId: string, sessionId: string): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const runtime = useMobileControlPlaneRuntime();
   const { actions: aiSessionActions, refresh: refreshAiSessions } = useActiveAiSessions();
   const { state: directory } = useActiveDirectories();
@@ -365,7 +370,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
         </Pressable>
       </MenuView>,
     }} />
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={[styles.content, { backgroundColor: colors.background }]} onScroll={updateActiveSection} ref={scrollRef} scrollEventThrottle={16} stickyHeaderIndices={[1]}>
+    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={adaptiveContentContainerStyle([styles.content, { backgroundColor: colors.background }], adaptive.contentInsets)} onScroll={updateActiveSection} ref={scrollRef} scrollEventThrottle={16} scrollIndicatorInsets={adaptive.scrollIndicatorInsets} stickyHeaderIndices={[1]} style={[{ backgroundColor: colors.background }]}>
     <View style={styles.header}><View style={styles.titleRow}><Text style={[styles.title, { color: colors.text }]}>{story.title}</Text><Pressable accessibilityLabel={t('stories.edit')} onPress={() => router.push({ pathname: `/stories/${story.id}/edit` as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}><Icon color={colors.primary} name="pencil" size={20} /></Pressable></View><Text style={[styles.meta, { color: colors.textMuted }]}>{nodeNames.get(story.ownerNodeId) || story.ownerNodeId} · {new Date(story.updatedAt).toLocaleString()}</Text>{story.description ? <Text style={[styles.description, { color: colors.textMuted }]}>{story.description}</Text> : null}<Pressable accessibilityRole="button" accessibilityLabel={t('sessions.new')} disabled={archived || !newSessionDefaults.instanceId} onPress={openNewSession} style={[styles.newSession, { backgroundColor: colors.primary, opacity: archived || !newSessionDefaults.instanceId ? 0.5 : 1 }]}><Icon color="#fff" name="add-circle-outline" size={18} /><Text style={styles.newSessionText}>{t('sessions.new')}</Text></Pressable></View>
     <View onLayout={(event) => { const layout = layoutFromEvent(event); if (layout) setSectionNavHeight(layout.height); }} style={[styles.sectionNav, { backgroundColor: colors.background, borderBottomColor: colors.border }]}><ScrollView contentContainerStyle={styles.sectionNavContent} horizontal showsHorizontalScrollIndicator={false}>{storySections.filter((section) => section !== 'decisions' || decisionSupported).map((section) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeSection === section }} key={section} onPress={() => scrollToSection(section)} style={({ pressed }) => [styles.sectionTab, activeSection === section && { borderBottomColor: colors.primary }, pressed && styles.pressed]}><Text style={[styles.sectionTabText, { color: activeSection === section ? colors.primary : colors.textMuted }]}>{t(`stories.${section}Tab` as Parameters<Translate>[0])}</Text></Pressable>)}</ScrollView></View>
     <Section onLayout={(event) => recordSectionOffset('actions', event)} title={t('stories.actions')}>{story.actions.length ? story.actions.map((action) => <View key={action.id} style={[styles.action, { backgroundColor: colors.surface, borderColor: colors.border }]}><Pressable accessibilityLabel={action.title} accessibilityRole="button" accessibilityState={{ busy: runningActionId === action.id, disabled: archived || Boolean(runningActionId) }} disabled={archived || Boolean(runningActionId)} onPress={() => confirmAction(action)} style={[styles.actionMain, archived && styles.disabled]}>{runningActionId === action.id ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="play" size={18} />}<Text style={[styles.itemTitle, { color: colors.text }]}>{action.title}</Text></Pressable><View style={[styles.countBadge, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.textMuted} name="time-outline" size={13} /><Text style={[styles.countText, { color: colors.textMuted }]}>{automationCount(action.id)}</Text></View></View>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noActions')}</Text>}</Section>

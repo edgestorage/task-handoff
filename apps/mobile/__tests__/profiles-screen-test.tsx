@@ -42,7 +42,7 @@ const direct = MobileDirectControlPlaneProfileSchema.parse({
 const relay = MobileCloudRelayControlPlaneProfileSchema.parse({
   ...profileBase,
   identity: { ...profileBase.identity, displayName: 'Alpha Relay' },
-  access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true }, resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 2, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' } },
+  access: { kind: 'cloud-relay', serviceOrigin: 'https://cloud.thandoff.com', bindingId: 'binding_a', bindingRevision: 1, accountSession: { id: 'device_a', secureCredentialKey: 'cloud.account.device_a' }, transport: { request: true, stream: true, webSocket: true }, resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 2, role: 'role_viewer', expiresAt: '2026-11-19T00:00:00.000Z' } },
 });
 
 const originalPlatform = Platform.OS;

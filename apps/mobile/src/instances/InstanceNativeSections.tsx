@@ -2,6 +2,10 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 
 import { Icon, type IconName } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from '../components/adaptive-layout';
 import { useI18n } from '../i18n';
 import type { InstanceHistoryProps, InstanceOverviewProps } from './instance-section-types';
 
@@ -44,6 +48,7 @@ export function InstanceOverview(props: InstanceOverviewProps) {
 export function InstanceHistory({ items, loading, onOpen, standalone = false }: InstanceHistoryProps) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const content = <View style={[styles.group, { backgroundColor: colors.surface }]}>
     {loading ? <View style={styles.loadingRow}><ActivityIndicator color={colors.primary} /><Text style={[styles.meta, { color: colors.textMuted }]}>{t('history.loading')}</Text></View> : null}
     {!loading && items.map((item, index) => <View key={item.id}>
@@ -56,7 +61,7 @@ export function InstanceHistory({ items, loading, onOpen, standalone = false }: 
     </View>)}
     {!loading && !items.length ? <View style={styles.emptyHistory}><Icon color={colors.textMuted} name="time-outline" size={25} /><Text style={[styles.meta, { color: colors.textMuted }]}>{t('instance.archivedEmpty')}</Text></View> : null}
   </View>;
-  return standalone ? <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.historyPage} style={[styles.historyScroll, { backgroundColor: colors.background }]}>{content}</ScrollView> : content;
+  return standalone ? <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={adaptiveContentContainerStyle(styles.historyPage, adaptive.contentInsets)} scrollIndicatorInsets={adaptive.scrollIndicatorInsets} style={[styles.historyScroll, { backgroundColor: colors.background }]}>{content}</ScrollView> : content;
 }
 
 function InfoRow({ label, monospace, name, tone = 'normal', value }: { label: string; monospace?: boolean; name: IconName; tone?: 'normal' | 'warning'; value: string }) {

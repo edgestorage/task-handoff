@@ -56,6 +56,10 @@ export function changeControlPlanePassword(input: { currentPassword: string; new
   return sharedControlPlaneClient.auth.changePassword(input);
 }
 
+export function stepUpControlPlaneAuthentication(password?: string) {
+  return sharedControlPlaneClient.auth.stepUp(password);
+}
+
 export function logoutControlPlane() {
   return sharedControlPlaneClient.auth.logout();
 }
@@ -196,7 +200,21 @@ export function updateControlPlaneSettings(input: Partial<ControlPlaneSettings>)
 }
 
 export function useCloudConnectivityQuery() {
-  return useQuery({ queryKey: controlPlaneQueryKeys.cloudConnectivity, queryFn: () => sharedControlPlaneClient.admin.cloudConnectivity(), retry: false });
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cloudConnectivity,
+    queryFn: () => sharedControlPlaneClient.admin.cloudConnectivity(),
+    retry: false,
+    refetchInterval: (query) => query.state.data?.status === "active" ? 10_000 : false,
+  });
+}
+
+export function useCloudAccessSettingsQuery(options: { enabled?: () => boolean } = {}) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cloudAccessSettings,
+    queryFn: () => sharedControlPlaneClient.admin.cloudAccessSettings(),
+    retry: false,
+    ...(options.enabled ? { enabled: options.enabled } : {}),
+  });
 }
 
 export function useCloudAccountQuery() {
@@ -232,6 +250,10 @@ export function updateCloudRemoteAccess(enabled: boolean) {
 
 export function updateCloudScopes(scopes: { deviceAccess: boolean; nodeRelay: boolean }) {
   return sharedControlPlaneClient.admin.setCloudScopes(scopes);
+}
+
+export function updateCloudAvailableRoles(input: { expectedSettingsRevision: number; availableRoleIds: string[] }) {
+  return sharedControlPlaneClient.admin.updateCloudAccessSettings(input);
 }
 
 export function useCloudAccountNodesQuery(options: { enabled?: () => boolean; refetchIntervalMs?: () => number | false } = {}) {

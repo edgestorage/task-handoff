@@ -189,6 +189,36 @@ test("archived role names can be reused and archived again", async () => {
   }
 });
 
+test("cloud role catalog redacts permissions and authorization fails closed for archived roles", async () => {
+  const fixture = serviceFixture();
+  try {
+    await fixture.service.bootstrapAdmin({ username: "admin", password: "password123" });
+    const custom = await fixture.service.createRole({ name: "Custom reader", permissionIds: ["instances:read", "ai-sessions:read"] });
+    const catalog = await fixture.service.roleCatalog();
+    assert.deepEqual(
+      catalog.find((role) => role.roleId === SYSTEM_ROLE_IDS.admin),
+      { roleId: SYSTEM_ROLE_IDS.admin, name: "Admin", system: true, status: "active" },
+    );
+    assert.deepEqual(
+      catalog.find((role) => role.roleId === custom.id),
+      { roleId: custom.id, name: "Custom reader", system: false, status: "active" },
+    );
+    assert.equal(catalog.some((role) => "permissionIds" in role), false);
+
+    const authorization = await fixture.service.roleAuthorization(custom.id);
+    assert.deepEqual(authorization.roleIds, [custom.id]);
+    assert.deepEqual(authorization.permissionIds, ["ai-sessions:read", "instances:read"]);
+    assert.equal(authorization.authorizationRevision, Math.max(1, Date.parse(custom.updatedAt)));
+
+    await fixture.service.archiveRole(custom.id);
+    assert.equal((await fixture.service.roleCatalog()).find((role) => role.roleId === custom.id)?.status, "archived");
+    await assert.rejects(() => fixture.service.roleAuthorization(custom.id), { code: "CONTROL_PLANE_ROLE_INACTIVE", statusCode: 403 });
+    await assert.rejects(() => fixture.service.roleAuthorization("role_missing"), { code: "CONTROL_PLANE_ROLE_INACTIVE", statusCode: 403 });
+  } finally {
+    await fixture.dispose();
+  }
+});
+
 test("recovery replaces one local identity and revokes its sessions", async () => {
   const fixture = serviceFixture();
   try {

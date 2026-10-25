@@ -12,6 +12,10 @@ import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-s
 import { EmptyState } from '../components/EmptyState';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { Icon } from '../components/Icon';
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from '../components/adaptive-layout';
 import { useMobileTheme } from '../components/theme';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
@@ -46,6 +50,7 @@ type StoryInboxProps = {
 export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession }: StoryInboxProps) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const runtime = useMobileControlPlaneRuntime();
   const { state: directory } = useActiveDirectories();
   const sessions = useActiveAiSessionsSnapshot();
@@ -200,7 +205,10 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const emptyUnavailable = sortedStories.length === 0 && visibleUnavailableNodeIds.length > 0;
   const emptyError = phase === 'error' || emptyUnavailable;
   return <><FlatList
-    contentContainerStyle={[styles.content, sortedStories.length === 0 && styles.emptyContent]}
+    contentContainerStyle={adaptiveContentContainerStyle(
+      [styles.content, sortedStories.length === 0 && styles.emptyContent],
+      adaptive.contentInsets,
+    )}
     contentInsetAdjustmentBehavior="automatic"
     data={sortedStories}
     keyExtractor={storyTreeKey}
@@ -214,6 +222,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       />}
     onRefresh={pullToRefresh.onRefresh}
     refreshing={pullToRefresh.refreshing}
+    scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
     scrollEnabled={!draggingStoryKey}
     style={[styles.screen, { backgroundColor: colors.background }]}
     testID="story-list"

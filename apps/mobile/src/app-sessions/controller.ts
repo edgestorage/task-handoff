@@ -11,6 +11,7 @@ import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
 import { MobileAppSessionStore } from './store';
 import { MobileReconnectBackoff } from '../platform/reconnect';
+import { connectionSyncPhase } from '../control-plane/sync-state';
 
 export class MobileAppSessionController {
   private connection?: MobileControlPlaneEventConnection;
@@ -37,11 +38,15 @@ export class MobileAppSessionController {
       this.store.replaceSnapshot(this.id, snapshot);
       this.reconnectBackoff.reset();
     } catch (cause) {
-      if (this.live(epoch)) this.store.setSyncState(this.id, {
-        phase: this.store.profile(this.id).snapshot ? 'stale' : 'error',
-        lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt,
-        error: cause instanceof Error ? cause.message : 'Could not load App Sessions.',
-      });
+      if (this.live(epoch)) {
+        const current = this.store.profile(this.id);
+        const phase = connectionSyncPhase(Boolean(current.snapshot), cause);
+        this.store.setSyncState(this.id, {
+          phase,
+          lastSyncedAt: current.sync.lastSyncedAt,
+          ...(phase === 'loading' ? {} : { error: cause instanceof Error ? cause.message : 'Could not load App Sessions.' }),
+        });
+      }
       if (!options.managed) this.scheduleReconnect(epoch);
       throw cause;
     }
@@ -52,11 +57,25 @@ export class MobileAppSessionController {
       onOpen() {},
       onEvent: (event) => { if (this.live(epoch)) this.applyEvent(event); },
       onError: (error) => {
-        if (this.live(epoch)) this.store.setSyncState(this.id, { phase: 'stale', lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt, error: error.message });
+        if (this.live(epoch)) {
+          const current = this.store.profile(this.id);
+          const phase = connectionSyncPhase(Boolean(current.snapshot), error);
+          this.store.setSyncState(this.id, {
+            phase,
+            lastSyncedAt: current.sync.lastSyncedAt,
+            ...(phase === 'loading' ? {} : { error: error.message }),
+          });
+        }
         this.scheduleReconnect(epoch);
       },
       onClose: () => {
-        if (this.live(epoch)) this.store.setSyncState(this.id, { phase: 'stale', lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt });
+        if (this.live(epoch)) {
+          const current = this.store.profile(this.id);
+          this.store.setSyncState(this.id, {
+            phase: connectionSyncPhase(Boolean(current.snapshot)),
+            lastSyncedAt: current.sync.lastSyncedAt,
+          });
+        }
         this.scheduleReconnect(epoch);
       },
     });
@@ -74,10 +93,11 @@ export class MobileAppSessionController {
   onConnectionError(error?: MobileControlPlaneTransportError) {
     if (!this.store.isGeneration(this.id, this.generation)) return;
     const current = this.store.profile(this.id);
+    const phase = connectionSyncPhase(Boolean(current.snapshot), error);
     this.store.setSyncState(this.id, {
-      phase: current.snapshot ? 'stale' : 'error',
+      phase,
       lastSyncedAt: current.sync.lastSyncedAt,
-      ...(error ? { error: error.message } : {}),
+      ...(phase === 'loading' || !error ? {} : { error: error.message }),
     });
   }
   async refresh() {
@@ -85,11 +105,15 @@ export class MobileAppSessionController {
     try {
       await this.refreshSnapshot(epoch);
     } catch (cause) {
-      if (this.live(epoch)) this.store.setSyncState(this.id, {
-        phase: this.store.profile(this.id).snapshot ? 'stale' : 'error',
-        lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt,
-        error: cause instanceof Error ? cause.message : 'Could not refresh App Sessions.',
-      });
+      if (this.live(epoch)) {
+        const current = this.store.profile(this.id);
+        const phase = connectionSyncPhase(Boolean(current.snapshot), cause);
+        this.store.setSyncState(this.id, {
+          phase,
+          lastSyncedAt: current.sync.lastSyncedAt,
+          ...(phase === 'loading' ? {} : { error: cause instanceof Error ? cause.message : 'Could not refresh App Sessions.' }),
+        });
+      }
       throw cause;
     }
   }

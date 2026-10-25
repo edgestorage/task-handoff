@@ -1,5 +1,5 @@
 import { Profiler, useEffect, useMemo, useState, useSyncExternalStore, type ProfilerOnRenderCallback } from 'react';
-import { ActivityIndicator, Alert, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import {
   aiSessionLastUserMessageAt,
@@ -11,15 +11,17 @@ import type { AiSessionScope, MobileAiSessionProfileState } from './store';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
+import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
+import { LoadingState } from '../components/LoadingState';
 import { SwipeActionList } from '../components/SwipeActionList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { markdownPlainText } from '../components/SafeMarkdown';
 import { sessionActivityText } from './SessionDetail';
 import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
-import { useI18n } from '../i18n';
+import { useI18n, type Translate } from '../i18n';
 import {
   aiSessionInboxRows,
   inboxCardContent,
@@ -33,6 +35,7 @@ import {
 import { getAiSessionInboxViewPreferences, subscribeAiSessionInboxViewPreferences } from './inbox-view-preferences';
 import { mobileAiSessionBusyKey, type MobileAiSessionActionCoordinator } from './actions';
 import { formatSessionUpdatedTime } from '../session-time';
+import type { MobileControlPlaneRuntimePhase } from '../control-plane/use-mobile-control-plane-runtime';
 
 export { inboxCardContent, inboxEntries, sessionScopeOptions } from './InboxModel';
 
@@ -47,6 +50,7 @@ export function AiSessionInbox({
   directory,
   initialScope,
   onRefresh,
+  connection,
 }: {
   actions?: MobileAiSessionActionCoordinator;
   state: MobileAiSessionProfileState;
@@ -54,9 +58,14 @@ export function AiSessionInbox({
   directory?: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
   initialScope?: AiSessionScope;
   onRefresh?: () => Promise<void>;
+  connection?: {
+    phase: MobileControlPlaneRuntimePhase;
+    relay?: boolean;
+  };
 }) {
   const { colors, dark } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const scope = initialScope ?? ALL_SCOPE;
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>('all');
   const [statusFilterTrackWidth, setStatusFilterTrackWidth] = useState(0);
@@ -102,15 +111,29 @@ export function AiSessionInbox({
     return () => animation.stop();
   }, [statusFilter, statusFilterOffset, statusFilterWidth]);
 
+  if (awaitingInitialSync) {
+    const loadingCopy = initialLoadingCopy(connection, t);
+    return (
+      <Profiler id="inbox" onRender={recordInboxRender}>
+        <LoadingState
+          accessibilityLabel={t('sessions.loadingAccessibility')}
+          description={loadingCopy.description}
+          style={[adaptive.contentStyle, { backgroundColor: colors.background }]}
+          testID="session-inbox-loading"
+          title={loadingCopy.title}
+        />
+      </Profiler>
+    );
+  }
+
   return (
     <Profiler id="inbox" onRender={recordInboxRender}>
       <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
-          contentContainerStyle={awaitingInitialSync ? styles.loadingContent : undefined}
           data={rows}
           itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : [styles.cardContainer, item.depth ? { marginLeft: 20 + item.depth * 14 } : null]}
           keyExtractor={(item) => item.type === 'group' ? item.key : `${item.instanceId}:${item.session.id}`}
-          ListHeaderComponent={awaitingInitialSync ? null : <View style={styles.header}>
+          ListHeaderComponent={<View style={styles.header}>
             <View
               accessibilityRole="tablist"
               onLayout={(event) => setStatusFilterTrackWidth(event.nativeEvent.layout.width)}
@@ -131,16 +154,14 @@ export function AiSessionInbox({
             </View>
             {statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
           </View>}
-          ListEmptyComponent={awaitingInitialSync
-            ? <View style={styles.loading}><ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} /></View>
-            : <EmptyState
-              icon={state.sync.phase === 'error'
-                ? 'alert-circle-outline'
-                : 'chatbubbles-outline'}
-              iconColor={state.sync.phase === 'error' ? colors.error : undefined}
-              message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
-              style={styles.empty}
-            />}
+          ListEmptyComponent={<EmptyState
+            icon={state.sync.phase === 'error'
+              ? 'alert-circle-outline'
+              : 'chatbubbles-outline'}
+            iconColor={state.sync.phase === 'error' ? colors.error : undefined}
+            message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
+            style={styles.empty}
+          />}
           onRefresh={pullToRefresh.onRefresh}
           refreshing={pullToRefresh.refreshing}
           swipeAction={(item) => {
@@ -240,6 +261,26 @@ function sessionMessageGroupKey(instanceId: string, sessionId: string) {
   return JSON.stringify([instanceId, sessionId]);
 }
 
+function initialLoadingCopy(
+  connection: { phase: MobileControlPlaneRuntimePhase; relay?: boolean } | undefined,
+  t: Translate,
+) {
+  if (connection?.phase === 'verifying') return connection.relay
+    ? { title: t('sessions.inbox.connectingRelay'), description: t('sessions.inbox.connectingDescription') }
+    : { title: t('sessions.inbox.connectingControlPlane'), description: t('sessions.inbox.connectingDescription') };
+  if (connection?.phase === 'reconnecting') return connection.relay
+    ? { title: t('sessions.inbox.reconnectingRelay'), description: t('sessions.inbox.reconnectingDescription') }
+    : { title: t('sessions.inbox.reconnectingControlPlane'), description: t('sessions.inbox.reconnectingDescription') };
+  if (!connection || connection.phase === 'idle') return {
+    title: t('sessions.inbox.preparing'),
+    description: t('sessions.inbox.preparingDescription'),
+  };
+  return {
+    title: t('sessions.inbox.syncing'),
+    description: t('sessions.inbox.syncingDescription'),
+  };
+}
+
 const recordInboxRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
   mobileMetrics.record('render.duration', { screen: 'inbox' }, actualDuration);
 };
@@ -248,8 +289,6 @@ const styles = StyleSheet.create({
   screen: { backgroundColor: '#f8fafc', flex: 1 },
   header: { alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingBottom: 12, paddingTop: 16 },
   notice: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#854d0e', fontSize: 13, lineHeight: 18, padding: 12, width: '100%' },
-  loading: { alignItems: 'center', flex: 1, justifyContent: 'center' },
-  loadingContent: { flexGrow: 1 },
   empty: { minHeight: 240 },
   statusFilters: { borderRadius: 999, flexDirection: 'row', padding: STATUS_FILTER_PADDING, position: 'relative', width: '100%' },
   statusFilterSelection: { borderRadius: 999, bottom: STATUS_FILTER_PADDING, left: STATUS_FILTER_PADDING, position: 'absolute', top: STATUS_FILTER_PADDING },

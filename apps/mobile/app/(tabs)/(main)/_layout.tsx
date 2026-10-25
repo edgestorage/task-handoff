@@ -1,8 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import { useEffect, useState } from 'react';
 import { Platform, View, type ColorValue } from 'react-native';
 
 import { useMobileTheme } from '../../../src/components/theme';
+import { useAdaptiveContentLayout } from '../../../src/components/adaptive-layout';
 import { MobileControlPlaneStatusBanner } from '../../../src/control-plane/MobileControlPlaneStatusBanner';
 import { useMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../src/i18n';
@@ -38,7 +40,24 @@ export default function PrimaryTabsLayout() {
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
   const android = Platform.OS === 'android';
-  const liquidGlassTabs = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
+  const { regular } = useAdaptiveContentLayout();
+  const iosMajorVersion = Platform.OS === 'ios' ? Number.parseInt(String(Platform.Version), 10) : 0;
+  const liquidGlassTabs = iosMajorVersion >= 26;
+  // UIKit does not rebuild the iPhone Duo side rail when native tabs cold-launch while unfolded.
+  // Toggle using the public tab-bar visibility prop until react-native-screens ships the frame fix.
+  // https://github.com/software-mansion/react-native-screens/issues/4989
+  const recoverDuoSideRail = Platform.OS === 'ios' && iosMajorVersion >= 27 && regular;
+  const [nativeTabsHidden, setNativeTabsHidden] = useState(false);
+  useEffect(() => {
+    if (!recoverDuoSideRail) return;
+    const hide = setTimeout(() => setNativeTabsHidden(true), 100);
+    const show = setTimeout(() => setNativeTabsHidden(false), 250);
+    return () => {
+      clearTimeout(hide);
+      clearTimeout(show);
+      setNativeTabsHidden(false);
+    };
+  }, [recoverDuoSideRail]);
   const nativeTabBlur = Platform.OS === 'ios' && !liquidGlassTabs
     ? dark ? 'systemUltraThinMaterialDark' as const : 'systemUltraThinMaterialLight' as const
     : undefined;
@@ -57,7 +76,8 @@ export default function PrimaryTabsLayout() {
         indicatorColor={android ? colors.primarySoft : undefined}
         labelStyle={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }}
         labelVisibilityMode={android ? 'labeled' : undefined}
-        minimizeBehavior={liquidGlassTabs ? 'onScrollDown' : undefined}
+        hidden={nativeTabsHidden}
+        minimizeBehavior={liquidGlassTabs ? regular ? 'never' : 'onScrollDown' : undefined}
         tintColor={colors.primary}
       >
         <NativeTabs.Trigger disableAutomaticContentInsets name="inbox">

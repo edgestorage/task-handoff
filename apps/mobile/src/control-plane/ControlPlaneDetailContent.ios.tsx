@@ -13,6 +13,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
   const { locale, t } = useI18n();
   const secondaryText = [font({ size: 13 }), foregroundStyle('secondary'), lineLimit(2), textSelection(true)];
   const sharedAccess = props.profile.access.kind === 'cloud-relay' && props.profile.access.resourceAccess?.kind === 'shared' ? props.profile.access.resourceAccess : undefined;
+  const sharedRoleKey = sharedAccess ? controlPlaneRoleMessageKey(sharedAccess.role) : undefined;
 
   return (
     <View style={{ flex: 1 }}>
@@ -31,7 +32,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
             <ValueRow label={t('controlPlane.id')} systemImage="number" value={props.profile.identity.controlPlaneId} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.fingerprint')} systemImage="checkmark.seal" value={props.profile.identity.publicKeyFingerprint} modifiers={secondaryText} />
             {sharedAccess ? <>
-              <ValueRow label={t('controlPlane.cloudAccess')} systemImage="person.2" value={t('cloudControlPlanes.sharedRole', { role: t(sharedAccess.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer') })} modifiers={secondaryText} />
+              <ValueRow label={t('controlPlane.cloudAccess')} systemImage="person.2" value={t('cloudControlPlanes.sharedRole', { role: sharedRoleKey ? t(sharedRoleKey) : sharedAccess.role })} modifiers={secondaryText} />
               <ValueRow label={t('controlPlane.shareExpiry')} systemImage="calendar" value={new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(sharedAccess.expiresAt))} modifiers={secondaryText} />
             </> : null}
             {props.currentAccess ? <>

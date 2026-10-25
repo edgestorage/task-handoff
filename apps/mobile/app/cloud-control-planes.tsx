@@ -6,6 +6,7 @@ import type { ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/m
 import { Screen } from '../src/components/Screen';
 import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
+import { controlPlaneRoleMessageKey } from '../src/control-plane/current-access';
 import { MobileCloudRelayControlPlaneProfileSchema } from '../src/control-plane/profile';
 import { mobileProfileStore, reconcileCloudControlPlaneProfiles, restoreActiveCloudAccountSession } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
@@ -115,7 +116,8 @@ function CloudControlPlanesContent() {
 
 function accessLabelFor(entry: ControlPlaneDirectoryEntry, t: ReturnType<typeof useI18n>['t']) {
   if (entry.access?.kind !== 'shared') return t('cloudControlPlanes.owner');
-  const role = t(entry.access.role === 'operator' ? 'controlPlane.roleOperator' : 'controlPlane.roleViewer');
+  const roleKey = controlPlaneRoleMessageKey(entry.access.role);
+  const role = roleKey ? t(roleKey) : entry.access.role;
   return t('cloudControlPlanes.sharedRole', { role });
 }
 

@@ -113,13 +113,13 @@ describe('MobileControlPlaneProfile', () => {
         bindingRevision: 2,
         accountSession: { id: 'account_session_01', secureCredentialKey: 'cloud.account.session.01' },
         transport: { request: true, stream: true, webSocket: true },
-        resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 3, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
+        resourceAccess: { kind: 'shared', shareId: 'shr_cp_01', revision: 3, role: 'role_viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
       },
     });
 
     expect(profile.access.kind).toBe('cloud-relay');
     expect(profile.access.accountSession.id).toBe('account_session_01');
-    expect(profile.access.resourceAccess).toMatchObject({ kind: 'shared', role: 'viewer', revision: 3 });
+    expect(profile.access.resourceAccess).toMatchObject({ kind: 'shared', role: 'role_viewer', revision: 3 });
     expect(() => MobileCloudRelayControlPlaneProfileSchema.parse({
       ...profile,
       access: { ...profile.access, nodeId: 'node_must_not_cross_boundary' },
@@ -198,7 +198,7 @@ describe('MobileControlPlaneProfile', () => {
         bindingRevision: 1,
         accountSession: { id: accountSessionId, secureCredentialKey: `cloud.account.${accountSessionId}` },
         transport: { request: true, stream: true, webSocket: true },
-        resourceAccess: { kind: 'shared', shareId: `shr_${controlPlaneId}`, revision: 1, role: 'viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
+        resourceAccess: { kind: 'shared', shareId: `shr_${controlPlaneId}`, revision: 1, role: 'role_viewer', expiresAt: '2026-11-19T00:00:00.000Z' },
       },
     });
     const direct = MobileDirectControlPlaneProfileSchema.parse(baseProfile);

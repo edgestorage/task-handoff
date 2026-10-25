@@ -127,7 +127,7 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     runtime.coordinator.stop();
   });
 
-  test('a superseded startup does not open its domains or event connection', async () => {
+  test('route domain registration during authentication joins the startup without restarting', async () => {
     const runtime = harness();
     const ai = domain('ai', ['ai.sessions'], true);
     const directories = domain('directories', ['instances', 'nodes']);
@@ -141,29 +141,33 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
 
     runtime.coordinator.register(directories);
     await flushCoordinator();
-    expect(runtime.coordinator.snapshot().phase).toBe('connected');
-    expect(ai.start).toHaveBeenCalledTimes(1);
-    expect(directories.start).toHaveBeenCalledTimes(1);
-    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('verifying');
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
+    expect(ai.start).not.toHaveBeenCalled();
+    expect(directories.start).not.toHaveBeenCalled();
+    expect(runtime.connectEvents).not.toHaveBeenCalled();
 
     releaseFirstSession?.({ authenticated: true });
     await flushCoordinator();
-    expect(runtime.authSession).toHaveBeenCalledTimes(2);
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
     expect(ai.start).toHaveBeenCalledTimes(1);
     expect(directories.start).toHaveBeenCalledTimes(1);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents.mock.calls[0][0].topics).toEqual(['ai.sessions', 'instances', 'nodes']);
     expect(runtime.coordinator.snapshot().phase).toBe('connected');
     runtime.coordinator.stop();
   });
 
-  test('aborts a superseded revalidation instead of waiting on its frozen attempt', async () => {
+  test('route registration during transport verification keeps the startup attempt alive', async () => {
     const runtime = harness();
     const ai = domain('ai', ['ai.sessions'], true);
     const directories = domain('directories', ['instances', 'nodes']);
     let firstSignal: AbortSignal | undefined;
+    let releaseRevalidation: (() => void) | undefined;
     runtime.revalidate.mockImplementationOnce((signal?: AbortSignal) => new Promise<void>((resolve) => {
       firstSignal = signal;
-      signal?.addEventListener('abort', () => resolve(), { once: true });
+      releaseRevalidation = resolve;
     }));
 
     runtime.coordinator.setEnvironment({ foreground: true, connected: true });
@@ -174,12 +178,47 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
 
     runtime.coordinator.register(directories);
     await flushCoordinator();
-    expect(firstSignal?.aborted).toBe(true);
-    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(firstSignal?.aborted).toBe(false);
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.authSession).not.toHaveBeenCalled();
+    expect(runtime.connectEvents).not.toHaveBeenCalled();
+
+    releaseRevalidation?.();
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
     expect(runtime.authSession).toHaveBeenCalledTimes(1);
     expect(ai.start).toHaveBeenCalledTimes(1);
     expect(directories.start).toHaveBeenCalledTimes(1);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents.mock.calls[0][0].topics).toEqual(['ai.sessions', 'instances', 'nodes']);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('route removal during startup drops the domain before events connect', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    const detail = domain('ai-session-detail', ['ai.sessions']);
+    let releaseSession: ((value: { authenticated: boolean }) => void) | undefined;
+    runtime.authSession.mockImplementationOnce(() => new Promise((resolve) => { releaseSession = resolve; }));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    const unregisterDetail = runtime.coordinator.register(detail);
+    await flushCoordinator();
+    unregisterDetail();
+    await flushCoordinator();
+
+    releaseSession?.({ authenticated: true });
+    await flushCoordinator();
+
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
+    expect(detail.stop).toHaveBeenCalledTimes(1);
+    expect(detail.start).not.toHaveBeenCalled();
+    expect(ai.start).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents.mock.calls[0][0].topics).toEqual(['ai.sessions']);
     expect(runtime.coordinator.snapshot().phase).toBe('connected');
     runtime.coordinator.stop();
   });

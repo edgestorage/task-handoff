@@ -105,6 +105,19 @@ export class ControlPlaneAuth {
     return this.sessions.changeLocalPassword(token, input);
   }
 
+  async stepUp(token: string | undefined, input: unknown) {
+    if (!this.enabled()) {
+      const authenticatedAt = now();
+      return { authenticatedAt, methods: ["local-trust"], expiresAt: new Date(Date.parse(authenticatedAt) + 5 * 60_000).toISOString() };
+    }
+    return this.sessions.stepUp(token, input);
+  }
+
+  async requireRecentAuthentication(token: string | undefined) {
+    if (!this.enabled()) return { authenticatedAt: now(), methods: ["local-trust"] };
+    return this.sessions.requireRecent(token);
+  }
+
   async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
     if (!this.enabled()) {
       // disabled 模式保持"匿名即已认证"的既有语义；但携带有效 CLI 会话时返回真实身份，

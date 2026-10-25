@@ -20,6 +20,7 @@ import { MobileControlPlaneTransportError } from '../control-plane/transport';
 import { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { MobileReconnectBackoff } from '../platform/reconnect';
+import { connectionSyncPhase } from '../control-plane/sync-state';
 
 export class MobileAiSessionController {
   private connection?: MobileControlPlaneEventConnection;
@@ -63,11 +64,15 @@ export class MobileAiSessionController {
       this.reconnectBackoff.reset();
       mobileMetrics.record('connection.result', { result: 'connected' });
     } catch (cause) {
-      if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.store.setSyncState(this.controlPlaneId, {
-        phase: this.store.profile(this.controlPlaneId).snapshot ? 'stale' : 'error',
-        lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
-        error: cause instanceof Error ? cause.message : 'Could not load AI Sessions.',
-      });
+      if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+        const current = this.store.profile(this.controlPlaneId);
+        const phase = connectionSyncPhase(Boolean(current.snapshot), cause);
+        this.store.setSyncState(this.controlPlaneId, {
+          phase,
+          lastSyncedAt: current.sync.lastSyncedAt,
+          ...(phase === 'loading' ? {} : { error: cause instanceof Error ? cause.message : 'Could not load AI Sessions.' }),
+        });
+      }
       mobileMetrics.record('connection.result', { result: 'failed' });
       if (!options.managed) this.scheduleReconnect(epoch);
       throw cause;
@@ -81,11 +86,15 @@ export class MobileAiSessionController {
         if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.applyEvent(event);
       },
       onError: (cause) => {
-        if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.store.setSyncState(this.controlPlaneId, {
-          phase: this.store.profile(this.controlPlaneId).snapshot ? 'stale' : 'error',
-          lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
-          error: cause.message,
-        });
+        if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+          const current = this.store.profile(this.controlPlaneId);
+          const phase = connectionSyncPhase(Boolean(current.snapshot), cause);
+          this.store.setSyncState(this.controlPlaneId, {
+            phase,
+            lastSyncedAt: current.sync.lastSyncedAt,
+            ...(phase === 'loading' ? {} : { error: cause.message }),
+          });
+        }
         this.scheduleReconnect(epoch);
       },
       onClose: () => {
@@ -120,10 +129,11 @@ export class MobileAiSessionController {
   onConnectionError(error?: MobileControlPlaneTransportError) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
     const current = this.store.profile(this.controlPlaneId);
+    const phase = connectionSyncPhase(Boolean(current.snapshot), error);
     this.store.setSyncState(this.controlPlaneId, {
-      phase: current.snapshot ? 'stale' : 'error',
+      phase,
       lastSyncedAt: current.sync.lastSyncedAt,
-      ...(error ? { error: error.message } : {}),
+      ...(phase === 'loading' || !error ? {} : { error: error.message }),
     });
   }
 
@@ -198,11 +208,15 @@ export class MobileAiSessionController {
     try {
       await this.refreshSnapshot(undefined, epoch);
     } catch (cause) {
-      if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.store.setSyncState(this.controlPlaneId, {
-        phase: this.store.profile(this.controlPlaneId).snapshot ? 'stale' : 'error',
-        lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
-        error: cause instanceof Error ? cause.message : 'Could not refresh AI Sessions.',
-      });
+      if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+        const current = this.store.profile(this.controlPlaneId);
+        const phase = connectionSyncPhase(Boolean(current.snapshot), cause);
+        this.store.setSyncState(this.controlPlaneId, {
+          phase,
+          lastSyncedAt: current.sync.lastSyncedAt,
+          ...(phase === 'loading' ? {} : { error: cause instanceof Error ? cause.message : 'Could not refresh AI Sessions.' }),
+        });
+      }
       throw cause;
     }
   }

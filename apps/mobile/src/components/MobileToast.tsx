@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useAdaptiveContentLayout } from './adaptive-layout';
 import { Icon } from './Icon';
 import { useMobileTheme } from './theme';
 
@@ -21,6 +22,7 @@ const DEFAULT_DURATION_MS = 4_500;
 export function MobileToastProvider({ children }: { children: ReactNode }) {
   const { colors } = useMobileTheme();
   const insets = useSafeAreaInsets();
+  const adaptive = useAdaptiveContentLayout();
   const sequence = useRef(0);
   const [progress] = useState(() => new Animated.Value(0));
   const [toast, setToast] = useState<MobileToastMessage>();
@@ -63,11 +65,14 @@ export function MobileToastProvider({ children }: { children: ReactNode }) {
           style={[
             styles.position,
             {
+              left: adaptive.contentInsets.left + 16,
               opacity: progress,
+              right: adaptive.contentInsets.right + 16,
               top: Math.max(insets.top, 8) + 8,
               transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }],
             },
           ]}
+          testID="mobile-toast-position"
         >
           <Pressable
             accessibilityLiveRegion="assertive"
@@ -94,7 +99,7 @@ export function useMobileToast() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  position: { alignItems: 'center', left: 16, position: 'absolute', right: 16, zIndex: 1000 },
+  position: { alignItems: 'center', position: 'absolute', zIndex: 1000 },
   toast: { alignItems: 'flex-start', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, elevation: 8, flexDirection: 'row', gap: 10, maxWidth: 520, paddingHorizontal: 14, paddingVertical: 12, shadowColor: '#000', shadowOffset: { height: 3, width: 0 }, shadowOpacity: 0.18, shadowRadius: 10, width: '100%' },
   copy: { flex: 1, gap: 2 },
   title: { fontSize: 14, fontWeight: '700', lineHeight: 19 },

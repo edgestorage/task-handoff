@@ -787,4 +787,41 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.session('cp-forbidden', 'instance-forbidden', 'session-forbidden')).toBeDefined();
     controller.stop();
   });
+
+  test('keeps a retryable initial load failure in loading instead of presenting an error', async () => {
+    jest.useFakeTimers();
+    try {
+      const store = new MobileAiSessionStore();
+      const failure = new MobileControlPlaneTransportError('RELAY_SOCKET_FAILED', '服务器发出错误的响应。', true);
+      const list = jest.fn().mockRejectedValue(failure);
+      const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list } } as unknown as ControlPlaneClient;
+      const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+      const controller = new MobileAiSessionController('cp-retryable', client, transport, store);
+
+      await expect(controller.start()).rejects.toBe(failure);
+
+      expect(store.profile('cp-retryable').sync).toEqual(expect.objectContaining({ phase: 'loading' }));
+      expect(store.profile('cp-retryable').sync.error).toBeUndefined();
+      controller.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('presents a non-retryable initial load failure as an error', async () => {
+    const store = new MobileAiSessionStore();
+    const failure = new MobileControlPlaneTransportError('DIRECT_SESSION_EXPIRED', 'The mobile Control Plane session expired.', false, 401);
+    const list = jest.fn().mockRejectedValue(failure);
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list } } as unknown as ControlPlaneClient;
+    const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+    const controller = new MobileAiSessionController('cp-terminal', client, transport, store);
+
+    await expect(controller.start()).rejects.toBe(failure);
+
+    expect(store.profile('cp-terminal').sync).toEqual(expect.objectContaining({
+      phase: 'error',
+      error: 'The mobile Control Plane session expired.',
+    }));
+    controller.stop();
+  });
 });

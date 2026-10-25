@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import type { AppSessionRecord } from '@task-handoff/protocol/app-sessions';
 
 import { useMobileTheme } from '../components/theme';
+import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { EmptyState } from '../components/EmptyState';
 import { SwipeActionList } from '../components/SwipeActionList';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
@@ -27,6 +28,7 @@ type Props = {
 export function AppSessionList({ state, directory, onCloseSession, onRefresh, scope, header }: Props) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const router = useRouter();
   const [closingKey, setClosingKey] = useState('');
   const pullToRefresh = usePullToRefresh(onRefresh);
@@ -52,7 +54,7 @@ export function AppSessionList({ state, directory, onCloseSession, onRefresh, sc
       },
     ]);
   };
-  if (state.sync.phase === 'loading' && !state.snapshot) return <ActivityIndicator style={styles.loading} />;
+  if (state.sync.phase === 'loading' && !state.snapshot) return <View style={[styles.loading, adaptive.contentStyle]}><ActivityIndicator /></View>;
   const statusMessage = state.sync.phase === 'offline' || state.sync.phase === 'stale'
     ? t('appSessions.cached')
     : state.sync.error;

@@ -85,6 +85,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private desiredSignature = '';
   private reconcileQueued = false;
   private pendingReconcileMode: 'domains' | 'environment' = 'environment';
+  private domainSyncPending = false;
   private mobileSessionRenewalSupported = true;
   private snapshotValue: RuntimeSnapshot = { phase: 'idle' };
 
@@ -104,6 +105,12 @@ export class MobileControlPlaneConnectionCoordinator {
 
   register(domain: MobileControlPlaneDomain) {
     this.domains.set(domain.key, domain);
+    diagnosticLog.info('runtime.domain.registered', {
+      domainKey: domain.key,
+      foreground: this.foreground,
+      connected: this.connected,
+      phase: this.snapshotValue.phase,
+    });
     this.queueReconcile('domains');
     return () => {
       if (this.domains.get(domain.key) !== domain) return;
@@ -137,6 +144,7 @@ export class MobileControlPlaneConnectionCoordinator {
 
   stop() {
     this.desiredSignature = '';
+    this.domainSyncPending = false;
     this.controlPlaneClosed = false;
     this.epoch += 1;
     this.clearTimers();
@@ -166,26 +174,51 @@ export class MobileControlPlaneConnectionCoordinator {
   }
 
   private reconcile(force = false, mode: 'domains' | 'environment' = 'environment') {
-    const desired = this.connected
-      ? [...this.domains.values()].filter((domain) => this.foreground || (this.carPlayConnected && domain.background))
-      : [];
+    const desired = this.desiredDomains();
     const signature = desired.map((domain) => domain.key).sort().join('\u0000');
     if (!force && signature === this.desiredSignature) return;
     this.desiredSignature = signature;
-    if (!force && mode === 'domains' && this.connected && this.connection && this.abortController && !this.abortController.signal.aborted) {
+    if (!force && mode === 'domains' && this.connected && this.abortController && !this.abortController.signal.aborted) {
       // Route-scoped domains come and go as the user navigates. They share the
       // already authenticated transport, so applying a delta must not replace a
       // healthy Relay channel or reset in-flight reads.
-      if (this.snapshotValue.phase === 'reconnecting') return;
       if (this.snapshotValue.phase === 'connected') {
         void this.applyDomainDelta(desired);
+        return;
+      }
+      // Startup already owns the one authentication and socket attempt. A route
+      // that appears while that attempt is verifying or loading joins the
+      // pending domain set instead of aborting reads that are already in flight.
+      if (this.snapshotValue.phase !== 'session-expired' && this.snapshotValue.phase !== 'offline') {
+        this.domainSyncPending = true;
         return;
       }
     }
     void this.restart(desired);
   }
 
+  private desiredDomains() {
+    return this.connected
+      ? [...this.domains.values()].filter((domain) => this.foreground || (this.carPlayConnected && domain.background))
+      : [];
+  }
+
+  private async startDomains(abortController: AbortController, started: Set<string>) {
+    const desired = this.desiredDomains();
+    const desiredKeys = new Set(desired.map((domain) => domain.key));
+    for (const domain of this.activeDomains) {
+      if (!desiredKeys.has(domain.key)) domain.stop();
+    }
+    this.activeDomains = desired;
+    this.domainSyncPending = false;
+    await Promise.all(desired.filter((domain) => !started.has(domain.key)).map(async (domain) => {
+      started.add(domain.key);
+      await domain.start(abortController.signal);
+    }));
+  }
+
   private async applyDomainDelta(desired: MobileControlPlaneDomain[]) {
+    this.domainSyncPending = false;
     const desiredKeys = new Set(desired.map((domain) => domain.key));
     const activeKeys = new Set(this.activeDomains.map((domain) => domain.key));
     for (const domain of this.activeDomains) {
@@ -220,6 +253,7 @@ export class MobileControlPlaneConnectionCoordinator {
     this.connection = undefined;
     for (const domain of this.activeDomains) domain.stop();
     this.activeDomains = desired;
+    this.domainSyncPending = false;
     if (!this.connected) {
       this.transport.suspend?.();
       for (const domain of this.domains.values()) domain.offline?.();
@@ -282,9 +316,20 @@ export class MobileControlPlaneConnectionCoordinator {
       this.publish({ phase: this.controlPlaneClosed
         ? 'control-plane-closed'
         : this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
-      await Promise.all(desired.map((domain) => domain.start(abortController.signal)));
+      const started = new Set<string>();
+      await this.startDomains(abortController, started);
       if (!this.live(epoch, abortController)) return;
-      const topics = [...new Set(desired.flatMap((domain) => [...domain.topics]))].sort();
+      if (this.domainSyncPending) {
+        await this.startDomains(abortController, started);
+        if (!this.live(epoch, abortController)) return;
+      }
+      if (!this.activeDomains.length) {
+        this.transport.suspend?.();
+        diagnosticLog.info('runtime.connect.skipped', { reason: 'no-domains', previousPhase: this.snapshotValue.phase });
+        this.publish({ phase: 'idle' });
+        return;
+      }
+      const topics = [...new Set(this.activeDomains.flatMap((domain) => [...domain.topics]))].sort();
       const aiSessionTransient = this.aggregateTransientDemand();
       this.connection = this.transport.connectEvents({
         topics,
@@ -293,6 +338,7 @@ export class MobileControlPlaneConnectionCoordinator {
           if (!this.live(epoch, abortController)) return;
           this.clearConnectTimer();
           this.controlPlaneClosed = false;
+          if (this.domainSyncPending) void this.applyDomainDelta(this.desiredDomains());
           diagnosticLog.info('runtime.connected', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
           this.publish({ phase: 'connected' });
           this.stableTimer = setTimeout(() => {
@@ -507,8 +553,17 @@ export function MobileControlPlaneRuntimeProvider({
     const applyEnvironment = () => coordinator?.setEnvironment({ foreground, connected, carPlayConnected });
     const activate = async () => {
       const currentActivation = ++activation;
+      diagnosticLog.info('runtime.activation.start', { activation: currentActivation });
       const profile = await dependencies.activeProfile();
       if (!live || currentActivation !== activation) return;
+      diagnosticLog.info('runtime.activation.profile', {
+        activation: currentActivation,
+        hasProfile: Boolean(profile),
+        accessKind: profile?.access.kind,
+        controlPlaneId: profile?.identity.controlPlaneId,
+        foreground,
+        connected,
+      });
       unsubscribeCoordinator?.();
       coordinator?.stop();
       coordinator = undefined;
@@ -527,7 +582,9 @@ export function MobileControlPlaneRuntimeProvider({
     const unsubscribeNetwork = dependencies.subscribeNetwork((network) => { connected = network.connected; applyEnvironment(); });
     const unsubscribeCarPlay = dependencies.subscribeCarPlay((value) => { carPlayConnected = value; applyEnvironment(); });
     void dependencies.carPlayConnected().then((value) => { if (live) { carPlayConnected = value; applyEnvironment(); } }).catch(() => undefined);
-    void activate();
+    void activate().catch((cause) => {
+      diagnosticLog.error('runtime.activation.failed', diagnosticErrorDetails(cause));
+    });
     return () => {
       live = false;
       activation += 1;

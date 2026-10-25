@@ -17,6 +17,7 @@ import type { ControlPlaneUserService } from "./user-service.ts";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const SESSION_RENEWAL_WINDOW_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_ACTIVITY_PRUNE_INTERVAL_MS = 1000 * 60 * 60;
+const STEP_UP_MAX_AGE_MS = 5 * 60_000;
 
 export type ControlPlaneSessionClientType = z.infer<typeof ControlPlaneSessionClientTypeSchema>;
 
@@ -100,6 +101,7 @@ export class ControlPlaneUserAuthentication {
   private readonly passwordUpdates = new Set<string>();
   private readonly limiter: LoginRateLimiter;
   private readonly sessionActivity = new Map<string, { expiresAt: string; lastSeenAt: string }>();
+  private readonly recentAuthentication = new Map<string, string>();
   private readonly users: ControlPlaneUserService;
   private nextSessionActivityPruneAt = 0;
 
@@ -175,6 +177,7 @@ export class ControlPlaneUserAuthentication {
     });
     const { record, identity, authorization } = created;
     this.trackSessionActivity(record, timestamp);
+    this.recentAuthentication.set(record.id, timestamp);
     return {
       sessionToken: `${record.id}.${secret}`,
       expiresAt: record.expiresAt,
@@ -215,10 +218,12 @@ export class ControlPlaneUserAuthentication {
     const timestamp = now();
     if (!session) {
       this.sessionActivity.delete(sessionId);
+      this.recentAuthentication.delete(sessionId);
       return undefined;
     }
     if (session.expiresAt <= timestamp) {
       this.sessionActivity.delete(sessionId);
+      this.recentAuthentication.delete(sessionId);
       return undefined;
     }
     if ((clientTypes && !clientTypes.includes(session.clientType)) || session.tokenHash !== sha256(secret)) return undefined;
@@ -228,11 +233,13 @@ export class ControlPlaneUserAuthentication {
     } catch {
       await this.users.store.sessions.delete(session.id);
       this.sessionActivity.delete(session.id);
+      this.recentAuthentication.delete(session.id);
       return undefined;
     }
     if (authorization.authorizationRevision !== session.authorizationRevision) {
       await this.users.store.sessions.delete(session.id);
       this.sessionActivity.delete(session.id);
+      this.recentAuthentication.delete(session.id);
       return undefined;
     }
     this.trackSessionActivity(session, timestamp);
@@ -242,6 +249,43 @@ export class ControlPlaneUserAuthentication {
       authorization: ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId: session.identityId }),
       requiresPasswordChange: (await this.users.store.identities.get(session.identityId))?.requiresPasswordChange === true,
     };
+  }
+
+  async stepUp(token: string | undefined, input: unknown) {
+    const parsed = z.object({ password: z.string().min(1).max(4096) }).strict().parse(input);
+    const current = await this.resolve(token, ["web"]);
+    if (!current) throw Object.assign(new Error("Sign in to continue."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+    const identity = await this.users.store.identities.get(current.session.identityId);
+    if (!identity) throw Object.assign(new Error("Sign in to continue."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+    // Step-up only has a local password factor. External identities must refresh
+    // their provider assertion by signing in again; accepting a password-less
+    // reauthentication call here would make the recent-auth boundary meaningless.
+    if (identity.kind !== "local-password") {
+      throw Object.assign(new Error("Sign in again with your identity provider to continue."), {
+        code: "STEP_UP_REAUTHENTICATION_REQUIRED",
+        statusCode: 403,
+      });
+    }
+    if (!(await verifyControlPlanePassword(parsed.password, identity.passwordHash || ""))) {
+      throw Object.assign(new Error("Sign in again with your password to continue."), { code: "STEP_UP_AUTHENTICATION_FAILED", statusCode: 401 });
+    }
+    const authenticatedAt = now();
+    this.recentAuthentication.set(current.session.id, authenticatedAt);
+    return {
+      authenticatedAt,
+      methods: ["password"],
+      expiresAt: new Date(Date.parse(authenticatedAt) + STEP_UP_MAX_AGE_MS).toISOString(),
+    };
+  }
+
+  async requireRecent(token: string | undefined, maxAgeMs = STEP_UP_MAX_AGE_MS) {
+    const current = await this.resolve(token, ["web"]);
+    if (!current) throw Object.assign(new Error("Sign in to continue."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+    const authenticatedAt = this.recentAuthentication.get(current.session.id) ?? current.session.createdAt;
+    if (Date.parse(authenticatedAt) + maxAgeMs <= Date.now()) {
+      throw Object.assign(new Error("Confirm your password to continue."), { code: "STEP_UP_REQUIRED", statusCode: 403 });
+    }
+    return { authenticatedAt };
   }
 
   async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
@@ -308,6 +352,7 @@ export class ControlPlaneUserAuthentication {
     const session = await this.users.store.sessions.get(sessionId);
     if (!session) {
       this.sessionActivity.delete(sessionId);
+      this.recentAuthentication.delete(sessionId);
       return false;
     }
     if (restrictToClientTypes && !restrictToClientTypes.includes(session.clientType)) return false;
@@ -315,7 +360,10 @@ export class ControlPlaneUserAuthentication {
       throw Object.assign(new Error("Session management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }
     const revoked = await this.users.store.sessions.delete(sessionId);
-    if (revoked) this.sessionActivity.delete(sessionId);
+    if (revoked) {
+      this.sessionActivity.delete(sessionId);
+      this.recentAuthentication.delete(sessionId);
+    }
     return revoked;
   }
 
@@ -324,6 +372,7 @@ export class ControlPlaneUserAuthentication {
     if (sessionId) {
       await this.users.store.sessions.delete(sessionId);
       this.sessionActivity.delete(sessionId);
+      this.recentAuthentication.delete(sessionId);
     }
     return { ok: true };
   }

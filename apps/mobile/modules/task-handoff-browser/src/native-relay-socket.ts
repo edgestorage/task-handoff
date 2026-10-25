@@ -24,7 +24,7 @@ type RelaySocketEventPayload = {
 };
 
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
-type SocketEventValue = { data?: unknown; message?: string; code?: number; reason?: string; wasClean?: boolean };
+type SocketEventValue = { data?: unknown; message?: string; domain?: string; code?: number; reason?: string; wasClean?: boolean };
 type SocketListener = (event: SocketEventValue) => void;
 
 const native = requireOptionalNativeModule<RelaySocketNativeModule>('TaskHandoffBrowser');
@@ -119,7 +119,11 @@ export class NativeRelaySocket {
     if (event.id !== this.id || this.readyState === 3) return;
     this.readyState = 3;
     void this.module.closeRelaySocket(this.id, 1011, 'relay-socket-error').catch(() => undefined);
-    this.dispatch('error', { message: event.message ?? 'Relay WebSocket failed.' });
+    this.dispatch('error', {
+      message: event.message ?? 'Relay WebSocket failed.',
+      ...(event.domain ? { domain: event.domain } : {}),
+      ...(typeof event.code === 'number' && Number.isFinite(event.code) ? { code: event.code } : {}),
+    });
     this.dispatch('close', { code: 1006, reason: event.message ?? '', wasClean: false });
     this.dispose();
   }

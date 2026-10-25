@@ -2,7 +2,15 @@ import * as Crypto from 'expo-crypto';
 import { deflateSync, inflateSync } from 'fflate';
 import nacl from 'tweetnacl';
 
-import { RELAY_FRAME_FLAG_DEFLATE, decodeRelayFrame, encodeRelayFrame } from '@task-handoff/cloud-contracts/mobile';
+import {
+  RELAY_FRAME_FLAG_DEFLATE,
+  RELAY_SESSION_PROTOCOL_VERSION,
+  decodeRelayFrame,
+  encodeRelayFrame,
+  type RelayRoleProof,
+  type RelaySessionGrant,
+  type RelaySessionTranscriptTicket,
+} from '@task-handoff/cloud-contracts/mobile';
 import { encodeRelayResponseFrame } from '@task-handoff/protocol/relay-body';
 import { createMobileRelayChannelFactory } from '../src/control-plane/relay-channel';
 import { diagnosticLog } from '../src/observability/diagnostic-logs';
@@ -19,7 +27,7 @@ jest.mock('expo-crypto', () => {
   };
 });
 
-type SocketListener = (event: { data?: unknown; code?: number; reason?: string }) => void;
+type SocketListener = (event: { data?: unknown; code?: number; reason?: string; message?: string; domain?: string }) => void;
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
 
 class FakeSocket {
@@ -35,17 +43,20 @@ class FakeSocket {
   open() { this.readyState = 1; this.emit('open', {}); }
   send(data: string | Uint8Array) { this.sent.push(data); }
   close(code?: number, reason?: string) { this.readyState = 3; this.closed = { code, reason }; this.emit('close', {}); }
-  emit(type: SocketEvent, event: { data?: unknown; code?: number; reason?: string; message?: string }) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event); }
+  emit(type: SocketEvent, event: { data?: unknown; code?: number; reason?: string; message?: string; domain?: string }) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event); }
 }
 
 const now = '2026-10-20T00:00:00.000Z';
 const expiresAt = '2026-10-20T00:15:00.000Z';
 const fingerprint = `sha256:${'a'.repeat(43)}`;
-const transcriptTicket = {
-  protocolVersion: '2026-10-20' as const,
+const transcriptTicket: RelaySessionTranscriptTicket = {
+  protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
   audience: 'task-handoff:relay-session-transcript' as const,
   transcriptTicketId: 'rtt_ticket_a',
   accountId: 'account_a',
+  ownerAccountId: 'account_a',
+  accessMode: 'owner' as const,
+  accessRoleId: 'role_admin',
   deviceSessionId: 'device_a',
   controlPlaneId: 'control_plane_a',
   bindingId: 'binding_a',
@@ -55,8 +66,8 @@ const transcriptTicket = {
   issuedAt: now,
   expiresAt,
 };
-const grant = {
-  protocolVersion: '2026-10-20' as const,
+const grant: RelaySessionGrant = {
+  protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
   audience: 'task-handoff:relay-session-grant' as const,
   sessionId: 'session_a',
   grantId: 'grant_a',
@@ -67,6 +78,9 @@ const grant = {
   relayRegion: 'eu-west',
   relayUrl: 'wss://eu.relay.thandoff.com/connect',
   accountId: 'account_a',
+  ownerAccountId: 'account_a',
+  accessMode: 'owner' as const,
+  accessRoleId: 'role_admin',
   deviceSessionId: 'device_a',
   controlPlaneId: 'control_plane_a',
   bindingId: 'binding_a',
@@ -82,8 +96,8 @@ const grant = {
   signature: 's'.repeat(86),
 };
 const clientAttach = { role: 'client' as const } as any;
-const proof = {
-  protocolVersion: '2026-10-20' as const,
+const proof: RelayRoleProof = {
+  protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
   role: 'client' as const,
   sessionId: 'session_a',
   grantId: 'grant_a',
@@ -124,7 +138,8 @@ async function acceptHandshake(input: { hello: any; identity: nacl.SignKeyPair; 
     audience: ticket.audience, ticketId: ticket.transcriptTicketId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, controlPlaneId: ticket.controlPlaneId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision, nonce: ticket.nonce, clientEphemeralPublicKey: input.hello.clientEphemeralPublicKey, serverEphemeralPublicKey,
     ...(ticket.accessMode === undefined ? {} : {
       ownerAccountId: ticket.ownerAccountId, accessMode: ticket.accessMode,
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision, shareRole: ticket.shareRole }),
+      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
+      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
     }),
   }))));
   const shared = nacl.scalarMult(serverKeys.secretKey, fromBase64Url(input.hello.clientEphemeralPublicKey));
@@ -285,10 +300,25 @@ describe('createMobileRelayChannelFactory', () => {
     const { channel, socket } = await connected();
     const closed: unknown[] = [];
     channel.subscribe(() => undefined, (error) => closed.push(error));
-    socket.emit('error', { message: 'WebSocket receive failed.' });
+    const logWarn = jest.spyOn(diagnosticLog, 'warn').mockImplementation(() => undefined);
+    try {
+      socket.emit('error', { message: 'WebSocket receive failed.', domain: 'NSURLErrorDomain', code: -1005 });
 
-    expect(closed).toEqual([expect.objectContaining({ code: 'RELAY_SOCKET_ERROR', retryable: true })]);
-    expect(socket.listenerCount('message')).toBe(0);
+      expect(closed).toEqual([expect.objectContaining({
+        code: 'RELAY_SOCKET_ERROR',
+        retryable: true,
+        socketDomain: 'NSURLErrorDomain',
+        socketCode: -1005,
+      })]);
+      expect(logWarn).toHaveBeenCalledWith('relay.channel.closed', expect.objectContaining({
+        errorCode: 'RELAY_SOCKET_ERROR',
+        socketDomain: 'NSURLErrorDomain',
+        socketCode: -1005,
+      }));
+      expect(socket.listenerCount('message')).toBe(0);
+    } finally {
+      logWarn.mockRestore();
+    }
   });
 
   test('renews on the same socket without advancing the encrypted frame sequence', async () => {
@@ -327,8 +357,8 @@ describe('createMobileRelayChannelFactory', () => {
   });
 
   test('binds shared-access identity fields into the end-to-end transcript', async () => {
-    const sharedTicket = { ...transcriptTicket, transcriptTicketId: 'rtt_shared', accountId: 'account_grantee', ownerAccountId: 'account_owner', accessMode: 'shared' as const, shareGrantId: 'share_a', shareRevision: 3, shareRole: 'viewer' as const };
-    const sharedGrant = { ...grant, accountId: 'account_grantee', sessionTranscriptTicket: sharedTicket, ownerAccountId: 'account_owner', accessMode: 'shared' as const, shareGrantId: 'share_a', shareRevision: 3, shareRole: 'viewer' as const };
+    const sharedTicket = { ...transcriptTicket, transcriptTicketId: 'rtt_shared', accountId: 'account_grantee', ownerAccountId: 'account_owner', accessMode: 'shared' as const, accessRoleId: 'role_viewer', shareGrantId: 'share_a', shareRevision: 3 };
+    const sharedGrant = { ...grant, accountId: 'account_grantee', sessionTranscriptTicket: sharedTicket, ownerAccountId: 'account_owner', accessMode: 'shared' as const, accessRoleId: 'role_viewer', shareGrantId: 'share_a', shareRevision: 3 };
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
@@ -342,6 +372,21 @@ describe('createMobileRelayChannelFactory', () => {
     const channel = await creating;
     expect(channel.leaseExpiresAt).toBe(attached.leaseExpiresAt);
     channel.close();
+  });
+
+  test('binds the Control Plane access role into the end-to-end transcript', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify(attached) });
+    await flush();
+    const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
+    const changedRoleTicket = { ...transcriptTicket, accessRoleId: 'role_viewer' };
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: changedRoleTicket })) });
+    await expect(creating).rejects.toMatchObject({ code: 'RELAY_E2E_IDENTITY_INVALID' });
   });
 
   test('rejects a mismatched session acknowledgement and closes the socket', async () => {

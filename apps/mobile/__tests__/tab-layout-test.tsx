@@ -25,7 +25,10 @@ jest.mock('expo-router/unstable-native-tabs', () => {
     },
   );
   const NativeTabs = Object.assign(
-    ({ children }: React.PropsWithChildren) => React.createElement(View, { testID: 'native-tabs' }, children),
+    ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => React.createElement(View, {
+      accessibilityLabel: JSON.stringify(props),
+      testID: 'native-tabs',
+    }, children),
     { Trigger },
   );
   return { NativeTabs };
@@ -48,6 +51,13 @@ describe('<PrimaryTabsLayout />', () => {
     expect(screen.getByText('App Sessions')).toBeTruthy();
     expect(screen.getByText('Instances')).toBeTruthy();
     expect(screen.getByTestId('primary-tabs-root')).toHaveStyle({ flex: 1 });
+  });
+
+  test('leaves native sidebar adaptation to the platform', async () => {
+    const screen = await render(<PrimaryTabsLayout />);
+    const nativeTabsProps = JSON.parse(screen.getByTestId('native-tabs').props.accessibilityLabel);
+
+    expect(nativeTabsProps).not.toHaveProperty('sidebarAdaptable');
   });
 
   test('keeps every native tab visible regardless of optional capabilities', async () => {

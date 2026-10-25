@@ -10,7 +10,10 @@ export type MobileNetworkState = {
 
 function normalizeNetworkState(state: Network.NetworkState): MobileNetworkState {
   return {
-    connected: state.isConnected === true && state.isInternetReachable !== false,
+    // Android can report a working network as PARTIAL_CONNECTIVITY when the
+    // system's reachability probe fails. The runtime still needs to attempt the
+    // connection in that case; transport failures own retry/backoff.
+    connected: state.isConnected === true,
     internetReachable: state.isInternetReachable ?? undefined,
     type: state.type ?? 'UNKNOWN',
   };

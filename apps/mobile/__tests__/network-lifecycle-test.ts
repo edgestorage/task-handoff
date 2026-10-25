@@ -45,3 +45,24 @@ test('rechecks the current network state when the app returns to the foreground'
   expect(removeLifecycle).toHaveBeenCalledTimes(1);
   expect(removeNetwork).toHaveBeenCalledTimes(1);
 });
+
+test('keeps a connected network usable when reachability is unknown or partial', async () => {
+  jest.mocked(subscribeToAppLifecycle).mockImplementation((listener) => {
+    listener('active');
+    return () => undefined;
+  });
+  jest.mocked(Network.addNetworkStateListener).mockReturnValue({ remove: () => undefined });
+  jest.mocked(Network.getNetworkStateAsync).mockResolvedValue({
+    isConnected: true,
+    isInternetReachable: false,
+    type: 'WIFI',
+  } as never);
+  const listener = jest.fn();
+
+  const unsubscribe = subscribeToNetworkState(listener);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(listener).toHaveBeenLastCalledWith({ connected: true, internetReachable: false, type: 'WIFI' });
+  unsubscribe();
+});

@@ -3,6 +3,7 @@ import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { acceptNodeRelayHandshake } from "../../shared/cloud-relay/node-relay-session.ts";
 import { trustedRelayUrl } from "./relay-connector.ts";
+import { observeRelaySocketErrors } from "./relay-socket.ts";
 
 const DEFAULT_ATTACH_TIMEOUT_MS = 15_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -55,6 +56,7 @@ export class CloudNodeRelayConnector {
     const event = input.allocation.event;
     const Socket = this.options.webSocket ?? WebSocket;
     const socket = new Socket(relayUrl.href, { followRedirects: false, handshakeTimeout: 10_000, perMessageDeflate: false });
+    observeRelaySocketErrors(socket);
     const attachTimeoutMs = positiveDuration(this.options.attachTimeoutMs, DEFAULT_ATTACH_TIMEOUT_MS);
     const handshakeTimeoutMs = positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_HANDSHAKE_TIMEOUT_MS);
     try {

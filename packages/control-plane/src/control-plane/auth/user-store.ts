@@ -30,9 +30,13 @@ export const SYSTEM_ROLE_IDS = {
   viewer: "role_viewer",
 } as const;
 
-const VIEWER_PERMISSIONS = CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read"));
-const OPERATOR_DENIED_PREFIXES = ["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"];
-const OPERATOR_PERMISSIONS = CONTROL_PLANE_PERMISSION_IDS.filter((id) => !OPERATOR_DENIED_PREFIXES.some((prefix) => id.startsWith(prefix)));
+export const SYSTEM_ROLE_PERMISSIONS = Object.freeze({
+  admin: Object.freeze([...CONTROL_PLANE_PERMISSION_IDS]),
+  operator: Object.freeze(CONTROL_PLANE_PERMISSION_IDS.filter((id) => ![
+    "users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:",
+  ].some((prefix) => id.startsWith(prefix)))),
+  viewer: Object.freeze(CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read"))),
+} satisfies Record<keyof typeof SYSTEM_ROLE_IDS, readonly ControlPlanePermissionId[]>);
 
 function systemRole(id: string, name: string, permissionIds: readonly ControlPlanePermissionId[]): RoleDefinitionRecord {
   const timestamp = now();
@@ -145,9 +149,9 @@ export class ControlPlaneUserStore {
 
   private async ensureSystemRoles(repository = this.repository()) {
     const definitions = [
-      systemRole(SYSTEM_ROLE_IDS.admin, "Admin", CONTROL_PLANE_PERMISSION_IDS),
-      systemRole(SYSTEM_ROLE_IDS.operator, "Operator", OPERATOR_PERMISSIONS),
-      systemRole(SYSTEM_ROLE_IDS.viewer, "Viewer", VIEWER_PERMISSIONS),
+      systemRole(SYSTEM_ROLE_IDS.admin, "Admin", SYSTEM_ROLE_PERMISSIONS.admin),
+      systemRole(SYSTEM_ROLE_IDS.operator, "Operator", SYSTEM_ROLE_PERMISSIONS.operator),
+      systemRole(SYSTEM_ROLE_IDS.viewer, "Viewer", SYSTEM_ROLE_PERMISSIONS.viewer),
     ];
     for (const definition of definitions) {
       const current = await repository.roles.get(definition.id);

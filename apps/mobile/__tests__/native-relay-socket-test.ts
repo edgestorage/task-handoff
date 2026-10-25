@@ -58,11 +58,16 @@ describe('native Relay WebSocket bridge', () => {
     const socket = new NativeRelaySocket('socket_1', mockNative as any);
     socket.attach();
     const events: string[] = [];
-    socket.addEventListener('error', (event) => events.push(`error:${event.message}`));
+    let failure: { message?: string; domain?: string; code?: number } | undefined;
+    socket.addEventListener('error', (event) => {
+      failure = event;
+      events.push(`error:${event.message}`);
+    });
     socket.addEventListener('close', (event) => events.push(`close:${event.code}`));
 
-    emit('onRelaySocketError', { id: 'socket_1', message: 'TLS failed' });
+    emit('onRelaySocketError', { id: 'socket_1', domain: 'NSURLErrorDomain', code: -1200, message: 'TLS failed' });
     expect(socket.readyState).toBe(3);
+    expect(failure).toEqual(expect.objectContaining({ message: 'TLS failed', domain: 'NSURLErrorDomain', code: -1200 }));
     expect(events).toEqual(['error:TLS failed', 'close:1006']);
     expect(mockNative.closeRelaySocket).toHaveBeenCalledWith('socket_1', 1011, 'relay-socket-error');
     expect(mockListeners.get('onRelaySocketError')?.size).toBe(0);

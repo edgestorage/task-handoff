@@ -1,16 +1,22 @@
 import type { PropsWithChildren } from 'react';
 import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from './adaptive-layout';
 import { useMobileTheme } from './theme';
 
 type ScreenProps = PropsWithChildren<{
   alwaysBounceVertical?: boolean;
   automaticallyAdjustKeyboardInsets?: boolean;
   contentContainerStyle?: StyleProp<ViewStyle>;
+  maxContentWidth?: number;
   testID?: string;
 }>;
 
-export function Screen({ alwaysBounceVertical, automaticallyAdjustKeyboardInsets = true, children, contentContainerStyle, testID }: ScreenProps) {
+export function Screen({ alwaysBounceVertical, automaticallyAdjustKeyboardInsets = true, children, contentContainerStyle, maxContentWidth, testID }: ScreenProps) {
   const { colors } = useMobileTheme();
+  const adaptive = useAdaptiveContentLayout(maxContentWidth);
 
   return (
     <View style={[styles.fill, { backgroundColor: colors.background }]}>
@@ -18,13 +24,15 @@ export function Screen({ alwaysBounceVertical, automaticallyAdjustKeyboardInsets
         alwaysBounceVertical={alwaysBounceVertical}
         automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets}
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[
+        contentContainerStyle={adaptiveContentContainerStyle([
           styles.content,
           { backgroundColor: colors.background },
           contentContainerStyle,
-        ]}
+        ], adaptive.contentInsets)}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
+        scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
+        style={styles.fill}
         testID={testID}
       >
         {children}

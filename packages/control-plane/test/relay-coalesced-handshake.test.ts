@@ -91,6 +91,9 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
     audience: RelaySessionAudience.Transcript,
     transcriptTicketId: "transcript_ticket_coalesced",
     accountId: "account_coalesced",
+    ownerAccountId: "account_coalesced",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
     deviceSessionId: "device_coalesced",
     controlPlaneId: "control_plane_coalesced",
     bindingId: "binding_coalesced",
@@ -112,6 +115,9 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
     relayRegion: "test",
     relayUrl: "ws://localhost:8080/connect",
     accountId: transcriptTicket.accountId,
+    ownerAccountId: transcriptTicket.ownerAccountId,
+    accessMode: transcriptTicket.accessMode,
+    accessRoleId: transcriptTicket.accessRoleId,
     deviceSessionId: transcriptTicket.deviceSessionId,
     controlPlaneId: transcriptTicket.controlPlaneId,
     bindingId: transcriptTicket.bindingId,
@@ -134,6 +140,7 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
     },
     bridge: { request: async () => ({ status: 200 }) } as any,
     webSocket: CoalescedSocket as any,
+    resolveAccessRole: async () => ({ roleIds: ["role_admin"], permissionIds: ["ai-sessions:read"], authorizationRevision: 1 }),
     handshakeTimeoutMs: 100,
   });
 

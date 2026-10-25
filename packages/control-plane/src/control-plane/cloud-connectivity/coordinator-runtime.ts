@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 import {
   CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION,
+  CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY,
   CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
+  ControlPlaneAccessSettingsViewSchema,
   OutboundConnectionRegistrationResponseSchema,
   RELAY_SESSION_RESUME_CAPABILITY,
   RESOURCE_SHARING_CAPABILITY_HEADER,
@@ -52,7 +54,7 @@ export class CloudCoordinatorConnector {
       publicKey: identity.publicKey, publicKeyFingerprint: identity.fingerprint,
       ...(input.bindingId ? { bindingId: input.bindingId, bindingRevision: input.bindingRevision } : {}),
       scopes: input.scopes,
-      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
+      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     const socketUrl = new URL("/api/v1/control-plane/connect", input.serviceOrigin);
@@ -97,6 +99,8 @@ export class CloudConnectivityBackgroundRuntime {
   private reconciling?: Promise<void>;
   private revoking?: Promise<void>;
   private rotatingCredentials?: Promise<void>;
+  private catalogPublishLoop?: Promise<void>;
+  private catalogPublishQueued = false;
   private nodeRelayRestore?: Promise<void>;
   private readonly nodeRelayClaimsInFlight = new Set<string>();
   private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -112,7 +116,8 @@ export class CloudConnectivityBackgroundRuntime {
     this.options = { ...options, fetch: options.fetch ?? globalThis.fetch };
     this.clock = options.clock ?? Date.now;
     this.relayTrace = options.relayTrace ?? new RelayTraceRecorder();
-    const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
+    const resolveAccessRole = options.resolveAccessRole ?? (async () => { throw runtimeError("CLOUD_ACCESS_ROLE_UNAVAILABLE"); });
+    const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, resolveAccessRole, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
     const verifyGrant = options.verifyRelaySessionGrant ?? ((grant) => verifyCoordinatorRelaySessionGrant(grant, options.state));
     const persistResume = Boolean(options.cloudRelaySessionsPath)
       && typeof (relayConnector as { resume?: unknown }).resume === "function";
@@ -120,7 +125,10 @@ export class CloudConnectivityBackgroundRuntime {
       this.control.disconnected();
       this.schedule();
       this.options.logger?.warn?.({ code: "CLOUD_CONTROL_CONNECTION_CLOSED", ...details }, "cloud_control_connection_closed");
-    }, onRegistered: (registration) => { options.state.setCloudControlPlaneId(registration.controlPlaneId); }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
+    }, onRegistered: (registration) => {
+      options.state.setCloudControlPlaneId(registration.controlPlaneId);
+      if (options.state.snapshot().status === "active") void this.publishAccessRoleCatalog();
+    }, onRequest: (operation, payload) => this.handleRequest(operation, payload) });
     this.dataConnections = new CloudRelayDataConnectionManager({
       verifyAllocation: options.verifyAllocation ?? ((allocation) => verifyCoordinatorRelayAllocation(allocation, options.state)),
       verifyGrant,
@@ -251,6 +259,57 @@ export class CloudConnectivityBackgroundRuntime {
     this.options.accountSession.beginRequest({ requestId: result.requestId, authorizationUrl: result.authorizationUrl, scope: result.scope, expiresAt: result.expiresAt });
     this.scheduleAccountPoll();
     return result;
+  }
+
+  /** Reuse the latest role snapshot revision; reconnects and retries never mint a revision. */
+  async publishAccessRoleCatalog() {
+    this.catalogPublishQueued = true;
+    if (!this.catalogPublishLoop) {
+      this.catalogPublishLoop = (async () => {
+        while (this.catalogPublishQueued) {
+          this.catalogPublishQueued = false;
+          await this.publishCatalogRevision();
+        }
+      })().finally(() => { this.catalogPublishLoop = undefined; });
+    }
+    return this.catalogPublishLoop;
+  }
+
+  async notifyAccessRoleCatalogChanged() {
+    this.options.state.markCatalogChanged();
+    await this.publishAccessRoleCatalog();
+  }
+
+  async accessRoleSettings() {
+    const bindingId = this.requireActiveBindingId();
+    const result = await this.request("get-control-plane-access-settings", { bindingId });
+    return ControlPlaneAccessSettingsViewSchema.parse(result);
+  }
+
+  async updateCloudAvailableRoles(input: { expectedSettingsRevision: number; availableRoleIds: string[] }) {
+    const bindingId = this.requireActiveBindingId();
+    const result = await this.request("update-control-plane-available-roles", { bindingId, ...input });
+    return ControlPlaneAccessSettingsViewSchema.parse(result);
+  }
+
+  private async publishCatalogRevision() {
+    const snapshot = this.options.state.snapshot();
+    if (snapshot.status !== "active" || !snapshot.bindingId || !this.options.roleCatalog) return;
+    const catalogRevision = this.options.state.catalogRevision();
+    try {
+      const roles = await this.options.roleCatalog();
+      await this.request("publish-access-role-catalog", { bindingId: snapshot.bindingId, catalogRevision, roles });
+      this.options.state.recordCatalogPublication({ revision: catalogRevision, publishedAt: new Date(this.clock()).toISOString() });
+    } catch (error) {
+      this.options.state.recordCatalogPublication({ revision: catalogRevision, errorCode: errorCode(error) ?? "ACCESS_ROLE_CATALOG_PUBLICATION_FAILED" });
+      this.options.logger?.warn?.({ code: "ACCESS_ROLE_CATALOG_PUBLICATION_FAILED", revision: catalogRevision, errorCode: errorCode(error) }, "access_role_catalog_publication_failed");
+    }
+  }
+
+  private requireActiveBindingId() {
+    const snapshot = this.options.state.snapshot();
+    if (snapshot.status !== "active" || !snapshot.bindingId) throw runtimeError("CLOUD_BINDING_UNAVAILABLE");
+    return snapshot.bindingId;
   }
 
   /** Sign-out clears the local account session; an existing relay binding is a separate concern. */
@@ -695,10 +754,35 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
       let message: any; try { message = JSON.parse(raw.toString()); } catch { return socket.close(1002, "invalid-json"); }
       if (message.type === "registered") { const registration = OutboundConnectionRegistrationResponseSchema.parse(message); options.onRegistered?.(registration); registered = true; clearRegistrationTimer(); heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000); heartbeat.unref(); return resolve(connection); }
       if (message.type === "event") return await options.onEvent(message.event);
-      if (message.type === "response") { const item = pending.get(message.requestId); if (!item) return; pending.delete(message.requestId); return message.error ? item.reject(Object.assign(new Error(message.error.message), { code: message.error.code })) : item.resolve(message.data); }
+      if (message.type === "response") {
+        const item = pending.get(message.requestId);
+        if (!item) return;
+        pending.delete(message.requestId);
+        return message.error
+          ? item.reject(Object.assign(new Error(message.error.message), {
+              code: message.error.code,
+              ...(typeof message.error.statusCode === "number" ? { statusCode: message.error.statusCode } : {}),
+              ...(typeof message.error.retryable === "boolean" ? { retryable: message.error.retryable } : {}),
+              ...(message.error.details && typeof message.error.details === "object" ? { details: message.error.details } : {}),
+            }))
+          : item.resolve(message.data);
+      }
       if (message.type === "request" && options.onRequest) {
         try { socket.send(JSON.stringify({ type: "response", requestId: message.requestId, data: await options.onRequest(message.operation, message.payload) })); }
-        catch (error) { socket.send(JSON.stringify({ type: "response", requestId: message.requestId, error: { code: (error as any)?.code ?? "REQUEST_FAILED", message: error instanceof Error ? error.message : String(error) } })); }
+        catch (error) {
+          const record = error !== null && typeof error === "object" ? error as Record<string, unknown> : {};
+          socket.send(JSON.stringify({
+            type: "response",
+            requestId: message.requestId,
+            error: {
+              code: typeof record.code === "string" ? record.code : "REQUEST_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+              ...(typeof record.statusCode === "number" ? { statusCode: record.statusCode } : {}),
+              retryable: record.retryable === true,
+              ...(record.details && typeof record.details === "object" ? { details: record.details } : {}),
+            },
+          }));
+        }
       }
     };
     socket.on("message", (raw) => {
@@ -727,6 +811,8 @@ type CloudRuntimeOptions = {
   identity: ControlPlaneIdentityService;
   logger?: CloudRuntimeLogger;
   relayBridge?: RelaySessionBridge;
+  resolveAccessRole?: (roleId: string) => Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>;
+  roleCatalog?: () => Promise<Array<{ roleId: string; name: string; description?: string; system: boolean; status: "active" | "archived" }>>;
   relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
   relayTrace?: RelayTraceRecorder;
   relayLinks?: RelayLinkProbeLoop;

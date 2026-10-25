@@ -2,9 +2,9 @@ import { useEffect, useReducer } from 'react';
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { File } from 'expo-file-system';
-import { Animated, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'react-native';
+import { Animated, Dimensions, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'react-native';
 import { BookOpen, Brain, CircleHelp, ClipboardCheck, CornerDownRight, Download, FilePenLine, FileSearch, ListTodo, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaInsetsContext, SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
 import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
@@ -37,6 +37,15 @@ const codexPermissionCapabilities = ControlPlaneInstanceDirectoryCapabilitiesSch
 const opencodePermissionCapabilities = ControlPlaneInstanceDirectoryCapabilitiesSchema.parse({
   aiSessionProviders: [{ agent: 'opencode', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }],
 });
+const initialWindowMetrics = Dimensions.get('window');
+const initialScreenMetrics = Dimensions.get('screen');
+
+function setViewportWidth(width: number) {
+  Dimensions.set({
+    screen: { ...initialScreenMetrics, width },
+    window: { ...initialWindowMetrics, width },
+  });
+}
 
 function actionClient(sendMessage: jest.Mock) {
   return {
@@ -1908,6 +1917,48 @@ test('floating composer follows the keyboard without creating an opaque layout s
   expect(workspaceStyle.backgroundColor).toBe('#ffffff');
   expect(workspaceBackgroundStyle.backgroundColor).toBe(workspaceStyle.backgroundColor);
   await screen.unmount();
+});
+
+test.each([
+  { indicator: undefined, left: 0, right: 84, width: 466 },
+  { indicator: { bottom: 0, left: 43.5, right: 43.5, top: 0 }, left: 43.5, right: 127.5, width: 951 },
+])('aligns SessionWorkspace overlays with the reading column at $width points', async ({ indicator, left, right, width }) => {
+  await act(async () => { setViewportWidth(width); });
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(
+    <SafeAreaInsetsContext.Provider value={{ bottom: 34, left: 0, right: 84, top: 47 }}>
+      <SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} />
+    </SafeAreaInsetsContext.Provider>,
+  );
+
+  try {
+    const contentViewportStyle = StyleSheet.flatten(screen.getByTestId('session-content').props.style);
+    const scrollViewportStyle = StyleSheet.flatten(screen.getByTestId('session-detail-scroll').props.style);
+    const scrollContentStyle = StyleSheet.flatten(screen.getByTestId('session-detail-scroll').props.contentContainerStyle);
+    expect(contentViewportStyle.marginLeft).toBeUndefined();
+    expect(contentViewportStyle.marginRight).toBeUndefined();
+    expect(scrollViewportStyle.marginLeft).toBeUndefined();
+    expect(scrollViewportStyle.marginRight).toBeUndefined();
+    expect(scrollContentStyle).toEqual(expect.objectContaining({
+      paddingLeft: left + 16,
+      paddingRight: right + 16,
+    }));
+    expect(screen.getByTestId('session-detail-scroll').props.scrollIndicatorInsets).toEqual(indicator);
+    for (const testID of [
+      'session-actions',
+      'session-composer-fade-backdrop',
+      'session-composer-backdrop',
+      'session-composer-bottom-backdrop',
+    ]) {
+      expect(StyleSheet.flatten(screen.getByTestId(testID).props.style)).toEqual(expect.objectContaining({ left, right }));
+    }
+  } finally {
+    await screen.unmount();
+    await act(async () => {
+      Dimensions.set({ screen: initialScreenMetrics, window: initialWindowMetrics });
+    });
+  }
 });
 
 test('composer backdrop fades from 16px above the input through the safe-area bottom', () => {

@@ -75,7 +75,8 @@ function transcriptHash(ticket: RelayTranscriptCredential, clientKey: string, se
     ...(ticket.accessMode === undefined ? {} : {
       ownerAccountId: ticket.ownerAccountId,
       accessMode: ticket.accessMode,
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision, shareRole: ticket.shareRole }),
+      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
+      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
     }),
   })).digest("base64url");
 }

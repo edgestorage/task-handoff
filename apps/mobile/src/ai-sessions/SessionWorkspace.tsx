@@ -17,6 +17,7 @@ import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimel
 import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
 import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableQueueEditRefs, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
+import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon, type IconName } from '../components/Icon';
 import { SessionComposer } from './SessionComposer';
 import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } from './composer-metrics';
@@ -94,6 +95,7 @@ export function SessionWorkspace({
   const composerBottomInset = Math.max(insets.bottom, 8);
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout(ADAPTIVE_READING_MAX_WIDTH);
   const toast = useMobileToast();
   const [draft, setDraft] = useState('');
   const latestDraft = useRef('');
@@ -440,7 +442,7 @@ export function SessionWorkspace({
     () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
     [decisionsSessionId, storyDecisionList],
   );
-  if (!session) return <SessionDetail messages={messages} recovering={syncPhase !== 'ready'} session={session} />;
+  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail messages={messages} recovering={syncPhase !== 'ready'} session={session} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
     controlPlaneId,
@@ -795,6 +797,9 @@ export function SessionWorkspace({
   });
   const composerFadeBottom = Animated.add(composerBackdropHeight, composerBottomInset);
   const bottomBackdrop = composerBottomBackdropGeometry(composerBottomInset);
+  const overlayInsetStyle = adaptive.contentInsets.left || adaptive.contentInsets.right
+    ? { left: adaptive.contentInsets.left, right: adaptive.contentInsets.right }
+    : undefined;
   return (
     <View style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace-background">
       <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace">
@@ -821,7 +826,7 @@ export function SessionWorkspace({
         />
       </View>
       <>
-        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, { bottom: composerFadeBottom, height: 16 }]} testID="session-composer-fade-backdrop">
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { bottom: composerFadeBottom, height: 16 }]} testID="session-composer-fade-backdrop">
           <Svg height="100%" width="100%">
             <Defs>
               <LinearGradient id="session-composer-gradient" x1="0" x2="0" y1="0" y2="100%">
@@ -832,8 +837,8 @@ export function SessionWorkspace({
             <Rect fill="url(#session-composer-gradient)" height="100%" width="100%" />
           </Svg>
         </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, { backgroundColor: colors.surface, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
-        <View pointerEvents="none" style={[styles.composerBackdrop, { bottom: 0, height: bottomBackdrop.height }]} testID="session-composer-bottom-backdrop">
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { backgroundColor: colors.surface, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
+        <View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { bottom: 0, height: bottomBackdrop.height }]} testID="session-composer-bottom-backdrop">
           <Svg height="100%" width="100%">
             <Defs>
               <LinearGradient id="session-composer-bottom-gradient" x1="0" x2="0" y1="0" y2="100%">
@@ -846,7 +851,7 @@ export function SessionWorkspace({
           </Svg>
         </View>
       </>
-      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: composerBottomInset }]} testID="session-actions">
+      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, overlayInsetStyle, { paddingBottom: composerBottomInset }]} testID="session-actions">
         {!authoritativeActionsEnabled && offlineNoticeVisible ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
             <Icon color={colors.noticeText} name="cloud-offline-outline" size={16} />

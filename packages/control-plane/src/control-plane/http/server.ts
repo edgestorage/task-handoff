@@ -12,7 +12,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
-import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
+import { RelayTtySnapshotEnvelopeSchema, UpdateControlPlaneAvailableRolesSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, GitProvisioningTerminalEventType, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import {
   ControlPlaneCliAuthorizationApprovalResponseSchema,
@@ -43,7 +43,7 @@ import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/le
 import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
 import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneActor } from "../auth/authorization.ts";
-import { cloudRelayRouteReachable, routeAuthorization, sharedCloudEventAllowed, sharedCloudRouteAllowed } from "./cloud-relay-authorization.ts";
+import { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, resolveCloudAccessActor, routeAuthorization } from "./cloud-relay-authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -423,7 +423,7 @@ function cliApprover(request: FastifyRequest) {
   return { userId: actor.userId, identityId: actor.identityId };
 }
 
-export { cloudRelayRouteReachable, routeAuthorization, sharedCloudEventAllowed, sharedCloudRouteAllowed } from "./cloud-relay-authorization.ts";
+export { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, resolveCloudAccessActor, routeAuthorization } from "./cloud-relay-authorization.ts";
 
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
@@ -526,11 +526,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
+      if (actor.type === "cloud-account") actor = await resolveCloudAccessActor(auth.users, actor);
       const authorization = routeAuthorization(method, requestPath);
       if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       }
-      if (actor.type === "cloud-account" && actor.accessMode === "shared" && !sharedCloudRouteAllowed(requestPath)) throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      if (actor.type === "cloud-account" && cloudOwnerOnlyRoute(requestPath) && actor.accessMode !== "owner") throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(actor, authorization.action, authorization.resource);
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
@@ -575,7 +576,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       // retains topic-derived legacy demand. Current mobile clients are precise.
       const stopEvents = events.on((event) => {
         if (!acceptsResourceMetricInstance(metricScope, event)) return;
-        if (actor.accessMode === "shared" && !sharedCloudEventAllowed(event)) return;
+        if (!cloudEventAllowed(actor, event)) return;
         if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
       });
       // Install delivery before publishing upstream demand so a synchronous
@@ -652,6 +653,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
     state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
+    resolveAccessRole: (roleId) => auth.users.roleAuthorization(roleId),
+    roleCatalog: () => auth.users.roleCatalog(),
     logger: { info: (data, message) => app.log.info(data, message), warn: (data, message) => app.log.warn(data, message) },
     fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir),
     cloudRelaySessionsPath: paths.cloudRelaySessionsPath, coordinatorOrigins: cloudServiceOrigins,
@@ -914,13 +917,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const securityUrl = matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url;
     const authBoundary = request.routeOptions.config.controlPlaneAuthBoundary;
     const internalActorToken = request.headers[CLOUD_INTERNAL_ACTOR_HEADER];
-    const cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;
+    let cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;
     if (cloudActor) {
       cloudRelayActors.delete(internalActorToken as string);
+      if (cloudActor.type === "cloud-account") cloudActor = await resolveCloudAccessActor(auth.users, cloudActor);
       setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
       if (!cloudRelayRouteReachable(request.method, securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
-      if (cloudActor.type === "cloud-account" && cloudActor.accessMode === "shared" && !sharedCloudRouteAllowed(securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      if (cloudActor.type === "cloud-account" && cloudOwnerOnlyRoute(securityUrl) && cloudActor.accessMode !== "owner") throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(cloudActor, authorization.action, authorization.resource);
       return;
     }
@@ -1008,13 +1012,40 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   const requireCloudConnectivityAdmin = async (request: FastifyRequest) => {
     if (!cloudConnectivityEnabled) throw Object.assign(new Error("Cloud connectivity is disabled by feature flag."), { code: "CLOUD_CONNECTIVITY_DISABLED", statusCode: 503 });
-    const actor = await actorForRequest(auth, requestSessionCredential(request)) || disabledAuthActor();
+    const actor = (controlPlaneRequestActor(request) ?? await actorForRequest(auth, requestSessionCredential(request))) || disabledAuthActor();
     assertCan(actor, "manage-settings", { type: "control-plane-settings" });
+    return actor;
+  };
+
+  // Availability is the local side of the split control model: the Cloud may
+  // choose an owner role from this set, but only a local Control Plane operator
+  // can make roles available. A cloud-account actor reaching this route through
+  // the relay must not be able to widen or narrow its own authority.
+  const requireLocalCloudAccessSettingsAdmin = async (request: FastifyRequest) => {
+    const actor = await requireCloudConnectivityAdmin(request);
+    if (actor.type !== "user" && actor.type !== "system") {
+      throw Object.assign(new Error("Cloud access role availability is managed from the local Control Plane."), {
+        code: "CLOUD_ACCESS_ROLES_LOCAL_ONLY",
+        statusCode: 403,
+      });
+    }
   };
 
   app.get("/api/cloud-connectivity", async (request) => {
     await requireCloudConnectivityAdmin(request);
     return { data: cloudConnectivity.snapshot() };
+  });
+
+  app.get("/api/cloud-connectivity/access-settings", async (request) => {
+    await requireLocalCloudAccessSettingsAdmin(request);
+    return { data: await cloudConnectivityRuntime.accessRoleSettings() };
+  });
+
+  app.patch("/api/cloud-connectivity/access-settings", async (request) => {
+    await requireLocalCloudAccessSettingsAdmin(request);
+    const input = UpdateControlPlaneAvailableRolesSchema.parse(request.body);
+    await auth.requireRecentAuthentication(requestSessionCredential(request).token);
+    return { data: await cloudConnectivityRuntime.updateCloudAvailableRoles(input) };
   });
 
   // Compatibility alias for Control Plane builds that still copy a one-time code by hand.
@@ -1347,6 +1378,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
     return { data: { user: result.user } };
   });
+  app.post("/api/auth/step-up", async (request) => {
+    const credential = requestSessionCredential(request, { bearerClientTypes: ["web"] });
+    return { data: await auth.stepUp(credential.token, request.body) };
+  });
   app.post("/api/auth/mobile/logout", async (request) => {
     const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["mobile"] });
     return { data: await auth.logoutSession(credential.token, credential.clientTypes) };
@@ -1462,7 +1497,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
   });
 
-  registerControlPlaneUserRoutes(app, auth, operationApprovals);
+  registerControlPlaneUserRoutes(app, auth, operationApprovals, { onRoleCatalogChanged: () => cloudConnectivityRuntime.notifyAccessRoleCatalogChanged() });
   registerControlPlaneGitCredentialRoutes(app, service, auth, operationApprovals);
 
   app.get("/api/control-plane/status", async () => ({
@@ -1552,7 +1587,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (!actor) return "system:unknown";
       if (actor.type === "user") return `user:${actor.userId}`;
       if (actor.type === "system") return `system:${actor.reason}`;
-      if (actor.type === "cloud-account") return `cloud-account:${actor.ownerAccountId ?? actor.accountId}:${actor.accountId}:${actor.shareGrantId ?? "owner"}:${actor.deviceSessionId}`;
+      if (actor.type === "cloud-account") return `cloud-account:${actor.ownerAccountId}:${actor.accountId}:${actor.shareGrantId ?? "owner"}:${actor.deviceSessionId}`;
       return `chat-bridge:${actor.bridgeId}`;
     },
   });

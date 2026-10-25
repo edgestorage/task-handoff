@@ -30,7 +30,7 @@ const CloudIdentitySchema = z.object({
 }).strict();
 
 const CloudConnectivitySchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   serviceOrigin: z.string(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
   // Two independent scopes: device access (account devices reach this Control
@@ -46,7 +46,35 @@ const CloudConnectivitySchema = z.object({
   cloudControlPlaneId: z.string().optional(),
   hasBackgroundCredential: z.boolean(),
   remoteResult: z.enum(["confirmed", "unknown"]).optional(),
+  catalogRevision: z.number().int().positive().optional(),
+  catalogPublication: z.object({
+    status: z.enum(["pending", "published", "failed"]),
+    revision: z.number().int().positive().optional(),
+    publishedAt: z.string().datetime().optional(),
+    errorCode: z.string().trim().min(1).max(120).optional(),
+  }).strict().optional(),
 }).strict();
+
+export const CloudAccessRoleSchema = z.object({
+  roleId: z.string().regex(/^role_[a-z0-9][a-z0-9_-]*$/).max(80),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(500).optional(),
+  system: z.boolean(),
+  status: z.enum(["active", "archived"]),
+}).strict();
+
+export const CloudAccessSettingsSchema = z.object({
+  bindingId: z.string(),
+  ownerRoleId: z.string().regex(/^role_[a-z0-9][a-z0-9_-]*$/).max(80),
+  availableRoleIds: z.array(z.string().regex(/^role_[a-z0-9][a-z0-9_-]*$/).max(80)).min(1).max(256),
+  settingsRevision: z.number().int().positive(),
+  updatedAt: z.string().datetime(),
+  catalogRevision: z.number().int().nonnegative(),
+  roles: z.array(CloudAccessRoleSchema).max(256),
+}).strict();
+
+export type CloudAccessSettings = z.infer<typeof CloudAccessSettingsSchema>;
+export type CloudAccessRole = z.infer<typeof CloudAccessRoleSchema>;
 
 /** Account node directory projection: only allowlisted identity fields, never endpoints or business data. */
 const CloudResourceAccessSchema = z.discriminatedUnion("kind", [
@@ -175,6 +203,12 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     },
     cloudConnectivity(signal?: AbortSignal) {
       return requestData("/api/cloud-connectivity", CloudConnectivitySchema, { signal });
+    },
+    cloudAccessSettings(signal?: AbortSignal) {
+      return requestData("/api/cloud-connectivity/access-settings", CloudAccessSettingsSchema, { signal });
+    },
+    updateCloudAccessSettings(input: { expectedSettingsRevision: number; availableRoleIds: string[] }) {
+      return requestData("/api/cloud-connectivity/access-settings", CloudAccessSettingsSchema, jsonRequest("PATCH", input));
     },
     createCloudChallenge() {
       return requestData("/api/cloud-connectivity/challenges", CloudBindingChallengeSchema, jsonRequest("POST", {}));

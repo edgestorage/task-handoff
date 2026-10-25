@@ -53,6 +53,28 @@ test("cloud identity is persisted separately from the local Control Plane identi
   assert.equal(restarted.cloudControlPlaneId(), "cp_cloud_a");
 });
 
+test("role catalog revision is monotonic, persisted, and keeps publication failures retryable", () => {
+  const { root, identity, service } = fixture();
+  assert.equal(service.catalogRevision(), 1);
+  assert.equal(service.catalogPublication(), undefined);
+
+  const first = service.markCatalogChanged();
+  assert.equal(first, 2);
+  assert.deepEqual(service.catalogPublication(), { status: "pending", revision: 2 });
+  service.recordCatalogPublication({ revision: first, errorCode: "CATALOG_UNAVAILABLE" });
+  assert.deepEqual(service.catalogPublication(), { status: "failed", revision: 2, errorCode: "CATALOG_UNAVAILABLE" });
+  assert.equal(service.catalogRevision(), 2);
+
+  service.recordCatalogPublication({ revision: first, publishedAt: "2026-08-10T00:00:01.000Z" });
+  assert.deepEqual(service.catalogPublication(), { status: "published", revision: 2, publishedAt: "2026-08-10T00:00:01.000Z" });
+  assert.equal(service.markCatalogChanged(), 3);
+
+  const restarted = new CloudConnectivityService({ statePath: path.join(root, "binding.json"), identity, serviceOrigin: "https://cloud.example.test" });
+  restarted.init();
+  assert.equal(restarted.catalogRevision(), 3);
+  assert.deepEqual(restarted.catalogPublication(), { status: "pending", revision: 3 });
+});
+
 test("binding challenge is target-bound, one-time, memory-only and restart-invalidated", () => {
   const { root, identity, service } = fixture();
   const issued = service.createChallenge();

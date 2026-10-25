@@ -13,9 +13,9 @@ import {
   RelayRateLimitSchema,
   RelayRevocationSchema,
   RelaySelectionSchema,
-  SharedAccessFieldsSchema,
+  ControlPlaneAccessFieldsSchema,
   TrafficClassSchema,
-  validateSharedAccessFields,
+  validateControlPlaneAccessFields,
 } from "./relay.ts";
 import {
   RELAY_SESSION_MAX_GRANT_TTL_MS,
@@ -70,8 +70,8 @@ export const RelaySessionTranscriptTicketSchema = z.strictObject({
   nonce: z.string().min(16).max(256),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
-  ...SharedAccessFieldsSchema.shape,
-}).superRefine((value, context) => validateSharedAccessFields(value, context, ["viewer", "operator"]));
+  ...ControlPlaneAccessFieldsSchema.shape,
+}).superRefine((value, context) => validateControlPlaneAccessFields(value, context));
 export type RelaySessionTranscriptTicket = z.infer<typeof RelaySessionTranscriptTicketSchema>;
 
 export const RelaySessionGrantPayloadSchema = z.strictObject({
@@ -100,9 +100,9 @@ export const RelaySessionGrantPayloadSchema = z.strictObject({
   revocationEpoch: z.number().int().nonnegative(),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
-  ...SharedAccessFieldsSchema.shape,
+  ...ControlPlaneAccessFieldsSchema.shape,
 }).superRefine((value, context) => {
-  validateSharedAccessFields(value, context, ["viewer", "operator"]);
+  validateControlPlaneAccessFields(value, context);
   const issuedAt = Date.parse(value.issuedAt);
   const expiresAt = Date.parse(value.expiresAt);
   if (expiresAt <= issuedAt) context.addIssue({ code: "custom", path: ["expiresAt"], message: "grant expiry must be after issuance" });
@@ -300,12 +300,12 @@ export function relaySessionCapabilitiesSatisfy(reported: readonly string[] | un
   return required.every((capability) => reported?.includes(capability) === true);
 }
 
-function accessTuple(value: { ownerAccountId?: string; accessMode?: "owner" | "shared"; shareGrantId?: string; shareRevision?: number; shareRole?: "viewer" | "operator" | "use" }): string {
+function accessTuple(value: { ownerAccountId?: string; accessMode?: "owner" | "shared"; shareGrantId?: string; shareRevision?: number; accessRoleId?: string }): string {
   return canonicalJson({
     ownerAccountId: value.ownerAccountId ?? null,
     accessMode: value.accessMode ?? null,
     shareGrantId: value.shareGrantId ?? null,
     shareRevision: value.shareRevision ?? null,
-    shareRole: value.shareRole ?? null,
+    accessRoleId: value.accessRoleId ?? null,
   });
 }

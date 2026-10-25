@@ -111,10 +111,10 @@ test("transport resolver selects the cloud-relay transport and fails closed with
 });
 
 test("relay channel sockets keep ws text frames text and binary frames binary", () => {
-  const sent: Array<{ channelId: string; data: string | Buffer; binary: boolean }> = [];
+  const sent: Array<{ streamId: number; data: string | Buffer; binary: boolean }> = [];
   const socket = new MultiplexedNodeRelaySocket({
-    sendData: (channelId: string, data: string | Buffer, binary: boolean) => sent.push({ channelId, data, binary }),
-  } as never, "stream_one");
+    sendData: (streamId: number, data: string | Buffer, binary: boolean) => sent.push({ streamId, data, binary }),
+  } as never, "stream_one", 1);
 
   socket.send(Buffer.from('{"frame":1}'), { binary: false });
   socket.send(Buffer.from([1, 2, 3]), { binary: true });
@@ -122,5 +122,5 @@ test("relay channel sockets keep ws text frames text and binary frames binary", 
   socket.send(Buffer.from([4, 5, 6]));
 
   assert.deepEqual(sent.map((entry) => entry.binary), [false, true, false, true]);
-  assert.deepEqual(sent.map((entry) => entry.channelId), ["stream_one", "stream_one", "stream_one", "stream_one"]);
+  assert.deepEqual(sent.map((entry) => entry.streamId), [1, 1, 1, 1]);
 });

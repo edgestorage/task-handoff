@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useI18n } from '../i18n';
+import { useAdaptiveContentLayout } from './adaptive-layout';
 import { useMobileTheme } from './theme';
 
 type SessionRenameModalProps = {
@@ -21,6 +22,7 @@ export function SessionRenameModal({ busy, error, initialTitle, onClose, onSubmi
 function SessionRenameModalContent({ busy, error, initialTitle, onClose, onSubmit }: Omit<SessionRenameModalProps, 'open'>) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const [draft, setDraft] = useState(initialTitle);
   const [validationError, setValidationError] = useState('');
 
@@ -42,30 +44,32 @@ function SessionRenameModalContent({ busy, error, initialTitle, onClose, onSubmi
   return <Modal animationType="fade" onRequestClose={() => !busy && onClose()} transparent visible>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
       <Pressable accessibilityLabel={t('common.cancel')} disabled={busy} onPress={onClose} style={styles.backdrop} />
-      <View accessibilityViewIsModal style={[styles.dialog, { backgroundColor: colors.surface }]}>
-        <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('sessions.rename')}</Text>
-        <TextInput
-          accessibilityLabel={t('sessions.renameLabel')}
-          autoFocus
-          editable={!busy}
-          maxLength={120}
-          onChangeText={(value) => { setDraft(value); setValidationError(''); }}
-          onSubmitEditing={submit}
-          placeholder={t('sessions.renamePlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          returnKeyType="done"
-          selectTextOnFocus
-          style={[styles.input, { borderColor: visibleError ? colors.error : colors.border, color: colors.text }]}
-          value={draft}
-        />
-        {visibleError ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{visibleError}</Text> : null}
-        <View style={styles.actions}>
-          <Pressable accessibilityRole="button" disabled={busy} onPress={onClose} style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
-            <Text style={[styles.actionText, { color: colors.textMuted }]}>{t('common.cancel')}</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" disabled={busy} onPress={submit} style={({ pressed }) => [styles.action, busy && styles.disabled, pressed && styles.pressed]}>
-            <Text style={[styles.actionText, { color: colors.primary }]}>{busy ? t('sessions.renaming') : t('common.save')}</Text>
-          </Pressable>
+      <View style={[styles.contentColumn, adaptive.contentStyle]} testID="session-rename-content-column">
+        <View accessibilityViewIsModal style={[styles.dialog, { backgroundColor: colors.surface }]}>
+          <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('sessions.rename')}</Text>
+          <TextInput
+            accessibilityLabel={t('sessions.renameLabel')}
+            autoFocus
+            editable={!busy}
+            maxLength={120}
+            onChangeText={(value) => { setDraft(value); setValidationError(''); }}
+            onSubmitEditing={submit}
+            placeholder={t('sessions.renamePlaceholder')}
+            placeholderTextColor={colors.textMuted}
+            returnKeyType="done"
+            selectTextOnFocus
+            style={[styles.input, { borderColor: visibleError ? colors.error : colors.border, color: colors.text }]}
+            value={draft}
+          />
+          {visibleError ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{visibleError}</Text> : null}
+          <View style={styles.actions}>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={onClose} style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
+              <Text style={[styles.actionText, { color: colors.textMuted }]}>{t('common.cancel')}</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={submit} style={({ pressed }) => [styles.action, busy && styles.disabled, pressed && styles.pressed]}>
+              <Text style={[styles.actionText, { color: colors.primary }]}>{busy ? t('sessions.renaming') : t('common.save')}</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -73,8 +77,9 @@ function SessionRenameModalContent({ busy, error, initialTitle, onClose, onSubmi
 }
 
 const styles = StyleSheet.create({
-  overlay: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
+  overlay: { flex: 1 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.35)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  contentColumn: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
   dialog: { borderRadius: 8, gap: 12, maxWidth: 420, padding: 18, width: '100%' },
   title: { fontSize: 18, fontWeight: '700', lineHeight: 24 },
   input: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, fontSize: 16, minHeight: 44, paddingHorizontal: 12, paddingVertical: 9 },

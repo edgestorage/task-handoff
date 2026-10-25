@@ -33,20 +33,32 @@ const snapshot = ControlPlaneAiSessionsSchema.parse({
 describe('<InboxRoute />', () => {
   test('shows loading instead of an authoritative empty state before the first snapshot arrives', async () => {
     const idle = await render(
-      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'idle' } }} />,
+      <AiSessionInbox
+        connection={{ phase: 'verifying', relay: true }}
+        state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'idle' } }}
+      />,
     );
 
     expect(idle.getByLabelText('Loading AI Sessions')).toBeTruthy();
-    expect(idle.getByTestId('swipe-action-list')).toBeTruthy();
+    expect(idle.getByTestId('session-inbox-loading').props.accessibilityState).toEqual({ busy: true });
+    expect(idle.getByText('Connecting to Cloud Relay')).toBeTruthy();
+    expect(idle.getByText('Establishing a secure connection before syncing AI Sessions')).toBeTruthy();
+    expect(idle.queryByTestId('swipe-action-list')).toBeNull();
     expect(idle.queryByText('No AI Sessions yet')).toBeNull();
     await idle.unmount();
 
     const loading = await render(
-      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'loading' } }} />,
+      <AiSessionInbox
+        connection={{ phase: 'connected', relay: false }}
+        state={{ controlPlaneId: 'cp-1', messages: {}, sync: { phase: 'loading' } }}
+      />,
     );
 
     expect(loading.getByLabelText('Loading AI Sessions')).toBeTruthy();
-    expect(loading.getByTestId('swipe-action-list')).toBeTruthy();
+    expect(loading.getByTestId('session-inbox-loading')).toBeTruthy();
+    expect(loading.getByText('Syncing AI Sessions')).toBeTruthy();
+    expect(loading.getByText('Fetching the latest AI Session snapshot')).toBeTruthy();
+    expect(loading.queryByTestId('swipe-action-list')).toBeNull();
     expect(loading.queryByText('No AI Sessions yet')).toBeNull();
     expect(inboxIsAwaitingInitialSync({ sync: { phase: 'idle' } })).toBe(true);
     expect(inboxIsAwaitingInitialSync({ sync: { phase: 'loading' } })).toBe(true);

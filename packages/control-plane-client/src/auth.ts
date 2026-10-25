@@ -38,6 +38,12 @@ export const ControlPlaneAuthSessionSchema = z.object({
   authorization: ControlPlaneCurrentAuthorizationSchema.optional(),
 }).strict();
 
+export const ControlPlaneStepUpResultSchema = z.object({
+  authenticatedAt: z.string().datetime(),
+  methods: z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+  expiresAt: z.string().datetime(),
+}).strict();
+
 export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (
     (await transport.request(path, DataSchema(schema), init)).data
@@ -70,6 +76,13 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
         "/api/auth/password",
         z.object({ user: ControlPlaneAuthenticatedUserSchema }).strict(),
         patch(input),
+      );
+    },
+    stepUp(password?: string) {
+      return requestData(
+        "/api/auth/step-up",
+        ControlPlaneStepUpResultSchema,
+        post(password === undefined ? {} : { password }),
       );
     },
     logout() {

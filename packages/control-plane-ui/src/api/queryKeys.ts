@@ -10,6 +10,7 @@ export const controlPlaneQueryKeys = {
   identityProviders: ["control-plane-identity-providers"] as const,
   externalIdentityApprovals: ["control-plane-external-identity-approvals"] as const,
   cloudConnectivity: ["cloud-connectivity"] as const,
+  cloudAccessSettings: ["cloud-access-settings"] as const,
   cloudAccount: ["cloud-account"] as const,
   cloudAccountNodes: ["cloud-account-nodes"] as const,
   cloudNodeRelay: ["cloud-node-relay"] as const,

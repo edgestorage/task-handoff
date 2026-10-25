@@ -158,7 +158,7 @@ export const diagnosticLog = {
 export function diagnosticErrorDetails(error: unknown): DiagnosticLogData {
   if (error === undefined || error === null) return {};
   if (error instanceof Error) {
-    const value = error as Error & { code?: unknown; status?: unknown; retryable?: unknown };
+    const value = error as Error & { code?: unknown; status?: unknown; retryable?: unknown; socketDomain?: unknown; socketCode?: unknown };
     return {
       errorName: value.name,
       errorMessage: value.message,
@@ -166,16 +166,18 @@ export function diagnosticErrorDetails(error: unknown): DiagnosticLogData {
       ...(typeof value.status === 'number' ? { status: value.status } : {}),
       ...(typeof value.retryable === 'boolean' ? { retryable: value.retryable } : {}),
       ...closeDetails(value),
+      ...nativeSocketDetails(value),
     };
   }
   if (typeof error === 'object') {
-    const value = error as { code?: unknown; status?: unknown; retryable?: unknown; message?: unknown; relayCloseCode?: unknown; relayCloseReason?: unknown };
+    const value = error as { code?: unknown; status?: unknown; retryable?: unknown; message?: unknown; relayCloseCode?: unknown; relayCloseReason?: unknown; socketDomain?: unknown; socketCode?: unknown };
     return {
       ...(typeof value.code === 'string' ? { errorCode: value.code } : {}),
       ...(typeof value.status === 'number' ? { status: value.status } : {}),
       ...(typeof value.retryable === 'boolean' ? { retryable: value.retryable } : {}),
       ...(typeof value.message === 'string' ? { errorMessage: value.message } : {}),
       ...closeDetails(value),
+      ...nativeSocketDetails(value),
     };
   }
   return { errorMessage: String(error) };
@@ -186,6 +188,14 @@ function closeDetails(source: object) {
   return {
     ...(typeof value.relayCloseCode === 'number' && Number.isFinite(value.relayCloseCode) ? { relayCloseCode: value.relayCloseCode } : {}),
     ...(typeof value.relayCloseReason === 'string' && value.relayCloseReason ? { relayCloseReason: value.relayCloseReason } : {}),
+  };
+}
+
+function nativeSocketDetails(source: object) {
+  const value = source as { socketDomain?: unknown; socketCode?: unknown };
+  return {
+    ...(typeof value.socketDomain === 'string' && value.socketDomain ? { socketDomain: value.socketDomain } : {}),
+    ...(typeof value.socketCode === 'number' && Number.isFinite(value.socketCode) ? { socketCode: value.socketCode } : {}),
   };
 }
 

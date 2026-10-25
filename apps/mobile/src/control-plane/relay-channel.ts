@@ -22,7 +22,7 @@ import { MobileControlPlaneTransportError } from './transport';
 import { createNativeRelaySocket, isNativeRelaySocketAvailable } from '../../modules/task-handoff-browser/src';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 
-type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string; message?: string };
+type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string; message?: string; domain?: string };
 type SocketListener = (event: SocketDefaultEvent) => void;
 type SocketEvent = 'open' | 'message' | 'error' | 'close';
 type SocketLike = { readyState: number; bufferedAmount?: number; binaryType?: string; addEventListener(type: SocketEvent, listener: SocketListener): void; removeEventListener?(type: SocketEvent, listener: SocketListener): void; send(data: string | Uint8Array): void; close(code?: number, reason?: string): void };
@@ -606,7 +606,7 @@ function closeLateSocket(socket: SocketLike) {
   try { socket.close(4400, 'handshake-timeout'); } catch { /* the socket may already be closed */ }
 }
 
-async function transcriptHash(ticket: { audience: string; transcriptTicketId?: string; ticketId?: string; accountId: string; deviceSessionId: string; controlPlaneId: string; bindingId: string; bindingRevision: number; nonce: string; accessMode?: string; ownerAccountId?: string; shareGrantId?: string; shareRevision?: number; shareRole?: string }, clientKey: string, serverKey: string) {
+async function transcriptHash(ticket: { audience: string; transcriptTicketId?: string; ticketId?: string; accountId: string; deviceSessionId: string; controlPlaneId: string; bindingId: string; bindingRevision: number; nonce: string; accessMode?: string; ownerAccountId?: string; accessRoleId?: string; shareGrantId?: string; shareRevision?: number }, clientKey: string, serverKey: string) {
   const canonical = canonicalJson({
     audience: ticket.audience,
     ticketId: ticket.transcriptTicketId ?? ticket.ticketId,
@@ -621,7 +621,8 @@ async function transcriptHash(ticket: { audience: string; transcriptTicketId?: s
     ...(ticket.accessMode === undefined ? {} : {
       ownerAccountId: ticket.ownerAccountId,
       accessMode: ticket.accessMode,
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision, shareRole: ticket.shareRole }),
+      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
+      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
     }),
   });
   return base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, new TextEncoder().encode(canonical))));
@@ -685,7 +686,10 @@ function socketError(event: SocketDefaultEvent, code = 'RELAY_SOCKET_FAILED') {
   const message = typeof event.message === 'string' && event.message
     ? event.message
     : detail ? `Cloud Relay socket failed (${detail}).` : 'Cloud Relay channel failed.';
-  return relayError(code, true, message, socketCloseDetails(event));
+  return relayError(code, true, message, {
+    ...(typeof event.domain === 'string' && event.domain ? { socketDomain: event.domain.slice(0, 240) } : {}),
+    ...(typeof event.code === 'number' && Number.isFinite(event.code) ? { socketCode: event.code } : {}),
+  });
 }
 
 function socketCloseDetails(event: SocketDefaultEvent) {
@@ -722,6 +726,6 @@ function isAttemptCancelled(error: unknown) {
   return (error as { code?: unknown } | null)?.code === 'RELAY_ATTEMPT_CANCELLED';
 }
 
-function relayError(code: string, retryable = false, message = 'Cloud Relay channel failed.', close?: { relayCloseCode?: number; relayCloseReason?: string }) {
-  return new MobileControlPlaneTransportError(code, message, retryable, undefined, close?.relayCloseCode, close?.relayCloseReason);
+function relayError(code: string, retryable = false, message = 'Cloud Relay channel failed.', details?: { relayCloseCode?: number; relayCloseReason?: string; socketDomain?: string; socketCode?: number }) {
+  return new MobileControlPlaneTransportError(code, message, retryable, undefined, details?.relayCloseCode, details?.relayCloseReason, details?.socketDomain, details?.socketCode);
 }

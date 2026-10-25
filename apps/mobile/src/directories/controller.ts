@@ -9,6 +9,7 @@ import { MobileDirectoryStore } from './store';
 import { MobileControlPlaneTransportError } from '../control-plane/transport';
 import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport } from '../control-plane/transport';
 import { MobileReconnectBackoff } from '../platform/reconnect';
+import { connectionSyncPhase } from '../control-plane/sync-state';
 
 const NodeConnectionObservationSchema = z.object({
   nodeId: z.string().trim().min(1).max(160),
@@ -91,9 +92,10 @@ export class MobileDirectoryController {
     } catch (cause) {
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
       const latest = this.store.profile(this.controlPlaneId);
+      const phase = connectionSyncPhase(Boolean(latest.nodes.length || latest.instances.length), cause);
       this.store.set(this.controlPlaneId, {
-        phase: latest.nodes.length || latest.instances.length ? 'stale' : 'error',
-        error: cause instanceof Error ? cause.message : 'Directory unavailable.',
+        phase,
+        error: phase === 'loading' ? undefined : cause instanceof Error ? cause.message : 'Directory unavailable.',
       });
       if (!options.managed && this.transport) this.scheduleReconnect(epoch);
       throw cause;
@@ -133,9 +135,10 @@ export class MobileDirectoryController {
     } catch (cause) {
       if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
         const current = this.store.profile(this.controlPlaneId);
+        const phase = connectionSyncPhase(Boolean(current.nodes.length || current.instances.length), cause);
         this.store.set(this.controlPlaneId, {
-          phase: current.nodes.length || current.instances.length ? 'stale' : 'error',
-          error: cause instanceof Error ? cause.message : 'Directory unavailable.',
+          phase,
+          error: phase === 'loading' ? undefined : cause instanceof Error ? cause.message : 'Directory unavailable.',
         });
       }
       throw cause;
@@ -157,9 +160,10 @@ export class MobileDirectoryController {
   onConnectionError(error?: MobileControlPlaneTransportError) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
     const current = this.store.profile(this.controlPlaneId);
+    const phase = connectionSyncPhase(Boolean(current.nodes.length || current.instances.length), error);
     this.store.set(this.controlPlaneId, {
-      phase: current.nodes.length || current.instances.length ? 'stale' : 'error',
-      ...(error ? { error: error.message } : {}),
+      phase,
+      ...(phase === 'loading' || !error ? { error: undefined } : { error: error.message }),
     });
   }
 
@@ -186,13 +190,14 @@ export class MobileDirectoryController {
       onError: (cause) => {
         if (epoch !== this.epoch) return;
         const current = this.store.profile(this.controlPlaneId);
-        this.store.set(this.controlPlaneId, { phase: current.nodes.length || current.instances.length ? 'stale' : 'error', error: cause.message });
+        const phase = connectionSyncPhase(Boolean(current.nodes.length || current.instances.length), cause);
+        this.store.set(this.controlPlaneId, { phase, error: phase === 'loading' ? undefined : cause.message });
         this.scheduleReconnect(epoch);
       },
       onClose: () => {
         if (epoch !== this.epoch) return;
         const current = this.store.profile(this.controlPlaneId);
-        this.store.set(this.controlPlaneId, { phase: current.nodes.length || current.instances.length ? 'stale' : 'error' });
+        this.store.set(this.controlPlaneId, { phase: connectionSyncPhase(Boolean(current.nodes.length || current.instances.length)), error: undefined });
         this.scheduleReconnect(epoch);
       },
     });

@@ -17,6 +17,7 @@ import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plan
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
 import { resolveModelSelection } from '../../../src/ai-sessions/model-selection';
 import { useMobileTheme } from '../../../src/components/theme';
+import { useAdaptiveContentLayout } from '../../../src/components/adaptive-layout';
 import { NativePrimaryButton } from '../../../src/ai-sessions/NativeSessionControls';
 import { ModelSettingsMenu } from '../../../src/ai-sessions/SessionComposerMenus';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
@@ -26,6 +27,7 @@ export default function HistoryDetailRoute() {
   const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const toast = useMobileToast();
   const directories = useActiveDirectories();
   const { instanceId, historyId } = useLocalSearchParams<{ instanceId: string; historyId: string }>();
@@ -110,7 +112,11 @@ export default function HistoryDetailRoute() {
   </Screen>
   {detail ? <View
     onLayout={(event) => setActionsHeight(event.nativeEvent.layout.height)}
-    style={[styles.actions, { bottom: actionsBottom }]}
+    style={[styles.actions, {
+      bottom: actionsBottom,
+      left: adaptive.contentInsets.left + 16,
+      right: adaptive.contentInsets.right + 16,
+    }]}
     testID="history-resume-actions"
   >
     {modelGroups.length || reasoningEnabled ? <ModelSettingsMenu

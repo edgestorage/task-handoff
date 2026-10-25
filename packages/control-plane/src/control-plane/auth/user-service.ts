@@ -771,4 +771,36 @@ export class ControlPlaneUserService {
   async roleSummaries() {
     return (await this.store.roles.list()).map((role) => ControlPlaneRoleSummarySchema.parse(role));
   }
+
+  /** Binding-scoped catalog projection. Permission IDs deliberately stay local. */
+  async roleCatalog() {
+    return (await this.store.roles.list())
+      .map((role) => ({
+        roleId: role.id,
+        name: role.name,
+        ...(role.description ? { description: role.description } : {}),
+        system: role.system,
+        status: role.status,
+      }))
+      .sort((left, right) => left.roleId.localeCompare(right.roleId));
+  }
+
+  /**
+   * Resolve one Cloud authority role against the current local role store. A
+   * missing or archived role fails closed; there is no fallback identity.
+   */
+  async roleAuthorization(roleId: string) {
+    const role = await this.store.roles.get(roleId);
+    if (!role || role.status !== "active") {
+      throw Object.assign(new Error("Cloud access references an unavailable Control Plane role."), {
+        code: "CONTROL_PLANE_ROLE_INACTIVE",
+        statusCode: 403,
+      });
+    }
+    return {
+      roleIds: [role.id],
+      permissionIds: [...role.permissionIds].sort() as ControlPlanePermissionId[],
+      authorizationRevision: Math.max(1, Date.parse(role.updatedAt)),
+    };
+  }
 }

@@ -7,9 +7,8 @@ export const TrafficClassSchema = z.enum(["interactive", "stream", "bulk"]);
 /**
  * Relay channels come in two kinds: access channels pair a device client with a
  * Control Plane, node channels pair a node agent with a Control Plane. Shared
- * access is additive: legacy owner capabilities omit the sharing tuple, while a
- * shared capability carries the complete signed authority below. Node
- * capabilities live in `node-relay.ts` and are parsed by kind.
+ * access distinguishes owner and shared authority with a complete signed tuple;
+ * node capabilities live in `node-relay.ts` and are parsed by kind.
  */
 export const RelayChannelKindSchema = z.enum(["access", "node"]);
 
@@ -19,41 +18,120 @@ export const CONTROL_PLANE_SHARED_ACCESS_CAPABILITY = "shared-access-v1";
 
 export const ResourceTypeSchema = z.enum(["control-plane", "node"]);
 export const ResourceShareStatusSchema = z.enum(["active", "revoked", "expired"]);
-export const ControlPlaneShareRoleSchema = z.enum(["viewer", "operator"]);
+export const AccessRoleIdSchema = z.string().trim().min(3).max(80).regex(/^role_[a-z0-9][a-z0-9_-]*$/);
+export const AccessRoleStatusSchema = z.enum(["active", "archived"]);
+export const AccessRoleCatalogEntrySchema = z.strictObject({
+  roleId: AccessRoleIdSchema,
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(500).optional(),
+  system: z.boolean(),
+  status: AccessRoleStatusSchema,
+});
+export const AccessRoleCatalogSnapshotSchema = z.strictObject({
+  catalogRevision: z.number().int().positive(),
+  roles: z.array(AccessRoleCatalogEntrySchema).min(1).max(256),
+});
+export const PublishAccessRoleCatalogSchema = AccessRoleCatalogSnapshotSchema.extend({ bindingId: IdSchema });
+export const ControlPlaneAccessSettingsSchema = z.strictObject({
+  bindingId: IdSchema,
+  ownerRoleId: AccessRoleIdSchema,
+  availableRoleIds: z.array(AccessRoleIdSchema).min(1).max(256),
+  settingsRevision: z.number().int().positive(),
+  updatedAt: DateTimeSchema,
+}).superRefine((value, context) => {
+  if (new Set(value.availableRoleIds).size !== value.availableRoleIds.length) context.addIssue({ code: "custom", path: ["availableRoleIds"], message: "available roles must be unique" });
+  if (!value.availableRoleIds.includes(value.ownerRoleId)) context.addIssue({ code: "custom", path: ["ownerRoleId"], message: "the owner role must be available" });
+});
+export const ControlPlaneAccessSettingsViewSchema = ControlPlaneAccessSettingsSchema.extend({
+  catalogRevision: z.number().int().nonnegative(),
+  roles: z.array(AccessRoleCatalogEntrySchema).max(256),
+});
+export const UpdateControlPlaneAvailableRolesSchema = z.strictObject({
+  expectedSettingsRevision: z.number().int().positive(),
+  availableRoleIds: z.array(AccessRoleIdSchema).min(1).max(256),
+}).superRefine((value, context) => {
+  if (new Set(value.availableRoleIds).size !== value.availableRoleIds.length) context.addIssue({ code: "custom", path: ["availableRoleIds"], message: "available roles must be unique" });
+});
 export const NodeShareRoleSchema = z.literal("use");
-export const ResourceShareRoleSchema = z.enum(["viewer", "operator", "use"]);
 export const ResourceAccessModeSchema = z.enum(["owner", "shared"]);
 
-export const ResourceAccessSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("owner") }),
+const OwnerResourceAccessSchema = z.strictObject({ kind: z.literal("owner") });
+export const ControlPlaneResourceAccessSchema = z.discriminatedUnion("kind", [
+  OwnerResourceAccessSchema,
   z.strictObject({
     kind: z.literal("shared"),
     shareId: IdSchema,
     revision: z.number().int().positive(),
-    role: ResourceShareRoleSchema,
+    role: AccessRoleIdSchema,
+    expiresAt: DateTimeSchema,
+  }),
+]);
+export const NodeResourceAccessSchema = z.discriminatedUnion("kind", [
+  OwnerResourceAccessSchema,
+  z.strictObject({
+    kind: z.literal("shared"),
+    shareId: IdSchema,
+    revision: z.number().int().positive(),
+    role: NodeShareRoleSchema,
     expiresAt: DateTimeSchema,
   }),
 ]);
 
 /**
- * Optional wire fields shared by access tickets, Relay capabilities, node claim
- * grants, and allocation events. A legacy owner payload omits every field. A new
- * owner payload may state `accessMode: "owner"` with its owner account, while a
- * shared payload must provide the complete tuple. `accountId` is always the
- * authenticated requester/grantee; `ownerAccountId` identifies resource owner.
+ * Control Plane access authority shared by access tickets, Relay capabilities,
+ * and session grants. Every payload carries a role resolved by the Control
+ * Plane. `accountId` is always the authenticated requester/grantee;
+ * `ownerAccountId` identifies the resource owner.
  */
-export const SharedAccessFieldsSchema = z.strictObject({
+export const ControlPlaneAccessFieldsSchema = z.strictObject({
   ownerAccountId: IdSchema.optional(),
   accessMode: ResourceAccessModeSchema.optional(),
   shareGrantId: IdSchema.optional(),
   shareRevision: z.number().int().positive().optional(),
-  shareRole: ResourceShareRoleSchema.optional(),
+  accessRoleId: AccessRoleIdSchema.optional(),
 });
 
-export function validateSharedAccessFields(
-  value: { accountId?: string; ownerAccountId?: string; accessMode?: "owner" | "shared"; shareGrantId?: string; shareRevision?: number; shareRole?: "viewer" | "operator" | "use" },
+export const NodeAccessFieldsSchema = z.strictObject({
+  ownerAccountId: IdSchema.optional(),
+  accessMode: ResourceAccessModeSchema.optional(),
+  shareGrantId: IdSchema.optional(),
+  shareRevision: z.number().int().positive().optional(),
+  shareRole: NodeShareRoleSchema.optional(),
+});
+
+type ControlPlaneAccessFields = {
+  accountId?: string;
+  ownerAccountId?: string;
+  accessMode?: "owner" | "shared";
+  shareGrantId?: string;
+  shareRevision?: number;
+  accessRoleId?: string;
+};
+
+export function validateControlPlaneAccessFields(value: ControlPlaneAccessFields, context: z.RefinementCtx): void {
+  if (!value.accessMode) {
+    context.addIssue({ code: "custom", path: ["accessMode"], message: "access authority requires accessMode" });
+    return;
+  }
+  if (!value.ownerAccountId) {
+    context.addIssue({ code: "custom", path: ["ownerAccountId"], message: "access authority requires ownerAccountId" });
+    return;
+  }
+  if (!value.accessRoleId) context.addIssue({ code: "custom", path: ["accessRoleId"], message: "access authority requires accessRoleId" });
+  if (value.accessMode === "owner") {
+    if (value.shareGrantId !== undefined || value.shareRevision !== undefined) context.addIssue({ code: "custom", message: "owner access cannot carry share grant fields" });
+    if (value.accountId && value.ownerAccountId !== value.accountId) context.addIssue({ code: "custom", path: ["ownerAccountId"], message: "owner access requires ownerAccountId to equal accountId" });
+    return;
+  }
+  if (!value.accountId) context.addIssue({ code: "custom", path: ["accountId"], message: "shared access requires accountId" });
+  if (value.accountId && value.ownerAccountId === value.accountId) context.addIssue({ code: "custom", path: ["ownerAccountId"], message: "shared access requires a different owner account" });
+  if (!value.shareGrantId) context.addIssue({ code: "custom", path: ["shareGrantId"], message: "shared access requires shareGrantId" });
+  if (value.shareRevision === undefined) context.addIssue({ code: "custom", path: ["shareRevision"], message: "shared access requires shareRevision" });
+}
+
+export function validateNodeAccessFields(
+  value: { accountId?: string; ownerAccountId?: string; accessMode?: "owner" | "shared"; shareGrantId?: string; shareRevision?: number; shareRole?: "use" },
   context: z.RefinementCtx,
-  allowedSharedRoles: readonly ("viewer" | "operator" | "use")[] = ["viewer", "operator", "use"],
 ): void {
   const shareFieldsPresent = value.ownerAccountId !== undefined || value.accessMode !== undefined || value.shareGrantId !== undefined || value.shareRevision !== undefined || value.shareRole !== undefined;
   if (!value.accessMode) {
@@ -74,8 +152,9 @@ export function validateSharedAccessFields(
   if (!value.shareGrantId) context.addIssue({ code: "custom", path: ["shareGrantId"], message: "shared access requires shareGrantId" });
   if (value.shareRevision === undefined) context.addIssue({ code: "custom", path: ["shareRevision"], message: "shared access requires shareRevision" });
   if (!value.shareRole) context.addIssue({ code: "custom", path: ["shareRole"], message: "shared access requires shareRole" });
-  else if (!allowedSharedRoles.includes(value.shareRole)) context.addIssue({ code: "custom", path: ["shareRole"], message: "shareRole is not valid for this resource" });
 }
+
+export const CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY = "access-role-catalog-v1";
 
 /**
  * Control Plane cloud-relay scopes. `device-access` gates account devices and
@@ -124,7 +203,7 @@ export const OutboundConnectionRegistrationPayloadSchema = z.strictObject({
   // so the cloud never has to guess which channel kinds a live connection may use.
   scopes: CloudRelayScopesSchema.optional(),
   epoch: z.number().int().nonnegative(),
-  capabilities: z.array(z.enum(["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, RELAY_SESSION_RESUME_CAPABILITY])).min(1),
+  capabilities: z.array(z.enum(["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, RELAY_SESSION_RESUME_CAPABILITY])).min(1),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
 }).superRefine((value, context) => {
@@ -177,8 +256,8 @@ export const AccessTicketSchema = z.strictObject({
   signature: OpaqueSecretSchema,
   /** Bound by the combined bootstrap so confirm can bind only this proof key. */
   clientProofPublicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
-  ...SharedAccessFieldsSchema.shape,
-}).superRefine((value, context) => validateSharedAccessFields(value, context, ["viewer", "operator"]));
+  ...ControlPlaneAccessFieldsSchema.shape,
+}).superRefine((value, context) => validateControlPlaneAccessFields(value, context));
 
 export const OfficialIdentityAssertionSchema = z.strictObject({
   audience: z.literal(OfficialAudience.ControlPlaneAccess),
@@ -218,11 +297,11 @@ export const RelayAttachCapabilitySchema = z.strictObject({
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
   signature: OpaqueSecretSchema,
-  ...SharedAccessFieldsSchema.shape,
+  ...ControlPlaneAccessFieldsSchema.shape,
 }).superRefine((value, context) => {
   const expected = value.role === "client" ? OfficialAudience.RelayClientAttach : OfficialAudience.RelayControlPlaneAttach;
   if (value.audience !== expected) context.addIssue({ code: "custom", path: ["audience"], message: `audience must match ${value.role} role` });
-  validateSharedAccessFields(value, context, ["viewer", "operator"]);
+  validateControlPlaneAccessFields(value, context);
 });
 
 export const RelayAllocationSchema = z.object({
@@ -332,14 +411,29 @@ export const RelayRevocationSchema = z.strictObject({
   channelKind: RelayChannelKindSchema.optional(),
   controlPlaneId: IdSchema.optional(),
   nodeHandle: NodeRelayHandleSchema.optional(),
-  ...SharedAccessFieldsSchema.shape,
+  ownerAccountId: IdSchema.optional(),
+  accessMode: ResourceAccessModeSchema.optional(),
+  shareGrantId: IdSchema.optional(),
+  shareRevision: z.number().int().positive().optional(),
+  accessRoleId: AccessRoleIdSchema.optional(),
+  shareRole: NodeShareRoleSchema.optional(),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
   signature: OpaqueSecretSchema,
 }).superRefine((value, context) => {
   if (![value.allocationId, value.sessionId, value.accountId, value.deviceSessionId, value.bindingId, value.controlPlaneId, value.nodeHandle, value.shareGrantId].some(Boolean)) context.addIssue({ code: "custom", message: "revocation target is required" });
   if ((value.shareGrantId === undefined) !== (value.shareRevision === undefined)) context.addIssue({ code: "custom", message: "shareGrantId and shareRevision must be supplied together" });
-  if (value.accessMode !== undefined && value.accessMode !== "shared") context.addIssue({ code: "custom", path: ["accessMode"], message: "revocation share targets require shared accessMode" });
+  if (value.channelKind === "node" && value.accessRoleId !== undefined) context.addIssue({ code: "custom", path: ["accessRoleId"], message: "node revocations cannot carry a Control Plane access role" });
+  if (value.channelKind !== "node" && value.shareRole !== undefined) context.addIssue({ code: "custom", path: ["shareRole"], message: "node use authority is only valid for node revocations" });
+  if (value.accessMode === "shared") {
+    if (value.channelKind === "node" && value.shareRole !== "use") context.addIssue({ code: "custom", path: ["shareRole"], message: "shared node revocation requires shareRole use" });
+    if (value.channelKind !== "node" && !value.accessRoleId) context.addIssue({ code: "custom", path: ["accessRoleId"], message: "shared Control Plane revocation requires accessRoleId" });
+  }
+  if (value.accessMode === "owner") {
+    if (!value.ownerAccountId) context.addIssue({ code: "custom", path: ["ownerAccountId"], message: "owner revocation requires ownerAccountId" });
+    if (value.shareGrantId !== undefined || value.shareRevision !== undefined || value.shareRole !== undefined) context.addIssue({ code: "custom", message: "owner revocation cannot carry share authority" });
+    if (value.channelKind === "node") context.addIssue({ code: "custom", path: ["channelKind"], message: "owner revocation is only valid for access channels" });
+  }
   if (value.sessionId && Date.parse(value.expiresAt) - Date.parse(value.issuedAt) < RELAY_REVOCATION_MIN_VALIDITY_MS) context.addIssue({ code: "custom", path: ["expiresAt"], message: "session revocation must remain valid for at least the maximum grant lifetime" });
 });
 

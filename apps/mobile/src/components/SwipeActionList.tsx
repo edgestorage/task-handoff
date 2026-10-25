@@ -1,5 +1,9 @@
 import { FlatList, View } from 'react-native';
 
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from './adaptive-layout';
 import { SwipeToClose } from './SwipeToClose';
 import type { SwipeActionListProps } from './SwipeActionList.types';
 
@@ -16,15 +20,17 @@ export function SwipeActionList<Item>({
   style,
   swipeAction,
 }: SwipeActionListProps<Item>) {
+  const adaptive = useAdaptiveContentLayout();
   return <FlatList
     contentInsetAdjustmentBehavior="automatic"
-    contentContainerStyle={contentContainerStyle}
+    contentContainerStyle={adaptiveContentContainerStyle(contentContainerStyle, adaptive.contentInsets)}
     data={data}
     keyExtractor={keyExtractor}
     ListEmptyComponent={ListEmptyComponent}
     ListHeaderComponent={ListHeaderComponent == null ? null : <>{ListHeaderComponent}</>}
     onRefresh={onRefresh}
     refreshing={refreshing}
+    scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
     renderItem={(info) => {
       const action = swipeAction(info.item);
       const content = renderItem(info);

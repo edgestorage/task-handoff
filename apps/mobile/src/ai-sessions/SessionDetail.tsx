@@ -8,6 +8,12 @@ import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessio
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
+import { LoadingState } from '../components/LoadingState';
+import {
+  ADAPTIVE_READING_MAX_WIDTH,
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from '../components/adaptive-layout';
 import { activeMobileStreamingMessage, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
@@ -85,6 +91,7 @@ export function SessionDetail({
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const adaptive = useAdaptiveContentLayout(ADAPTIVE_READING_MAX_WIDTH);
   const turns = useMemo(() => aiSessionDisplayTurns(session), [session]);
   const latestIndex = Math.max(0, turns.length - 1);
   const [localTurnSelection, setLocalTurnSelection] = useState({ sessionId: session?.id, index: latestIndex });
@@ -211,11 +218,13 @@ export function SessionDetail({
   };
   if (!session && recovering) return (
     <Profiler id="detail" onRender={recordDetailRender}>
-      <View style={[styles.empty, { backgroundColor: colors.background }]} testID="session-recovering">
-        <ActivityIndicator color={colors.primary} />
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('sessions.recovering')}</Text>
-        <Text style={[styles.muted, styles.emptyText, { color: colors.textMuted }]}>{t('sessions.recoveringDescription')}</Text>
-      </View>
+      <LoadingState
+        accessibilityLabel={t('sessions.loadingAccessibility')}
+        description={t('sessions.recoveringDescription')}
+        style={{ backgroundColor: colors.background }}
+        testID="session-recovering"
+        title={t('sessions.recovering')}
+      />
     </Profiler>
   );
   if (!session) return (
@@ -252,10 +261,10 @@ export function SessionDetail({
         <FlatList
           key={`${session.id}:${selectedMode}`}
           ref={listRef}
-          contentContainerStyle={[styles.list, {
+          contentContainerStyle={adaptiveContentContainerStyle([styles.list, {
             backgroundColor: colors.surface,
             paddingBottom: Math.max(28, bottomInset + 16),
-          }]}
+          }], adaptive.contentInsets)}
           contentInsetAdjustmentBehavior="automatic"
           data={displayItems}
           initialNumToRender={selectedMode === 'conversation' ? CONVERSATION_WINDOW_ITEM_COUNT : 6}
@@ -284,6 +293,7 @@ export function SessionDetail({
             if (!followingRef.current) expandConversationWindow();
           } : undefined}
           onStartReachedThreshold={0.5}
+          scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
           scrollEventThrottle={16}
           ListEmptyComponent={contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
           ListFooterComponent={listFooter}
@@ -314,7 +324,12 @@ export function SessionDetail({
             onPress={resumeFollowing}
             style={({ pressed }) => [
               styles.scrollToBottom,
-              { backgroundColor: colors.primaryButton, borderColor: colors.primaryButton, bottom: Math.max(16, bottomInset + 12) },
+              {
+                backgroundColor: colors.primaryButton,
+                borderColor: colors.primaryButton,
+                bottom: Math.max(16, bottomInset + 12),
+                right: adaptive.contentInsets.right + 16,
+              },
               pressed && styles.scrollToBottomPressed,
             ]}
             testID="session-scroll-to-bottom"

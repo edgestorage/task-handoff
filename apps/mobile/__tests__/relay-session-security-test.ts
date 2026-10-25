@@ -1,5 +1,6 @@
 import nacl from 'tweetnacl';
 import {
+  RELAY_SESSION_PROTOCOL_VERSION,
   relayRoleProofSigningInput,
   type RelaySessionGrant,
 } from '@task-handoff/cloud-contracts/mobile';
@@ -33,8 +34,9 @@ function memorySecureStore(): SecureValueStore & { values: Map<string, string> }
 }
 
 function grantFor(clientProofPublicKey: string): RelaySessionGrant {
-  const issuedAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const now = Date.now();
+  const issuedAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + 15 * 60_000).toISOString();
   const authority = {
     accountId: 'account_a',
     deviceSessionId: 'device_a',
@@ -43,7 +45,7 @@ function grantFor(clientProofPublicKey: string): RelaySessionGrant {
     bindingRevision: 1,
   };
   return {
-    protocolVersion: '2026-10-20',
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
     audience: 'task-handoff:relay-session-grant',
     sessionId: 'session_a',
     grantId: 'grant_a',
@@ -54,15 +56,21 @@ function grantFor(clientProofPublicKey: string): RelaySessionGrant {
     relayRegion: 'cn-north-test-1',
     relayUrl: 'wss://relay.example.test/connect',
     ...authority,
+    ownerAccountId: 'account_a',
+    accessMode: 'owner',
+    accessRoleId: 'role_admin',
     targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`,
     clientProofPublicKey,
     controlPlaneProofPublicKey: 'p'.repeat(43),
     trafficClass: 'interactive',
     sessionTranscriptTicket: {
-      protocolVersion: '2026-10-20',
+      protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
       audience: 'task-handoff:relay-session-transcript',
       transcriptTicketId: 'rtt_ticket_a',
       ...authority,
+      ownerAccountId: 'account_a',
+      accessMode: 'owner',
+      accessRoleId: 'role_admin',
       targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`,
       nonce: 'n'.repeat(24),
       issuedAt,

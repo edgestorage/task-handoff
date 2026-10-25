@@ -1,5 +1,6 @@
 import { router } from 'expo-router';
 import { EmptyState } from '../../../../src/components/EmptyState';
+import { Screen } from '../../../../src/components/Screen';
 import { useMobileControlPlaneRuntime } from '../../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../../src/i18n';
 import { StoryInbox } from '../../../../src/stories/StoryInbox';
@@ -8,7 +9,7 @@ export default function StoriesRoute() {
   const runtime = useMobileControlPlaneRuntime();
   const { t } = useI18n();
   if (!runtime.storyCapability) {
-    return <EmptyState icon="book-outline" message={t('stories.unsupported')} style={{ flex: 1 }} />;
+    return <Screen><EmptyState icon="book-outline" message={t('stories.unsupported')} style={{ flex: 1 }} /></Screen>;
   }
   return <StoryInbox
     onAddAction={(story) => router.push({ pathname: '/stories/[storyId]/actions/new' as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}

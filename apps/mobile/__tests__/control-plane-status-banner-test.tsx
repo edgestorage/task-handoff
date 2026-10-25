@@ -1,4 +1,5 @@
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
+import { Dimensions } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ControlPlaneClosedBanner, MobileControlPlaneStatusBanner } from '../src/control-plane/MobileControlPlaneStatusBanner';
@@ -18,6 +19,12 @@ const metrics = {
   frame: { x: 0, y: 0, width: 390, height: 844 },
   insets: { top: 47, right: 0, bottom: 34, left: 0 },
 };
+const initialWindowMetrics = Dimensions.get('window');
+const initialScreenMetrics = Dimensions.get('screen');
+
+afterEach(async () => {
+  await act(async () => Dimensions.set({ screen: initialScreenMetrics, window: initialWindowMetrics }));
+});
 
 describe('<ControlPlaneClosedBanner />', () => {
   test('shows an explicit closed state while the peer Control Plane is unavailable', async () => {
@@ -40,6 +47,21 @@ describe('<ControlPlaneClosedBanner />', () => {
     </SafeAreaProvider>);
 
     expect(screen.queryByTestId('control-plane-closed-banner')).toBeNull();
+  });
+
+  test('keeps the closed banner clear of the Duo outer-display tab rail', async () => {
+    await act(async () => Dimensions.set({
+      screen: { ...initialScreenMetrics, width: 466 },
+      window: { ...initialWindowMetrics, width: 466 },
+    }));
+    const screen = await render(<SafeAreaProvider initialMetrics={{
+      frame: { x: 0, y: 0, width: 466, height: 678 },
+      insets: { top: 0, right: 84, bottom: 34, left: 0 },
+    }}>
+      <ControlPlaneClosedBanner visible />
+    </SafeAreaProvider>);
+
+    expect(screen.getByTestId('control-plane-closed-banner-position')).toHaveStyle({ left: 16, right: 100 });
   });
 
   test('maps the runtime closed phase to the persistent banner', async () => {

@@ -36,7 +36,7 @@ const owner = {
 const shared = {
   bindingId: 'binding_shared', controlPlaneId: 'cp_shared', displayName: { default: 'Shared Studio' }, publicKeyFingerprint: sharedFingerprint,
   bindingRevision: 2, remoteAccess: 'enabled' as const, relayUsageBytes: 0,
-  access: { kind: 'shared' as const, shareId: 'shr_cp_shared', revision: 3, role: 'viewer' as const, expiresAt: '2026-11-19T00:00:00.000Z' },
+  access: { kind: 'shared' as const, shareId: 'shr_cp_shared', revision: 3, role: 'role_viewer' as const, expiresAt: '2026-11-19T00:00:00.000Z' },
 };
 
 beforeEach(() => {
@@ -65,7 +65,7 @@ test('shared and owned Control Planes share the existing list, connection profil
     access: {
       kind: 'cloud-relay',
       bindingId: 'binding_shared',
-      resourceAccess: { kind: 'shared', shareId: 'shr_cp_shared', revision: 3, role: 'viewer' },
+      resourceAccess: { kind: 'shared', shareId: 'shr_cp_shared', revision: 3, role: 'role_viewer' },
     },
   });
   expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/(main)/inbox');
@@ -79,6 +79,14 @@ test('a directory refresh is applied without a separate share acceptance route',
   expect(mockList).toHaveBeenCalledTimes(1);
   expect(mockReconcile).toHaveBeenCalledWith('device_a', [owner, shared]);
   expect(mockRouter.push).not.toHaveBeenCalledWith(expect.stringMatching(/share|accept|invite/i));
+});
+
+test('shows a custom shared role ID instead of falling back to Viewer', async () => {
+  mockList.mockResolvedValue([owner, { ...shared, access: { ...shared.access, role: 'role_researcher' } }]);
+  const screen = await render(<CloudControlPlanesScreen />);
+
+  expect(await screen.findByText('Shared · role_researcher')).toBeTruthy();
+  expect(screen.queryByText('Shared · Viewer')).toBeNull();
 });
 
 test('the directory shows a loading state until Control Planes arrive', async () => {

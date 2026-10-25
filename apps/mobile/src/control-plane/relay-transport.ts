@@ -635,7 +635,10 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   async revalidate(signal?: AbortSignal) {
-    this.reset(transportError('RELAY_NETWORK_CHANGED', true));
+    // This is an intentional transport refresh, not evidence that the device
+    // changed networks. Existing subscribers reconnect through their runtime
+    // epoch; they must not flash a connection error during the swap.
+    this.reset(transportError('RELAY_TRANSPORT_REVALIDATING', true), { notifyHandlers: false, logLevel: 'info' });
     // Callers use revalidate() to reconnect, not to report that the network changed, so
     // the remembered winner survives it. A device that really moved is caught by the
     // network fingerprint inside the cache, and every genuine failure clears it.
@@ -1497,11 +1500,12 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     });
   }
 
-  private reset(error: unknown) {
+  private reset(error: unknown, options: { notifyHandlers?: boolean; logLevel?: 'info' | 'warn' } = {}) {
     this.cancelAttempt('reset');
     this.rekeyAbort?.abort();
     this.rekeyAbort = undefined;
-    diagnosticLog.warn('relay.transport.reset', { hadChannel: Boolean(this.channelValue), generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, ...diagnosticErrorDetails(error) });
+    const log = options.logLevel === 'info' ? diagnosticLog.info : diagnosticLog.warn;
+    log('relay.transport.reset', { hadChannel: Boolean(this.channelValue), generation: this.session?.grant.generation, relayId: this.session?.grant.relayId, ...diagnosticErrorDetails(error) });
     this.cancelLeaseRenewal();
     this.cancelE2eRekey();
     this.unsubscribeControl?.();
@@ -1518,8 +1522,10 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       pending.reject(normalized);
     }
     this.pending.clear();
-    for (const handler of this.events) handler.onError(normalize(error));
-    for (const handler of this.tty.values()) handler.onError(normalize(error));
+    if (options.notifyHandlers !== false) {
+      for (const handler of this.events) handler.onError(normalize(error));
+      for (const handler of this.tty.values()) handler.onError(normalize(error));
+    }
   }
 
   private clearSession() {

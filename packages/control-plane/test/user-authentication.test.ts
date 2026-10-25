@@ -60,9 +60,11 @@ test("temporary-password sessions remain restricted until the password is change
     assert.equal(login.requiresPasswordChange, true);
     assert.equal((await current.auth.currentSession(login.sessionToken))?.requiresPasswordChange, true);
     await assert.rejects(() => current.auth.createSessionForIdentity(user.identities[0].id, "mobile", {
-      id: "device_temporary_password",
-      name: "Phone",
-      platform: "ios",
+      device: {
+        id: "device_temporary_password",
+        name: "Phone",
+        platform: "ios",
+      },
     }), { code: "AUTH_PASSWORD_CHANGE_REQUIRED" });
 
     const changed = await current.auth.changeLocalPassword(login.sessionToken, {
@@ -173,6 +175,32 @@ test("local login has a uniform failure and rate limit", async () => {
     await assert.rejects(() => current.auth.loginLocal({ username: "missing", password: "bad" }, { sourceId: "one" }), { code: "AUTH_LOGIN_FAILED" });
     await assert.rejects(() => current.auth.loginLocal({ username: "missing", password: "bad" }, { sourceId: "one" }), { code: "AUTH_LOGIN_FAILED" });
     await assert.rejects(() => current.auth.loginLocal({ username: "missing", password: "bad" }, { sourceId: "one" }), { code: "AUTH_LOGIN_RATE_LIMITED" });
+  } finally {
+    await current.dispose();
+  }
+});
+
+test("external identities must sign in again instead of using password step-up", async () => {
+  const current = fixture();
+  try {
+    const user = await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
+    const timestamp = new Date().toISOString();
+    const externalIdentity = {
+      id: "identity_external_test",
+      userId: user.id,
+      kind: "oidc" as const,
+      providerId: "identity_provider_test",
+      subject: "external-subject",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await current.users.store.identities.put(externalIdentity);
+    const session = await current.auth.createSessionForIdentity(externalIdentity.id, "web");
+
+    await assert.rejects(
+      () => current.auth.stepUp(session.sessionToken, { password: "password123" }),
+      { code: "STEP_UP_REAUTHENTICATION_REQUIRED", statusCode: 403 },
+    );
   } finally {
     await current.dispose();
   }

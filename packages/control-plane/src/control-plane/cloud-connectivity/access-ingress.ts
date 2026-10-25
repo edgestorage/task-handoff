@@ -3,43 +3,48 @@ import type { CloudConnectivityService } from "./service.ts";
 
 export type VerifiedCloudAssertion = {
   accountId: string;
-  ownerAccountId?: string;
+  ownerAccountId: string;
   deviceSessionId: string;
   controlPlaneId: string;
   bindingId: string;
   bindingRevision: number;
   expiresAt: string;
-  accessMode?: "owner" | "shared";
+  accessMode: "owner" | "shared";
   shareGrantId?: string;
   shareRevision?: number;
-  shareRole?: "viewer" | "operator";
+  accessRoleId: string;
 };
 
 export class CloudAccessIngress {
   private readonly state: CloudConnectivityService;
   private readonly verifyAssertion: (assertion: unknown) => Promise<VerifiedCloudAssertion> | VerifiedCloudAssertion;
+  private readonly roleResolver: (roleId: string) => Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>;
   private readonly clock: () => number;
 
-  constructor(options: { state: CloudConnectivityService; verifyAssertion(assertion: unknown): Promise<VerifiedCloudAssertion> | VerifiedCloudAssertion; clock?: () => number }) {
+  constructor(options: { state: CloudConnectivityService; verifyAssertion(assertion: unknown): Promise<VerifiedCloudAssertion> | VerifiedCloudAssertion; resolveRole(roleId: string): Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>; clock?: () => number }) {
     this.state = options.state;
     this.verifyAssertion = options.verifyAssertion;
+    this.roleResolver = options.resolveRole;
     this.clock = options.clock ?? Date.now;
   }
 
   async actor(assertion: unknown): Promise<ControlPlaneActor> {
     const verified = await this.verifyAssertion(assertion);
     const current = this.state.snapshot();
-    const accessMode = verified.accessMode ?? "owner";
-    const ownerAccountId = verified.ownerAccountId ?? verified.accountId;
+    const { accessMode, ownerAccountId, accessRoleId } = verified;
     const sharedAuthorityValid = accessMode === "owner"
-      ? verified.shareGrantId === undefined && verified.shareRevision === undefined && verified.shareRole === undefined
-      : verified.accountId !== ownerAccountId && Boolean(verified.shareGrantId) && Number.isInteger(verified.shareRevision) && (verified.shareRole === "viewer" || verified.shareRole === "operator");
+      ? verified.shareGrantId === undefined && verified.shareRevision === undefined
+      : verified.accountId !== ownerAccountId && Boolean(verified.shareGrantId) && Number.isInteger(verified.shareRevision);
     if (current.status !== "active" || current.scopes.deviceAccess !== true || current.cloudControlPlaneId !== verified.controlPlaneId || current.accountId !== ownerAccountId || current.bindingId !== verified.bindingId || current.bindingRevision !== verified.bindingRevision || !sharedAuthorityValid || Date.parse(verified.expiresAt) <= this.clock()) throw ingressError("CLOUD_ASSERTION_NOT_AUTHORIZED");
+    const role = await this.roleResolver(accessRoleId);
     return {
       type: "cloud-account", accountId: verified.accountId, deviceSessionId: verified.deviceSessionId,
       bindingId: verified.bindingId, bindingRevision: verified.bindingRevision,
-      ownerAccountId, accessMode,
-      ...(accessMode === "shared" ? { shareGrantId: verified.shareGrantId, shareRevision: verified.shareRevision, shareRole: verified.shareRole } : {}),
+      ownerAccountId, accessMode, accessRoleId,
+      roleIds: role.roleIds, permissionIds: role.permissionIds,
+      nodeScope: { kind: "all" }, instanceScope: { kind: "inherit-node-scope" },
+      authorizationRevision: role.authorizationRevision,
+      ...(accessMode === "shared" ? { shareGrantId: verified.shareGrantId, shareRevision: verified.shareRevision } : {}),
     };
   }
 

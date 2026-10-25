@@ -3,7 +3,7 @@ import {
   ControlPlanePublicCapabilitiesSchema,
   type ControlPlanePublicCapabilities,
 } from '@task-handoff/protocol/control-plane-access';
-import { ResourceAccessSchema, type ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
+import { ControlPlaneResourceAccessSchema, type ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
 
 export const MOBILE_CONTROL_PLANE_PROFILE_VERSION = 1;
 
@@ -49,7 +49,7 @@ const MobileCloudRelayAccessSchema = z.object({
   }).strict(),
   /** Cloud directory authority captured when the profile was added. Legacy
    * profiles have no field and remain owner profiles. */
-  resourceAccess: ResourceAccessSchema.optional(),
+  resourceAccess: ControlPlaneResourceAccessSchema.optional(),
 }).strict();
 
 export const MobileDirectControlPlaneProfileSchema = MobileControlPlaneProfileBaseSchema.extend({ access: MobileDirectAccessSchema }).strict();
@@ -63,7 +63,7 @@ export type MobileControlPlaneCapabilities = z.infer<typeof MobileControlPlaneCa
 export type MobileDirectControlPlaneProfile = z.infer<typeof MobileDirectControlPlaneProfileSchema>;
 export type MobileCloudRelayControlPlaneProfile = z.infer<typeof MobileCloudRelayControlPlaneProfileSchema>;
 export type MobileControlPlaneProfile = z.infer<typeof MobileControlPlaneProfileSchema>;
-export type MobileResourceAccess = z.infer<typeof ResourceAccessSchema>;
+export type MobileResourceAccess = z.infer<typeof ControlPlaneResourceAccessSchema>;
 
 export function staleCloudControlPlaneProfiles(
   profiles: readonly MobileControlPlaneProfile[],

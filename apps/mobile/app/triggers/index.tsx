@@ -3,6 +3,10 @@ import { router, Stack } from 'expo-router';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Icon } from '../../src/components/Icon';
+import {
+  adaptiveContentContainerStyle,
+  useAdaptiveContentLayout,
+} from '../../src/components/adaptive-layout';
 import { useMobileTheme } from '../../src/components/theme';
 import { useI18n } from '../../src/i18n';
 import { triggerSourceSummary } from '../../src/triggers/model';
@@ -11,6 +15,7 @@ import { useActiveTriggers } from '../../src/triggers/use-active-triggers';
 export default function TriggerListRoute() {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const adaptive = useAdaptiveContentLayout();
   const triggers = useActiveTriggers();
   const [filter, setFilter] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -24,7 +29,7 @@ export default function TriggerListRoute() {
       title: t('triggers.title'),
       headerRight: triggers.state.canMutate ? () => <Pressable accessibilityLabel={t('triggers.create')} hitSlop={10} onPress={() => router.push('/triggers/new' as never)}><Icon color={colors.primary} name="add-circle-outline" size={23} /></Pressable> : undefined,
     }} />
-    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.screen} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />} style={{ backgroundColor: colors.background }}>
+    <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={adaptiveContentContainerStyle(styles.screen, adaptive.contentInsets)} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />} scrollIndicatorInsets={adaptive.scrollIndicatorInsets} style={[{ backgroundColor: colors.background }]}>
       <View style={styles.stats}>
         <Stat label={t('triggers.templates')} value={triggers.state.snapshot.triggers.length} />
         <Stat label={t('triggers.deployments')} value={triggers.state.snapshot.triggers.reduce((sum, item) => sum + item.deploymentCount, 0)} />

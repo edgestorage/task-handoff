@@ -1,6 +1,7 @@
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
@@ -12,11 +13,16 @@ export function ControlPlaneClosedBanner({ visible }: { visible: boolean }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
+  const adaptive = useAdaptiveContentLayout();
   if (!visible) return null;
   return (
     <View
       pointerEvents="none"
-      style={[styles.position, { bottom: Math.max(insets.bottom, 8) + FLOATING_TAB_BAR_OFFSET }]}
+      style={[styles.position, {
+        bottom: Math.max(insets.bottom, 8) + FLOATING_TAB_BAR_OFFSET,
+        left: adaptive.contentInsets.left + 16,
+        right: adaptive.contentInsets.right + 16,
+      }]}
       testID="control-plane-closed-banner-position"
     >
       <View
@@ -41,7 +47,7 @@ export function MobileControlPlaneStatusBanner() {
 }
 
 const styles = StyleSheet.create({
-  position: { alignItems: 'center', left: 16, position: 'absolute', right: 16, zIndex: 900 },
+  position: { alignItems: 'center', position: 'absolute', zIndex: 900 },
   banner: {
     alignItems: 'flex-start',
     borderRadius: 14,

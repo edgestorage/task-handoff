@@ -37,6 +37,7 @@ import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import { projectCompactPublicEvent } from "../events/bus.ts";
 import type { RelayTraceRecorder } from "./relay-trace.ts";
+import { observeRelaySocketErrors } from "./relay-socket.ts";
 import { cloudEnvironmentForServiceOrigin, isTrustedCloudRelayUrl } from "../../../../../shared/cloud-environments.cjs";
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null; sentAt?: string; receivedAt?: string };
@@ -103,13 +104,13 @@ export function verifyCoordinatorRelayAllocation(raw: unknown, state: { snapshot
   const ticket = grant.sessionTranscriptTicket;
   const current = state.snapshot();
   const relayUrl = new URL(String(event?.relayUrl));
-  const ownerAccountId = grant.ownerAccountId ?? grant.accountId;
-  const accessMode = grant.accessMode ?? "owner";
+  const ownerAccountId = grant.ownerAccountId;
+  const accessMode = grant.accessMode;
   const sharedIdentityMatches = sameOptional(attach.ownerAccountId, grant.ownerAccountId)
     && sameOptional(attach.accessMode, grant.accessMode)
     && sameOptional(attach.shareGrantId, grant.shareGrantId)
     && sameOptional(attach.shareRevision, grant.shareRevision)
-    && sameOptional(attach.shareRole, grant.shareRole);
+    && sameOptional(attach.accessRoleId, grant.accessRoleId);
   if (event?.type !== "relay-allocation" || event?.allocationId !== grant.allocationId || attach.allocationId !== grant.allocationId ||
       attach.role !== "control-plane" || attach.relayId !== grant.relayId ||
       attach.controlPlaneId !== grant.controlPlaneId || attach.accountId !== grant.accountId ||
@@ -132,8 +133,8 @@ export function verifyCoordinatorRelaySessionGrant(raw: unknown, state: { snapsh
   const grant = RelaySessionGrantSchema.parse(event?.type === "relay-session-grant" ? event.grant : event?.grant ?? event);
   const current = state.snapshot();
   const relayUrl = new URL(grant.relayUrl);
-  const ownerAccountId = grant.ownerAccountId ?? grant.accountId;
-  const accessMode = grant.accessMode ?? "owner";
+  const ownerAccountId = grant.ownerAccountId;
+  const accessMode = grant.accessMode;
   if ((event?.type && event.type !== "relay-session-grant") || current.status !== "active" || current.scopes.deviceAccess !== true ||
       current.cloudControlPlaneId !== grant.controlPlaneId || current.accountId !== ownerAccountId ||
       current.bindingId !== grant.bindingId || current.bindingRevision !== grant.bindingRevision ||
@@ -191,6 +192,7 @@ export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snap
 type CloudRelayConnectorOptions = {
   identity: ControlPlaneIdentityService;
   bridge: RelaySessionBridge;
+  resolveAccessRole: (roleId: string) => Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>;
   webSocket?: typeof WebSocket;
   trace?: RelayTraceRecorder;
   heartbeatIntervalMs?: number;
@@ -210,6 +212,7 @@ export class CloudRelayConnector {
     const ticket = grant.sessionTranscriptTicket;
     const Socket = this.options.webSocket ?? WebSocket;
     const socket = new Socket(input.relayUrl, { followRedirects: false, handshakeTimeout: 10_000, perMessageDeflate: false });
+    observeRelaySocketErrors(socket);
     await socketOpen(socket);
     startRelayHeartbeat(socket, this.options.heartbeatIntervalMs, this.options.heartbeatTimeoutMs);
     const handshake = socketFrameWaiter(socket, (frame) => frame.kind === "handshake");
@@ -236,7 +239,7 @@ export class CloudRelayConnector {
           ticketMs: Number.isFinite(Date.parse(String(ticket.expiresAt))) ? Date.parse(String(ticket.expiresAt)) - Date.now() : undefined,
         },
       });
-      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options.identity, this.options.bridge, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
+      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options.identity, this.options.bridge, this.options.resolveAccessRole, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       handshake.dispose();
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
@@ -248,6 +251,7 @@ export class CloudRelayConnector {
     const grant = RelaySessionGrantSchema.parse(input.grant);
     const Socket = this.options.webSocket ?? WebSocket;
     const socket = new Socket(input.relayUrl, { followRedirects: false, handshakeTimeout: 10_000, perMessageDeflate: false });
+    observeRelaySocketErrors(socket);
     await socketOpen(socket);
     startRelayHeartbeat(socket, this.options.heartbeatIntervalMs, this.options.heartbeatTimeoutMs);
     const handshake = socketFrameWaiter(socket, (frame) => frame.kind === "handshake");
@@ -263,7 +267,7 @@ export class CloudRelayConnector {
         wireBytes: 0,
         detail: { channelId: boundedText(attached.channelId, 64), allocationId: boundedText(attached.allocationId, 64), generation: grant.generation },
       });
-      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options.identity, this.options.bridge, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
+      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options.identity, this.options.bridge, this.options.resolveAccessRole, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       handshake.dispose();
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
@@ -280,7 +284,7 @@ export class CloudRelayConnector {
 // acknowledges the allocation, while the encrypted handshake can only finish once that
 // client joins the Relay. Acknowledge as soon as the Relay accepted this peer and keep
 // completing the handshake in the background so both sides cannot wait on each other.
-function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, onDisconnected: (() => void) | undefined, handshakePromise: Promise<RelayFramePayload>, trace?: RelayTraceRecorder, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
+function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, resolveAccessRole: CloudRelayConnectorOptions["resolveAccessRole"], onDisconnected: (() => void) | undefined, handshakePromise: Promise<RelayFramePayload>, trace?: RelayTraceRecorder, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
   let session: { close(reason?: string): Promise<void> | void } | undefined;
   let closeReason: string | undefined;
   let intentional = false;
@@ -295,7 +299,7 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
     onDisconnected?.();
   };
   socket.once("close", reportDisconnected);
-  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, handshakeWithTimeout(handshakePromise, handshakeTimeoutMs), reportDisconnected, trace).then((value) => {
+  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, resolveAccessRole, handshakeWithTimeout(handshakePromise, handshakeTimeoutMs), reportDisconnected, trace).then((value) => {
     session = value;
     if (closeReason !== undefined) void value.close(closeReason);
     return value;
@@ -317,25 +321,31 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
   };
 }
 
-async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, handshakePromise: Promise<RelayFramePayload>, onPeerDetached?: () => void, trace?: RelayTraceRecorder) {
+async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, resolveAccessRole: CloudRelayConnectorOptions["resolveAccessRole"], handshakePromise: Promise<RelayFramePayload>, onPeerDetached?: () => void, trace?: RelayTraceRecorder) {
   const handshake = await handshakePromise;
   if (handshake.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
   const hello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
   const accepted = identity.acceptCloudAccessHandshake(ticket, hello);
   const response = { ...accepted.response, controlPlanePublicKey: identity.publicIdentity().publicKey };
   socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(response)) }));
+  const role = await resolveAccessRole(ticket.accessRoleId);
   const actor: ControlPlaneActor = {
     type: "cloud-account",
     accountId: ticket.accountId,
     deviceSessionId: ticket.deviceSessionId,
     bindingId: ticket.bindingId,
     bindingRevision: ticket.bindingRevision,
-    ownerAccountId: ticket.ownerAccountId ?? ticket.accountId,
-    accessMode: ticket.accessMode ?? "owner",
+    ownerAccountId: ticket.ownerAccountId,
+    accessMode: ticket.accessMode,
+    accessRoleId: ticket.accessRoleId,
+    roleIds: role.roleIds,
+    permissionIds: role.permissionIds,
+    authorizationRevision: role.authorizationRevision,
+    nodeScope: { kind: "all" },
+    instanceScope: { kind: "inherit-node-scope" },
     ...(ticket.accessMode === "shared" ? {
       shareGrantId: ticket.shareGrantId,
       shareRevision: ticket.shareRevision,
-      shareRole: ticket.shareRole,
     } : {}),
   };
   const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, bridge, trace, onPeerDetached);
@@ -853,6 +863,11 @@ function socketFrameWaiter(socket: WebSocket, predicate: (frame: RelayFramePaylo
     cleanup = () => { socket.off("message", onMessage); socket.off("close", onClose); };
     socket.on("message", onMessage); socket.once("close", onClose);
   });
+  // A close can race the attach acknowledgement, rejecting this waiter before
+  // connect() reaches the point where it routes the rejection into the
+  // encrypted-session setup. Mark that expected transport rejection observed;
+  // callers still receive it through the promise and decide how to surface it.
+  void promise.catch(() => undefined);
   return {
     promise,
     dispose() {

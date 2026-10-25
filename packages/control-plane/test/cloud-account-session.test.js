@@ -78,7 +78,7 @@ test("a delivery-failed request clears pending and exposes a retryable failure",
   assert.equal(service.snapshot().requestFailure, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1 } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -104,6 +104,8 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPol
   const identity = { publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "key", fingerprint: "sha256:fingerprint" }), signCloudOutboundRegistration: () => "signature" };
   let status = pendingRevocation ? "pending-revocation" : bindingId ? "active" : "unbound";
   let currentBindingId = bindingId;
+  let currentCatalogRevision = catalogRevision;
+  let catalogPublication;
   const state = {
     snapshot: () => ({
       status,
@@ -112,22 +114,46 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPol
       serviceOrigin: "https://cloud.example.test",
       identity: identity.publicIdentity(),
       ...(currentBindingId ? { accountId: "account_a", bindingId: currentBindingId, bindingRevision: 1 } : {}),
+      catalogRevision: currentCatalogRevision,
+      ...(catalogPublication ? { catalogPublication } : {}),
     }),
     backgroundCredential: () => status === "active" && currentBindingId ? "c".repeat(43) : undefined,
     revocationCredential: () => status === "pending-revocation" && currentBindingId ? "c".repeat(43) : undefined,
     confirmRevocation: () => { status = "unbound"; currentBindingId = undefined; return state.snapshot(); },
     nextConnectionEpoch: () => 1,
     activate: () => ({ status: "active" }), consumeChallenge: () => ({ challengeId: "challenge_a" }),
-    setCloudControlPlaneId: () => undefined,
+    setCloudControlPlaneId: (cloudControlPlaneId) => { state.cloudControlPlaneId = cloudControlPlaneId; },
+    catalogRevision: () => currentCatalogRevision,
+    markCatalogChanged: () => {
+      currentCatalogRevision += 1;
+      catalogPublication = { status: "pending", revision: currentCatalogRevision };
+      return currentCatalogRevision;
+    },
+    recordCatalogPublication: (input) => {
+      catalogPublication = input.errorCode
+        ? { status: "failed", revision: input.revision, errorCode: input.errorCode }
+        : { status: "published", revision: input.revision, publishedAt: input.publishedAt };
+      if (!input.errorCode) currentCatalogRevision = Math.max(currentCatalogRevision, input.revision);
+    },
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
     state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs, accountRequestPollMs,
+    roleCatalog,
     cloudRelaySessionsPath: path.join(dir, "cloud-relay-sessions.json"),
     relayConnector: { async connect() { throw new Error("unexpected relay connection"); }, async resume() { throw new Error("unexpected relay resume"); } },
     fetch: async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return fetchImpl ? fetchImpl(url, init) : { ok: false, status: 500 }; },
   });
   runtime.start();
   return { runtime, accountSession, sockets, fetchCalls, state };
+}
+
+async function waitFor(predicate, message, attempts = 200) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(message);
 }
 
 test("Control Plane always advertises resumable Relay sessions", async () => {
@@ -150,6 +176,94 @@ test("Control Plane always advertises resumable Relay sessions", async () => {
       if (previous[name] === undefined) delete process.env[name];
       else process.env[name] = previous[name];
     }
+  }
+});
+
+test("an active binding publishes its complete role catalog immediately after registration", async () => {
+  const roles = [
+    { roleId: "role_admin", name: "Admin", system: true, status: "active" },
+    { roleId: "role_custom_reader", name: "Reader", description: "Read-only custom role", system: false, status: "active" },
+    { roleId: "role_viewer", name: "Viewer", system: true, status: "archived" },
+  ];
+  const { runtime, sockets, state } = runtimeHarness({ bindingId: "binding_a", catalogRevision: 4, roleCatalog: async () => roles });
+  try {
+    const request = await waitFor(
+      () => sockets[0]?.sent?.find((message) => message.type === "request" && message.operation === "publish-access-role-catalog"),
+      "registration did not publish the role catalog",
+    );
+    assert.equal(request.payload.bindingId, "binding_a");
+    assert.equal(request.payload.catalogRevision, 4);
+    assert.deepEqual(request.payload.roles, roles);
+    assert.equal(JSON.stringify(request.payload).includes("permissionIds"), false);
+    sockets[0].respond(request.requestId, { applied: true, catalogRevision: 4 });
+    await waitFor(() => state.snapshot().catalogPublication?.status === "published", "catalog publication was not recorded");
+    assert.equal(state.snapshot().catalogPublication.revision, 4);
+    assert.equal(state.cloudControlPlaneId, "control_plane_test");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a failed catalog publication retries the same revision and a role mutation advances it", async () => {
+  let roles = [{ roleId: "role_admin", name: "Admin", system: true, status: "active" }];
+  const { runtime, sockets, state } = runtimeHarness({ bindingId: "binding_a", catalogRevision: 3, roleCatalog: async () => roles });
+  try {
+    const first = await waitFor(
+      () => sockets[0]?.sent?.filter((message) => message.operation === "publish-access-role-catalog").at(-1),
+      "registration did not start the first catalog publication",
+    );
+    sockets[0].receive({ type: "response", requestId: first.requestId, error: { code: "CATALOG_REJECTED", message: "catalog rejected" } });
+    await waitFor(() => state.snapshot().catalogPublication?.status === "failed", "catalog failure was not recorded");
+    assert.deepEqual(state.snapshot().catalogPublication, { status: "failed", revision: 3, errorCode: "CATALOG_REJECTED" });
+
+    const retry = runtime.publishAccessRoleCatalog();
+    const retried = await waitFor(
+      () => sockets[0].sent.filter((message) => message.operation === "publish-access-role-catalog").at(-1)?.requestId !== first.requestId
+        && sockets[0].sent.filter((message) => message.operation === "publish-access-role-catalog").at(-1),
+      "catalog retry was not sent",
+    );
+    assert.equal(retried.payload.catalogRevision, 3);
+    sockets[0].respond(retried.requestId, { applied: true, catalogRevision: 3 });
+    await retry;
+    await waitFor(() => state.snapshot().catalogPublication?.status === "published", "catalog retry was not recorded");
+
+    roles = [...roles, { roleId: "role_custom_reader", name: "Reader", system: false, status: "active" }];
+    const changed = runtime.notifyAccessRoleCatalogChanged();
+    const next = await waitFor(
+      () => sockets[0].sent.filter((message) => message.operation === "publish-access-role-catalog").at(-1)?.payload?.catalogRevision === 4
+        && sockets[0].sent.filter((message) => message.operation === "publish-access-role-catalog").at(-1),
+      "role mutation was not published",
+    );
+    assert.deepEqual(next.payload.roles, roles);
+    sockets[0].respond(next.requestId, { applied: true, catalogRevision: 4 });
+    await changed;
+    assert.equal(state.snapshot().catalogRevision, 4);
+    assert.equal(state.snapshot().catalogPublication.status, "published");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a reconnect republishes the current catalog revision without minting a new one", async () => {
+  const roles = [{ roleId: "role_admin", name: "Admin", system: true, status: "active" }];
+  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a", catalogRevision: 7, roleCatalog: async () => roles });
+  try {
+    const initial = await waitFor(
+      () => sockets[0]?.sent?.find((message) => message.operation === "publish-access-role-catalog"),
+      "initial registration did not publish the catalog",
+    );
+    sockets[0].respond(initial.requestId, { applied: true, catalogRevision: 7 });
+
+    sockets[0].close(1006, "network-lost");
+    const republished = await waitFor(
+      () => sockets[1]?.sent?.find((message) => message.operation === "publish-access-role-catalog"),
+      "reconnect did not republish the catalog",
+    );
+    assert.equal(republished.payload.catalogRevision, 7);
+    assert.deepEqual(republished.payload.roles, roles);
+    sockets[1].respond(republished.requestId, { applied: true, catalogRevision: 7 });
+  } finally {
+    await runtime.stop();
   }
 });
 

@@ -5,7 +5,7 @@ import { JsonFile, createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 
 const CloudConnectivityStateSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   serviceOrigin: z.string().url(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
   /** Two independent cloud-relay scopes; only both being off stops the cloud connection. */
@@ -20,6 +20,14 @@ const CloudConnectivityStateSchema = z.object({
   backgroundCredential: z.string().min(32).optional(),
   updatedAt: z.string().datetime(),
   connectionEpoch: z.number().int().nonnegative().default(0),
+  /** Monotonic version of the local role catalog projection. */
+  catalogRevision: z.number().int().positive().optional(),
+  catalogPublication: z.object({
+    status: z.enum(["pending", "published", "failed"]),
+    revision: z.number().int().positive().optional(),
+    publishedAt: z.string().datetime().optional(),
+    errorCode: z.string().trim().min(1).max(120).optional(),
+  }).strict().optional(),
 }).strip();
 
 export type CloudRelayScopes = { deviceAccess: boolean; nodeRelay: boolean };
@@ -43,7 +51,7 @@ export class CloudConnectivityService {
     this.identity = options.identity;
     this.serviceOrigin = new URL(options.serviceOrigin).origin;
     this.clock = options.clock ?? Date.now;
-    this.state = new JsonFile<StoredCloudConnectivityState>(options.statePath, () => ({ version: 1, serviceOrigin: this.serviceOrigin, status: "unbound", scopes: { deviceAccess: true, nodeRelay: false }, updatedAt: new Date(this.clock()).toISOString(), connectionEpoch: 0 }), {
+    this.state = new JsonFile<StoredCloudConnectivityState>(options.statePath, () => ({ version: 2, serviceOrigin: this.serviceOrigin, status: "unbound", scopes: { deviceAccess: true, nodeRelay: false }, updatedAt: new Date(this.clock()).toISOString(), connectionEpoch: 0, catalogRevision: 1 }), {
       schema: CloudConnectivityStateSchema,
       directoryMode: 0o700,
       fileMode: 0o600,
@@ -56,12 +64,43 @@ export class CloudConnectivityService {
     if (raw.serviceOrigin !== this.serviceOrigin) throw cloudError("CLOUD_SERVICE_ORIGIN_CHANGED", "Cloud service origin does not match persisted binding authority.");
     // Older state files had one remote-access switch; it becomes the
     // device-access scope, and node relay starts off until switched on.
-    if (!raw.scopes) this.putScopes({ deviceAccess: raw.remoteAccessEnabled !== false, nodeRelay: false });
+    if (!raw.scopes || raw.version !== 2 || raw.catalogRevision === undefined) {
+      this.state.put({
+        ...raw,
+        version: 2,
+        scopes: raw.scopes ?? { deviceAccess: raw.remoteAccessEnabled !== false, nodeRelay: false },
+        catalogRevision: raw.catalogRevision ?? 1,
+        ...(raw.catalogPublication ? { catalogPublication: raw.catalogPublication } : {}),
+      });
+    }
   }
 
   snapshot() {
     const { backgroundCredential: _secret, connectionEpoch: _internalEpoch, remoteAccessEnabled: _legacy, scopes, ...safe } = this.current();
     return { ...safe, scopes, remoteAccessEnabled: scopes.deviceAccess, identity: this.identity.publicIdentity(), hasBackgroundCredential: Boolean(_secret) };
+  }
+
+  catalogRevision() {
+    return this.current().catalogRevision ?? 1;
+  }
+
+  catalogPublication() {
+    return this.current().catalogPublication;
+  }
+
+  markCatalogChanged() {
+    const current = this.current();
+    const revision = (current.catalogRevision ?? 1) + 1;
+    this.state.put({ ...current, version: 2, catalogRevision: revision, catalogPublication: { status: "pending", revision }, updatedAt: new Date(this.clock()).toISOString() });
+    return revision;
+  }
+
+  recordCatalogPublication(input: { revision: number; publishedAt?: string; errorCode?: string }) {
+    const current = this.current();
+    const publication = input.errorCode
+      ? { status: "failed" as const, revision: input.revision, errorCode: input.errorCode }
+      : { status: "published" as const, revision: input.revision, ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}) };
+    this.state.put({ ...current, version: 2, catalogPublication: publication, ...(input.errorCode ? {} : { catalogRevision: Math.max(current.catalogRevision ?? 1, input.revision) }), updatedAt: new Date(this.clock()).toISOString() });
   }
 
   createChallenge() {
@@ -133,13 +172,14 @@ export class CloudConnectivityService {
   confirmRevocation() {
     const current = this.current();
     this.state.put({
-      version: 1,
+      version: 2,
       serviceOrigin: current.serviceOrigin,
       status: "unbound",
       scopes: { deviceAccess: false, nodeRelay: false },
       ...(current.cloudControlPlaneId ? { cloudControlPlaneId: current.cloudControlPlaneId } : {}),
       updatedAt: new Date(this.clock()).toISOString(),
       connectionEpoch: current.connectionEpoch,
+      catalogRevision: current.catalogRevision ?? 1,
     });
     return this.snapshot();
   }

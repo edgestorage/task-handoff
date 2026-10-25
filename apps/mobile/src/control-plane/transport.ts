@@ -97,6 +97,8 @@ export class MobileControlPlaneTransportError extends Error {
     readonly status?: number,
     readonly relayCloseCode?: number,
     readonly relayCloseReason?: string,
+    readonly socketDomain?: string,
+    readonly socketCode?: number,
   ) {
     super(message);
     this.name = 'MobileControlPlaneTransportError';

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import nacl from "tweetnacl";
-import { decodeRelayFrame, encodeRelayFrame, RELAY_SESSION_PROTOCOL_VERSION, RelaySessionAudience, type RelayFramePayload } from "@task-handoff/cloud-contracts";
+import { decodeRelayFrame, encodeRelayFrame, RELAY_FRAMING_PROTOCOL_VERSION, RELAY_SESSION_PROTOCOL_VERSION, RelaySessionAudience, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { CloudRelayConnector } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 import { RelayTraceRecorder, relayTraceEnabled, relayTraceFromEnvironment } from "../src/control-plane/cloud-connectivity/relay-trace.ts";
 
@@ -156,6 +156,9 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     audience: RelaySessionAudience.Transcript,
     transcriptTicketId: "transcript_ticket_a",
     accountId: "account_a",
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
     deviceSessionId: "device_a",
     controlPlaneId: "control_plane_a",
     bindingId: "binding_a",
@@ -177,6 +180,9 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     relayRegion: "eu-west",
     relayUrl: "ws://localhost:8080/connect",
     accountId: transcriptTicket.accountId,
+    ownerAccountId: transcriptTicket.ownerAccountId,
+    accessMode: transcriptTicket.accessMode,
+    accessRoleId: transcriptTicket.accessRoleId,
     deviceSessionId: transcriptTicket.deviceSessionId,
     controlPlaneId: transcriptTicket.controlPlaneId,
     bindingId: transcriptTicket.bindingId,
@@ -191,7 +197,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     expiresAt,
     signature: "s".repeat(86),
   } as const;
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, ownerAccountId: grant.ownerAccountId, accessMode: grant.accessMode, accessRoleId: grant.accessRoleId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const sessionKey = new Uint8Array(32);
   const identity = {
     acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey }),
@@ -205,6 +211,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     bridge: { request: async (_actor, input) => ({ status: 200, body: { data: { path: input.path } } }) } as any,
     webSocket: FakeSocket as any,
     trace,
+    resolveAccessRole: async () => ({ roleIds: ["role_admin"], permissionIds: ["ai-sessions:read"], authorizationRevision: 1 }),
   });
 
   const connection = await connector.connect({ relayUrl: grant.relayUrl, allocation: { attach, grant } });
@@ -273,6 +280,9 @@ test("relay connector times out when the Relay never acknowledges attach", { tim
     audience: RelaySessionAudience.Transcript,
     transcriptTicketId: "transcript_ticket_a",
     accountId: "account_a",
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
     deviceSessionId: "device_a",
     controlPlaneId: "control_plane_a",
     bindingId: "binding_a",
@@ -294,6 +304,9 @@ test("relay connector times out when the Relay never acknowledges attach", { tim
     relayRegion: "eu-west",
     relayUrl: "ws://localhost:8080/connect",
     accountId: transcriptTicket.accountId,
+    ownerAccountId: transcriptTicket.ownerAccountId,
+    accessMode: transcriptTicket.accessMode,
+    accessRoleId: transcriptTicket.accessRoleId,
     deviceSessionId: transcriptTicket.deviceSessionId,
     controlPlaneId: transcriptTicket.controlPlaneId,
     bindingId: transcriptTicket.bindingId,
@@ -308,7 +321,7 @@ test("relay connector times out when the Relay never acknowledges attach", { tim
     expiresAt,
     signature: "s".repeat(86),
   } as const;
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, ownerAccountId: grant.ownerAccountId, accessMode: grant.accessMode, accessRoleId: grant.accessRoleId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const connector = new CloudRelayConnector({
     identity: {
       acceptCloudAccessHandshake: () => ({ response: {}, transcript: "transcript", signature: "s".repeat(32) }),
@@ -370,6 +383,9 @@ test("relay connector bounds the encrypted handshake wait", { timeout: 2_000 }, 
     audience: RelaySessionAudience.Transcript,
     transcriptTicketId: "transcript_ticket_a",
     accountId: "account_a",
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
     deviceSessionId: "device_a",
     controlPlaneId: "control_plane_a",
     bindingId: "binding_a",
@@ -391,6 +407,9 @@ test("relay connector bounds the encrypted handshake wait", { timeout: 2_000 }, 
     relayRegion: "eu-west",
     relayUrl: "ws://localhost:8080/connect",
     accountId: transcriptTicket.accountId,
+    ownerAccountId: transcriptTicket.ownerAccountId,
+    accessMode: transcriptTicket.accessMode,
+    accessRoleId: transcriptTicket.accessRoleId,
     deviceSessionId: transcriptTicket.deviceSessionId,
     controlPlaneId: transcriptTicket.controlPlaneId,
     bindingId: transcriptTicket.bindingId,
@@ -405,7 +424,7 @@ test("relay connector bounds the encrypted handshake wait", { timeout: 2_000 }, 
     expiresAt,
     signature: "s".repeat(86),
   } as const;
-  const attach = { protocolVersion: "2026-08-10", audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
+  const attach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, ownerAccountId: grant.ownerAccountId, accessMode: grant.accessMode, accessRoleId: grant.accessRoleId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const connector = new CloudRelayConnector({
     identity: {
       acceptCloudAccessHandshake: () => ({ response: {}, transcript: "transcript", signature: "s".repeat(32) }),

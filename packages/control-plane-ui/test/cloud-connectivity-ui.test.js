@@ -111,3 +111,38 @@ test("cloud permissions expose a clickable list of managed nodes", () => {
   assert.match(component, /settings\.cloud\.nodeAdded/);
   assert.match(component, /\.cloud-node-picker\s*\{[^}]*border:1px solid var\(--line\)/s);
 });
+
+test("archived Cloud roles can be removed but cannot be made available again", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+
+  assert.match(component, /role\.roleId === accessSettings\.data\.value\.ownerRoleId \|\| \(role\.status === 'archived' && !roleDraft\.includes\(role\.roleId\)\)/);
+  assert.match(component, /roleId === settings\.ownerRoleId \|\| \(available && role\.status === "archived"\)/);
+  assert.match(component, /archivedDraftRoles\.value\.length === 0/);
+  assert.match(component, /settings\.cloud\.rolesArchivedSelected/);
+});
+
+test("Cloud available roles use the published catalog and preserve conflict context", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  const queries = read("src/api/queries.ts");
+  const client = read("../control-plane-client/src/control-plane-admin.ts");
+  const chinese = read("src/i18n/locales/zh-CN/settings.ts");
+  const english = read("src/i18n/locales/en-US/settings.ts");
+
+  assert.match(component, /accessSettings\.data\.value\?\.roles/);
+  assert.match(component, /role\.status === "archived"/);
+  assert.match(component, /role\.roleId === accessSettings\.data\.value\.ownerRoleId/);
+  assert.match(component, /expectedSettingsRevision: settings\.settingsRevision/);
+  assert.match(component, /code === "REVISION_CONFLICT"/);
+  assert.match(component, /code === "CONTROL_PLANE_ACCESS_ROLE_IN_USE"/);
+  assert.match(component, /entry\.owner === true/);
+  assert.match(component, /entry\.grantees/);
+  assert.match(component, /function roleName\(roleId: string\)[\s\S]*\?\.name \|\| roleId/);
+  assert.match(queries, /useCloudAccessSettingsQuery[\s\S]*admin\.cloudAccessSettings\(\)/);
+  assert.match(queries, /updateCloudAvailableRoles[\s\S]*admin\.updateCloudAccessSettings/);
+  assert.match(queries, /useCloudConnectivityQuery[\s\S]*refetchInterval:[\s\S]*status === "active" \? 10_000 : false/);
+  assert.match(component, /watch\(\(\) => state\.value\?\.catalogPublication\?\.revision[\s\S]*status !== "published"[\s\S]*accessSettings\.refetch\(\)/);
+  assert.match(client, /cloudAccessSettings\(signal\?: AbortSignal\)/);
+  assert.match(client, /updateCloudAccessSettings\(input: \{ expectedSettingsRevision: number; availableRoleIds: string\[\] \}\)/);
+  assert.match(english, /Cloud access roles/);
+  assert.match(chinese, /云平台可用角色/);
+});

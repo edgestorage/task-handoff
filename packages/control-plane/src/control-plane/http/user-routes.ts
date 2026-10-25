@@ -18,7 +18,7 @@ function userActor(request: Parameters<typeof controlPlaneRequestActor>[0]) {
   return actor;
 }
 
-export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: ControlPlaneAuth, operationApprovals: OperationApprovals) {
+export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: ControlPlaneAuth, operationApprovals: OperationApprovals, options: { onRoleCatalogChanged?: () => Promise<void> | void } = {}) {
   app.get("/api/users", async (request) => {
     const query = z.object({ search: z.string().trim().max(160).optional(), includeArchived: z.coerce.boolean().optional() }).strict().parse(request.query);
     return { data: await auth.users.list(query) };
@@ -73,7 +73,11 @@ export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: Contr
 
   app.get("/api/roles", async () => ({ data: await auth.users.roleSummaries() }));
   app.get("/api/permissions", async () => ({ data: CONTROL_PLANE_PERMISSION_CATALOG }));
-  app.post("/api/roles", async (request, reply) => reply.code(201).send({ data: await auth.users.createRole(request.body) }));
+  app.post("/api/roles", async (request, reply) => {
+    const role = await auth.users.createRole(request.body);
+    await options.onRoleCatalogChanged?.();
+    return reply.code(201).send({ data: role });
+  });
   app.patch("/api/roles/:id", async (request, reply) => {
     const roleId = IdParamsSchema.parse(request.params).id;
     const input = UpdateRoleInputSchema.parse(request.body);
@@ -84,12 +88,17 @@ export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: Contr
       const affected = (await auth.users.store.grants.listByRole(roleId)).map((grant) => grant.userId);
       const role = await auth.users.updateRole(roleId, input);
       for (const userId of affected) await auth.notifyAuthorizationChanged(userId);
+      await options.onRoleCatalogChanged?.();
       return role;
     });
   });
   app.delete("/api/roles/:id", async (request, reply) => {
     const roleId = IdParamsSchema.parse(request.params).id;
-    return executeApprovedOperation(request, reply, auth, operationApprovals, "user.role.remove", roleId, {}, undefined, () => auth.users.archiveRole(roleId));
+    return executeApprovedOperation(request, reply, auth, operationApprovals, "user.role.remove", roleId, {}, undefined, async () => {
+      const role = await auth.users.archiveRole(roleId);
+      await options.onRoleCatalogChanged?.();
+      return role;
+    });
   });
 
   app.get("/api/identity-providers", async () => ({ data: await auth.identityProviders.list() }));

@@ -22,14 +22,19 @@ export type ControlPlaneActor =
   | {
     type: "cloud-account";
     accountId: string;
-    ownerAccountId?: string;
+    ownerAccountId: string;
     deviceSessionId: string;
     bindingId: string;
     bindingRevision: number;
-    accessMode?: "owner" | "shared";
+    accessMode: "owner" | "shared";
+    accessRoleId: string;
+    roleIds: string[];
+    permissionIds: ControlPlanePermissionId[];
     shareGrantId?: string;
     shareRevision?: number;
-    shareRole?: "viewer" | "operator";
+    nodeScope: ControlPlaneUserNodeScope;
+    instanceScope?: ControlPlaneUserInstanceScope;
+    authorizationRevision: number;
   }
   | { type: "chat-bridge"; bridgeId: string; channel: string; chatSessionId?: string; userId?: string }
   | { type: "system"; reason: string };
@@ -118,60 +123,28 @@ export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resour
   return userCan(actor, action, resource);
 }
 
-function userCan(actor: ControlPlaneUserAuthorizationContext, action: ControlPlaneAction, resource: ControlPlaneResource) {
+type PermissionBearingActor = Pick<ControlPlaneUserAuthorizationContext, "permissionIds">;
+
+function userCan(actor: PermissionBearingActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
   const permission = permissionForControlPlaneOperation(action, resource.type);
   return Boolean(permission && actor.permissionIds.includes(permission));
 }
 
 function canCloudAccount(actor: ControlPlaneCloudAccountActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
-  if (["user", "role", "identity-provider", "user-session", "identity-approval", "user-audit", "control-plane-settings", "secret", "chat-bridge"].includes(resource.type)) return false;
-  if (actor.accessMode === "shared") {
-    if (!actor.shareGrantId || !actor.shareRevision || !actor.shareRole) return false;
-    if (actor.shareRole === "viewer") return action === "read";
-  }
-  if (resource.type === "node") return action === "read";
-  if (action === "read") return true;
-  if (resource.type === "image" || resource.type === "public-directory") return false;
-  return ["create", "update", "delete", "start", "stop", "restart", "proxy", "interactive-access", "send-message", "approve", "interrupt", "read-file-content"].includes(action);
+  return userCan(actor, action, resource);
 }
 
 export type ControlPlaneCloudAccountActor = Extract<ControlPlaneActor, { type: "cloud-account" }>;
 
-/**
- * Cloud accounts have no local role or node scope, so the relay projects
- * `canCloudAccount` into the local permission vocabulary. Clients use the
- * projection only to gate their own UI; every request is still enforced
- * through `canCloudAccount` on the Control Plane.
- */
-export const CLOUD_ACCOUNT_PERMISSION_IDS: readonly ControlPlanePermissionId[] = [
-  "nodes:read",
-  "projects:read", "projects:manage",
-  "runtimes:read", "runtimes:manage",
-  "templates:read", "templates:manage",
-  "instances:read", "instances:manage", "instances:interactive",
-  "app-sessions:read", "app-sessions:manage", "app-sessions:interactive",
-  "ai-sessions:read", "ai-sessions:manage", "ai-sessions:interactive",
-  "triggers:read", "triggers:manage",
-  "repositories:read", "repositories:manage",
-  "attachments:read", "attachments:manage",
-  "models:read", "models:manage",
-  // Reads stay open except for the admin and secret surfaces, mirroring the
-  // `action === "read"` branch of `canCloudAccount`.
-  "images:read", "public-directory:read",
-];
-
-const SHARED_VIEWER_PERMISSION_IDS = CLOUD_ACCOUNT_PERMISSION_IDS.filter((permission) => permission.endsWith(":read"));
-
 export function cloudAccountAuthorization(actor: ControlPlaneCloudAccountActor): ControlPlaneCurrentAuthorization {
-  const shared = actor.accessMode === "shared";
   return {
     userId: `cloud-account:${actor.accountId}`,
     identityId: `cloud-device:${actor.deviceSessionId}`,
-    roleIds: [shared ? `role_cloud_shared_${actor.shareRole ?? "viewer"}` : "role_cloud_account"],
-    permissionIds: [...(shared && actor.shareRole === "viewer" ? SHARED_VIEWER_PERMISSION_IDS : CLOUD_ACCOUNT_PERMISSION_IDS)],
-    nodeScope: { kind: "all" },
-    instanceScope: { kind: "inherit-node-scope" },
-    authorizationRevision: Math.max(1, actor.bindingRevision, actor.shareRevision ?? 1),
+    roleIds: actor.roleIds,
+    permissionIds: actor.permissionIds,
+    nodeScope: actor.nodeScope,
+    instanceScope: actor.instanceScope ?? { kind: "inherit-node-scope" },
+    authorizationRevision: Math.max(1, actor.authorizationRevision, actor.bindingRevision, actor.shareRevision ?? 1),
   };
 }
 
