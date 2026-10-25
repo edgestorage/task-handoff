@@ -271,6 +271,55 @@ test("a superseding allocation replaces the live channel for the same handle", a
   one.channels.closeAll("test-done");
 });
 
+test("a live channel close requests recovery while a stale close is ignored", async () => {
+  const node = ed25519Identity("node_macmini");
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  const attached: Array<{ nodeId: string; onClosed?: (reason: string) => void }> = [];
+  const closed: Array<{ nodeHandle: string; nodeId: string; reason: string }> = [];
+  const connector = {
+    async connect(input: any) {
+      return {
+        socket: linkedFrameSockets().left,
+        key: new Uint8Array(32),
+        nodeId: node.nodeId,
+        paired: true,
+        allocationId: input.allocation.allocationId,
+      };
+    },
+  };
+  const transport = {
+    attachNode(nodeId: string, input: { onClosed?(reason: string): void }) {
+      attached.push({ nodeId, onClosed: input.onClosed });
+    },
+    detachNode: () => true,
+    connected: () => true,
+  };
+  const channels = new CloudNodeRelayChannels({
+    state: cloudState("control_plane_cp1", "binding_a"),
+    connector,
+    transport: () => transport,
+    nodes: store.adapter,
+    onChannelClosed: (event) => closed.push(event),
+  });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+  const superseding = { ...event, allocationId: "node_allocation_b" };
+
+  await channels.attach(event);
+  await channels.attach(superseding);
+  store.calls.disconnected.length = 0;
+
+  attached[0]?.onClosed?.("old-socket-late-close");
+  assert.deepEqual(closed, []);
+  assert.deepEqual(store.calls.disconnected, []);
+  assert.equal(channels.state().channels[0]?.allocationId, superseding.allocationId);
+
+  attached[1]?.onClosed?.("network-lost");
+  assert.deepEqual(store.calls.disconnected, [`${node.nodeId}:network-lost`]);
+  assert.deepEqual(closed, [{ nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, reason: "network-lost" }]);
+  assert.equal(channels.state().channels.length, 0);
+});
+
 test("a node that cannot prove the registered key never reaches the transport", async () => {
   const registered = ed25519Identity();
   const attacker = ed25519Identity();

@@ -23,7 +23,7 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any }) {
   const sockets: FakeSocket[] = [];
   class FakeSocket {
     static OPEN = 1;
@@ -87,7 +87,7 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
     fetch: (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch,
     nodeRelay: {
       nodes: cloudRelayNodes(input.handles),
-      transport: () => ({ attachNode: () => undefined, detachNode: () => true, connected: () => false }),
+      transport: () => input.transport ?? ({ attachNode: () => undefined, detachNode: () => true, connected: () => false }),
       ...(input.connector ? { connector: input.connector } : {}),
     },
   });
@@ -156,6 +156,68 @@ test("an attach failure refreshes the Coordinator claim instead of waiting for a
     assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
     const error = runtime.nodeRelayState().errors.find((entry: any) => entry.nodeHandle === "nrh_macmini");
     assert.equal(error?.code, "RELAY_ATTACH_REPLAYED");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a live node channel closing refreshes the Coordinator claim", async () => {
+  let closeChannel: ((reason: string) => void) | undefined;
+  const connector = {
+    async connect(input: any) {
+      return {
+        socket: {
+          readyState: 1,
+          bufferedAmount: 0,
+          send() {},
+          close() {},
+          on() {},
+          off() {},
+        },
+        key: new Uint8Array(32),
+        nodeId: "node_macmini",
+        paired: true,
+        allocationId: input.allocation.allocationId,
+      };
+    },
+  };
+  const transport = {
+    attachNode(_nodeId: string, input: { onClosed?(reason: string): void }) {
+      closeChannel = input.onClosed;
+    },
+    detachNode: () => true,
+    connected: () => true,
+  };
+  const { runtime, sockets } = runtimeFixture({ nodeRelay: true, handles: ["nrh_macmini"], connector, transport });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().claims.length === 0; attempt += 1) await wait(5);
+    const event = nodeRelayAllocationEvent({
+      allocationId: "allocation_live_channel",
+      nodeHandle: "nrh_macmini",
+      nodeId: "node_macmini",
+      controlPlaneId: "control_plane_test",
+      accountId: "account_a",
+      bindingId: "binding_a",
+      nodePublicKeyFingerprint: `sha256:${"b".repeat(43)}`,
+      relayUrl: "wss://cloud.example.test/relay",
+    });
+    sockets[0].receive({ type: "event", event });
+    for (let attempt = 0; attempt < 100 && (!closeChannel || runtime.nodeRelayState().channels.length === 0); attempt += 1) await wait(5);
+    assert.ok(closeChannel, "the allocation must reach the transport");
+    assert.equal(runtime.nodeRelayState().channels[0]?.nodeHandle, "nrh_macmini");
+
+    closeChannel!("relay-lost");
+
+    let refresh: any;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      refresh = sockets[0].sent.find((message) => message.operation === "claim-node-relay-node" && message.payload.refreshAllocation === true);
+      if (refresh) break;
+      await wait(5);
+    }
+    assert.ok(refresh, "a closed live channel must request a fresh allocation");
+    assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
+    assert.equal(runtime.nodeRelayState().channels.length, 0);
   } finally {
     await runtime.stop();
   }

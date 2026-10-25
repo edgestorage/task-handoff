@@ -36,8 +36,17 @@ export type CloudNodeRelayChannelsOptions = {
     disconnected(nodeId: string, input: { nodeHandle: string; reason: string }): void | Promise<void>;
   };
   onPreserveLocalConnection?(nodeHandle: string): void | Promise<void>;
+  /** An unexpectedly closed live channel; the runtime must claim a fresh allocation. */
+  onChannelClosed?(input: { nodeHandle: string; nodeId: string; reason: string }): void;
   now?: () => number;
   audit?(event: { type: string; outcome: "allowed" | "denied"; nodeHandle?: string; reason: string }): void;
+};
+
+type ActiveNodeRelayChannel = {
+  allocationId: string;
+  nodeId: string;
+  channelId?: string;
+  connectedAt: string;
 };
 
 /**
@@ -49,7 +58,7 @@ export type CloudNodeRelayChannelsOptions = {
  */
 export class CloudNodeRelayChannels {
   private readonly options: CloudNodeRelayChannelsOptions;
-  private readonly channels = new Map<string, { allocationId: string; nodeId: string; channelId?: string; connectedAt: string }>();
+  private readonly channels = new Map<string, ActiveNodeRelayChannel>();
   private readonly claims = new Map<string, { requestedAt: string }>();
   private readonly errors = new Map<string, { code: string; message: string; at: string }>();
 
@@ -171,12 +180,13 @@ export class CloudNodeRelayChannels {
       return { status: "attached" as const, preservedLocalConnection: true, nodeId: identity.nodeId, nodeHandle: verified.nodeHandle };
     }
     if (connection.issuedPairing) await this.options.nodes.savePairing(identity.nodeId, connection.issuedPairing);
-    this.channels.set(verified.nodeHandle, {
+    const activeChannel: ActiveNodeRelayChannel = {
       allocationId: verified.allocationId,
       nodeId: identity.nodeId,
       ...(connection.channelId ? { channelId: connection.channelId } : {}),
       connectedAt: new Date(this.now()).toISOString(),
-    });
+    };
+    this.channels.set(verified.nodeHandle, activeChannel);
     this.claims.delete(verified.nodeHandle);
     this.errors.delete(verified.nodeHandle);
     transport.attachNode(identity.nodeId, {
@@ -184,9 +194,16 @@ export class CloudNodeRelayChannels {
       key: connection.key,
       nodeHandle: verified.nodeHandle,
       ...(connection.channelId ? { relayChannelId: connection.channelId } : {}),
-      onClosed: (reason) => this.handleClosed(verified.nodeHandle, reason),
+      onClosed: (reason) => this.handleClosed(verified.nodeHandle, activeChannel, reason),
     });
     await this.options.nodes.connected(identity.nodeId, { nodeHandle: verified.nodeHandle });
+    if (this.channels.get(verified.nodeHandle) !== activeChannel) {
+      // The channel can close while the node record is being persisted. Do not
+      // report a successful attach that the runtime has already treated as gone.
+      const error = Object.assign(new Error("Cloud relay node channel closed while attaching."), { code: "NODE_RELAY_CHANNEL_CLOSED", retryable: true });
+      this.recordError(verified.nodeHandle, error);
+      throw error;
+    }
     this.options.audit?.({ type: "node-relay.channel.attached", outcome: "allowed", nodeHandle: verified.nodeHandle, reason: connection.paired ? "paired" : "pairing-established" });
     return { status: "attached" as const, nodeId: identity.nodeId, nodeHandle: verified.nodeHandle };
   }
@@ -217,12 +234,15 @@ export class CloudNodeRelayChannels {
     };
   }
 
-  private handleClosed(nodeHandle: string, reason: string) {
-    const channel = this.channels.get(nodeHandle);
-    if (!channel) return;
+  private handleClosed(nodeHandle: string, channel: ActiveNodeRelayChannel, reason: string) {
+    // A superseding allocation can attach before the previous socket emits its
+    // close event. Only the channel that is still current may mark the node
+    // offline or trigger another recovery claim.
+    if (this.channels.get(nodeHandle) !== channel) return;
     this.channels.delete(nodeHandle);
     void this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason });
     this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
+    this.options.onChannelClosed?.({ nodeHandle, nodeId: channel.nodeId, reason });
   }
 
   /** Drops only the Relay channel; a preserved direct node keeps its own status and health. */

@@ -214,6 +214,15 @@ export class CloudConnectivityBackgroundRuntime {
         nodes: options.nodeRelay.nodes,
         audit: options.nodeRelay.audit,
         onPreserveLocalConnection: async (nodeHandle) => { await this.revokeAccountNodeClaim(nodeHandle); },
+        onChannelClosed: ({ nodeHandle, nodeId, reason }) => {
+          this.options.logger?.warn?.({
+            code: "NODE_RELAY_CHANNEL_CLOSED",
+            nodeHandle,
+            nodeId,
+            reason: boundedText(reason, 240),
+          }, "node_relay_channel_closed");
+          this.scheduleNodeRelayRecovery(nodeHandle);
+        },
       });
     }
   }
