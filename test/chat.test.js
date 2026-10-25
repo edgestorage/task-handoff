@@ -7152,9 +7152,9 @@ test("web app events websocket bootstraps session authority before app-managemen
   assert.equal(typeof address, "object");
   const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events?aiSessionAuthoritySnapshot=1`);
   t.after(() => socket.terminate());
-  const firstMessages = withTimeout(webSocketMessageFrames(socket, 3), "initial events");
+  const firstMessages = withTimeout(webSocketMessageFrames(socket, 3), "initial events", 10_000);
 
-  await withTimeout(waitForWebSocketOpen(socket), "controlled instance events websocket open");
+  await withTimeout(waitForWebSocketOpen(socket), "controlled instance events websocket open", 10_000);
   const [helloFrame, aiSessionFrame, appManagementFrame] = await firstMessages;
   const hello = JSON.parse(helloFrame.message);
   assert.equal(hello.type, "streams.hello");

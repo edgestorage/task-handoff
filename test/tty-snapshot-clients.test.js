@@ -29,7 +29,7 @@ test("every current TTY client restores authoritative snapshots before live outp
 test("mobile direct and relay TTY transports preserve snapshots", () => {
   const direct = read("apps/mobile/src/control-plane/direct-transport.ts");
   const relay = read("apps/mobile/src/control-plane/relay-transport.ts");
-  const screen = read("apps/mobile/app/app-sessions/[instanceId]/[sessionId].tsx");
+  const screen = read("apps/mobile/src/app-sessions/AppSessionDetailScreen.tsx");
   const relayBridge = read("packages/control-plane/src/control-plane/http/server.ts");
 
   assert.match(direct, /TtyStreamSnapshotMessageSchema/);

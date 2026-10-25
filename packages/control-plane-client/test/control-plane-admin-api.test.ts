@@ -11,7 +11,7 @@ function settings(overrides: Record<string, unknown> = {}) {
 
 function cloud(overrides: Record<string, unknown> = {}) {
   return {
-    version: 1,
+    version: 2,
     serviceOrigin: "https://cloud.example.com",
     status: "active",
     scopes: { deviceAccess: true, nodeRelay: false },
@@ -94,7 +94,7 @@ test("control-plane admin cloud routes", async () => {
     pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a" },
   };
 
-  await api.cloudConnectivity();
+  assert.equal((await api.cloudConnectivity()).version, 2);
   const challenge = await api.createCloudChallenge();
   assert.equal(challenge.challengeCode, "code");
   assert.equal(challenge.payload.hostname, "studio-box");

@@ -20897,7 +20897,8 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.deepEqual(historyDetail.body.data.turns.map((turn) => [turn.id, turn.userPrompt, turn.lastMessage]), [["turn_history_proxy", "Proxy prompt", "Proxy answer"]]);
   const timeline = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/timeline`);
   assert.equal(timeline.statusCode, 200);
-  assert.deepEqual(timeline.body.data.items.map((item) => [item.type, item.id]), [["ai-message", "agent_1"]]);
+  assert.equal(timeline.body.data.kind, "updated");
+  assert.deepEqual(timeline.body.data.timeline.items.map((item) => [item.type, item.id]), [["ai-message", "agent_1"]]);
   const resumeInput = { modelSelection: { modelEntityId: "model_provider_2", modelName: "model_2" } };
   const resumed = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, resumeInput);
   assert.equal(resumed.statusCode, 200);

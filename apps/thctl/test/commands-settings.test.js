@@ -69,7 +69,7 @@ function settingsFetch(fake) {
       return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { "content-type": "application/gzip", "content-disposition": 'attachment; filename="diagnostics.tar.gz"' } });
     }
     if (method === "GET" && parsed.pathname === "/api/cloud-connectivity") {
-      return json(200, { data: { version: 1, serviceOrigin: "https://cloud.example.com", status: "unbound", remoteAccessEnabled: false, updatedAt: now, identity: { controlPlaneId: "cp_fake", algorithm: "Ed25519", publicKey: "pk", fingerprint: "sha256:x" }, hasBackgroundCredential: false } });
+      return json(200, { data: { version: 2, serviceOrigin: "https://cloud.example.com", status: "unbound", scopes: { deviceAccess: false, nodeRelay: false }, remoteAccessEnabled: false, updatedAt: now, identity: { controlPlaneId: "cp_fake", algorithm: "Ed25519", publicKey: "pk", fingerprint: "sha256:x" }, hasBackgroundCredential: false } });
     }
     if (method === "POST" && parsed.pathname === "/api/cloud-connectivity/challenges") {
       return json(200, { data: { challengeCode: "binding_challenge_fake.SECRET-CHALLENGE-CODE", authorizationUrl: "https://cloud.example.com/bindings/authorize", payload: { controlPlaneId: "cp_fake", publicKeyFingerprint: "sha256:x", expiresAt: now }, signature: "sig" } });
