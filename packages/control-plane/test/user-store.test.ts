@@ -36,6 +36,9 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
       // Retires the hash-projection bookkeeping: legacy model identities now
       // upgrade onto stable entity ids on write.
       "0009_drop_model_legacy_projections",
+      "0010_cloud_device_trust",
+      "0011_cloud_device_trust_revision_bigint",
+      "0012_cloud_device_trust_authorization_revision_bigint",
     ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);
@@ -46,7 +49,66 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_models/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_chat_bridges/);
     assert.match(migrations[1]!.sql, /CREATE TABLE cp_git_credentials/);
-    assert.match(migrations.at(-1)!.sql, /DROP TABLE IF EXISTS cp_model_legacy_projections/);
+    assert.match(migrations.find((migration) => migration.id === "0009_drop_model_legacy_projections")!.sql, /DROP TABLE IF EXISTS cp_model_legacy_projections/);
+    const deviceTrustMigration = migrations.find((migration) => migration.id === "0010_cloud_device_trust")!;
+    assert.match(deviceTrustMigration.sql, /CREATE TABLE cp_cloud_device_pins/);
+    assert.match(deviceTrustMigration.sql, /CREATE TABLE cp_cloud_device_trust_requests/);
+    assert.match(deviceTrustMigration.sql, /CREATE TABLE cp_cloud_device_trust_audit/);
+    assert.match(deviceTrustMigration.sql, /CREATE TABLE cp_cloud_device_trust_revisions/);
+    if (migrations === postgresqlMigrations) {
+      const revisionMigration = migrations.find((migration) => migration.id === "0011_cloud_device_trust_revision_bigint")!;
+      assert.match(revisionMigration.sql, /ALTER COLUMN revision TYPE BIGINT/);
+      const authorizationRevisionMigration = migrations.find((migration) => migration.id === "0012_cloud_device_trust_authorization_revision_bigint")!;
+      assert.match(authorizationRevisionMigration.sql, /ALTER COLUMN authorization_revision TYPE BIGINT/);
+    }
+  }
+});
+
+test("0010 cloud device trust migration upgrades a populated 0009 SQLite database", async () => {
+  const dataDir = tempDataDir();
+  const paths = controlPlaneStorePaths(dataDir);
+  fs.mkdirSync(path.dirname(paths.databasePath), { recursive: true });
+  const previous = new DatabaseSync(paths.databasePath);
+  const timestamp = new Date().toISOString();
+  try {
+    previous.exec("PRAGMA foreign_keys = ON;");
+    previous.exec("CREATE TABLE cp_migration_ledger (id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL)");
+    const insertLedger = previous.prepare("INSERT INTO cp_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
+    for (const migration of sqliteMigrations.slice(0, 9)) {
+      previous.exec(migration.sql);
+      insertLedger.run(migration.id, migration.checksum, timestamp, JSON.stringify({ dialect: "sqlite" }));
+    }
+    previous.prepare("INSERT INTO cp_users (id, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .run("user_existing", "Existing Admin", "active", timestamp, timestamp);
+    previous.prepare("INSERT INTO cp_login_identities (id, user_id, kind, normalized_login_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("identity_existing", "user_existing", "local-password", "admin", "scrypt$salt$hash", timestamp, timestamp);
+    previous.prepare("INSERT INTO cp_user_sessions (id, identity_id, authorization_revision, token_hash, expires_at, client_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("sess_existing", "identity_existing", 1, "existing-token-hash", "2030-01-01T00:00:00.000Z", "web", timestamp, timestamp);
+  } finally {
+    previous.close();
+  }
+
+  const repository = await createControlPlaneUserRepository(paths);
+  try {
+    assert.equal((await repository.users.get("user_existing"))?.displayName, "Existing Admin");
+    assert.equal((await repository.sessions.get("sess_existing"))?.clientType, "web");
+    assert.equal((await repository.migration("0010_cloud_device_trust"))?.id, "0010_cloud_device_trust");
+  } finally {
+    await repository.close();
+  }
+
+  const database = new DatabaseSync(paths.databasePath, { readOnly: true });
+  try {
+    const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'cp_cloud_device_%'").all().map((row) => row.name));
+    assert.deepEqual(tables, new Set([
+      "cp_cloud_device_pins",
+      "cp_cloud_device_trust_audit",
+      "cp_cloud_device_trust_requests",
+      "cp_cloud_device_trust_revisions",
+    ]));
+  } finally {
+    database.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
@@ -168,6 +230,10 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
       assert.deepEqual(tables, [
         "cp_chat_bridges",
         "cp_chat_session_bindings",
+        "cp_cloud_device_pins",
+        "cp_cloud_device_trust_audit",
+        "cp_cloud_device_trust_requests",
+        "cp_cloud_device_trust_revisions",
         "cp_external_identity_approvals",
         "cp_git_audit",
         "cp_git_credential_assignments",

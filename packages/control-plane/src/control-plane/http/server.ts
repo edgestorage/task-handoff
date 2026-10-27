@@ -13,6 +13,7 @@ import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema, UpdateControlPlaneAvailableRolesSchema } from "@task-handoff/cloud-contracts";
+import type { CloudDeviceTrustRoleOption } from "@task-handoff/protocol/device-trust";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, GitProvisioningTerminalEventType, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import {
   ControlPlaneCliAuthorizationApprovalResponseSchema,
@@ -43,7 +44,7 @@ import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/le
 import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
 import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneActor } from "../auth/authorization.ts";
-import { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, resolveCloudAccessActor, routeAuthorization } from "./cloud-relay-authorization.ts";
+import { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -91,6 +92,10 @@ import {
   type CloudEnvironment,
 } from "../../../../../shared/cloud-environments.cjs";
 import { CloudEndpointResolver } from "../../../../../shared/cloud-discovery.cjs";
+import { createControlPlaneDeviceTrustStore } from "../device-trust/repository.ts";
+import { CloudDeviceTrustService, type CloudDeviceTrustActor } from "../device-trust/service.ts";
+import { TrustedDeviceSessionRegistry } from "../device-trust/trusted-device-sessions.ts";
+import { registerDeviceTrustRoutes } from "./device-trust-routes.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -123,6 +128,7 @@ export const ControlPlaneHttpErrorSchema = z.object({
   message: z.string(),
   details: z.record(z.string(), z.unknown()).optional(),
   retryable: z.boolean().optional(),
+  requestId: z.string().trim().min(1).optional(),
 }).strict();
 
 export const ControlPlaneHttpErrorResponseSchema = z.object({
@@ -310,22 +316,50 @@ function sendStaticFile(reply: FastifyReply, staticDir: string, relativePath: st
   return reply.send(fs.createReadStream(filePath));
 }
 
-export function controlPlaneErrorPayload(error: unknown) {
+const CONTROL_PLANE_INTERNAL_ERROR_CODE = "CONTROL_PLANE_INTERNAL_ERROR";
+const CONTROL_PLANE_INTERNAL_ERROR_MESSAGE = "The Control Plane could not complete the request.";
+
+function requestCorrelationId(value: unknown) {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, 160) : undefined;
+}
+
+export function controlPlaneErrorPayload(error: unknown, options: { requestId?: unknown } = {}) {
+  const requestId = requestCorrelationId(options.requestId);
   if (error instanceof z.ZodError) {
     return {
       statusCode: 400,
       code: "VALIDATION_ERROR",
       message: error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; "),
+      ...(requestId ? { requestId } : {}),
     };
   }
   const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const requestedStatusCode = typeof record.statusCode === "number" && record.statusCode >= 400 && record.statusCode <= 599
+    ? record.statusCode
+    : 500;
+  const retryable = typeof record.retryable === "boolean" ? { retryable: record.retryable } : {};
+  if (requestedStatusCode >= 500) {
+    // Driver errors, query text, bind values, and upstream response bodies can
+    // contain credentials or sensitive resource identifiers. Their internal
+    // code, message, and details remain server-log-only.
+    return {
+      statusCode: requestedStatusCode,
+      code: CONTROL_PLANE_INTERNAL_ERROR_CODE,
+      message: CONTROL_PLANE_INTERNAL_ERROR_MESSAGE,
+      ...retryable,
+      ...(requestId ? { requestId } : {}),
+    };
+  }
   return {
-    statusCode: typeof record.statusCode === "number" ? record.statusCode : 500,
+    statusCode: requestedStatusCode,
     code: typeof record.code === "string" ? record.code : "CONTROL_PLANE_ERROR",
     message: error instanceof Error ? error.message : String(error),
     ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
-    ...(typeof record.retryable === "boolean" ? { retryable: record.retryable } : {}),
+    ...retryable,
     ...(typeof record.retryAfterSeconds === "number" ? { retryAfterSeconds: record.retryAfterSeconds } : {}),
+    ...(requestId ? { requestId } : {}),
   };
 }
 
@@ -423,11 +457,28 @@ function cliApprover(request: FastifyRequest) {
   return { userId: actor.userId, identityId: actor.identityId };
 }
 
-export { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, resolveCloudAccessActor, routeAuthorization } from "./cloud-relay-authorization.ts";
+export { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
+
+function requestLogSerializer(request: FastifyRequest) {
+  return {
+    id: request.id,
+    method: request.method,
+    url: request.url.split("?")[0],
+    host: request.hostname,
+    remoteAddress: request.ip,
+    remotePort: request.socket.remotePort,
+  };
+}
 
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
-  const app = Fastify({ logger: options.logger ?? true });
+  const app = Fastify({
+    logger: options.logger === false
+      ? false
+      : options.logger && typeof options.logger === "object"
+        ? options.logger
+        : { serializers: { req: requestLogSerializer } },
+  });
   await app.register(compress, {
     encodings: ["br", "gzip", "deflate"],
     globalDecompression: false,
@@ -480,6 +531,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       },
     );
   });
+  const trustedDeviceSessions = new TrustedDeviceSessionRegistry();
+  let cloudDeviceTrust: CloudDeviceTrustService | undefined;
   const auth = new ControlPlaneAuth(paths, {
     ...options.auth,
     onUserAuthorizationChanged: (change) => {
@@ -492,6 +545,17 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     paths.identitySigningPath,
     () => service.proxyPrivateStore.controlPlaneId(),
     (message, details) => app.log.warn(details, message),
+  );
+  cloudDeviceTrust = new CloudDeviceTrustService(
+    createControlPlaneDeviceTrustStore(database),
+    (roleId, repository) => auth.users.roleAuthorization(roleId, repository),
+    {
+      closePinSessions: (pin, reason) => trustedDeviceSessions.closePin(pin.id, pin.authorizationRevision, reason),
+      closeAllSessions: (reason) => trustedDeviceSessions.closeAll(reason),
+      onChanged: ({ bindingId, revision }) => {
+        events.publish("device-trust.changed", { bindingId, revision }, { topic: "device-trust" });
+      },
+    },
   );
   const configuredCloudVariables = configuredCloudEnvironmentVariables(process.env);
   const cloudEnvironment = resolveCloudEnvironment(configuredCloudVariables[CLOUD_ENVIRONMENT_VARIABLES.environment]);
@@ -526,7 +590,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
-      if (actor.type === "cloud-account") actor = await resolveCloudAccessActor(auth.users, actor);
       const authorization = routeAuthorization(method, requestPath);
       if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
@@ -653,7 +716,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
     state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
-    resolveAccessRole: (roleId) => auth.users.roleAuthorization(roleId),
+    deviceTrust: cloudDeviceTrust,
+    trustedDeviceSessions,
     roleCatalog: () => auth.users.roleCatalog(),
     logger: { info: (data, message) => app.log.info(data, message), warn: (data, message) => app.log.warn(data, message) },
     fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir),
@@ -881,19 +945,23 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.setErrorHandler((error, request, reply) => {
-    const payload = controlPlaneErrorPayload(error);
+    const requestId = requestCorrelationId(request.id);
+    const payload = controlPlaneErrorPayload(error, { requestId });
+    if (requestId) reply.header("x-request-id", requestId);
     if (payload.retryAfterSeconds !== undefined) {
       reply.header("retry-after", String(payload.retryAfterSeconds));
     }
     if (diagnosticLogsEnabled || payload.statusCode >= 500) {
-      const log = payload.statusCode >= 500 ? app.log.error.bind(app.log) : app.log.warn.bind(app.log);
+      const log = payload.statusCode >= 500 ? request.log.error.bind(request.log) : request.log.warn.bind(request.log);
+      const matchedRoute = request.routeOptions.url;
       log(
         {
+          err: error,
+          requestId,
           method: request.method,
-          url: request.url,
+          route: matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url.split("?")[0],
           statusCode: payload.statusCode,
           errorCode: payload.code,
-          error: payload.message,
         },
         "control plane request failed",
       );
@@ -904,6 +972,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         message: payload.message,
         ...(payload.details ? { details: payload.details } : {}),
         ...(payload.retryable !== undefined ? { retryable: payload.retryable } : {}),
+        ...(payload.requestId ? { requestId: payload.requestId } : {}),
       },
     }));
   });
@@ -920,7 +989,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     let cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;
     if (cloudActor) {
       cloudRelayActors.delete(internalActorToken as string);
-      if (cloudActor.type === "cloud-account") cloudActor = await resolveCloudAccessActor(auth.users, cloudActor);
       setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
       if (!cloudRelayRouteReachable(request.method, securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
@@ -1030,6 +1098,43 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       });
     }
   };
+
+  const deviceTrustActor = (request: FastifyRequest): CloudDeviceTrustActor => {
+    const actor = controlPlaneRequestActor(request);
+    if (!actor || actor.type === "chat-bridge") {
+      throw Object.assign(new Error("A trusted administrator is required."), {
+        code: "CLOUD_DEVICE_TRUST_ADMIN_REQUIRED",
+        statusCode: 403,
+      });
+    }
+    return {
+      type: actor.type === "user" ? "user" : actor.type === "cloud-account" ? "cloud-account" : "system",
+      id: actor.type === "user" ? actor.userId : actor.type === "cloud-account" ? `cloud-account:${actor.accountId}` : actor.reason,
+      roleIds: actor.type === "user" || actor.type === "cloud-account" ? actor.roleIds : [],
+      permissionIds: actor.type === "user" || actor.type === "cloud-account" ? actor.permissionIds : [],
+      ...(actor.type === "cloud-account" && actor.deviceTrustPinId ? { deviceTrustPinId: actor.deviceTrustPinId } : {}),
+    };
+  };
+
+  const deviceTrustBindingId = (request: FastifyRequest) => {
+    const actor = controlPlaneRequestActor(request);
+    return actor?.type === "cloud-account" ? actor.bindingId : cloudConnectivity.snapshot().bindingId;
+  };
+
+  const deviceTrustRoles = async (): Promise<CloudDeviceTrustRoleOption[]> => (await auth.users.roleSummaries()).map((role) => ({
+    roleId: role.id,
+    name: role.name,
+    ...(role.description ? { description: role.description } : {}),
+    status: role.status,
+    isAdmin: role.permissionIds.includes("settings:manage"),
+  }));
+
+  registerDeviceTrustRoutes(app, {
+    service: cloudDeviceTrust,
+    actor: deviceTrustActor,
+    bindingId: deviceTrustBindingId,
+    roles: deviceTrustRoles,
+  });
 
   app.get("/api/cloud-connectivity", async (request) => {
     await requireCloudConnectivityAdmin(request);
@@ -1293,16 +1398,16 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       instanceIds: eventInstanceId ? [eventInstanceId] : undefined,
       expectsTransientSubscription: eventQuery.aiSessionTransient === "1",
       expectsMetricSubscription: eventQuery.resourceMetricsScope === "1",
-      ...(actor?.type === "user" ? {
+      ...(actor?.type === "user" || actor?.type === "cloud-account" ? {
         authorization: {
-          userId: actor.userId,
+          userId: actor.type === "user" ? actor.userId : `cloud-account:${actor.accountId}`,
           ...(requestSessionCredential(request).source === "cookie" ? { webSession: true as const } : {}),
           authorizationRevision: actor.authorizationRevision,
           permissionIds: actor.permissionIds,
-          ...(actor.nodeScope.kind === "selected" ? {
+          ...(actor.type === "user" && actor.nodeScope.kind === "selected" ? {
             allowedNodeIds: new Set(actor.nodeScope.nodeIds),
           } : {}),
-          ...((actor.instanceScope?.kind === "selected" || actor.nodeScope.kind === "selected") ? {
+          ...(actor.type === "user" && (actor.instanceScope?.kind === "selected" || actor.nodeScope.kind === "selected") ? {
             allowedInstanceIds: visibleInstanceIds,
           } : {}),
         },
@@ -1497,7 +1602,15 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
   });
 
-  registerControlPlaneUserRoutes(app, auth, operationApprovals, { onRoleCatalogChanged: () => cloudConnectivityRuntime.notifyAccessRoleCatalogChanged() });
+  registerControlPlaneUserRoutes(app, auth, operationApprovals, {
+    onRoleCatalogChanged: async () => {
+      // Device pins resolve their permissions from this local role catalog.
+      // Close live sessions before the next handshake establishes whether the
+      // approved role still exists or changed.
+      await cloudDeviceTrust?.closeAllSessions("local-role-catalog-changed");
+      await cloudConnectivityRuntime.notifyAccessRoleCatalogChanged();
+    },
+  });
   registerControlPlaneGitCredentialRoutes(app, service, auth, operationApprovals);
 
   app.get("/api/control-plane/status", async () => ({

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
+import { nodeAgentControlPlaneComparisonCode, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { verifyCoordinatorNodeRelayAllocation } from "./relay-connector.ts";
-import type { ConnectedNodeRelayChannel, VerifiedNodeRelayAllocation } from "./node-relay-connector.ts";
+import type { CloudNodeRelayConnectorResult, VerifiedNodeRelayAllocation } from "./node-relay-connector.ts";
 
 /** Structural surface of the Relay dialer, so tests can inject a linked socket. */
 export type CloudNodeRelayChannelConnector = {
@@ -10,7 +10,7 @@ export type CloudNodeRelayChannelConnector = {
     serviceOrigin: string;
     pairing?: { keyId: string; secret: string };
     createPairing(): { keyId: string; secret: string };
-  }): Promise<ConnectedNodeRelayChannel>;
+  }): Promise<CloudNodeRelayConnectorResult>;
 };
 
 export type CloudNodeRelayChannelTransport = {
@@ -49,6 +49,21 @@ type ActiveNodeRelayChannel = {
   connectedAt: string;
 };
 
+export type NodeRelayControlPlaneTrustProjection = {
+  nodeHandle: string;
+  nodeId: string;
+  displayName?: string;
+  state: "pending" | "rejected" | "expired";
+  reason: string;
+  controlPlaneId: string;
+  controlPlaneFingerprint: string;
+  comparisonCode: string;
+  requestId?: string;
+  requestedAt: string;
+  expiresAt?: string;
+  observedAt: string;
+};
+
 /**
  * Owns the Control Plane end of every account node channel: verifying each
  * pushed allocation against the local binding and scope, dialing the Relay,
@@ -61,6 +76,7 @@ export class CloudNodeRelayChannels {
   private readonly channels = new Map<string, ActiveNodeRelayChannel>();
   private readonly claims = new Map<string, { requestedAt: string }>();
   private readonly errors = new Map<string, { code: string; message: string; at: string }>();
+  private readonly trust = new Map<string, NodeRelayControlPlaneTrustProjection>();
 
   constructor(options: CloudNodeRelayChannelsOptions) {
     this.options = options;
@@ -79,12 +95,25 @@ export class CloudNodeRelayChannels {
     this.recordError(nodeHandle, error);
   }
 
+  recordTrustProbeTimeout(nodeHandle: string) {
+    this.recordError(nodeHandle, Object.assign(
+      new Error("Node Agent did not answer the Control Plane trust probe before the timeout."),
+      { code: "NODE_RELAY_TRUST_TIMEOUT", retryable: true },
+    ));
+  }
+
+  trustState(nodeHandle: string) {
+    return this.trust.get(nodeHandle)?.state;
+  }
+
   forgetClaim(nodeHandle: string) {
     this.claims.delete(nodeHandle);
   }
 
   forgetNode(nodeHandle: string) {
+    this.claims.delete(nodeHandle);
     this.errors.delete(nodeHandle);
+    this.trust.delete(nodeHandle);
     this.closeNode(nodeHandle, "node-relay-claim-revoked");
   }
 
@@ -149,6 +178,31 @@ export class CloudNodeRelayChannels {
       this.recordError(verified.nodeHandle, error);
       throw error;
     });
+    if (connection.status === "trust-required") {
+      const identity = this.options.state.snapshot().identity;
+      this.trust.set(verified.nodeHandle, {
+        nodeHandle: verified.nodeHandle,
+        nodeId: connection.outcome.nodeId,
+        ...(verified.displayName ? { displayName: verified.displayName } : {}),
+        state: connection.outcome.state,
+        reason: connection.outcome.reason,
+        controlPlaneId: connection.outcome.controlPlaneId,
+        controlPlaneFingerprint: connection.outcome.controlPlanePublicKeyFingerprint,
+        comparisonCode: nodeAgentControlPlaneComparisonCode(connection.outcome.controlPlaneId, identity.publicKey),
+        ...(connection.outcome.requestId ? { requestId: connection.outcome.requestId } : {}),
+        requestedAt: connection.outcome.requestedAt,
+        ...(connection.outcome.expiresAt ? { expiresAt: connection.outcome.expiresAt } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+      this.errors.delete(verified.nodeHandle);
+      this.options.audit?.({ type: "node-relay.control-plane-trust", outcome: "denied", nodeHandle: verified.nodeHandle, reason: connection.outcome.state });
+      return {
+        status: "trust-required" as const,
+        nodeId: connection.outcome.nodeId,
+        nodeHandle: verified.nodeHandle,
+        trust: this.trust.get(verified.nodeHandle),
+      };
+    }
     if (verified.nodeId && verified.nodeId !== connection.nodeId) {
       closeConnection(connection.socket, "node-relay-node-id-mismatch");
       const error = nodeIdentityMismatch(verified.nodeHandle, verified.nodeId, connection.nodeId);
@@ -189,6 +243,7 @@ export class CloudNodeRelayChannels {
     this.channels.set(verified.nodeHandle, activeChannel);
     this.claims.delete(verified.nodeHandle);
     this.errors.delete(verified.nodeHandle);
+    this.trust.delete(verified.nodeHandle);
     transport.attachNode(identity.nodeId, {
       socket: connection.socket,
       key: connection.key,
@@ -231,6 +286,7 @@ export class CloudNodeRelayChannels {
       })),
       claims: [...this.claims.entries()].map(([nodeHandle, claim]) => ({ nodeHandle, requestedAt: claim.requestedAt })),
       errors: [...this.errors.entries()].map(([nodeHandle, error]) => ({ nodeHandle, ...error })),
+      trust: [...this.trust.values()],
     };
   }
 

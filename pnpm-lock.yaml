@@ -224,6 +224,9 @@ importers:
       '@task-handoff/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@task-handoff/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       commander:
         specifier: ^14.0.3
         version: 14.0.3

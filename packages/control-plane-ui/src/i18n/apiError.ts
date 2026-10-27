@@ -4,10 +4,16 @@ export type StructuredApiError = {
   code?: unknown;
   message?: unknown;
   details?: unknown;
+  status?: unknown;
+  requestId?: unknown;
 };
 
 type ErrorDescriptor = {
   key: string;
+  requestIdVariant?: {
+    key: string;
+    parameter: string;
+  };
   detailVariant?: {
     key: string;
     detailKey: string;
@@ -32,6 +38,13 @@ const knownApiErrors: Record<string, ErrorDescriptor> = {
   AUTH_CREDENTIAL_UPDATE_IN_PROGRESS: { key: "errors.AUTH_CREDENTIAL_UPDATE_IN_PROGRESS" },
   CONTROL_PLANE_AUTH_REQUIRED: { key: "errors.CONTROL_PLANE_AUTH_REQUIRED" },
   CONTROL_PLANE_FORBIDDEN: { key: "errors.CONTROL_PLANE_FORBIDDEN" },
+  CONTROL_PLANE_INTERNAL_ERROR: {
+    key: "errors.CONTROL_PLANE_INTERNAL_ERROR",
+    requestIdVariant: {
+      key: "errors.CONTROL_PLANE_INTERNAL_ERROR_WITH_REQUEST_ID",
+      parameter: "requestId",
+    },
+  },
   CONTROL_PLANE_LOCAL_IDENTITY_IMMUTABLE: { key: "errors.CONTROL_PLANE_LOCAL_IDENTITY_IMMUTABLE" },
   CONTROL_PLANE_IDENTITY_PROVIDER_NAMESPACE_IMMUTABLE: { key: "errors.CONTROL_PLANE_IDENTITY_PROVIDER_NAMESPACE_IMMUTABLE" },
 
@@ -232,9 +245,14 @@ function joinDetailList(value: unknown, separator: string): string | undefined {
 export function translateApiError(error: unknown, t: Translate, fallback?: string) {
   const record = errorRecord(error);
   const code = typeof record.code === "string" ? record.code.trim() : "";
+  const requestId = typeof record.requestId === "string" && record.requestId.trim() ? record.requestId.trim() : undefined;
+  const status = typeof record.status === "number" && Number.isFinite(record.status) ? record.status : undefined;
   const descriptor = code ? knownApiErrors[code] : undefined;
 
   if (descriptor) {
+    if (descriptor.requestIdVariant && requestId) {
+      return t(descriptor.requestIdVariant.key, { [descriptor.requestIdVariant.parameter]: requestId });
+    }
     const variant = descriptor.detailVariant;
     const rawDetail = variant ? detailRecord(record.details)[variant.detailKey] : undefined;
     const detail = variant
@@ -244,6 +262,15 @@ export function translateApiError(error: unknown, t: Translate, fallback?: strin
       return t(variant.key, { [variant.parameter]: detail });
     }
     return t(descriptor.key);
+  }
+
+  // An unknown 5xx message can contain driver text, query fragments, or
+  // internal identifiers. Do not render it even when an older server still
+  // returns the diagnostic in the response body.
+  if (status !== undefined && status >= 500) {
+    return requestId
+      ? t("errors.CONTROL_PLANE_INTERNAL_ERROR_WITH_REQUEST_ID", { requestId })
+      : t("errors.CONTROL_PLANE_INTERNAL_ERROR");
   }
 
   if (typeof record.message === "string" && record.message.trim()) {

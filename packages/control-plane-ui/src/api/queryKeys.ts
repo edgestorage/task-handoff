@@ -42,6 +42,7 @@ export const controlPlaneQueryKeys = {
   nodeLocalFolders: (nodeId?: string) => nodeId
     ? ["control-plane-node-local-folders", nodeId] as const
     : ["control-plane-node-local-folders"] as const,
+  nodeControlPlaneTrust: (nodeId: string) => ["control-plane-node-control-plane-trust", nodeId] as const,
   nodeImageCatalog: (nodeId?: string) => nodeId
     ? ["node-image-catalog", nodeId] as const
     : ["node-image-catalog"] as const,

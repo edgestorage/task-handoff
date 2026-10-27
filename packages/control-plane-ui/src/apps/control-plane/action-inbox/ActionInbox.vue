@@ -45,6 +45,60 @@
                   @cancel="emit('cancel-story', item)"
                 />
               </template>
+              <template v-else-if="item.type === 'device-trust'">
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind">
+                    <ShieldCheck :size="13" aria-hidden="true" />
+                    {{ t('navigation.deviceTrust.title') }}
+                  </span>
+                  <span class="action-inbox-source" :title="item.request.device.name">{{ item.request.device.name }}</span>
+                </header>
+                <div class="action-inbox-title" :title="item.request.device.name">
+                  {{ t(`navigation.deviceTrust.reasons.${item.request.reason}`) }}
+                </div>
+                <div class="action-inbox-context">{{ t('navigation.deviceTrust.source') }}: {{ t(`navigation.deviceTrust.sources.${item.request.source}`) }} · {{ t('navigation.deviceTrust.pendingStatus') }}</div>
+                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.reported') }}: {{ item.request.device.kind }} · {{ item.request.device.platform }}<template v-if="item.request.device.version"> · {{ item.request.device.version }}</template></div>
+                <div class="action-inbox-context action-inbox-detail" :title="item.request.fingerprint">{{ t('navigation.deviceTrust.fingerprint') }}: {{ item.request.fingerprint }}</div>
+                <div class="action-inbox-context">{{ t('navigation.deviceTrust.comparisonCode') }}: <strong class="action-inbox-comparison">{{ item.request.comparisonCode }}</strong></div>
+                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.binding') }}: {{ item.request.bindingId }}</div>
+                <div class="action-inbox-context action-inbox-detail">{{ t(`navigation.deviceTrust.accessModes.${item.request.accessMode}`) }} · {{ t('navigation.deviceTrust.account') }}: {{ item.request.accountId }}<template v-if="item.request.accessMode === 'shared'"> · {{ t('navigation.deviceTrust.owner') }}: {{ item.request.ownerAccountId }}</template></div>
+                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.cloudRole') }}: {{ item.request.cloudAccessRoleId }}<template v-if="item.request.shareGrantId"> · {{ t('navigation.deviceTrust.shareGrant') }}: {{ item.request.shareGrantId }}</template></div>
+                <div class="action-inbox-context">{{ t('navigation.deviceTrust.requestedAt') }}: {{ formatDate(item.request.requestedAt) }} · {{ t('navigation.deviceTrust.expiresAt') }}: {{ formatDate(item.request.expiresAt) }}</div>
+                <Select :model-value="selectedDeviceRoleId(item)" @update:model-value="(value) => setDeviceRole(item, value)">
+                  <SelectTrigger class="action-inbox-device-select" :aria-label="t('navigation.deviceTrust.role')">
+                    <SelectValue :placeholder="t('navigation.deviceTrust.chooseRole')" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="role in activeDeviceRoles(item)" :key="role.roleId" :value="role.roleId">
+                      {{ role.name }}<template v-if="role.isAdmin"> · {{ t('navigation.deviceTrust.adminRole') }}</template>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <div v-if="!activeDeviceRoles(item).length" class="action-inbox-context">{{ t('navigation.deviceTrust.noRoles') }}</div>
+                <div class="action-inbox-actions">
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey) || !selectedDeviceRoleId(item)" @click="approveDevice(item)">{{ t('navigation.deviceTrust.approve') }}</Button>
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-device', item, { decision: 'reject' })">{{ t('navigation.deviceTrust.reject') }}</Button>
+                </div>
+              </template>
+              <template v-else-if="item.type === 'node-control-plane-trust'">
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind">
+                    <ShieldCheck :size="13" aria-hidden="true" />
+                    {{ t('navigation.nodeControlPlaneTrust.title') }}
+                  </span>
+                  <span class="action-inbox-source" :title="item.trust.nodeHandle">{{ item.trust.displayName || item.trust.nodeHandle }}</span>
+                </header>
+                <div class="action-inbox-title">{{ t(`navigation.nodeControlPlaneTrust.reasons.${item.trust.reason}`) }}</div>
+                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.pendingStatus') }}</div>
+                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.nodeControlPlaneTrust.node') }}: {{ item.trust.nodeHandle }} · {{ item.nodeId }}</div>
+                <div class="action-inbox-context action-inbox-detail" :title="item.trust.controlPlaneFingerprint">{{ t('navigation.nodeControlPlaneTrust.fingerprint') }}: {{ item.trust.controlPlaneFingerprint }}</div>
+                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.comparisonCode') }}: <strong class="action-inbox-comparison">{{ item.trust.comparisonCode }}</strong></div>
+                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.requestedAt') }}: {{ formatDate(item.trust.requestedAt) }}<template v-if="item.trust.expiresAt"> · {{ t('navigation.nodeControlPlaneTrust.expiresAt') }}: {{ formatDate(item.trust.expiresAt) }}</template></div>
+                <div class="action-inbox-actions">
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-node-control-plane', item, 'approve')">{{ t('navigation.nodeControlPlaneTrust.approve') }}</Button>
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-node-control-plane', item, 'reject')">{{ t('navigation.nodeControlPlaneTrust.reject') }}</Button>
+                </div>
+              </template>
               <template v-else>
                 <header class="action-inbox-head">
                   <span class="action-inbox-kind">
@@ -78,6 +132,9 @@ import { useI18n } from "vue-i18n";
 import { BookOpen, ChevronUp, ExternalLink, ShieldCheck, ShieldQuestion } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../components/ui/select";
+import { formatDateTime } from "../../../i18n/presentation";
+import type { SupportedLocale } from "../../../i18n/locale";
 import type { AiSessionApprovalDecision } from "./aiSessionApprovals";
 import { actionInboxPlacement } from "./toastPlacement";
 import { visibleToastBounds } from "../../../components/ui/sonner/toastRegion";
@@ -91,12 +148,28 @@ const emit = defineEmits<{
   collapse: [];
   resolve: [item: Extract<Item, { type: "ai-session-approval" }>, decision: AiSessionApprovalDecision];
   decide: [item: Extract<Item, { type: "operation-approval" }>, decision: "approve" | "deny"];
+  "decide-device": [item: Extract<Item, { type: "device-trust" }>, decision: { decision: "approve"; roleId: string } | { decision: "reject" }];
+  "decide-node-control-plane": [item: Extract<Item, { type: "node-control-plane-trust" }>, decision: "approve" | "reject"];
   "decide-story": [item: StoryDecisionItem, input: { optionId?: string; response?: string }];
   "cancel-story": [item: StoryDecisionItem];
   "open-story": [item: StoryDecisionItem];
   "open-story-session": [item: StoryDecisionItem];
 }>();
-const { t } = useI18n();
+const { locale, t } = useI18n();
+const deviceRoleSelections = ref<Record<string, string>>({});
+const activeDeviceRoles = (item: Extract<Item, { type: "device-trust" }>) => item.roles.filter((role) => role.status === "active");
+const formatDate = (value: string) => formatDateTime(value, locale.value as SupportedLocale);
+function selectedDeviceRoleId(item: Extract<Item, { type: "device-trust" }>) {
+  const roleId = deviceRoleSelections.value[item.key];
+  return roleId && activeDeviceRoles(item).some((role) => role.roleId === roleId) ? roleId : undefined;
+}
+function setDeviceRole(item: Extract<Item, { type: "device-trust" }>, value: unknown) {
+  if (typeof value === "string") deviceRoleSelections.value[item.key] = value;
+}
+function approveDevice(item: Extract<Item, { type: "device-trust" }>) {
+  const roleId = selectedDeviceRoleId(item);
+  if (roleId) emit("decide-device", item, { decision: "approve", roleId });
+}
 const operationLabels: Record<ApprovalOperation, string> = {
   "instance.delete": "navigation.instanceDeleteApproval",
   "node.remove": "navigation.nodeRemoveApproval",
@@ -213,6 +286,8 @@ onBeforeUnmount(() => {
 .action-inbox-story-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-inbox-open-session { flex: 0 0 auto; color: var(--text-muted); }
 .action-inbox-context { font-size: 12px; color: var(--text-muted); }
+.action-inbox-comparison { color: var(--text-strong); font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace); font-weight: 500; letter-spacing: 0.04em; }
+.action-inbox-device-select { height: 30px; margin-top: 4px; font-size: 12px; }
 .action-inbox-detail { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-title { font-size: 14px; margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

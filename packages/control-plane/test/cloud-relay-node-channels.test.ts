@@ -336,6 +336,102 @@ test("a node that cannot prove the registered key never reaches the transport", 
   assert.equal(channel.channels.state().errors[0]?.code, "NODE_RELAY_NODE_KEY_MISMATCH");
 });
 
+test("a trust-required outcome projects pending state without a pairing, channel, or connected node", async () => {
+  const node = ed25519Identity();
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  let createPairingCalls = 0;
+  let attachCalls = 0;
+  const transport = {
+    attachNode() { attachCalls += 1; },
+    detachNode: () => true,
+    connected: () => true,
+  };
+  const channels = new CloudNodeRelayChannels({
+    state: {
+      snapshot: () => ({
+        status: "active",
+        scopes: { deviceAccess: true, nodeRelay: true },
+        cloudControlPlaneId: "control_plane_cp1",
+        identity: { controlPlaneId: "control_plane_cp1", publicKey: cp.publicKey, fingerprint: nodeRelayFingerprint(cp.publicKey) },
+        accountId: "account_a",
+        bindingId: "binding_a",
+        bindingRevision: 1,
+        serviceOrigin: "https://cloud.example.com",
+      }),
+    },
+    connector: {
+      async connect() {
+        return {
+          status: "trust-required" as const,
+          outcome: {
+            type: "node-agent.control-plane-trust" as const,
+            protocolVersion: "2026-10-26.1",
+            audience: "task-handoff:node-agent-control-plane-trust",
+            allocationId: "node_allocation_a",
+            relayId: "relay_a",
+            nodeHandle: "nrh_node_alpha",
+            nodeId: node.nodeId,
+            nodePublicKey: node.publicKey,
+            nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey),
+            controlPlaneId: "control_plane_cp1",
+            controlPlanePublicKeyFingerprint: nodeRelayFingerprint(cp.publicKey),
+            bindingId: "binding_a",
+            bindingRevision: 1,
+            access: { accountId: "account_a", ownerAccountId: "account_a", accessMode: "owner" as const },
+            state: "pending" as const,
+            reason: "first-seen",
+            requestId: "cptreq_pending",
+            requestedAt: "2026-10-26T09:59:59.000Z",
+            expiresAt: "2026-10-27T09:59:59.000Z",
+            issuedAt: "2026-10-26T09:59:59.500Z",
+          },
+        };
+      },
+    },
+    transport: () => transport,
+    nodes: store.adapter,
+  });
+  const event = nodeRelayAllocationEvent({
+    allocationId: "node_allocation_a",
+    nodeHandle: "nrh_node_alpha",
+    nodeId: node.nodeId,
+    displayName: "Alpha box",
+    controlPlaneId: "control_plane_cp1",
+    accountId: "account_a",
+    bindingId: "binding_a",
+    nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey),
+  });
+
+  const result = await channels.attach(event);
+  assert.equal(result.status, "trust-required");
+  assert.equal(createPairingCalls, 0);
+  assert.equal(attachCalls, 0);
+  assert.deepEqual(store.calls.saved, []);
+  assert.deepEqual(store.calls.connected, []);
+  assert.deepEqual(channels.state().channels, []);
+  assert.equal(channels.state().trust[0]?.state, "pending");
+  assert.equal(channels.state().trust[0]?.requestId, "cptreq_pending");
+  assert.equal(channels.state().trust[0]?.nodeId, node.nodeId);
+  assert.equal(channels.state().trust[0]?.displayName, "Alpha box");
+});
+
+test("forgetting a revoked node clears its pending claim projection", () => {
+  const node = ed25519Identity();
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  const sockets = linkedFrameSockets();
+  const channel = controlPlaneChannel({ controlPlaneId: "control_plane_cp1", bindingId: "binding_a", socket: sockets.left, identity: cp, store });
+
+  channel.channels.noteClaim("nrh_node_alpha");
+  assert.equal(channel.channels.state().claims.length, 1);
+  assert.equal(channel.channels.state().claims[0]?.nodeHandle, "nrh_node_alpha");
+
+  channel.channels.forgetNode("nrh_node_alpha");
+
+  assert.deepEqual(channel.channels.state().claims, []);
+});
+
 test("a node refuses a peer that does not hold the key pinned in its claim grant", async () => {
   const node = ed25519Identity();
   const fingerprint = nodeRelayFingerprint(node.publicKey);

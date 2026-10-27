@@ -6,6 +6,16 @@ import {
   NodeAgentPairingInviteSchema,
 } from "./schemas.ts";
 import {
+  NodeAgentControlPlaneTrustDecisionSchema,
+  NodeAgentControlPlaneTrustRetrySchema,
+  NodeAgentControlPlaneTrustRevokeSchema,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
+import type {
+  NodeAgentCloudControlPlanePin,
+  NodeAgentCloudControlPlaneTrustDecisionResult,
+  NodeAgentCloudControlPlaneTrustRequest,
+} from "../cloud-relay/trust-types.ts";
+import {
   assertHttpControlPlaneUrl,
   completeControlPlaneJoin,
   type NodeAgentIdentityService,
@@ -22,6 +32,11 @@ type Options = {
   nodeName(): string;
   fetchImpl: typeof fetch;
   reverseTunnels(): ReverseTunnelAccess | undefined;
+  onTrustChanged?(change: {
+    decision?: NodeAgentCloudControlPlaneTrustDecisionResult;
+    revokedPin?: NodeAgentCloudControlPlanePin;
+    retried?: NodeAgentCloudControlPlaneTrustRequest;
+  }): void;
 };
 
 const StoredIdSchema = z.string().trim().min(1).max(160);
@@ -117,5 +132,65 @@ export function registerNodeAgentIdentityRoutes(app: FastifyInstance, options: O
         },
       });
     });
+  });
+
+  const trustActor = (request: { nodeAgentAuthKeyId?: string }) => {
+    const keyId = request.nodeAgentAuthKeyId;
+    if (!keyId) return { type: "local" as const, id: "local-node-agent-admin" };
+    const authority = identity.resolveControlPlaneAuthority(keyId);
+    if (!authority) {
+      throw Object.assign(new Error("The authenticated Control Plane identity could not be resolved."), {
+        statusCode: 403,
+        code: "NODE_AGENT_CONTROL_PLANE_IDENTITY_UNRESOLVED",
+      });
+    }
+    return {
+      type: "control-plane" as const,
+      id: authority.controlPlaneId,
+      connectionType: authority.connectionType,
+    };
+  };
+
+  const trustSnapshot = () => identity.cloudControlPlaneTrustSnapshot();
+
+  app.get("/api/node-agent/control-plane-trust", async () => ({ data: trustSnapshot() }));
+
+  app.post("/api/node-agent/control-plane-trust/requests/:requestId/decision", async (request) => {
+    const { requestId } = z.object({ requestId: StoredIdSchema }).strict().parse(request.params);
+    const input = NodeAgentControlPlaneTrustDecisionSchema.parse(request.body);
+    const actor = trustActor(request);
+    const decision = identity.decideCloudControlPlaneTrust({
+      action: input.action,
+      requestId,
+      expectedFingerprint: input.expectedFingerprint,
+      expectedRevision: input.expectedRevision,
+      actor,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.action === "approve" && input.retainPreviousKey !== undefined ? { retainPreviousKey: input.retainPreviousKey } : {}),
+    });
+    options.onTrustChanged?.({ decision });
+    return { data: trustSnapshot() };
+  });
+
+  app.post("/api/node-agent/control-plane-trust/requests/:requestId/retry", async (request) => {
+    const { requestId } = z.object({ requestId: StoredIdSchema }).strict().parse(request.params);
+    NodeAgentControlPlaneTrustRetrySchema.parse(request.body ?? {});
+    const retried = identity.retryCloudControlPlaneTrustRequest(requestId, trustActor(request));
+    options.onTrustChanged?.({ retried });
+    return { data: trustSnapshot() };
+  });
+
+  app.post("/api/node-agent/control-plane-trust/pins/:pinId/revoke", async (request) => {
+    const { pinId } = z.object({ pinId: StoredIdSchema }).strict().parse(request.params);
+    const input = NodeAgentControlPlaneTrustRevokeSchema.parse(request.body);
+    const revokedPin = identity.revokeCloudControlPlaneTrustPin({
+      pinId,
+      expectedFingerprint: input.expectedFingerprint,
+      expectedRevision: input.expectedRevision,
+      actor: trustActor(request),
+      ...(input.reason ? { reason: input.reason } : {}),
+    });
+    options.onTrustChanged?.({ revokedPin });
+    return { data: trustSnapshot() };
   });
 }

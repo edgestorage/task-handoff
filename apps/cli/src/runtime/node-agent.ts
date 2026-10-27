@@ -9,6 +9,11 @@ import {
   runNodeAgentServer,
   uninstallNodeAgent,
 } from "@task-handoff/control-plane/node-agent";
+import {
+  NodeAgentControlPlaneTrustSnapshotSchema,
+  type NodeAgentControlPlaneTrustRequest,
+  type NodeAgentControlPlaneTrustSnapshot,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
 
 // The Linux service installer listens here explicitly. Keep the same default
 // for one-off CLI commands run through sudo, where the service's environment
@@ -139,6 +144,101 @@ async function bindCloudRelay(options: {
   };
   if (!response.ok) throw new Error(payload.error?.message || `Cloud relay binding failed with HTTP ${response.status}`);
   return payload.data || {};
+}
+
+type NodeAgentTrustOptions = {
+  endpoint?: string;
+  ipcPath?: string;
+  token?: string;
+};
+
+async function fetchNodeAgentTrust(options: NodeAgentTrustOptions, path: string, method = "GET", body?: unknown) {
+  const headers = {
+    ...(body === undefined ? {} : { "content-type": "application/json" }),
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+  };
+  const response = options.endpoint
+    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    : await fetchNodeAgentIpc(options.ipcPath!, path, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: { message?: string } };
+  if (!response.ok) throw new Error(payload.error?.message || `Node Agent trust request failed with HTTP ${response.status}`);
+  const parsed = NodeAgentControlPlaneTrustSnapshotSchema.safeParse(payload.data);
+  if (!parsed.success) {
+    throw new Error("Node Agent trust response did not include a trust snapshot.");
+  }
+  return parsed.data;
+}
+
+function matchesTrustIdentity(value: { fingerprint: string; comparisonCode: string }, options: { fingerprint?: string; comparisonCode?: string }) {
+  if (!options.fingerprint && !options.comparisonCode) throw new Error("Specify --fingerprint or --comparison-code.");
+  if (options.fingerprint && value.fingerprint !== options.fingerprint) return false;
+  if (options.comparisonCode && value.comparisonCode !== options.comparisonCode) return false;
+  return true;
+}
+
+function requireTrustRequest(snapshot: NodeAgentControlPlaneTrustSnapshot, requestId: string, options: { fingerprint?: string; comparisonCode?: string }) {
+  const request = snapshot.requests.find((item) => item.requestId === requestId);
+  if (!request) throw new Error(`Control Plane trust request not found: ${requestId}`);
+  if (!matchesTrustIdentity(request, options)) throw new Error("The Control Plane fingerprint or comparison code does not match the request.");
+  return request;
+}
+
+function requireTrustPin(snapshot: NodeAgentControlPlaneTrustSnapshot, pinId: string, options: { fingerprint?: string; comparisonCode?: string }) {
+  const pin = snapshot.pins.find((item) => item.pinId === pinId);
+  if (!pin) throw new Error(`Control Plane trust pin not found: ${pinId}`);
+  if (!matchesTrustIdentity(pin, options)) throw new Error("The Control Plane fingerprint or comparison code does not match the pin.");
+  return pin;
+}
+
+function accessLabel(access: NodeAgentControlPlaneTrustRequest["access"]) {
+  return access.accessMode === "shared"
+    ? `shared ${access.accountId} via ${access.shareGrantId || "grant"}${access.shareRevision ? ` r${access.shareRevision}` : ""}`
+    : `owner ${access.accountId}`;
+}
+
+function printTrustSnapshot(snapshot: NodeAgentControlPlaneTrustSnapshot) {
+  console.log(`Node Agent: ${snapshot.nodeId}${snapshot.nodeHandle ? ` · ${snapshot.nodeHandle}` : ""}`);
+  const pending = snapshot.requests.filter((request) => request.status === "pending");
+  console.log(`Pending Control Plane requests (not mobile devices): ${pending.length}`);
+  for (const request of pending) {
+    console.log(`- request ${request.requestId} · ${request.controlPlaneId} · ${request.reason}`);
+    console.log(`  fingerprint ${request.fingerprint}`);
+    console.log(`  compare ${request.comparisonCode}`);
+    console.log(`  node ${request.nodeHandle} · ${request.bindingId} r${request.bindingRevision} · ${accessLabel(request.access)}`);
+    console.log(`  requested ${request.requestedAt} · expires ${request.expiresAt} · revision ${request.revision}`);
+  }
+  const pins = snapshot.pins.filter((pin) => pin.status === "active");
+  console.log(`Active trusted Control Planes (not mobile devices): ${pins.length}`);
+  for (const pin of pins) {
+    console.log(`- pin ${pin.pinId} · ${pin.controlPlaneId}`);
+    console.log(`  fingerprint ${pin.fingerprint}`);
+    console.log(`  compare ${pin.comparisonCode}`);
+    console.log(`  node ${pin.nodeHandle} · ${pin.bindingId} r${pin.bindingRevision} · ${accessLabel(pin.access)}`);
+    console.log(`  approved ${pin.approvedAt} by ${pin.approvedByActorType}:${pin.approvedByActorId} · last seen ${pin.lastSeenAt} · revision ${pin.revision}`);
+  }
+}
+
+function resolveTrustTransport(rootOptions: { ipcPath?: string; dataDir?: string }, options: {
+  endpoint?: string;
+  ipcPath?: string;
+  dataDir?: string;
+}) {
+  const explicitIpcPath = options.ipcPath || rootOptions.ipcPath
+    || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH;
+  const dataDir = options.dataDir || rootOptions.dataDir
+    || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
+  return {
+    endpoint: options.endpoint,
+    ipcPath: options.endpoint ? undefined : resolveNodeAgentIpcPath(explicitIpcPath, dataDir),
+  };
 }
 
 async function unbindCloudRelay(options: { endpoint?: string; ipcPath?: string; token?: string }) {
@@ -309,6 +409,146 @@ async function main() {
         return;
       }
       console.log(result.unbound ? `Unbound: ${String(result.nodeHandle || "node")}` : "Node Agent was not bound.");
+    });
+
+  const trust = program
+    .command("trust")
+    .description("Review and manage Control Planes trusted for this Node Agent's cloud relay (not mobile devices).");
+
+  trust
+    .command("list")
+    .description("List pending Control Plane trust requests and active trusted Control Planes.")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (options) => {
+      const transport = resolveTrustTransport(program.opts(), options);
+      const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
+      if (options.json) {
+        console.log(JSON.stringify(snapshot, null, 2));
+        return;
+      }
+      printTrustSnapshot(snapshot);
+    });
+
+  trust
+    .command("approve")
+    .description("Approve a pending Control Plane. Compare its fingerprint or short code with the Control Plane UI first.")
+    .argument("<requestId>", "Pending Control Plane trust request ID")
+    .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
+    .option("--comparison-code <code>", "Expected short comparison code")
+    .option("--revision <revision>", "Expected request revision from the list output", parsePositiveInteger)
+    .option("--retain-previous-key", "Keep the previous key active for the same Control Plane and access context")
+    .option("--reason <reason>", "Decision reason for the local audit log")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (requestId, options) => {
+      const transport = resolveTrustTransport(program.opts(), options);
+      const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
+      const request = requireTrustRequest(snapshot, requestId, options);
+      const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/decision`, "POST", {
+        action: "approve",
+        expectedFingerprint: request.fingerprint,
+        expectedRevision: options.revision ?? request.revision,
+        ...(options.retainPreviousKey ? { retainPreviousKey: true } : {}),
+        ...(options.reason ? { reason: options.reason } : {}),
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      printTrustSnapshot(result);
+    });
+
+  trust
+    .command("reject")
+    .description("Reject a pending Control Plane trust request.")
+    .argument("<requestId>", "Pending Control Plane trust request ID")
+    .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
+    .option("--comparison-code <code>", "Expected short comparison code")
+    .option("--revision <revision>", "Expected request revision from the list output", parsePositiveInteger)
+    .option("--reason <reason>", "Rejection reason for the local audit log")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (requestId, options) => {
+      const transport = resolveTrustTransport(program.opts(), options);
+      const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
+      const request = requireTrustRequest(snapshot, requestId, options);
+      const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/decision`, "POST", {
+        action: "reject",
+        expectedFingerprint: request.fingerprint,
+        expectedRevision: options.revision ?? request.revision,
+        ...(options.reason ? { reason: options.reason } : {}),
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      printTrustSnapshot(result);
+    });
+
+  trust
+    .command("retry")
+    .description("Explicitly reopen a rejected or expired request as a new pending request.")
+    .argument("<requestId>", "Rejected or expired Control Plane trust request ID")
+    .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
+    .option("--comparison-code <code>", "Expected short comparison code")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (requestId, options) => {
+      const transport = resolveTrustTransport(program.opts(), options);
+      const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
+      const request = requireTrustRequest(snapshot, requestId, options);
+      if (request.status !== "rejected" && request.status !== "expired") {
+        throw new Error(`Only rejected or expired requests can be retried; this request is ${request.status}.`);
+      }
+      const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/retry`, "POST", {});
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      printTrustSnapshot(result);
+    });
+
+  trust
+    .command("revoke")
+    .description("Revoke one exact active Control Plane pin.")
+    .argument("<pinId>", "Active Control Plane pin ID")
+    .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
+    .option("--comparison-code <code>", "Expected short comparison code")
+    .option("--revision <revision>", "Expected pin revision from the list output", parsePositiveInteger)
+    .option("--reason <reason>", "Revocation reason for the local audit log")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (pinId, options) => {
+      const transport = resolveTrustTransport(program.opts(), options);
+      const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
+      const pin = requireTrustPin(snapshot, pinId, options);
+      if (pin.status !== "active") throw new Error("The selected Control Plane pin is already revoked.");
+      const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/pins/${encodeURIComponent(pinId)}/revoke`, "POST", {
+        expectedFingerprint: pin.fingerprint,
+        expectedRevision: options.revision ?? pin.revision,
+        ...(options.reason ? { reason: options.reason } : {}),
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      printTrustSnapshot(result);
     });
 
   program

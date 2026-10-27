@@ -87,6 +87,35 @@ test("unknown codes preserve their non-empty server message verbatim", () => {
   assert.equal(translateApiError({ code: "FUTURE_ERROR", message }, chinese), message);
 });
 
+test("unknown 5xx errors never render the server diagnostic", () => {
+  const error = {
+    code: "FUTURE_INTERNAL_ERROR",
+    message: "insert into cp_cloud_device_pins values ($1) failed for tok_secret",
+    status: 500,
+  };
+  assert.equal(translateApiError(error, english), "The Control Plane could not complete the request.");
+  assert.equal(translateApiError(error, chinese), "控制面板无法完成此请求。");
+});
+
+test("unknown 5xx errors show only the safe request reference", () => {
+  const error = new ApiError(
+    "raw PostgreSQL query and bind values",
+    "FUTURE_INTERNAL_ERROR",
+    503,
+    { query: "select secret" },
+    undefined,
+    "req_safe_123",
+  );
+  assert.equal(
+    translateApiError(error, english),
+    "The Control Plane could not complete the request. Reference: req_safe_123.",
+  );
+  assert.equal(
+    translateApiError(error, chinese),
+    "控制面板无法完成此请求。错误参考号：req_safe_123。",
+  );
+});
+
 test("a message without a code is preserved verbatim", () => {
   const message = "原始服务端诊断";
   assert.equal(translateApiError({ message }, english), message);

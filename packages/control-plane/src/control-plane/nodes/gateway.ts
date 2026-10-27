@@ -64,6 +64,12 @@ import {
   INSTANCE_PROJECTION_HEADER,
   projectInstancesForFleetComparison,
 } from "../../shared/instances/fleet-projection.ts";
+import {
+  NodeAgentControlPlaneTrustDecisionSchema,
+  NodeAgentControlPlaneTrustRetrySchema,
+  NodeAgentControlPlaneTrustRevokeSchema,
+  NodeAgentControlPlaneTrustSnapshotSchema,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
 
 export type NodeAgentFleetResult<T> = {
   items: T[];
@@ -377,6 +383,37 @@ export class ControlPlaneNodeAgentGateway {
 
   listControlPlanePairings(node: Node) {
     return this.client.requestSchema(node, "/control-plane-pairings", z.array(NodeAgentControlPlanePairingSchema));
+  }
+
+  listControlPlaneTrust(node: Node) {
+    return this.client.requestSchema(node, "/control-plane-trust", NodeAgentControlPlaneTrustSnapshotSchema);
+  }
+
+  decideControlPlaneTrust(node: Node, requestId: string, input: unknown) {
+    const decision = NodeAgentControlPlaneTrustDecisionSchema.parse(input);
+    return this.client.requestSchema(node, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/decision`, NodeAgentControlPlaneTrustSnapshotSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(decision),
+    });
+  }
+
+  revokeControlPlaneTrust(node: Node, pinId: string, input: unknown) {
+    const revoke = NodeAgentControlPlaneTrustRevokeSchema.parse(input);
+    return this.client.requestSchema(node, `/control-plane-trust/pins/${encodeURIComponent(pinId)}/revoke`, NodeAgentControlPlaneTrustSnapshotSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(revoke),
+    });
+  }
+
+  retryControlPlaneTrust(node: Node, requestId: string, input: unknown = {}) {
+    const retry = NodeAgentControlPlaneTrustRetrySchema.parse(input);
+    return this.client.requestSchema(node, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/retry`, NodeAgentControlPlaneTrustSnapshotSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(retry),
+    });
   }
 
   deleteControlPlanePairing(node: Node, keyId: string) {

@@ -45,7 +45,7 @@ if (!hostDir && !consumerDir) {
   process.exit(1);
 }
 
-const sharedFiles = ["account", "binding", "client", "common", "e2e", "index", "mobile", "mobile-client", "node-relay", "relay", "relay-frame", "relay-session", "versions"];
+const sharedFiles = ["account", "binding", "client", "common", "device-auth", "e2e", "index", "mobile", "mobile-client", "node-relay", "relay", "relay-frame", "relay-session", "versions"];
 const consumerOnly = { "relay.ts": ["RelayTtySnapshotEnvelopeSchema", "RelayTtySnapshotEnvelope"] };
 
 const exportNames = (source) => [...source.matchAll(/^export (?:const|function|class|type|interface|enum)\s+(\w+)/gm)].map((match) => match[1]).sort();
@@ -72,6 +72,7 @@ if (!Object.keys(host).length && !Object.keys(consumer).length) {
 const failures = [];
 if (host.versions && consumer.versions && normalize(host.versions) !== normalize(consumer.versions)) failures.push("versions.ts: the two copies differ after normalization (protocol constants and audiences must stay identical)");
 if (host["relay-frame"] && consumer["relay-frame"] && normalize(host["relay-frame"]) !== normalize(consumer["relay-frame"])) failures.push("relay-frame.ts: the two copies differ after normalization (both sides parse this framing)");
+if (host["device-auth"] && consumer["device-auth"] && normalize(host["device-auth"]) !== normalize(consumer["device-auth"])) failures.push("device-auth.ts: the two copies differ after normalization (canonical device authentication inputs must stay identical)");
 if (host.relay && consumer.relay) {
   const allowed = new Set(consumerOnly["relay.ts"]);
   const hostNames = new Set(exportNames(host.relay));
@@ -83,6 +84,7 @@ const current = {
   sharedFiles,
   versions: hash(normalize(host.versions ?? consumer.versions ?? "")),
   relayFrame: hash(normalize(host["relay-frame"] ?? consumer["relay-frame"] ?? "")),
+  deviceAuth: hash(normalize(host["device-auth"] ?? consumer["device-auth"] ?? "")),
   exports: {
     host: hostDir ? Object.fromEntries(Object.entries(host).map(([file, source]) => [file, exportNames(source)])) : undefined,
     consumer: consumerDir ? Object.fromEntries(Object.entries(consumer).map(([file, source]) => [file, exportNames(source)])) : undefined,
@@ -103,6 +105,7 @@ if (write) {
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
   if (lock.versions !== current.versions) failures.push(`versions.ts drifted from the locked vocabulary (expected ${String(lock.versions).slice(0, 12)}…, computed ${current.versions.slice(0, 12)}…)`);
   if (lock.relayFrame !== current.relayFrame) failures.push(`relay-frame.ts drifted from the locked framing (expected ${String(lock.relayFrame).slice(0, 12)}…, computed ${current.relayFrame.slice(0, 12)}…)`);
+  if (lock.deviceAuth !== current.deviceAuth) failures.push(`device-auth.ts drifted from the locked canonical input (expected ${String(lock.deviceAuth).slice(0, 12)}…, computed ${current.deviceAuth.slice(0, 12)}…)`);
   for (const side of ["host", "consumer"]) {
     if (!current.exports[side]) continue;
     if (!lock.exports?.[side]) { failures.push(`the lock has no recorded ${side} exports; run with --write from a checkout that has both copies.`); continue; }

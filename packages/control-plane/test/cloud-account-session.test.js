@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { RELAY_SESSION_RESUME_CAPABILITY } from "@task-handoff/cloud-contracts";
+import { RELAY_SESSION_PROTOCOL_VERSION, RELAY_SESSION_RESUME_CAPABILITY, RelaySessionAudience } from "@task-handoff/cloud-contracts";
 import { CloudAccountSessionService } from "../src/control-plane/cloud-connectivity/account-session.ts";
 import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
 
@@ -78,7 +78,7 @@ test("a delivery-failed request clears pending and exposes a retryable failure",
   assert.equal(service.snapshot().requestFailure, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1 } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1, runtimeOptions = {} } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -142,6 +142,7 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPol
     cloudRelaySessionsPath: path.join(dir, "cloud-relay-sessions.json"),
     relayConnector: { async connect() { throw new Error("unexpected relay connection"); }, async resume() { throw new Error("unexpected relay resume"); } },
     fetch: async (url, init) => { fetchCalls.push({ url, body: JSON.parse(init.body) }); return fetchImpl ? fetchImpl(url, init) : { ok: false, status: 500 }; },
+    ...runtimeOptions,
   });
   runtime.start();
   return { runtime, accountSession, sockets, fetchCalls, state };
@@ -154,6 +155,57 @@ async function waitFor(predicate, message, attempts = 200) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.fail(message);
+}
+
+function runtimeRelaySessionGrant(now) {
+  const issuedAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + 15 * 60_000).toISOString();
+  const identity = {
+    allocationId: "allocation_rate_limited",
+    sessionId: "session_rate_limited",
+    relayId: "relay_rate_limited",
+    relayUrl: "wss://relay.example.test/connect",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_test",
+    bindingId: "binding_a",
+    bindingRevision: 1,
+    targetPublicKeyFingerprint: `sha256:${"a".repeat(43)}`,
+  };
+  const access = { ownerAccountId: identity.accountId, accessMode: "owner", accessRoleId: "role_admin" };
+  return {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Grant,
+    sessionId: identity.sessionId,
+    grantId: "grant_rate_limited_1",
+    generation: 1,
+    accessTicketId: "access_ticket_rate_limited",
+    ...identity,
+    relayRegion: "cn-north-test-1",
+    clientProofPublicKey: "b".repeat(43),
+    controlPlaneProofPublicKey: "c".repeat(43),
+    trafficClass: "interactive",
+    ...access,
+    sessionTranscriptTicket: {
+      protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+      audience: RelaySessionAudience.Transcript,
+      transcriptTicketId: "transcript_ticket_rate_limited",
+      accountId: identity.accountId,
+      deviceSessionId: identity.deviceSessionId,
+      controlPlaneId: identity.controlPlaneId,
+      bindingId: identity.bindingId,
+      bindingRevision: identity.bindingRevision,
+      targetPublicKeyFingerprint: identity.targetPublicKeyFingerprint,
+      nonce: "transcript-nonce-rate-limited",
+      issuedAt,
+      expiresAt,
+      ...access,
+    },
+    revocationEpoch: 0,
+    issuedAt,
+    expiresAt,
+    signature: "s".repeat(64),
+  };
 }
 
 test("Control Plane always advertises resumable Relay sessions", async () => {
@@ -267,15 +319,45 @@ test("a reconnect republishes the current catalog revision without minting a new
   }
 });
 
-test("a rejected pushed event closes the control socket without crashing the runtime", async () => {
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
+test("a transient Relay grant failure keeps the control socket connected for data-plane retry", async () => {
+  const logs = [];
+  let resumeCalls = 0;
+  const { runtime, sockets } = runtimeHarness({
+    bindingId: "binding_a",
+    runtimeOptions: {
+      logger: { warn: (entry) => logs.push(entry) },
+      verifyRelaySessionGrant: async (input) => ({
+        allocationId: input.grant.allocationId,
+        relayUrl: input.grant.relayUrl,
+        epoch: 1,
+        channelKind: "access",
+        grant: input.grant,
+      }),
+      relayConnector: {
+        async connect() { throw new Error("unexpected relay connection"); },
+        async resume() {
+          resumeCalls += 1;
+          throw Object.assign(new Error("Unexpected server response: 429"), { statusCode: 429 });
+        },
+      },
+    },
+  });
   try {
-    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent?.some((message) => message.type === "register"); attempt += 1) await wait(5);
-    assert.ok(sockets[0]);
-    sockets[0].receive({ type: "event", event: { type: "relay-session-grant", grant: {} } });
-    for (let attempt = 0; attempt < 100 && sockets[0].readyState !== 3; attempt += 1) await wait(5);
-    assert.equal(sockets[0].readyState, 3);
+    await waitFor(() => sockets[0]?.sent?.some((message) => message.type === "register"), "control socket did not register");
+    sockets[0].receive({
+      type: "event",
+      event: {
+        type: "relay-session-grant",
+        grant: runtimeRelaySessionGrant(Date.now()),
+      },
+    });
+    await waitFor(() => resumeCalls > 0, "Relay grant was not attempted");
+    await waitFor(
+      () => logs.some((entry) => entry.code === "CLOUD_RELAY_SESSION_APPLY_FAILED" && entry.allocationId === "allocation_rate_limited"),
+      "Relay grant failure was not logged",
+    );
+    assert.equal(sockets[0].readyState, 1);
+    assert.equal(sockets.length, 1, "the Control Plane must not reconnect because of a data-plane failure");
   } finally {
     await runtime.stop();
   }

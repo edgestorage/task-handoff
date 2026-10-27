@@ -124,3 +124,36 @@ test("mapped management routes still fail closed when the resolved role lacks th
     resource: { type: "control-plane-settings" },
   });
 });
+
+test("device trust management is relay reachable only with the local settings permission", () => {
+  const admin = cloudActor("role_admin", [...CONTROL_PLANE_PERMISSION_IDS]);
+  const viewer = cloudActor("role_viewer", [...VIEWER_PERMISSIONS]);
+  for (const [method, path] of [
+    ["GET", "/api/device-trust"],
+    ["POST", "/api/device-trust/requests/devtrust_a/decision"],
+    ["POST", "/api/device-trust/pins/devpin_a/revoke"],
+  ]) {
+    assert.equal(cloudRelayRouteReachable(method, path), true, `${method} ${path} must be relay reachable for trusted admins`);
+    const authorization = routeAuthorization(method, path);
+    assert.deepEqual(authorization, { action: "manage-settings", resource: { type: "device-trust" } });
+    assert.equal(can(admin, authorization.action, authorization.resource), true, `${method} ${path} must allow local admins`);
+    assert.equal(can(viewer, authorization.action, authorization.resource), false, `${method} ${path} must reject non-admins`);
+  }
+});
+
+test("node Control Plane trust management requires control-plane settings rather than node auth", () => {
+  const admin = cloudActor("role_admin", [...CONTROL_PLANE_PERMISSION_IDS]);
+  const operator = cloudActor("role_operator", [...OPERATOR_PERMISSIONS]);
+  for (const [method, path] of [
+    ["GET", "/api/nodes/node_a/control-plane-trust-requests"],
+    ["POST", "/api/nodes/node_a/control-plane-trust-requests/cptreq_a/decision"],
+    ["POST", "/api/nodes/node_a/control-plane-trust-requests/cptreq_a/retry"],
+    ["POST", "/api/nodes/node_a/control-plane-trust-pins/cptpin_a/revoke"],
+  ]) {
+    assert.equal(cloudRelayRouteReachable(method, path), true, `${method} ${path} must be relay reachable for trusted admins`);
+    const authorization = routeAuthorization(method, path);
+    assert.deepEqual(authorization, { action: "manage-settings", resource: { type: "control-plane-settings" } });
+    assert.equal(can(admin, authorization.action, authorization.resource), true, `${method} ${path} must allow local admins`);
+    assert.equal(can(operator, authorization.action, authorization.resource), false, `${method} ${path} must not downgrade to node auth`);
+  }
+});

@@ -23,6 +23,15 @@ test("cloud node onboarding is a standalone source and connection flow", () => {
   assert.match(dialog, /connectAccountNode\(item\.nodeHandle\)/);
 });
 
+test("cloud node onboarding derives query readiness before creating the query", () => {
+  const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
+  const readiness = dialog.indexOf("const cloudRelayUsable = computed");
+  const query = dialog.indexOf("const accountNodes = useCloudAccountNodesQuery");
+  assert.ok(readiness >= 0, "cloudRelayUsable is declared");
+  assert.ok(query >= 0, "accountNodes query is declared");
+  assert.ok(readiness < query, "cloudRelayUsable must be initialized before the query reads it");
+});
+
 test("cloud node onboarding shows one generated command for the selected node state", () => {
   const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
   assert.match(dialog, /commandMode = ref<CommandMode>\("install"\)/);

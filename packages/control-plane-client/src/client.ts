@@ -19,6 +19,7 @@ import { createControlPlaneEnvironmentTemplatesApi } from "./environment-templat
 import { createControlPlaneChatGatewayApi } from "./chat-gateway.ts";
 import { createControlPlaneAdminApi } from "./control-plane-admin.ts";
 import { createOperationApprovalsApi } from "./operation-approvals.ts";
+import { createControlPlaneDeviceTrustApi } from "./device-trust.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
@@ -31,6 +32,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
   };
   return {
     approvals: createOperationApprovalsApi(compatibleTransport),
+    deviceTrust: createControlPlaneDeviceTrustApi(compatibleTransport),
     auth: createControlPlaneAuthApi(compatibleTransport),
     users: createControlPlaneUsersApi(compatibleTransport),
     aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),

@@ -8,10 +8,14 @@ import {
   decodeRelayFrame,
   encodeRelayFrame,
   packRelayPayload,
+  CloudClientHandshakeReplySchema,
+  cloudClientTranscriptSigningInput,
+  cloudClientTrustOutcomeSigningInput,
   RelaySessionClosedMessageSchema,
   RelaySessionRenewalResultSchema,
   RelaySessionResumeResultSchema,
   unpackRelayPayload,
+  type CloudClientTrustOutcome,
   type RelayFramePayload,
   type RelayRoleProof,
   type RelaySessionGrant,
@@ -21,6 +25,8 @@ import type { EncryptedRelayChannel, RelayChannelFactory, RelayControlNotice, Re
 import { MobileControlPlaneTransportError } from './transport';
 import { createNativeRelaySocket, isNativeRelaySocketAvailable } from '../../modules/task-handoff-browser/src';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
+import { deviceComparisonCode, fingerprintDevicePublicKey } from './mobile-device';
+import { MobileDeviceTrustError } from './device-trust-error';
 
 type SocketDefaultEvent = { data?: unknown; code?: number; reason?: string; message?: string; domain?: string };
 type SocketListener = (event: SocketDefaultEvent) => void;
@@ -119,10 +125,20 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
 
       const ticket = input.grant.sessionTranscriptTicket;
       const keyPair = nacl.box.keyPair();
+      const clientEphemeralPublicKey = base64Url(keyPair.publicKey);
+      if (!input.deviceAuth) throw relayError('RELAY_DEVICE_AUTH_UNAVAILABLE');
+      const deviceAuth = await input.deviceAuth({
+        ticket,
+        grant: input.grant,
+        clientEphemeralPublicKey,
+        ...(input.trustRetry ? { trustRetry: true as const } : {}),
+      });
       const hello = {
         ticketId: ticket.transcriptTicketId,
         deviceSessionId: ticket.deviceSessionId,
-        clientEphemeralPublicKey: base64Url(keyPair.publicKey),
+        clientEphemeralPublicKey,
+        deviceAuth,
+        ...(input.trustRetry ? { trustRetry: true as const } : {}),
       };
       let sendSequence = 0;
       const e2eStartedAt = Date.now();
@@ -132,11 +148,23 @@ export function createMobileRelayChannelFactory(options: { webSocketFactory?: So
       socket.send(encodeRelayFrame({ kind: 'handshake', sequence: sendSequence++, payload: new TextEncoder().encode(JSON.stringify(hello)) }));
       const handshakeFrame = await nextFrame(socket, (frame) => frame.kind === 'handshake', timeouts.handshakeMs, 'RELAY_E2E_HANDSHAKE_TIMEOUT', input.signal);
       throwIfAborted(input.signal);
-      const response = JSON.parse(new TextDecoder().decode(handshakeFrame.payload));
+      const parsedReply = CloudClientHandshakeReplySchema.safeParse(JSON.parse(new TextDecoder().decode(handshakeFrame.payload)));
+      if (!parsedReply.success) throw relayError('RELAY_E2E_IDENTITY_INVALID');
+      if (parsedReply.data.state !== 'accepted') {
+        await verifyTrustOutcome(parsedReply.data, input.grant, input.targetPublicKeyFingerprint);
+        throw new MobileDeviceTrustError(parsedReply.data);
+      }
+      const response = parsedReply.data;
       const identityKey = fromBase64Url(response.controlPlanePublicKey);
       const fingerprint = `sha256:${base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, identityKey)))}`;
-      const transcript = await transcriptHash(ticket, hello.clientEphemeralPublicKey, response.serverEphemeralPublicKey);
-      if (fingerprint !== input.targetPublicKeyFingerprint || response.transcript !== transcript || !nacl.sign.detached.verify(new TextEncoder().encode(transcript), fromBase64Url(response.signature), identityKey)) throw relayError('RELAY_E2E_IDENTITY_INVALID');
+      const transcript = await transcriptHash(ticket, input.grant, clientEphemeralPublicKey, response.serverEphemeralPublicKey);
+      if (fingerprint !== input.targetPublicKeyFingerprint
+        || response.controlPlaneId !== ticket.controlPlaneId
+        || response.bindingId !== ticket.bindingId
+        || response.ticketId !== ticket.transcriptTicketId
+        || response.deviceSessionId !== ticket.deviceSessionId
+        || response.transcript !== transcript
+        || !nacl.sign.detached.verify(new TextEncoder().encode(transcript), fromBase64Url(response.signature), identityKey)) throw relayError('RELAY_E2E_IDENTITY_INVALID');
       // The Control Plane derives the session key from the raw X25519 shared secret
       // (packages/cloud-contracts/src/e2e.ts). nacl.box.before would apply the NaCl
       // box HSalsa20 transform on top, so the two sides would never agree.
@@ -524,6 +552,19 @@ function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => 
     };
     const aborted = () => { cleanup(); reject(attemptCancelledError()); };
     const message = (event: SocketDefaultEvent) => {
+      if (typeof event.data === 'string') {
+        const control = relayHandshakeControl(event.data);
+        if (control) {
+          // Relay control frames may be delivered before the buffered handshake
+          // outcome when the Control Plane closes a trust-rejected allocation.
+          // They are not part of the binary E2E frame stream.
+          diagnosticLog.warn('relay.handshake.control', {
+            controlType: control.type,
+            ...(typeof control.code === 'string' ? { controlCode: control.code } : {}),
+          });
+          return;
+        }
+      }
       try {
         const bytes = frameBytes(event.data);
         if (!bytes) throw relayError('RELAY_PROTOCOL_INVALID');
@@ -532,6 +573,7 @@ function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => 
         cleanup();
         resolve(frame);
       } catch (error) {
+        diagnosticLog.warn('relay.handshake.message-invalid', relayMessageShape(event.data, error));
         cleanup();
         reject(error);
       }
@@ -548,7 +590,27 @@ function nextFrame(socket: SocketLike, predicate: (frame: RelayFramePayload) => 
 function frameBytes(raw: unknown) {
   if (raw instanceof Uint8Array) return raw;
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (ArrayBuffer.isView(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
   return undefined;
+}
+
+function relayHandshakeControl(raw: string): { type: 'peer-detached' | 'session-closed'; code?: unknown } | undefined {
+  try {
+    const value = JSON.parse(raw);
+    if (value?.type === 'peer-detached' || value?.type === 'session-closed') return value;
+  } catch { /* an ordinary text message is a protocol violation below */ }
+  return undefined;
+}
+
+function relayMessageShape(raw: unknown, error: unknown) {
+  const object = raw && typeof raw === 'object' ? raw as { constructor?: { name?: unknown }; byteLength?: unknown } : undefined;
+  return {
+    dataType: typeof raw,
+    constructorName: typeof object?.constructor?.name === 'string' ? object.constructor.name : undefined,
+    arrayBufferView: ArrayBuffer.isView(raw),
+    byteLength: typeof object?.byteLength === 'number' ? object.byteLength : undefined,
+    errorCode: typeof (error as { code?: unknown } | null)?.code === 'string' ? String((error as { code: string }).code) : undefined,
+  };
 }
 
 function remainingTimeout(timeoutMs: number, startedAt: number) {
@@ -606,32 +668,31 @@ function closeLateSocket(socket: SocketLike) {
   try { socket.close(4400, 'handshake-timeout'); } catch { /* the socket may already be closed */ }
 }
 
-async function transcriptHash(ticket: { audience: string; transcriptTicketId?: string; ticketId?: string; accountId: string; deviceSessionId: string; controlPlaneId: string; bindingId: string; bindingRevision: number; nonce: string; accessMode?: string; ownerAccountId?: string; accessRoleId?: string; shareGrantId?: string; shareRevision?: number }, clientKey: string, serverKey: string) {
-  const canonical = canonicalJson({
-    audience: ticket.audience,
-    ticketId: ticket.transcriptTicketId ?? ticket.ticketId,
-    accountId: ticket.accountId,
-    deviceSessionId: ticket.deviceSessionId,
-    controlPlaneId: ticket.controlPlaneId,
-    bindingId: ticket.bindingId,
-    bindingRevision: ticket.bindingRevision,
-    nonce: ticket.nonce,
-    clientEphemeralPublicKey: clientKey,
-    serverEphemeralPublicKey: serverKey,
-    ...(ticket.accessMode === undefined ? {} : {
-      ownerAccountId: ticket.ownerAccountId,
-      accessMode: ticket.accessMode,
-      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
-    }),
-  });
+async function transcriptHash(ticket: RelaySessionGrant['sessionTranscriptTicket'], grant: RelaySessionGrant, clientKey: string, serverKey: string) {
+  const canonical = cloudClientTranscriptSigningInput({ ticket, grant, clientEphemeralPublicKey: clientKey, serverEphemeralPublicKey: serverKey });
   return base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, new TextEncoder().encode(canonical))));
 }
 
-function canonicalJson(value: any): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
-  return JSON.stringify(value);
+async function verifyTrustOutcome(outcome: CloudClientTrustOutcome, grant: RelaySessionGrant, targetPublicKeyFingerprint: string) {
+  const identityKey = fromBase64Url(outcome.controlPlanePublicKey);
+  const fingerprint = `sha256:${base64Url(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, identityKey)))}`;
+  const deviceFingerprint = await fingerprintDevicePublicKey(grant.clientProofPublicKey);
+  const comparisonCode = await deviceComparisonCode(grant.bindingId, grant.clientProofPublicKey);
+  if (fingerprint !== targetPublicKeyFingerprint
+    || outcome.controlPlaneId !== grant.controlPlaneId
+    || outcome.bindingId !== grant.bindingId
+    || outcome.ticketId !== grant.sessionTranscriptTicket.transcriptTicketId
+    || outcome.accountId !== grant.accountId
+    || outcome.deviceSessionId !== grant.deviceSessionId
+    || outcome.devicePublicKeyFingerprint !== deviceFingerprint
+    || outcome.comparisonCode !== comparisonCode
+    || Date.parse(outcome.issuedAt) > Date.now() + 60_000
+    || Date.parse(outcome.expiresAt) <= Date.parse(outcome.issuedAt)
+    || !nacl.sign.detached.verify(
+      new TextEncoder().encode(cloudClientTrustOutcomeSigningInput(outcome)),
+      fromBase64Url(outcome.signature),
+      identityKey,
+    )) throw relayError('RELAY_E2E_IDENTITY_INVALID');
 }
 
 function nonce(direction: number, counter: number) {

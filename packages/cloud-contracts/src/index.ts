@@ -7,5 +7,6 @@ export * from "./relay-frame.ts";
 export * from "./node-relay.ts";
 export * from "./versions.ts";
 export * from "./client.ts";
+export * from "./device-auth.ts";
 export * from "./e2e.ts";
 export * from "./mobile-client.ts";

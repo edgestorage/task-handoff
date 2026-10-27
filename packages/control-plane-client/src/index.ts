@@ -13,6 +13,7 @@ export * from "./auth.ts";
 export * from "./users.ts";
 export * from "./client.ts";
 export * from "./operation-approvals.ts";
+export * from "./device-trust.ts";
 export * from "./resources.ts";
 export * from "./triggers.ts";
 export * from "./stories.ts";

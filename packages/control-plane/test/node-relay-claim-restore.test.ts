@@ -7,7 +7,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function fakeIdentity() {
   return {
-    publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "key", fingerprint: "sha256:fingerprint" }),
+    publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "k".repeat(43), fingerprint: "sha256:fingerprint" }),
     signCloudOutboundRegistration: () => "signature",
   };
 }
@@ -23,7 +23,7 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; trustProbeTimeoutMs?: number }) {
   const sockets: FakeSocket[] = [];
   class FakeSocket {
     static OPEN = 1;
@@ -90,6 +90,7 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
       transport: () => input.transport ?? ({ attachNode: () => undefined, detachNode: () => true, connected: () => false }),
       ...(input.connector ? { connector: input.connector } : {}),
     },
+    ...(input.trustProbeTimeoutMs ? { nodeRelayTrustProbeTimeoutMs: input.trustProbeTimeoutMs } : {}),
   });
   return { runtime, sockets };
 }
@@ -218,6 +219,112 @@ test("a live node channel closing refreshes the Coordinator claim", async () => 
     assert.ok(refresh, "a closed live channel must request a fresh allocation");
     assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
     assert.equal(runtime.nodeRelayState().channels.length, 0);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("pending node trust keeps probing and becomes a transport failure when no fresh outcome arrives", async () => {
+  const connector = {
+    async connect(input: any) {
+      return {
+        status: "trust-required",
+        outcome: {
+          nodeId: "node_macmini",
+          state: "pending",
+          reason: "first-seen",
+          controlPlaneId: "control_plane_test",
+          controlPlanePublicKeyFingerprint: `sha256:${"c".repeat(43)}`,
+          requestId: "cptreq_pending",
+          requestedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          allocationId: input.allocation.allocationId,
+        },
+      };
+    },
+  };
+  const { runtime, sockets, audit } = runtimeFixture({
+    nodeRelay: true,
+    handles: ["nrh_macmini"],
+    connector,
+    trustProbeTimeoutMs: 80,
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().claims.length === 0; attempt += 1) await wait(5);
+    const event = nodeRelayAllocationEvent({
+      allocationId: "allocation_pending_probe",
+      nodeHandle: "nrh_macmini",
+      nodeId: "node_macmini",
+      controlPlaneId: "control_plane_test",
+      accountId: "account_a",
+      bindingId: "binding_a",
+      nodePublicKeyFingerprint: `sha256:${"d".repeat(43)}`,
+      relayUrl: "wss://cloud.example.test/relay",
+    });
+    sockets[0].receive({ type: "event", event });
+
+    let refresh: any;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      refresh = sockets[0].sent.find((message) => message.operation === "claim-node-relay-node" && message.payload.refreshAllocation === true);
+      if (refresh) break;
+      await wait(5);
+    }
+    assert.ok(refresh, "pending trust must keep requesting fresh allocations");
+
+    for (let attempt = 0; attempt < 100 && !runtime.nodeRelayState().errors.some((entry: any) => entry.code === "NODE_RELAY_TRUST_TIMEOUT"); attempt += 1) await wait(5);
+    const error = runtime.nodeRelayState().errors.find((entry: any) => entry.code === "NODE_RELAY_TRUST_TIMEOUT");
+    assert.ok(error, "a pending outcome without a fresh response must surface a transport failure");
+    assert.equal(error.nodeHandle, "nrh_macmini");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a rejected node trust outcome stays terminal without automatic probing", async () => {
+  const connector = {
+    async connect(input: any) {
+      return {
+        status: "trust-required",
+        outcome: {
+          nodeId: "node_macmini",
+          state: "rejected",
+          reason: "rejected",
+          controlPlaneId: "control_plane_test",
+          controlPlanePublicKeyFingerprint: `sha256:${"e".repeat(43)}`,
+          requestId: "cptreq_rejected",
+          requestedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          allocationId: input.allocation.allocationId,
+        },
+      };
+    },
+  };
+  const { runtime, sockets } = runtimeFixture({
+    nodeRelay: true,
+    handles: ["nrh_macmini"],
+    connector,
+    trustProbeTimeoutMs: 30,
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().claims.length === 0; attempt += 1) await wait(5);
+    const event = nodeRelayAllocationEvent({
+      allocationId: "allocation_rejected_probe",
+      nodeHandle: "nrh_macmini",
+      nodeId: "node_macmini",
+      controlPlaneId: "control_plane_test",
+      accountId: "account_a",
+      bindingId: "binding_a",
+      nodePublicKeyFingerprint: `sha256:${"f".repeat(43)}`,
+      relayUrl: "wss://cloud.example.test/relay",
+    });
+    sockets[0].receive({ type: "event", event });
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().trust[0]?.state !== "rejected"; attempt += 1) await wait(5);
+    await wait(120);
+    assert.equal(runtime.nodeRelayState().trust[0]?.state, "rejected");
+    assert.equal(sockets[0].sent.some((message) => message.operation === "claim-node-relay-node" && message.payload.refreshAllocation === true), false);
+    assert.equal(runtime.nodeRelayState().errors.some((entry: any) => entry.code === "NODE_RELAY_TRUST_TIMEOUT"), false);
   } finally {
     await runtime.stop();
   }

@@ -789,8 +789,8 @@ export class ControlPlaneUserService {
    * Resolve one Cloud authority role against the current local role store. A
    * missing or archived role fails closed; there is no fallback identity.
    */
-  async roleAuthorization(roleId: string) {
-    const role = await this.store.roles.get(roleId);
+  async roleAuthorization(roleId: string, repository: Pick<ControlPlaneUserRepository, "roles"> = this.store) {
+    const role = await repository.roles.get(roleId);
     if (!role || role.status !== "active") {
       throw Object.assign(new Error("Cloud access references an unavailable Control Plane role."), {
         code: "CONTROL_PLANE_ROLE_INACTIVE",

@@ -85,6 +85,8 @@ export interface MobileControlPlaneTransport extends ControlPlaneClientTransport
   revalidate?(signal?: AbortSignal): Promise<void>;
   /** Drops live transport state while the app is not allowed to stay connected. */
   suspend?(): void;
+  /** Marks the next relay handshake as an explicit retry after a terminal trust result. */
+  authorizeDeviceTrustRetry?(): void;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
 }

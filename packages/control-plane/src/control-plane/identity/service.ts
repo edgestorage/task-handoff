@@ -7,7 +7,19 @@ import {
   controlPlaneIdentitySigningInput,
   type ControlPlanePublicCapabilities,
 } from "@task-handoff/protocol/control-plane-access";
-import { acceptControlPlaneHandshake, outboundConnectionRegistrationSigningInput, relayRoleProofSigningInput, type RelayRoleProof, type RelayRoleProofPayload } from "@task-handoff/cloud-contracts";
+import {
+  CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+  CLOUD_DEVICE_TRUST_AUDIENCE,
+  CloudClientTrustOutcomeSchema,
+  acceptControlPlaneHandshake,
+  cloudClientTrustOutcomeSigningInput,
+  outboundConnectionRegistrationSigningInput,
+  relayRoleProofSigningInput,
+  type AuthenticatedClientHandshake,
+  type CloudClientTrustOutcome,
+  type RelayRoleProof,
+  type RelayRoleProofPayload,
+} from "@task-handoff/cloud-contracts";
 import { JsonFile } from "../../shared/persistence/store.ts";
 
 const IDENTITY_DOCUMENT_TTL_MS = 5 * 60 * 1000;
@@ -161,13 +173,26 @@ export class ControlPlaneIdentityService {
     return crypto.sign(null, Buffer.from(input), this.privateKey()).toString("base64url");
   }
 
-  acceptCloudAccessHandshake(ticket: unknown, clientHello: unknown) {
+  acceptCloudAccessHandshake(authenticated: AuthenticatedClientHandshake) {
     const identity = this.publicIdentity();
     return acceptControlPlaneHandshake({
-      ticket,
-      clientHello,
+      authenticated,
       controlPlaneFingerprint: identity.fingerprint,
       controlPlanePrivateKey: this.privateKey(),
+    });
+  }
+
+  signCloudClientTrustOutcome(input: Omit<CloudClientTrustOutcome, "protocolVersion" | "audience" | "controlPlanePublicKey" | "signature">) {
+    const identity = this.publicIdentity();
+    const unsigned = {
+      protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+      audience: CLOUD_DEVICE_TRUST_AUDIENCE,
+      controlPlanePublicKey: identity.publicKey,
+      ...input,
+    };
+    return CloudClientTrustOutcomeSchema.parse({
+      ...unsigned,
+      signature: crypto.sign(null, Buffer.from(cloudClientTrustOutcomeSigningInput(unsigned)), this.privateKey()).toString("base64url"),
     });
   }
 

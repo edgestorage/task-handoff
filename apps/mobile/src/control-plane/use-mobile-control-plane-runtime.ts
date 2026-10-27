@@ -10,6 +10,7 @@ import {
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import { AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
+import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobile';
 
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
@@ -24,6 +25,7 @@ import {
   mobileControlPlaneClosedErrorCode,
 } from './transport';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
+import { isMobileDeviceTrustError } from './device-trust-error';
 import type {
   MobileControlPlaneEvent,
   MobileControlPlaneEventConnection,
@@ -36,6 +38,12 @@ export type MobileControlPlaneRuntimePhase =
   | 'loading'
   | 'connected'
   | 'reconnecting'
+  | 'waiting-device-approval'
+  | 'approved-connecting'
+  | 'rejected'
+  | 'expired'
+  | 'revoked'
+  | 'trust-required'
   | 'control-plane-closed'
   | 'offline'
   | 'session-expired'
@@ -52,14 +60,17 @@ export type MobileControlPlaneDomain = {
   onConnectionError?(error?: MobileControlPlaneTransportError): void;
 };
 
-type RuntimeSnapshot = {
+export type MobileControlPlaneRuntimeSnapshot = {
   phase: MobileControlPlaneRuntimePhase;
   error?: string;
+  deviceTrust?: CloudClientTrustOutcome;
 };
 
 const CONNECT_TIMEOUT_MS = 12_000;
 const STABLE_CONNECTION_MS = 15_000;
 const IDEMPOTENCY_PENDING_RECONNECT_DELAY_MS = 10_000;
+const DEVICE_TRUST_RETRY_INITIAL_MS = 2_000;
+const DEVICE_TRUST_RETRY_MAX_MS = 30_000;
 const MOBILE_SESSION_RENEWAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 const MINIMUM_MOBILE_SESSION_RENEWAL_DELAY_MS = 60_000;
 
@@ -75,6 +86,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private mobileSessionRenewalTimer?: ReturnType<typeof setTimeout>;
   private connectTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
+  private deviceTrustTimer?: ReturnType<typeof setTimeout>;
   private epoch = 0;
   private connectionSequence = 0;
   private foreground = false;
@@ -87,7 +99,10 @@ export class MobileControlPlaneConnectionCoordinator {
   private pendingReconcileMode: 'domains' | 'environment' = 'environment';
   private domainSyncPending = false;
   private mobileSessionRenewalSupported = true;
-  private snapshotValue: RuntimeSnapshot = { phase: 'idle' };
+  private deviceTrustValue?: CloudClientTrustOutcome;
+  private deviceTrustTerminal = false;
+  private deviceTrustRetryAttempt = 0;
+  private snapshotValue: MobileControlPlaneRuntimeSnapshot = { phase: 'idle' };
 
   constructor(
     readonly profile: MobileControlPlaneProfile,
@@ -146,6 +161,9 @@ export class MobileControlPlaneConnectionCoordinator {
     this.desiredSignature = '';
     this.domainSyncPending = false;
     this.controlPlaneClosed = false;
+    this.deviceTrustValue = undefined;
+    this.deviceTrustTerminal = false;
+    this.deviceTrustRetryAttempt = 0;
     this.epoch += 1;
     this.clearTimers();
     this.abortController?.abort();
@@ -156,6 +174,19 @@ export class MobileControlPlaneConnectionCoordinator {
     this.activeDomains = [];
     this.transport.suspend?.();
     this.publish({ phase: 'idle' });
+  }
+
+  /** Re-arms one user-initiated trust attempt after a terminal decision. */
+  retryDeviceTrust() {
+    if (!this.deviceTrustTerminal || this.snapshotValue.phase === 'trust-required') return false;
+    this.transport.authorizeDeviceTrustRetry?.();
+    this.deviceTrustTerminal = false;
+    this.deviceTrustValue = undefined;
+    this.deviceTrustRetryAttempt = 0;
+    this.reconnectBackoff.reset();
+    diagnosticLog.info('runtime.device_trust.retry', { previousPhase: this.snapshotValue.phase });
+    this.reconcile(true);
+    return true;
   }
 
   private queueReconcile(mode: 'domains' | 'environment' = 'environment') {
@@ -267,6 +298,12 @@ export class MobileControlPlaneConnectionCoordinator {
       this.publish({ phase: 'idle' });
       return;
     }
+    if (this.deviceTrustTerminal && this.deviceTrustValue) {
+      this.transport.suspend?.();
+      diagnosticLog.info('runtime.connect.skipped', { reason: 'device-trust-terminal', previousPhase: this.snapshotValue.phase, trustState: this.deviceTrustValue.state });
+      this.publishTrustOutcome(this.deviceTrustValue);
+      return;
+    }
     const connectionId = `runtime_${Date.now().toString(36)}_${++this.connectionSequence}`;
     const startedAt = Date.now();
     diagnosticLog.info('runtime.connect.start', {
@@ -281,9 +318,11 @@ export class MobileControlPlaneConnectionCoordinator {
     const abortController = new AbortController();
     this.abortController = abortController;
     try {
-      this.publish({ phase: this.controlPlaneClosed
-        ? 'control-plane-closed'
-        : this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
+      this.publish(this.deviceTrustValue?.state === 'pending'
+        ? { phase: 'waiting-device-approval', deviceTrust: this.deviceTrustValue }
+        : { phase: this.controlPlaneClosed
+          ? 'control-plane-closed'
+          : this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
       await this.revalidateTransport(abortController.signal);
       diagnosticLog.info('runtime.transport.ready', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
       if (!this.live(epoch, abortController)) return;
@@ -313,9 +352,11 @@ export class MobileControlPlaneConnectionCoordinator {
         && payload.publicKey.fingerprint === this.profile.identity.publicKeyFingerprint) {
         this.currentCapabilities = payload.capabilities;
       }
-      this.publish({ phase: this.controlPlaneClosed
-        ? 'control-plane-closed'
-        : this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
+      this.publish(this.deviceTrustValue?.state === 'pending'
+        ? { phase: 'approved-connecting', deviceTrust: this.deviceTrustValue }
+        : { phase: this.controlPlaneClosed
+          ? 'control-plane-closed'
+          : this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
       const started = new Set<string>();
       await this.startDomains(abortController, started);
       if (!this.live(epoch, abortController)) return;
@@ -340,6 +381,9 @@ export class MobileControlPlaneConnectionCoordinator {
           this.controlPlaneClosed = false;
           if (this.domainSyncPending) void this.applyDomainDelta(this.desiredDomains());
           diagnosticLog.info('runtime.connected', { connectionId, durationMs: Date.now() - startedAt, reconnectAttempts: this.reconnectBackoff.attempts });
+          this.deviceTrustValue = undefined;
+          this.deviceTrustTerminal = false;
+          this.deviceTrustRetryAttempt = 0;
           this.publish({ phase: 'connected' });
           this.stableTimer = setTimeout(() => {
             if (this.live(epoch, abortController)) this.reconnectBackoff.reset();
@@ -371,6 +415,10 @@ export class MobileControlPlaneConnectionCoordinator {
     } catch (cause) {
       if (!this.live(epoch, abortController)) return;
       diagnosticLog.error('runtime.connect.failed', { connectionId, durationMs: Date.now() - startedAt, phase: this.snapshotValue.phase, ...diagnosticErrorDetails(cause) });
+      if (isMobileDeviceTrustError(cause)) {
+        this.handleDeviceTrustOutcome(cause.outcome, epoch, abortController);
+        return;
+      }
       const connectionError = mobileConnectionError(cause);
       for (const domain of desired) domain.onConnectionError?.(connectionError);
       this.scheduleReconnect(epoch, abortController, cause);
@@ -402,6 +450,10 @@ export class MobileControlPlaneConnectionCoordinator {
 
   private scheduleReconnect(epoch: number, abortController: AbortController, cause?: unknown) {
     if (!this.live(epoch, abortController) || this.reconnectTimer) return;
+    if (isMobileDeviceTrustError(cause)) {
+      this.handleDeviceTrustOutcome(cause.outcome, epoch, abortController);
+      return;
+    }
     this.clearConnectTimer();
     if (this.stableTimer) clearTimeout(this.stableTimer);
     this.stableTimer = undefined;
@@ -424,6 +476,67 @@ export class MobileControlPlaneConnectionCoordinator {
       if (!this.live(epoch, abortController)) return;
       this.reconcile(true);
     }, delay);
+  }
+
+  private handleDeviceTrustOutcome(outcome: CloudClientTrustOutcome, epoch: number, abortController: AbortController) {
+    if (!this.live(epoch, abortController)) return;
+    this.clearConnectTimer();
+    if (this.stableTimer) clearTimeout(this.stableTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.deviceTrustTimer) clearTimeout(this.deviceTrustTimer);
+    this.stableTimer = undefined;
+    this.reconnectTimer = undefined;
+    this.deviceTrustTimer = undefined;
+    this.reconnectBackoff.reset();
+    this.deviceTrustValue = outcome;
+    if (outcome.state === 'pending') {
+      this.deviceTrustTerminal = false;
+      diagnosticLog.info('runtime.device_trust.pending', {
+        requestId: outcome.requestId,
+        reason: outcome.reason,
+        retryAttempt: this.deviceTrustRetryAttempt,
+        expiresInMs: Date.parse(outcome.expiresAt) - Date.now(),
+      });
+      this.publishTrustOutcome(outcome);
+      this.scheduleDeviceTrustRetry(epoch, abortController, outcome);
+      return;
+    }
+    this.deviceTrustTerminal = true;
+    this.deviceTrustRetryAttempt = 0;
+    diagnosticLog.warn('runtime.device_trust.terminal', { state: outcome.state, reason: outcome.reason, requestId: outcome.requestId });
+    this.publishTrustOutcome(outcome);
+  }
+
+  private scheduleDeviceTrustRetry(epoch: number, abortController: AbortController, outcome: CloudClientTrustOutcome) {
+    const remainingMs = Date.parse(outcome.expiresAt) - Date.now();
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+      this.deviceTrustTerminal = true;
+      this.publish({ phase: 'expired', deviceTrust: outcome });
+      return;
+    }
+    const retryDelayMs = Math.min(
+      DEVICE_TRUST_RETRY_MAX_MS,
+      DEVICE_TRUST_RETRY_INITIAL_MS * (2 ** Math.min(this.deviceTrustRetryAttempt, 5)),
+      remainingMs,
+    );
+    this.deviceTrustRetryAttempt += 1;
+    diagnosticLog.info('runtime.device_trust.retry_scheduled', { retryAttempt: this.deviceTrustRetryAttempt, retryDelayMs, remainingMs });
+    this.deviceTrustTimer = setTimeout(() => {
+      this.deviceTrustTimer = undefined;
+      if (!this.live(epoch, abortController)) return;
+      if (Date.parse(outcome.expiresAt) <= Date.now()) {
+        this.deviceTrustTerminal = true;
+        diagnosticLog.warn('runtime.device_trust.expired', { requestId: outcome.requestId });
+        this.publish({ phase: 'expired', deviceTrust: outcome });
+        return;
+      }
+      this.reconcile(true);
+    }, retryDelayMs);
+  }
+
+  private publishTrustOutcome(outcome: CloudClientTrustOutcome) {
+    const phase = outcome.state === 'pending' ? 'waiting-device-approval' : outcome.state;
+    this.publish({ phase, deviceTrust: outcome });
   }
 
   private revalidateTransport(signal: AbortSignal) {
@@ -457,14 +570,18 @@ export class MobileControlPlaneConnectionCoordinator {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.stableTimer) clearTimeout(this.stableTimer);
     if (this.mobileSessionRenewalTimer) clearTimeout(this.mobileSessionRenewalTimer);
+    if (this.deviceTrustTimer) clearTimeout(this.deviceTrustTimer);
     this.reconnectTimer = undefined;
     this.stableTimer = undefined;
     this.mobileSessionRenewalTimer = undefined;
+    this.deviceTrustTimer = undefined;
     this.clearConnectTimer();
   }
 
-  private publish(snapshot: RuntimeSnapshot) {
-    if (this.snapshotValue.phase === snapshot.phase && this.snapshotValue.error === snapshot.error) return;
+  private publish(snapshot: MobileControlPlaneRuntimeSnapshot) {
+    if (this.snapshotValue.phase === snapshot.phase
+      && this.snapshotValue.error === snapshot.error
+      && sameTrustOutcome(this.snapshotValue.deviceTrust, snapshot.deviceTrust)) return;
     diagnosticLog.info('runtime.phase', { phase: snapshot.phase, previousPhase: this.snapshotValue.phase, errorPresent: Boolean(snapshot.error) });
     this.snapshotValue = snapshot;
     for (const listener of this.listeners) listener();
@@ -473,6 +590,16 @@ export class MobileControlPlaneConnectionCoordinator {
 
 function idempotencyPendingError(error: unknown) {
   return String((error as { code?: unknown } | null)?.code ?? '') === 'IDEMPOTENCY_REQUEST_IN_PROGRESS';
+}
+
+function sameTrustOutcome(left?: CloudClientTrustOutcome, right?: CloudClientTrustOutcome) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.state === right.state
+    && left.reason === right.reason
+    && left.requestId === right.requestId
+    && left.issuedAt === right.issuedAt
+    && left.expiresAt === right.expiresAt;
 }
 
 function mobileConnectionError(cause: unknown) {
@@ -524,8 +651,10 @@ export type MobileControlPlaneRuntimeValue = {
   controlPlaneId?: string;
   controlPlaneOrigin?: string;
   coordinator?: MobileControlPlaneConnectionCoordinator;
+  deviceTrust?: CloudClientTrustOutcome;
   phase: MobileControlPlaneRuntimePhase;
   profile?: MobileControlPlaneProfile;
+  retryDeviceTrust(): boolean;
   triggerCapability: boolean;
   storyCapability: boolean;
   transport?: MobileControlPlaneTransport;
@@ -597,19 +726,23 @@ export function MobileControlPlaneRuntimeProvider({
     };
   }, [dependencies]);
   const activeCarPlayConnected = active?.coordinator.isCarPlayConnected() ?? false;
-  const activePhase = active?.coordinator.snapshot().phase ?? 'idle';
+  const activeSnapshot = active?.coordinator.snapshot();
+  const activePhase = activeSnapshot?.phase ?? 'idle';
+  const activeDeviceTrust = activeSnapshot?.deviceTrust;
   const value = useMemo<MobileControlPlaneRuntimeValue>(() => ({
     api: active?.direct.api,
     carPlayConnected: activeCarPlayConnected,
     controlPlaneId: active?.profile.identity.controlPlaneId,
     controlPlaneOrigin: active?.profile.access.kind === 'direct' ? active.profile.access.origin : undefined,
     coordinator: active?.coordinator,
+    deviceTrust: activeDeviceTrust,
     phase: activePhase,
     profile: active?.profile,
+    retryDeviceTrust: () => active?.coordinator.retryDeviceTrust() ?? false,
     triggerCapability: (active?.coordinator.currentCapabilities.triggers ?? active?.direct.transport.currentCapabilities?.triggers ?? active?.profile.capabilities.triggers) === true,
     storyCapability: (active?.coordinator.currentCapabilities.stories ?? active?.direct.transport.currentCapabilities?.stories ?? active?.profile.capabilities.stories) === true,
     transport: active?.direct.transport,
-  }), [active, activeCarPlayConnected, activePhase]);
+  }), [active, activeCarPlayConnected, activeDeviceTrust, activePhase]);
   return createElement(Context.Provider, { value }, children);
 }
 

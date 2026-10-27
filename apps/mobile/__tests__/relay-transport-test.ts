@@ -7,6 +7,7 @@ import type { RelayProofKeyProvider } from '../src/control-plane/relay-proof-key
 import type { RelayPendingOperation, RelaySessionStore } from '../src/control-plane/relay-session-store';
 import { RelayWinnerCache } from '../src/control-plane/relay-winner-cache';
 import { MobileControlPlaneTransportError } from '../src/control-plane/transport';
+import { MobileDeviceTrustError } from '../src/control-plane/device-trust-error';
 import type { ValueStore } from '../src/platform/secure-storage';
 import type { MobileCloudRelayControlPlaneProfile } from '../src/control-plane/profile';
 import { diagnosticLog } from '../src/observability/diagnostic-logs';
@@ -30,6 +31,8 @@ const profile: MobileCloudRelayControlPlaneProfile = {
 const clientProofPublicKey = 'c'.repeat(43);
 const proofKey: RelayProofKeyProvider = {
   async publicKey() { return clientProofPublicKey; },
+  async deviceDescriptor() { return { name: 'Test phone', kind: 'mobile', platform: 'test' }; },
+  async deviceAuth() { throw new Error('The transport test uses a custom Relay channel.'); },
   async proof(grant) {
     return {
       protocolVersion: grant.protocolVersion,
@@ -240,6 +243,60 @@ test('first connection performs exactly bootstrap and confirm before attaching t
     targetPublicKeyFingerprint: profile.identity.publicKeyFingerprint,
   }));
   expect(channels[0].channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'request' }));
+});
+
+test('explicit device trust retry is sent on the next relay handshake', async () => {
+  const first = harness();
+  await first.transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(first.open).toHaveBeenCalledWith(expect.not.objectContaining({ trustRetry: true }));
+
+  const retrying = harness();
+  retrying.transport.authorizeDeviceTrustRetry();
+  await retrying.transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  expect(retrying.open).toHaveBeenCalledWith(expect.objectContaining({ trustRetry: true }));
+});
+
+test('an explicit device trust retry survives a handshake that fails before the trust outcome', async () => {
+  const store = memoryStore();
+  const winnerCache = new RelayWinnerCache({ store });
+  await winnerCache.write('control_plane_a', { relayId: 'relay_a', relayUrl: 'wss://eu.relay.thandoff.com/connect', rttMs: 11, networkFingerprint: 'default' });
+  const { account, open, transport } = harness({ winnerCache, probe: fastestProbe() });
+  account.bootstrapRelaySession.mockResolvedValueOnce(bootstrapResult({ selection: selection({ preferredHonored: true }) }));
+  open.mockRejectedValueOnce(new MobileControlPlaneTransportError('RELAY_SOCKET_FAILED', 'failed', true));
+
+  transport.authorizeDeviceTrustRetry();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+
+  expect(open).toHaveBeenCalledTimes(2);
+  expect(open.mock.calls[0][0]).toEqual(expect.objectContaining({ trustRetry: true }));
+  expect(open.mock.calls[1][0]).toEqual(expect.objectContaining({ trustRetry: true }));
+});
+
+test('an explicit device trust retry is consumed after the Control Plane returns a trust outcome', async () => {
+  const { open, transport } = harness();
+  open.mockRejectedValueOnce(new MobileDeviceTrustError({
+    state: 'revoked',
+    reason: 'device-revoked',
+    controlPlaneId: profile.identity.controlPlaneId,
+    bindingId: profile.access.bindingId,
+    ticketId: 'rtt_ticket_a',
+    accountId: 'account_a',
+    deviceSessionId: 'device_a',
+    devicePublicKeyFingerprint: 'sha256:test',
+    comparisonCode: 'AAAA-AAAA-AAAA-AAAA',
+    controlPlanePublicKey: 'p'.repeat(43),
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    signature: 's'.repeat(86),
+  } as any));
+
+  transport.authorizeDeviceTrustRetry();
+  await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).rejects.toBeInstanceOf(MobileDeviceTrustError);
+  await expect(transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }))).resolves.toEqual({ data: { ok: true } });
+
+  expect(open).toHaveBeenCalledTimes(2);
+  expect(open.mock.calls[0][0]).toEqual(expect.objectContaining({ trustRetry: true }));
+  expect(open.mock.calls[1][0]).toEqual(expect.not.objectContaining({ trustRetry: true }));
 });
 
 test('binary request bodies travel as chunk frames instead of a base64 envelope', async () => {

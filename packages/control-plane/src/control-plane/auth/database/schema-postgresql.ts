@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 const timestamps = {
   createdAt: text("created_at").notNull(),
@@ -114,3 +114,58 @@ export const gitAudit = pgTable("cp_git_audit", {
   id: text("id").primaryKey(), action: text("action").notNull(), credentialId: text("credential_id").notNull(), instanceId: text("instance_id"),
   credentialRevision: integer("credential_revision"), assignmentRevision: integer("assignment_revision"), ...timestamps,
 }, (table) => [index("cp_git_audit_created_idx").on(table.createdAt)]);
+
+export const cloudDevicePins = pgTable("cp_cloud_device_pins", {
+  id: text("id").primaryKey(), bindingId: text("binding_id").notNull(), accountId: text("account_id").notNull(),
+  ownerAccountId: text("owner_account_id").notNull(), accessMode: text("access_mode").notNull(),
+  shareGrantId: text("share_grant_id"), shareRevision: integer("share_revision"), cloudAccessRoleId: text("cloud_access_role_id").notNull(),
+  devicePublicKey: text("device_public_key").notNull(), reportedName: text("reported_name").notNull(), clientKind: text("client_kind").notNull(),
+  clientPlatform: text("client_platform").notNull(), clientVersion: text("client_version"), roleId: text("role_id").notNull().references(() => roles.id, { onDelete: "restrict" }),
+  status: text("status").notNull(), label: text("label"), approvedByActorType: text("approved_by_actor_type").notNull(),
+  approvedByActorId: text("approved_by_actor_id").notNull(), approvedAt: text("approved_at").notNull(), lastSeenAt: text("last_seen_at").notNull(),
+  revokedAt: text("revoked_at"), revokeReason: text("revoke_reason"), authorizationRevision: bigint("authorization_revision", { mode: "number" }).notNull(),
+  revision: integer("revision").notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("cp_cloud_device_pins_active_context_uq").on(
+    table.bindingId, table.accountId, table.ownerAccountId, table.accessMode,
+    sql`coalesce(${table.shareGrantId}, '')`, table.cloudAccessRoleId, table.devicePublicKey,
+  ).where(sql`${table.status} = 'active'`),
+  index("cp_cloud_device_pins_binding_idx").on(table.bindingId, table.status),
+  index("cp_cloud_device_pins_device_idx").on(table.devicePublicKey),
+]);
+
+export const cloudDeviceTrustRequests = pgTable("cp_cloud_device_trust_requests", {
+  id: text("id").primaryKey(), bindingId: text("binding_id").notNull(), accountId: text("account_id").notNull(),
+  ownerAccountId: text("owner_account_id").notNull(), accessMode: text("access_mode").notNull(),
+  shareGrantId: text("share_grant_id"), shareRevision: integer("share_revision"), cloudAccessRoleId: text("cloud_access_role_id").notNull(),
+  devicePublicKey: text("device_public_key").notNull(), reportedName: text("reported_name").notNull(), clientKind: text("client_kind").notNull(),
+  clientPlatform: text("client_platform").notNull(), clientVersion: text("client_version"), status: text("status").notNull(), reason: text("reason").notNull(),
+  requestedAt: text("requested_at").notNull(), lastSeenAt: text("last_seen_at").notNull(), expiresAt: text("expires_at").notNull(),
+  decidedAt: text("decided_at"), decidedByActorType: text("decided_by_actor_type"), decidedByActorId: text("decided_by_actor_id"),
+  decidedRoleId: text("decided_role_id").references(() => roles.id, { onDelete: "restrict" }), decisionReason: text("decision_reason"),
+  approvedPinId: text("approved_pin_id").references(() => cloudDevicePins.id, { onDelete: "set null" }), revision: integer("revision").notNull(), ...timestamps,
+}, (table) => [
+  uniqueIndex("cp_cloud_device_trust_requests_pending_context_uq").on(
+    table.bindingId, table.accountId, table.ownerAccountId, table.accessMode,
+    sql`coalesce(${table.shareGrantId}, '')`, table.cloudAccessRoleId, table.devicePublicKey,
+  ).where(sql`${table.status} = 'pending'`),
+  index("cp_cloud_device_trust_requests_pending_idx").on(table.bindingId, table.status, table.expiresAt),
+  index("cp_cloud_device_trust_requests_device_idx").on(table.devicePublicKey),
+]);
+
+export const cloudDeviceTrustAudit = pgTable("cp_cloud_device_trust_audit", {
+  id: text("id").primaryKey(), action: text("action").notNull(), bindingId: text("binding_id").notNull(),
+  requestId: text("request_id"), pinId: text("pin_id"), accountId: text("account_id").notNull(),
+  devicePublicKey: text("device_public_key").notNull(), deviceFingerprint: text("device_fingerprint").notNull(),
+  actorType: text("actor_type").notNull(), actorId: text("actor_id").notNull(), actorRoleId: text("actor_role_id"),
+  reason: text("reason"), details: jsonb("details").$type<Record<string, unknown>>().notNull(), createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("cp_cloud_device_trust_audit_created_idx").on(table.createdAt),
+  index("cp_cloud_device_trust_audit_binding_idx").on(table.bindingId, table.createdAt),
+]);
+
+export const cloudDeviceTrustRevisions = pgTable("cp_cloud_device_trust_revisions", {
+  bindingId: text("binding_id").primaryKey(),
+  revision: bigint("revision", { mode: "number" }).notNull(),
+});

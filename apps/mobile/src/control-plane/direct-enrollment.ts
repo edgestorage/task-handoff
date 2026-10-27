@@ -1,5 +1,4 @@
 import * as Crypto from 'expo-crypto';
-import { Platform } from 'react-native';
 import nacl from 'tweetnacl';
 import {
   controlPlaneIdentitySigningInput,
@@ -8,6 +7,7 @@ import {
 import { createControlPlaneClient, type ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
 
 import type { SecureValueStore } from '../platform/secure-storage';
+import { mobileDeviceIdentity } from './mobile-device';
 import {
   MOBILE_CONTROL_PLANE_PROFILE_VERSION,
   normalizeMobileControlPlaneCapabilities,
@@ -15,7 +15,6 @@ import {
 } from './profile';
 
 const CLOCK_SKEW_MS = 60_000;
-const DEVICE_ID_KEY = 'mobile-device-id';
 
 export class DirectEnrollmentError extends Error {
   constructor(
@@ -163,16 +162,6 @@ export async function probeDirectControlPlane(
   return { origin, identity: document.data.payload };
 }
 
-async function mobileDevice(secureStore: SecureValueStore) {
-  let id = await secureStore.get(DEVICE_ID_KEY);
-  if (!id) {
-    id = Crypto.randomUUID();
-    await secureStore.set(DEVICE_ID_KEY, id);
-  }
-  const platform = Platform.OS === 'ios' ? 'ios' : 'android';
-  return { id, name: `TaskHandoff on ${platform === 'ios' ? 'iOS' : 'Android'}`, platform } as const;
-}
-
 export async function loginDirectControlPlane(
   target: VerifiedDirectControlPlane,
   credentials: { username: string; password: string },
@@ -184,9 +173,15 @@ export async function loginDirectControlPlane(
   }
   let login;
   try {
+    const device = await mobileDeviceIdentity(secureStore);
     login = await publicAuthApi(target.origin, options.fetchImpl ?? fetch).loginMobile({
       ...credentials,
-      device: await mobileDevice(secureStore),
+      device: {
+        id: device.id,
+        name: device.descriptor.name,
+        platform: device.descriptor.platform as 'ios' | 'android',
+        ...(device.descriptor.version ? { appVersion: device.descriptor.version } : {}),
+      },
     });
   } catch (cause) {
     if (cause instanceof DirectEnrollmentError) throw cause;

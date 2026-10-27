@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { acceptNodeRelayHandshake } from "../../shared/cloud-relay/node-relay-session.ts";
+import type { NodeAgentControlPlaneTrustOutcome } from "@task-handoff/protocol/node-relay-channel";
 import { trustedRelayUrl } from "./relay-connector.ts";
 import { observeRelaySocketErrors } from "./relay-socket.ts";
 
@@ -22,6 +23,7 @@ export type VerifiedNodeRelayAllocation = {
 };
 
 export type ConnectedNodeRelayChannel = {
+  status: "connected";
   socket: NodeRelayFrameSocket;
   key: Uint8Array;
   nodeId: string;
@@ -30,6 +32,13 @@ export type ConnectedNodeRelayChannel = {
   allocationId: string;
   channelId?: string;
 };
+
+export type TrustRequiredNodeRelayConnection = {
+  status: "trust-required";
+  outcome: NodeAgentControlPlaneTrustOutcome;
+};
+
+export type CloudNodeRelayConnectorResult = ConnectedNodeRelayChannel | TrustRequiredNodeRelayConnection;
 
 /**
  * Dials the Relay for one pushed node allocation, attaches as the
@@ -48,7 +57,7 @@ export class CloudNodeRelayConnector {
     serviceOrigin: string;
     pairing?: { keyId: string; secret: string };
     createPairing(): { keyId: string; secret: string };
-  }): Promise<ConnectedNodeRelayChannel> {
+  }): Promise<CloudNodeRelayConnectorResult> {
     const allocation = input.allocation;
     const relayUrl = new URL(allocation.relayUrl);
     if (!trustedRelayUrl(relayUrl, input.serviceOrigin)) throw channelError("UNTRUSTED_RELAY_URL");
@@ -75,7 +84,13 @@ export class CloudNodeRelayConnector {
           relayId: event.relayId,
           nodeHandle: event.nodeHandle,
           controlPlaneId: event.controlPlaneId,
+          controlPlanePublicKey: this.options.identity.publicIdentity().publicKey,
           accountId: attach.accountId,
+          ownerAccountId: attach.ownerAccountId,
+          accessMode: attach.accessMode,
+          shareGrantId: attach.shareGrantId,
+          shareRole: attach.shareRole,
+          shareRevision: attach.shareRevision,
           bindingId: event.bindingId,
           bindingRevision: event.bindingRevision,
           nodePublicKeyFingerprint: allocation.nodePublicKeyFingerprint,
@@ -84,7 +99,12 @@ export class CloudNodeRelayConnector {
         createPairing: input.createPairing,
         timeoutMs: handshakeTimeoutMs,
       });
+      if (accepted.status === "trust-required") {
+        try { if (socket.readyState < WebSocket.CLOSING) socket.close(4403, "node-agent-control-plane-trust-required"); } catch { /* node closed it */ }
+        return { status: "trust-required", outcome: accepted.outcome };
+      }
       return {
+        status: "connected",
         socket: socket as unknown as NodeRelayFrameSocket,
         key: accepted.key,
         nodeId: accepted.init.nodeId,

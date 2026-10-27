@@ -179,7 +179,7 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
   return { app, stub, relay, identityService, planes, connections, planeFor, connect, hmacFor, localHeaders };
 }
 
-async function bind(app: FastifyInstance, stub: CloudStub, displayName?: string, headers: Record<string, string> = authorizationHeaders()) {
+async function bind(app: FastifyInstance, stub: CloudStub, displayName?: string, headers: Record<string, string> = authorizationHeaders(), autoApproveTrust = true) {
   const response = await app.inject({
     method: "POST",
     url: "/api/node-agent/cloud-relay/bind",
@@ -187,6 +187,40 @@ async function bind(app: FastifyInstance, stub: CloudStub, displayName?: string,
     payload: { cloudOrigin: SERVICE_ORIGIN, bindingToken: stub.state.bindingToken, ...(displayName ? { displayName } : {}) },
   });
   assert.equal(response.statusCode, 201, response.body);
+  if (autoApproveTrust) {
+    const identity = (app as FastifyInstance & { nodeAgentIdentityService: NodeAgentIdentityService }).nodeAgentIdentityService;
+    const binding = identity.cloudRelayBinding();
+    assert.ok(binding, "the relay trust fixture requires a cloud binding");
+    for (const claim of stub.state.claims.values()) {
+      const accountId = claim.accountId ?? binding.accountId;
+      const ownerAccountId = claim.ownerAccountId ?? accountId;
+      const accessMode = claim.accessMode ?? "owner";
+      const context = {
+        nodeId: "node_cloud_relay",
+        nodeHandle: binding.nodeHandle,
+        controlPlaneId: claim.controlPlaneId,
+        controlPlanePublicKey: claim.controlPlanePublicKey,
+        bindingId: claim.bindingId ?? "binding_test",
+        bindingRevision: claim.bindingRevision ?? 1,
+        accountId,
+        ownerAccountId,
+        accessMode,
+        ...(claim.shareGrantId ? { shareGrantId: claim.shareGrantId } : {}),
+        ...(claim.shareRole ? { shareRole: claim.shareRole } : {}),
+        ...(claim.shareRevision ? { shareRevision: claim.shareRevision } : {}),
+      };
+      const observation = identity.observeCloudControlPlaneTrust(context);
+      if (observation.kind === "active") continue;
+      assert.equal(observation.kind, "pending", `unexpected trust state for ${claim.controlPlaneId}`);
+      identity.decideCloudControlPlaneTrust({
+        action: "approve",
+        requestId: observation.request.id,
+        expectedFingerprint: nodeRelayFingerprint(claim.controlPlanePublicKey),
+        expectedRevision: observation.request.revision,
+        actor: { type: "local", id: "test-fixture" },
+      });
+    }
+  }
   return response.json().data;
 }
 
@@ -400,6 +434,145 @@ test("a stale allocation returned after refresh is never attached a second time"
   }, "the node to recover once the Coordinator issues a new allocation");
   assert.ok(connections.length >= 2);
   assert.notEqual(connections[connections.length - 1].allocationId, connections[0].allocationId);
+});
+
+test("an unapproved Control Plane receives only a pending outcome; local approval connects without rebinding", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  const controlPlaneId = "control_plane_waiting_for_trust";
+  const pendingPlane = planeFor(controlPlaneId);
+  await bind(app, stub, undefined, authorizationHeaders(), false);
+
+  relay.pollNow();
+  const pending = await connect(controlPlaneId) as any;
+  assert.equal(pending.status, "trust-required");
+  assert.equal(pending.outcome.state, "pending");
+  assert.equal(pending.outcome.reason, "first-seen");
+  assert.equal(pending.outcome.controlPlaneId, controlPlaneId);
+  assert.equal(identityService.cloudRelayPairing(controlPlaneId), undefined);
+  assert.deepEqual(identityService.listControlPlanePairings(), []);
+  const beforeApproval = await status(app);
+  assert.equal(beforeApproval.channels.some((channel: any) => channel.status === "connected"), false);
+
+  const listed = await app.inject({ method: "GET", url: "/api/node-agent/control-plane-trust", headers: authorizationHeaders() });
+  assert.equal(listed.statusCode, 200, listed.body);
+  const trust = listed.json().data;
+  assert.deepEqual(trust.pins, []);
+  const request = trust.requests.find((item: any) => item.requestId === pending.outcome.requestId);
+  assert.equal(request?.status, "pending");
+  assert.equal(request?.controlPlaneId, controlPlaneId);
+  assert.equal(request?.fingerprint, nodeRelayFingerprint(pendingPlane.identity.publicKey));
+
+  const decisionPayload = {
+    action: "approve",
+    expectedFingerprint: request.fingerprint,
+    expectedRevision: request.revision,
+  };
+  const decided = await app.inject({
+    method: "POST",
+    url: `/api/node-agent/control-plane-trust/requests/${encodeURIComponent(request.requestId)}/decision`,
+    headers: authorizationHeaders(),
+    payload: decisionPayload,
+  });
+  assert.equal(decided.statusCode, 200, decided.body);
+  assert.equal(decided.json().data.pins.filter((pin: any) => pin.status === "active").length, 1);
+
+  const approvedPeer = await waitFor(async () => {
+    if (pendingPlane.peers.length < 2) return undefined;
+    const peer = await pendingPlane.peers[pendingPlane.peers.length - 1] as any;
+    return peer?.status === "trust-required" ? undefined : peer;
+  }, "the approved Control Plane to reconnect and complete the handshake");
+  assert.equal((await approvedPeer.request("/health")).status, 200);
+  assert.ok(identityService.cloudRelayPairing(controlPlaneId));
+  assert.equal(stub.state.redemptions.length, 1, "approval must not redeem or rotate the cloud binding token");
+  const connected = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+  assert.equal(connected.channels.find((channel: any) => channel.controlPlaneId === controlPlaneId)?.status, "connected");
+});
+
+test("revoking one Control Plane pin closes only that channel and clears only its relay pairing", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  planeFor("control_plane_revoke_one");
+  const two = planeFor("control_plane_revoke_two");
+  await bind(app, stub);
+  relay.pollNow();
+  const [peerOne, peerTwo] = await Promise.all([connect("control_plane_revoke_one"), connect("control_plane_revoke_two")]);
+  assert.equal((await peerOne.request("/health")).status, 200);
+  assert.equal((await peerTwo.request("/health")).status, 200);
+
+  const trustHeaders = localHeaders("GET", "/api/node-agent/control-plane-trust");
+  const listed = await app.inject({ method: "GET", url: "/api/node-agent/control-plane-trust", headers: trustHeaders });
+  assert.equal(listed.statusCode, 200, listed.body);
+  const pin = listed.json().data.pins.find((item: any) => item.controlPlaneId === "control_plane_revoke_one" && item.status === "active");
+  assert.ok(pin);
+  const revokeHeaders = localHeaders("POST", `/api/node-agent/control-plane-trust/pins/${pin.pinId}/revoke`, { expectedFingerprint: pin.fingerprint, expectedRevision: pin.revision, reason: "test revoke" });
+  const revoked = await app.inject({
+    method: "POST",
+    url: `/api/node-agent/control-plane-trust/pins/${pin.pinId}/revoke`,
+    headers: revokeHeaders,
+    payload: { expectedFingerprint: pin.fingerprint, expectedRevision: pin.revision, reason: "test revoke" },
+  });
+  assert.equal(revoked.statusCode, 200, revoked.body);
+  assert.equal(revoked.json().data.pins.find((item: any) => item.pinId === pin.pinId)?.status, "revoked");
+
+  await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    const oneChannel = snapshot.channels.find((channel: any) => channel.controlPlaneId === "control_plane_revoke_one");
+    const twoChannel = snapshot.channels.find((channel: any) => channel.controlPlaneId === "control_plane_revoke_two");
+    return oneChannel?.status !== "connected" && twoChannel?.status === "connected" ? snapshot : undefined;
+  }, "only the revoked Control Plane channel to close");
+  assert.equal(identityService.cloudRelayPairing("control_plane_revoke_one"), undefined);
+  assert.ok(identityService.cloudRelayPairing("control_plane_revoke_two"));
+  assert.equal((await peerTwo.request("/health")).status, 200);
+});
+
+test("an already connected Control Plane can approve a different pending CP; the authenticated key, not a spoofed header, is audited", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, identityService, planeFor, connect, hmacFor } = await cloudRelayFixture(t, stub);
+  const approverId = "control_plane_approver";
+  const targetId = "control_plane_target";
+  planeFor(approverId);
+  await bind(app, stub);
+  relay.pollNow();
+  const approver = await connect(approverId);
+  assert.equal((await approver.request("/health")).status, 200);
+  const approverPairing = identityService.cloudRelayPairing(approverId);
+  assert.ok(approverPairing);
+
+  const targetPlane = planeFor(targetId);
+  relay.pollNow();
+  const pending = await connect(targetId) as any;
+  assert.equal(pending.status, "trust-required");
+  assert.equal(pending.outcome.controlPlaneId, targetId);
+
+  const listPath = "/api/node-agent/control-plane-trust";
+  const listed = await app.inject({ method: "GET", url: listPath, headers: hmacFor(approverPairing)( "GET", listPath) });
+  assert.equal(listed.statusCode, 200, listed.body);
+  const request = listed.json().data.requests.find((item: any) => item.requestId === pending.outcome.requestId);
+  assert.ok(request);
+  const decisionPath = `/api/node-agent/control-plane-trust/requests/${encodeURIComponent(request.requestId)}/decision`;
+  const payload = { action: "approve", expectedFingerprint: request.fingerprint, expectedRevision: request.revision };
+  const decided = await app.inject({
+    method: "POST",
+    url: decisionPath,
+    headers: {
+      ...hmacFor(approverPairing)("POST", decisionPath, payload),
+      "x-task-handoff-control-plane-id": targetId,
+    },
+    payload,
+  });
+  assert.equal(decided.statusCode, 200, decided.body);
+  const pin = decided.json().data.pins.find((item: any) => item.controlPlaneId === targetId && item.status === "active");
+  assert.equal(pin?.approvedByActorType, "control-plane");
+  assert.equal(pin?.approvedByActorId, approverId);
+  assert.notEqual(pin?.approvedByActorId, targetId);
+
+  const targetPeer = await waitFor(async () => {
+    if (targetPlane.peers.length < 2) return undefined;
+    const peer = await targetPlane.peers[targetPlane.peers.length - 1] as any;
+    return peer?.status === "trust-required" ? undefined : peer;
+  }, "the proxy-approved target Control Plane to connect");
+  assert.equal((await targetPeer.request("/health")).status, 200);
 });
 
 test("a new allocation supersedes a stalled attach before the old socket closes", async (t) => {

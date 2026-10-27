@@ -7,6 +7,7 @@ import nacl from "tweetnacl";
 import { decodeRelayFrame, encodeRelayFrame, RELAY_FRAMING_PROTOCOL_VERSION, RELAY_SESSION_PROTOCOL_VERSION, RelaySessionAudience, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { CloudRelayConnector } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 import { RelayTraceRecorder, relayTraceEnabled, relayTraceFromEnvironment } from "../src/control-plane/cloud-connectivity/relay-trace.ts";
+import { activeDeviceTrust, cloudClientDevice, cloudRelayIdentity, trustedDeviceSessions } from "./support/cloud-relay-client-auth.ts";
 
 const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "relay-trace-test-"));
 
@@ -124,6 +125,7 @@ test("relay trace uses its own switch and ignores the diagnostic logging flag", 
 
 test("relay connector writes decoded traffic that the relay itself only sees as ciphertext", { timeout: 5_000 }, async () => {
   const sockets: any[] = [];
+  const device = cloudClientDevice();
   class FakeSocket {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -188,7 +190,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     bindingId: transcriptTicket.bindingId,
     bindingRevision: transcriptTicket.bindingRevision,
     targetPublicKeyFingerprint: fingerprint,
-    clientProofPublicKey: "b".repeat(43),
+    clientProofPublicKey: device.publicKey,
     controlPlaneProofPublicKey: "c".repeat(43),
     trafficClass: "interactive",
     sessionTranscriptTicket: transcriptTicket,
@@ -199,11 +201,7 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
   } as const;
   const attach = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: "task-handoff:relay-control-plane-attach", allocationId: grant.allocationId, relayId: grant.relayId, role: "control-plane", controlPlaneId: grant.controlPlaneId, accountId: grant.accountId, ownerAccountId: grant.ownerAccountId, accessMode: grant.accessMode, accessRoleId: grant.accessRoleId, deviceSessionId: grant.deviceSessionId, bindingId: grant.bindingId, ticketId: grant.accessTicketId, bindingRevision: grant.bindingRevision, trafficClass: "interactive", nonce: "a".repeat(24), issuedAt, expiresAt: new Date(now + 8 * 60_000).toISOString(), signature: "s".repeat(32) };
   const sessionKey = new Uint8Array(32);
-  const identity = {
-    acceptCloudAccessHandshake: () => ({ response: { serverEphemeralPublicKey: "c".repeat(43), transcript: "transcript", signature: "s".repeat(32) }, sessionKey }),
-    publicIdentity: () => ({ publicKey: "c".repeat(43) }),
-    signRelayRoleProof: (payload: Record<string, unknown>) => ({ ...payload, signature: "s".repeat(86) }),
-  };
+  const identity = cloudRelayIdentity({ fingerprint, sessionKey });
   const directory = tempDir();
   const trace = new RelayTraceRecorder({ enabled: true, directory });
   const connector = new CloudRelayConnector({
@@ -211,11 +209,13 @@ test("relay connector writes decoded traffic that the relay itself only sees as 
     bridge: { request: async (_actor, input) => ({ status: 200, body: { data: { path: input.path } } }) } as any,
     webSocket: FakeSocket as any,
     trace,
-    resolveAccessRole: async () => ({ roleIds: ["role_admin"], permissionIds: ["ai-sessions:read"], authorizationRevision: 1 }),
+    deviceTrust: activeDeviceTrust(),
+    trustedSessions: trustedDeviceSessions(),
   });
 
   const connection = await connector.connect({ relayUrl: grant.relayUrl, allocation: { attach, grant } });
-  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify({ ticketId: transcriptTicket.transcriptTicketId, deviceSessionId: transcriptTicket.deviceSessionId, clientEphemeralPublicKey: "b".repeat(43) })) });
+  const hello = device.hello({ ticket: transcriptTicket, grant });
+  sockets[0].receive({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(hello)) });
   // The data frame can only be consumed once the encrypted session has registered its
   // listener, which happens after the handshake response goes back over the socket.
   await waitFor(() => sockets[0].frames.some((frame) => frame.kind === "handshake"));

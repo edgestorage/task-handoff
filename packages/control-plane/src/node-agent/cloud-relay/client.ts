@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 import type { NodeRelayClaimGrant, NodeRelayNodeAllocation } from "@task-handoff/cloud-contracts";
 import type { NodeAgentCloudRelayStatus } from "@task-handoff/protocol/control-plane";
-import { initiateNodeRelayHandshake, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
+import { initiateNodeRelayHandshake, nodeRelayFingerprint, writeNodeAgentControlPlaneTrustOutcome, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { EventConnectionRetryTimer } from "../../shared/events/connection-retry.ts";
 import { WebSocketConnectionSupervisor } from "../../shared/transport/websocket-connection-supervisor.ts";
 import type { NodeAgentIdentityService } from "../identity/service.ts";
@@ -11,6 +11,7 @@ import { verifyNodeRelayClaimGrant } from "./claim-grant.ts";
 import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
 import { probeNodeRelayTargets } from "./probe.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
+import type { NodeAgentCloudControlPlanePin, NodeAgentCloudControlPlaneTrustContext, NodeAgentCloudControlPlaneTrustRequest } from "./trust-types.ts";
 import { resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
 import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
 
@@ -26,7 +27,7 @@ type VerifiedAllocation = { allocation: NodeRelayNodeAllocation; grant: NodeRela
 type ChannelAttempt = {
   id: number;
   allocationId: string;
-  phase: "dialing" | "attaching" | "handshaking";
+  phase: "dialing" | "attaching" | "trust-checking" | "handshaking";
   startedAt: number;
   controller: AbortController;
   socket?: WebSocket;
@@ -47,6 +48,9 @@ type ChannelEntry = {
   lastDisconnectedAt?: string;
   nextRetryAt?: string;
   error?: string;
+  activePinId?: string;
+  activeContextKey?: string;
+  suppressedContextKey?: string;
 };
 
 export type NodeAgentCloudRelayClientOptions = {
@@ -83,6 +87,74 @@ function relayKeySigner(binding: NodeAgentCloudRelayBinding) {
       return crypto.sign(null, Buffer.from(input), key).toString("base64url");
     },
   };
+}
+
+function controlPlaneTrustContext(binding: NodeAgentCloudRelayBinding, grant: NodeRelayClaimGrant, nodeId: string): NodeAgentCloudControlPlaneTrustContext {
+  if (!grant.controlPlanePublicKey) throw relayError("NODE_AGENT_CLOUD_RELAY_CONTROL_PLANE_KEY_MISSING");
+  const accessMode = grant.accessMode ?? "owner";
+  const ownerAccountId = grant.ownerAccountId ?? grant.accountId;
+  return {
+    nodeId,
+    nodeHandle: grant.nodeHandle,
+    controlPlaneId: grant.controlPlaneId,
+    controlPlanePublicKey: grant.controlPlanePublicKey,
+    bindingId: grant.bindingId,
+    bindingRevision: grant.bindingRevision,
+    accountId: grant.accountId,
+    ownerAccountId,
+    accessMode,
+    ...(accessMode === "shared" && grant.shareGrantId ? { shareGrantId: grant.shareGrantId } : {}),
+    ...(accessMode === "shared" && grant.shareRole ? { shareRole: grant.shareRole } : {}),
+    ...(accessMode === "shared" && grant.shareRevision ? { shareRevision: grant.shareRevision } : {}),
+  };
+}
+
+function controlPlaneTrustContextKey(context: NodeAgentCloudControlPlaneTrustContext) {
+  return [
+    context.nodeHandle,
+    context.controlPlaneId,
+    context.controlPlanePublicKey,
+    context.bindingId,
+    context.accountId,
+    context.ownerAccountId,
+    context.accessMode,
+    context.shareGrantId ?? "",
+    context.shareRole ?? "",
+  ].join("\0");
+}
+
+function controlPlaneTrustContextKeyFromPin(pin: NodeAgentCloudControlPlanePin) {
+  return controlPlaneTrustContextKey({
+    nodeId: pin.nodeId,
+    nodeHandle: pin.nodeHandle,
+    controlPlaneId: pin.controlPlaneId,
+    controlPlanePublicKey: pin.controlPlanePublicKey,
+    bindingId: pin.bindingId,
+    bindingRevision: pin.bindingRevision,
+    accountId: pin.accessAccountId,
+    ownerAccountId: pin.ownerAccountId,
+    accessMode: pin.accessMode,
+    ...(pin.shareGrantId ? { shareGrantId: pin.shareGrantId } : {}),
+    ...(pin.shareRole ? { shareRole: pin.shareRole } : {}),
+    ...(pin.shareRevision ? { shareRevision: pin.shareRevision } : {}),
+  });
+}
+
+function controlPlaneTrustContextKeyFromRequest(request: NodeAgentCloudControlPlaneTrustRequest) {
+  return controlPlaneTrustContextKey({
+    nodeId: request.nodeId,
+    nodeHandle: request.nodeHandle,
+    controlPlaneId: request.controlPlaneId,
+    controlPlanePublicKey: request.controlPlanePublicKey,
+    bindingId: request.bindingId,
+    bindingRevision: request.bindingRevision,
+    accountId: request.accessAccountId,
+    ownerAccountId: request.ownerAccountId,
+    accessMode: request.accessMode,
+    ...(request.shareGrantId ? { shareGrantId: request.shareGrantId } : {}),
+    ...(request.shareRole ? { shareRole: request.shareRole } : {}),
+    ...(request.shareRevision ? { shareRevision: request.shareRevision } : {}),
+  });
 }
 
 function relayErrorCode(error: unknown) {
@@ -337,6 +409,31 @@ export class NodeAgentCloudRelayClient {
     this.schedulePoll(0);
   }
 
+  controlPlaneTrustChanged(revoked?: NodeAgentCloudControlPlanePin) {
+    if (revoked) {
+      for (const entry of this.channels.values()) {
+        if (entry.activePinId !== revoked.id && entry.activeContextKey !== controlPlaneTrustContextKeyFromPin(revoked)) continue;
+        entry.activePinId = undefined;
+        entry.activeContextKey = undefined;
+        entry.status = "reconnecting";
+        entry.error = "The local Control Plane trust was revoked.";
+        entry.lastDisconnectedAt = new Date(this.now()).toISOString();
+        this.releaseChannel(entry, "control-plane-trust-revoked");
+        this.refreshControlPlaneIds.add(entry.controlPlaneId);
+      }
+    }
+    this.schedulePoll(0);
+  }
+
+  controlPlaneTrustRetried(request: NodeAgentCloudControlPlaneTrustRequest) {
+    const key = controlPlaneTrustContextKeyFromRequest(request);
+    for (const entry of this.channels.values()) {
+      if (entry.suppressedContextKey === key) entry.suppressedContextKey = undefined;
+    }
+    this.refreshControlPlaneIds.add(request.controlPlaneId);
+    this.schedulePoll(0);
+  }
+
   private async cloudClient(cloudOrigin: string) {
     const resolver = await this.discoveryResolver(cloudOrigin);
     return new NodeRelayCloudClient({
@@ -528,6 +625,12 @@ export class NodeAgentCloudRelayClient {
       seen.add(verified.grant.controlPlaneId);
       const entry = this.ensureEntry(verified.grant.controlPlaneId);
       entry.missingPolls = 0;
+      const trustContextKey = controlPlaneTrustContextKey(controlPlaneTrustContext(binding, verified.grant, this.options.nodeId));
+      if (entry.suppressedContextKey === trustContextKey) {
+        entry.expiresAt = allocation.expiresAt;
+        continue;
+      }
+      entry.suppressedContextKey = undefined;
       // A refresh is complete only when the Coordinator actually issues a new
       // allocation id. Reusing the old id would replay an attach capability
       // that the Relay has already consumed.
@@ -680,8 +783,66 @@ export class NodeAgentCloudRelayClient {
         allocationId: attempt.allocationId,
         attemptId: attempt.id,
       }, "node agent cloud relay attach accepted");
-      attempt.phase = "handshaking";
+      attempt.phase = "trust-checking";
       const grant = verified.grant;
+      const trustContext = controlPlaneTrustContext(binding, grant, this.options.nodeId);
+      const trustContextKey = controlPlaneTrustContextKey(trustContext);
+      const trustObservation = this.options.identity.observeCloudControlPlaneTrust(trustContext);
+      if (trustObservation.kind !== "active") {
+        const request = trustObservation.request;
+        const issuedAt = new Date(this.now()).toISOString();
+        writeNodeAgentControlPlaneTrustOutcome({
+          socket: socket as unknown as NodeRelayFrameSocket,
+          node: relayKeySigner(binding),
+          outcome: {
+            type: "node-agent.control-plane-trust",
+            protocolVersion: "2026-10-26.1",
+            audience: "task-handoff:node-agent-control-plane-trust",
+            allocationId: grant.allocationId,
+            relayId: grant.relayId,
+            nodeHandle: grant.nodeHandle,
+            nodeId: this.options.nodeId,
+            nodePublicKey: binding.relayPublicKey,
+            nodePublicKeyFingerprint: nodeRelayFingerprint(binding.relayPublicKey),
+            controlPlaneId: grant.controlPlaneId,
+            controlPlanePublicKeyFingerprint: nodeRelayFingerprint(grant.controlPlanePublicKey),
+            bindingId: grant.bindingId,
+            bindingRevision: grant.bindingRevision,
+            access: {
+              accountId: trustContext.accountId,
+              ownerAccountId: trustContext.ownerAccountId,
+              accessMode: trustContext.accessMode,
+              ...(trustContext.shareGrantId ? { shareGrantId: trustContext.shareGrantId } : {}),
+              ...(trustContext.shareRole ? { shareRole: trustContext.shareRole } : {}),
+              ...(trustContext.shareRevision ? { shareRevision: trustContext.shareRevision } : {}),
+            },
+            state: trustObservation.kind,
+            reason: trustObservation.kind === "pending" ? trustObservation.reason : trustObservation.kind,
+            requestId: request.id,
+            requestedAt: request.requestedAt,
+            ...(trustObservation.kind === "pending" ? { expiresAt: request.expiresAt } : {}),
+            issuedAt,
+          },
+        });
+        if (trustObservation.kind === "rejected") entry.suppressedContextKey = trustContextKey;
+        try {
+          if (socket.readyState < WebSocket.CLOSING) socket.close(4403, `node-agent-control-plane-trust-${trustObservation.kind}`);
+        } catch {
+          // The Relay may already have closed after forwarding the outcome.
+        }
+        const error = relayError(
+          `NODE_AGENT_CONTROL_PLANE_TRUST_${trustObservation.kind.toUpperCase()}`,
+          trustObservation.kind === "pending"
+            ? "The Control Plane must be approved locally before this node opens an encrypted channel."
+            : "The local node rejected this Control Plane trust request.",
+        );
+        error.retryable = trustObservation.kind === "pending";
+        throw error;
+      }
+      entry.activePinId = trustObservation.pin.id;
+      entry.activeContextKey = trustContextKey;
+      entry.suppressedContextKey = undefined;
+      attempt.phase = "handshaking";
       const storedPairing = this.options.identity.cloudRelayPairing(grant.controlPlaneId);
       const handshake = await initiateNodeRelayHandshake({
         socket: socket as unknown as NodeRelayFrameSocket,
@@ -760,7 +921,10 @@ export class NodeAgentCloudRelayClient {
         error: entry.error,
         durationMs: Math.max(0, this.now() - attempt.startedAt),
       }, "node agent cloud relay connect failed");
-      this.scheduleEntryRetry(entry);
+      entry.activePinId = undefined;
+      entry.activeContextKey = undefined;
+      if ((error as { retryable?: unknown })?.retryable === false) entry.retry.cancel();
+      else this.scheduleEntryRetry(entry);
     } finally {
       if (entry.attempt === attempt) entry.attempt = undefined;
     }

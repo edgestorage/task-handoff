@@ -19,8 +19,11 @@ import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } f
 import { RELAY_BODY_CHUNK_BYTES, RelayBinaryResponseSchema, type RelayBodyFrame } from '@task-handoff/protocol/relay-body';
 import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 import { createEphemeralRelayProofKey, type RelayProofKeyProvider } from './relay-proof-key';
+import type { CloudDeviceAuth } from '@task-handoff/cloud-contracts/mobile';
+import type { DeviceAuthInput } from './relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from './relay-session-store';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
+import { isMobileDeviceTrustError } from './device-trust-error';
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; bytes?: Uint8Array; final?: boolean; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionRenewal = { leaseExpiresAt: string; generation: number; committed: boolean };
@@ -48,6 +51,10 @@ export type RelayChannelFactory = (input: {
   targetPublicKeyFingerprint: string;
   epoch: number;
   signal?: AbortSignal;
+  /** Injected by RelayControlPlaneTransport; optional only for transport-level test doubles. */
+  deviceAuth?(input: DeviceAuthInput): Promise<CloudDeviceAuth>;
+  /** True only for one user-initiated retry after a terminal trust outcome. */
+  trustRetry?: true;
 }) => Promise<EncryptedRelayChannel>;
 
 type RelayAttempt = {
@@ -207,6 +214,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   private readonly maxResumeFailures: number;
   private e2eHandshakeTimeouts = 0;
   private resumeFailures = 0;
+  private deviceTrustRetry = false;
   private sessionRestore?: Promise<void>;
   private sessionStoreChain: Promise<void> = Promise.resolve();
   private memoryPending?: RelayPendingOperation;
@@ -655,12 +663,17 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.reset(transportError('RELAY_TRANSPORT_SUSPENDED', true, 'Cloud Relay connection was suspended.'));
   }
 
+  authorizeDeviceTrustRetry() {
+    this.deviceTrustRetry = true;
+  }
+
   private ensureChannel(attempt = this.attempt && this.isAttemptCurrent(this.attempt) ? this.attempt : this.beginAttempt()) {
     if (this.channel) return this.channel;
     if (!this.isAttemptCurrent(attempt)) return Promise.reject(attemptCancelled());
     let pending!: Promise<EncryptedRelayChannel>;
     pending = this.establishChannel(true, attempt).catch((error) => {
       if (this.channel === pending) this.channel = undefined;
+      if (isMobileDeviceTrustError(error)) this.deviceTrustRetry = false;
       throw normalize(error);
     });
     this.channel = pending;
@@ -1137,6 +1150,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.channelValue = channel;
     this.channel = Promise.resolve(channel);
     this.session = session;
+    this.deviceTrustRetry = false;
     this.e2eHandshakeTimeouts = 0;
     this.resumeFailures = 0;
     channel.subscribe((value) => this.receive(value), (error) => this.channelClosed(channel, error));
@@ -1467,8 +1481,14 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   /** Stops the transport from installing a channel even if a platform socket resolves late. */
-  private openChannelForAttempt(input: Parameters<RelayChannelFactory>[0], attempt: RelayAttempt): Promise<EncryptedRelayChannel> {
+  private openChannelForAttempt(input: Omit<Parameters<RelayChannelFactory>[0], 'deviceAuth'>, attempt: RelayAttempt): Promise<EncryptedRelayChannel> {
     this.assertAttemptCurrent(attempt);
+    // Keep the explicit retry until the Control Plane actually answers with a
+    // trust outcome. A socket can be replaced or detached before the signed
+    // outcome arrives; consuming the retry here would make the automatic
+    // reconnect look like an ordinary revoked session and never create a new
+    // request.
+    const trustRetry = this.deviceTrustRetry;
     return new Promise<EncryptedRelayChannel>((resolve, reject) => {
       let settled = false;
       const cleanup = () => attempt.controller.signal.removeEventListener('abort', aborted);
@@ -1491,7 +1511,12 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       attempt.controller.signal.addEventListener('abort', aborted, { once: true });
       let opening: Promise<EncryptedRelayChannel>;
       try {
-        opening = Promise.resolve(this.openChannel({ ...input, signal: attempt.controller.signal }));
+        opening = Promise.resolve(this.openChannel({
+          ...input,
+          signal: attempt.controller.signal,
+          deviceAuth: (deviceInput) => this.proofKey.deviceAuth(deviceInput),
+          ...(trustRetry ? { trustRetry: true as const } : {}),
+        }));
       } catch (error) {
         fail(error);
         return;

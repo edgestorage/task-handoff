@@ -26,6 +26,10 @@
       "types": "./src/operation-approvals.ts",
       "default": "./src/operation-approvals.ts"
     },
+    "./device-trust": {
+      "types": "./src/device-trust.ts",
+      "default": "./src/device-trust.ts"
+    },
     "./control-plane-directory": {
       "types": "./src/control-plane-directory.ts",
       "default": "./src/control-plane-directory.ts"
@@ -33,6 +37,10 @@
     "./node-relay-channel": {
       "types": "./src/node-relay-channel.ts",
       "default": "./src/node-relay-channel.ts"
+    },
+    "./node-agent-control-plane-trust": {
+      "types": "./src/node-agent-control-plane-trust.ts",
+      "default": "./src/node-agent-control-plane-trust.ts"
     },
     "./config-sync": {
       "types": "./src/config-sync.ts",

@@ -1,84 +1,86 @@
 import { createHash, createPublicKey, diffieHellman, generateKeyPairSync, sign, verify, type KeyObject } from "node:crypto";
-import { z } from "zod";
-import { canonicalJson } from "./common.ts";
-import { AccessTicketSchema, type AccessTicket } from "./relay.ts";
-import { RelaySessionTranscriptTicketSchema, type RelaySessionTranscriptTicket } from "./relay-session.ts";
+import {
+  CLOUD_CLIENT_HANDSHAKE_AUDIENCE,
+  CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+  ClientHelloSchema,
+  HandshakeResponseSchema,
+  cloudClientTranscriptSigningInput,
+  type ClientHello,
+  type HandshakeResponse,
+} from "./device-auth.ts";
+import type { AccessTicket } from "./relay.ts";
+import type { RelaySessionGrant, RelaySessionTranscriptTicket } from "./relay-session.ts";
 
-export const ClientHelloSchema = z.object({
-  ticketId: z.string().trim().min(3).max(160),
-  deviceSessionId: z.string().trim().min(3).max(160),
-  clientEphemeralPublicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-});
-
-export const HandshakeResponseSchema = z.object({
-  serverEphemeralPublicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  transcript: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
-});
-
-export type ClientHello = z.infer<typeof ClientHelloSchema>;
-export type HandshakeResponse = z.infer<typeof HandshakeResponseSchema>;
+export { ClientHelloSchema, HandshakeResponseSchema, type ClientHello, type HandshakeResponse } from "./device-auth.ts";
 
 interface ClientPrivateState {
   privateKey: KeyObject;
   ticket: AccessTicket | RelaySessionTranscriptTicket;
+  grant?: RelaySessionGrant;
 }
 
-const RelayTranscriptCredentialSchema = z.union([AccessTicketSchema, RelaySessionTranscriptTicketSchema]);
 type RelayTranscriptCredential = AccessTicket | RelaySessionTranscriptTicket;
 
-export function beginClientHandshake(ticket: AccessTicket | RelaySessionTranscriptTicket): { privateState: ClientPrivateState; hello: ClientHello } {
-  const credential = RelayTranscriptCredentialSchema.parse(ticket);
+/** Inputs that may only be produced after the device-auth signature was verified. */
+export type AuthenticatedClientHandshake = {
+  ticket: RelayTranscriptCredential;
+  grant?: RelaySessionGrant;
+  clientEphemeralPublicKey: string;
+};
+
+export function beginClientHandshake(ticket: AccessTicket | RelaySessionTranscriptTicket, grant?: RelaySessionGrant): { privateState: ClientPrivateState; hello: ClientHello } {
   const keyPair = generateKeyPairSync("x25519");
   const clientEphemeralPublicKey = jwkX(keyPair.publicKey);
-  return { privateState: { privateKey: keyPair.privateKey, ticket: credential }, hello: { ticketId: transcriptTicketId(credential), deviceSessionId: credential.deviceSessionId, clientEphemeralPublicKey } };
+  return { privateState: { privateKey: keyPair.privateKey, ticket, grant }, hello: { ticketId: transcriptTicketId(ticket), deviceSessionId: ticket.deviceSessionId, clientEphemeralPublicKey } };
 }
 
 export function acceptControlPlaneHandshake(input: {
-  ticket: unknown;
-  clientHello: unknown;
+  authenticated: AuthenticatedClientHandshake;
   controlPlaneFingerprint: string;
   controlPlanePrivateKey: KeyObject | string | Buffer;
 }): { sessionKey: Buffer; response: HandshakeResponse } {
-  const ticket = RelayTranscriptCredentialSchema.parse(input.ticket);
-  const clientHello = ClientHelloSchema.parse(input.clientHello);
-  if (transcriptTicketId(ticket) !== clientHello.ticketId || ticket.deviceSessionId !== clientHello.deviceSessionId || ticket.targetPublicKeyFingerprint !== input.controlPlaneFingerprint) throw handshakeError();
+  const { ticket, grant, clientEphemeralPublicKey } = input.authenticated;
+  if (ticket.targetPublicKeyFingerprint !== input.controlPlaneFingerprint) throw handshakeError();
   const keyPair = generateKeyPairSync("x25519");
   const serverEphemeralPublicKey = jwkX(keyPair.publicKey);
-  const transcript = transcriptHash(ticket, clientHello.clientEphemeralPublicKey, serverEphemeralPublicKey);
-  const sharedSecret = diffieHellman({ privateKey: keyPair.privateKey, publicKey: x25519PublicKey(clientHello.clientEphemeralPublicKey) });
+  const transcript = transcriptHash(ticket, grant, clientEphemeralPublicKey, serverEphemeralPublicKey);
+  const sharedSecret = diffieHellman({ privateKey: keyPair.privateKey, publicKey: x25519PublicKey(clientEphemeralPublicKey) });
   const sessionKey = deriveSessionKey(sharedSecret, transcript);
-  return { sessionKey, response: { serverEphemeralPublicKey, transcript, signature: sign(null, Buffer.from(transcript), input.controlPlanePrivateKey).toString("base64url") } };
+  const publicKey = createPublicKey(input.controlPlanePrivateKey).export({ format: "jwk" }).x;
+  if (!publicKey) throw handshakeError();
+  return {
+    sessionKey,
+    response: HandshakeResponseSchema.parse({
+      protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+      audience: CLOUD_CLIENT_HANDSHAKE_AUDIENCE,
+      state: "accepted",
+      controlPlaneId: ticket.controlPlaneId,
+      bindingId: ticket.bindingId,
+      ticketId: transcriptTicketId(ticket),
+      deviceSessionId: ticket.deviceSessionId,
+      controlPlanePublicKey: publicKey,
+      serverEphemeralPublicKey,
+      transcript,
+      signature: sign(null, Buffer.from(transcript), input.controlPlanePrivateKey).toString("base64url"),
+    }),
+  };
 }
 
 export function finishClientHandshake(privateState: ClientPrivateState, rawResponse: unknown, controlPlanePublicKey: KeyObject | string): Buffer {
   const response = HandshakeResponseSchema.parse(rawResponse);
   const publicKey = typeof controlPlanePublicKey === "string" ? createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: controlPlanePublicKey }, format: "jwk" }) : controlPlanePublicKey;
-  const expected = transcriptHash(privateState.ticket, jwkX(createPublicKey(privateState.privateKey)), response.serverEphemeralPublicKey);
+  const expectedPublicKey = publicKey.export({ format: "jwk" }).x;
+  if (!expectedPublicKey || response.controlPlanePublicKey !== expectedPublicKey
+    || response.ticketId !== transcriptTicketId(privateState.ticket)
+    || response.deviceSessionId !== privateState.ticket.deviceSessionId) throw handshakeError();
+  const expected = transcriptHash(privateState.ticket, privateState.grant, jwkX(createPublicKey(privateState.privateKey)), response.serverEphemeralPublicKey);
   if (response.transcript !== expected || !verify(null, Buffer.from(expected), publicKey, Buffer.from(response.signature, "base64url"))) throw handshakeError();
   const sharedSecret = diffieHellman({ privateKey: privateState.privateKey, publicKey: x25519PublicKey(response.serverEphemeralPublicKey) });
   return deriveSessionKey(sharedSecret, expected);
 }
 
-function transcriptHash(ticket: RelayTranscriptCredential, clientKey: string, serverKey: string): string {
-  return createHash("sha256").update(canonicalJson({
-    audience: ticket.audience,
-    ticketId: transcriptTicketId(ticket),
-    accountId: ticket.accountId,
-    deviceSessionId: ticket.deviceSessionId,
-    controlPlaneId: ticket.controlPlaneId,
-    bindingId: ticket.bindingId,
-    bindingRevision: ticket.bindingRevision,
-    nonce: ticket.nonce,
-    clientEphemeralPublicKey: clientKey,
-    serverEphemeralPublicKey: serverKey,
-    ...(ticket.accessMode === undefined ? {} : {
-      ownerAccountId: ticket.ownerAccountId,
-      accessMode: ticket.accessMode,
-      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
-    }),
-  })).digest("base64url");
+function transcriptHash(ticket: RelayTranscriptCredential, grant: RelaySessionGrant | undefined, clientKey: string, serverKey: string): string {
+  return createHash("sha256").update(cloudClientTranscriptSigningInput({ ticket, ...(grant === undefined ? {} : { grant }), clientEphemeralPublicKey: clientKey, serverEphemeralPublicKey: serverKey })).digest("base64url");
 }
 
 function transcriptTicketId(ticket: RelayTranscriptCredential): string {

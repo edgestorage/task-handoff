@@ -1903,6 +1903,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     nodeName: () => state.node.name,
     fetchImpl,
     reverseTunnels: () => app.nodeAgentReverseTunnels,
+    onTrustChanged: ({ decision, revokedPin, retried }) => {
+      for (const pin of decision?.revokedPins ?? []) cloudRelay.controlPlaneTrustChanged(pin);
+      if (revokedPin) cloudRelay.controlPlaneTrustChanged(revokedPin);
+      if (decision?.pin) cloudRelay.pollNow();
+      if (retried) cloudRelay.controlPlaneTrustRetried(retried);
+    },
   });
 
   registerRuntimeRoutes(app, {

@@ -1,6 +1,8 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobile';
 
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
+import { MobileDeviceTrustError } from '../src/control-plane/device-trust-error';
 import {
   MobileControlPlaneConnectionCoordinator,
   type MobileControlPlaneDomain,
@@ -49,6 +51,7 @@ function harness() {
   const updateAiSessionTransient = jest.fn();
   const revalidate = jest.fn().mockResolvedValue(undefined);
   const suspend = jest.fn();
+  const authorizeDeviceTrustRetry = jest.fn();
   const connectEvents = jest.fn((next: MobileControlPlaneEventHandlers) => {
     handlers = next;
     next.onOpen();
@@ -71,11 +74,13 @@ function harness() {
     profile,
     revalidate,
     suspend,
+    authorizeDeviceTrustRetry,
     connectEvents,
   } as unknown as MobileControlPlaneTransport;
   return {
     coordinator: new MobileControlPlaneConnectionCoordinator(profile, api, transport),
     authSession,
+    authorizeDeviceTrustRetry,
     close,
     connectEvents,
     identity,
@@ -85,6 +90,29 @@ function harness() {
     suspend,
     updateAiSessionTransient,
     updateTopics,
+  };
+}
+
+function trustOutcome(state: CloudClientTrustOutcome['state'], overrides: Partial<CloudClientTrustOutcome> = {}): CloudClientTrustOutcome {
+  const now = Date.now();
+  return {
+    protocolVersion: '2026-10-26',
+    audience: 'task-handoff:cloud-device-trust',
+    state,
+    ...(state === 'pending' ? { reason: 'first-seen' as const, requestId: 'devtrust_pending' } : {}),
+    controlPlaneId: profile.identity.controlPlaneId,
+    bindingId: 'binding_a',
+    ticketId: 'rtt_ticket_a',
+    accountId: 'account_a',
+    deviceSessionId: 'device_a',
+    controlPlanePublicKey: 'q'.repeat(43),
+    device: { name: 'Test phone', kind: 'mobile', platform: 'test', version: '1.0.0' },
+    devicePublicKeyFingerprint: `sha256:${'p'.repeat(43)}`,
+    comparisonCode: 'ABCD-EFGH-JKMN-NPQR',
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 60 * 60_000).toISOString(),
+    signature: 's'.repeat(86),
+    ...overrides,
   };
 }
 
@@ -124,6 +152,139 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     expect(runtime.renewMobileSession).toHaveBeenCalledTimes(2);
     expect(runtime.authSession).toHaveBeenCalledTimes(2);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
+  test('shows a pending device trust request and resumes automatically after approval', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileDeviceTrustError(trustOutcome('pending')));
+    let releaseSession: ((value: { authenticated: boolean }) => void) | undefined;
+    runtime.authSession.mockImplementationOnce(() => new Promise((resolve) => { releaseSession = resolve; }));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.coordinator.snapshot()).toMatchObject({
+      phase: 'waiting-device-approval',
+      deviceTrust: { state: 'pending', requestId: 'devtrust_pending' },
+    });
+    expect(ai.onConnectionError).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'CLOUD_DEVICE_TRUST_REQUIRED' }));
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(1_999);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(1);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.coordinator.snapshot().phase).toBe('waiting-device-approval');
+
+    releaseSession?.({ authenticated: true });
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    runtime.coordinator.stop();
+  });
+
+  test('stops automatic reconnects after rejection and only retries on explicit request', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileDeviceTrustError(trustOutcome('rejected', {
+      reason: 'admin-rejected',
+      requestId: 'devtrust_rejected',
+    })));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot()).toMatchObject({ phase: 'rejected', deviceTrust: { requestId: 'devtrust_rejected' } });
+
+    jest.advanceTimersByTime(60_000);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+
+    runtime.coordinator.setEnvironment({ foreground: false, connected: false });
+    await flushCoordinator();
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('rejected');
+
+    runtime.revalidate.mockResolvedValue(undefined);
+    expect(runtime.coordinator.retryDeviceTrust()).toBe(true);
+    await flushCoordinator();
+
+    expect(runtime.authorizeDeviceTrustRetry).toHaveBeenCalledTimes(1);
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('treats stale shared authorization as terminal until the user retries', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileDeviceTrustError(trustOutcome('rejected', {
+      reason: 'authorization-stale',
+    })));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot()).toMatchObject({
+      phase: 'rejected',
+      deviceTrust: { state: 'rejected', reason: 'authorization-stale' },
+    });
+
+    jest.advanceTimersByTime(60_000);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+
+    runtime.revalidate.mockResolvedValue(undefined);
+    expect(runtime.coordinator.retryDeviceTrust()).toBe(true);
+    await flushCoordinator();
+    expect(runtime.authorizeDeviceTrustRetry).toHaveBeenCalledTimes(1);
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('moves an unapproved request to expired locally when its TTL ends', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileDeviceTrustError(trustOutcome('pending', {
+      expiresAt: new Date(Date.now() + 1_000).toISOString(),
+    })));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('waiting-device-approval');
+
+    jest.advanceTimersByTime(1_000);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('expired');
+    jest.advanceTimersByTime(60_000);
+    await flushCoordinator();
+    expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    runtime.coordinator.stop();
+  });
+
+  test('does not offer a retry for an unsupported client trust result', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.revalidate.mockRejectedValueOnce(new MobileDeviceTrustError(trustOutcome('trust-required', {
+      reason: 'unsupported-client',
+      requestId: undefined,
+    })));
+
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('trust-required');
+    expect(runtime.coordinator.retryDeviceTrust()).toBe(false);
+    expect(runtime.authorizeDeviceTrustRetry).not.toHaveBeenCalled();
     runtime.coordinator.stop();
   });
 

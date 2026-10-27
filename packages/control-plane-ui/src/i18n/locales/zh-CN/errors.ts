@@ -17,6 +17,8 @@ export const errors = {
   AUTH_CREDENTIAL_UPDATE_IN_PROGRESS: "账号密码正在修改中，请稍后重试。",
   CONTROL_PLANE_AUTH_REQUIRED: "请先登录控制面板。",
   CONTROL_PLANE_FORBIDDEN: "你的账号没有执行此操作的权限。",
+  CONTROL_PLANE_INTERNAL_ERROR: "控制面板无法完成此请求。",
+  CONTROL_PLANE_INTERNAL_ERROR_WITH_REQUEST_ID: "控制面板无法完成此请求。错误参考号：{requestId}。",
   CONTROL_PLANE_USERNAME_CONFLICT: "该登录用户名已被其他用户使用。",
   CONTROL_PLANE_LOCAL_IDENTITY_IMMUTABLE: "本地密码身份不能解绑。",
   CONTROL_PLANE_IDENTITY_PROVIDER_NAMESPACE_IMMUTABLE: "此身份提供方存在已绑定身份或待处理审批，无法修改类型或签发者。",

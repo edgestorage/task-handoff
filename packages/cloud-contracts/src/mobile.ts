@@ -6,4 +6,5 @@ export * from "./relay-session.ts";
 export * from "./relay-frame.ts";
 export * from "./versions.ts";
 export * from "./client.ts";
+export * from "./device-auth.ts";
 export * from "./mobile-client.ts";

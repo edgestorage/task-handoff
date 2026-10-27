@@ -5,6 +5,7 @@ import { Platform, View, type ColorValue } from 'react-native';
 
 import { useMobileTheme } from '../../../src/components/theme';
 import { useAdaptiveContentLayout } from '../../../src/components/adaptive-layout';
+import { MobileDeviceTrustGate } from '../../../src/control-plane/MobileDeviceTrustGate';
 import { MobileControlPlaneStatusBanner } from '../../../src/control-plane/MobileControlPlaneStatusBanner';
 import { useMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../src/i18n';
@@ -107,6 +108,7 @@ export default function PrimaryTabsLayout() {
         </NativeTabs.Trigger>
       </NativeTabs>
       {runtime.phase === 'control-plane-closed' ? <MobileControlPlaneStatusBanner /> : null}
+      <MobileDeviceTrustGate />
     </View>
   );
 }

@@ -580,6 +580,28 @@ export function listNodeControlPlanePairings(nodeId: string) {
   return sharedControlPlaneClient.nodeAdmin.listControlPlanePairings(nodeId);
 }
 
+export function listNodeControlPlaneTrust(nodeId: string, signal?: AbortSignal) {
+  return sharedControlPlaneClient.nodeAdmin.listControlPlaneTrust(nodeId, signal);
+}
+
+export function nodeControlPlaneTrustQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.nodeControlPlaneTrust(nodeId),
+    queryFn: ({ signal }) => listNodeControlPlaneTrust(nodeId, signal),
+    enabled: Boolean(nodeId) && toValue(enabled),
+    refetchInterval: 4_000,
+    retry: false,
+  });
+}
+
+export function decideNodeControlPlaneTrust(nodeId: string, requestId: string, input: unknown) {
+  return sharedControlPlaneClient.nodeAdmin.decideControlPlaneTrust(nodeId, requestId, input);
+}
+
+export function revokeNodeControlPlaneTrust(nodeId: string, pinId: string, input: unknown) {
+  return sharedControlPlaneClient.nodeAdmin.revokeControlPlaneTrust(nodeId, pinId, input);
+}
+
 export function deleteNodeControlPlanePairing(nodeId: string, keyId: string) {
   return sharedControlPlaneClient.nodeAdmin.removeControlPlanePairing(nodeId, keyId);
 }

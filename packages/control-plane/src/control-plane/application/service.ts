@@ -1313,6 +1313,26 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.listControlPlanePairings(node);
   }
 
+  async listNodeControlPlaneTrust(id: string) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.listControlPlaneTrust(node);
+  }
+
+  async decideNodeControlPlaneTrust(id: string, requestId: string, input: unknown) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.decideControlPlaneTrust(node, requestId, input);
+  }
+
+  async revokeNodeControlPlaneTrust(id: string, pinId: string, input: unknown) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.revokeControlPlaneTrust(node, pinId, input);
+  }
+
+  async retryNodeControlPlaneTrust(id: string, requestId: string, input: unknown = {}) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.retryControlPlaneTrust(node, requestId, input);
+  }
+
   async deleteNodeControlPlanePairing(id: string, keyId: string) {
     const node = this.requireNode(id);
     return this.nodeAgentGateway.deleteControlPlanePairing(node, keyId);

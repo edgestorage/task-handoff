@@ -402,6 +402,9 @@ const NODE_DERIVED_EVENT_TOPICS = new Set([
 function authorizedEvent(client: EventSocket, event: EventEnvelope) {
   const authorization = client.authorization;
   if (!authorization) return true;
+  if (event.type === "device-trust.changed") {
+    return authorization.permissionIds.includes("settings:manage");
+  }
   if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
     return authorization.permissionIds.includes("triggers:manage");
   }

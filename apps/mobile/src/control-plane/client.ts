@@ -62,7 +62,7 @@ function cloudClient(profile: MobileCloudRelayControlPlaneProfile, secureStore: 
   // The remembered winner is what turns the second connection into a single
   // validation sample, so the cache lives with the client and shares its store.
   const winnerCache = options.relayWinnerCache ?? new RelayWinnerCache({ store: secureStore });
-  const proofKey = new MobileRelayProofKeyProvider(secureStore, profile.access.accountSession.id);
+  const proofKey = new MobileRelayProofKeyProvider(secureStore);
   const sessionStore = new MobileRelaySessionStore(secureStore, profile.access.accountSession.id, profile.identity.controlPlaneId);
   const allowRelayUrl = (url: URL) => allowCloudRelayUrlForService(url, account.origin, allowIsolatedEnvironment());
   const transport = new RelayControlPlaneTransport(profile, account.client, options.relayChannelFactory ?? createMobileRelayChannelFactory({ allowRelayUrl }), { winnerCache, allowRelayUrl, proofKey, sessionStore });

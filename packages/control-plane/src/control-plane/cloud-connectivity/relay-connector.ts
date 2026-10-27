@@ -11,6 +11,7 @@ import {
   RelaySessionDetachedMessageSchema,
   RelaySessionGrantSchema,
   RELAY_SESSION_PROTOCOL_VERSION,
+  ClientHelloSchema,
   decodeRelayFrame,
   encodeRelayFrame,
   packRelayPayload,
@@ -39,6 +40,9 @@ import { projectCompactPublicEvent } from "../events/bus.ts";
 import type { RelayTraceRecorder } from "./relay-trace.ts";
 import { observeRelaySocketErrors } from "./relay-socket.ts";
 import { cloudEnvironmentForServiceOrigin, isTrustedCloudRelayUrl } from "../../../../../shared/cloud-environments.cjs";
+import { authenticateCloudClient, CloudClientAuthenticationError, deviceComparisonCode, fingerprintDevicePublicKey, type CloudClientAuthContext } from "./client-auth.ts";
+import type { CloudDeviceObservation, CloudDeviceTrustService } from "../device-trust/service.ts";
+import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-device-sessions.ts";
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null; sentAt?: string; receivedAt?: string };
 export type RelaySessionBridge = {
@@ -192,14 +196,19 @@ export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snap
 type CloudRelayConnectorOptions = {
   identity: ControlPlaneIdentityService;
   bridge: RelaySessionBridge;
-  resolveAccessRole: (roleId: string) => Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>;
+  deviceTrust: CloudDeviceTrustService;
+  trustedSessions: TrustedDeviceSessionRegistry;
   webSocket?: typeof WebSocket;
   trace?: RelayTraceRecorder;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   attachTimeoutMs?: number;
   handshakeTimeoutMs?: number;
+  trustOutcomeCloseTimeoutMs?: number;
+  onHandshakeError?: (error: unknown, context: { allocationId: string; controlPlaneId: string; bindingId: string; deviceSessionId: string }) => void;
 };
+
+const DEFAULT_TRUST_OUTCOME_CLOSE_TIMEOUT_MS = 2_000;
 
 export class CloudRelayConnector {
   private readonly options: CloudRelayConnectorOptions;
@@ -239,7 +248,7 @@ export class CloudRelayConnector {
           ticketMs: Number.isFinite(Date.parse(String(ticket.expiresAt))) ? Date.parse(String(ticket.expiresAt)) - Date.now() : undefined,
         },
       });
-      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options.identity, this.options.bridge, this.options.resolveAccessRole, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
+      return continueEncryptedSession(socket, attached.channelId, ticket, grant, this.options, input.onDisconnected, handshake.promise, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       handshake.dispose();
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
@@ -267,7 +276,7 @@ export class CloudRelayConnector {
         wireBytes: 0,
         detail: { channelId: boundedText(attached.channelId, 64), allocationId: boundedText(attached.allocationId, 64), generation: grant.generation },
       });
-      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options.identity, this.options.bridge, this.options.resolveAccessRole, input.onDisconnected, handshake.promise, this.options.trace, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
+      return continueEncryptedSession(socket, attached.channelId, grant.sessionTranscriptTicket, grant, this.options, input.onDisconnected, handshake.promise, positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS));
     } catch (error) {
       handshake.dispose();
       if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-attach-failed");
@@ -284,7 +293,7 @@ export class CloudRelayConnector {
 // acknowledges the allocation, while the encrypted handshake can only finish once that
 // client joins the Relay. Acknowledge as soon as the Relay accepted this peer and keep
 // completing the handshake in the background so both sides cannot wait on each other.
-function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, resolveAccessRole: CloudRelayConnectorOptions["resolveAccessRole"], onDisconnected: (() => void) | undefined, handshakePromise: Promise<RelayFramePayload>, trace?: RelayTraceRecorder, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
+function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: any, grant: RelaySessionGrant, options: CloudRelayConnectorOptions, onDisconnected: (() => void) | undefined, handshakePromise: Promise<RelayFramePayload>, handshakeTimeoutMs = DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS) {
   let session: { close(reason?: string): Promise<void> | void } | undefined;
   let closeReason: string | undefined;
   let intentional = false;
@@ -299,17 +308,25 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
     onDisconnected?.();
   };
   socket.once("close", reportDisconnected);
-  const established = establishEncryptedSession(socket, channelId, ticket, identity, bridge, resolveAccessRole, handshakeWithTimeout(handshakePromise, handshakeTimeoutMs), reportDisconnected, trace).then((value) => {
+  const established = establishEncryptedSession(socket, channelId, ticket, grant, options, handshakeWithTimeout(handshakePromise, handshakeTimeoutMs), reportDisconnected).then((value) => {
     session = value;
     if (closeReason !== undefined) void value.close(closeReason);
     return value;
   });
-  void established.catch(() => { if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-handshake-failed"); });
+  void established.catch((error) => {
+    options.onHandshakeError?.(error, {
+      allocationId: grant.allocationId,
+      controlPlaneId: grant.controlPlaneId,
+      bindingId: grant.bindingId,
+      deviceSessionId: grant.deviceSessionId,
+    });
+    if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "relay-handshake-failed");
+  });
   return {
     renew(nextGrant: unknown) {
       latestGrant = RelaySessionGrantSchema.parse(nextGrant);
       if (socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: "session-renew", grant: latestGrant, proof: RelayRoleProofSchema.parse(identity.signRelayRoleProof(relayRoleProofPayload(latestGrant))) }));
+      socket.send(JSON.stringify({ type: "session-renew", grant: latestGrant, proof: RelayRoleProofSchema.parse(options.identity.signRelayRoleProof(relayRoleProofPayload(latestGrant))) }));
     },
     async close(reason = "normal") {
       intentional = true;
@@ -321,36 +338,177 @@ function continueEncryptedSession(socket: WebSocket, channelId: string, ticket: 
   };
 }
 
-async function establishEncryptedSession(socket: WebSocket, channelId: string, ticket: any, identity: ControlPlaneIdentityService, bridge: RelaySessionBridge, resolveAccessRole: CloudRelayConnectorOptions["resolveAccessRole"], handshakePromise: Promise<RelayFramePayload>, onPeerDetached?: () => void, trace?: RelayTraceRecorder) {
+async function establishEncryptedSession(
+  socket: WebSocket,
+  channelId: string,
+  ticket: unknown,
+  grant: RelaySessionGrant,
+  options: CloudRelayConnectorOptions,
+  handshakePromise: Promise<RelayFramePayload>,
+  onPeerDetached?: () => void,
+) {
   const handshake = await handshakePromise;
   if (handshake.sequence !== 0) throw relayError("RELAY_HANDSHAKE_SEQUENCE_INVALID");
-  const hello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
-  const accepted = identity.acceptCloudAccessHandshake(ticket, hello);
-  const response = { ...accepted.response, controlPlanePublicKey: identity.publicIdentity().publicKey };
-  socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(response)) }));
-  const role = await resolveAccessRole(ticket.accessRoleId);
+  const rawHello = JSON.parse(Buffer.from(handshake.payload).toString("utf8"));
+  let auth: CloudClientAuthContext;
+  try {
+    auth = authenticateCloudClient({
+      ticket,
+      grant,
+      clientHello: rawHello,
+      controlPlaneFingerprint: options.identity.publicIdentity().fingerprint,
+    });
+  } catch (error) {
+    if (error instanceof CloudClientAuthenticationError && error.trustRequired === "unsupported-client") {
+      sendTrustOutcome(socket, options, unsupportedClientOutcomeInput(grant));
+      return trustOutcomeHandle(socket, "device-trust-unsupported-client", options);
+    }
+    throw error;
+  }
+
+  // A revoke or role-catalog close can commit after an active-pin read but
+  // before this socket registers. The claim makes that close invalidate the
+  // registration instead of allowing a stale session to start afterwards.
+  const sessionClaim = options.trustedSessions.beginClaim();
+  const observation = await options.deviceTrust.observeClient(auth, { explicitRetry: auth.trustRetry });
+  if (observation.kind !== "active") {
+    sendTrustOutcome(socket, options, trustOutcomeInput(observation, auth));
+    return trustOutcomeHandle(socket, `device-trust-${observation.kind}`, options);
+  }
+
+  const accepted = options.identity.acceptCloudAccessHandshake({
+    ticket: auth.ticket,
+    grant: auth.grant,
+    clientEphemeralPublicKey: ClientHelloSchema.parse(rawHello).clientEphemeralPublicKey,
+  });
+  const response = { ...accepted.response, controlPlanePublicKey: options.identity.publicIdentity().publicKey };
   const actor: ControlPlaneActor = {
     type: "cloud-account",
-    accountId: ticket.accountId,
-    deviceSessionId: ticket.deviceSessionId,
-    bindingId: ticket.bindingId,
-    bindingRevision: ticket.bindingRevision,
-    ownerAccountId: ticket.ownerAccountId,
-    accessMode: ticket.accessMode,
-    accessRoleId: ticket.accessRoleId,
-    roleIds: role.roleIds,
-    permissionIds: role.permissionIds,
-    authorizationRevision: role.authorizationRevision,
+    accountId: auth.ticket.accountId,
+    deviceSessionId: auth.ticket.deviceSessionId,
+    bindingId: auth.ticket.bindingId,
+    bindingRevision: auth.ticket.bindingRevision,
+    ownerAccountId: auth.ticket.ownerAccountId,
+    accessMode: auth.ticket.accessMode,
+    accessRoleId: auth.ticket.accessRoleId,
+    roleIds: observation.role.roleIds,
+    permissionIds: observation.role.permissionIds,
+    authorizationRevision: observation.role.authorizationRevision,
+    deviceTrustPinId: observation.pin.id,
     nodeScope: { kind: "all" },
     instanceScope: { kind: "inherit-node-scope" },
-    ...(ticket.accessMode === "shared" ? {
-      shareGrantId: ticket.shareGrantId,
-      shareRevision: ticket.shareRevision,
+    ...(auth.ticket.accessMode === "shared" ? {
+      shareGrantId: auth.ticket.shareGrantId,
+      shareRevision: auth.ticket.shareRevision,
     } : {}),
   };
-  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, bridge, trace, onPeerDetached);
+  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, options.bridge, options.trace, onPeerDetached);
+  let registered = true;
+  const unregister = options.trustedSessions.register(observation.pin.id, observation.pin.authorizationRevision, sessionClaim, {
+    close(reason: string) {
+      if (registered) {
+        registered = false;
+        unregister();
+      }
+      return session.close(reason);
+    },
+  });
+  if (!unregister) return closedHandle(socket, "device-trust-state-changed");
+  socket.once("close", () => {
+    if (!registered) return;
+    registered = false;
+    unregister();
+  });
+  socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(response)) }));
   session.start();
-  return { close: (reason = "normal") => session.close(reason) };
+  return {
+    close: (reason = "normal") => {
+      if (registered) {
+        registered = false;
+        unregister();
+      }
+      return session.close(reason);
+    },
+  };
+}
+
+function sendTrustOutcome(socket: WebSocket, options: CloudRelayConnectorOptions, input: Parameters<ControlPlaneIdentityService["signCloudClientTrustOutcome"]>[0]) {
+  const outcome = options.identity.signCloudClientTrustOutcome(input);
+  if (socket.readyState < WebSocket.CLOSING) {
+    socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(outcome)) }));
+  }
+  return outcome;
+}
+
+function closedHandle(socket: WebSocket, reason: string) {
+  if (socket.readyState < WebSocket.CLOSING) socket.close(4401, reason.slice(0, 120));
+  return { close() { if (socket.readyState < WebSocket.CLOSING) socket.close(1000, "normal"); } };
+}
+
+function trustOutcomeHandle(socket: WebSocket, reason: string, options: CloudRelayConnectorOptions) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  const close = () => {
+    clear();
+    if (socket.readyState < WebSocket.CLOSING) socket.close(4401, reason.slice(0, 120));
+  };
+  // Give the Relay time to deliver the signed outcome before the close control
+  // races it. The client closes as soon as it has consumed the outcome; this
+  // bound also releases clients that cannot understand the trust protocol.
+  timer = setTimeout(close, positiveDuration(options.trustOutcomeCloseTimeoutMs, DEFAULT_TRUST_OUTCOME_CLOSE_TIMEOUT_MS));
+  timer.unref?.();
+  socket.once("close", clear);
+  return {
+    close() {
+      clear();
+      if (socket.readyState < WebSocket.CLOSING) socket.close(1000, "normal");
+    },
+  };
+}
+
+function unsupportedClientOutcomeInput(grant: RelaySessionGrant) {
+  const now = Date.now();
+  return {
+    state: "trust-required" as const,
+    reason: "unsupported-client" as const,
+    controlPlaneId: grant.controlPlaneId,
+    bindingId: grant.bindingId,
+    ticketId: grant.sessionTranscriptTicket.transcriptTicketId,
+    accountId: grant.accountId,
+    deviceSessionId: grant.deviceSessionId,
+    device: { name: "Unsupported client", kind: "unknown", platform: "unknown" },
+    devicePublicKeyFingerprint: fingerprintDevicePublicKey(grant.clientProofPublicKey),
+    comparisonCode: deviceComparisonCode(grant.bindingId, grant.clientProofPublicKey),
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 5 * 60_000).toISOString(),
+  };
+}
+
+function trustOutcomeInput(observation: Exclude<CloudDeviceObservation, { kind: "active" }>, auth: CloudClientAuthContext) {
+  const now = Date.now();
+  const request = "request" in observation ? observation.request : undefined;
+  return {
+    state: observation.kind === "authorization-stale" ? "rejected" as const : observation.kind,
+    ...(observation.kind === "authorization-stale" ? { reason: "authorization-stale" as const } : {}),
+    ...(observation.kind === "pending" ? { reason: observation.reason } : {}),
+    ...(observation.kind === "rejected" ? { reason: "admin-rejected" as const } : {}),
+    ...(observation.kind === "expired" ? { reason: "request-expired" as const } : {}),
+    ...(observation.kind === "revoked" ? { reason: "device-revoked" as const } : {}),
+    ...(request ? { requestId: request.id } : {}),
+    controlPlaneId: auth.ticket.controlPlaneId,
+    bindingId: auth.ticket.bindingId,
+    ticketId: auth.ticket.transcriptTicketId,
+    accountId: auth.ticket.accountId,
+    deviceSessionId: auth.ticket.deviceSessionId,
+    device: auth.device,
+    devicePublicKeyFingerprint: auth.deviceFingerprint,
+    comparisonCode: auth.comparisonCode,
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(Math.max(now + 5 * 60_000, request ? Date.parse(request.expiresAt) : 0)).toISOString(),
+  };
 }
 
 // Exported so tests can drive the decrypted envelope path (sequence, nonce and

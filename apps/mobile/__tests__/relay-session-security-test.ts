@@ -117,15 +117,15 @@ test('persists a grant only within its account and Control Plane scope and remov
   expect(secureStore.values.has(pendingKey!)).toBe(false);
 });
 
-test('restores the same proof key across app instances and verifies a fresh client proof', async () => {
+test('restores one installation proof key across app instances, accounts, and logs in', async () => {
   const secureStore = memorySecureStore();
-  const first = new MobileRelayProofKeyProvider(secureStore, 'device_a');
+  const first = new MobileRelayProofKeyProvider(secureStore);
   const publicKey = await first.publicKey();
-  const restored = new MobileRelayProofKeyProvider(secureStore, 'device_a');
+  const restored = new MobileRelayProofKeyProvider(secureStore);
   await expect(restored.publicKey()).resolves.toBe(publicKey);
 
-  const otherAccount = new MobileRelayProofKeyProvider(secureStore, 'device_b');
-  await expect(otherAccount.publicKey()).resolves.not.toBe(publicKey);
+  const afterReauthentication = new MobileRelayProofKeyProvider(secureStore);
+  await expect(afterReauthentication.publicKey()).resolves.toBe(publicKey);
 
   const grant = grantFor(publicKey);
   const proof = await restored.proof(grant);
@@ -138,7 +138,7 @@ test('restores the same proof key across app instances and verifies a fresh clie
   expect(proof).toMatchObject({ role: 'client', sessionId: grant.sessionId, grantId: grant.grantId, generation: grant.generation });
 
   await new MobileRelaySessionStore(secureStore, 'device_a', 'control_plane_a').save(grant);
-  const proofKey = [...secureStore.values.entries()].find(([key]) => key.includes('.proof.'))!;
+  const proofKey = [...secureStore.values.entries()].find(([key]) => key.includes('device-proof'))!;
   const sessionKey = [...secureStore.values.entries()].find(([key]) => key.includes('.session.'))!;
   expect(proofKey[0]).not.toBe(sessionKey[0]);
   expect(sessionKey[1]).not.toContain(proofKey[1]);
@@ -149,13 +149,81 @@ test('restores the same proof key across app instances and verifies a fresh clie
 
 test('replaces a corrupt proof seed instead of reusing it', async () => {
   const secureStore = memorySecureStore();
-  const original = new MobileRelayProofKeyProvider(secureStore, 'device_a');
+  const original = new MobileRelayProofKeyProvider(secureStore);
   const originalPublicKey = await original.publicKey();
-  const proofEntry = [...secureStore.values.keys()].find((key) => key.includes('.proof.'))!;
+  const proofEntry = [...secureStore.values.keys()].find((key) => key.includes('device-proof'))!;
   secureStore.values.set(proofEntry, 'corrupt');
 
-  const recovered = new MobileRelayProofKeyProvider(secureStore, 'device_a');
+  const recovered = new MobileRelayProofKeyProvider(secureStore);
   const recoveredPublicKey = await recovered.publicKey();
   expect(recoveredPublicKey).not.toBe(originalPublicKey);
   expect(secureStore.values.get(proofEntry)).not.toBe('corrupt');
 });
+
+test('does not replace an unreadable proof seed and retries after storage recovers', async () => {
+  const secureStore = memorySecureStore();
+  const storageKey = 'cloud.relay.device-proof.v1';
+  const originalSeed = encodeBase64Url(new Uint8Array(32).fill(9));
+  secureStore.values.set(storageKey, originalSeed);
+
+  const read = secureStore.get.bind(secureStore);
+  let storageUnavailable = true;
+  secureStore.get = async (key) => {
+    if (storageUnavailable) throw new Error('keychain unavailable');
+    return read(key);
+  };
+
+  const provider = new MobileRelayProofKeyProvider(secureStore);
+  await expect(provider.publicKey()).rejects.toMatchObject({ code: 'CLOUD_DEVICE_KEY_UNAVAILABLE' });
+  expect(secureStore.values.get(storageKey)).toBe(originalSeed);
+
+  storageUnavailable = false;
+  await expect(provider.publicKey()).resolves.toBeDefined();
+  expect(secureStore.values.get(storageKey)).toBe(originalSeed);
+});
+
+test('concurrent providers converge on one installation proof key', async () => {
+  const secureStore = memorySecureStore();
+  const read = secureStore.get.bind(secureStore);
+  let reads = 0;
+  let writes = 0;
+  secureStore.get = async (key) => {
+    reads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return read(key);
+  };
+  secureStore.set = async (key, value) => {
+    writes += 1;
+    secureStore.values.set(key, value);
+  };
+
+  const [first, second] = await Promise.all([
+    new MobileRelayProofKeyProvider(secureStore).publicKey(),
+    new MobileRelayProofKeyProvider(secureStore).publicKey(),
+  ]);
+
+  expect(first).toBe(second);
+  expect(reads).toBe(1);
+  expect(writes).toBe(1);
+});
+
+test('does not migrate an old account-scoped proof key into the installation identity', async () => {
+  const secureStore = memorySecureStore();
+  const oldKey = 'cloud.relay.proof.device_a';
+  const oldSeed = encodeBase64Url(new Uint8Array(32).fill(7));
+  secureStore.values.set(oldKey, oldSeed);
+
+  const installation = new MobileRelayProofKeyProvider(secureStore);
+  const publicKey = await installation.publicKey();
+
+  expect(publicKey).toBeDefined();
+  expect(secureStore.values.get(oldKey)).toBe(oldSeed);
+  expect(secureStore.values.get('cloud.relay.device-proof.v1')).toBeDefined();
+  expect(secureStore.values.get('cloud.relay.device-proof.v1')).not.toBe(oldSeed);
+});
+
+function encodeBase64Url(value: Uint8Array) {
+  let binary = '';
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}

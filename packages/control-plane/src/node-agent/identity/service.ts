@@ -8,6 +8,13 @@ import { NodeAgentIdentityStore } from "./store.ts";
 import type { NodeAgentControlPlaneConnection, NodeAgentControlPlanePairing, NodeAgentIdentity, PublicNodeAgentControlPlanePairing } from "./types.ts";
 import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "../cloud-relay/types.ts";
+import type {
+  NodeAgentControlPlaneTrustActor,
+  NodeAgentCloudControlPlaneRevokeInput,
+  NodeAgentCloudControlPlaneTrustContext,
+  NodeAgentCloudControlPlaneTrustDecision,
+} from "../cloud-relay/trust-types.ts";
+import { projectNodeAgentControlPlaneTrust } from "../cloud-relay/trust-projection.ts";
 import type { AccessRepository } from "../persistence/access-repository.ts";
 import { createNodeAgentRepository } from "../persistence/repository.ts";
 import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
@@ -27,6 +34,7 @@ type StagedControlPlaneConnection = {
 };
 
 const NODE_AGENT_PAIRING_INVITE_TTL_MS = 10 * 60 * 1000;
+const CLOUD_CONTROL_PLANE_TRUST_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class NodeAgentIdentityService {
   private readonly store: NodeAgentIdentityStore;
@@ -389,6 +397,71 @@ export class NodeAgentIdentityService {
     return pairing;
   }
 
+  listCloudControlPlaneTrust() {
+    return this.repository.listCloudControlPlaneTrust(now());
+  }
+
+  cloudControlPlaneTrustSnapshot() {
+    const trust = this.listCloudControlPlaneTrust();
+    return projectNodeAgentControlPlaneTrust(this.repository, {
+      nodeId: this.resolveNodeId(),
+      ...(this.cloudRelayBinding()?.nodeHandle ? { nodeHandle: this.cloudRelayBinding()!.nodeHandle } : {}),
+      ...trust,
+    });
+  }
+
+  observeCloudControlPlaneTrust(context: NodeAgentCloudControlPlaneTrustContext, options: { now?: string; ttlMs?: number } = {}) {
+    return this.repository.observeCloudControlPlaneTrust({
+      context,
+      fingerprint: this.repository.cloudControlPlaneTrustFingerprint(context.controlPlanePublicKey),
+      now: options.now ?? now(),
+      ttlMs: options.ttlMs ?? CLOUD_CONTROL_PLANE_TRUST_TTL_MS,
+    });
+  }
+
+  decideCloudControlPlaneTrust(input: NodeAgentCloudControlPlaneTrustDecision, options: { now?: string } = {}) {
+    const result = this.repository.decideCloudControlPlaneTrust(input, {
+      now: options.now ?? now(),
+    });
+    for (const pin of result.revokedPins) this.cleanupCloudRelayPairingIfUnused(pin.controlPlaneId);
+    return result;
+  }
+
+  revokeCloudControlPlaneTrustPin(input: NodeAgentCloudControlPlaneRevokeInput, options: { now?: string } = {}) {
+    const pin = this.repository.revokeCloudControlPlaneTrustPin(input, options.now ?? now());
+    this.cleanupCloudRelayPairingIfUnused(pin.controlPlaneId);
+    return pin;
+  }
+
+  retryCloudControlPlaneTrustRequest(requestId: string, actor: NodeAgentControlPlaneTrustActor, options: { now?: string } = {}) {
+    return this.repository.retryCloudControlPlaneTrustRequest({
+      requestId,
+      actor,
+      now: options.now ?? now(),
+      ttlMs: CLOUD_CONTROL_PLANE_TRUST_TTL_MS,
+    });
+  }
+
+  private cleanupCloudRelayPairingIfUnused(controlPlaneId: string) {
+    if (this.repository.activeCloudControlPlanePinCount(controlPlaneId) > 0) return;
+    const binding = this.repository.readCloudRelayBinding();
+    if (!binding?.pairedControlPlaneIds.includes(controlPlaneId)) return;
+    const current = this.store.read();
+    if (!current) return;
+    const timestamp = now();
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: (current.controlPlanePairings || []).filter((pairing) => pairing.id !== controlPlaneId),
+      });
+      this.repository.writeCloudRelayBinding({
+        ...binding,
+        pairedControlPlaneIds: binding.pairedControlPlaneIds.filter((id) => id !== controlPlaneId),
+        updatedAt: timestamp,
+      });
+    });
+  }
+
   /** Removes exactly the pairings a relay claim created, leaving direct/reverse pairings intact. */
   clearCloudRelayPairings() {
     const binding = this.repository.readCloudRelayBinding();
@@ -409,6 +482,19 @@ export class NodeAgentIdentityService {
         .map((pairing) => ({ keyId: pairing.keyId, secret: pairing.secret })),
       ...(overrideSecret && overrideKeyId ? [{ keyId: overrideKeyId, secret: overrideSecret }] : []),
     ];
+  }
+
+  resolveControlPlaneAuthority(keyId: string) {
+    const current = this.store.read();
+    const pairing = (current?.controlPlanePairings || [])
+      .find((candidate) => candidate.keyId === keyId && !candidate.revokedAt);
+    if (!pairing) return undefined;
+    const connection = (current?.controlPlaneConnections || []).find((candidate) => candidate.pairingKeyId === keyId);
+    const relayPairing = this.cloudRelayPairing(pairing.id);
+    return {
+      controlPlaneId: pairing.id,
+      connectionType: connection ? "reverse" as const : relayPairing?.keyId === keyId ? "node-relay" as const : "direct" as const,
+    };
   }
 
   isRevokedPairing(keyId: string) {

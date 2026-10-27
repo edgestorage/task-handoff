@@ -69,9 +69,9 @@ test("operation cards show a label for every protected action and only server-su
 });
 
 test("every card leads with one header row that carries its source", () => {
-  assert.equal((inbox.match(/<header class="action-inbox-head">/g) ?? []).length, 3);
-  assert.equal((inbox.match(/<span class="action-inbox-kind/g) ?? []).length, 3);
-  assert.equal((inbox.match(/<span class="action-inbox-source"/g) ?? []).length, 2);
+  assert.equal((inbox.match(/<header class="action-inbox-head">/g) ?? []).length, 5);
+  assert.equal((inbox.match(/<span class="action-inbox-kind/g) ?? []).length, 5);
+  assert.equal((inbox.match(/<span class="action-inbox-source"/g) ?? []).length, 4);
   assert.doesNotMatch(inbox, /<div class="action-inbox-kind">/);
   for (const icon of ["ShieldQuestion", "ShieldCheck"]) {
     assert.match(inbox, new RegExp(`<${icon} :size="13" aria-hidden="true" />`), icon);
@@ -83,6 +83,8 @@ test("every card leads with one header row that carries its source", () => {
   assert.match(inbox, /<BookOpen class="action-inbox-story-icon" :size="13" aria-hidden="true" \/>/);
   assert.match(inbox, /<span class="action-inbox-story-title">\{\{ item\.story\.title \}\}<\/span>/);
   assert.match(inbox, /action-inbox-source" :title="item\.request\.targetId">\{\{ item\.request\.targetId \}\}<\/span>/);
+  assert.match(inbox, /action-inbox-source" :title="item\.request\.device\.name">\{\{ item\.request\.device\.name \}\}<\/span>/);
+  assert.match(inbox, /action-inbox-source" :title="item\.trust\.nodeHandle">\{\{ item\.trust\.displayName \|\| item\.trust\.nodeHandle \}\}<\/span>/);
   assert.match(inbox, /action-inbox-source" :title="`\$\{item\.instanceName\} · \$\{item\.session\.agent\}`">\{\{ item\.instanceName \}\} · \{\{ item\.session\.agent \}\}<\/span>/);
   assert.doesNotMatch(inbox, /action-inbox-context">\{\{ item\.instanceName \}\}/);
   assert.match(inbox, /\.action-inbox-head \{ display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 6px; \}/);

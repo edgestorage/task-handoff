@@ -60,6 +60,7 @@ const EVENT_PERMISSION_PREFIXES: ReadonlyArray<readonly [string, ControlPlanePer
   ["document", "public-directory:read"],
   ["agent", "ai-sessions:read"],
   ["git.", "instances:read"],
+  ["device-trust", "settings:manage"],
 ];
 
 /** Events are a read surface. Unknown families fail closed instead of inheriting a broad allow. */
@@ -73,21 +74,6 @@ export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "pe
   return Boolean(permission && actor.permissionIds.includes(permission));
 }
 
-export async function resolveCloudAccessActor(
-  users: { roleAuthorization(roleId: string): Promise<{ roleIds: string[]; permissionIds: ControlPlanePermissionId[]; authorizationRevision: number }> },
-  actor: ControlPlaneCloudAccountActor,
-): Promise<ControlPlaneCloudAccountActor> {
-  const authorization = await users.roleAuthorization(actor.accessRoleId);
-  return {
-    ...actor,
-    roleIds: authorization.roleIds,
-    permissionIds: authorization.permissionIds,
-    nodeScope: actor.nodeScope?.kind === "all" ? actor.nodeScope : { kind: "all" },
-    instanceScope: actor.instanceScope ?? { kind: "inherit-node-scope" },
-    authorizationRevision: authorization.authorizationRevision,
-  };
-}
-
 export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
   const path = url.split("?")[0] || "/";
   if (!path.startsWith("/api/")) return undefined;
@@ -96,6 +82,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   const action = actionForHttpMethod(method);
   if (path === "/api/control-plane/diagnostic-logs/export") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
+  }
+  if (path === "/api/device-trust" || path.startsWith("/api/device-trust/")) {
+    return { action: "manage-settings", resource: { type: "device-trust" } };
   }
   if (path === "/api/session-streams/diagnostics") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
@@ -152,6 +141,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   }
   if (path.startsWith("/api/control-plane-proxy")) {
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
+  }
+  if (path.startsWith("/api/nodes/") && /\/control-plane-trust-(?:requests|pins)(?:\/|$)/.test(path)) {
+    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
   if (path.startsWith("/api/nodes")) {
     if (/\/(runtimes|local-folders)(\/|$)/.test(path)) {

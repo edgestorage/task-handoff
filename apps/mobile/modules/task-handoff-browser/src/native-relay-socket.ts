@@ -15,7 +15,7 @@ type RelaySocketEventPayload = {
   id: string;
   protocol?: string;
   type?: 'text' | 'binary';
-  data?: string | ArrayBuffer | Uint8Array;
+  data?: unknown;
   domain?: string;
   code?: number;
   message?: string;
@@ -112,7 +112,7 @@ export class NativeRelaySocket {
 
   private onMessage(event: RelaySocketEventPayload) {
     if (event.id !== this.id || this.readyState !== 1) return;
-    this.dispatch('message', { data: event.data });
+    this.dispatch('message', { data: event.type === 'binary' ? normalizeBinaryData(event.data) : event.data });
   }
 
   private onError(event: RelaySocketEventPayload) {
@@ -138,4 +138,14 @@ export class NativeRelaySocket {
   private dispatch(type: SocketEvent, value: SocketEventValue) {
     for (const listener of this.listeners.get(type) ?? []) listener(value);
   }
+}
+
+function normalizeBinaryData(data: unknown) {
+  if (data instanceof ArrayBuffer || Object.prototype.toString.call(data) === '[object ArrayBuffer]') {
+    return new Uint8Array(data as ArrayBuffer);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+  }
+  return data;
 }

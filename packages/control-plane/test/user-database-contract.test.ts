@@ -147,6 +147,91 @@ for (const fixture of fixtures) {
       await current.cleanup();
     }
   });
+
+  test(`${fixture.name} repository persists device trust pins, requests and snapshot revisions`, async () => {
+    const current = await fixture.create();
+    const timestamp = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const context = {
+      bindingId: "binding_contract",
+      accountId: "account_guest",
+      ownerAccountId: "account_owner",
+      accessMode: "shared" as const,
+      shareGrantId: "share_contract",
+      shareRevision: 2,
+      cloudAccessRoleId: "role_cloud_use",
+      devicePublicKey: "A".repeat(43),
+    };
+    try {
+      await current.repository.roles.put({
+        id: "role_contract",
+        name: "Contract role",
+        system: false,
+        status: "active",
+        permissionIds: ["settings:manage"],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      const request = {
+        id: "devtrust_contract",
+        ...context,
+        reportedName: "Contract device",
+        clientKind: "mobile",
+        clientPlatform: "android",
+        status: "pending" as const,
+        reason: "first-seen" as const,
+        requestedAt: timestamp,
+        lastSeenAt: timestamp,
+        expiresAt,
+        revision: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const roleAuthorizationRevision = Date.parse(timestamp);
+      await current.repository.cloudDeviceTrust.putRequest(request);
+      assert.equal((await current.repository.cloudDeviceTrust.findPendingRequest(context))?.id, request.id);
+      assert.equal(await current.repository.cloudDeviceTrust.getRevision(context.bindingId), 0);
+      assert.equal(await current.repository.cloudDeviceTrust.advanceRevision(context.bindingId, Date.parse(timestamp)), Date.parse(timestamp) + 1);
+      assert.equal(await current.repository.cloudDeviceTrust.advanceRevision(context.bindingId, Date.parse(timestamp)), Date.parse(timestamp) + 2);
+
+      const pin = {
+        id: "devpin_contract",
+        ...context,
+        reportedName: request.reportedName,
+        clientKind: request.clientKind,
+        clientPlatform: request.clientPlatform,
+        roleId: "role_contract",
+        status: "active" as const,
+        approvedByActorType: "user" as const,
+        approvedByActorId: "user_admin",
+        approvedAt: timestamp,
+        lastSeenAt: timestamp,
+        authorizationRevision: roleAuthorizationRevision,
+        revision: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      await current.repository.cloudDeviceTrust.putPin(pin);
+      const activePin = await current.repository.cloudDeviceTrust.findActivePin(context);
+      assert.equal(activePin?.id, pin.id);
+      assert.equal(activePin?.authorizationRevision, roleAuthorizationRevision);
+      assert.equal(await current.repository.cloudDeviceTrust.putRequestIfStatus({
+        ...request,
+        status: "approved",
+        decidedAt: timestamp,
+        decidedByActorType: "user",
+        decidedByActorId: "user_admin",
+        decidedRoleId: "role_contract",
+        approvedPinId: pin.id,
+        revision: 2,
+        updatedAt: timestamp,
+      }, "pending", 1), true);
+      assert.equal((await current.repository.cloudDeviceTrust.getRequest(request.id))?.status, "approved");
+      assert.equal(await current.repository.cloudDeviceTrust.putRequestIfStatus(request, "pending", 1), false);
+    } finally {
+      await current.cleanup();
+    }
+  });
 }
 
 test("PostgreSQL repository contract is opt-in when no test database is configured", { skip: Boolean(postgresqlUrl) }, () => {

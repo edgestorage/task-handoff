@@ -22,11 +22,19 @@ import { withRequestSignal } from "./request-signal.ts";
 import { z } from "zod";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { publicNodeDirectory } from "../public-records.ts";
-import { filterRequestNodes } from "./access-projection.ts";
+import { filterRequestNodes, requestCanAccessNode } from "./access-projection.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 const NodeListQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
 const FleetListQuerySchema = z.object({ progressive: z.enum(["true", "false"]).optional() }).strict();
+const ControlPlaneTrustRequestParamsSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  requestId: z.string().trim().min(1).max(160),
+}).strict();
+const ControlPlaneTrustPinParamsSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  pinId: z.string().trim().min(1).max(160),
+}).strict();
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -145,6 +153,32 @@ export function registerNodeRoutes({
   app.get("/api/nodes/:id/control-plane-pairings", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     return { data: await service.listNodeControlPlanePairings(params.id) };
+  });
+  app.get("/api/nodes/:id/control-plane-trust-requests", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    requireVisibleNode(request, params.id);
+    return { data: await service.listNodeControlPlaneTrust(params.id) };
+  });
+  app.post("/api/nodes/:id/control-plane-trust-requests/:requestId/decision", async (request) => {
+    const params = ControlPlaneTrustRequestParamsSchema.parse(request.params);
+    requireVisibleNode(request, params.id);
+    const result = await service.decideNodeControlPlaneTrust(params.id, params.requestId, request.body);
+    events.publish("node.control-plane-trust.changed", { nodeId: params.id, requestId: params.requestId });
+    return { data: result };
+  });
+  app.post("/api/nodes/:id/control-plane-trust-requests/:requestId/retry", async (request) => {
+    const params = ControlPlaneTrustRequestParamsSchema.parse(request.params);
+    requireVisibleNode(request, params.id);
+    const result = await service.retryNodeControlPlaneTrust(params.id, params.requestId, request.body ?? {});
+    events.publish("node.control-plane-trust.changed", { nodeId: params.id, requestId: params.requestId });
+    return { data: result };
+  });
+  app.post("/api/nodes/:id/control-plane-trust-pins/:pinId/revoke", async (request) => {
+    const params = ControlPlaneTrustPinParamsSchema.parse(request.params);
+    requireVisibleNode(request, params.id);
+    const result = await service.revokeNodeControlPlaneTrust(params.id, params.pinId, request.body);
+    events.publish("node.control-plane-trust.changed", { nodeId: params.id, pinId: params.pinId });
+    return { data: result };
   });
   app.delete("/api/nodes/:id/control-plane-pairings/:keyId", async (request) => {
     const params = NodeRemoteKeyParamsSchema.parse(request.params);
@@ -269,4 +303,12 @@ export function registerNodeRoutes({
   }));
 
   registerNodeAgentTunnelRoutes({ app, service, nodeAgentTunnel, errorPayload });
+}
+
+function requireVisibleNode(request: Parameters<typeof requestCanAccessNode>[0], nodeId: string) {
+  if (requestCanAccessNode(request, nodeId)) return;
+  throw Object.assign(new Error("The requested resource is not visible."), {
+    statusCode: 404,
+    code: "CONTROL_PLANE_RESOURCE_NOT_VISIBLE",
+  });
 }

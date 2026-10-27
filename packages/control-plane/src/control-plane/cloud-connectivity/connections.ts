@@ -11,10 +11,30 @@ type DataConnectionEntry = {
   relayUrl: string;
   verified: VerifiedDataAllocation;
   connection?: ManagedConnection;
+  connectionToken?: symbol;
+  opening?: Promise<ManagedConnection>;
   attempts: number;
   timer?: ReturnType<typeof setTimeout>;
-  resuming?: Promise<void>;
 };
+
+function accessSessionKey(channelKind: "access" | "node", grant: unknown) {
+  if (channelKind !== "access" || !grant || typeof grant !== "object" || Array.isArray(grant)) return undefined;
+  const value = grant as { accountId?: unknown; deviceSessionId?: unknown; controlPlaneId?: unknown };
+  if (typeof value.accountId !== "string" || typeof value.deviceSessionId !== "string" || typeof value.controlPlaneId !== "string") return undefined;
+  return `${value.accountId}\0${value.deviceSessionId}\0${value.controlPlaneId}`;
+}
+
+function grantNumber(grant: unknown, field: "generation"): number {
+  const value = grant && typeof grant === "object" ? Number((grant as Record<string, unknown>)[field]) : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+
+function newerPersistedSession(candidate: PersistedRelaySession, current: PersistedRelaySession) {
+  if (candidate.epoch !== current.epoch) return candidate.epoch > current.epoch;
+  const generation = grantNumber(candidate.grant, "generation") - grantNumber(current.grant, "generation");
+  if (generation !== 0) return generation > 0;
+  return String(candidate.grant.sessionId).localeCompare(String(current.grant.sessionId)) > 0;
+}
 
 const COORDINATOR_ORIGIN_COOLDOWN_MS = 5_000;
 const TERMINAL_RELAY_RESUME_CODES = new Set([
@@ -215,7 +235,21 @@ export class CloudRelayDataConnectionManager {
     this.clock = options.clock ?? Date.now;
     if (options.sessionStatePath && options.verifyGrant && options.connector.resume) {
       this.sessionStore = new RelaySessionStore(options.sessionStatePath, { clock: this.clock });
-      for (const entry of this.sessionStore.load()) {
+      const persisted = this.sessionStore.load();
+      const newestBySession = new Map<string, PersistedRelaySession>();
+      const retained = new Set<PersistedRelaySession>();
+      for (const entry of persisted) {
+        const key = accessSessionKey(entry.channelKind, entry.grant);
+        if (!key) { retained.add(entry); continue; }
+        const current = newestBySession.get(key);
+        if (!current || newerPersistedSession(entry, current)) newestBySession.set(key, entry);
+      }
+      for (const entry of newestBySession.values()) retained.add(entry);
+      for (const entry of persisted) {
+        if (retained.has(entry)) continue;
+        this.sessionStore.remove(entry.allocationId);
+      }
+      for (const entry of retained) {
         this.connections.set(entry.allocationId, {
           epoch: entry.epoch,
           channelKind: entry.channelKind,
@@ -231,41 +265,72 @@ export class CloudRelayDataConnectionManager {
 
   async attach(allocation: unknown) {
     const verified = await this.options.verifyAllocation(allocation);
-    const current = this.connections.get(verified.allocationId);
-    if (current && verified.epoch < current.epoch) throw connectionError("STALE_CONNECTION_EPOCH");
-    if (current && verified.epoch === current.epoch) {
-      // The Coordinator may replay an allocation whose acknowledgement was
-      // ambiguous. Returning the established channel is what makes that retry
-      // idempotent instead of creating a second Control Plane Relay connection.
-      if (verified.relayUrl !== current.relayUrl || (verified.channelKind ?? "access") !== current.channelKind) throw connectionError("STALE_CONNECTION_EPOCH");
-      const currentGeneration = Number((current.verified.grant as { generation?: unknown } | undefined)?.generation ?? 0);
-      const nextGeneration = Number((verified.grant as { generation?: unknown } | undefined)?.generation ?? 0);
-      if (nextGeneration < currentGeneration) throw connectionError("STALE_CONNECTION_EPOCH");
-      if (current.verified.grant && verified.grant && nextGeneration === currentGeneration
-        && (current.verified.grant as { grantId?: unknown }).grantId !== (verified.grant as { grantId?: unknown }).grantId) throw connectionError("RELAY_SESSION_GENERATION_CONFLICT");
-      current.verified = { ...current.verified, ...verified };
-      await this.persist(current);
-      if (current.connection?.renew && verified.grant) await current.connection.renew(verified.grant);
-      return { status: "attached" as const, allocationId: verified.allocationId, epoch: verified.epoch, replayed: true as const };
+    for (;;) {
+      const current = this.connections.get(verified.allocationId);
+      if (current && verified.epoch < current.epoch) throw connectionError("STALE_CONNECTION_EPOCH");
+      if (current?.opening) {
+        // An allocation event and a persisted-session resume can arrive together.
+        // The Relay permits one socket per role, so wait for the in-flight open and
+        // then reuse it instead of creating a socket that detaches the client.
+        await current.opening.catch(() => undefined);
+        continue;
+      }
+      if (current && verified.epoch === current.epoch) {
+        // The Coordinator may replay an allocation whose acknowledgement was
+        // ambiguous. Returning the established channel is what makes that retry
+        // idempotent instead of creating a second Control Plane Relay connection.
+        if (verified.relayUrl !== current.relayUrl || (verified.channelKind ?? "access") !== current.channelKind) throw connectionError("STALE_CONNECTION_EPOCH");
+        const currentGeneration = Number((current.verified.grant as { generation?: unknown } | undefined)?.generation ?? 0);
+        const nextGeneration = Number((verified.grant as { generation?: unknown } | undefined)?.generation ?? 0);
+        if (nextGeneration < currentGeneration) throw connectionError("STALE_CONNECTION_EPOCH");
+        if (current.verified.grant && verified.grant && nextGeneration === currentGeneration
+          && (current.verified.grant as { grantId?: unknown }).grantId !== (verified.grant as { grantId?: unknown }).grantId) throw connectionError("RELAY_SESSION_GENERATION_CONFLICT");
+        current.verified = { ...current.verified, ...verified };
+        await this.persist(current);
+        if (current.connection?.renew && verified.grant) await current.connection.renew(verified.grant);
+        return { status: "attached" as const, allocationId: verified.allocationId, epoch: verified.epoch, replayed: true as const };
+      }
+      const previous = current?.connection;
+      const entry: DataConnectionEntry = current ?? {
+        epoch: verified.epoch,
+        channelKind: verified.channelKind ?? "access",
+        relayUrl: verified.relayUrl,
+        verified,
+        attempts: 0,
+      };
+      const superseding = current ? undefined : this.supersedeSiblingSessions(entry);
+      if (superseding) await superseding;
+      entry.epoch = verified.epoch;
+      entry.channelKind = verified.channelKind ?? "access";
+      entry.relayUrl = verified.relayUrl;
+      entry.verified = verified;
+      if (!current) this.connections.set(verified.allocationId, entry);
+      if (entry.timer) { clearTimeout(entry.timer); entry.timer = undefined; }
+      if (previous) {
+        entry.connection = undefined;
+        entry.connectionToken = undefined;
+      }
+      try {
+        const connection = await this.openConnection(entry, (onDisconnected) => this.options.connector.connect({
+          relayUrl: verified.relayUrl, allocation, epoch: verified.epoch, onDisconnected,
+        }), async () => {
+          // Close the old role before attaching its replacement. The Relay treats a
+          // duplicate control-plane socket as a new pairing generation and detaches
+          // the client, which would make a normal allocation replay look like a
+          // transport failure.
+          if (previous) await previous.close("replaced-by-new-epoch");
+        });
+        try { await this.persist(entry); }
+        catch (error) {
+          await connection.close("grant-persistence-failed");
+          throw error;
+        }
+        return { status: "attached" as const, allocationId: verified.allocationId, epoch: verified.epoch };
+      } catch (error) {
+        if (!current && this.connections.get(verified.allocationId) === entry) this.connections.delete(verified.allocationId);
+        throw error;
+      }
     }
-    const connection = await this.options.connector.connect({ relayUrl: verified.relayUrl, allocation, epoch: verified.epoch, onDisconnected: () => this.disconnected(verified.allocationId) });
-    await current?.connection.close("replaced-by-new-epoch");
-    if (current?.timer) clearTimeout(current.timer);
-    const entry: DataConnectionEntry = {
-      epoch: verified.epoch,
-      channelKind: verified.channelKind ?? "access",
-      relayUrl: verified.relayUrl,
-      verified,
-      connection,
-      attempts: 0,
-    };
-    try { await this.persist(entry); }
-    catch (error) {
-      await connection.close("grant-persistence-failed");
-      throw error;
-    }
-    this.connections.set(verified.allocationId, entry);
-    return { status: "attached" as const, allocationId: verified.allocationId, epoch: verified.epoch };
   }
 
   /**
@@ -290,7 +355,7 @@ export class CloudRelayDataConnectionManager {
           await current.connection.renew(verified.grant);
           return { status: "renewed" as const, allocationId: verified.allocationId };
         } catch {
-          this.disconnected(verified.allocationId);
+          if (current.connectionToken) this.disconnected(verified.allocationId, current.connectionToken);
         }
       }
       if (!await this.resumeGrant(verified.allocationId)) return { status: "discarded" as const, allocationId: verified.allocationId };
@@ -303,6 +368,8 @@ export class CloudRelayDataConnectionManager {
       verified,
       attempts: 0,
     };
+    const superseding = this.supersedeSiblingSessions(entry);
+    if (superseding) await superseding;
     await this.persist(entry);
     this.connections.set(verified.allocationId, entry);
     if (!await this.resumeGrant(verified.allocationId)) return { status: "discarded" as const, allocationId: verified.allocationId };
@@ -356,16 +423,17 @@ export class CloudRelayDataConnectionManager {
     await Promise.allSettled(matching.map(([, entry]) => entry.connection?.close(reason)));
   }
 
-  private disconnected(allocationId: string) {
+  private disconnected(allocationId: string, connectionToken: symbol) {
     const entry = this.connections.get(allocationId);
-    if (!entry) return;
+    if (!entry || entry.connectionToken !== connectionToken) return;
     entry.connection = undefined;
+    entry.connectionToken = undefined;
     this.scheduleResume(allocationId);
   }
 
   private scheduleResume(allocationId: string) {
     const entry = this.connections.get(allocationId);
-    if (!entry || entry.timer || entry.resuming || !this.options.connector.resume) return;
+    if (!entry || entry.timer || entry.opening || !this.options.connector.resume) return;
     const expiresAt = Date.parse(String((entry.verified.grant as { expiresAt?: unknown } | undefined)?.expiresAt ?? ""));
     if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
       this.connections.delete(allocationId);
@@ -383,29 +451,48 @@ export class CloudRelayDataConnectionManager {
 
   private resume(allocationId: string) {
     const entry = this.connections.get(allocationId);
-    if (!entry || entry.connection || entry.resuming) return entry?.resuming ?? Promise.resolve();
+    if (!entry || entry.connection) return Promise.resolve();
+    if (entry.opening) return entry.opening.then(() => undefined);
     if (!this.options.connector.resume) return Promise.resolve();
     if (entry.timer) { clearTimeout(entry.timer); entry.timer = undefined; }
-    entry.resuming = (async () => {
-      try {
-        const grant = entry.verified.grant;
-        const connection = await this.options.connector.resume!({ relayUrl: entry.relayUrl, grant, onDisconnected: () => this.disconnected(allocationId) });
-        const current = this.connections.get(allocationId);
-        if (current !== entry) { await connection.close("session-removed"); return; }
-        entry.connection = connection;
-        entry.attempts = 0;
-      } catch (error) {
-        if (terminalResumeFailure(error)) {
-          this.connections.delete(allocationId);
-          this.sessionStore?.remove(allocationId);
-        }
-        throw error;
-      } finally {
-        entry.resuming = undefined;
-        if (!entry.connection && this.connections.get(allocationId) === entry) this.scheduleResume(allocationId);
+    return this.openConnection(entry, (onDisconnected) => this.options.connector.resume!({
+      relayUrl: entry.relayUrl,
+      grant: entry.verified.grant,
+      onDisconnected,
+    })).then(() => undefined).catch((error) => {
+      if (terminalResumeFailure(error)) {
+        this.connections.delete(allocationId);
+        this.sessionStore?.remove(allocationId);
       }
+      if (!entry.connection && this.connections.get(allocationId) === entry) this.scheduleResume(allocationId);
+      throw error;
+    });
+  }
+
+  private openConnection(
+    entry: DataConnectionEntry,
+    open: (onDisconnected: () => void) => Promise<ManagedConnection>,
+    beforeOpen?: () => Promise<void>,
+  ) {
+    if (entry.opening) return entry.opening;
+    const connectionToken = Symbol(entry.verified.allocationId);
+    const operation = (async () => {
+      await beforeOpen?.();
+      const connection = await open(() => this.disconnected(entry.verified.allocationId, connectionToken));
+      if (this.connections.get(entry.verified.allocationId) !== entry) {
+        await connection.close("session-removed");
+        throw connectionError("RELAY_CONNECTION_SUPERSEDED");
+      }
+      entry.connection = connection;
+      entry.connectionToken = connectionToken;
+      entry.attempts = 0;
+      return connection;
     })();
-    return entry.resuming;
+    entry.opening = operation;
+    void operation.then(() => undefined, () => undefined).finally(() => {
+      if (entry.opening === operation) entry.opening = undefined;
+    });
+    return operation;
   }
 
   private async resumeGrant(allocationId: string) {
@@ -419,6 +506,23 @@ export class CloudRelayDataConnectionManager {
       if (terminalResumeFailure(error)) return false;
       throw error;
     }
+  }
+
+  private supersedeSiblingSessions(entry: DataConnectionEntry): Promise<void> | undefined {
+    const key = accessSessionKey(entry.channelKind, entry.verified.grant);
+    if (!key) return;
+    const peers = [...this.connections.entries()].filter(([allocationId, candidate]) =>
+      allocationId !== entry.verified.allocationId && accessSessionKey(candidate.channelKind, candidate.verified.grant) === key);
+    for (const [allocationId, peer] of peers) {
+      this.connections.delete(allocationId);
+      if (peer.timer) clearTimeout(peer.timer);
+      this.sessionStore?.remove(allocationId);
+    }
+    if (!peers.length) return undefined;
+    return Promise.allSettled(peers.map(async ([, peer]) => {
+      await peer.opening?.catch(() => undefined);
+      await peer.connection?.close("superseded-by-new-relay-session");
+    })).then(() => undefined);
   }
 
   private async persist(entry: DataConnectionEntry) {

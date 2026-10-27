@@ -32,6 +32,7 @@ export type ControlPlaneActor =
     permissionIds: ControlPlanePermissionId[];
     shareGrantId?: string;
     shareRevision?: number;
+    deviceTrustPinId?: string;
     nodeScope: ControlPlaneUserNodeScope;
     instanceScope?: ControlPlaneUserInstanceScope;
     authorizationRevision: number;
@@ -49,7 +50,7 @@ export type ControlPlaneResourceType =
   | "project" | "node" | "runtime" | "template" | "instance" | "app-session" | "ai-session"
   | "trigger-template" | "trigger-deployment" | "repository" | "attachment" | "image" | "model"
   | "user" | "role" | "identity-provider" | "user-session" | "identity-approval" | "user-audit"
-  | "chat-bridge" | "control-plane-settings" | "secret" | "public-directory";
+  | "chat-bridge" | "control-plane-settings" | "device-trust" | "secret" | "public-directory";
 
 export type ControlPlaneResource = {
   type: ControlPlaneResourceType;
@@ -72,7 +73,7 @@ const RESOURCE_PERMISSION_PREFIX: Record<ControlPlaneResourceType, string> = {
   repository: "repositories", attachment: "attachments", image: "images", model: "models",
   user: "users", role: "roles", "identity-provider": "identity-providers", "user-session": "users",
   "identity-approval": "users", "user-audit": "users", "chat-bridge": "chat-bridges",
-  "control-plane-settings": "settings", secret: "secrets", "public-directory": "public-directory",
+  "control-plane-settings": "settings", "device-trust": "settings", secret: "secrets", "public-directory": "public-directory",
 };
 
 const INTERACTIVE_RESOURCES = new Set<ControlPlaneResourceType>(["instance", "app-session", "ai-session"]);

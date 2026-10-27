@@ -3,10 +3,20 @@ import { deflateSync, inflateSync } from 'fflate';
 import nacl from 'tweetnacl';
 
 import {
+  CLOUD_CLIENT_HANDSHAKE_AUDIENCE,
+  CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+  CLOUD_DEVICE_TRUST_AUDIENCE,
+  CloudDeviceAuthSchema,
+  CloudClientTrustOutcomeSchema,
   RELAY_FRAME_FLAG_DEFLATE,
   RELAY_SESSION_PROTOCOL_VERSION,
+  cloudClientTrustOutcomeSigningInput,
+  cloudClientTranscriptSigningInput,
+  cloudDeviceComparisonCodeInput,
+  cloudDeviceAuthSigningInput,
   decodeRelayFrame,
   encodeRelayFrame,
+  formatCloudDeviceComparisonCode,
   type RelayRoleProof,
   type RelaySessionGrant,
   type RelaySessionTranscriptTicket,
@@ -124,36 +134,38 @@ function fromBase64Url(value: string) { const normalized = value.replace(/-/g, '
 function concat(...values: Uint8Array[]) { const result = new Uint8Array(values.reduce((sum, value) => sum + value.length, 0)); let offset = 0; for (const value of values) { result.set(value, offset); offset += value.length; } return result; }
 async function sha256(...values: Uint8Array[]) { return new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, concat(...values))); }
 async function fingerprintOf(publicKey: string) { return `sha256:${base64Url(await sha256(fromBase64Url(publicKey)))}`; }
-function canonicalJson(value: any): string { if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`; if (value && typeof value === 'object') return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`; return JSON.stringify(value); }
 function nonce(direction: number, counter: number) { const value = new Uint8Array(24); value[0] = direction; for (let index = 0; index < 6; index += 1) value[23 - index] = (counter / (2 ** (8 * index))) & 255; return value; }
 function frame(sequence: number, payload: Uint8Array, kind: 'handshake' | 'data' | 'cancel' = 'data', flags = 0) { return encodeRelayFrame({ kind, sequence, payload, flags }); }
 function sentFrame(socket: FakeSocket, index: number) { const value = socket.sent[index]; if (!value || typeof value === 'string') throw new Error(`sent message ${index} is not a binary frame`); return decodeRelayFrame(value); }
 
-async function acceptHandshake(input: { hello: any; identity: nacl.SignKeyPair; ticket?: any }) {
+const testDeviceKey = nacl.sign.keyPair();
+const testDevice = { name: 'Test phone', kind: 'mobile', platform: 'test' } as const;
+async function testDeviceAuth(input: { ticket: RelaySessionTranscriptTicket; grant: RelaySessionGrant; clientEphemeralPublicKey: string; trustRetry?: true }) {
+  const signature = nacl.sign.detached(
+    new TextEncoder().encode(cloudDeviceAuthSigningInput({ ...input, device: testDevice })),
+    testDeviceKey.secretKey,
+  );
+  return CloudDeviceAuthSchema.parse({ protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION, device: testDevice, signature: base64Url(signature) });
+}
+
+async function acceptHandshake(input: { hello: any; identity: nacl.SignKeyPair; ticket?: any; grant?: RelaySessionGrant }) {
   const serverKeys = nacl.box.keyPair();
   const controlPlanePublicKey = base64Url(input.identity.publicKey);
   const serverEphemeralPublicKey = base64Url(serverKeys.publicKey);
   const ticket = input.ticket ?? transcriptTicket;
-  const transcript = base64Url(await sha256(new TextEncoder().encode(canonicalJson({
-    audience: ticket.audience, ticketId: ticket.transcriptTicketId, accountId: ticket.accountId, deviceSessionId: ticket.deviceSessionId, controlPlaneId: ticket.controlPlaneId, bindingId: ticket.bindingId, bindingRevision: ticket.bindingRevision, nonce: ticket.nonce, clientEphemeralPublicKey: input.hello.clientEphemeralPublicKey, serverEphemeralPublicKey,
-    ...(ticket.accessMode === undefined ? {} : {
-      ownerAccountId: ticket.ownerAccountId, accessMode: ticket.accessMode,
-      ...(ticket.accessRoleId === undefined ? {} : { accessRoleId: ticket.accessRoleId }),
-      ...(ticket.shareGrantId === undefined ? {} : { shareGrantId: ticket.shareGrantId, shareRevision: ticket.shareRevision }),
-    }),
-  }))));
+  const transcript = base64Url(await sha256(new TextEncoder().encode(cloudClientTranscriptSigningInput({ ticket, grant: input.grant ?? grant, clientEphemeralPublicKey: input.hello.clientEphemeralPublicKey, serverEphemeralPublicKey }))));
   const shared = nacl.scalarMult(serverKeys.secretKey, fromBase64Url(input.hello.clientEphemeralPublicKey));
   const sessionKey = await sha256(shared, new TextEncoder().encode(transcript), new TextEncoder().encode('task-handoff:control-plane-access:e2e:v1'));
-  return { controlPlanePublicKey, serverEphemeralPublicKey, transcript, signature: base64Url(nacl.sign.detached(new TextEncoder().encode(transcript), input.identity.secretKey)), sessionKey };
+  return { controlPlanePublicKey, serverEphemeralPublicKey, transcript, signature: base64Url(nacl.sign.detached(new TextEncoder().encode(transcript), input.identity.secretKey)), sessionKey, ticket };
 }
-function handshakeResponse(controlPlane: Awaited<ReturnType<typeof acceptHandshake>>) { return frame(0, new TextEncoder().encode(JSON.stringify({ controlPlanePublicKey: controlPlane.controlPlanePublicKey, serverEphemeralPublicKey: controlPlane.serverEphemeralPublicKey, transcript: controlPlane.transcript, signature: controlPlane.signature })), 'handshake'); }
+function handshakeResponse(controlPlane: Awaited<ReturnType<typeof acceptHandshake>>) { return frame(0, new TextEncoder().encode(JSON.stringify({ protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION, audience: CLOUD_CLIENT_HANDSHAKE_AUDIENCE, state: 'accepted', controlPlaneId: controlPlane.ticket.controlPlaneId, bindingId: controlPlane.ticket.bindingId, ticketId: controlPlane.ticket.transcriptTicketId, deviceSessionId: controlPlane.ticket.deviceSessionId, controlPlanePublicKey: controlPlane.controlPlanePublicKey, serverEphemeralPublicKey: controlPlane.serverEphemeralPublicKey, transcript: controlPlane.transcript, signature: controlPlane.signature })), 'handshake'); }
 function flush() { return new Promise<void>((resolve) => setTimeout(resolve, 0)); }
 
-async function connected() {
+async function connected(options: { trustRetry?: true } = {}) {
   const identity = nacl.sign.keyPair();
   const socket = new FakeSocket();
   const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-  const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+  const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1, ...options });
   socket.open();
   await flush();
   socket.emit('message', { data: JSON.stringify(attached) });
@@ -169,7 +181,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
 
     expect(socket.listenerCount('open')).toBe(1);
     socket.open();
@@ -181,7 +193,16 @@ describe('createMobileRelayChannelFactory', () => {
     const helloFrame = sentFrame(socket, 1);
     expect(helloFrame).toMatchObject({ sequence: 0, kind: 'handshake' });
     const hello = JSON.parse(new TextDecoder().decode(helloFrame.payload));
-    expect(hello).toEqual({ ticketId: 'rtt_ticket_a', deviceSessionId: 'device_a', clientEphemeralPublicKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+    expect(hello).toEqual({
+      ticketId: 'rtt_ticket_a',
+      deviceSessionId: 'device_a',
+      clientEphemeralPublicKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      deviceAuth: {
+        protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+        device: testDevice,
+        signature: expect.stringMatching(/^[A-Za-z0-9_-]{86}$/),
+      },
+    });
 
     const controlPlane = await acceptHandshake({ hello, identity });
     socket.emit('message', { data: handshakeResponse(controlPlane) });
@@ -207,6 +228,85 @@ describe('createMobileRelayChannelFactory', () => {
       { type: 'response', id: 'request_1', status: 200, body: { data: { ok: true } } },
       { type: 'response-chunk', responseId: 11, offset: 0, bytes: chunk, final: true },
     ]);
+    channel.close();
+  });
+
+  test('binds an explicit trust retry into the signed client hello', async () => {
+    const { hello } = await connected({ trustRetry: true });
+    expect(hello.trustRetry).toBe(true);
+    expect(nacl.sign.detached.verify(
+      new TextEncoder().encode(cloudDeviceAuthSigningInput({
+        ticket: transcriptTicket,
+        grant,
+        clientEphemeralPublicKey: hello.clientEphemeralPublicKey,
+        device: testDevice,
+        trustRetry: true,
+      })),
+      fromBase64Url(hello.deviceAuth.signature),
+      testDeviceKey.publicKey,
+    )).toBe(true);
+    const regular = await connected();
+    expect(regular.hello).not.toHaveProperty('trustRetry');
+  });
+
+  test('accepts a signed pending outcome for the grant Control Plane identity', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify(attached) });
+    await flush();
+
+    const issuedAt = new Date().toISOString();
+    const unsigned = {
+      protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+      audience: CLOUD_DEVICE_TRUST_AUDIENCE,
+      state: 'pending' as const,
+      reason: 'first-seen' as const,
+      requestId: 'devtrust_a',
+      controlPlaneId: grant.controlPlaneId,
+      bindingId: grant.bindingId,
+      ticketId: grant.sessionTranscriptTicket.transcriptTicketId,
+      accountId: grant.accountId,
+      deviceSessionId: grant.deviceSessionId,
+      controlPlanePublicKey: base64Url(identity.publicKey),
+      device: testDevice,
+      devicePublicKeyFingerprint: `sha256:${base64Url(await sha256(new TextEncoder().encode(grant.clientProofPublicKey)))}`,
+      comparisonCode: formatCloudDeviceComparisonCode(await sha256(cloudDeviceComparisonCodeInput(grant.bindingId, grant.clientProofPublicKey))),
+      issuedAt,
+      expiresAt: new Date(Date.parse(issuedAt) + 86_400_000).toISOString(),
+    };
+    const outcome = CloudClientTrustOutcomeSchema.parse({
+      ...unsigned,
+      signature: base64Url(nacl.sign.detached(new TextEncoder().encode(cloudClientTrustOutcomeSigningInput(unsigned)), identity.secretKey)),
+    });
+    socket.emit('message', { data: frame(0, new TextEncoder().encode(JSON.stringify(outcome)), 'handshake') });
+
+    await expect(creating).rejects.toMatchObject({
+      code: 'CLOUD_DEVICE_TRUST_REQUIRED',
+      outcome: { state: 'pending', requestId: 'devtrust_a', controlPlaneId: grant.controlPlaneId },
+    });
+    expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
+  });
+
+  test('does not mistake a queued Relay control message for the handshake outcome', async () => {
+    const identity = nacl.sign.keyPair();
+    const socket = new FakeSocket();
+    const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    socket.open();
+    await flush();
+    socket.emit('message', { data: JSON.stringify(attached) });
+    await flush();
+    const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
+
+    socket.emit('message', { data: JSON.stringify({ type: 'peer-detached', sessionId: 'session_a', retryable: false }) });
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity })) });
+    const channel = await creating;
+
+    expect(channel.generation).toBe(1);
     channel.close();
   });
 
@@ -239,7 +339,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
     await flush();
 
@@ -256,7 +356,7 @@ describe('createMobileRelayChannelFactory', () => {
     const logError = jest.spyOn(diagnosticLog, 'error').mockImplementation(() => undefined);
     try {
       const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-      const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
+      const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
       socket.open();
       await flush();
       socket.emit('message', { data: JSON.stringify({ type: 'session-closed', sessionId: 'session_a', code: 'RELAY_SESSION_NOT_FOUND', retryable: false }) });
@@ -362,13 +462,13 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant: sharedGrant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant: sharedGrant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: JSON.stringify(attached) });
     await flush();
     const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
-    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: sharedTicket })) });
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: sharedTicket, grant: sharedGrant })) });
     const channel = await creating;
     expect(channel.leaseExpiresAt).toBe(attached.leaseExpiresAt);
     channel.close();
@@ -378,14 +478,15 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'attach', grant, proof, attach: clientAttach, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: JSON.stringify(attached) });
     await flush();
     const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
     const changedRoleTicket = { ...transcriptTicket, accessRoleId: 'role_viewer' };
-    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: changedRoleTicket })) });
+    const changedRoleGrant = { ...grant, accessRoleId: 'role_viewer', sessionTranscriptTicket: changedRoleTicket };
+    socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity, ticket: changedRoleTicket, grant: changedRoleGrant })) });
     await expect(creating).rejects.toMatchObject({ code: 'RELAY_E2E_IDENTITY_INVALID' });
   });
 
@@ -393,7 +494,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: JSON.stringify({ ...attached, sessionId: 'session_other' }) });
@@ -406,7 +507,7 @@ describe('createMobileRelayChannelFactory', () => {
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { socketOpenMs: 10 } });
 
-    await expect(factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
+    await expect(factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
     expect(socket.closed).toEqual({ code: 4400, reason: 'handshake-failed' });
     expect(socket.listenerCount('open')).toBe(0);
     expect(socket.listenerCount('message')).toBe(0);
@@ -419,7 +520,7 @@ describe('createMobileRelayChannelFactory', () => {
     const socketPromise = new Promise<FakeSocket>((resolve) => { resolveSocket = resolve; });
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socketPromise, allowRelayUrl: () => true, timeouts: { socketOpenMs: 10 } });
 
-    await expect(factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
+    await expect(factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: fingerprint, epoch: 1 })).rejects.toMatchObject({ code: 'RELAY_SOCKET_OPEN_TIMEOUT', retryable: true });
     const lateSocket = new FakeSocket();
     resolveSocket(lateSocket);
     await flush();
@@ -430,7 +531,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { attachMs: 10 } });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
 
     await expect(creating).rejects.toMatchObject({ code: 'RELAY_SESSION_ATTACH_TIMEOUT', retryable: true });
@@ -442,7 +543,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true, timeouts: { handshakeMs: 10 } });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: await fingerprintOf(base64Url(identity.publicKey)), epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: JSON.stringify(attached) });
@@ -457,7 +558,7 @@ describe('createMobileRelayChannelFactory', () => {
   test('rejects a protocol violation during the handshake and drops every listener', async () => {
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'a'.repeat(43)}`, epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: 'not-json' });
@@ -474,7 +575,7 @@ describe('createMobileRelayChannelFactory', () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
-    const creating = factory({ relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'b'.repeat(43)}`, epoch: 1 });
+    const creating = factory({ deviceAuth: testDeviceAuth, relayUrl: grant.relayUrl, mode: 'resume', grant, proof, targetPublicKeyFingerprint: `sha256:${'b'.repeat(43)}`, epoch: 1 });
     socket.open();
     await flush();
     socket.emit('message', { data: JSON.stringify(attached) });

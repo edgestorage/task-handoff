@@ -23,6 +23,8 @@ import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-s
 import { RelayLinkProbeLoop } from "./relay-link-probe.ts";
 import { RelayTraceRecorder } from "./relay-trace.ts";
 import type { CloudEndpointResolver } from "../../../../../shared/cloud-discovery.cjs";
+import type { CloudDeviceTrustService } from "../device-trust/service.ts";
+import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-device-sessions.ts";
 
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
 type CloudAccountScope = "account:sign-in" | "control-plane:bind";
@@ -37,9 +39,9 @@ const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
-  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number };
+  private readonly options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onMessageError?(details: { messageType?: string; eventType?: string; operation?: string; errorCode?: string; errorMessage: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number };
 
-  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number }) {
+  constructor(options: { identity: ControlPlaneIdentityService; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; onRegistered(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onMessageError?(details: { messageType?: string; eventType?: string; operation?: string; errorCode?: string; errorMessage: string }): void; onRequest(operation: string, payload: unknown): Promise<unknown>; webSocket?: typeof WebSocket; supportsRelaySessionResume?: boolean; registrationTimeoutMs?: number; requestTimeoutMs?: number }) {
     this.options = options;
   }
 
@@ -66,6 +68,7 @@ export class CloudCoordinatorConnector {
       register: { type: "register", registration: { ...payload, signature: this.options.identity.signCloudOutboundRegistration(payload) }, backgroundCredential: input.credential },
       onEvent: input.onEvent,
       onRegistered: this.options.onRegistered,
+      onMessageError: this.options.onMessageError,
       onRequest: this.options.onRequest,
       registrationTimeoutMs: this.options.registrationTimeoutMs,
       requestTimeoutMs: this.options.requestTimeoutMs,
@@ -106,6 +109,7 @@ export class CloudConnectivityBackgroundRuntime {
   private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nodeRelayRecoveryAttempts = new Map<string, number>();
   private readonly nodeRelayRecoveryInFlight = new Set<string>();
+  private readonly nodeRelayTrustProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private accessToken?: { value: string; expiresAt: number };
   private readonly nodeRelayChannels?: CloudNodeRelayChannels;
   private readonly onboardingHints = new Map<string, { tokenId?: string; at: string }>();
@@ -116,12 +120,32 @@ export class CloudConnectivityBackgroundRuntime {
     this.options = { ...options, fetch: options.fetch ?? globalThis.fetch };
     this.clock = options.clock ?? Date.now;
     this.relayTrace = options.relayTrace ?? new RelayTraceRecorder();
-    const resolveAccessRole = options.resolveAccessRole ?? (async () => { throw runtimeError("CLOUD_ACCESS_ROLE_UNAVAILABLE"); });
-    const relayConnector = options.relayConnector ?? (options.relayBridge ? new CloudRelayConnector({ identity: options.identity, bridge: options.relayBridge, resolveAccessRole, webSocket: options.webSocket, trace: this.relayTrace }) : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
+    const relayConnector = options.relayConnector ?? (options.relayBridge && options.deviceTrust && options.trustedDeviceSessions
+      ? new CloudRelayConnector({
+          identity: options.identity,
+          bridge: options.relayBridge,
+          deviceTrust: options.deviceTrust,
+          trustedSessions: options.trustedDeviceSessions,
+          webSocket: options.webSocket,
+          trace: this.relayTrace,
+          onHandshakeError: (error, context) => {
+            const code = errorCode(error);
+            this.options.logger?.warn?.({
+              code: code ?? "CLOUD_RELAY_HANDSHAKE_FAILED",
+              ...(code ? { errorCode: code } : {}),
+              errorName: error instanceof Error ? error.name : typeof error,
+              errorMessage: boundedErrorMessage(error),
+              ...context,
+            }, "cloud_relay_handshake_failed");
+          },
+        })
+      : { async connect() { throw runtimeError("CLOUD_RELAY_CONNECTOR_UNAVAILABLE"); } });
     const verifyGrant = options.verifyRelaySessionGrant ?? ((grant) => verifyCoordinatorRelaySessionGrant(grant, options.state));
     const persistResume = Boolean(options.cloudRelaySessionsPath)
       && typeof (relayConnector as { resume?: unknown }).resume === "function";
-    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onDisconnected: (details) => {
+    this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onMessageError: (details) => {
+      this.options.logger?.warn?.({ code: "CLOUD_CONTROL_MESSAGE_FAILED", ...details }, "cloud_control_message_failed");
+    }, onDisconnected: (details) => {
       this.control.disconnected();
       this.schedule();
       this.options.logger?.warn?.({ code: "CLOUD_CONTROL_CONNECTION_CLOSED", ...details }, "cloud_control_connection_closed");
@@ -163,10 +187,18 @@ export class CloudConnectivityBackgroundRuntime {
         if (!this.nodeRelayChannels) return;
         const nodeHandle = (event as any)?.nodeHandle;
         this.relayLinks.observe((event as any)?.relayUrl);
-        void this.nodeRelayChannels.attach(event).then(() => {
-          if (typeof nodeHandle === "string") this.resetNodeRelayRecovery(nodeHandle);
+        void this.nodeRelayChannels.attach(event).then((result) => {
+          if (typeof nodeHandle !== "string") return;
+          if (result.status === "trust-required" && result.trust.state === "pending") {
+            this.armNodeRelayTrustProbeTimeout(nodeHandle);
+            this.scheduleNodeRelayRecovery(nodeHandle);
+          } else {
+            this.clearNodeRelayTrustProbeTimeout(nodeHandle);
+            this.resetNodeRelayRecovery(nodeHandle);
+          }
         }).catch((error) => {
           if (typeof nodeHandle !== "string") return;
+          this.clearNodeRelayTrustProbeTimeout(nodeHandle);
           const retryable = (error as { retryable?: unknown } | undefined)?.retryable !== false;
           this.nodeRelayChannels?.forgetClaim(nodeHandle);
           this.options.logger?.warn?.({
@@ -180,7 +212,21 @@ export class CloudConnectivityBackgroundRuntime {
         return;
       }
       if ((event as any)?.type === "relay-session-grant") {
-        await this.dataConnections.applyGrant(event);
+        try {
+          await this.dataConnections.applyGrant(event);
+        } catch (error) {
+          // A Relay grant is a data-plane concern. Its attach can fail while the
+          // Coordinator connection is healthy, and the data manager already
+          // retains the grant and backs off transient resume failures. Closing
+          // the control socket here would replay the grant immediately and turn
+          // one Relay admission error into a reconnect storm.
+          this.options.logger?.warn?.({
+            code: "CLOUD_RELAY_SESSION_APPLY_FAILED",
+            allocationId: boundedText((event as any)?.grant?.allocationId, 64),
+            errorCode: errorCode(error) ?? "RELAY_SESSION_APPLY_FAILED",
+            errorMessage: boundedErrorMessage(error),
+          }, "cloud_relay_session_apply_failed");
+        }
         return;
       }
       await this.events.apply(event as any);
@@ -252,6 +298,8 @@ export class CloudConnectivityBackgroundRuntime {
     this.nodeRelayRecoveryTimers.clear();
     this.nodeRelayRecoveryAttempts.clear();
     this.nodeRelayRecoveryInFlight.clear();
+    for (const timer of this.nodeRelayTrustProbeTimers.values()) clearTimeout(timer);
+    this.nodeRelayTrustProbeTimers.clear();
     this.relayLinks.stop();
     this.relayTrace.close();
     this.nodeRelayChannels?.closeAll("runtime-stopped");
@@ -584,6 +632,24 @@ export class CloudConnectivityBackgroundRuntime {
     if (failure !== undefined || pending) this.scheduleNodeRelayRecovery(nodeHandle);
   }
 
+  private armNodeRelayTrustProbeTimeout(nodeHandle: string) {
+    this.clearNodeRelayTrustProbeTimeout(nodeHandle);
+    const timeoutMs = positiveDuration(this.options.nodeRelayTrustProbeTimeoutMs, 20_000);
+    const timer = setTimeout(() => {
+      this.nodeRelayTrustProbeTimers.delete(nodeHandle);
+      if (!this.running || this.nodeRelayChannels?.trustState(nodeHandle) !== "pending") return;
+      this.nodeRelayChannels.recordTrustProbeTimeout(nodeHandle);
+    }, timeoutMs);
+    timer.unref?.();
+    this.nodeRelayTrustProbeTimers.set(nodeHandle, timer);
+  }
+
+  private clearNodeRelayTrustProbeTimeout(nodeHandle: string) {
+    const timer = this.nodeRelayTrustProbeTimers.get(nodeHandle);
+    if (timer) clearTimeout(timer);
+    this.nodeRelayTrustProbeTimers.delete(nodeHandle);
+  }
+
   private resetNodeRelayRecovery(nodeHandle: string) {
     const timer = this.nodeRelayRecoveryTimers.get(nodeHandle);
     if (timer) clearTimeout(timer);
@@ -711,7 +777,7 @@ export class CloudConnectivityBackgroundRuntime {
   }
 }
 
-function openRpcConnection(socket: WebSocket, options: { register: unknown; onEvent(event: unknown): void; onRegistered?(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onRequest?(operation: string, payload: unknown): Promise<unknown>; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; registrationTimeoutMs?: number; requestTimeoutMs?: number }): Promise<RpcConnection> {
+function openRpcConnection(socket: WebSocket, options: { register: unknown; onEvent(event: unknown): void; onRegistered?(registration: { controlPlaneId: string; reportedControlPlaneId: string }): void; onMessageError?(details: { messageType?: string; eventType?: string; operation?: string; errorCode?: string; errorMessage: string }): void; onRequest?(operation: string, payload: unknown): Promise<unknown>; onDisconnected(details?: { closeCode?: number; closeReason?: string; errorCode?: string }): void; registrationTimeoutMs?: number; requestTimeoutMs?: number }): Promise<RpcConnection> {
   return new Promise((resolve, reject) => {
     const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
     let registered = false;
@@ -795,7 +861,18 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
       }
     };
     socket.on("message", (raw) => {
-      void handleMessage(raw).catch(() => {
+      let messageType: string | undefined;
+      let eventType: string | undefined;
+      let operation: string | undefined;
+      try { const parsed = JSON.parse(raw.toString()); messageType = typeof parsed?.type === "string" ? parsed.type : undefined; eventType = typeof parsed?.event?.type === "string" ? parsed.event.type : undefined; operation = typeof parsed?.operation === "string" ? parsed.operation : undefined; } catch { /* handled below */ }
+      void handleMessage(raw).catch((error) => {
+        options.onMessageError?.({
+          ...(messageType ? { messageType } : {}),
+          ...(eventType ? { eventType } : {}),
+          ...(operation ? { operation } : {}),
+          ...(errorCode(error) ? { errorCode: errorCode(error) } : {}),
+          errorMessage: boundedText(error instanceof Error ? error.message : String(error), 300),
+        });
         if (socket.readyState === WebSocket.OPEN) socket.close(1011, "message-handler-failed");
       });
     });
@@ -820,12 +897,14 @@ type CloudRuntimeOptions = {
   identity: ControlPlaneIdentityService;
   logger?: CloudRuntimeLogger;
   relayBridge?: RelaySessionBridge;
-  resolveAccessRole?: (roleId: string) => Promise<{ roleIds: string[]; permissionIds: import("@task-handoff/protocol/control-plane-access").ControlPlanePermissionId[]; authorizationRevision: number }>;
+  deviceTrust?: CloudDeviceTrustService;
+  trustedDeviceSessions?: TrustedDeviceSessionRegistry;
   roleCatalog?: () => Promise<Array<{ roleId: string; name: string; description?: string; system: boolean; status: "active" | "archived" }>>;
   relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
   relayTrace?: RelayTraceRecorder;
   relayLinks?: RelayLinkProbeLoop;
   relayLinkProbeIntervalMs?: number;
+  nodeRelayTrustProbeTimeoutMs?: number;
   accountRenewalIntervalMs?: number;
   accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;

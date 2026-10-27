@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { decodeRelayFrame, encodeRelayFrame, RELAY_SESSION_PROTOCOL_VERSION, RelaySessionAudience, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import { CloudRelayConnector } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
+import { activeDeviceTrust, cloudClientDevice, cloudRelayIdentity, trustedDeviceSessions } from "./support/cloud-relay-client-auth.ts";
 
 test("relay resume does not drop a handshake coalesced with the attach acknowledgement", { timeout: 2_000 }, async () => {
   const sockets: CoalescedSocket[] = [];
@@ -64,11 +65,7 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
       const handshake = Buffer.from(encodeRelayFrame({
         kind: "handshake",
         sequence: 0,
-        payload: Buffer.from(JSON.stringify({
-          ticketId: message.grant.sessionTranscriptTicket.transcriptTicketId,
-          deviceSessionId: message.grant.sessionTranscriptTicket.deviceSessionId,
-          clientEphemeralPublicKey: "b".repeat(43),
-        })),
+        payload: Buffer.from(JSON.stringify(hello)),
       }));
       queueMicrotask(() => {
         this.emit("message", attached, false);
@@ -84,6 +81,7 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
 
   const now = Date.now();
   const fingerprint = `sha256:${"a".repeat(43)}`;
+  const device = cloudClientDevice();
   const issuedAt = new Date(now - 1_000).toISOString();
   const expiresAt = new Date(now + 14 * 60_000).toISOString();
   const transcriptTicket = {
@@ -123,7 +121,7 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
     bindingId: transcriptTicket.bindingId,
     bindingRevision: transcriptTicket.bindingRevision,
     targetPublicKeyFingerprint: fingerprint,
-    clientProofPublicKey: "b".repeat(43),
+    clientProofPublicKey: device.publicKey,
     controlPlaneProofPublicKey: "c".repeat(43),
     trafficClass: "interactive",
     sessionTranscriptTicket: transcriptTicket,
@@ -132,15 +130,13 @@ test("relay resume does not drop a handshake coalesced with the attach acknowled
     expiresAt,
     signature: "s".repeat(86),
   };
+  const hello = device.hello({ ticket: transcriptTicket, grant });
   const connector = new CloudRelayConnector({
-    identity: {
-      acceptCloudAccessHandshake: () => ({ response: {}, transcript: "transcript", signature: "s".repeat(32) }),
-      publicIdentity: () => ({ publicKey: "c".repeat(43) }),
-      signRelayRoleProof: (payload: Record<string, unknown>) => ({ ...payload, signature: "s".repeat(86) }),
-    },
+    identity: cloudRelayIdentity({ fingerprint }),
     bridge: { request: async () => ({ status: 200 }) } as any,
     webSocket: CoalescedSocket as any,
-    resolveAccessRole: async () => ({ roleIds: ["role_admin"], permissionIds: ["ai-sessions:read"], authorizationRevision: 1 }),
+    deviceTrust: activeDeviceTrust(),
+    trustedSessions: trustedDeviceSessions(),
     handshakeTimeoutMs: 100,
   });
 

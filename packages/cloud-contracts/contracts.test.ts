@@ -30,10 +30,27 @@ import {
   ControlPlaneResourceAccessSchema,
   NodeResourceAccessSchema,
   RESOURCE_SHARING_CLIENT_CAPABILITY,
+  CLOUD_CLIENT_HANDSHAKE_AUDIENCE,
+  CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+  CLOUD_DEVICE_TRUST_AUDIENCE,
+  ClientHelloSchema,
+  CloudClientHandshakeReplySchema,
+  CloudDeviceAuthSchema,
+  RELAY_SESSION_PROTOCOL_VERSION,
+  RelaySessionAudience,
   acceptControlPlaneHandshake,
   beginClientHandshake,
+  cloudClientTranscriptSigningInput,
+  cloudClientTrustOutcomeSigningInput,
+  cloudDeviceAuthBindings,
+  cloudDeviceAuthSigningInput,
+  cloudDeviceComparisonCodeInput,
+  cloudDeviceFingerprintInput,
+  formatCloudDeviceComparisonCode,
   finishClientHandshake,
   type AccessTicket,
+  type RelaySessionGrant,
+  type RelaySessionTranscriptTicket,
 } from "./src/index.ts";
 
 const at = "2026-08-10T00:00:00.000Z";
@@ -214,14 +231,211 @@ test("X25519 session key is bound to the signed Control Plane and ticket transcr
   const fingerprint = `sha256:${createHash("sha256").update(Buffer.from(publicX, "base64url")).digest("base64url")}`;
   const ticket: AccessTicket = { protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION, audience: OfficialAudience.ControlPlaneAccess, ticketId: "ticket_a", accountId: "account_a", deviceSessionId: "session_a", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, trafficClasses: ["interactive"], ownerAccountId: "account_a", accessMode: "owner", accessRoleId: "role_admin", nonce: "n".repeat(32), targetPublicKeyFingerprint: fingerprint, issuedAt: at, expiresAt: "2026-08-10T00:05:00.000Z", signature: "s".repeat(64) };
   const client = beginClientHandshake(ticket);
-  const accepted = acceptControlPlaneHandshake({ ticket, clientHello: client.hello, controlPlaneFingerprint: fingerprint, controlPlanePrivateKey: controlPlane.privateKey });
+  const accepted = acceptControlPlaneHandshake({ authenticated: { ticket, clientEphemeralPublicKey: client.hello.clientEphemeralPublicKey }, controlPlaneFingerprint: fingerprint, controlPlanePrivateKey: controlPlane.privateKey });
   const clientKey = finishClientHandshake(client.privateState, accepted.response, controlPlane.publicKey);
   assert.deepEqual(clientKey, accepted.sessionKey);
   assert.throws(() => finishClientHandshake({ ...client.privateState, ticket: { ...ticket, bindingRevision: 1 } }, accepted.response, controlPlane.publicKey), { code: "E2E_HANDSHAKE_INVALID" });
 
   const sharedTicket: AccessTicket = { ...ticket, accountId: "account_grantee", ownerAccountId: "account_owner", accessMode: "shared", shareGrantId: "share_a", shareRevision: 3, accessRoleId: "role_viewer" };
   const sharedClient = beginClientHandshake(sharedTicket);
-  const sharedAccepted = acceptControlPlaneHandshake({ ticket: sharedTicket, clientHello: sharedClient.hello, controlPlaneFingerprint: fingerprint, controlPlanePrivateKey: controlPlane.privateKey });
+  const sharedAccepted = acceptControlPlaneHandshake({ authenticated: { ticket: sharedTicket, clientEphemeralPublicKey: sharedClient.hello.clientEphemeralPublicKey }, controlPlaneFingerprint: fingerprint, controlPlanePrivateKey: controlPlane.privateKey });
   assert.deepEqual(finishClientHandshake(sharedClient.privateState, sharedAccepted.response, controlPlane.publicKey), sharedAccepted.sessionKey);
   assert.throws(() => finishClientHandshake({ ...sharedClient.privateState, ticket: { ...sharedTicket, shareRevision: 4 } }, sharedAccepted.response, controlPlane.publicKey), { code: "E2E_HANDSHAKE_INVALID" });
+});
+
+test("device auth canonical input binds the full device and access context", () => {
+  const sessionAt = "2026-10-26T00:00:00.000Z";
+  const expiresAt = "2026-10-26T00:10:00.000Z";
+  const ticket: RelaySessionTranscriptTicket = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Transcript,
+    transcriptTicketId: "rtt_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    nonce: "n".repeat(24),
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
+    issuedAt: sessionAt,
+    expiresAt,
+  };
+  const grant: RelaySessionGrant = {
+    protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
+    audience: RelaySessionAudience.Grant,
+    sessionId: "session_a",
+    grantId: "grant_a",
+    generation: 1,
+    allocationId: "allocation_a",
+    accessTicketId: "ticket_a",
+    relayId: "relay_a",
+    relayRegion: "test",
+    relayUrl: "wss://relay.example.test/connect",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    clientProofPublicKey: "p".repeat(43),
+    controlPlaneProofPublicKey: "q".repeat(43),
+    trafficClass: "interactive",
+    sessionTranscriptTicket: ticket,
+    revocationEpoch: 0,
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
+    issuedAt: sessionAt,
+    expiresAt,
+    signature: "s".repeat(86),
+  };
+  const device = { name: "Alice's phone", kind: "mobile", platform: "ios", version: "1.2.3" };
+  const input = { ticket, grant, clientEphemeralPublicKey: "e".repeat(43), device };
+  const bindings = cloudDeviceAuthBindings(input);
+  assert.deepEqual(bindings, {
+    protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+    audience: "task-handoff:cloud-device-auth",
+    ticketId: "rtt_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    targetPublicKeyFingerprint: fingerprint,
+    nonce: "n".repeat(24),
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
+    clientProofPublicKey: "p".repeat(43),
+    clientEphemeralPublicKey: "e".repeat(43),
+    device,
+  });
+  assert.equal(cloudDeviceAuthBindings({ ...input, device: { ...device, name: "Other name" } }).clientEphemeralPublicKey, "e".repeat(43));
+  assert.notEqual(cloudDeviceAuthSigningInput(input), cloudDeviceAuthSigningInput({ ...input, device: { ...device, name: "Other name" } }));
+  assert.notEqual(cloudDeviceAuthSigningInput(input), cloudDeviceAuthSigningInput({ ...input, trustRetry: true }));
+  assert.match(cloudDeviceAuthSigningInput({ ...input, trustRetry: true }), /"trustRetry":true/);
+  assert.throws(() => cloudDeviceAuthBindings({
+    ...input,
+    grant: { ...grant, targetPublicKeyFingerprint: `sha256:${"z".repeat(43)}` },
+  }), { code: "CLOUD_DEVICE_AUTH_INVALID" });
+
+  const sharedTicket: RelaySessionTranscriptTicket = {
+    ...ticket,
+    accountId: "account_guest",
+    ownerAccountId: "account_owner",
+    accessMode: "shared",
+    shareGrantId: "share_docs",
+    shareRevision: 3,
+    accessRoleId: "role_operator",
+  };
+  const sharedGrant: RelaySessionGrant = {
+    ...grant,
+    accountId: sharedTicket.accountId,
+    ownerAccountId: sharedTicket.ownerAccountId,
+    accessMode: sharedTicket.accessMode,
+    shareGrantId: sharedTicket.shareGrantId,
+    shareRevision: sharedTicket.shareRevision,
+    accessRoleId: sharedTicket.accessRoleId,
+    sessionTranscriptTicket: sharedTicket,
+  };
+  const sharedInput = { ...input, ticket: sharedTicket, grant: sharedGrant };
+  const sharedSigningInput = cloudDeviceAuthSigningInput(sharedInput);
+  const tamperedContext = (
+    ticketChanges: Partial<RelaySessionTranscriptTicket>,
+    grantChanges: Partial<RelaySessionGrant> = {},
+  ) => {
+    const ticket = { ...sharedTicket, ...ticketChanges };
+    return { ticket, grant: { ...sharedGrant, ...grantChanges, sessionTranscriptTicket: ticket } };
+  };
+  const tamperedContexts: Array<[string, { ticket: RelaySessionTranscriptTicket; grant: RelaySessionGrant }]> = [
+    ["device proof key", tamperedContext({}, { clientProofPublicKey: "k".repeat(43) })],
+    ["account", tamperedContext({ accountId: "account_other_guest" }, { accountId: "account_other_guest" })],
+    ["binding", tamperedContext({ bindingId: "binding_b" }, { bindingId: "binding_b" })],
+    ["owner", tamperedContext({ ownerAccountId: "account_other_owner" }, { ownerAccountId: "account_other_owner" })],
+    ["share grant", tamperedContext({ shareGrantId: "share_other" }, { shareGrantId: "share_other" })],
+    ["share revision", tamperedContext({ shareRevision: 4 }, { shareRevision: 4 })],
+    ["cloud role", tamperedContext({ accessRoleId: "role_cloud_admin" }, { accessRoleId: "role_cloud_admin" })],
+  ];
+  for (const [name, tampered] of tamperedContexts) {
+    assert.notEqual(cloudDeviceAuthSigningInput({ ...sharedInput, ...tampered }), sharedSigningInput, `${name} must be signed`);
+  }
+
+  const accessTicket: AccessTicket = {
+    protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION,
+    audience: OfficialAudience.ControlPlaneAccess,
+    ticketId: "rtt_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    bindingRevision: 2,
+    trafficClasses: ["interactive"],
+    ownerAccountId: "account_a",
+    accessMode: "owner",
+    accessRoleId: "role_admin",
+    nonce: "n".repeat(32),
+    targetPublicKeyFingerprint: fingerprint,
+    issuedAt: sessionAt,
+    expiresAt,
+    signature: "s".repeat(64),
+  };
+  assert.throws(() => cloudDeviceAuthBindings({ ...input, ticket: accessTicket }), { code: "CLOUD_DEVICE_AUTH_UNSUPPORTED_CLIENT" });
+
+  assert.deepEqual(new TextDecoder().decode(cloudDeviceFingerprintInput("p".repeat(43))), "p".repeat(43));
+  const comparisonInput = new TextDecoder().decode(cloudDeviceComparisonCodeInput("binding_a", "p".repeat(43)));
+  assert.equal(comparisonInput, `task-handoff:cloud-device-sas:v1\0binding_a\0${"p".repeat(43)}`);
+  assert.match(formatCloudDeviceComparisonCode(createHash("sha256").update(comparisonInput).digest()), /^[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){3}$/);
+});
+
+test("device auth, trust outcomes and handshake replies reject unsupported wire shapes", () => {
+  const device = { name: "Future device", kind: "embedded-client", platform: "harmony.next" };
+  assert.equal(CloudDeviceAuthSchema.safeParse({ protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION, device, signature: "s".repeat(86) }).success, true);
+  assert.equal(CloudDeviceAuthSchema.safeParse({ protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION, device, signature: "s".repeat(85) }).success, false);
+  assert.equal(CloudDeviceAuthSchema.safeParse({ protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION, device, signature: "s".repeat(86), secret: "leak" }).success, false);
+  assert.equal(ClientHelloSchema.safeParse({ ticketId: "ticket_a", deviceSessionId: "device_a", clientEphemeralPublicKey: "e".repeat(43) }).success, true);
+  assert.equal(ClientHelloSchema.safeParse({ ticketId: "ticket_a", deviceSessionId: "device_a", clientEphemeralPublicKey: "e".repeat(43), trustRetry: true }).success, true);
+  assert.equal(ClientHelloSchema.safeParse({ ticketId: "ticket_a", deviceSessionId: "device_a", clientEphemeralPublicKey: "e".repeat(43), trustRetry: false }).success, false);
+
+  const outcome = {
+    protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+    audience: CLOUD_DEVICE_TRUST_AUDIENCE,
+    state: "pending",
+    reason: "first-seen",
+    requestId: "devtrust_a",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    ticketId: "rtt_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    controlPlanePublicKey: "q".repeat(43),
+    device,
+    devicePublicKeyFingerprint: fingerprint,
+    comparisonCode: "ABCD-EFGH-JKMN-NPQR",
+    issuedAt: at,
+    expiresAt: "2026-10-26T00:05:00.000Z",
+    signature: "s".repeat(86),
+  };
+  assert.equal(CloudClientHandshakeReplySchema.safeParse(outcome).success, true);
+  assert.match(cloudClientTrustOutcomeSigningInput(outcome), /"state":"pending"/);
+  assert.doesNotMatch(cloudClientTrustOutcomeSigningInput(outcome), /"signature"/);
+  assert.equal(CloudClientHandshakeReplySchema.safeParse({ ...outcome, state: "rejected", reason: "admin-rejected", requestId: undefined }).success, true);
+  assert.equal(CloudClientHandshakeReplySchema.safeParse({ ...outcome, state: "rejected", reason: "authorization-stale", requestId: undefined }).success, true);
+  assert.equal(CloudClientHandshakeReplySchema.safeParse({ ...outcome, reason: undefined }).success, false);
+  assert.equal(CloudClientHandshakeReplySchema.safeParse({ ...outcome, unexpected: true }).success, false);
+  assert.equal(CloudClientHandshakeReplySchema.safeParse({
+    protocolVersion: CLOUD_DEVICE_AUTH_PROTOCOL_VERSION,
+    audience: CLOUD_CLIENT_HANDSHAKE_AUDIENCE,
+    state: "accepted",
+    controlPlaneId: "control_plane_a",
+    bindingId: "binding_a",
+    ticketId: "rtt_ticket_a",
+    deviceSessionId: "device_a",
+    controlPlanePublicKey: "q".repeat(43),
+    serverEphemeralPublicKey: "s".repeat(43),
+    transcript: "t".repeat(43),
+    signature: "v".repeat(86),
+  }).success, true);
 });

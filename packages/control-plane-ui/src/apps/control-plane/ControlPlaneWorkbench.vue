@@ -325,11 +325,13 @@
       v-if="!standaloneMode"
       :items="actionInboxItems"
       :collapsed="actionInboxCollapsed"
-      :busy-key="aiApprovalBusyKey || operationApprovalBusyKey || storyDecisionBusyKey"
+      :busy-key="aiApprovalBusyKey || operationApprovalBusyKey || storyDecisionBusyKey || deviceTrustBusyKey || nodeControlPlaneTrustBusyKey"
       :error="actionInboxError"
       @collapse="actionInboxCollapsed = true"
       @resolve="resolveActionInboxApproval"
       @decide="decideActionInboxOperation"
+      @decide-device="decideActionInboxDeviceTrust"
+      @decide-node-control-plane="decideActionInboxNodeControlPlaneTrust"
       @decide-story="decideActionInboxStoryDecision"
       @cancel-story="cancelActionInboxStoryDecision"
       @open-story="openActionInboxStory"
@@ -668,7 +670,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideNodeControlPlaneTrust, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, listNodeControlPlaneTrust, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useCloudAccountNodesQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -689,6 +691,8 @@ import { aiSessionApprovalItems, type AiSessionApprovalDecision } from "./action
 import { mergeActionInboxItems } from "./action-inbox/items";
 import { applyStoryDecisionUpdate, isStoryDecisionResumePending, storyDecisionItemsOutsideSessionDisplay, type StoryDecisionList } from "./action-inbox/storyDecisionItems";
 import { useOperationApprovalStore } from "./action-inbox/useOperationApprovalStore";
+import { useDeviceTrustStore } from "./action-inbox/useDeviceTrustStore";
+import { useNodeControlPlaneTrustInbox } from "./action-inbox/useNodeControlPlaneTrustInbox";
 import { useStoryDecisionInbox } from "./action-inbox/useStoryDecisionInbox";
 import AgentView from "./agent/AgentView.vue";
 import { useAgentCatalog } from "./agent/useAgentCatalog";
@@ -1097,26 +1101,42 @@ const aiSessionStore = useAiSessionStore({
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
 const operationApprovalStore = useOperationApprovalStore();
-watch(() => authSession.data.value?.user?.id, (userId, previousId) => {
-  if (userId === previousId) return;
-  operationApprovalStore.reset();
-  if (userId && authSession.data.value?.enabled) void operationApprovalStore.recover().catch(() => undefined);
+const deviceTrustStore = useDeviceTrustStore();
+const nodeControlPlaneTrust = useCloudAccountNodesQuery({
+  enabled: () => canManageSettings.value,
+  refetchIntervalMs: () => 4_000,
 });
+const managedNodeControlPlaneTrust = useNodeControlPlaneTrustInbox(() => canManageSettings.value);
+watch(() => [authSession.data.value?.user?.id, canManageSettings.value] as const, ([userId, manageSettings], previous) => {
+  if (userId === previous?.[0] && manageSettings === previous?.[1]) return;
+  operationApprovalStore.reset();
+  deviceTrustStore.reset();
+  if (userId && authSession.data.value?.enabled) {
+    void operationApprovalStore.recover().catch(() => undefined);
+    if (manageSettings) void deviceTrustStore.recover().catch(() => undefined);
+  }
+}, { immediate: true });
 const storyDecisionInbox = useStoryDecisionInbox(() => !standaloneMode.value);
 // 会话内提示正在展示的决策不再进入右上角浮层，避免同一决策在会话和审批中心重复出现。
 const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems(
   aiSessionApprovalItems(boardInstancesWithAiSessions.value),
   operationApprovalStore.snapshot.value.requests,
   storyDecisionItemsOutsideSessionDisplay(storyDecisionInbox.items.value, inSessionDisplayedDecisionIds().value),
+  deviceTrustStore.snapshot.value,
+  managedNodeControlPlaneTrust.trust.value,
 ));
 const actionInboxCollapsed = ref(false);
 const actionInboxError = ref("");
 const operationApprovalBusyKey = ref("");
 const storyDecisionBusyKey = ref("");
+const deviceTrustBusyKey = ref("");
+const nodeControlPlaneTrustBusyKey = ref("");
 
 function actionInboxPreview(item: ActionInboxItem) {
   if (item.type === "ai-session-approval") return `${item.instanceName} · ${item.session.title || item.session.id}`;
   if (item.type === "story-decision") return `${t("navigation.storyDecision")} · ${item.story.title}`;
+  if (item.type === "device-trust") return `${t("navigation.deviceTrust.title")} · ${item.request.device.name}`;
+  if (item.type === "node-control-plane-trust") return `${t("navigation.nodeControlPlaneTrust.title")} · ${item.trust.displayName || item.trust.nodeHandle}`;
   return `${t("navigation.operationApproval")} · ${item.request.targetId}`;
 }
 
@@ -1137,6 +1157,59 @@ async function decideActionInboxOperation(item: Extract<ActionInboxItem, { type:
     await operationApprovalStore.recover().catch(() => undefined);
   } finally {
     operationApprovalBusyKey.value = "";
+  }
+}
+
+async function decideActionInboxDeviceTrust(
+  item: Extract<ActionInboxItem, { type: "device-trust" }>,
+  decision: { decision: "approve"; roleId: string } | { decision: "reject" },
+) {
+  if (deviceTrustBusyKey.value) return;
+  actionInboxError.value = "";
+  deviceTrustBusyKey.value = item.key;
+  try {
+    await deviceTrustStore.decide(item.request.requestId, {
+      ...decision,
+      expectedFingerprint: item.request.fingerprint,
+      expectedRevision: item.request.revision,
+    });
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+    await deviceTrustStore.recover().catch(() => undefined);
+  } finally {
+    deviceTrustBusyKey.value = "";
+  }
+}
+
+async function decideActionInboxNodeControlPlaneTrust(
+  item: Extract<ActionInboxItem, { type: "node-control-plane-trust" }>,
+  decision: "approve" | "reject",
+) {
+  if (nodeControlPlaneTrustBusyKey.value) return;
+  actionInboxError.value = "";
+  nodeControlPlaneTrustBusyKey.value = item.key;
+  try {
+    const snapshot = await listNodeControlPlaneTrust(item.nodeId);
+    const request = snapshot.requests.find((candidate) => candidate.requestId === item.trust.requestId && candidate.status === "pending");
+    if (!request) throw new Error(t("navigation.nodeControlPlaneTrust.stale"));
+    await decideNodeControlPlaneTrust(item.nodeId, request.requestId, decision === "approve" ? {
+      action: "approve",
+      expectedFingerprint: request.fingerprint,
+      expectedRevision: request.revision,
+    } : {
+      action: "reject",
+      expectedFingerprint: request.fingerprint,
+      expectedRevision: request.revision,
+    });
+    await Promise.all([
+      managedNodeControlPlaneTrust.refetch(item.nodeId),
+      nodeControlPlaneTrust.refetch(),
+    ]);
+  } catch (error) {
+    actionInboxError.value = t("navigation.nodeControlPlaneTrust.failed", { message: errorText(error) });
+    await nodeControlPlaneTrust.refetch().catch(() => undefined);
+  } finally {
+    nodeControlPlaneTrustBusyKey.value = "";
   }
 }
 
@@ -1534,7 +1607,12 @@ useControlPlaneEvents({
     applyEvent: (payload) => { if (authSession.data.value?.enabled && authSession.data.value?.user?.id) operationApprovalStore.applyEvent(payload); },
     recoverOpen: () => authSession.data.value?.enabled ? operationApprovalStore.recover() : undefined,
   },
+  deviceTrust: {
+    applyEvent: (payload) => { if (canManageSettings.value) deviceTrustStore.applyEvent(payload); },
+    recoverOpen: () => canManageSettings.value ? deviceTrustStore.recover() : undefined,
+  },
   onAuthoritativeState(authoritative) {
+    if (!authoritative) deviceTrustStore.reset();
     instanceDirectoryEventsAuthoritative.value = authoritative;
   },
 });

@@ -1,17 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { and, asc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { z } from "zod";
 import { sqliteMigrations } from "./migrations/index.ts";
 import { ControlPlaneMigrationLedgerRecordSchema } from "../../persistence/database/migrations.ts";
 import {
+  cloudDevicePinRowForDatabase,
+  cloudDeviceTrustRequestRowForDatabase,
   databaseStartupError,
   p0RecordSchemas,
   recordFromDatabase,
   rowForDatabase,
   type ControlPlaneApprovalCollection,
+  type CloudDeviceAccessContext,
+  type ControlPlaneCloudDeviceTrustRepository,
   type ControlPlaneGrantCollection,
   type ControlPlaneGitAssignmentCollection,
   type ControlPlaneGitAuditCollection,
@@ -23,6 +27,14 @@ import {
   type ControlPlaneUserStoreMetadata,
   userRecordSchemas,
 } from "./repository.ts";
+import {
+  CloudDevicePinRecordSchema,
+  CloudDeviceTrustAuditRecordSchema,
+  CloudDeviceTrustRequestRecordSchema,
+  parseStoredCloudDevicePinRecord,
+  parseStoredCloudDeviceTrustAuditRecord,
+  parseStoredCloudDeviceTrustRequestRecord,
+} from "./cloud-device-trust-records.ts";
 import type { ExternalIdentityApprovalRecord, UserAccessGrantRecord } from "../user-records.ts";
 import * as schema from "./schema-sqlite.ts";
 
@@ -272,6 +284,139 @@ function gitAuditCollection(db: any, mutate: <R>(operation: () => Promise<R>) =>
   };
 }
 
+function cloudDeviceTrustRepository(db: any, mutate: <R>(operation: () => Promise<R>) => Promise<R>): ControlPlaneCloudDeviceTrustRepository {
+  const pinContext = (context: CloudDeviceAccessContext) => and(
+    eq(schema.cloudDevicePins.bindingId, context.bindingId),
+    eq(schema.cloudDevicePins.accountId, context.accountId),
+    eq(schema.cloudDevicePins.ownerAccountId, context.ownerAccountId),
+    eq(schema.cloudDevicePins.accessMode, context.accessMode),
+    context.shareGrantId === undefined ? isNull(schema.cloudDevicePins.shareGrantId) : eq(schema.cloudDevicePins.shareGrantId, context.shareGrantId),
+    eq(schema.cloudDevicePins.cloudAccessRoleId, context.cloudAccessRoleId),
+    eq(schema.cloudDevicePins.devicePublicKey, context.devicePublicKey),
+  );
+  const requestContext = (context: CloudDeviceAccessContext) => and(
+    eq(schema.cloudDeviceTrustRequests.bindingId, context.bindingId),
+    eq(schema.cloudDeviceTrustRequests.accountId, context.accountId),
+    eq(schema.cloudDeviceTrustRequests.ownerAccountId, context.ownerAccountId),
+    eq(schema.cloudDeviceTrustRequests.accessMode, context.accessMode),
+    context.shareGrantId === undefined ? isNull(schema.cloudDeviceTrustRequests.shareGrantId) : eq(schema.cloudDeviceTrustRequests.shareGrantId, context.shareGrantId),
+    eq(schema.cloudDeviceTrustRequests.cloudAccessRoleId, context.cloudAccessRoleId),
+    eq(schema.cloudDeviceTrustRequests.devicePublicKey, context.devicePublicKey),
+  );
+  return {
+    async findActivePin(context) {
+      const rows = await db.select().from(schema.cloudDevicePins).where(and(pinContext(context), eq(schema.cloudDevicePins.status, "active"))).limit(1);
+      return rows[0] ? parseStoredCloudDevicePinRecord(rows[0]) : undefined;
+    },
+    async getPin(id) {
+      const rows = await db.select().from(schema.cloudDevicePins).where(eq(schema.cloudDevicePins.id, id)).limit(1);
+      return rows[0] ? parseStoredCloudDevicePinRecord(rows[0]) : undefined;
+    },
+    async listPins(bindingId) {
+      const rows = await db.select().from(schema.cloudDevicePins).where(eq(schema.cloudDevicePins.bindingId, bindingId)).orderBy(desc(schema.cloudDevicePins.approvedAt));
+      return rows.map((row: Record<string, unknown>) => parseStoredCloudDevicePinRecord(row));
+    },
+    putPin(input) {
+      return mutate(async () => {
+        const record = CloudDevicePinRecordSchema.parse(input);
+        const values = cloudDevicePinRowForDatabase(record);
+        await db.insert(schema.cloudDevicePins).values(values).onConflictDoUpdate({
+          target: schema.cloudDevicePins.id,
+          set: Object.fromEntries(Object.entries(values).filter(([key]) => key !== "id")),
+        });
+        return record;
+      });
+    },
+    putPinIfStatus(input, expectedStatus, expectedRevision) {
+      return mutate(async () => {
+        const record = CloudDevicePinRecordSchema.parse(input);
+        const values = cloudDevicePinRowForDatabase(record);
+        const rows = await db.update(schema.cloudDevicePins).set(values)
+          .where(and(
+            eq(schema.cloudDevicePins.id, record.id),
+            eq(schema.cloudDevicePins.status, expectedStatus),
+            ...(expectedRevision === undefined ? [] : [eq(schema.cloudDevicePins.revision, expectedRevision)]),
+          ))
+          .returning({ id: schema.cloudDevicePins.id });
+        return rows.length === 1;
+      });
+    },
+    async findPendingRequest(context) {
+      const rows = await db.select().from(schema.cloudDeviceTrustRequests).where(and(requestContext(context), eq(schema.cloudDeviceTrustRequests.status, "pending"))).limit(1);
+      return rows[0] ? parseStoredCloudDeviceTrustRequestRecord(rows[0]) : undefined;
+    },
+    async getRequest(id) {
+      const rows = await db.select().from(schema.cloudDeviceTrustRequests).where(eq(schema.cloudDeviceTrustRequests.id, id)).limit(1);
+      return rows[0] ? parseStoredCloudDeviceTrustRequestRecord(rows[0]) : undefined;
+    },
+    async latestRequest(context) {
+      const rows = await db.select().from(schema.cloudDeviceTrustRequests).where(requestContext(context))
+        .orderBy(desc(schema.cloudDeviceTrustRequests.requestedAt), desc(schema.cloudDeviceTrustRequests.id)).limit(1);
+      return rows[0] ? parseStoredCloudDeviceTrustRequestRecord(rows[0]) : undefined;
+    },
+    async listRequests(bindingId) {
+      const rows = await db.select().from(schema.cloudDeviceTrustRequests).where(eq(schema.cloudDeviceTrustRequests.bindingId, bindingId)).orderBy(desc(schema.cloudDeviceTrustRequests.requestedAt));
+      return rows.map((row: Record<string, unknown>) => parseStoredCloudDeviceTrustRequestRecord(row));
+    },
+    putRequest(input) {
+      return mutate(async () => {
+        const record = CloudDeviceTrustRequestRecordSchema.parse(input);
+        const values = cloudDeviceTrustRequestRowForDatabase(record);
+        await db.insert(schema.cloudDeviceTrustRequests).values(values).onConflictDoUpdate({
+          target: schema.cloudDeviceTrustRequests.id,
+          set: Object.fromEntries(Object.entries(values).filter(([key]) => key !== "id")),
+        });
+        return record;
+      });
+    },
+    putRequestIfStatus(input, expectedStatus, expectedRevision) {
+      return mutate(async () => {
+        const record = CloudDeviceTrustRequestRecordSchema.parse(input);
+        const values = cloudDeviceTrustRequestRowForDatabase(record);
+        const rows = await db.update(schema.cloudDeviceTrustRequests).set(values)
+          .where(and(
+            eq(schema.cloudDeviceTrustRequests.id, record.id),
+            eq(schema.cloudDeviceTrustRequests.status, expectedStatus),
+            ...(expectedRevision === undefined ? [] : [eq(schema.cloudDeviceTrustRequests.revision, expectedRevision)]),
+          ))
+          .returning({ id: schema.cloudDeviceTrustRequests.id });
+        return rows.length === 1;
+      });
+    },
+    async listAudit(bindingId, limit = 500) {
+      const rows = await db.select().from(schema.cloudDeviceTrustAudit).where(eq(schema.cloudDeviceTrustAudit.bindingId, bindingId))
+        .orderBy(desc(schema.cloudDeviceTrustAudit.createdAt)).limit(Math.min(Math.max(limit, 1), 5_000));
+      return rows.map((row: Record<string, unknown>) => parseStoredCloudDeviceTrustAuditRecord(row));
+    },
+    appendAudit(input) {
+      return mutate(async () => {
+        const record = CloudDeviceTrustAuditRecordSchema.parse(input);
+        await db.insert(schema.cloudDeviceTrustAudit).values(rowForDatabase(record as Record<string, unknown>));
+      });
+    },
+    async getRevision(bindingId) {
+      const rows = await db.select({ revision: schema.cloudDeviceTrustRevisions.revision })
+        .from(schema.cloudDeviceTrustRevisions)
+        .where(eq(schema.cloudDeviceTrustRevisions.bindingId, bindingId))
+        .limit(1);
+      return rows[0]?.revision ?? 0;
+    },
+    advanceRevision(bindingId, minimum) {
+      return mutate(async () => {
+        const candidate = Math.max(1, Math.trunc(minimum) + 1);
+        const rows = await db.insert(schema.cloudDeviceTrustRevisions)
+          .values({ bindingId, revision: candidate })
+          .onConflictDoUpdate({
+            target: schema.cloudDeviceTrustRevisions.bindingId,
+            set: { revision: sql`max(${schema.cloudDeviceTrustRevisions.revision} + 1, ${candidate})` },
+          })
+          .returning({ revision: schema.cloudDeviceTrustRevisions.revision });
+        return rows[0]?.revision ?? candidate;
+      });
+    },
+  };
+}
+
 function repositoryFor(
   db: any,
   close: () => Promise<void>,
@@ -314,6 +459,7 @@ function repositoryFor(
     gitAssignments: gitAssignmentCollection(db, mutate),
     gitProvisioningIntents: gitProvisioningCollection(db, mutate),
     gitAudit: gitAuditCollection(db, mutate),
+    cloudDeviceTrust: cloudDeviceTrustRepository(db, mutate),
     async metadata() {
       const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "user_store")).limit(1);
       return (rows[0]?.value || { schemaVersion: 1 }) as ControlPlaneUserStoreMetadata;

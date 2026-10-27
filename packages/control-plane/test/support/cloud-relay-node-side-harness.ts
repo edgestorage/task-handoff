@@ -422,6 +422,7 @@ export async function startCloudRelayControlPlanePeer(input: {
       relayId: input.allocation.relayId,
       nodeHandle: input.allocation.nodeHandle,
       controlPlaneId: input.controlPlaneId,
+      controlPlanePublicKey: input.identity.publicKey,
       accountId: input.allocation.accountId,
       bindingId: input.allocation.bindingId,
       bindingRevision: input.allocation.bindingRevision,
@@ -430,6 +431,7 @@ export async function startCloudRelayControlPlanePeer(input: {
     ...(input.pairing ? { pairing: input.pairing } : {}),
     createPairing: input.createPairing ?? (() => ({ keyId: `key_${input.controlPlaneId}`, secret: crypto.randomBytes(32).toString("base64url") })),
   });
+  if (accepted.status === "trust-required") return { status: "trust-required" as const, outcome: accepted.outcome };
   const messages: any[] = [];
   const pendingResponses = new Map<string, (value: any) => void>();
   const pendingAux = new Map<string, AuxState>();

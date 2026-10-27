@@ -13,6 +13,17 @@ export const NODE_RELAY_HANDSHAKE_AUDIENCE = "task-handoff:node-relay-handshake"
 export const NODE_RELAY_MAIN_CHANNEL_ID = "main";
 
 /**
+ * Pre-E2E node-agent -> Control Plane trust result. It shares the existing
+ * Relay `handshake` frame sequence 0 with the normal E2E hello, but owns a
+ * separate version and lifecycle so a node can explain that the Control Plane
+ * must be approved locally without opening the encrypted channel.
+ */
+export const NODE_AGENT_CONTROL_PLANE_TRUST_PROTOCOL_VERSION = "2026-10-26.1";
+export const NODE_AGENT_CONTROL_PLANE_TRUST_AUDIENCE = "task-handoff:node-agent-control-plane-trust";
+export const NODE_AGENT_CONTROL_PLANE_TRUST_SIGNING_DOMAIN = "task-handoff:node-agent-control-plane-trust:v1";
+export const NODE_AGENT_CONTROL_PLANE_COMPARISON_DOMAIN = "task-handoff:node-agent-control-plane-comparison:v1";
+
+/**
  * Binary tunnel data carried inside the encrypted node channel.
  *
  * Control messages (open/accept/close and heartbeats) remain JSON. Once a
@@ -88,6 +99,82 @@ export const NodeRelayHandshakeInitPayloadSchema = z.strictObject({
 
 export const NodeRelayHandshakeInitSchema = NodeRelayHandshakeInitPayloadSchema.safeExtend({ signature: z.string().trim().min(16).max(512) });
 
+export const NodeAgentControlPlaneAccessContextSchema = z.strictObject({
+  accountId: IdSchema,
+  ownerAccountId: IdSchema,
+  accessMode: z.enum(["owner", "shared"]),
+  shareGrantId: IdSchema.optional(),
+  shareRole: z.literal("use").optional(),
+  shareRevision: z.number().int().positive().optional(),
+}).superRefine((value, context) => {
+  if (value.accessMode === "owner") {
+    if (value.shareGrantId !== undefined || value.shareRole !== undefined || value.shareRevision !== undefined) {
+      context.addIssue({ code: "custom", message: "owner access cannot carry share fields" });
+    }
+    if (value.accountId !== value.ownerAccountId) {
+      context.addIssue({ code: "custom", path: ["accountId"], message: "owner access account must equal owner" });
+    }
+    return;
+  }
+  if (!value.shareGrantId || !value.shareRole || !value.shareRevision) {
+    context.addIssue({ code: "custom", message: "shared access requires grant, role and revision" });
+  }
+  if (value.accountId === value.ownerAccountId) {
+    context.addIssue({ code: "custom", path: ["accountId"], message: "shared access account must differ from owner" });
+  }
+});
+
+export const NodeAgentControlPlaneTrustStateSchema = z.enum(["pending", "rejected", "expired"]);
+export const NodeAgentControlPlaneTrustReasonSchema = z.enum([
+  "first-seen",
+  "key-changed",
+  "access-context-changed",
+  "rejected",
+  "expired",
+]);
+
+/**
+ * Diagnostic-only pre-E2E trust result. It carries no grant, ticket, session
+ * key, pairing secret or channel capability. The Control Plane may use it to
+ * explain an onboarding wait, but it must never use it as an authorization.
+ */
+export const NodeAgentControlPlaneTrustOutcomePayloadSchema = z.strictObject({
+  type: z.literal("node-agent.control-plane-trust"),
+  protocolVersion: z.literal(NODE_AGENT_CONTROL_PLANE_TRUST_PROTOCOL_VERSION),
+  audience: z.literal(NODE_AGENT_CONTROL_PLANE_TRUST_AUDIENCE),
+  allocationId: IdSchema,
+  relayId: IdSchema,
+  nodeHandle: NodeRelayHandleSchema,
+  nodeId: IdSchema,
+  nodePublicKey: PublicKeySchema,
+  nodePublicKeyFingerprint: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
+  controlPlaneId: IdSchema,
+  controlPlanePublicKeyFingerprint: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
+  bindingId: IdSchema,
+  bindingRevision: z.number().int().positive(),
+  access: NodeAgentControlPlaneAccessContextSchema,
+  state: NodeAgentControlPlaneTrustStateSchema,
+  reason: NodeAgentControlPlaneTrustReasonSchema,
+  requestId: IdSchema.optional(),
+  requestedAt: TimestampSchema,
+  expiresAt: TimestampSchema.optional(),
+  issuedAt: TimestampSchema,
+}).superRefine((value, context) => {
+  if (value.state === "rejected" && value.reason !== "rejected") {
+    context.addIssue({ code: "custom", path: ["reason"], message: "rejected outcomes require the rejected reason" });
+  }
+  if (value.state === "expired" && value.reason !== "expired") {
+    context.addIssue({ code: "custom", path: ["reason"], message: "expired outcomes require the expired reason" });
+  }
+  if (value.state === "pending" && (value.reason === "rejected" || value.reason === "expired")) {
+    context.addIssue({ code: "custom", path: ["reason"], message: "pending outcomes require a pending reason" });
+  }
+});
+
+export const NodeAgentControlPlaneTrustOutcomeSchema = NodeAgentControlPlaneTrustOutcomePayloadSchema.safeExtend({
+  signature: z.string().trim().min(16).max(512),
+});
+
 export const NodeRelayHandshakeAcceptPayloadSchema = z.strictObject({
   type: z.literal("node-relay.handshake-accept"),
   protocolVersion: z.literal(NODE_RELAY_CHANNEL_PROTOCOL_VERSION),
@@ -119,6 +206,63 @@ export function nodeRelayHandshakeAcceptSigningInput(payload: unknown): string {
   const parsed = NodeRelayHandshakeAcceptPayloadSchema.parse(payload);
   const { type: _type, ...body } = parsed;
   return `task-handoff:node-relay-handshake-accept:v1\n${JSON.stringify(body)}`;
+}
+
+export function nodeAgentControlPlaneTrustSigningInput(payload: unknown): string {
+  const parsed = NodeAgentControlPlaneTrustOutcomePayloadSchema.parse(payload);
+  const body = {
+    type: parsed.type,
+    protocolVersion: parsed.protocolVersion,
+    audience: parsed.audience,
+    allocationId: parsed.allocationId,
+    relayId: parsed.relayId,
+    nodeHandle: parsed.nodeHandle,
+    nodeId: parsed.nodeId,
+    nodePublicKey: parsed.nodePublicKey,
+    nodePublicKeyFingerprint: parsed.nodePublicKeyFingerprint,
+    controlPlaneId: parsed.controlPlaneId,
+    controlPlanePublicKeyFingerprint: parsed.controlPlanePublicKeyFingerprint,
+    bindingId: parsed.bindingId,
+    bindingRevision: parsed.bindingRevision,
+    access: {
+      accountId: parsed.access.accountId,
+      ownerAccountId: parsed.access.ownerAccountId,
+      accessMode: parsed.access.accessMode,
+      ...(parsed.access.shareGrantId ? { shareGrantId: parsed.access.shareGrantId } : {}),
+      ...(parsed.access.shareRole ? { shareRole: parsed.access.shareRole } : {}),
+      ...(parsed.access.shareRevision ? { shareRevision: parsed.access.shareRevision } : {}),
+    },
+    state: parsed.state,
+    reason: parsed.reason,
+    ...(parsed.requestId ? { requestId: parsed.requestId } : {}),
+    requestedAt: parsed.requestedAt,
+    ...(parsed.expiresAt ? { expiresAt: parsed.expiresAt } : {}),
+    issuedAt: parsed.issuedAt,
+  };
+  return `${NODE_AGENT_CONTROL_PLANE_TRUST_SIGNING_DOMAIN}\n${JSON.stringify(body)}`;
+}
+
+export function nodeAgentControlPlaneComparisonCodeInput(controlPlaneId: string, publicKey: string): Uint8Array {
+  return new TextEncoder().encode(`${NODE_AGENT_CONTROL_PLANE_COMPARISON_DOMAIN}\0${IdSchema.parse(controlPlaneId)}\0${PublicKeySchema.parse(publicKey)}`);
+}
+
+const NODE_AGENT_COMPARISON_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+export function formatNodeAgentControlPlaneComparisonCode(digest: Uint8Array): string {
+  if (digest.byteLength < 10) throw new Error("A Control Plane comparison code requires at least ten digest bytes.");
+  let bits = 0;
+  let value = 0;
+  let encoded = "";
+  for (const byte of digest.subarray(0, 10)) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      encoded += NODE_AGENT_COMPARISON_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) encoded += NODE_AGENT_COMPARISON_ALPHABET[(value << (5 - bits)) & 31];
+  return encoded.match(/.{1,4}/g)!.join("-");
 }
 
 /** The pairing HMAC binds the stored secret to this exact peer pair and allocation. */
@@ -199,4 +343,6 @@ export const NodeRelaySessionMessageSchema = z.discriminatedUnion("type", [
 
 export type NodeRelayHandshakeInit = z.infer<typeof NodeRelayHandshakeInitSchema>;
 export type NodeRelayHandshakeAccept = z.infer<typeof NodeRelayHandshakeAcceptSchema>;
+export type NodeAgentControlPlaneAccessContext = z.infer<typeof NodeAgentControlPlaneAccessContextSchema>;
+export type NodeAgentControlPlaneTrustOutcome = z.infer<typeof NodeAgentControlPlaneTrustOutcomeSchema>;
 export type NodeRelaySessionMessage = z.infer<typeof NodeRelaySessionMessageSchema>;

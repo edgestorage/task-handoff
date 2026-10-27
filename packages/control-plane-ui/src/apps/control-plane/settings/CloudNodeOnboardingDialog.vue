@@ -100,6 +100,16 @@
             </ul>
             <p v-else class="cloud-node-onboarding-instruction">{{ t("settings.nodeRelay.directoryEmpty") }}</p>
             <p v-if="relayAccountError" class="cloud-node-onboarding-error" role="alert">{{ t("settings.nodeRelay.statusError", { message: relayAccountError }) }}</p>
+            <CloudNodeTrustStatus
+              v-if="attempt?.source === 'existing' && attempt.nodeHandle"
+              :phase="attempt.phase"
+              :trust="trust"
+              :display-name="attempt.displayName"
+              :node-handle="attempt.nodeHandle"
+              :error="cloudRelayError"
+              @retry="retryOnboardingPoll"
+              @cancel="cancelBindingToken"
+            />
           </section>
 
           <section v-else-if="step === 'connect' && source === 'new'" class="cloud-node-onboarding-section">
@@ -135,13 +145,21 @@
                 <LoaderCircle v-else class="spin" :size="16" />
                 <span>{{ bindingTokenExpired ? t("settings.nodeRelay.expired") : t("settings.nodeRelay.expiresIn", { time: formattedExpiry }) }}</span>
               </div>
-              <p v-if="claimPendingHandle" class="cloud-node-onboarding-instruction" role="status">{{ t("settings.nodeRelay.waiting") }}</p>
-              <p v-else-if="cloudRelayWaitingForNode" class="cloud-node-onboarding-instruction" role="status">{{ t("settings.nodeRelay.waitingForInstall") }}</p>
+              <p v-if="cloudRelayWaitingForNode" class="cloud-node-onboarding-instruction" role="status">{{ t("settings.nodeRelay.waitingForInstall") }}</p>
+              <CloudNodeTrustStatus
+                v-if="attempt"
+                :phase="attempt.phase"
+                :trust="trust"
+                :display-name="attempt.displayName"
+                :node-handle="attempt.nodeHandle"
+                :error="cloudRelayError"
+                @retry="retryOnboardingPoll"
+                @cancel="cancelBindingToken"
+              />
               <div class="cloud-node-onboarding-actions">
                 <Button type="button" variant="destructive" :disabled="busy" @click="cancelBindingToken">{{ t("settings.nodeRelay.cancelToken") }}</Button>
               </div>
             </template>
-            <p v-if="cloudRelayError" class="cloud-node-onboarding-error" role="alert">{{ cloudRelayError }}</p>
           </section>
 
           <section v-else-if="step === 'complete'" class="cloud-node-onboarding-complete" role="status">
@@ -183,15 +201,28 @@ import {
   claimCloudAccountNode,
   controlPlaneQueryKeys,
   createCloudNodeBindingToken,
+  releaseCloudAccountNodeClaim,
   useCloudAccountNodesQuery,
   useCloudAccountQuery,
   useCloudConnectivityQuery,
 } from "../../../api/queries";
-import type { CloudAccountNode, CloudNodeBindingToken, Node } from "../../../api/types";
+import type { CloudAccountNode, Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
+import {
+  beginCloudNodeOnboarding,
+  completeCloudNodeOnboarding,
+  failCloudNodeOnboarding,
+  resetCloudNodeOnboarding,
+  resumeCloudNodeOnboarding,
+  setCloudNodeOnboardingNodeHandle,
+  setCloudNodeOnboardingToken,
+  syncCloudNodeOnboarding,
+  useCloudNodeOnboardingAttempt,
+} from "./cloudNodeOnboardingAttempt";
 
 type Step = "source" | "connect" | "complete";
 type NodeSource = "existing" | "new";
@@ -208,22 +239,30 @@ const queryClient = useQueryClient();
 const step = ref<Step>("source");
 const source = ref<NodeSource>();
 const commandMode = ref<CommandMode>("install");
-const displayName = ref("");
-const bindingToken = ref<CloudNodeBindingToken>();
+const displayNameDraft = ref("");
 const copied = ref(false);
 const busy = ref(false);
-const cloudRelayError = ref("");
 const relayBusyHandle = ref("");
-const claimPendingHandle = ref("");
-const claimedHandles = ref<string[]>([]);
-const pendingNodeId = ref("");
-const completedNode = ref<Node>();
 const nowMs = ref(Date.now());
+const onboarding = useCloudNodeOnboardingAttempt();
+const attempt = onboarding.attempt;
+const displayName = computed({
+  get: () => attempt.value?.displayName ?? displayNameDraft.value,
+  set: (value: string) => { displayNameDraft.value = value; },
+});
+const bindingToken = computed(() => attempt.value?.token);
+const completedNode = computed(() => attempt.value?.nodeId ? props.nodes.find((node) => node.id === attempt.value?.nodeId) : undefined);
+const cloudRelayError = computed(() => attempt.value?.error || "");
+const trust = computed(() => attempt.value?.trust);
 const account = useCloudAccountQuery();
 const connectivity = useCloudConnectivityQuery();
+const cloudRelaySignedIn = computed(() => Boolean(account.data.value?.signedIn));
+const cloudRelayBound = computed(() => connectivity.data.value?.status === "active");
+const cloudRelayScopeEnabled = computed(() => connectivity.data.value?.scopes?.nodeRelay === true);
+const cloudRelayUsable = computed(() => cloudRelaySignedIn.value && cloudRelayBound.value && cloudRelayScopeEnabled.value);
 const accountNodes = useCloudAccountNodesQuery({
-  enabled: () => props.open && cloudRelayUsable.value,
-  refetchIntervalMs: () => 2_000,
+  enabled: () => cloudRelayUsable.value && (props.open || onboarding.active.value),
+  refetchIntervalMs: () => onboarding.active.value ? 2_000 : false,
 });
 let clock: ReturnType<typeof setInterval> | undefined;
 
@@ -233,16 +272,12 @@ const steps = computed(() => [
   { id: "complete" as const, label: t("settings.nodeRelay.onboardingSteps.complete") },
 ]);
 const stepIndex = computed(() => steps.value.findIndex((item) => item.id === step.value));
-const cloudRelaySignedIn = computed(() => Boolean(account.data.value?.signedIn));
-const cloudRelayBound = computed(() => connectivity.data.value?.status === "active");
-const cloudRelayScopeEnabled = computed(() => connectivity.data.value?.scopes?.nodeRelay === true);
-const cloudRelayUsable = computed(() => cloudRelaySignedIn.value && cloudRelayBound.value && cloudRelayScopeEnabled.value);
 const cloudRelayUnavailableReason = computed(() => !cloudRelaySignedIn.value
   ? t("settings.nodeRelay.unavailableSignedIn")
   : !cloudRelayBound.value ? t("settings.nodeRelay.unavailableUnbound") : t("settings.nodeRelay.unavailableScope"));
 const accountNodeItems = computed(() => (accountNodes.data.value?.items ?? []).filter((item) => item.status === "active"));
 const accountNodeConnected = (nodeHandle: string) => Boolean(accountNodes.data.value?.nodeRelay.channels.some((channel) => channel.nodeHandle === nodeHandle && channel.connected));
-const accountNodeClaimed = (nodeHandle: string) => claimedHandles.value.includes(nodeHandle) || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle)) || accountNodeConnected(nodeHandle);
+const accountNodeClaimed = (nodeHandle: string) => attempt.value?.nodeHandle === nodeHandle || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle)) || accountNodeConnected(nodeHandle);
 const accountNodeStatus = (item: CloudAccountNode) => t(`settings.nodeRelay.accountStatus.${item.status}`);
 const accountNodeAccess = (item: CloudAccountNode) => item.access?.kind === 'shared'
   ? t("settings.nodeRelay.accountAccessShared", { expiresAt: formatDateTime(new Date(item.access.expiresAt), locale.value) })
@@ -262,46 +297,47 @@ watch(() => props.open, (open) => {
     stopClock();
     return;
   }
-  reset();
+  if (attempt.value) restoreAttemptView();
+  else resetView();
   void account.refetch();
   void connectivity.refetch();
   clock = setInterval(() => { nowMs.value = Date.now(); }, 1_000);
 });
 
 watch(() => accountNodes.data.value, (data) => {
-  if (!data || step.value !== "connect") return;
-  if (bindingToken.value) {
-    const hint = data.nodeRelay.onboarding.find((item) => item.tokenId === bindingToken.value?.tokenId);
-    if (hint) claimPendingHandle.value = hint.nodeHandle;
-  }
-  if (!claimPendingHandle.value) return;
-  const channel = data.nodeRelay.channels.find((item) => item.nodeHandle === claimPendingHandle.value && item.connected);
-  if (!channel) return;
-  pendingNodeId.value = channel.nodeId;
-  void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes });
-  completeFromSnapshot();
+  syncCloudNodeOnboarding(data);
+  applyOnboardingState();
 });
 
-watch(() => props.nodes, completeFromSnapshot, { deep: false });
+watch(() => accountNodes.error.value, (error) => {
+  if (error && onboarding.active.value) {
+    failCloudNodeOnboarding(translateApiError(error, t));
+    applyOnboardingState();
+  }
+});
+
+watch(() => props.nodes, applyOnboardingState, { deep: false });
 
 onBeforeUnmount(stopClock);
 
-function reset() {
+function resetView() {
   stopClock();
   step.value = "source";
   source.value = undefined;
   commandMode.value = "install";
-  displayName.value = "";
-  bindingToken.value = undefined;
+  displayNameDraft.value = "";
   copied.value = false;
   busy.value = false;
-  cloudRelayError.value = "";
   relayBusyHandle.value = "";
-  claimPendingHandle.value = "";
-  claimedHandles.value = [];
-  pendingNodeId.value = "";
-  completedNode.value = undefined;
   nowMs.value = Date.now();
+}
+
+function restoreAttemptView() {
+  if (!attempt.value) return;
+  source.value = attempt.value.source;
+  displayNameDraft.value = attempt.value.displayName;
+  step.value = attempt.value.phase === "complete" ? "complete" : "connect";
+  if (attempt.value.phase === "complete") applyOnboardingState();
 }
 
 function stopClock() {
@@ -312,14 +348,15 @@ function stopClock() {
 async function connectAccountNode(nodeHandle: string) {
   if (relayBusyHandle.value) return;
   relayBusyHandle.value = nodeHandle;
-  cloudRelayError.value = "";
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle(nodeHandle);
   try {
     await claimCloudAccountNode(nodeHandle);
-    claimPendingHandle.value = nodeHandle;
-    claimedHandles.value = [...claimedHandles.value, nodeHandle];
     await accountNodes.refetch();
+    syncCloudNodeOnboarding(accountNodes.data.value);
+    applyOnboardingState();
   } catch (error) {
-    cloudRelayError.value = translateApiError(error, t);
+    failCloudNodeOnboarding(translateApiError(error, t));
   } finally {
     relayBusyHandle.value = "";
   }
@@ -328,28 +365,30 @@ async function connectAccountNode(nodeHandle: string) {
 async function generateBindingToken() {
   if (busy.value) return;
   busy.value = true;
-  cloudRelayError.value = "";
+  beginCloudNodeOnboarding("new", displayName.value.trim());
   try {
     if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId).catch(() => undefined);
-    bindingToken.value = await createCloudNodeBindingToken(displayName.value.trim() ? { displayName: displayName.value.trim() } : {});
+    setCloudNodeOnboardingToken(await createCloudNodeBindingToken(displayName.value.trim() ? { displayName: displayName.value.trim() } : {}));
     copied.value = false;
-    claimPendingHandle.value = "";
   } catch (error) {
-    cloudRelayError.value = translateApiError(error, t);
+    failCloudNodeOnboarding(translateApiError(error, t));
   } finally {
     busy.value = false;
   }
 }
 
 async function cancelBindingToken() {
-  if (!bindingToken.value || busy.value) return;
+  if (busy.value) return;
   busy.value = true;
   try {
-    await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
-    bindingToken.value = undefined;
+    if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
+    else if (attempt.value?.source === "existing" && attempt.value.nodeHandle) await releaseCloudAccountNodeClaim(attempt.value.nodeHandle);
+    resetCloudNodeOnboarding();
+    resetView();
+    void accountNodes.refetch();
     copied.value = false;
   } catch (error) {
-    cloudRelayError.value = translateApiError(error, t);
+    failCloudNodeOnboarding(translateApiError(error, t));
   } finally {
     busy.value = false;
   }
@@ -361,40 +400,40 @@ async function copyCommand() {
     await navigator.clipboard.writeText(generatedCommand.value);
     copied.value = true;
   } catch {
-    cloudRelayError.value = t("settings.nodeRelay.clipboardFailed");
+    failCloudNodeOnboarding(t("settings.nodeRelay.clipboardFailed"));
   }
 }
 
-function completeFromSnapshot() {
-  if (!pendingNodeId.value) return;
-  const node = props.nodes.find((item) => item.id === pendingNodeId.value);
-  if (node) markComplete(node);
-}
+let completedAttemptId = 0;
 
-function markComplete(node: Node) {
-  bindingToken.value = undefined;
-  copied.value = false;
-  claimPendingHandle.value = "";
-  completedNode.value = node;
-  step.value = "complete";
-  emit("created", node);
+function applyOnboardingState() {
+  if (!attempt.value) return;
+  if (attempt.value.phase === "complete") {
+    const node = props.nodes.find((item) => item.id === attempt.value?.nodeId);
+    if (node && completedAttemptId !== attempt.value.id) {
+      completedAttemptId = attempt.value.id;
+      completeCloudNodeOnboarding(node);
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes });
+      step.value = "complete";
+      copied.value = false;
+      emit("created", node);
+    }
+  }
 }
 
 function goBack() {
-  cloudRelayError.value = "";
   step.value = "source";
-  const pending = bindingToken.value;
-  bindingToken.value = undefined;
-  copied.value = false;
-  claimPendingHandle.value = "";
-  if (pending) void cancelCloudNodeBindingToken(pending.tokenId).catch(() => undefined);
 }
 
 function closeDialog() {
-  const pending = bindingToken.value?.tokenId;
-  reset();
+  stopClock();
+  if (attempt.value?.phase === "complete") resetCloudNodeOnboarding();
   emit("close");
-  if (pending) void cancelCloudNodeBindingToken(pending).catch(() => undefined);
+}
+
+function retryOnboardingPoll() {
+  resumeCloudNodeOnboarding();
+  void accountNodes.refetch();
 }
 </script>
 

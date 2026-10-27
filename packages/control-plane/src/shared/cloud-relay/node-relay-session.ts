@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
+import type { z } from "zod";
 import { decodeRelayFrame, encodeRelayFrame, packRelayPayload, unpackRelayPayload, RELAY_FRAME_HEADER_BYTES, type RelayFramePayload } from "@task-handoff/cloud-contracts";
 import {
   NODE_RELAY_CHANNEL_PROTOCOL_VERSION,
@@ -17,9 +18,16 @@ import {
   NodeRelayHandshakeInitSchema,
   NodeRelaySessionMessageSchema,
   NodeRelayPairingEnvelopeSchema,
+  NodeAgentControlPlaneTrustOutcomePayloadSchema,
+  NodeAgentControlPlaneTrustOutcomeSchema,
+  formatNodeAgentControlPlaneComparisonCode,
+  nodeAgentControlPlaneComparisonCodeInput,
+  nodeAgentControlPlaneTrustSigningInput,
   nodeRelayHandshakeAcceptSigningInput,
   nodeRelayHandshakeSigningInput,
   nodeRelayPairingTranscript,
+  type NodeAgentControlPlaneAccessContext,
+  type NodeAgentControlPlaneTrustOutcome,
   type NodeRelayDataFrame,
   type NodeRelaySessionMessage,
 } from "@task-handoff/protocol/node-relay-channel";
@@ -155,6 +163,66 @@ export function nodeRelayFingerprint(publicKey: string) {
   return `sha256:${crypto.createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("base64url")}`;
 }
 
+export function nodeAgentControlPlaneComparisonCode(controlPlaneId: string, publicKey: string) {
+  const digest = crypto.createHash("sha256").update(nodeAgentControlPlaneComparisonCodeInput(controlPlaneId, publicKey)).digest();
+  return formatNodeAgentControlPlaneComparisonCode(digest);
+}
+
+export function writeNodeAgentControlPlaneTrustOutcome(options: {
+  socket: NodeRelayFrameSocket;
+  node: { publicKey: string; sign(input: string): string };
+  outcome: z.input<typeof NodeAgentControlPlaneTrustOutcomePayloadSchema>;
+}) {
+  const outcome = NodeAgentControlPlaneTrustOutcomePayloadSchema.parse(options.outcome);
+  writeNodeRelayHandshakeFrame(options.socket, {
+    ...outcome,
+    signature: options.node.sign(nodeAgentControlPlaneTrustSigningInput(outcome)),
+  });
+  return outcome;
+}
+
+export function verifyNodeAgentControlPlaneTrustOutcome(options: {
+  outcome: unknown;
+  expectation: NodeRelayHandshakeExpectation;
+  now?: number;
+}): NodeAgentControlPlaneTrustOutcome {
+  const parsed = NodeAgentControlPlaneTrustOutcomeSchema.safeParse(options.outcome);
+  if (!parsed.success) throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_OUTCOME_INVALID");
+  const { signature, ...outcome } = parsed.data;
+  if (nodeRelayFingerprint(outcome.nodePublicKey) !== outcome.nodePublicKeyFingerprint ||
+      outcome.nodePublicKeyFingerprint !== options.expectation.nodePublicKeyFingerprint) {
+    throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_NODE_KEY_MISMATCH");
+  }
+  const expected = options.expectation;
+  if (outcome.allocationId !== expected.allocationId || outcome.relayId !== expected.relayId ||
+      outcome.nodeHandle !== expected.nodeHandle || outcome.controlPlaneId !== expected.controlPlaneId ||
+      outcome.bindingId !== expected.bindingId || outcome.bindingRevision !== expected.bindingRevision ||
+      outcome.controlPlanePublicKeyFingerprint !== nodeRelayFingerprint(expected.controlPlanePublicKey)) {
+    throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_OUTCOME_MISMATCH");
+  }
+  const expectedAccess = normalizedAccessContext(expected);
+  if (!sameAccessContext(outcome.access, expectedAccess)) {
+    throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_ACCESS_MISMATCH");
+  }
+  const now = options.now ?? Date.now();
+  if (Date.parse(outcome.issuedAt) > now + 60_000 || (outcome.expiresAt && outcome.state === "pending" && Date.parse(outcome.expiresAt) <= now)) {
+    throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_OUTCOME_EXPIRED");
+  }
+  let verified = false;
+  try {
+    verified = crypto.verify(
+      null,
+      Buffer.from(nodeAgentControlPlaneTrustSigningInput(outcome)),
+      crypto.createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: outcome.nodePublicKey }, format: "jwk" }),
+      Buffer.from(signature, "base64url"),
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) throw nodeRelaySessionError("NODE_AGENT_CONTROL_PLANE_TRUST_OUTCOME_SIGNATURE_INVALID");
+  return parsed.data;
+}
+
 /**
  * The pairing envelope uses a key derived from the session key and a fresh
  * (per-key, single-use) zero nonce, so it can never collide with the ordered
@@ -180,12 +248,44 @@ export type NodeRelayHandshakeExpectation = {
   relayId: string;
   nodeHandle: string;
   controlPlaneId: string;
+  controlPlanePublicKey: string;
   accountId: string;
+  ownerAccountId?: string;
+  accessMode?: "owner" | "shared";
+  shareGrantId?: string;
+  shareRole?: "use";
+  shareRevision?: number;
   bindingId: string;
   bindingRevision: number;
   nodePublicKeyFingerprint: string;
   now?: () => number;
 };
+
+export type AcceptNodeRelayHandshakeResult =
+  | { status: "accepted"; init: ReturnType<typeof NodeRelayHandshakeInitPayloadSchema.parse>; key: Uint8Array; paired: boolean; issuedPairing?: { keyId: string; secret: string } }
+  | { status: "trust-required"; outcome: NodeAgentControlPlaneTrustOutcome };
+
+function normalizedAccessContext(expectation: NodeRelayHandshakeExpectation): NodeAgentControlPlaneAccessContext {
+  const accessMode = expectation.accessMode ?? "owner";
+  const ownerAccountId = expectation.ownerAccountId ?? expectation.accountId;
+  return {
+    accountId: expectation.accountId,
+    ownerAccountId,
+    accessMode,
+    ...(accessMode === "shared" && expectation.shareGrantId ? { shareGrantId: expectation.shareGrantId } : {}),
+    ...(accessMode === "shared" && expectation.shareRole ? { shareRole: expectation.shareRole } : {}),
+    ...(accessMode === "shared" && expectation.shareRevision ? { shareRevision: expectation.shareRevision } : {}),
+  };
+}
+
+function sameAccessContext(left: NodeAgentControlPlaneAccessContext, right: NodeAgentControlPlaneAccessContext) {
+  return left.accountId === right.accountId
+    && left.ownerAccountId === right.ownerAccountId
+    && left.accessMode === right.accessMode
+    && left.shareGrantId === right.shareGrantId
+    && left.shareRole === right.shareRole
+    && left.shareRevision === right.shareRevision;
+}
 
 /**
  * Control Plane side of the handshake: waits for the node's signed hello,
@@ -200,9 +300,15 @@ export async function acceptNodeRelayHandshake(options: {
   /** Called when this channel must pin a new pairing (first claim, or a lost record). */
   createPairing?: () => { keyId: string; secret: string };
   timeoutMs?: number;
-}): Promise<{ init: ReturnType<typeof NodeRelayHandshakeInitPayloadSchema.parse>; key: Uint8Array; paired: boolean; issuedPairing?: { keyId: string; secret: string } }> {
+}): Promise<AcceptNodeRelayHandshakeResult> {
   const now = (options.expectation.now ?? Date.now)();
   const raw = await readNodeRelayHandshakeFrame(options.socket, options.timeoutMs);
+  if (NodeAgentControlPlaneTrustOutcomeSchema.safeParse(raw).success) {
+    return {
+      status: "trust-required",
+      outcome: verifyNodeAgentControlPlaneTrustOutcome({ outcome: raw, expectation: options.expectation, now }),
+    };
+  }
   const parsed = NodeRelayHandshakeInitSchema.safeParse(raw);
   if (!parsed.success) throw nodeRelaySessionError("NODE_RELAY_HANDSHAKE_INVALID");
   const { signature, ...init } = parsed.data;
@@ -241,7 +347,7 @@ export async function acceptNodeRelayHandshake(options: {
     ...(issuedPairing ? { encryptedPairing: sealNodeRelayPairing(key, issuedPairing) } : {}),
   });
   writeNodeRelayHandshakeFrame(options.socket, { ...acceptPayload, signature: options.identity.signNodeRelayHandshake(nodeRelayHandshakeAcceptSigningInput(acceptPayload)) });
-  return { init, key, paired, ...(issuedPairing ? { issuedPairing } : {}) };
+  return { status: "accepted", init, key, paired, ...(issuedPairing ? { issuedPairing } : {}) };
 }
 
 /**

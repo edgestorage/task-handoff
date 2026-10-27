@@ -303,6 +303,72 @@ CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
 `),
   migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings TEXT NOT NULL DEFAULT '[]';"),
   migration("0009_drop_model_legacy_projections", "DROP TABLE IF EXISTS cp_model_legacy_projections;"),
+  migration("0010_cloud_device_trust", `
+CREATE TABLE cp_cloud_device_pins (
+  id TEXT PRIMARY KEY NOT NULL,
+  binding_id TEXT NOT NULL, account_id TEXT NOT NULL, owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT, share_revision INTEGER CHECK(share_revision IS NULL OR share_revision > 0),
+  cloud_access_role_id TEXT NOT NULL, device_public_key TEXT NOT NULL,
+  reported_name TEXT NOT NULL, client_kind TEXT NOT NULL, client_platform TEXT NOT NULL, client_version TEXT,
+  role_id TEXT NOT NULL REFERENCES cp_roles(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL CHECK(status IN ('active','revoked')), label TEXT,
+  approved_by_actor_type TEXT NOT NULL CHECK(approved_by_actor_type IN ('user','cloud-account','system')),
+  approved_by_actor_id TEXT NOT NULL, approved_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  revoked_at TEXT, revoke_reason TEXT,
+  authorization_revision INTEGER NOT NULL CHECK(authorization_revision > 0),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  CHECK ((access_mode = 'owner' AND owner_account_id = account_id AND share_grant_id IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND owner_account_id <> account_id AND share_grant_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX cp_cloud_device_pins_active_context_uq ON cp_cloud_device_pins(
+  binding_id, account_id, owner_account_id, access_mode, coalesce(share_grant_id, ''), cloud_access_role_id, device_public_key
+) WHERE status = 'active';
+CREATE INDEX cp_cloud_device_pins_binding_idx ON cp_cloud_device_pins(binding_id, status);
+CREATE INDEX cp_cloud_device_pins_device_idx ON cp_cloud_device_pins(device_public_key);
+
+CREATE TABLE cp_cloud_device_trust_requests (
+  id TEXT PRIMARY KEY NOT NULL,
+  binding_id TEXT NOT NULL, account_id TEXT NOT NULL, owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT, share_revision INTEGER CHECK(share_revision IS NULL OR share_revision > 0),
+  cloud_access_role_id TEXT NOT NULL, device_public_key TEXT NOT NULL,
+  reported_name TEXT NOT NULL, client_kind TEXT NOT NULL, client_platform TEXT NOT NULL, client_version TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+  reason TEXT NOT NULL CHECK(reason IN ('first-seen','role-changed','share-role-changed')),
+  requested_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by_actor_type TEXT CHECK(decided_by_actor_type IS NULL OR decided_by_actor_type IN ('user','cloud-account','system')),
+  decided_by_actor_id TEXT, decided_role_id TEXT REFERENCES cp_roles(id) ON DELETE RESTRICT,
+  decision_reason TEXT, approved_pin_id TEXT REFERENCES cp_cloud_device_pins(id) ON DELETE SET NULL,
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  CHECK ((access_mode = 'owner' AND owner_account_id = account_id AND share_grant_id IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND owner_account_id <> account_id AND share_grant_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX cp_cloud_device_trust_requests_pending_context_uq ON cp_cloud_device_trust_requests(
+  binding_id, account_id, owner_account_id, access_mode, coalesce(share_grant_id, ''), cloud_access_role_id, device_public_key
+) WHERE status = 'pending';
+CREATE INDEX cp_cloud_device_trust_requests_pending_idx ON cp_cloud_device_trust_requests(binding_id, status, expires_at);
+CREATE INDEX cp_cloud_device_trust_requests_device_idx ON cp_cloud_device_trust_requests(device_public_key);
+
+CREATE TABLE cp_cloud_device_trust_audit (
+  id TEXT PRIMARY KEY NOT NULL, action TEXT NOT NULL, binding_id TEXT NOT NULL,
+  request_id TEXT, pin_id TEXT, account_id TEXT NOT NULL, device_public_key TEXT NOT NULL, device_fingerprint TEXT NOT NULL,
+  actor_type TEXT NOT NULL CHECK(actor_type IN ('user','cloud-account','system')), actor_id TEXT NOT NULL, actor_role_id TEXT,
+  reason TEXT, details TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX cp_cloud_device_trust_audit_created_idx ON cp_cloud_device_trust_audit(created_at);
+CREATE INDEX cp_cloud_device_trust_audit_binding_idx ON cp_cloud_device_trust_audit(binding_id, created_at);
+
+CREATE TABLE cp_cloud_device_trust_revisions (
+  binding_id TEXT PRIMARY KEY NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision > 0)
+);
+`),
+  migration("0011_cloud_device_trust_revision_bigint", "SELECT 1;"),
+  migration("0012_cloud_device_trust_authorization_revision_bigint", "SELECT 1;"),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -326,4 +392,70 @@ ALTER TABLE cp_login_identities ADD CONSTRAINT cp_login_identities_kind_check CH
 `),
   migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings JSONB NOT NULL DEFAULT '[]'::jsonb;"),
   migration("0009_drop_model_legacy_projections", "DROP TABLE IF EXISTS cp_model_legacy_projections;"),
+  migration("0010_cloud_device_trust", `
+CREATE TABLE cp_cloud_device_pins (
+  id TEXT PRIMARY KEY NOT NULL,
+  binding_id TEXT NOT NULL, account_id TEXT NOT NULL, owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT, share_revision INTEGER CHECK(share_revision IS NULL OR share_revision > 0),
+  cloud_access_role_id TEXT NOT NULL, device_public_key TEXT NOT NULL,
+  reported_name TEXT NOT NULL, client_kind TEXT NOT NULL, client_platform TEXT NOT NULL, client_version TEXT,
+  role_id TEXT NOT NULL REFERENCES cp_roles(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL CHECK(status IN ('active','revoked')), label TEXT,
+  approved_by_actor_type TEXT NOT NULL CHECK(approved_by_actor_type IN ('user','cloud-account','system')),
+  approved_by_actor_id TEXT NOT NULL, approved_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  revoked_at TEXT, revoke_reason TEXT,
+  authorization_revision INTEGER NOT NULL CHECK(authorization_revision > 0),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  CHECK ((access_mode = 'owner' AND owner_account_id = account_id AND share_grant_id IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND owner_account_id <> account_id AND share_grant_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX cp_cloud_device_pins_active_context_uq ON cp_cloud_device_pins(
+  binding_id, account_id, owner_account_id, access_mode, coalesce(share_grant_id, ''), cloud_access_role_id, device_public_key
+) WHERE status = 'active';
+CREATE INDEX cp_cloud_device_pins_binding_idx ON cp_cloud_device_pins(binding_id, status);
+CREATE INDEX cp_cloud_device_pins_device_idx ON cp_cloud_device_pins(device_public_key);
+
+CREATE TABLE cp_cloud_device_trust_requests (
+  id TEXT PRIMARY KEY NOT NULL,
+  binding_id TEXT NOT NULL, account_id TEXT NOT NULL, owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT, share_revision INTEGER CHECK(share_revision IS NULL OR share_revision > 0),
+  cloud_access_role_id TEXT NOT NULL, device_public_key TEXT NOT NULL,
+  reported_name TEXT NOT NULL, client_kind TEXT NOT NULL, client_platform TEXT NOT NULL, client_version TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+  reason TEXT NOT NULL CHECK(reason IN ('first-seen','role-changed','share-role-changed')),
+  requested_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by_actor_type TEXT CHECK(decided_by_actor_type IS NULL OR decided_by_actor_type IN ('user','cloud-account','system')),
+  decided_by_actor_id TEXT, decided_role_id TEXT REFERENCES cp_roles(id) ON DELETE RESTRICT,
+  decision_reason TEXT, approved_pin_id TEXT REFERENCES cp_cloud_device_pins(id) ON DELETE SET NULL,
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  CHECK ((access_mode = 'owner' AND owner_account_id = account_id AND share_grant_id IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND owner_account_id <> account_id AND share_grant_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX cp_cloud_device_trust_requests_pending_context_uq ON cp_cloud_device_trust_requests(
+  binding_id, account_id, owner_account_id, access_mode, coalesce(share_grant_id, ''), cloud_access_role_id, device_public_key
+) WHERE status = 'pending';
+CREATE INDEX cp_cloud_device_trust_requests_pending_idx ON cp_cloud_device_trust_requests(binding_id, status, expires_at);
+CREATE INDEX cp_cloud_device_trust_requests_device_idx ON cp_cloud_device_trust_requests(device_public_key);
+
+CREATE TABLE cp_cloud_device_trust_audit (
+  id TEXT PRIMARY KEY NOT NULL, action TEXT NOT NULL, binding_id TEXT NOT NULL,
+  request_id TEXT, pin_id TEXT, account_id TEXT NOT NULL, device_public_key TEXT NOT NULL, device_fingerprint TEXT NOT NULL,
+  actor_type TEXT NOT NULL CHECK(actor_type IN ('user','cloud-account','system')), actor_id TEXT NOT NULL, actor_role_id TEXT,
+  reason TEXT, details JSONB NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX cp_cloud_device_trust_audit_created_idx ON cp_cloud_device_trust_audit(created_at);
+CREATE INDEX cp_cloud_device_trust_audit_binding_idx ON cp_cloud_device_trust_audit(binding_id, created_at);
+
+CREATE TABLE cp_cloud_device_trust_revisions (
+  binding_id TEXT PRIMARY KEY NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision > 0)
+);
+`),
+  migration("0011_cloud_device_trust_revision_bigint", "ALTER TABLE cp_cloud_device_trust_revisions ALTER COLUMN revision TYPE BIGINT;"),
+  migration("0012_cloud_device_trust_authorization_revision_bigint", "ALTER TABLE cp_cloud_device_pins ALTER COLUMN authorization_revision TYPE BIGINT;"),
 ];

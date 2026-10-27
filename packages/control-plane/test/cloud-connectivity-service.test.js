@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import { can } from "../src/control-plane/auth/authorization.ts";
 import { CloudConnectivityLifecycle } from "../src/control-plane/cloud-connectivity/lifecycle.ts";
 import { createControlPlaneApp, trustedCloudCoordinatorOrigins, trustedCloudServiceOrigin } from "../src/control-plane/http/server.ts";
 import { resolveCloudEnvironment } from "../../../shared/cloud-environments.cjs";
+import { cloudClientTrustOutcomeSigningInput } from "@task-handoff/cloud-contracts";
 
 const PRODUCTION_ENVIRONMENT = resolveCloudEnvironment("production", undefined, {
   TASK_HANDOFF_CLOUD_ENV: "production",
@@ -41,6 +43,35 @@ test("Control Plane identity is private, stable across restart and has a public 
   restarted.init();
   assert.deepEqual(restarted.publicIdentity(), before);
   assert.doesNotMatch(JSON.stringify(restarted.publicIdentity()), /privateKey/);
+});
+
+test("Control Plane identity signs pending device trust outcomes", () => {
+  const { identity, service } = fixture();
+  service.setCloudControlPlaneId("cp_cloud_a");
+  const issuedAt = "2026-08-10T00:00:00.000Z";
+  const outcome = identity.signCloudClientTrustOutcome({
+    state: "pending",
+    reason: "first-seen",
+    requestId: "devtrust_a",
+    controlPlaneId: "cp_cloud_a",
+    bindingId: "binding_a",
+    ticketId: "rtt_ticket_a",
+    accountId: "account_a",
+    deviceSessionId: "device_a",
+    device: { name: "Phone", kind: "mobile", platform: "android", version: "1.0.0" },
+    devicePublicKeyFingerprint: `sha256:${"a".repeat(43)}`,
+    comparisonCode: "ABCD-EFGH-JKMN-NPQR",
+    issuedAt,
+    expiresAt: "2026-08-11T00:00:00.000Z",
+  });
+  assert.equal(outcome.state, "pending");
+  assert.equal(outcome.controlPlaneId, "cp_cloud_a");
+  assert.equal(crypto.verify(
+    null,
+    Buffer.from(cloudClientTrustOutcomeSigningInput(outcome)),
+    crypto.createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: outcome.controlPlanePublicKey }, format: "jwk" }),
+    Buffer.from(outcome.signature, "base64url"),
+  ), true);
 });
 
 test("cloud identity is persisted separately from the local Control Plane identity", () => {

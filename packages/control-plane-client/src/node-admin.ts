@@ -29,6 +29,12 @@ import {
 } from "@task-handoff/protocol/control-plane-directory";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { jsonRequest } from "./json-request.ts";
+import {
+  NodeAgentControlPlaneTrustDecisionSchema,
+  NodeAgentControlPlaneTrustRetrySchema,
+  NodeAgentControlPlaneTrustRevokeSchema,
+  NodeAgentControlPlaneTrustSnapshotSchema,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
 
@@ -181,6 +187,33 @@ export function createControlPlaneNodeAdminApi(transport: ControlPlaneClientTran
     },
     listControlPlanePairings(nodeId: string, signal?: AbortSignal) {
       return requestData(`${nodePath(nodeId)}/control-plane-pairings`, z.array(NodeAgentControlPlanePairingSchema), { signal });
+    },
+    listControlPlaneTrust(nodeId: string, signal?: AbortSignal) {
+      return requestData(`${nodePath(nodeId)}/control-plane-trust-requests`, NodeAgentControlPlaneTrustSnapshotSchema, { signal });
+    },
+    decideControlPlaneTrust(nodeId: string, requestId: string, input: unknown) {
+      const decision = NodeAgentControlPlaneTrustDecisionSchema.parse(input);
+      return requestData(
+        `${nodePath(nodeId)}/control-plane-trust-requests/${encodeURIComponent(requestId)}/decision`,
+        NodeAgentControlPlaneTrustSnapshotSchema,
+        jsonRequest("POST", decision),
+      );
+    },
+    revokeControlPlaneTrust(nodeId: string, pinId: string, input: unknown) {
+      const revoke = NodeAgentControlPlaneTrustRevokeSchema.parse(input);
+      return requestData(
+        `${nodePath(nodeId)}/control-plane-trust-pins/${encodeURIComponent(pinId)}/revoke`,
+        NodeAgentControlPlaneTrustSnapshotSchema,
+        jsonRequest("POST", revoke),
+      );
+    },
+    retryControlPlaneTrust(nodeId: string, requestId: string) {
+      const retry = NodeAgentControlPlaneTrustRetrySchema.parse({});
+      return requestData(
+        `${nodePath(nodeId)}/control-plane-trust-requests/${encodeURIComponent(requestId)}/retry`,
+        NodeAgentControlPlaneTrustSnapshotSchema,
+        jsonRequest("POST", retry),
+      );
     },
     removeControlPlanePairing(nodeId: string, keyId: string) {
       return requestData(`${nodePath(nodeId)}/control-plane-pairings/${encodeURIComponent(keyId)}`, NodeAgentDeleteResponseSchema, jsonRequest("DELETE"));

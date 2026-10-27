@@ -83,7 +83,7 @@ test("the workbench merges Story decisions into the approval center with a dedic
   const workbench = read("ControlPlaneWorkbench.vue");
   assert.match(workbench, /useStoryDecisionInbox\(\(\) => !standaloneMode\.value\)/);
   assert.match(workbench, /mergeActionInboxItems\(\s*aiSessionApprovalItems\(boardInstancesWithAiSessions\.value\),\s*operationApprovalStore\.snapshot\.value\.requests,\s*storyDecisionItemsOutsideSessionDisplay\(storyDecisionInbox\.items\.value, inSessionDisplayedDecisionIds\(\)\.value\),/);
-  assert.match(workbench, /:busy-key="aiApprovalBusyKey \|\| operationApprovalBusyKey \|\| storyDecisionBusyKey"/);
+  assert.match(workbench, /:busy-key="aiApprovalBusyKey \|\| operationApprovalBusyKey \|\| storyDecisionBusyKey \|\| deviceTrustBusyKey \|\| nodeControlPlaneTrustBusyKey"/);
   assert.match(workbench, /@decide-story="decideActionInboxStoryDecision"/);
   assert.match(workbench, /@cancel-story="cancelActionInboxStoryDecision"/);
   assert.match(workbench, /decideStoryDecision\(item\.story\.id, item\.decision\.id, item\.story\.ownerNodeId, \{ expectedRevision: item\.decision\.revision, \.\.\.input \}\)/);

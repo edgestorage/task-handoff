@@ -98,6 +98,20 @@ const CloudNodeRelayStateSchema = z.object({
   claims: z.array(z.object({ nodeHandle: z.string(), requestedAt: z.string() }).strict()),
   errors: z.array(z.object({ nodeHandle: z.string(), code: z.string(), message: z.string(), at: z.string() }).strict()),
   onboarding: z.array(z.object({ nodeHandle: z.string(), tokenId: z.string().optional(), at: z.string() }).strict()),
+  trust: z.array(z.object({
+    nodeHandle: z.string(),
+    nodeId: z.string(),
+    displayName: z.string().optional(),
+    state: z.enum(["pending", "rejected", "expired"]),
+    reason: z.string(),
+    controlPlaneId: z.string(),
+    controlPlaneFingerprint: z.string(),
+    comparisonCode: z.string(),
+    requestId: z.string().optional(),
+    requestedAt: z.string(),
+    expiresAt: z.string().optional(),
+    observedAt: z.string(),
+  }).strict()).default([]),
 }).strict();
 
 const CloudAccountNodesSchema = z.object({

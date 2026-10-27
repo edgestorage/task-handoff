@@ -408,6 +408,102 @@ CREATE TABLE na_cloud_relay_bindings (
 );
 `;
 
+// add-device-trust-approval-center Stage B: node-agent is the local authority
+// for Control Plane pins. Existing cloud bindings and relay pairings are never
+// imported as approvals; the first claim after upgrade must form a pending.
+const cloudControlPlaneTrust = `
+CREATE TABLE na_cloud_control_plane_pins (
+  id TEXT PRIMARY KEY NOT NULL,
+  node_id TEXT NOT NULL,
+  node_handle TEXT NOT NULL,
+  control_plane_id TEXT NOT NULL,
+  control_plane_public_key TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  binding_revision INTEGER NOT NULL CHECK(binding_revision >= 1),
+  access_account_id TEXT NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT,
+  share_role TEXT,
+  share_revision INTEGER CHECK(share_revision IS NULL OR share_revision >= 1),
+  status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+  approved_by_actor_type TEXT NOT NULL CHECK(approved_by_actor_type IN ('local','control-plane','system')),
+  approved_by_actor_id TEXT NOT NULL,
+  approved_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoke_reason TEXT,
+  authorization_revision INTEGER NOT NULL CHECK(authorization_revision >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK((access_mode = 'owner' AND share_grant_id IS NULL AND share_role IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND share_grant_id IS NOT NULL AND share_role IS NOT NULL AND share_revision IS NOT NULL))
+);
+CREATE UNIQUE INDEX na_cloud_control_plane_pins_active_uq ON na_cloud_control_plane_pins(
+  node_id, node_handle, control_plane_id, control_plane_public_key, binding_id,
+  access_account_id, owner_account_id, access_mode,
+  COALESCE(share_grant_id, ''), COALESCE(share_role, '')
+) WHERE status = 'active';
+CREATE INDEX na_cloud_control_plane_pins_scope_idx ON na_cloud_control_plane_pins(node_id, status, updated_at);
+CREATE INDEX na_cloud_control_plane_pins_control_plane_idx ON na_cloud_control_plane_pins(control_plane_id, status, updated_at);
+
+CREATE TABLE na_cloud_control_plane_trust_requests (
+  id TEXT PRIMARY KEY NOT NULL,
+  node_id TEXT NOT NULL,
+  node_handle TEXT NOT NULL,
+  control_plane_id TEXT NOT NULL,
+  control_plane_public_key TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  binding_revision INTEGER NOT NULL CHECK(binding_revision >= 1),
+  access_account_id TEXT NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_grant_id TEXT,
+  share_role TEXT,
+  share_revision INTEGER CHECK(share_revision IS NULL OR share_revision >= 1),
+  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+  requested_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by_actor_type TEXT CHECK(decided_by_actor_type IS NULL OR decided_by_actor_type IN ('local','control-plane','system')),
+  decided_by_actor_id TEXT,
+  decision_reason TEXT,
+  pin_id TEXT REFERENCES na_cloud_control_plane_pins(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  revision INTEGER NOT NULL CHECK(revision >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK((access_mode = 'owner' AND share_grant_id IS NULL AND share_role IS NULL AND share_revision IS NULL)
+    OR (access_mode = 'shared' AND share_grant_id IS NOT NULL AND share_role IS NOT NULL AND share_revision IS NOT NULL))
+);
+CREATE UNIQUE INDEX na_cloud_control_plane_trust_requests_pending_uq ON na_cloud_control_plane_trust_requests(
+  node_id, node_handle, control_plane_id, control_plane_public_key, binding_id,
+  access_account_id, owner_account_id, access_mode,
+  COALESCE(share_grant_id, ''), COALESCE(share_role, '')
+) WHERE status = 'pending';
+CREATE INDEX na_cloud_control_plane_trust_requests_scope_idx ON na_cloud_control_plane_trust_requests(node_id, status, expires_at);
+CREATE INDEX na_cloud_control_plane_trust_requests_control_plane_idx ON na_cloud_control_plane_trust_requests(control_plane_id, status, updated_at);
+
+CREATE TABLE na_cloud_control_plane_trust_audit (
+  id TEXT PRIMARY KEY NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('approve','reject','revoke','expire','retry','share-revision-update')),
+  actor_type TEXT NOT NULL CHECK(actor_type IN ('local','control-plane','system')),
+  actor_id TEXT NOT NULL,
+  connection_type TEXT,
+  request_id TEXT,
+  pin_id TEXT,
+  control_plane_id TEXT NOT NULL,
+  control_plane_public_key_fingerprint TEXT NOT NULL,
+  access_mode TEXT NOT NULL CHECK(access_mode IN ('owner','shared')),
+  share_role TEXT,
+  reason TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX na_cloud_control_plane_trust_audit_control_plane_idx ON na_cloud_control_plane_trust_audit(control_plane_id, created_at);
+CREATE INDEX na_cloud_control_plane_trust_audit_request_idx ON na_cloud_control_plane_trust_audit(request_id, created_at);
+CREATE INDEX na_cloud_control_plane_trust_audit_pin_idx ON na_cloud_control_plane_trust_audit(pin_id, created_at);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -428,4 +524,5 @@ export const nodeAgentMigrations = [
   migration("0015_agent_definition_model_identity", agentDefinitionModelIdentity),
   migration("0016_runtime_type_wsl", runtimeTypeWsl, { foreignKeysOff: true }),
   migration("0017_cloud_relay_binding", cloudRelayBinding),
+  migration("0018_cloud_control_plane_trust", cloudControlPlaneTrust),
 ] as const;

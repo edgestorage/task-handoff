@@ -54,6 +54,19 @@ describe('native Relay WebSocket bridge', () => {
     expect(mockListeners.get('onRelaySocketOpen')?.size).toBe(0);
   });
 
+  test('normalizes binary views from the native bridge to Uint8Array', async () => {
+    const socket = new NativeRelaySocket('socket_1', mockNative as any);
+    socket.attach();
+    let received: unknown;
+    socket.addEventListener('message', (event) => { received = event.data; });
+
+    emit('onRelaySocketOpen', { id: 'socket_1' });
+    emit('onRelaySocketMessage', { id: 'socket_1', type: 'binary', data: new DataView(new Uint8Array([7, 8, 9]).buffer) });
+
+    expect(received).toBeInstanceOf(Uint8Array);
+    expect(Array.from(received as Uint8Array)).toEqual([7, 8, 9]);
+  });
+
   test('surfaces native failures as error and abnormal close events', async () => {
     const socket = new NativeRelaySocket('socket_1', mockNative as any);
     socket.attach();
