@@ -33,10 +33,12 @@ const controlPlane = {
 };
 
 describe('<InitialSyncLoading /> device trust states', () => {
-  test('shows the pending request identity and approval details without a retry action', async () => {
+  test('shows only the pending decision identity and expands technical details on demand', async () => {
     const trust = outcome('pending');
+    const onOpenSettings = jest.fn();
     const screen = await render(<InitialSyncLoading
       connection={{ phase: 'waiting-device-approval', controlPlane, deviceTrust: trust }}
+      onOpenSettings={onOpenSettings}
       resource="aiSessions"
       testID="device-trust-loading"
     />);
@@ -44,16 +46,26 @@ describe('<InitialSyncLoading /> device trust states', () => {
     expect(screen.getByTestId('device-trust-state')).toBeTruthy();
     expect(screen.getByText('Waiting for Control Plane approval')).toBeTruthy();
     expect(screen.getByText('Home Control Plane')).toBeTruthy();
-    expect(screen.getByText('control_plane_123')).toBeTruthy();
     expect(screen.getByText('Cloud Relay · https://cloud.example.test')).toBeTruthy();
     expect(screen.getByText('Pixel test phone')).toBeTruthy();
-    expect(screen.getByText('mobile · android · 1.2.3')).toBeTruthy();
-    expect(screen.getByText(`sha256:${'p'.repeat(43)}`)).toBeTruthy();
     expect(screen.getByText('ABCD-EFGH-JKMN-NPQR')).toBeTruthy();
-    expect(screen.getByText('devtrust_123')).toBeTruthy();
-    expect(screen.getByText('First connection from this device')).toBeTruthy();
+    expect(screen.queryByText('control_plane_123')).toBeNull();
+    expect(screen.queryByText('mobile · android · 1.2.3')).toBeNull();
+    expect(screen.queryByText(`sha256:${'p'.repeat(43)}`)).toBeNull();
+    expect(screen.queryByText('devtrust_123')).toBeNull();
+    expect(screen.queryByText('First connection from this device')).toBeNull();
     expect(screen.queryByText('Request again')).toBeNull();
     expect(screen.queryByText('Connecting to Cloud Relay')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('device-trust-details-toggle'));
+    expect(await screen.findByText('control_plane_123')).toBeTruthy();
+    expect(screen.getByText('mobile · android · 1.2.3')).toBeTruthy();
+    expect(screen.getByText(`sha256:${'p'.repeat(43)}`)).toBeTruthy();
+    expect(screen.getByText('devtrust_123')).toBeTruthy();
+    expect(screen.getByText('First connection from this device')).toBeTruthy();
+
+    fireEvent.press(screen.getByText('Back to settings'));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   test('offers an explicit retry for a rejected device', async () => {
@@ -63,6 +75,7 @@ describe('<InitialSyncLoading /> device trust states', () => {
       resource="aiSessions"
     />);
     expect(screen.getByText('Device approval was rejected')).toBeTruthy();
+    expect(screen.getByText('An administrator rejected the request')).toBeTruthy();
     fireEvent.press(screen.getByText('Request again'));
     expect(retry).toHaveBeenCalledTimes(1);
   });
@@ -105,5 +118,6 @@ describe('<InitialSyncLoading /> device trust states', () => {
       resource="aiSessions"
     />);
     expect(screen.getByText('This device needs approval again because its local role changed. An administrator must approve the request.')).toBeTruthy();
+    expect(screen.getByText('The local access role changed')).toBeTruthy();
   });
 });

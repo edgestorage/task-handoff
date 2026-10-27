@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { router } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useEffect, useState } from 'react';
 import { Platform, View, type ColorValue } from 'react-native';
@@ -108,7 +109,7 @@ export default function PrimaryTabsLayout() {
         </NativeTabs.Trigger>
       </NativeTabs>
       {runtime.phase === 'control-plane-closed' ? <MobileControlPlaneStatusBanner /> : null}
-      <MobileDeviceTrustGate />
+      <MobileDeviceTrustGate onOpenSettings={() => { router.push('/profiles'); }} />
     </View>
   );
 }

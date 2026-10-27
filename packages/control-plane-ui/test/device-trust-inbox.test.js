@@ -73,11 +73,13 @@ test("the approval center and trusted-device settings share one device-trust sto
   assert.match(workbench, /expectedRevision: item\.request\.revision/);
   assert.match(workbench, /deviceTrustStore\.snapshot\.value/);
   assert.match(inbox, /v-else-if="item\.type === 'device-trust'"/);
-  assert.match(inbox, /<Select /);
+  assert.doesNotMatch(inbox, /<Select /);
   assert.match(inbox, /navigation\.deviceTrust\.requestedAt/);
   assert.match(inbox, /navigation\.deviceTrust\.reported/);
   assert.match(inbox, /navigation\.deviceTrust\.sources\.\$\{item\.request\.source\}/);
-  assert.match(inbox, /selectedDeviceRoleId\(item\)/);
+  assert.match(inbox, /deviceRoleName\(item\)/);
+  assert.match(inbox, /deviceRoleAvailable\(item\)/);
+  assert.match(inbox, /navigation\.trustApproval\.role/);
   assert.match(inbox, /\.action-inbox-kind \{[^}]*font-size: 12px/);
   assert.match(inbox, /\.action-inbox-context \{ font-size: 12px/);
   assert.match(settings, /useDeviceTrustStore\(\)/);

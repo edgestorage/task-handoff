@@ -6,6 +6,8 @@ import { ScreenFlatList } from '../src/components/ScreenFlatList';
 
 let mockRuntimePhase = 'connected';
 
+jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({
   useMobileControlPlaneRuntime: () => ({ phase: mockRuntimePhase }),
 }));

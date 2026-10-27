@@ -34,7 +34,6 @@ export function registerDeviceTrustRoutes(app: FastifyInstance, context: DeviceT
         requestId: params.requestId,
         expectedFingerprint: decision.expectedFingerprint,
         expectedRevision: decision.expectedRevision,
-        roleId: decision.roleId,
         actor,
         ...(decision.reason ? { reason: decision.reason } : {}),
       });

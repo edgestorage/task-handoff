@@ -56,27 +56,39 @@
                 <div class="action-inbox-title" :title="item.request.device.name">
                   {{ t(`navigation.deviceTrust.reasons.${item.request.reason}`) }}
                 </div>
-                <div class="action-inbox-context">{{ t('navigation.deviceTrust.source') }}: {{ t(`navigation.deviceTrust.sources.${item.request.source}`) }} · {{ t('navigation.deviceTrust.pendingStatus') }}</div>
-                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.reported') }}: {{ item.request.device.kind }} · {{ item.request.device.platform }}<template v-if="item.request.device.version"> · {{ item.request.device.version }}</template></div>
-                <div class="action-inbox-context action-inbox-detail" :title="item.request.fingerprint">{{ t('navigation.deviceTrust.fingerprint') }}: {{ item.request.fingerprint }}</div>
-                <div class="action-inbox-context">{{ t('navigation.deviceTrust.comparisonCode') }}: <strong class="action-inbox-comparison">{{ item.request.comparisonCode }}</strong></div>
-                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.binding') }}: {{ item.request.bindingId }}</div>
-                <div class="action-inbox-context action-inbox-detail">{{ t(`navigation.deviceTrust.accessModes.${item.request.accessMode}`) }} · {{ t('navigation.deviceTrust.account') }}: {{ item.request.accountId }}<template v-if="item.request.accessMode === 'shared'"> · {{ t('navigation.deviceTrust.owner') }}: {{ item.request.ownerAccountId }}</template></div>
-                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.cloudRole') }}: {{ item.request.cloudAccessRoleId }}<template v-if="item.request.shareGrantId"> · {{ t('navigation.deviceTrust.shareGrant') }}: {{ item.request.shareGrantId }}</template></div>
-                <div class="action-inbox-context">{{ t('navigation.deviceTrust.requestedAt') }}: {{ formatDate(item.request.requestedAt) }} · {{ t('navigation.deviceTrust.expiresAt') }}: {{ formatDate(item.request.expiresAt) }}</div>
-                <Select :model-value="selectedDeviceRoleId(item)" @update:model-value="(value) => setDeviceRole(item, value)">
-                  <SelectTrigger class="action-inbox-device-select" :aria-label="t('navigation.deviceTrust.role')">
-                    <SelectValue :placeholder="t('navigation.deviceTrust.chooseRole')" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="role in activeDeviceRoles(item)" :key="role.roleId" :value="role.roleId">
-                      {{ role.name }}<template v-if="role.isAdmin"> · {{ t('navigation.deviceTrust.adminRole') }}</template>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <div v-if="!activeDeviceRoles(item).length" class="action-inbox-context">{{ t('navigation.deviceTrust.noRoles') }}</div>
+                <div class="action-inbox-trust-code">
+                  <span>{{ t('navigation.deviceTrust.comparisonCode') }}</span>
+                  <TooltipProvider :delay-duration="200">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <button type="button" class="action-inbox-info" :aria-label="t('navigation.deviceTrust.comparisonCode')">
+                          <InfoIcon :size="12" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="start">{{ t('navigation.trustApproval.comparisonCodeHint') }}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <strong class="action-inbox-comparison">{{ item.request.comparisonCode }}</strong>
+                </div>
+                <div class="action-inbox-context">{{ formatExpiryRelative(item.request.expiresAt) }}</div>
+                <button type="button" class="action-inbox-details-toggle" :aria-expanded="trustDetailsOpen(item)" @click="toggleTrustDetails(item)">
+                  {{ trustDetailsOpen(item) ? t('navigation.trustApproval.hideDetails') : t('navigation.trustApproval.showDetails') }}
+                  <ChevronDown :size="12" :class="{ open: trustDetailsOpen(item) }" />
+                </button>
+                <div v-if="trustDetailsOpen(item)" class="action-inbox-details">
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.source') }}: {{ t(`navigation.deviceTrust.sources.${item.request.source}`) }}</div>
+                  <div class="action-inbox-context action-inbox-detail" :title="item.request.fingerprint">{{ t('navigation.deviceTrust.fingerprint') }}: {{ item.request.fingerprint }}</div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.reported') }}: {{ item.request.device.kind }} · {{ item.request.device.platform }}<template v-if="item.request.device.version"> · {{ item.request.device.version }}</template></div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.binding') }}: {{ item.request.bindingId }}</div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t(`navigation.deviceTrust.accessModes.${item.request.accessMode}`) }} · {{ t('navigation.deviceTrust.account') }}: {{ item.request.accountId }}<template v-if="item.request.accessMode === 'shared'"> · {{ t('navigation.deviceTrust.owner') }}: {{ item.request.ownerAccountId }}</template></div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.deviceTrust.cloudRole') }}: {{ item.request.cloudAccessRoleId }}<template v-if="item.request.shareGrantId"> · {{ t('navigation.deviceTrust.shareGrant') }}: {{ item.request.shareGrantId }}</template></div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.trustApproval.requestId') }}: {{ item.request.requestId }}</div>
+                  <div class="action-inbox-context">{{ t('navigation.deviceTrust.requestedAt') }}: {{ formatDate(item.request.requestedAt) }} · {{ t('navigation.deviceTrust.expiresAt') }}: {{ formatDate(item.request.expiresAt) }}</div>
+                </div>
+                <div class="action-inbox-context">{{ t('navigation.trustApproval.role') }}: <strong>{{ deviceRoleName(item) }}</strong></div>
+                <div v-if="!deviceRoleAvailable(item)" class="action-inbox-context">{{ t('navigation.trustApproval.roleUnavailable') }}</div>
                 <div class="action-inbox-actions">
-                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey) || !selectedDeviceRoleId(item)" @click="approveDevice(item)">{{ t('navigation.deviceTrust.approve') }}</Button>
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey) || !deviceRoleAvailable(item)" @click="emit('decide-device', item, { decision: 'approve' })">{{ t('navigation.deviceTrust.approve') }}</Button>
                   <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-device', item, { decision: 'reject' })">{{ t('navigation.deviceTrust.reject') }}</Button>
                 </div>
               </template>
@@ -88,12 +100,34 @@
                   </span>
                   <span class="action-inbox-source" :title="item.trust.nodeHandle">{{ item.trust.displayName || item.trust.nodeHandle }}</span>
                 </header>
-                <div class="action-inbox-title">{{ t(`navigation.nodeControlPlaneTrust.reasons.${item.trust.reason}`) }}</div>
-                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.pendingStatus') }}</div>
-                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.nodeControlPlaneTrust.node') }}: {{ item.trust.nodeHandle }} · {{ item.nodeId }}</div>
-                <div class="action-inbox-context action-inbox-detail" :title="item.trust.controlPlaneFingerprint">{{ t('navigation.nodeControlPlaneTrust.fingerprint') }}: {{ item.trust.controlPlaneFingerprint }}</div>
-                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.comparisonCode') }}: <strong class="action-inbox-comparison">{{ item.trust.comparisonCode }}</strong></div>
-                <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.requestedAt') }}: {{ formatDate(item.trust.requestedAt) }}<template v-if="item.trust.expiresAt"> · {{ t('navigation.nodeControlPlaneTrust.expiresAt') }}: {{ formatDate(item.trust.expiresAt) }}</template></div>
+                <div class="action-inbox-title">{{ nodeTrustTitle(item.trust.reason) }}</div>
+                <div class="action-inbox-trust-code">
+                  <span>{{ t('navigation.nodeControlPlaneTrust.comparisonCode') }}</span>
+                  <TooltipProvider :delay-duration="200">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <button type="button" class="action-inbox-info" :aria-label="t('navigation.nodeControlPlaneTrust.comparisonCode')">
+                          <InfoIcon :size="12" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="start">{{ t('navigation.trustApproval.nodeComparisonCodeHint') }}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <strong class="action-inbox-comparison">{{ item.trust.comparisonCode }}</strong>
+                </div>
+                <div v-if="item.trust.expiresAt" class="action-inbox-context">{{ formatExpiryRelative(item.trust.expiresAt) }}</div>
+                <button type="button" class="action-inbox-details-toggle" :aria-expanded="trustDetailsOpen(item)" @click="toggleTrustDetails(item)">
+                  {{ trustDetailsOpen(item) ? t('navigation.trustApproval.hideDetails') : t('navigation.trustApproval.showDetails') }}
+                  <ChevronDown :size="12" :class="{ open: trustDetailsOpen(item) }" />
+                </button>
+                <div v-if="trustDetailsOpen(item)" class="action-inbox-details">
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.trustApproval.controlPlaneId') }}: {{ item.trust.controlPlaneId }}</div>
+                  <div class="action-inbox-context action-inbox-detail" :title="item.trust.controlPlaneFingerprint">{{ t('navigation.nodeControlPlaneTrust.fingerprint') }}: {{ item.trust.controlPlaneFingerprint }}</div>
+                  <div class="action-inbox-context action-inbox-detail">{{ t('navigation.nodeControlPlaneTrust.node') }}: {{ item.trust.nodeHandle }} · {{ item.nodeId }}</div>
+                  <div v-if="item.trust.requestId" class="action-inbox-context action-inbox-detail">{{ t('navigation.trustApproval.requestId') }}: {{ item.trust.requestId }}</div>
+                  <div class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.requestedAt') }}: {{ formatDate(item.trust.requestedAt) }}<template v-if="item.trust.expiresAt"> · {{ t('navigation.nodeControlPlaneTrust.expiresAt') }}: {{ formatDate(item.trust.expiresAt) }}</template></div>
+                  <div v-if="item.trust.reason" class="action-inbox-context">{{ t('navigation.nodeControlPlaneTrust.reason') }}: {{ t(`navigation.nodeControlPlaneTrust.reasons.${item.trust.reason}`) }}</div>
+                </div>
                 <div class="action-inbox-actions">
                   <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-node-control-plane', item, 'approve')">{{ t('navigation.nodeControlPlaneTrust.approve') }}</Button>
                   <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-node-control-plane', item, 'reject')">{{ t('navigation.nodeControlPlaneTrust.reject') }}</Button>
@@ -129,10 +163,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ApprovalOperation } from "@task-handoff/protocol/operation-approvals";
 import { useI18n } from "vue-i18n";
-import { BookOpen, ChevronUp, ExternalLink, ShieldCheck, ShieldQuestion } from "@lucide/vue";
+import { BookOpen, ChevronDown, ChevronUp, ExternalLink, InfoIcon, ShieldCheck, ShieldQuestion } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { formatDateTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import type { AiSessionApprovalDecision } from "./aiSessionApprovals";
@@ -148,7 +182,7 @@ const emit = defineEmits<{
   collapse: [];
   resolve: [item: Extract<Item, { type: "ai-session-approval" }>, decision: AiSessionApprovalDecision];
   decide: [item: Extract<Item, { type: "operation-approval" }>, decision: "approve" | "deny"];
-  "decide-device": [item: Extract<Item, { type: "device-trust" }>, decision: { decision: "approve"; roleId: string } | { decision: "reject" }];
+  "decide-device": [item: Extract<Item, { type: "device-trust" }>, decision: { decision: "approve" } | { decision: "reject" }];
   "decide-node-control-plane": [item: Extract<Item, { type: "node-control-plane-trust" }>, decision: "approve" | "reject"];
   "decide-story": [item: StoryDecisionItem, input: { optionId?: string; response?: string }];
   "cancel-story": [item: StoryDecisionItem];
@@ -156,19 +190,40 @@ const emit = defineEmits<{
   "open-story-session": [item: StoryDecisionItem];
 }>();
 const { locale, t } = useI18n();
-const deviceRoleSelections = ref<Record<string, string>>({});
-const activeDeviceRoles = (item: Extract<Item, { type: "device-trust" }>) => item.roles.filter((role) => role.status === "active");
+const expandedTrustDetails = ref<Set<string>>(new Set());
 const formatDate = (value: string) => formatDateTime(value, locale.value as SupportedLocale);
-function selectedDeviceRoleId(item: Extract<Item, { type: "device-trust" }>) {
-  const roleId = deviceRoleSelections.value[item.key];
-  return roleId && activeDeviceRoles(item).some((role) => role.roleId === roleId) ? roleId : undefined;
+function deviceRoleName(item: Extract<Item, { type: "device-trust" }>) {
+  return item.roles.find((role) => role.roleId === item.request.cloudAccessRoleId)?.name || item.request.cloudAccessRoleId;
 }
-function setDeviceRole(item: Extract<Item, { type: "device-trust" }>, value: unknown) {
-  if (typeof value === "string") deviceRoleSelections.value[item.key] = value;
+function deviceRoleAvailable(item: Extract<Item, { type: "device-trust" }>) {
+  return item.roles.some((role) => role.roleId === item.request.cloudAccessRoleId && role.status === "active");
 }
-function approveDevice(item: Extract<Item, { type: "device-trust" }>) {
-  const roleId = selectedDeviceRoleId(item);
-  if (roleId) emit("decide-device", item, { decision: "approve", roleId });
+function trustDetailsOpen(item: { key: string }) {
+  return expandedTrustDetails.value.has(item.key);
+}
+function toggleTrustDetails(item: { key: string }) {
+  const next = new Set(expandedTrustDetails.value);
+  if (next.has(item.key)) next.delete(item.key);
+  else next.add(item.key);
+  expandedTrustDetails.value = next;
+}
+function formatExpiryRelative(value: string | undefined) {
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return formatDate(value);
+  const remaining = timestamp - Date.now();
+  if (remaining <= 0) return t("navigation.trustApproval.expired");
+  const minutes = Math.ceil(remaining / 60_000);
+  if (minutes < 60) return t("navigation.trustApproval.expiresInMinutes", { count: minutes });
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return t("navigation.trustApproval.expiresInHours", { count: hours });
+  return t("navigation.trustApproval.expiresInDays", { count: Math.ceil(hours / 24) });
+}
+function nodeTrustTitle(reason: string | undefined) {
+  if (reason === "key-changed" || reason === "access-context-changed") {
+    return t(`navigation.nodeControlPlaneTrust.reasons.${reason}`);
+  }
+  return t("navigation.trustApproval.nodeFirstSeen");
 }
 const operationLabels: Record<ApprovalOperation, string> = {
   "instance.delete": "navigation.instanceDeleteApproval",
@@ -194,7 +249,11 @@ const itemsElement = ref<HTMLElement | null>(null);
 const itemsHeight = ref(0);
 let itemsResizeObserver: ResizeObserver | undefined;
 const stackHeight = computed(() => Math.min(itemsHeight.value, Math.max(0, availableHeight.value - panelHandleHeight)));
-watch(() => props.items.map((item) => item.key).join("|"), () => { offset.value = 0; });
+watch(() => props.items.map((item) => item.key).join("|"), () => {
+  offset.value = 0;
+  const keys = new Set(props.items.map((item) => item.key));
+  expandedTrustDetails.value = new Set([...expandedTrustDetails.value].filter((key) => keys.has(key)));
+});
 
 function observeItemsHeight() {
   itemsResizeObserver?.disconnect();
@@ -288,6 +347,16 @@ onBeforeUnmount(() => {
 .action-inbox-context { font-size: 12px; color: var(--text-muted); }
 .action-inbox-comparison { color: var(--text-strong); font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace); font-weight: 500; letter-spacing: 0.04em; }
 .action-inbox-device-select { height: 30px; margin-top: 4px; font-size: 12px; }
+.action-inbox-trust-code { align-items: center; color: var(--text-muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 4px; }
+.action-inbox-info { align-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-muted); cursor: help; display: inline-flex; padding: 2px; }
+.action-inbox-info:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.action-inbox-details-toggle { align-items: center; align-self: flex-start; background: transparent; border: 0; border-radius: 4px; color: var(--text-muted); cursor: pointer; display: inline-flex; font: inherit; font-size: 12px; gap: 3px; margin-top: 2px; padding: 0; }
+.action-inbox-details-toggle:hover { color: var(--text-strong); }
+.action-inbox-details-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.action-inbox-details-toggle svg { transition: transform 140ms ease; }
+.action-inbox-details-toggle svg.open { transform: rotate(180deg); }
+.action-inbox-details { display: grid; gap: 4px; padding-top: 4px; }
+.action-inbox-details .action-inbox-detail { display: block; overflow: visible; -webkit-line-clamp: unset; }
 .action-inbox-detail { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-title { font-size: 14px; margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .action-inbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

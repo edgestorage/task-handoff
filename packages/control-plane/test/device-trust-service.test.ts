@@ -83,7 +83,7 @@ function authContext(overrides: AuthOverrides = {}): CloudClientAuthContext {
       ownerAccountId,
       accessMode,
       ...(shareGrantId === undefined ? {} : { shareGrantId }),
-      cloudAccessRoleId: overrides.cloudAccessRoleId ?? "role_cloud_use",
+      cloudAccessRoleId: overrides.cloudAccessRoleId ?? "role_admin",
       devicePublicKey,
     },
     trustRetry: false,
@@ -228,7 +228,6 @@ test("background reconnect refreshes pending lastSeen without moving its revisio
       requestId: first.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(first.request.devicePublicKey),
       expectedRevision: first.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     assert.equal(approved.pin.status, "active");
@@ -247,7 +246,6 @@ test("background reconnect refreshes trusted pin lastSeen without moving its rev
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     const eventCount = fixture.changes.length;
@@ -281,7 +279,6 @@ test("record revisions advance within one millisecond and reject a stale approva
       requestId: repeated.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(repeated.request.devicePublicKey),
       expectedRevision: first.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     }), { code: "CLOUD_DEVICE_TRUST_REVISION_CONFLICT", statusCode: 409 });
     assert.equal((await fixture.service.list(BINDING_ID)).pins.length, 0);
@@ -290,7 +287,6 @@ test("record revisions advance within one millisecond and reject a stale approva
       requestId: repeated.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(repeated.request.devicePublicKey),
       expectedRevision: repeated.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     assert.equal(approved.pin.status, "active");
@@ -348,7 +344,6 @@ test("approval persists one active pin, rejects stale revisions and prevents dup
       requestId: request.id,
       expectedFingerprint: fingerprintDevicePublicKey("B".repeat(43)),
       expectedRevision,
-      roleId: "role_admin",
       actor: adminActor,
     }), { code: "CLOUD_DEVICE_TRUST_FINGERPRINT_CONFLICT" });
     assert.equal((await fixture.service.list(BINDING_ID)).pins.length, 0);
@@ -357,7 +352,6 @@ test("approval persists one active pin, rejects stale revisions and prevents dup
       requestId: request.id,
       expectedFingerprint: fingerprint,
       expectedRevision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     assert.equal(approved.pin.status, "active");
@@ -374,7 +368,6 @@ test("approval persists one active pin, rejects stale revisions and prevents dup
       requestId: request.id,
       expectedFingerprint: fingerprint,
       expectedRevision,
-      roleId: "role_operator",
       actor: adminActor,
     }), { code: "CLOUD_DEVICE_TRUST_REQUEST_NOT_PENDING" });
 
@@ -402,7 +395,6 @@ test("concurrent approval attempts produce only one active pin", async () => {
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     };
     const results = await Promise.allSettled([
@@ -421,7 +413,7 @@ test("concurrent approval attempts produce only one active pin", async () => {
   }
 });
 
-test("approval resolves the selected role inside the decision transaction", async () => {
+test("approval resolves the requested cloud role inside the decision transaction", async () => {
   const fixture = await createFixture();
   try {
     const pending = await fixture.service.observeClient(authContext());
@@ -442,7 +434,6 @@ test("approval resolves the selected role inside the decision transaction", asyn
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     }), { code: "CLOUD_DEVICE_TRUST_ROLE_UNAVAILABLE" });
 
@@ -527,7 +518,6 @@ test("revocation closes only the exact pin and explicit retry starts a new trust
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -566,7 +556,6 @@ test("an unavailable local role revokes the old pin, closes its sessions and reo
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -597,7 +586,6 @@ test("an unavailable local role revokes the old pin, closes its sessions and reo
       requestId: unavailable.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(unavailable.request.devicePublicKey),
       expectedRevision: unavailable.request.revision,
-      roleId: "role_operator",
       actor: selfActor,
     }), { code: "CLOUD_DEVICE_TRUST_ADMIN_REQUIRED" });
   } finally {
@@ -615,7 +603,6 @@ test("a transient role lookup failure does not revoke a trusted pin or create a 
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -642,7 +629,6 @@ test("a changed local role revision revokes the old pin before reopening approva
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -672,7 +658,6 @@ test("reapproval creates a new pin while retaining the superseded pin as revoked
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -687,7 +672,6 @@ test("reapproval creates a new pin while retaining the superseded pin as revoked
       requestId: changed.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(changed.request.devicePublicKey),
       expectedRevision: changed.request.revision,
-      roleId: "role_operator",
       actor: adminActor,
     });
 
@@ -714,7 +698,6 @@ test("a changed share grant revokes the superseded pin and requires approval", a
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -743,7 +726,6 @@ test("a changed cloud role revokes the superseded pin and requires approval", as
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -770,7 +752,6 @@ for (const variant of isolatedAccessContextCases) {
         requestId: pending.request.id,
         expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
         expectedRevision: pending.request.revision,
-        roleId: "role_admin",
         actor: adminActor,
       });
 
@@ -802,7 +783,6 @@ test("a cloud admin approval records the approving device pin without conflating
       requestId: approving.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(approving.request.devicePublicKey),
       expectedRevision: approving.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -820,7 +800,6 @@ test("a cloud admin approval records the approving device pin without conflating
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_operator",
       actor: cloudActor,
     });
 
@@ -845,7 +824,6 @@ test("a trusted device cannot approve a pending request for its own public key",
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     const timestamp = new Date(START + 1_000).toISOString();
@@ -858,7 +836,7 @@ test("a trusted device cannot approve a pending request for its own public key",
       accessMode: "shared",
       shareGrantId: "share_replacement",
       shareRevision: 3,
-      cloudAccessRoleId: "role_cloud_use",
+      cloudAccessRoleId: "role_admin",
       devicePublicKey: DEVICE_PUBLIC_KEY,
       reportedName: "Pixel test device",
       clientKind: "mobile",
@@ -884,7 +862,6 @@ test("a trusted device cannot approve a pending request for its own public key",
       requestId: selfRequestId,
       expectedFingerprint: fingerprintDevicePublicKey(DEVICE_PUBLIC_KEY),
       expectedRevision: 1,
-      roleId: "role_admin",
       actor: selfActor,
     }), { code: "CLOUD_DEVICE_TRUST_SELF_APPROVAL_FORBIDDEN", statusCode: 403 });
     const records = await fixture.service.list(BINDING_ID);
@@ -904,7 +881,6 @@ test("metadata refreshes on a trusted pin without changing its role and clears a
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
 
@@ -935,7 +911,6 @@ test("share revision growth converges the pin while a rollback fails closed with
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     assert.equal(approved.pin.shareRevision, 2);
@@ -1012,7 +987,6 @@ test("stored device trust rows ignore unknown historical fields without leaking 
       requestId: pending.request.id,
       expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
       expectedRevision: pending.request.revision,
-      roleId: "role_admin",
       actor: adminActor,
     });
     const storedPin = parseStoredCloudDevicePinRecord({ ...approved.pin, futureOptionalField: { nested: true } });

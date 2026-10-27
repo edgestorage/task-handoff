@@ -118,7 +118,6 @@ export class CloudDeviceTrustService {
   async approve(input: {
     requestId: string;
     expectedFingerprint: string;
-    roleId: string;
     expectedRevision: number;
     actor: CloudDeviceTrustActor;
     label?: string;
@@ -127,7 +126,8 @@ export class CloudDeviceTrustService {
     const now = this.clock();
     const decided = await this.store.transaction(async (repository) => {
       await this.assertAdmin(repository, input.actor);
-      const role = await this.resolveApprovalRole(repository, input.roleId);
+      const request = await this.requirePending(repository.cloudDeviceTrust, input.requestId, now);
+      const role = await this.resolveApprovalRole(repository, request.cloudAccessRoleId);
       const decided = await this.approveInRepository(repository, { ...input, role, now });
       const revision = await repository.cloudDeviceTrust.advanceRevision(decided.request.bindingId, Date.parse(decided.request.updatedAt));
       return { ...decided, revision };
@@ -359,7 +359,7 @@ export class CloudDeviceTrustService {
 
   private async approveInRepository(
     repository: ControlPlaneDeviceTrustTransaction,
-    input: { requestId: string; expectedFingerprint: string; expectedRevision: number; roleId: string; actor: CloudDeviceTrustActor; label?: string; reason?: string; role: CloudDeviceTrustResolvedRole; now: Date },
+    input: { requestId: string; expectedFingerprint: string; expectedRevision: number; actor: CloudDeviceTrustActor; label?: string; reason?: string; role: CloudDeviceTrustResolvedRole; now: Date },
   ): Promise<{ request: CloudDeviceTrustRequestRecord; pin: CloudDevicePinRecord; previousPin?: CloudDevicePinRecord }> {
     const devices = repository.cloudDeviceTrust;
     const request = await this.requirePending(devices, input.requestId, input.now);
@@ -369,6 +369,8 @@ export class CloudDeviceTrustService {
     this.assertExpectedFingerprint(request.devicePublicKey, input.expectedFingerprint);
     const context = requestContext(request);
     const previous = await devices.findActivePin(context);
+    const roleId = input.role.roleIds[0];
+    if (!roleId) throw new CloudDeviceTrustError("CLOUD_DEVICE_TRUST_ROLE_UNAVAILABLE", "The approved role is not available.");
     const timestamp = input.now.toISOString();
     const label = input.label ?? previous?.label;
     const pin: CloudDevicePinRecord = {
@@ -379,7 +381,7 @@ export class CloudDeviceTrustService {
       clientKind: request.clientKind,
       clientPlatform: request.clientPlatform,
       ...(request.clientVersion ? { clientVersion: request.clientVersion } : {}),
-      roleId: input.roleId,
+      roleId,
       status: "active",
       ...(label ? { label } : {}),
       approvedByActorType: input.actor.type,
@@ -405,7 +407,7 @@ export class CloudDeviceTrustService {
       decidedAt: timestamp,
       decidedByActorType: input.actor.type,
       decidedByActorId: input.actor.id,
-      decidedRoleId: input.roleId,
+      decidedRoleId: roleId,
       ...(input.reason ? { decisionReason: input.reason } : {}),
       approvedPinId: pin.id,
       revision: request.revision + 1,
@@ -420,7 +422,7 @@ export class CloudDeviceTrustService {
     if (!await devices.putPinIfStatus(pin, "revoked", stagedPin.revision)) {
       throw new CloudDeviceTrustError("CLOUD_DEVICE_TRUST_REVISION_CONFLICT", "The trusted device changed while approval was being applied.", 409);
     }
-    await this.audit(devices, "request-approved", approved, input.actor, input.reason, { pinId: pin.id, roleId: input.roleId });
+    await this.audit(devices, "request-approved", approved, input.actor, input.reason, { pinId: pin.id, roleId });
     return { request: approved, pin, ...(previous ? { previousPin: previous } : {}) };
   }
 

@@ -54,6 +54,19 @@ describe('<MobileDeviceTrustGate />', () => {
     expect(screen.getByText('Pixel test phone')).toBeTruthy();
   });
 
+  test('offers a way back to settings while the device is waiting for approval', async () => {
+    const openSettings = jest.fn();
+    mockRuntime = {
+      phase: 'waiting-device-approval',
+      deviceTrust: outcome('pending'),
+      retryDeviceTrust: () => false,
+    };
+    const screen = await render(<MobileDeviceTrustGate onOpenSettings={openSettings} />);
+
+    fireEvent.press(screen.getByText('Back to settings'));
+    expect(openSettings).toHaveBeenCalledTimes(1);
+  });
+
   test('surfaces explicit retry for a revoked device instead of cached data', async () => {
     const retry = jest.fn(() => true);
     mockRuntime = {

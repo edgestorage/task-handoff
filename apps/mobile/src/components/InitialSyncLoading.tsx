@@ -1,5 +1,6 @@
 import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobile';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { MobileControlPlaneRuntimePhase } from '../control-plane/use-mobile-control-plane-runtime';
 import { useOptionalMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
@@ -33,10 +34,12 @@ const resourceLabels: Record<InitialSyncResource, { item: MessageKey; plural: Me
 
 export function InitialSyncLoading({
   connection,
+  onOpenSettings,
   resource,
   testID,
 }: {
   connection?: InitialSyncConnection;
+  onOpenSettings?: () => void;
   resource: InitialSyncResource;
   testID?: string;
 }) {
@@ -66,6 +69,7 @@ export function InitialSyncLoading({
     return <DeviceTrustLoadingState
       connection={effectiveConnection}
       locale={locale}
+      onOpenSettings={onOpenSettings}
       phase={phase}
       t={t}
       testID={testID}
@@ -100,6 +104,7 @@ export function isDeviceTrustPhase(phase: MobileControlPlaneRuntimePhase) {
 function DeviceTrustLoadingState({
   connection,
   locale,
+  onOpenSettings,
   phase,
   t,
   testID,
@@ -107,6 +112,7 @@ function DeviceTrustLoadingState({
 }: {
   connection: InitialSyncConnection;
   locale: string;
+  onOpenSettings?: () => void;
   phase: MobileControlPlaneRuntimePhase;
   t: Translate;
   testID?: string;
@@ -114,12 +120,21 @@ function DeviceTrustLoadingState({
 }) {
   const { colors } = useMobileTheme();
   const adaptive = useAdaptiveContentLayout();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const copy = deviceTrustCopy(phase, trust, t);
   const controlPlaneId = connection.controlPlane?.id || trust.controlPlaneId;
   const controlPlaneName = connection.controlPlane?.name?.trim() || controlPlaneId;
   const source = [connection.controlPlane?.source, connection.controlPlane?.origin].filter(Boolean).join(' · ');
   const canRetry = phase === 'rejected' || phase === 'expired' || phase === 'revoked';
   const pending = phase === 'waiting-device-approval' || phase === 'approved-connecting';
+  const reasonVisible = Boolean(trust.reason) && (
+    phase === 'rejected'
+    || phase === 'expired'
+    || phase === 'revoked'
+    || phase === 'trust-required'
+    || trust.reason === 'role-changed'
+    || trust.reason === 'share-role-changed'
+  );
   return <ScrollView
     contentContainerStyle={[styles.container, adaptive.contentStyle]}
     style={{ backgroundColor: colors.background, flex: 1 }}
@@ -144,42 +159,110 @@ function DeviceTrustLoadingState({
 
       <View style={[styles.section, { borderColor: colors.border }]}>
         <TrustRow label={t('deviceTrust.controlPlane')} value={controlPlaneName || t('common.unknown')} />
-        {controlPlaneName !== controlPlaneId ? <TrustRow label={t('deviceTrust.controlPlaneId')} value={controlPlaneId} selectable /> : null}
-        {source ? <TrustRow label={t('deviceTrust.source')} value={source} /> : null}
-      </View>
-
-      <View style={[styles.section, { borderColor: colors.border }]}>
+        {source ? <Text style={[styles.meta, { color: colors.textMuted }]}>{source}</Text> : null}
         <TrustRow label={t('deviceTrust.device')} value={trust.device.name} />
-        <TrustRow label={t('deviceTrust.deviceType')} value={deviceMetadata(trust.device)} />
-        <TrustRow label={t('deviceTrust.fingerprint')} value={trust.devicePublicKeyFingerprint} selectable />
-        <TrustRow label={t('deviceTrust.comparisonCode')} value={trust.comparisonCode} selectable strong />
+        {trust.device.platform ? <Text style={[styles.meta, { color: colors.textMuted }]}>{trust.device.platform}</Text> : null}
       </View>
 
       <View style={[styles.section, { borderColor: colors.border }]}>
-        {trust.reason ? <TrustRow label={t('deviceTrust.reason')} value={t(reasonKey(trust.reason))} /> : null}
-        {trust.requestId ? <TrustRow label={t('deviceTrust.requestId')} value={trust.requestId} selectable /> : null}
-        <TrustRow label={t('deviceTrust.expiresAt')} value={formatExpiry(trust.expiresAt, locale)} />
+        <TrustRow
+          hint={{ label: t('deviceTrust.comparisonCode'), text: t('deviceTrust.comparisonCodeHint') }}
+          label={t('deviceTrust.comparisonCode')}
+          strong
+          value={trust.comparisonCode}
+        />
+        <TrustRow label={t('deviceTrust.expiresAt')} value={formatExpiryRelative(trust.expiresAt, t)} />
       </View>
 
+      {reasonVisible && trust.reason ? <Text style={[styles.reason, { color: colors.textMuted }]}>{t(reasonKey(trust.reason))}</Text> : null}
       {phase === 'waiting-device-approval' ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('deviceTrust.waitingHint')}</Text> : null}
-      {canRetry ? <Pressable
+
+      <View style={styles.actions}>
+        {canRetry ? <Pressable
+          accessibilityRole="button"
+          onPress={connection.onRetryDeviceTrust}
+          style={({ pressed }) => [styles.retry, { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 }]}
+        >
+          <Icon color="#fff" name="refresh-outline" size={18} />
+          <Text style={styles.retryText}>{t('deviceTrust.retry')}</Text>
+        </Pressable> : null}
+        {onOpenSettings ? <Pressable
+          accessibilityRole="button"
+          onPress={onOpenSettings}
+          style={({ pressed }) => [styles.settingsAction, { borderColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
+        >
+          <Icon color={colors.text} name="settings-outline" size={17} />
+          <Text style={[styles.settingsText, { color: colors.text }]}>{t('deviceTrust.backToSettings')}</Text>
+        </Pressable> : null}
+      </View>
+
+      <Pressable
         accessibilityRole="button"
-        onPress={connection.onRetryDeviceTrust}
-        style={({ pressed }) => [styles.retry, { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 }]}
+        accessibilityState={{ expanded: detailsOpen }}
+        onPress={() => setDetailsOpen((open) => !open)}
+        style={({ pressed }) => [styles.detailsToggle, { opacity: pressed ? 0.6 : 1 }]}
+        testID="device-trust-details-toggle"
       >
-        <Icon color="#fff" name="refresh-outline" size={18} />
-        <Text style={styles.retryText}>{t('deviceTrust.retry')}</Text>
-      </Pressable> : null}
+        <Text style={[styles.detailsToggleText, { color: colors.primary }]}>{detailsOpen ? t('deviceTrust.hideDetails') : t('deviceTrust.showDetails')}</Text>
+        <Icon color={colors.primary} name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={15} />
+      </Pressable>
+
+      {detailsOpen ? <View style={[styles.details, { borderColor: colors.border }]}>
+        <TrustRow label={t('deviceTrust.controlPlaneId')} value={controlPlaneId} selectable />
+        <TrustRow
+          hint={{ label: t('deviceTrust.fingerprint'), text: t('deviceTrust.fingerprintHint') }}
+          label={t('deviceTrust.fingerprint')}
+          selectable
+          value={trust.devicePublicKeyFingerprint}
+        />
+        <TrustRow label={t('deviceTrust.deviceType')} value={deviceMetadata(trust.device)} />
+        {trust.requestId ? <TrustRow label={t('deviceTrust.requestId')} value={trust.requestId} selectable /> : null}
+        {trust.reason ? <TrustRow label={t('deviceTrust.reason')} value={t(reasonKey(trust.reason))} /> : null}
+        <TrustRow label={t('deviceTrust.expiresAt')} value={formatExpiry(trust.expiresAt, locale)} />
+      </View> : null}
     </View>
   </ScrollView>;
 }
 
-function TrustRow({ label, selectable, strong, value }: { label: string; selectable?: boolean; strong?: boolean; value: string }) {
+function TrustRow({
+  hint,
+  label,
+  selectable,
+  strong,
+  value,
+}: {
+  hint?: { label: string; text: string };
+  label: string;
+  selectable?: boolean;
+  strong?: boolean;
+  value: string;
+}) {
   const { colors } = useMobileTheme();
   return <View style={styles.row}>
-    <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
+    <View style={styles.rowLabelLine}>
+      <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
+      {hint ? <InfoTip label={hint.label} text={hint.text} /> : null}
+    </View>
     <Text selectable={selectable} style={[styles.rowValue, strong && styles.strong, { color: colors.text }]}>{value}</Text>
   </View>;
+}
+
+function InfoTip({ label, text }: { label: string; text: string }) {
+  const { colors } = useMobileTheme();
+  const [open, setOpen] = useState(false);
+  return <>
+    <Pressable accessibilityLabel={label} accessibilityRole="button" hitSlop={10} onPress={() => setOpen(true)} style={styles.infoButton}>
+      <Icon color={colors.textMuted} name="information-circle-outline" size={15} />
+    </Pressable>
+    <Modal animationType="fade" onRequestClose={() => setOpen(false)} transparent visible={open}>
+      <Pressable accessibilityRole="button" onPress={() => setOpen(false)} style={styles.tipBackdrop}>
+        <View style={[styles.tipCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.tipTitle, { color: colors.text }]}>{label}</Text>
+          <Text style={[styles.tipText, { color: colors.textMuted }]}>{text}</Text>
+        </View>
+      </Pressable>
+    </Modal>
+  </>;
 }
 
 function deviceTrustCopy(phase: MobileControlPlaneRuntimePhase, trust: CloudClientTrustOutcome, t: Translate) {
@@ -223,6 +306,18 @@ function deviceMetadata(device: CloudClientTrustOutcome['device']) {
   return [device.kind, device.platform, device.version].filter(Boolean).join(' · ');
 }
 
+function formatExpiryRelative(value: string, t: Translate) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  const remaining = timestamp - Date.now();
+  if (remaining <= 0) return t('deviceTrust.expiredAlready');
+  const minutes = Math.ceil(remaining / 60_000);
+  if (minutes < 60) return t('deviceTrust.expiresInMinutes', { count: minutes });
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return t('deviceTrust.expiresInHours', { count: hours });
+  return t('deviceTrust.expiresInDays', { count: Math.ceil(hours / 24) });
+}
+
 function formatExpiry(value: string, locale: string) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
@@ -230,19 +325,33 @@ function formatExpiry(value: string, locale: string) {
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, gap: 18, maxWidth: 560, padding: 20, width: '100%' },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  card: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, gap: 14, maxWidth: 560, padding: 18, width: '100%' },
   container: { alignItems: 'center', flexGrow: 1, justifyContent: 'center', padding: 24 },
   description: { fontSize: 14, lineHeight: 20 },
+  details: { borderTopWidth: StyleSheet.hairlineWidth, gap: 10, paddingTop: 12 },
+  detailsToggle: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 4, minHeight: 36 },
+  detailsToggleText: { fontSize: 13, fontWeight: '500' },
   heading: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   headingCopy: { flex: 1, gap: 5 },
   hint: { fontSize: 13, lineHeight: 19 },
+  infoButton: { alignItems: 'center', justifyContent: 'center', minHeight: 20, minWidth: 20 },
+  meta: { fontSize: 12, lineHeight: 17 },
+  reason: { fontSize: 13, lineHeight: 19 },
   retry: { alignItems: 'center', alignSelf: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 16 },
   retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   row: { gap: 2 },
   rowLabel: { fontSize: 12, lineHeight: 17 },
+  rowLabelLine: { alignItems: 'center', flexDirection: 'row', gap: 3 },
   rowValue: { fontSize: 13, lineHeight: 19 },
-  section: { borderTopWidth: StyleSheet.hairlineWidth, gap: 11, paddingTop: 14 },
-  strong: { fontSize: 16, fontWeight: '600', letterSpacing: 0.6, lineHeight: 22 },
+  section: { borderTopWidth: StyleSheet.hairlineWidth, gap: 8, paddingTop: 12 },
+  settingsAction: { alignItems: 'center', alignSelf: 'flex-start', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 14 },
+  settingsText: { fontSize: 14, fontWeight: '500' },
+  strong: { fontSize: 20, fontWeight: '600', letterSpacing: 0.8, lineHeight: 26 },
+  tipBackdrop: { alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.24)', flex: 1, justifyContent: 'center', padding: 24 },
+  tipCard: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, gap: 6, maxWidth: 320, padding: 16, width: '100%' },
+  tipText: { fontSize: 13, lineHeight: 19 },
+  tipTitle: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   title: { fontSize: 19, fontWeight: '700', lineHeight: 25 },
 });
 

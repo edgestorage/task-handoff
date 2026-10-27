@@ -31,7 +31,7 @@ const OPERATOR_ROLE: CloudDeviceTrustResolvedRole = {
   authorizationRevision: 2,
 };
 
-function authContext(devicePublicKey: string, overrides: { shareGrantId?: string } = {}): CloudClientAuthContext {
+function authContext(devicePublicKey: string, overrides: { shareGrantId?: string; cloudAccessRoleId?: string } = {}): CloudClientAuthContext {
   return {
     ticket: { shareRevision: 1 },
     grant: {},
@@ -45,7 +45,7 @@ function authContext(devicePublicKey: string, overrides: { shareGrantId?: string
       ownerAccountId: "account_owner",
       accessMode: "shared",
       shareGrantId: overrides.shareGrantId ?? "share_docs",
-      cloudAccessRoleId: "role_cloud_use",
+      cloudAccessRoleId: overrides.cloudAccessRoleId ?? "role_admin",
       devicePublicKey,
     },
     trustRetry: false,
@@ -112,15 +112,14 @@ async function createFixture() {
     actors,
     service,
     closedPins,
-    async approvePending(devicePublicKey: string, roleId = "role_admin") {
-      const pending = await service.observeClient(authContext(devicePublicKey));
+    async approvePending(devicePublicKey: string, cloudAccessRoleId = "role_admin") {
+      const pending = await service.observeClient(authContext(devicePublicKey, { cloudAccessRoleId }));
       assert.equal(pending.kind, "pending");
       if (pending.kind !== "pending") throw new Error("Expected a pending device request.");
       return service.approve({
         requestId: pending.request.id,
         expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
         expectedRevision: pending.request.revision,
-        roleId,
         actor: actors.get("local-admin")!,
       });
     },
@@ -159,6 +158,7 @@ test("a pinned cloud admin can decide another device while a pinned operator can
   try {
     const approvingDevice = await fixture.approvePending("B".repeat(43));
     const operatorDevice = await fixture.approvePending("C".repeat(43), "role_operator");
+    assert.equal(operatorDevice.pin.roleId, "role_operator");
     fixture.actors.set("cloud-admin-pinned", {
       type: "cloud-account",
       id: "cloud-account:account_owner",
@@ -192,7 +192,6 @@ test("a pinned cloud admin can decide another device while a pinned operator can
         decision: "approve",
         expectedFingerprint: fingerprintDevicePublicKey(pending.request.devicePublicKey),
         expectedRevision: pending.request.revision,
-        roleId: "role_operator",
       },
     });
     assert.equal(decision.statusCode, 200, decision.body);

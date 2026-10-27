@@ -81,7 +81,6 @@ export const CloudDeviceTrustDecisionSchema = z.discriminatedUnion("decision", [
     decision: z.literal("approve"),
     expectedFingerprint: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
     expectedRevision: z.number().int().positive(),
-    roleId: z.string().min(1).max(160),
     reason: z.string().min(1).max(500).optional(),
   }),
   z.strictObject({

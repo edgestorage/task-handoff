@@ -1162,7 +1162,7 @@ async function decideActionInboxOperation(item: Extract<ActionInboxItem, { type:
 
 async function decideActionInboxDeviceTrust(
   item: Extract<ActionInboxItem, { type: "device-trust" }>,
-  decision: { decision: "approve"; roleId: string } | { decision: "reject" },
+  decision: { decision: "approve" } | { decision: "reject" },
 ) {
   if (deviceTrustBusyKey.value) return;
   actionInboxError.value = "";
