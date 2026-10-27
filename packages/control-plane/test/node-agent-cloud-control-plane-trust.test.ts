@@ -311,6 +311,42 @@ test("approving a rotated Control Plane key revokes the prior key unless explici
   assert.equal(pins.filter((pin) => pin.status === "revoked").length, 1);
 });
 
+test("explicitly retaining a rotated Control Plane key keeps both pins active", (t) => {
+  const { repository } = fixture(t);
+  const first = context();
+  const pending = observe(repository, first);
+  assert.equal(pending.kind, "pending");
+  if (pending.kind !== "pending") return;
+  repository.decideCloudControlPlaneTrust({
+    action: "approve",
+    requestId: pending.request.id,
+    expectedFingerprint: repository.cloudControlPlaneTrustFingerprint(first.controlPlanePublicKey),
+    expectedRevision: pending.request.revision,
+    actor: { type: "local", id: "cli-admin" },
+  }, { now: NOW });
+
+  const rotated = context({ controlPlanePublicKey: crypto.randomBytes(32).toString("base64url") });
+  const rotationPending = observe(repository, rotated);
+  assert.equal(rotationPending.kind, "pending");
+  if (rotationPending.kind !== "pending") return;
+  const approved = repository.decideCloudControlPlaneTrust({
+    action: "approve",
+    requestId: rotationPending.request.id,
+    expectedFingerprint: repository.cloudControlPlaneTrustFingerprint(rotated.controlPlanePublicKey),
+    expectedRevision: rotationPending.request.revision,
+    retainPreviousKey: true,
+    actor: { type: "local", id: "cli-admin" },
+  }, { now: NOW });
+
+  assert.equal(approved.revokedPins.length, 0);
+  const activePins = repository.listCloudControlPlaneTrust(NOW).pins.filter((pin) => pin.status === "active");
+  assert.equal(activePins.length, 2);
+  assert.deepEqual(
+    new Set(activePins.map((pin) => pin.controlPlanePublicKey)),
+    new Set([first.controlPlanePublicKey, rotated.controlPlanePublicKey]),
+  );
+});
+
 test("revoking one exact pin does not block a future pending request", (t) => {
   const { repository } = fixture(t);
   const value = context({ controlPlaneId: "cp_gamma" });
