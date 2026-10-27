@@ -219,7 +219,7 @@ export function AppSessionDetailScreen({
   </>;
 
   if (!session || (accessMode !== 'tty' && accessMode !== 'vnc')) {
-    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.code }]}><Text style={[styles.unavailableText, { color: colors.codeText }]}>{t('appSessions.viewUnavailable')}</Text></View></>;
+    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.background }]}><Text style={[styles.unavailableText, { color: colors.text }]}>{t('appSessions.viewUnavailable')}</Text></View></>;
   }
 
   const statusText = error || (status === 'connecting' ? t('appSessions.terminalConnecting') : status === 'connected' ? t('appSessions.terminalConnected') : status === 'exited' ? t('appSessions.terminalExited') : t('appSessions.terminalClosed'));
@@ -240,8 +240,8 @@ export function AppSessionDetailScreen({
       }
       connection.current?.resize(nativeEvent.cols, nativeEvent.rows);
     }}
-    style={styles.terminal}
-    theme={{ background: colors.code, foreground: colors.codeText, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft }}
+    style={[styles.terminal, { backgroundColor: colors.background }]}
+    theme={{ background: colors.background, foreground: colors.text, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft, selectionForeground: colors.text }}
   /> : activeAccess ? <WebView
     key={activeAccess.token}
     allowsFullscreenVideo
@@ -272,14 +272,14 @@ export function AppSessionDetailScreen({
   /> : null;
   const sessionContent = <>{content}
     {status !== 'connected' ? <View pointerEvents="none" style={[styles.status, { backgroundColor: colors.surface }]}><Text numberOfLines={2} style={[styles.statusText, { color: status === 'error' ? colors.error : colors.textMuted }]}>{statusText}</Text></View> : null}</>;
-  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, styles.terminalKeyboardBackground]} testID="app-session-terminal-keyboard-background">
+  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, { backgroundColor: colors.background }]} testID="app-session-terminal-keyboard-background">
     <KeyboardAvoidingView
       behavior={appSessionTerminalKeyboardBehavior(Platform.OS)}
       keyboardVerticalOffset={appSessionTerminalKeyboardOffset(Platform.OS, Platform.Version)}
-      style={[styles.screen, styles.terminalKeyboardBackground]}
+      style={[styles.screen, { backgroundColor: colors.background }]}
       testID="app-session-terminal-keyboard-area"
     >{sessionContent}</KeyboardAvoidingView>
-  </View> : <View style={[styles.screen, { backgroundColor: colors.code }]}>{sessionContent}</View>}
+  </View> : <View style={[styles.screen, { backgroundColor: colors.background }]}>{sessionContent}</View>}
   <SessionRenameModal
     busy={renaming}
     error={renameError}
@@ -302,7 +302,6 @@ function sameOriginOrLocalDocument(url: string, accessUrl: string) {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   terminal: { flex: 1 },
-  terminalKeyboardBackground: { backgroundColor: '#000000' },
   webView: { flex: 1 },
   status: { borderRadius: 9, left: 12, maxWidth: '85%', paddingHorizontal: 10, paddingVertical: 7, position: 'absolute', top: 10 },
   statusText: { fontSize: 12, lineHeight: 16 },

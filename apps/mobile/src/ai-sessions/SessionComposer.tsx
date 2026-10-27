@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { BlurView } from 'expo-blur';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import { ActivityIndicator, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -39,7 +40,7 @@ import { AttachmentMenu, ModelSettingsMenu, PermissionMenu, type PermissionOptio
 import type { SessionComposerProps } from './session-composer-types';
 
 export function SessionComposer(props: SessionComposerProps) {
-  const { colors } = useMobileTheme();
+  const { dark, colors } = useMobileTheme();
   const { t } = useI18n();
   const attachmentDisabled = props.actionBusy || props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
   const permissionOptions: PermissionOption[] = ([
@@ -105,9 +106,28 @@ export function SessionComposer(props: SessionComposerProps) {
       style={[
         styles.composer,
         animatedContainerStyle,
-        { backgroundColor: colors.surface, borderColor: colors.border },
+        { borderColor: colors.border },
       ]}
     >
+      <View
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+        testID="session-composer-blur"
+      >
+        <BlurView
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          intensity={56}
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          tint={dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
+        />
+      </View>
+      <View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { backgroundColor: dark ? 'rgba(23, 24, 28, 0.30)' : 'rgba(255, 255, 255, 0.44)' }]}
+        testID="session-composer-material"
+      />
       <TextInputWrapper
         interceptTextPasteAbove={
           props.editingLabel ? undefined : AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD

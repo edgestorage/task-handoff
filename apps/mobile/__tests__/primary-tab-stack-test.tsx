@@ -70,7 +70,10 @@ test.each([
   }
 });
 
-test.each([26, 27])('pins the session header material while disabling mirrored scroll edges on iOS %i', (version) => {
+test.each([
+  [26, 'soft'],
+  [27, 'automatic'],
+] as const)('keeps the iOS %i session header edge effect while disabling mirrored scroll edges', (version, effect) => {
   const originalPlatform = Platform.OS;
   const originalVersion = Platform.Version;
   try {
@@ -78,9 +81,9 @@ test.each([26, 27])('pins the session header material while disabling mirrored s
     setPlatformVersion(version);
 
     expect(iosSessionHeaderOptions(false)).toEqual(expect.objectContaining({
-      headerBlurEffect: 'systemUltraThinMaterialLight',
-      scrollEdgeEffects: { bottom: 'hidden', left: 'hidden', right: 'hidden', top: 'hidden' },
+      scrollEdgeEffects: { bottom: 'hidden', left: 'hidden', right: 'hidden', top: effect },
     }));
+    expect(iosSessionHeaderOptions(false)).not.toHaveProperty('headerBlurEffect');
   } finally {
     setPlatform(originalPlatform as 'android' | 'ios');
     Object.defineProperty(Platform, 'Version', { configurable: true, value: originalVersion, writable: true });

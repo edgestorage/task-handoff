@@ -80,7 +80,7 @@ export function ToolActivityText({
       <Text
         numberOfLines={numberOfLines}
         onLayout={(event) => setTextWidth(event.nativeEvent.layout.width)}
-        style={[textStyle, styles.baseText, { color: colors.sessionActivityMuted }]}
+        style={[textStyle, styles.baseText, { color: colors.textMuted }]}
         testID="tool-activity-label"
       >
         {children}

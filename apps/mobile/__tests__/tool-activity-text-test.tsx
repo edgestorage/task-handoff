@@ -30,7 +30,7 @@ test('tool activity derives its duration from the measured logical text width', 
     useNativeDriver: true,
   })));
   await waitFor(() => expect(screen.getAllByTestId('tool-activity-highlight', { includeHiddenElements: true })).not.toHaveLength(0));
-  expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).color).toBe(mobileDarkColors.sessionActivityMuted);
+  expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).color).toBe(mobileDarkColors.textMuted);
   expect(StyleSheet.flatten(screen.getAllByTestId('tool-activity-highlight', { includeHiddenElements: true })[0].props.style).color).toBe(mobileDarkColors.sessionActivityHighlight);
   timing.mockRestore();
 });
