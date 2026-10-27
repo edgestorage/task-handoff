@@ -491,7 +491,7 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
 
 test("revoking one Control Plane pin closes only that channel and clears only its relay pairing", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
-  const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  const { app, relay, identityService, planeFor, connect, hmacFor, localHeaders } = await cloudRelayFixture(t, stub);
   planeFor("control_plane_revoke_one");
   const two = planeFor("control_plane_revoke_two");
   await bind(app, stub);
@@ -505,12 +505,26 @@ test("revoking one Control Plane pin closes only that channel and clears only it
   assert.equal(listed.statusCode, 200, listed.body);
   const pin = listed.json().data.pins.find((item: any) => item.controlPlaneId === "control_plane_revoke_one" && item.status === "active");
   assert.ok(pin);
-  const revokeHeaders = localHeaders("POST", `/api/node-agent/control-plane-trust/pins/${pin.pinId}/revoke`, { expectedFingerprint: pin.fingerprint, expectedRevision: pin.revision, reason: "test revoke" });
+  const revokePath = `/api/node-agent/control-plane-trust/pins/${pin.pinId}/revoke`;
+  const revokePayload = { expectedFingerprint: pin.fingerprint, expectedRevision: pin.revision, reason: "test revoke" };
+  const selfPairing = identityService.cloudRelayPairing("control_plane_revoke_one");
+  const otherPairing = identityService.cloudRelayPairing("control_plane_revoke_two");
+  assert.ok(selfPairing);
+  assert.ok(otherPairing);
+  const selfRevoke = await app.inject({
+    method: "POST",
+    url: revokePath,
+    headers: hmacFor(selfPairing)("POST", revokePath, revokePayload),
+    payload: revokePayload,
+  });
+  assert.equal(selfRevoke.statusCode, 403, selfRevoke.body);
+  assert.equal(selfRevoke.json().error.code, "NODE_AGENT_CONTROL_PLANE_TRUST_SELF_REVOKE_FORBIDDEN");
+
   const revoked = await app.inject({
     method: "POST",
-    url: `/api/node-agent/control-plane-trust/pins/${pin.pinId}/revoke`,
-    headers: revokeHeaders,
-    payload: { expectedFingerprint: pin.fingerprint, expectedRevision: pin.revision, reason: "test revoke" },
+    url: revokePath,
+    headers: hmacFor(otherPairing)("POST", revokePath, revokePayload),
+    payload: revokePayload,
   });
   assert.equal(revoked.statusCode, 200, revoked.body);
   assert.equal(revoked.json().data.pins.find((item: any) => item.pinId === pin.pinId)?.status, "revoked");

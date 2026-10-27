@@ -1,5 +1,5 @@
 <template>
-  <section class="cloud-relay-panel">
+  <section class="cloud-relay-panel" :class="{ 'cloud-relay-panel-embedded': embedded }">
     <header class="cloud-relay-panel-head">
       <span>{{ t("settings.nodeDetail.cloudRelayTitle") }}</span>
       <Button variant="outline" size="sm" :disabled="relay.isFetching.value" @click="relay.refetch()">
@@ -45,7 +45,7 @@ import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 
-const props = defineProps<{ selectedNode: Node }>();
+const props = defineProps<{ selectedNode: Node; embedded?: boolean }>();
 const { t } = useI18n();
 const queryClient = useQueryClient();
 const busy = ref(false);
@@ -84,6 +84,13 @@ async function unbind() {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
+}
+
+.cloud-relay-panel-embedded {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .cloud-relay-panel-head {

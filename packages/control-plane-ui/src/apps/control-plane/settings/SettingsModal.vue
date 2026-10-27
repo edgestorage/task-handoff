@@ -100,7 +100,6 @@
 
       <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
 
-      <TrustedDevicesSettingsSection v-else-if="settingsSection === 'trusted-devices'" />
 
       <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" :instances="instances" />
 
@@ -256,6 +255,7 @@
           <NodeDetailPanel
             :actions="nodeDetailActions"
             :busy="nodeDetailBusy"
+            :can-manage-settings="canManageSettings"
             :resources="nodeDetailResources"
             :selected-node="selectedNode"
             :status="nodeDetailStatus"
@@ -501,7 +501,6 @@ import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import ImageSettingsSection from "./ImageSettingsSection.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
-import TrustedDevicesSettingsSection from "./TrustedDevicesSettingsSection.vue";
 import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
 import ModelSettingsSection from "./ModelSettingsSection.vue";
 import ProjectSettingsSection from "./ProjectSettingsSection.vue";

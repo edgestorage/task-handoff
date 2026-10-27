@@ -338,6 +338,31 @@ test("revoking one exact pin does not block a future pending request", (t) => {
   if (next.kind === "pending") assert.notEqual(next.request.id, pending.request.id);
 });
 
+test("a Control Plane cannot revoke its own active trust pin", (t) => {
+  const { repository } = fixture(t);
+  const value = context({ controlPlaneId: "cp_self" });
+  const pending = observe(repository, value);
+  assert.equal(pending.kind, "pending");
+  if (pending.kind !== "pending") return;
+  const fingerprint = repository.cloudControlPlaneTrustFingerprint(value.controlPlanePublicKey);
+  const approved = repository.decideCloudControlPlaneTrust({
+    action: "approve",
+    requestId: pending.request.id,
+    expectedFingerprint: fingerprint,
+    expectedRevision: pending.request.revision,
+    actor: { type: "local", id: "cli-admin" },
+  }, { now: NOW });
+  assert.ok(approved.pin);
+
+  assert.throws(() => repository.revokeCloudControlPlaneTrustPin({
+    pinId: approved.pin!.id,
+    expectedFingerprint: fingerprint,
+    expectedRevision: approved.pin!.authorizationRevision,
+    actor: { type: "control-plane", id: value.controlPlaneId },
+  }, NOW), (error: any) => error.code === "NODE_AGENT_CONTROL_PLANE_TRUST_SELF_REVOKE_FORBIDDEN" && error.statusCode === 403);
+  assert.equal(repository.listCloudControlPlaneTrust(NOW).pins.find((pin) => pin.id === approved.pin!.id)?.status, "active");
+});
+
 test("fingerprint and short comparison code are derived from the full public key", () => {
   const publicKey = crypto.randomBytes(32).toString("base64url");
   const fingerprint = nodeRelayFingerprint(publicKey);

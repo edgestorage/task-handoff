@@ -530,6 +530,10 @@ test("revocation closes only the exact pin and explicit retry starts a new trust
     });
     assert.equal(revoked.status, "revoked");
     assert.deepEqual(fixture.closedPins, [{ pinId: approved.pin.id, reason: "device-trust-revoked" }]);
+    const records = await fixture.service.list(BINDING_ID);
+    assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.status, "revoked");
+    assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.revokeReason, "lost phone");
+    assert.ok(records.audit.some((entry) => entry.action === "pin-revoked" && entry.pinId === approved.pin.id && entry.reason === "lost phone"));
 
     const observed = await fixture.service.observeClient(authContext());
     assert.equal(observed.kind, "revoked");
@@ -570,9 +574,10 @@ test("an unavailable local role revokes the old pin, closes its sessions and reo
     assert.equal(unavailable.reason, "role-changed");
     assert.deepEqual(unavailable.revokedPins?.map((pin) => pin.id), [approved.pin.id]);
     assert.deepEqual(fixture.closedPins, [{ pinId: approved.pin.id, reason: "device-trust-reapproval-required" }]);
-    const oldPin = (await fixture.service.list(BINDING_ID)).pins.find((pin) => pin.id === approved.pin.id);
-    assert.equal(oldPin?.status, "revoked");
-    assert.equal(oldPin?.revokeReason, "local-role-unavailable");
+    const records = await fixture.service.list(BINDING_ID);
+    assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.status, "revoked");
+    assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.revokeReason, "local-role-unavailable");
+    assert.ok(records.audit.some((entry) => entry.action === "pin-revoked" && entry.reason === "local-role-unavailable"));
 
     fixture.setRoleResolver(async (roleId) => roleId === "role_admin" ? adminRole : operatorRole);
     const selfActor: CloudDeviceTrustActor = {
@@ -643,6 +648,7 @@ test("a changed local role revision revokes the old pin before reopening approva
     const records = await fixture.service.list(BINDING_ID);
     assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.status, "revoked");
     assert.equal(records.pins.find((pin) => pin.id === approved.pin.id)?.revokeReason, "local-role-changed");
+    assert.ok(records.audit.some((entry) => entry.action === "pin-revoked" && entry.reason === "local-role-changed"));
   } finally {
     await fixture.cleanup();
   }

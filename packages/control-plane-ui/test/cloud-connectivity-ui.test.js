@@ -75,6 +75,23 @@ test("Thandoff account follows the shared settings directory layout", () => {
   assert.doesNotMatch(component, /settings-panel-surface|modal-section/);
 });
 
+test("node management is an independent tab before cloud roles", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  const chinese = read("src/i18n/locales/zh-CN/settings.ts");
+  const english = read("src/i18n/locales/en-US/settings.ts");
+  const tabs = component.match(/<TabsList[\s\S]*?<\/TabsList>/)?.[0] || "";
+
+  assert.match(tabs, /value="connection"[\s\S]*value="node-management"[\s\S]*value="roles"[\s\S]*value="trusted-devices"/);
+  assert.match(component, /v-if="tab === 'node-management' && state\?\.status === 'active'"/);
+  assert.match(component, /tab === 'node-management'[\s\S]*settings\.cloud\.nodeRelay[\s\S]*v-for="node in cloudNodes"/);
+  assert.match(component, /nodeManagementRequiresConnection/);
+  assert.match(component, /nodeManagementUnbindNote/);
+  assert.match(chinese, /nodeManagement: "节点管理"/);
+  assert.match(chinese, /不会删除节点、节点上的账号绑定或本地实例/);
+  assert.match(english, /nodeManagement: "Node management"/);
+  assert.match(english, /does not delete nodes, their account binding, or local instances/);
+});
+
 test("blocked cloud node actions can be resolved without following a text-only instruction", () => {
   const bind = read("src/apps/control-plane/settings/CloudRelayBindPanel.vue");
   const detail = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
@@ -96,7 +113,7 @@ test("blocked cloud node actions can be resolved without following a text-only i
   assert.match(english, /cloudRelayBindEnableScopeAction: "Enable node management"/);
 });
 
-test("cloud permissions expose a clickable list of managed nodes", () => {
+test("node management exposes a clickable list of managed nodes", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
 
   assert.match(component, /useNodesQuery\(\)/);
@@ -121,7 +138,7 @@ test("archived Cloud roles can be removed but cannot be made available again", (
   assert.match(component, /settings\.cloud\.rolesArchivedSelected/);
 });
 
-test("Cloud available roles use the published catalog and preserve conflict context", () => {
+test("Cloud roles use the published catalog and preserve conflict context", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
   const queries = read("src/api/queries.ts");
   const client = read("../control-plane-client/src/control-plane-admin.ts");
@@ -143,6 +160,6 @@ test("Cloud available roles use the published catalog and preserve conflict cont
   assert.match(component, /watch\(\(\) => state\.value\?\.catalogPublication\?\.revision[\s\S]*status !== "published"[\s\S]*accessSettings\.refetch\(\)/);
   assert.match(client, /cloudAccessSettings\(signal\?: AbortSignal\)/);
   assert.match(client, /updateCloudAccessSettings\(input: \{ expectedSettingsRevision: number; availableRoleIds: string\[\] \}\)/);
-  assert.match(english, /Cloud access roles/);
-  assert.match(chinese, /云平台可用角色/);
+  assert.match(english, /Cloud roles/);
+  assert.match(chinese, /云平台角色/);
 });

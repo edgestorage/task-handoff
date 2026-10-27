@@ -548,14 +548,20 @@ export class EncryptedControlPlaneRelaySession {
         wireBytes: 0,
         detail: { code, reason: boundedText(reason?.toString(), 120) },
       });
-      this.unsubscribe?.();
-      for (const tty of this.ttys.values()) tty.close();
-      this.ttys.clear();
+      this.unsubscribeSafely();
+      this.closeTtys();
       for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
       for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
     });
   }
-  async close(reason: string) { this.closing = true; this.unsubscribe?.(); for (const tty of this.ttys.values()) tty.close(); this.ttys.clear(); for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED"); for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED")); if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, reason.slice(0, 120)); }
+  async close(reason: string) {
+    this.closing = true;
+    this.unsubscribeSafely();
+    this.closeTtys();
+    for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
+    for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
+    if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, reason.slice(0, 120));
+  }
   private async receive(raw: WebSocket.RawData, isBinary: boolean) {
     if (!isBinary) {
       const control = JSON.parse(rawBytes(raw).toString("utf8"));
@@ -655,14 +661,24 @@ export class EncryptedControlPlaneRelaySession {
         ? value.body.metricInstanceIds.map(String).filter(Boolean)
         : undefined;
       const compact = value.body?.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION;
-      this.unsubscribe = this.bridge.subscribe(this.actor, topics, (event) => this.send({ type: "event", event: compact ? projectCompactPublicEvent(event) : event }), transient.success ? transient.data : undefined, resourceMetricInstanceIds);
+      this.unsubscribe = this.bridge.subscribe(this.actor, topics, (event) => this.sendFromBridge({ type: "event", event: compact ? projectCompactPublicEvent(event) : event }), transient.success ? transient.data : undefined, resourceMetricInstanceIds);
       return;
     }
     // The Relay carries an idle channel to nothing, so a client that only
     // listens (every mobile event stream) has to keep the channel warm. The
     // direct event transport answers the same frame so both paths behave alike.
     if (value.type === "ping") { this.send({ type: "pong", sentAt: value.sentAt, receivedAt: new Date().toISOString() }); return; }
-    if (value.type === "tty-open" && value.streamId && this.bridge.openTty) { const streamId = value.streamId; const tty = await this.bridge.openTty(this.actor, value.body, (event) => this.send({ ...event, streamId })); this.ttys.set(streamId, tty); this.send({ type: "tty-opened", streamId }); return; }
+    if (value.type === "tty-open" && value.streamId && this.bridge.openTty) {
+      const streamId = value.streamId;
+      const tty = await this.bridge.openTty(this.actor, value.body, (event) => this.sendFromBridge({ ...event, streamId }));
+      if (this.closing) {
+        try { tty.close(); } catch { /* The relay channel already owns the failure. */ }
+        return;
+      }
+      this.ttys.set(streamId, tty);
+      this.send({ type: "tty-opened", streamId });
+      return;
+    }
     const tty = value.streamId ? this.ttys.get(value.streamId) : undefined;
     if (tty && value.type === "tty-input") return tty.send(String(value.data ?? ""));
     if (tty && value.type === "tty-resize") return tty.resize(Number(value.body?.cols), Number(value.body?.rows));
@@ -680,7 +696,18 @@ export class EncryptedControlPlaneRelaySession {
     }
     if (value.type !== "cancel") throw relayError("RELAY_ENVELOPE_UNSUPPORTED");
   }
+  private sendFromBridge(value: RelayEnvelope) {
+    if (this.closing) return;
+    try {
+      this.send(value);
+    } catch {
+      // Bridge callbacks run inside stream/event emitters. Letting a failed
+      // Relay write escape there terminates the process instead of reconnecting.
+      void this.close("relay-send-failed").catch(() => undefined);
+    }
+  }
   private send(value: RelayEnvelope) {
+    if (this.closing) return;
     if (this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2 * 1024 * 1024) throw relayError("RELAY_BACKPRESSURE_LIMIT");
     const plaintext = Buffer.from(JSON.stringify(value));
     const packed = packRelayPayload(plaintext, (input) => deflateRawSync(input));
@@ -690,6 +717,18 @@ export class EncryptedControlPlaneRelaySession {
     // pays the secretbox MAC and the fixed frame header before it reaches the Relay.
     this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: sealed.byteLength, wireBytes: wire.byteLength, detail: envelopeDetail(value) });
     this.socket.send(wire);
+  }
+  private unsubscribeSafely() {
+    const unsubscribe = this.unsubscribe;
+    this.unsubscribe = undefined;
+    try { unsubscribe?.(); } catch { /* The Relay channel is already closing. */ }
+  }
+  private closeTtys() {
+    const ttys = [...this.ttys.values()];
+    this.ttys.clear();
+    for (const tty of ttys) {
+      try { tty.close(); } catch { /* The Relay channel is already closing. */ }
+    }
   }
   private sendBinaryResponse(requestId: string, status: number, binary: { bytes: Uint8Array; contentType?: string; filename?: string }) {
     const responseId = ++this.nextResponseId;

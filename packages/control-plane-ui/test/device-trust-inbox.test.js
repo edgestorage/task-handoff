@@ -84,9 +84,14 @@ test("the approval center and trusted-device settings share one device-trust sto
   assert.match(inbox, /\.action-inbox-context \{ font-size: 12px/);
   assert.match(settings, /useDeviceTrustStore\(\)/);
   assert.match(settings, /expectedRevision: device\.revision/);
-  assert.match(settings, /settings\.deviceTrust\.reported/);
+  assert.match(settings, /filter\(\(device\) => device\.status === "active"\)/);
+  assert.match(settings, /count: devices\.length/);
+  assert.match(settings, /settings\.deviceTrust\.showDetails/);
   assert.doesNotMatch(settings, /font-size:(?:[0-9]|1[01])px/);
-  assert.match(sections, /access\.manageSettings[\s\S]*trusted-devices/);
+  const cloud = read("settings/CloudConnectivitySettingsSection.vue");
+  assert.doesNotMatch(sections, /id: "trusted-devices"/);
+  assert.match(cloud, /TrustedDevicesSettingsSection/);
+  assert.match(cloud, /settings\.cloud\.tabs\.trustedDevices/);
   assert.match(navigation, /deviceTrust: \{/);
 });
 

@@ -305,6 +305,9 @@ export class AccessRepository {
         throw controlPlaneTrustError("NODE_AGENT_CONTROL_PLANE_TRUST_REVISION_CONFLICT", "The trusted Control Plane pin changed before this decision.", 409);
       }
       if (pin.status === "revoked") return pin;
+      if (input.actor.type === "control-plane" && input.actor.id === pin.controlPlaneId) {
+        throw controlPlaneTrustError("NODE_AGENT_CONTROL_PLANE_TRUST_SELF_REVOKE_FORBIDDEN", "A Control Plane cannot revoke its own trust pin.", 403);
+      }
       const revoked: NodeAgentCloudControlPlanePin = {
         ...pin,
         status: "revoked",

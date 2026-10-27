@@ -9,7 +9,16 @@
         {{ requestFailureMessage }}
         <code>{{ requestFailure.code }}</code>
       </p>
+      <Tabs v-model="tab" class="cloud-tabs">
+        <TabsList class="cloud-tabs-list">
+          <TabsTrigger value="connection">{{ t("settings.cloud.tabs.connection") }}</TabsTrigger>
+          <TabsTrigger value="node-management">{{ t("settings.cloud.tabs.nodeManagement") }}</TabsTrigger>
+          <TabsTrigger value="roles">{{ t("settings.cloud.tabs.roles") }}</TabsTrigger>
+          <TabsTrigger value="trusted-devices">{{ t("settings.cloud.tabs.trustedDevices") }}</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
+      <template v-if="tab === 'connection'">
       <section class="cloud-directory">
         <header class="cloud-directory-head"><strong>{{ t("settings.cloud.accountTitle") }}</strong></header>
         <div v-if="account.error.value" class="cloud-error" role="alert"><span>{{ errorText(account.error.value) }}</span><Button variant="outline" size="sm" @click="account.refetch()">{{ t("common.actions.retry") }}</Button></div>
@@ -60,7 +69,64 @@
         </div>
       </section>
 
-      <section v-if="state?.status === 'active'" class="cloud-directory">
+      </template>
+
+      <section v-if="tab === 'node-management' && state?.status === 'active'" class="cloud-directory">
+        <header class="cloud-directory-head"><strong>{{ t("settings.cloud.tabs.nodeManagement") }}</strong></header>
+        <div class="cloud-content">
+          <p class="cloud-note">{{ t("settings.cloud.nodeManagementNote") }}</p>
+          <label class="cloud-scope">
+            <Checkbox :model-value="state.scopes.nodeRelay" :disabled="busy" @update:model-value="(value) => setScope('nodeRelay', value === true)" />
+            <span><strong>{{ t("settings.cloud.nodeRelay") }}</strong><small>{{ t("settings.cloud.nodeRelayHint") }}</small></span>
+          </label>
+          <section class="cloud-node-picker" :aria-label="t('settings.cloud.nodeListTitle')">
+            <header class="cloud-node-picker-head">
+              <span>
+                <strong>{{ t("settings.cloud.nodeListTitle") }}</strong>
+                <small>{{ t("settings.cloud.nodeListHint") }}</small>
+              </span>
+              <small>{{ t("settings.cloud.nodeListCount", { count: cloudNodes.length }) }}</small>
+            </header>
+            <p v-if="!canAddCloudNodes" class="cloud-node-picker-warning" role="status">
+              {{ signedIn ? t("settings.cloud.nodeAddRequiresBinding") : t("settings.cloud.nodeAddRequiresSignIn") }}
+            </p>
+            <p v-if="nodes.isLoading.value" class="cloud-node-picker-state" role="status">{{ t("settings.cloud.nodeListLoading") }}</p>
+            <div v-else-if="nodes.error.value" class="cloud-node-picker-error" role="alert">
+              <span>{{ t("settings.cloud.nodeListFailed") }} {{ errorText(nodes.error.value) }}</span>
+              <Button variant="outline" size="sm" @click="nodes.refetch()">{{ t("common.actions.retry") }}</Button>
+            </div>
+            <p v-else-if="!cloudNodes.length" class="cloud-node-picker-state">{{ t("settings.cloud.nodeListEmpty") }}</p>
+            <div v-else class="cloud-node-picker-list">
+              <button
+                v-for="node in cloudNodes"
+                :key="node.id"
+                type="button"
+                class="cloud-node-row"
+                :disabled="Boolean(nodeCloudHandle(node)) || Boolean(addingNodeId) || busy || !canAddCloudNodes"
+                @click="addNode(node)"
+              >
+                <span class="cloud-node-identity">
+                  <strong>{{ node.name }}</strong>
+                  <small>{{ nodeMeta(node) }}</small>
+                </span>
+                <span class="cloud-node-action">
+                  <Badge v-if="nodeCloudHandle(node)" variant="secondary">{{ t("settings.cloud.nodeAdded") }}</Badge>
+                  <template v-else>
+                    <span>{{ nodeActionLabel(node) }}</span>
+                    <Cloud :size="14" aria-hidden="true" />
+                  </template>
+                </span>
+              </button>
+            </div>
+          </section>
+          <p v-if="!state.scopes.nodeRelay" class="cloud-note" role="status">{{ t("settings.cloud.nodeRelayOffNote") }}</p>
+          <p class="cloud-note">{{ t("settings.cloud.nodeManagementUnbindNote") }}</p>
+        </div>
+      </section>
+      <p v-else-if="tab === 'node-management' && query.isLoading.value" class="cloud-state" role="status">{{ t("settings.cloud.loading") }}</p>
+      <p v-else-if="tab === 'node-management'" class="cloud-state">{{ t("settings.cloud.nodeManagementRequiresConnection") }}</p>
+
+      <section v-if="tab === 'roles' && state?.status === 'active'" class="cloud-directory">
         <header class="cloud-directory-head">
           <strong>{{ t("settings.cloud.rolesTitle") }}</strong>
           <span v-if="accessSettings.data.value" class="cloud-revision">{{ t("settings.cloud.rolesSettingsRevision", { revision: accessSettings.data.value.settingsRevision }) }}</span>
@@ -114,7 +180,10 @@
         </div>
       </section>
 
-      <section v-if="state?.status === 'active'" class="cloud-directory">
+      <p v-if="tab === 'roles' && state?.status !== 'active'" class="cloud-state">{{ t("settings.cloud.rolesRequiresConnection") }}</p>
+      <TrustedDevicesSettingsSection v-if="tab === 'trusted-devices'" />
+
+      <section v-if="tab === 'connection' && state?.status === 'active'" class="cloud-directory">
         <header class="cloud-directory-head"><strong>{{ t("settings.cloud.scopesTitle") }}</strong></header>
         <div class="cloud-content">
           <p class="cloud-note">{{ t("settings.cloud.scopesNote") }}</p>
@@ -122,51 +191,6 @@
             <Checkbox :model-value="state.scopes.deviceAccess" :disabled="busy" @update:model-value="(value) => setScope('deviceAccess', value === true)" />
             <span><strong>{{ t("settings.cloud.deviceAccess") }}</strong><small>{{ t("settings.cloud.deviceAccessHint") }}</small></span>
           </label>
-          <label class="cloud-scope">
-            <Checkbox :model-value="state.scopes.nodeRelay" :disabled="busy" @update:model-value="(value) => setScope('nodeRelay', value === true)" />
-            <span><strong>{{ t("settings.cloud.nodeRelay") }}</strong><small>{{ t("settings.cloud.nodeRelayHint") }}</small></span>
-          </label>
-          <section class="cloud-node-picker" :aria-label="t('settings.cloud.nodeListTitle')">
-            <header class="cloud-node-picker-head">
-              <span>
-                <strong>{{ t("settings.cloud.nodeListTitle") }}</strong>
-                <small>{{ t("settings.cloud.nodeListHint") }}</small>
-              </span>
-              <small>{{ t("settings.cloud.nodeListCount", { count: cloudNodes.length }) }}</small>
-            </header>
-            <p v-if="!canAddCloudNodes" class="cloud-node-picker-warning" role="status">
-              {{ signedIn ? t("settings.cloud.nodeAddRequiresBinding") : t("settings.cloud.nodeAddRequiresSignIn") }}
-            </p>
-            <p v-if="nodes.isLoading.value" class="cloud-node-picker-state" role="status">{{ t("settings.cloud.nodeListLoading") }}</p>
-            <div v-else-if="nodes.error.value" class="cloud-node-picker-error" role="alert">
-              <span>{{ t("settings.cloud.nodeListFailed") }} {{ errorText(nodes.error.value) }}</span>
-              <Button variant="outline" size="sm" @click="nodes.refetch()">{{ t("common.actions.retry") }}</Button>
-            </div>
-            <p v-else-if="!cloudNodes.length" class="cloud-node-picker-state">{{ t("settings.cloud.nodeListEmpty") }}</p>
-            <div v-else class="cloud-node-picker-list">
-              <button
-                v-for="node in cloudNodes"
-                :key="node.id"
-                type="button"
-                class="cloud-node-row"
-                :disabled="Boolean(nodeCloudHandle(node)) || Boolean(addingNodeId) || busy || !canAddCloudNodes"
-                @click="addNode(node)"
-              >
-                <span class="cloud-node-identity">
-                  <strong>{{ node.name }}</strong>
-                  <small>{{ nodeMeta(node) }}</small>
-                </span>
-                <span class="cloud-node-action">
-                  <Badge v-if="nodeCloudHandle(node)" variant="secondary">{{ t("settings.cloud.nodeAdded") }}</Badge>
-                  <template v-else>
-                    <span>{{ nodeActionLabel(node) }}</span>
-                    <Cloud :size="14" aria-hidden="true" />
-                  </template>
-                </span>
-              </button>
-            </div>
-          </section>
-          <p v-if="!state.scopes.nodeRelay" class="cloud-note" role="status">{{ t("settings.cloud.nodeRelayOffNote") }}</p>
           <p v-if="!state.scopes.deviceAccess" class="cloud-note" role="status">{{ t("settings.cloud.deviceAccessOffNote") }}</p>
           <p v-if="!state.scopes.deviceAccess && !state.scopes.nodeRelay" class="cloud-warning" role="status">{{ t("settings.cloud.bothScopesOffNote") }}</p>
           <p class="cloud-note">{{ t("settings.cloud.unbindClearsScopes") }}</p>
@@ -208,13 +232,16 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { bindCloudRelayNode, createCloudBindingRequest, createCloudSignInRequest, disconnectCloudAccount, signOutCloudAccount, stepUpControlPlaneAuthentication, updateCloudAvailableRoles, updateCloudScopes, useCloudAccessSettingsQuery, useCloudAccountQuery, useCloudConnectivityQuery, useCloudNodeRelayQuery, useNodesQuery } from "../../../api/queries";
 import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { nodeConnectionModeKeys, nodeRuntimeStatusKeys, translateStatus } from "../../../i18n/status";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import TrustedDevicesSettingsSection from "./TrustedDevicesSettingsSection.vue";
 
 const { locale, t } = useI18n();
+const tab = ref<"connection" | "node-management" | "roles" | "trusted-devices">("connection");
 const query = useCloudConnectivityQuery();
 const account = useCloudAccountQuery();
 const nodes = useNodesQuery();
@@ -447,7 +474,7 @@ async function disconnect() { if (!window.confirm(t("settings.cloud.disconnectCo
 </script>
 
 <style scoped>
-.cloud-connectivity-scroll{height:100%;min-height:0;width:100%}.cloud-connectivity-page{display:grid;gap:12px}.cloud-page-head{align-items:center;display:flex;gap:16px;justify-content:space-between}.cloud-page-head p,.cloud-note{color:var(--text-muted);font-size:12px;line-height:1.45;margin:0}.cloud-scope{align-items:flex-start;cursor:pointer;display:flex;gap:10px}.cloud-scope span{display:grid;gap:2px}.cloud-scope strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-scope small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-directory{background:var(--surface-raised);border:1px solid var(--line);border-radius:8px;overflow:hidden}.cloud-directory-head{align-items:center;border-bottom:1px solid var(--line);display:flex;min-height:38px;padding:0 12px}.cloud-directory-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-content{display:grid;gap:14px;padding:12px}.cloud-state{color:var(--text-muted);font-size:12px;padding:48px 20px;text-align:center}.cloud-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;justify-content:space-between;min-height:80px;padding:12px}.cloud-identity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.cloud-identity>div{display:grid;gap:4px;min-width:0;padding:8px 10px}.cloud-identity dt{color:var(--text-muted);font-size:12px}.cloud-identity dd{color:var(--text);font-size:13px;margin:0;min-width:0;overflow-wrap:anywhere}.cloud-identity code{font-size:12px}.cloud-note{background:var(--surface-inset);border:1px solid var(--line);border-radius:7px;padding:10px 12px}.cloud-pending{background:var(--surface-active);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;margin:0;padding:10px 12px}.cloud-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}.cloud-actions{border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;padding-top:12px}.cloud-warning{color:var(--status-warning);font-size:12px;margin:0}@media(max-width:720px){.cloud-page-head{align-items:stretch;flex-direction:column}.cloud-page-head>span{align-self:flex-start}.cloud-identity{grid-template-columns:1fr}}
+.cloud-connectivity-scroll{height:100%;min-height:0;width:100%}.cloud-connectivity-page{display:grid;gap:12px}.cloud-tabs{max-width:100%;min-width:0}.cloud-tabs-list{align-self:start;background:var(--surface-inset);border:1px solid var(--line);border-radius:7px;gap:1px;height:32px;justify-self:start;max-width:100%;min-height:32px;overflow-x:auto;padding:2px;scrollbar-width:none;width:fit-content}.cloud-tabs-list::-webkit-scrollbar{display:none}.cloud-tabs-list :deep(button){border-radius:5px;color:var(--text-muted);flex:0 0 auto;font-size:12px;font-weight:500;height:26px;min-height:26px;padding:0 10px}.cloud-tabs-list :deep(button:not([data-state="active"]):hover){background:var(--surface-hover);color:var(--text-strong)}.cloud-tabs-list :deep(button[data-state="active"]){background:var(--surface-active);color:var(--text-strong);box-shadow:none}.cloud-page-head{align-items:center;display:flex;gap:16px;justify-content:space-between}.cloud-page-head p,.cloud-note{color:var(--text-muted);font-size:12px;line-height:1.45;margin:0}.cloud-scope{align-items:flex-start;cursor:pointer;display:flex;gap:10px}.cloud-scope span{display:grid;gap:2px}.cloud-scope strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-scope small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-directory{background:var(--surface-raised);border:1px solid var(--line);border-radius:8px;overflow:hidden}.cloud-directory-head{align-items:center;border-bottom:1px solid var(--line);display:flex;min-height:38px;padding:0 12px}.cloud-directory-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-content{display:grid;gap:14px;padding:12px}.cloud-state{color:var(--text-muted);font-size:12px;padding:48px 20px;text-align:center}.cloud-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;justify-content:space-between;min-height:80px;padding:12px}.cloud-identity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.cloud-identity>div{display:grid;gap:4px;min-width:0;padding:8px 10px}.cloud-identity dt{color:var(--text-muted);font-size:12px}.cloud-identity dd{color:var(--text);font-size:13px;margin:0;min-width:0;overflow-wrap:anywhere}.cloud-identity code{font-size:12px}.cloud-note{background:var(--surface-inset);border:1px solid var(--line);border-radius:7px;padding:10px 12px}.cloud-pending{background:var(--surface-active);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;margin:0;padding:10px 12px}.cloud-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}.cloud-actions{border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;padding-top:12px}.cloud-warning{color:var(--status-warning);font-size:12px;margin:0}@media(max-width:720px){.cloud-page-head{align-items:stretch;flex-direction:column}.cloud-page-head>span{align-self:flex-start}.cloud-identity{grid-template-columns:1fr}}
 .cloud-node-picker{display:grid;border:1px solid var(--line);border-radius:7px;overflow:hidden}.cloud-node-picker-head{align-items:center;background:var(--surface-inset);border-bottom:1px solid var(--line);display:flex;gap:12px;justify-content:space-between;padding:9px 10px}.cloud-node-picker-head>span{display:grid;gap:2px;min-width:0}.cloud-node-picker-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-picker-head small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-node-picker-head>small{flex:0 0 auto}.cloud-node-picker-warning{border-bottom:1px solid var(--line);color:var(--status-warning);font-size:12px;line-height:1.45;margin:0;padding:9px 10px}.cloud-node-picker-state{color:var(--text-muted);font-size:12px;margin:0;padding:12px 10px;text-align:center}.cloud-node-picker-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;gap:12px;justify-content:space-between;padding:10px}.cloud-node-picker-list{display:grid}.cloud-node-row{align-items:center;appearance:none;background:transparent;border:0;border-bottom:1px solid var(--line);color:inherit;cursor:pointer;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) auto;padding:10px;text-align:left;width:100%}.cloud-node-row:last-child{border-bottom:0}.cloud-node-row:not(:disabled):hover{background:var(--surface-hover)}.cloud-node-row:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}.cloud-node-row:disabled{cursor:default}.cloud-node-identity{display:grid;gap:3px;min-width:0}.cloud-node-identity strong,.cloud-node-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cloud-node-identity strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-identity small{color:var(--text-muted);font-size:12px}.cloud-node-action{align-items:center;color:var(--accent);display:inline-flex;font-size:12px;font-weight:500;gap:6px;white-space:nowrap}.cloud-node-row:disabled .cloud-node-action{color:var(--text-muted)}@media(max-width:560px){.cloud-node-row{gap:7px;grid-template-columns:1fr}.cloud-node-action{justify-self:start}}
 .cloud-directory-head{gap:8px;justify-content:space-between}.cloud-revision,.cloud-catalog-meta{color:var(--text-muted);font-size:12px}.cloud-revision{white-space:nowrap}.cloud-catalog-meta{align-items:center;display:flex;flex-wrap:wrap;gap:4px 12px}.cloud-role-publication-error code,.cloud-role-error code{font-size:12px}.cloud-role-list{display:grid;border:1px solid var(--line);border-radius:7px;overflow:hidden}.cloud-role-row{align-items:center;display:grid;gap:10px;grid-template-columns:auto minmax(0,1fr) auto;padding:10px;border-bottom:1px solid var(--line)}.cloud-role-row:last-child{border-bottom:0}.cloud-role-row[data-archived="true"]{background:var(--surface-inset)}.cloud-role-copy{display:grid;gap:3px;min-width:0}.cloud-role-title{align-items:center;display:flex;flex-wrap:wrap;gap:6px}.cloud-role-title strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-role-copy small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-role-copy code{color:var(--text-muted);font-size:12px;overflow-wrap:anywhere}.cloud-role-state{color:var(--text-muted);font-size:12px;white-space:nowrap}.cloud-role-actions{align-items:center;justify-content:flex-end}.cloud-role-dirty{color:var(--text-muted);font-size:12px;margin-right:auto}.cloud-role-error{background:color-mix(in srgb,var(--status-danger) 7%,transparent);border:1px solid color-mix(in srgb,var(--status-danger) 24%,var(--line));border-radius:7px;color:var(--status-danger);display:grid;gap:6px;font-size:12px;padding:10px 12px}.cloud-role-error strong{font-weight:500}.cloud-role-error ul{display:grid;gap:3px;margin:0;padding-left:18px}.cloud-role-error code{color:var(--text-muted)}.cloud-step-up-dialog{max-width:480px}.cloud-step-up-form{display:grid;gap:14px}.cloud-step-up-field{display:grid;gap:6px;font-size:12px}.cloud-step-up-field span{color:var(--text-muted)}@media(max-width:620px){.cloud-role-row{align-items:start;grid-template-columns:auto minmax(0,1fr)}.cloud-role-state{grid-column:2}.cloud-role-actions{align-items:stretch}.cloud-role-dirty{flex-basis:100%;margin:0}.cloud-directory-head{align-items:flex-start;flex-direction:column;justify-content:center;padding-block:9px}.cloud-revision{white-space:normal}}
 </style>

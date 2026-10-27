@@ -511,10 +511,18 @@
               v-if="selectedNode.connectionMode === 'control-plane-proxy'"
               :selected-node="selectedNode"
             />
-            <CloudRelayNodePanel
+            <div
               v-else-if="selectedNode.connectionMode === 'cloud-relay'"
-              :selected-node="selectedNode"
-            />
+              class="node-cloud-connection-card"
+            >
+              <CloudRelayNodePanel :selected-node="selectedNode" embedded />
+              <CloudNodeTrustPanel
+                v-if="showCloudNodeTrust"
+                :can-manage-settings="canManageSettings"
+                :selected-node="selectedNode"
+                embedded
+              />
+            </div>
             <template v-else>
             <div class="node-remote-panel">
               <div class="section-head has-actions">
@@ -580,7 +588,15 @@
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
               </p>
             </div>
-            <CloudRelayBindPanel :selected-node="selectedNode" @open-cloud-settings="emit('open-cloud-settings')" />
+            <div class="node-cloud-connection-card">
+              <CloudRelayBindPanel :selected-node="selectedNode" embedded @open-cloud-settings="emit('open-cloud-settings')" />
+              <CloudNodeTrustPanel
+                v-if="showCloudNodeTrust"
+                :can-manage-settings="canManageSettings"
+                :selected-node="selectedNode"
+                embedded
+              />
+            </div>
             <div class="node-remote-panel">
               <div class="node-detail-section-body">
               <ControlPlaneProxyManagementPanel :node-id="selectedNode.id" :node-name="selectedNode.name" />
@@ -657,6 +673,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
+import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
@@ -674,6 +691,7 @@ import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel
 import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
 import CloudRelayNodePanel from "./CloudRelayNodePanel.vue";
 import CloudRelayBindPanel from "./CloudRelayBindPanel.vue";
+import CloudNodeTrustPanel from "./CloudNodeTrustPanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeResourceEmptyState from "./NodeResourceEmptyState.vue";
 import { nodeLocalFolderDisplayName } from "../nodePath";
@@ -810,12 +828,17 @@ type NodeDetailStatus = {
 const props = defineProps<{
   actions: NodeDetailActions;
   busy: NodeDetailBusy;
+  canManageSettings: boolean;
   resources: NodeDetailResources;
   selectedNode?: Node;
   status: NodeDetailStatus;
 }>();
 const emit = defineEmits<{ "open-cloud-settings": [] }>();
 
+const showCloudNodeTrust = computed(() => props.canManageSettings && Boolean(props.selectedNode && (
+  props.selectedNode.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL]
+  || props.selectedNode.connectionPath?.kind === "cloud-relay"
+)));
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
 const localFolderRenameTarget = ref<NodeLocalFolder>();
@@ -1449,6 +1472,15 @@ watch(
   gap: 10px;
   min-width: 0;
   padding: 12px;
+}
+
+.node-cloud-connection-card {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .node-detail-section > .control-plane-error,

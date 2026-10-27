@@ -126,6 +126,7 @@ function DeviceTrustLoadingState({
   const controlPlaneName = connection.controlPlane?.name?.trim() || controlPlaneId;
   const source = [connection.controlPlane?.source, connection.controlPlane?.origin].filter(Boolean).join(' · ');
   const canRetry = phase === 'rejected' || phase === 'expired' || phase === 'revoked';
+  const singleAction = Number(canRetry) + Number(Boolean(onOpenSettings)) === 1;
   const pending = phase === 'waiting-device-approval' || phase === 'approved-connecting';
   const reasonVisible = Boolean(trust.reason) && (
     phase === 'rejected'
@@ -177,19 +178,20 @@ function DeviceTrustLoadingState({
       {reasonVisible && trust.reason ? <Text style={[styles.reason, { color: colors.textMuted }]}>{t(reasonKey(trust.reason))}</Text> : null}
       {phase === 'waiting-device-approval' ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('deviceTrust.waitingHint')}</Text> : null}
 
-      <View style={styles.actions}>
+      <View style={[styles.actions, singleAction && styles.actionsSingle]}>
         {canRetry ? <Pressable
           accessibilityRole="button"
           onPress={connection.onRetryDeviceTrust}
-          style={({ pressed }) => [styles.retry, { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 }]}
+          style={({ pressed }) => [styles.retry, singleAction && styles.actionFill, { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 }]}
         >
           <Icon color="#fff" name="refresh-outline" size={18} />
           <Text style={styles.retryText}>{t('deviceTrust.retry')}</Text>
         </Pressable> : null}
         {onOpenSettings ? <Pressable
+          accessibilityLabel={t('deviceTrust.backToSettings')}
           accessibilityRole="button"
           onPress={onOpenSettings}
-          style={({ pressed }) => [styles.settingsAction, { borderColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
+          style={({ pressed }) => [styles.settingsAction, singleAction && styles.actionFill, { borderColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
         >
           <Icon color={colors.text} name="settings-outline" size={17} />
           <Text style={[styles.settingsText, { color: colors.text }]}>{t('deviceTrust.backToSettings')}</Text>
@@ -325,7 +327,9 @@ function formatExpiry(value: string, locale: string) {
 }
 
 const styles = StyleSheet.create({
+  actionFill: { alignSelf: 'stretch', justifyContent: 'center', width: '100%' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  actionsSingle: { flexDirection: 'column' },
   card: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, gap: 14, maxWidth: 560, padding: 18, width: '100%' },
   container: { alignItems: 'center', flexGrow: 1, justifyContent: 'center', padding: 24 },
   description: { fontSize: 14, lineHeight: 20 },

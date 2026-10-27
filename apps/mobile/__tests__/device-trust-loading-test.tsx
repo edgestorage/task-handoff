@@ -1,4 +1,5 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobile';
 
 import { InitialSyncLoading, type InitialSyncConnection } from '../src/components/InitialSyncLoading';
@@ -63,6 +64,9 @@ describe('<InitialSyncLoading /> device trust states', () => {
     expect(screen.getByText(`sha256:${'p'.repeat(43)}`)).toBeTruthy();
     expect(screen.getByText('devtrust_123')).toBeTruthy();
     expect(screen.getByText('First connection from this device')).toBeTruthy();
+
+    const settingsButton = screen.getByRole('button', { name: 'Back to settings' });
+    expect(StyleSheet.flatten(settingsButton.props.style)).toMatchObject({ alignSelf: 'stretch', justifyContent: 'center', width: '100%' });
 
     fireEvent.press(screen.getByText('Back to settings'));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
