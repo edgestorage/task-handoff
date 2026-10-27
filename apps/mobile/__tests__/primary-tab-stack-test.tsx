@@ -2,7 +2,7 @@ import { render } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { Platform, Text } from 'react-native';
 
-import { iosTransparentHeaderOptions } from '../src/components/navigation-header';
+import { iosSessionHeaderOptions, iosTransparentHeaderOptions } from '../src/components/navigation-header';
 import { PrimaryTabStack } from '../src/components/PrimaryTabStack';
 
 const mockHeaderOptions: { current?: Record<string, unknown> } = {};
@@ -64,6 +64,23 @@ test.each([
     setPlatformVersion(version);
 
     expect(iosTransparentHeaderOptions(false)).toEqual(expect.objectContaining({ scrollEdgeEffects: { top: effect } }));
+  } finally {
+    setPlatform(originalPlatform as 'android' | 'ios');
+    Object.defineProperty(Platform, 'Version', { configurable: true, value: originalVersion, writable: true });
+  }
+});
+
+test.each([26, 27])('pins the session header material while disabling mirrored scroll edges on iOS %i', (version) => {
+  const originalPlatform = Platform.OS;
+  const originalVersion = Platform.Version;
+  try {
+    setPlatform('ios');
+    setPlatformVersion(version);
+
+    expect(iosSessionHeaderOptions(false)).toEqual(expect.objectContaining({
+      headerBlurEffect: 'systemUltraThinMaterialLight',
+      scrollEdgeEffects: { bottom: 'hidden', left: 'hidden', right: 'hidden', top: 'hidden' },
+    }));
   } finally {
     setPlatform(originalPlatform as 'android' | 'ios');
     Object.defineProperty(Platform, 'Version', { configurable: true, value: originalVersion, writable: true });

@@ -65,8 +65,8 @@ test('marks only the active profile when a direct and cloud Relay profile share 
   mockStore.active.mockResolvedValue(relay);
   const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
   await waitFor(() => expect(screen.getByText('https://direct.example.com')).toBeTruthy());
-  expect(screen.getByText('https://cloud.thandoff.com')).toBeTruthy();
-  expect(screen.getByText('Shared · Viewer')).toBeTruthy();
+  expect(screen.queryByText('https://cloud.thandoff.com')).toBeNull();
+  expect(screen.getByText('Thandoff relay · Shared · Viewer')).toBeTruthy();
   expect(screen.getByText('Record diagnostic logs')).toBeTruthy();
   expect(screen.getByTestId('diagnostic-logs-toggle')).toBeTruthy();
   expect(screen.getAllByTestId('profile-active-marker', { includeHiddenElements: true })).toHaveLength(1);
@@ -79,6 +79,21 @@ test('marks only the active profile when a direct and cloud Relay profile share 
   expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
     params: expect.objectContaining({ controlPlaneId: 'cp_01', fingerprint, kind: 'direct' }),
   }));
+});
+
+test('shows cloud ownership without exposing the cloud service origin', async () => {
+  const ownedRelay = MobileCloudRelayControlPlaneProfileSchema.parse({
+    ...relay,
+    identity: { ...relay.identity, displayName: 'Owned Relay' },
+    access: { ...relay.access, resourceAccess: undefined },
+  });
+  mockStore.list.mockResolvedValue([ownedRelay]);
+  mockStore.active.mockResolvedValue(ownedRelay);
+
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
+
+  expect(await screen.findByText('Thandoff relay · Owned by you')).toBeTruthy();
+  expect(screen.queryByText('https://cloud.thandoff.com')).toBeNull();
 });
 
 test('opens Thandoff account settings when the account is signed in', async () => {

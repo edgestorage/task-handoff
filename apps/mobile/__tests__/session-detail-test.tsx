@@ -2,7 +2,8 @@ import { useEffect, useReducer } from 'react';
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { File } from 'expo-file-system';
-import { Animated, Dimensions, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'react-native';
+import { HeaderHeightContext } from 'expo-router/react-navigation';
+import { Animated, Dimensions, FlatList, Keyboard, PixelRatio, Platform, StyleSheet, Text } from 'react-native';
 import { BookOpen, Brain, CircleHelp, ClipboardCheck, CornerDownRight, Download, FilePenLine, FileSearch, ListTodo, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaInsetsContext, SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -433,13 +434,14 @@ test('compact mode does not force a scroll to the latest content when switching 
   cancelFrame.mockRestore();
 });
 
-test('conversation mode anchors its virtual window at the latest logical row', async () => {
+test('conversation mode renders newest messages first in an inverted virtualized list', async () => {
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
     callback(0);
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
   const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
   const longSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     currentTool: undefined,
@@ -459,36 +461,63 @@ test('conversation mode anchors its virtual window at the latest logical row', a
   const screen = await render(<SessionDetail messages={[]} mode="conversation" session={longSession} />);
   const list = screen.getByTestId('session-detail-scroll');
 
-  expect(list.props.inverted).toBeUndefined();
+  expect(list.props.inverted).toBe(true);
   expect(list.props.initialNumToRender).toBe(18);
-  expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 0 });
-  expect(list.props.data).toHaveLength(18);
-  expect(list.props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 44' }));
-  expect(list.props.data.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', text: 'Response 49' }));
-  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+  expect(list.props.maintainVisibleContentPosition).toBeUndefined();
+  expect(list.props.onStartReached).toBeUndefined();
+  expect(list.props.data).toHaveLength(150);
+  expect(list.props.data[0]).toEqual(expect.objectContaining({ role: 'assistant', text: 'Response 49' }));
+  expect(list.props.data[1]).toEqual(expect.objectContaining({ role: 'history' }));
+  expect(list.props.data[2]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 49' }));
+  expect(list.props.data.at(-1)).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 0' }));
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 0 }));
+  expect(scrollToEnd).not.toHaveBeenCalled();
 
   await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 500 } } });
   await fireEvent(list, 'contentSizeChange', 390, 1_200);
   await fireEvent(list, 'scrollBeginDrag');
   await fireEvent.scroll(list, {
     nativeEvent: {
-      contentOffset: { x: 0, y: 0 },
+      contentOffset: { x: 0, y: 300 },
       contentSize: { height: 1_200, width: 390 },
       layoutMeasurement: { height: 500, width: 390 },
     },
   });
-  await act(async () => { list.props.onStartReached(); });
-  await waitFor(() => expect(screen.getByTestId('session-detail-scroll').props.data).toHaveLength(36));
-  expect(screen.getByTestId('session-detail-scroll').props.initialNumToRender).toBe(18);
-  expect(screen.getByTestId('session-detail-scroll').props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 38' }));
+  expect(await screen.findByRole('button', { name: 'Scroll to latest message' })).toBeTruthy();
 
   await screen.unmount();
+  scrollToOffset.mockRestore();
   scrollToEnd.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
 
-test('switching to conversation clears the previous mode metrics before following its measured bottom', async () => {
+test('conversation mode compensates the inverted list with the native header height', async () => {
+  const originalPlatform = Platform.OS;
+  try {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios', writable: true });
+
+    const conversation = await render(<HeaderHeightContext.Provider value={116}>
+      <SessionDetail messages={[]} mode="conversation" session={session} />
+    </HeaderHeightContext.Provider>);
+    const conversationList = conversation.getByTestId('session-detail-scroll');
+    expect(conversationList.props.contentInsetAdjustmentBehavior).toBe('never');
+    expect(StyleSheet.flatten(conversationList.props.contentContainerStyle).paddingBottom).toBe(128);
+    await conversation.unmount();
+
+    const compact = await render(<HeaderHeightContext.Provider value={116}>
+      <SessionDetail messages={[]} mode="turn" session={session} />
+    </HeaderHeightContext.Provider>);
+    const compactList = compact.getByTestId('session-detail-scroll');
+    expect(compactList.props.contentInsetAdjustmentBehavior).toBe('automatic');
+    expect(StyleSheet.flatten(compactList.props.contentContainerStyle).paddingBottom).toBe(28);
+    await compact.unmount();
+  } finally {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform, writable: true });
+  }
+});
+
+test('switching to conversation starts at the inverted list latest edge without scrolling through all content', async () => {
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
     callback(0);
     return 1;
@@ -513,13 +542,14 @@ test('switching to conversation clears the previous mode metrics before followin
   scrollToOffset.mockClear();
 
   await screen.rerender(<SessionDetail messages={[]} mode="conversation" session={session} />);
-  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
-  expect(scrollToOffset).not.toHaveBeenCalled();
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 0 }));
+  expect(scrollToEnd).not.toHaveBeenCalled();
 
   const conversationList = screen.getByTestId('session-detail-scroll');
+  expect(conversationList.props.inverted).toBe(true);
   await fireEvent(conversationList, 'layout', { nativeEvent: { layout: { height: 500 } } });
   await fireEvent(conversationList, 'contentSizeChange', 390, 1_500);
-  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_000 }));
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 0 }));
 
   await screen.unmount();
   scrollToEnd.mockRestore();
@@ -542,7 +572,7 @@ test('conversation reanchors after the keyboard viewport settles', async () => {
   await fireEvent(list, 'contentSizeChange', 390, 1_200);
   scrollToOffset.mockClear();
   await screen.rerender(<SessionDetail keyboardViewportRevision={1} messages={[]} mode="conversation" session={session} />);
-  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 900 }));
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 0 }));
 
   await screen.unmount();
   scrollToOffset.mockRestore();
@@ -554,6 +584,8 @@ test('scroll following uses a bottom tolerance and treats short content as settl
   expect(isSessionScrollNearBottom({ contentHeight: 400, offsetY: 0, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 460, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 300, viewportHeight: 500 })).toBe(false);
+  expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 0, viewportHeight: 500 }, true)).toBe(true);
+  expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 300, viewportHeight: 500 }, true)).toBe(false);
 });
 
 test('running Turn elapsed time advances from the authoritative start timestamp', () => {
@@ -1480,9 +1512,22 @@ test('untyped fenced code exposes a plain text language label', async () => {
   await screen.unmount();
 });
 
-test('fenced code constrains its cross-axis height inside a vertical conversation', async () => {
+test('fenced code constrains its cross-axis height without flexing its message bubble', async () => {
   const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
-  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(Math.ceil(75 * PixelRatio.getFontScale() + 28));
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style)).toEqual(expect.objectContaining({
+    flexGrow: 0,
+    flexShrink: 0,
+    height: Math.ceil(75 * PixelRatio.getFontScale() + 28),
+  }));
+  await screen.unmount();
+});
+
+test('markdown tables do not flex their scroll container beyond their content', async () => {
+  const screen = await render(<SafeMarkdown>{'| Path | Auth |\n| --- | --- |\n| reverse-wss | node-agent connects to the control plane |'}</SafeMarkdown>);
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-table-scroll').props.style)).toEqual(expect.objectContaining({
+    flexGrow: 0,
+    flexShrink: 0,
+  }));
   await screen.unmount();
 });
 

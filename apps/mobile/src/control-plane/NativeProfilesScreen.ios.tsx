@@ -18,8 +18,8 @@ import { useI18n } from '../i18n';
 import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled, setDiagnosticLogsEnabled, subscribeDiagnosticLogs } from '../observability/diagnostic-logs';
 import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
-import { controlPlaneRoleMessageKey } from './current-access';
-import { mobileControlPlaneProfileAddress, sameMobileControlPlaneProfileIdentity } from './profile';
+import { mobileControlPlaneProfileConnectionLabel } from './connection-presentation';
+import { sameMobileControlPlaneProfileIdentity } from './profile';
 import type { CloudAccountState } from './use-cloud-account-state';
 
 export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
@@ -150,9 +150,6 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
         {props.profiles.map((profile) => {
           const active = Boolean(props.activeProfile && sameMobileControlPlaneProfileIdentity(props.activeProfile, profile));
           const name = profile.identity.displayName || t('profiles.defaultName');
-          const sharedAccess = profile.access.kind === 'cloud-relay' && profile.access.resourceAccess?.kind === 'shared' ? profile.access.resourceAccess : undefined;
-          const sharedRoleKey = sharedAccess ? controlPlaneRoleMessageKey(sharedAccess.role) : undefined;
-          const accessLabel = sharedAccess ? t('cloudControlPlanes.sharedRole', { role: sharedRoleKey ? t(sharedRoleKey) : sharedAccess.role }) : undefined;
           return (
             <Button
               key={`${profile.access.kind}:${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}
@@ -163,7 +160,7 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
                 <Image size={22} systemName="server.rack" />
                 <VStack alignment="leading" spacing={3}>
                   <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{name}</Text>
-                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{accessLabel ? `${accessLabel} · ${mobileControlPlaneProfileAddress(profile)}` : mobileControlPlaneProfileAddress(profile)}</Text>
+                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{mobileControlPlaneProfileConnectionLabel(profile, t)}</Text>
                 </VStack>
                 <Spacer />
                 {active ? <Image size={17} systemName="checkmark.circle.fill" /> : null}

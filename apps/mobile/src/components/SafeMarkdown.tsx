@@ -590,7 +590,9 @@ function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { cont
   const copied = copiedContent === content;
   // A horizontal ScrollView needs an explicit cross-axis size inside a
   // virtualized list. Include the current accessibility font scale so the
-  // explicit height never clips enlarged code text.
+  // explicit height never clips enlarged code text. It must also opt out of
+  // vertical flex growth, otherwise its content height can leak into the
+  // surrounding message bubble.
   const blockHeight = Math.ceil(
     Math.max(1, content.split('\n').length) * mobileWebMetric(14 * 1.55) * PixelRatio.getFontScale()
       + mobileWebMetric(12) * 2,
@@ -628,7 +630,7 @@ function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { cont
           <Text style={styles.codeBlockCopyText}>{copyLabel}</Text>
         </Pressable>
       </View>
-      <ScrollView contentContainerStyle={styles.codeBlockScrollContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: blockHeight }} testID="markdown-code-scroll">
+      <ScrollView contentContainerStyle={styles.codeBlockScrollContent} horizontal showsHorizontalScrollIndicator={false} style={[styles.codeBlockScroll, { height: blockHeight }]} testID="markdown-code-scroll">
         <SelectableText selectable style={styles.codeBlockText} uiTextView>
           {highlighted ? highlighted.map((child, index) => renderHighlightNode(child, `code:${index}`, styles)) : content}
         </SelectableText>
@@ -711,7 +713,7 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
   const heading5Size = compact ? 15 : mobileWebType.body;
   const inlineCodeSize = compact ? 13 : mobileWebMetric(14 * 0.9);
   return StyleSheet.create({
-    root: {},
+    root: { alignSelf: 'stretch', minWidth: 0, width: '100%' },
     body: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     text: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     textgroup: { color: colors.text },
@@ -748,6 +750,7 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     codeBlockCopy: { alignItems: 'center', borderRadius: 6, flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebMetric(30), paddingHorizontal: mobileWebMetric(7) },
     codeBlockCopyPressed: { backgroundColor: colors.surface },
     codeBlockCopyText: { color: colors.textMuted, fontSize: mobileWebType.small, lineHeight: mobileWebMetric(16) },
+    codeBlockScroll: { flexGrow: 0, flexShrink: 0 },
     codeBlockScrollContent: { paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
     codeBlockText: { color: colors.text, fontFamily: codeFont, fontSize: inlineCodeSize, lineHeight: mobileWebMetric(14 * 1.55) },
     syntaxComment: { color: colors.syntaxComment, fontStyle: 'italic' },
@@ -760,7 +763,7 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     syntaxStrong: { fontWeight: '700' },
     pre: { marginBottom: mobileWebMetric(14 * 0.75) },
     hr: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginBottom: mobileWebMetric(14), marginTop: mobileWebMetric(6) },
-    tableScroll: { marginBottom: mobileWebMetric(10), maxWidth: '100%' },
+    tableScroll: { alignSelf: 'stretch', flexGrow: 0, flexShrink: 0, marginBottom: mobileWebMetric(10), maxWidth: '100%', width: '100%' },
     tableScrollContent: { flexGrow: 1 },
     table: { alignSelf: 'flex-start', borderColor: colors.border, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
     thead: { backgroundColor: colors.surfaceMuted },

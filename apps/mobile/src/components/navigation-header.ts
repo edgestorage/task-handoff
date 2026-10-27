@@ -32,3 +32,28 @@ export function iosTransparentHeaderOptions(dark: boolean) {
     headerTransparent: true,
   } as const;
 }
+
+/**
+ * Session detail uses an inverted ScrollView in conversation mode. UIKit mirrors the
+ * scroll edge effect with that transform, moving the navigation-bar treatment to the
+ * bottom of the screen. Keep a native material on the header itself and disable the
+ * mirrored edge effects for this screen.
+ */
+export function iosSessionHeaderOptions(dark: boolean) {
+  if (Platform.OS !== 'ios') return undefined;
+
+  const transparentOptions = iosTransparentHeaderOptions(dark);
+  const iosMajorVersion = Number.parseInt(String(Platform.Version), 10);
+  if (iosMajorVersion < 26) return transparentOptions;
+
+  return {
+    ...transparentOptions,
+    headerBlurEffect: dark ? 'systemUltraThinMaterialDark' as const : 'systemUltraThinMaterialLight' as const,
+    scrollEdgeEffects: {
+      bottom: 'hidden' as const,
+      left: 'hidden' as const,
+      right: 'hidden' as const,
+      top: 'hidden' as const,
+    },
+  } as const;
+}

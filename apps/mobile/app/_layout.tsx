@@ -5,7 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
 import { MobileThemeProvider, useMobileTheme } from '../src/components/theme';
-import { iosTransparentHeaderOptions } from '../src/components/navigation-header';
+import { iosSessionHeaderOptions, iosTransparentHeaderOptions } from '../src/components/navigation-header';
 import { ActiveAiSessionsProvider } from '../src/ai-sessions/use-active-sessions';
 import { ActiveAppSessionsProvider } from '../src/app-sessions/use-active-app-sessions';
 import { ActiveDirectoriesProvider } from '../src/directories/use-directories';
@@ -107,7 +107,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
-                    <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosSessionHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]" options={{ title: t('nav.stories'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/new" options={{ title: t('stories.create'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/edit" options={{ title: t('stories.edit'), ...iosTransparentHeaderOptions(dark) }} />

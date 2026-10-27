@@ -1,6 +1,7 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Profiler, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { Check, ChevronDown, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
@@ -28,7 +29,7 @@ import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typogra
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
-const CONVERSATION_WINDOW_ITEM_COUNT = 18;
+const CONVERSATION_INITIAL_ITEM_COUNT = 18;
 
 type DetailTurn = Pick<AiSessionTurn, 'id' | 'providerTurnId' | 'status' | 'startedAt' | 'updatedAt' | 'completedAt'>;
 
@@ -96,6 +97,7 @@ export function SessionDetail({
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const navigationHeaderHeight = useContext(HeaderHeightContext) ?? 0;
   const adaptive = useAdaptiveContentLayout(ADAPTIVE_READING_MAX_WIDTH);
   const turns = useMemo(() => aiSessionDisplayTurns(session), [session]);
   const latestIndex = Math.max(0, turns.length - 1);
@@ -106,7 +108,6 @@ export function SessionDetail({
   const userDragging = useRef(false);
   const scrollMetrics = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
   const followingRef = useRef(true);
-  const [conversationWindow, setConversationWindow] = useState({ projectionId: '', start: 0 });
   const [scrollPosition, setScrollPosition] = useState({ sessionId: session?.id, atBottom: true });
   const [canScroll, setCanScroll] = useState(false);
   const selectedMode = mode ?? localMode;
@@ -123,15 +124,12 @@ export function SessionDetail({
     ? conversationDetailItems(session, messages, t, timelines, timelineVisible, timelineHistoryEnabled)
     : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [contentLoading, session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
   const projectionId = `${session?.id || ''}:${selectedMode}`;
-  const initialConversationStart = conversationWindowStart(items, items.length);
-  const conversationStart = selectedMode === 'conversation' && conversationWindow.projectionId === projectionId
-    ? Math.min(conversationWindow.start, initialConversationStart)
-    : initialConversationStart;
-  const displayItems = selectedMode === 'conversation' ? items.slice(conversationStart) : items;
-  const expandConversationWindow = useCallback(() => {
-    if (selectedMode !== 'conversation' || conversationStart <= 0) return;
-    setConversationWindow({ projectionId, start: conversationWindowStart(items, conversationStart) });
-  }, [conversationStart, items, projectionId, selectedMode]);
+  const conversationInverted = selectedMode === 'conversation';
+  const conversationTopInset = conversationInverted && Platform.OS === 'ios' ? navigationHeaderHeight : 0;
+  const displayItems = useMemo(() => conversationInverted ? [...items].reverse() : items, [conversationInverted, items]);
+  const trimEndItemIds = useMemo(() => new Set(items
+    .filter((item, index) => items[index + 1]?.role === 'current')
+    .map((item) => item.id)), [items]);
   const setFollowing = useCallback((next: boolean) => {
     followingRef.current = next;
   }, []);
@@ -142,6 +140,10 @@ export function SessionDetail({
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = undefined;
+      if (conversationInverted) {
+        listRef.current?.scrollToOffset({ animated, offset: 0 });
+        return;
+      }
       const { contentHeight, viewportHeight } = scrollMetrics.current;
       if (contentHeight > 0 && viewportHeight > 0) {
         listRef.current?.scrollToOffset({
@@ -152,7 +154,7 @@ export function SessionDetail({
       }
       listRef.current?.scrollToEnd({ animated });
     });
-  }, []);
+  }, [conversationInverted]);
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     scrollMetrics.current = {
@@ -160,35 +162,31 @@ export function SessionDetail({
       offsetY: Math.max(0, contentOffset.y),
       viewportHeight: layoutMeasurement.height,
     };
-    const nextAtBottom = isSessionScrollNearBottom(scrollMetrics.current);
+    const nextAtBottom = isSessionScrollNearBottom(scrollMetrics.current, conversationInverted);
     setAtBottom(nextAtBottom);
     if (nextAtBottom && !followingRef.current) setFollowing(true);
     else if (!nextAtBottom && userDragging.current && followingRef.current) setFollowing(false);
-  }, [setAtBottom, setFollowing]);
+  }, [conversationInverted, setAtBottom, setFollowing]);
   const handleContentSizeChange = useCallback((_width: number, height: number) => {
     scrollMetrics.current.contentHeight = height;
     setCanScroll(height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD);
-    if (selectedMode === 'conversation' && conversationStart > 0 && scrollMetrics.current.viewportHeight > 0 && height <= scrollMetrics.current.viewportHeight) {
-      expandConversationWindow();
-      return;
-    }
     if (
-      selectedMode === 'conversation'
+      conversationInverted
       &&
       followingRef.current
       && !userDragging.current
       && scrollMetrics.current.viewportHeight > 0
       && height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD
     ) scheduleScrollToBottom(false);
-  }, [conversationStart, expandConversationWindow, scheduleScrollToBottom, selectedMode]);
+  }, [conversationInverted, scheduleScrollToBottom]);
   const resumeFollowing = useCallback(() => {
     setFollowing(true);
     scheduleScrollToBottom(true);
   }, [scheduleScrollToBottom, setFollowing]);
   const finishProgrammaticScroll = useCallback(() => {
     userDragging.current = false;
-    if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current)) scheduleScrollToBottom(false);
-  }, [scheduleScrollToBottom]);
+    if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current, conversationInverted)) scheduleScrollToBottom(false);
+  }, [conversationInverted, scheduleScrollToBottom]);
   useEffect(() => {
     if (session) onVisible?.();
   }, [onVisible, session]);
@@ -273,21 +271,22 @@ export function SessionDetail({
           ref={listRef}
           contentContainerStyle={adaptiveContentContainerStyle([styles.list, {
             backgroundColor: colors.background,
-            paddingBottom: Math.max(28, bottomInset + 16),
+            paddingBottom: conversationInverted ? conversationTopInset + 12 : Math.max(28, bottomInset + 16),
+            paddingTop: conversationInverted ? Math.max(28, bottomInset + 16) : 12,
           }], adaptive.contentInsets)}
-          contentInsetAdjustmentBehavior="automatic"
+          contentInsetAdjustmentBehavior={conversationInverted ? 'never' : 'automatic'}
           data={displayItems}
-          initialNumToRender={selectedMode === 'conversation' ? CONVERSATION_WINDOW_ITEM_COUNT : 6}
+          initialNumToRender={conversationInverted ? CONVERSATION_INITIAL_ITEM_COUNT : 6}
+          inverted={conversationInverted}
           ItemSeparatorComponent={DetailItemSeparator}
           keyExtractor={(item) => item.id}
           keyboardDismissMode="interactive"
-          maintainVisibleContentPosition={selectedMode === 'conversation' ? { minIndexForVisible: 0 } : undefined}
           onContentSizeChange={handleContentSizeChange}
           onLayout={(event) => {
             scrollMetrics.current.viewportHeight = event.nativeEvent.layout.height;
             setCanScroll(scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD);
             if (
-              selectedMode === 'conversation'
+              conversationInverted
               &&
               followingRef.current
               && !userDragging.current
@@ -299,19 +298,15 @@ export function SessionDetail({
           onScrollEndDrag={() => { userDragging.current = false; }}
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
-          onStartReached={selectedMode === 'conversation' ? () => {
-            if (!followingRef.current) expandConversationWindow();
-          } : undefined}
-          onStartReachedThreshold={0.5}
           scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
           scrollEventThrottle={16}
           ListEmptyComponent={contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
-          ListFooterComponent={listFooter}
-          ListHeaderComponent={selectedMode !== 'conversation' || conversationStart === 0 ? listHeader : null}
+          ListFooterComponent={conversationInverted ? listHeader : listFooter}
+          ListHeaderComponent={conversationInverted ? listFooter : listHeader}
           maxToRenderPerBatch={6}
-          renderItem={({ index, item }) => <View
+          renderItem={({ item }) => <View
             testID={`session-detail-item-${item.role}`}
-          ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={displayItems[index + 1]?.role === 'current'} /></View>}
+          ><DetailItemContent conversation={conversationInverted} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>}
           style={[styles.fill, { backgroundColor: colors.background }]}
           testID="session-detail-scroll"
           windowSize={7}
@@ -356,12 +351,6 @@ function DetailItemSeparator() {
   return <View style={styles.itemSeparator} />;
 }
 
-function conversationWindowStart(items: readonly DetailItem[], beforeIndex: number) {
-  let start = Math.max(0, beforeIndex - CONVERSATION_WINDOW_ITEM_COUNT);
-  while (start > 0 && items[start]?.role !== 'user') start -= 1;
-  return start;
-}
-
 const recordDetailRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
   mobileMetrics.record('render.duration', { screen: 'detail' }, actualDuration);
 };
@@ -374,9 +363,11 @@ export function isSessionScrollNearBottom({
   contentHeight: number;
   offsetY: number;
   viewportHeight: number;
-}) {
-  return contentHeight <= viewportHeight
-    || contentHeight - viewportHeight - offsetY <= SCROLL_BOTTOM_THRESHOLD;
+}, inverted = false) {
+  if (contentHeight <= viewportHeight) return true;
+  return inverted
+    ? offsetY <= SCROLL_BOTTOM_THRESHOLD
+    : contentHeight - viewportHeight - offsetY <= SCROLL_BOTTOM_THRESHOLD;
 }
 
 export function detailItems(
@@ -775,7 +766,7 @@ const styles = StyleSheet.create({
   promptBlock: { borderRadius: 18, borderTopRightRadius: 6, paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
   responseBlock: { alignSelf: 'stretch', paddingHorizontal: 2, paddingVertical: 4 },
   conversationUser: { borderRadius: 18, borderTopRightRadius: 6, paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
-  conversationResponse: { alignSelf: 'flex-start', maxWidth: '98%', paddingHorizontal: 2, paddingVertical: 4 },
+  conversationResponse: { alignSelf: 'stretch', maxWidth: '98%', minWidth: 0, paddingHorizontal: 2, paddingVertical: 4 },
   errorBlock: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
   contentError: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
   contentErrorText: { flex: 1, fontSize: 13, lineHeight: 18 },
