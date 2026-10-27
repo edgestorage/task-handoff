@@ -466,7 +466,7 @@ function requestLogSerializer(request: FastifyRequest) {
     url: request.url.split("?")[0],
     host: request.hostname,
     remoteAddress: request.ip,
-    remotePort: request.socket.remotePort,
+    remotePort: request.socket?.remotePort,
   };
 }
 

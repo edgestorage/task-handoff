@@ -33,10 +33,21 @@ async function assertLoopbackAvailable() {
 const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-test-runtime-${process.pid}-`));
 const dataDir = path.join(runtimeRoot, "data");
 
-// A developer shell may export a live cloud environment. Tests must provide their
-// own values so an ambient production or staging identity never changes trust.
+const testControlEnvironment = new Set([
+  "TASK_HANDOFF_DOCKER_GIT_INTEGRATION",
+  "TASK_HANDOFF_DOCKER_INTEGRATION",
+  "TASK_HANDOFF_DOCKER_TEST_IMAGE",
+  "TASK_HANDOFF_IMAGE_CAPABILITIES",
+  "TASK_HANDOFF_IMAGE_PROFILE",
+  "TASK_HANDOFF_REAL_CODEX_TIMELINE_THREAD_ID",
+  "TASK_HANDOFF_TEST_POSTGRES_URL",
+]);
+
+// A developer shell may be the live controlled instance. Inherited identity,
+// sockets, cloud credentials, and runtime paths would let test processes mutate
+// that instance or each other, so only explicit test controls survive.
 for (const name of Object.keys(process.env)) {
-  if (name.startsWith("TASK_HANDOFF_CLOUD_")) delete process.env[name];
+  if (name.startsWith("TASK_HANDOFF_") && !testControlEnvironment.has(name)) delete process.env[name];
 }
 
 process.env.TASK_HANDOFF_CONTROL_PLANE_LOCK_PATH = path.join(runtimeRoot, "control-plane.lock");

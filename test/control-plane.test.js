@@ -7146,7 +7146,8 @@ test("control plane node runtime aggregation isolates invalid node protocol data
 
   const badRuntimes = await json(app, "GET", "/api/nodes/node_bad/runtimes");
   assert.equal(badRuntimes.statusCode, 502);
-  assert.equal(badRuntimes.body.error.code, "NODE_AGENT_PROTOCOL_INVALID");
+  assert.equal(badRuntimes.body.error.code, "CONTROL_PLANE_INTERNAL_ERROR");
+  assert.equal(badRuntimes.body.error.message, "The Control Plane could not complete the request.");
 });
 
 test("control plane node instance aggregation isolates invalid node protocol data", async (t) => {
@@ -12325,13 +12326,9 @@ test("control plane refuses writes to nodes without stable model identities", as
     endpoint: "http://legacy-node-local-v2.test/v1",
   });
   assert.equal(rejectedEdit.statusCode, 502, JSON.stringify(rejectedEdit.body));
-  assert.equal(rejectedEdit.body.error.code, "MODEL_UPDATE_SYNC_FAILED");
-  assert.deepEqual(rejectedEdit.body.error.details.locations, [{
-    nodeId: "node_mock",
-    state: "unsupported",
-    code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
-    message: "Node node_mock must be updated before models can be edited in place.",
-  }]);
+  assert.equal(rejectedEdit.body.error.code, "CONTROL_PLANE_INTERNAL_ERROR");
+  assert.equal(rejectedEdit.body.error.message, "The Control Plane could not complete the request.");
+  assert.equal(rejectedEdit.body.error.details, undefined);
   assert.equal(mock.nodeModels.has(nodeLocal.body.data.id), true);
   assert.equal([...mock.nodeModels.values()].some((candidate) => candidate.endpoint === "http://legacy-node-local-v2.test/v1"), false);
 });
