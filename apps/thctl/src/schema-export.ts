@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { CLI_GROUPS, CLI_LEAVES, type CliGroup, type CliLeaf } from "./contracts.ts";
 import { THCTL_VERSION } from "./client-info.ts";
+import { CLI_GLOBAL_OPTIONS } from "./global-options.ts";
 
-export const CLI_CONTRACT_VERSION = "1";
+export const CLI_CONTRACT_VERSION = "2";
 
 export function leafUsage(leaf: CliLeaf) {
   const args = (leaf.args ?? []).map((arg) => arg.required ? `<${arg.name}>` : `[${arg.name}]`);
@@ -38,14 +39,7 @@ export function exportContractDocument(target?: { group?: string; leaf?: CliLeaf
     cli: "thctl",
     version: THCTL_VERSION,
     contractVersion: CLI_CONTRACT_VERSION,
-    globalOptions: [
-      { flags: "--profile <label>", description: "Profile to use (overrides TASK_HANDOFF_CLI_PROFILE)" },
-      { flags: "--json", description: "Emit machine-readable JSON on stdout" },
-      { flags: "--yes", description: "Skip interactive confirmation for write commands" },
-      { flags: "--dry-run", description: "Print the request a write command would send without sending it" },
-      { flags: "--token-stdin", description: "Read a secret (token, join token, credential) from stdin instead of a flag" },
-      { flags: "--no-update-check", description: "Skip the background CLI and skill update check" },
-    ],
+    globalOptions: CLI_GLOBAL_OPTIONS.map((option) => ({ ...option })),
     groups: groups.map((entry) => ({ ...entry, leaves: entry.leaves })),
     commands: leaves.map(leafDocument),
   };

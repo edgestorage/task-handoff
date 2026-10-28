@@ -61,9 +61,17 @@ import {
   mobileSessionRevoke,
 } from "../commands/chat.ts";
 import {
+  cloudAccountNodeClaim,
+  cloudAccountNodeRelease,
+  cloudAccountNodesList,
+  cloudAccountShow,
+  cloudAccountSignIn,
+  cloudAccountSignOut,
+  cloudBind,
   cloudChallenge,
   cloudDisconnect,
   cloudRemoteAccess,
+  cloudScopesSet,
   cloudShow,
   controlPlaneDiagnosticLogsExport,
   controlPlaneSettingsShow,
@@ -347,13 +355,36 @@ export const controlPlaneGroup = group("control-plane", "Inspect and configure t
 
 export const cloudGroup = group("cloud", "Manage the cloud connectivity binding", [
   { id: "cloud show", group: "cloud", name: "show", stage: "B", summary: "Show cloud connectivity state", input: emptyInput, ...loose, handler: cloudShow },
+  { id: "cloud account show", group: "cloud", name: "account show", stage: "B", summary: "Show the cloud account session", input: emptyInput, ...loose, handler: cloudAccountShow },
+  { id: "cloud account sign-in", group: "cloud", name: "account sign-in", stage: "B", write: true, summary: "Start cloud account sign-in", input: emptyInput, ...loose, handler: cloudAccountSignIn },
+  { id: "cloud account sign-out", group: "cloud", name: "account sign-out", stage: "B", write: true, summary: "Sign out of the cloud account", input: emptyInput, ...loose, handler: cloudAccountSignOut },
+  { id: "cloud bind", group: "cloud", name: "bind", stage: "B", write: true, summary: "Start browser approval to bind this Control Plane to the signed-in cloud account", input: emptyInput, ...loose, handler: cloudBind },
   { id: "cloud challenge", group: "cloud", name: "challenge", stage: "B", write: true, summary: "Create a cloud binding challenge (the challenge secret is never printed)", input: emptyInput, ...loose, handler: cloudChallenge },
   {
-    id: "cloud remote-access", group: "cloud", name: "remote-access", stage: "B", write: true, summary: "Enable or disable cloud remote access",
-    options: [{ flags: "--enabled <true|false>", description: "Whether remote access should be enabled" }],
+    id: "cloud remote-access", group: "cloud", name: "remote-access", stage: "B", write: true, summary: "Set the legacy device-access switch (blocked while node relay is enabled)",
+    options: [{ flags: "--enabled <true|false>", description: "Whether device access should be enabled; use cloud scopes set when node relay is enabled" }],
     input: inputOf({ enabled: z.string() }), ...loose, handler: cloudRemoteAccess,
   },
+  {
+    id: "cloud scopes set", group: "cloud", name: "scopes set", stage: "B", write: true, summary: "Set the independent device-access and node-relay scopes",
+    options: [
+      { flags: "--device-access <true|false>", description: "Whether account devices may reach this Control Plane" },
+      { flags: "--node-relay <true|false>", description: "Whether this Control Plane may claim account nodes" },
+    ],
+    input: inputOf({ deviceAccess: z.string(), nodeRelay: z.string() }), ...loose, handler: cloudScopesSet,
+  },
   { id: "cloud disconnect", group: "cloud", name: "disconnect", stage: "B", write: true, summary: "Disconnect the cloud binding", input: emptyInput, ...loose, handler: cloudDisconnect },
+  { id: "cloud account-nodes list", group: "cloud", name: "account-nodes list", stage: "B", summary: "List nodes in the signed-in cloud account", input: emptyInput, ...loose, handler: cloudAccountNodesList },
+  {
+    id: "cloud account-nodes claim", group: "cloud", name: "account-nodes claim", stage: "B", write: true, summary: "Claim a cloud account node for this Control Plane",
+    args: [{ name: "nodeHandle", description: "Opaque cloud account node handle", required: true }],
+    input: inputOf({ nodeHandle: z.string() }), ...loose, handler: cloudAccountNodeClaim,
+  },
+  {
+    id: "cloud account-nodes release", group: "cloud", name: "account-nodes release", stage: "B", write: true, summary: "Release this Control Plane's claim on a cloud account node",
+    args: [{ name: "nodeHandle", description: "Opaque cloud account node handle", required: true }],
+    input: inputOf({ nodeHandle: z.string() }), ...loose, handler: cloudAccountNodeRelease,
+  },
 ]);
 
 export const proxyGroup = group("proxy", "Manage the control-plane proxy", [

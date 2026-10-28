@@ -48,7 +48,7 @@ test("browser login exchanges the loopback callback for a CLI session", async (t
   const { store, fake } = await prepare();
   const output = capture();
   const opened = [];
-  const login = runCli(["node", "thctl", "login"], {
+  const login = runCli(["node", "thctl", "login", "--table"], {
     store,
     streams: output.streams,
     fetchImpl: fake.fetchImpl,

@@ -94,7 +94,7 @@ test("node read commands render tables and JSON from the shared client", async (
   const { store, fake } = await signedIn();
   const admin = nodeAdminFetch(fake);
   const folders = capture();
-  assert.equal(await runCli(["node", "thctl", "node", "folders", "list", NODE_ID], { store, streams: folders.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, folders.stderr());
+  assert.equal(await runCli(["node", "thctl", "node", "folders", "list", NODE_ID, "--table"], { store, streams: folders.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, folders.stderr());
   assert.match(folders.stdout(), /workspace/);
   assert.match(folders.stdout(), /\/home\/agent\/workspace/);
 
@@ -103,7 +103,7 @@ test("node read commands render tables and JSON from the shared client", async (
   assert.equal(JSON.parse(runtimes.stdout())[0].id, runtime.id);
 
   const relay = capture();
-  assert.equal(await runCli(["node", "thctl", "node", "settings", "model-relay", "show", NODE_ID], { store, streams: relay.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, relay.stderr());
+  assert.equal(await runCli(["node", "thctl", "node", "settings", "model-relay", "show", NODE_ID, "--table"], { store, streams: relay.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, relay.stderr());
   assert.match(relay.stdout(), /persisted/);
   assert.match(relay.stdout(), /imagePruning/);
   assert.match(relay.stdout(), /passthrough/);
@@ -113,7 +113,7 @@ test("node read commands render tables and JSON from the shared client", async (
   assert.deepEqual(JSON.parse(relayJson.stdout()).imagePruning, imagePruning);
 
   const jobs = capture();
-  assert.equal(await runCli(["node", "thctl", "node", "updates", "jobs", NODE_ID], { store, streams: jobs.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, jobs.stderr());
+  assert.equal(await runCli(["node", "thctl", "node", "updates", "jobs", NODE_ID, "--table"], { store, streams: jobs.streams, fetchImpl: admin.fetchImpl, isTty: false }), 0, jobs.stderr());
   assert.match(jobs.stdout(), /No update jobs matched/);
 });
 
@@ -188,6 +188,7 @@ test("schema export documents the secret input channel without secret defaults",
   assert.equal(await runCli(["node", "thctl", "schema"], { store, streams: output.streams, isTty: false }), 0, output.stderr());
   const document = JSON.parse(output.stdout());
   assert.ok(document.globalOptions.some((option) => option.flags === "--token-stdin"));
+  assert.ok(document.globalOptions.some((option) => option.flags === "--table"));
   const serialized = JSON.stringify(document.commands);
   assert.doesNotMatch(serialized, /super-secret/);
   for (const command of document.commands) {

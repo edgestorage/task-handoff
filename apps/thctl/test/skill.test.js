@@ -155,7 +155,7 @@ test("skill update is a no-op at the published version", async () => {
   const root = tempDir("thctl-skill-root-");
   const server = createSkillServer({ version: "7" });
   assert.equal(await runSkill(["install", "--dir", root, "--yes"], { fetchImpl: server.fetchImpl }).then((result) => result.code), 0);
-  const result = await runSkill(["update", "--dir", root, "--yes"], { fetchImpl: server.fetchImpl });
+  const result = await runSkill(["update", "--dir", root, "--yes", "--table"], { fetchImpl: server.fetchImpl });
   assert.equal(result.code, 0, result.stderr());
   assert.match(result.stdout(), /already at 7/);
   fs.rmSync(root, { recursive: true, force: true });
@@ -172,7 +172,7 @@ test("skill status and update compare published content, not version order", asy
   const current = await runSkill(["status", "--dir", root, "--json"], { fetchImpl: relabelled.fetchImpl });
   assert.equal(JSON.parse(current.stdout())[0].status, "current");
   assert.equal(JSON.parse(current.stdout())[0].latestVersion, "20261005-bbbbbbbbbbbb");
-  const noop = await runSkill(["update", "--dir", root, "--yes"], { fetchImpl: relabelled.fetchImpl });
+  const noop = await runSkill(["update", "--dir", root, "--yes", "--table"], { fetchImpl: relabelled.fetchImpl });
   assert.equal(noop.code, 0, noop.stderr());
   assert.match(noop.stdout(), /already at 20261004-aaaaaaaaaaaa/);
 
@@ -183,7 +183,7 @@ test("skill status and update compare published content, not version order", asy
   });
   const outdated = await runSkill(["status", "--dir", root, "--json"], { fetchImpl: edited.fetchImpl });
   assert.equal(JSON.parse(outdated.stdout())[0].status, "update-available");
-  const updated = await runSkill(["update", "--dir", root, "--yes"], { fetchImpl: edited.fetchImpl });
+  const updated = await runSkill(["update", "--dir", root, "--yes", "--table"], { fetchImpl: edited.fetchImpl });
   assert.equal(updated.code, 0, updated.stderr());
   assert.match(updated.stdout(), /Updated skill/);
   assert.equal(fs.readFileSync(path.join(root, "taskhandoff", "references", "nodes.md"), "utf8"), "# Nodes 20261004-aaaaaaaaaaaa edited\n");

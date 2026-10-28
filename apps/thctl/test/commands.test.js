@@ -88,10 +88,24 @@ test("device login reports denial and expiry with authentication exit codes", as
   assert.match(output.stderr(), /CLI_AUTHORIZATION_EXPIRED/);
 });
 
+test("parse errors use one output format and default to JSON", async () => {
+  const json = capture();
+  assert.equal(await runCli(["node", "thctl", "instance", "list", "--unknown-option"], {
+    store: tempStore(), streams: json.streams, isTty: false,
+  }), 2);
+  assert.equal(JSON.parse(json.stderr()).error.code, "CLI_USAGE_ERROR");
+
+  const table = capture();
+  assert.equal(await runCli(["node", "thctl", "instance", "list", "--table", "--unknown-option"], {
+    store: tempStore(), streams: table.streams, isTty: false,
+  }), 2);
+  assert.match(table.stderr(), /^CLI_USAGE_ERROR: error: unknown option/);
+});
+
 test("whoami reads the authoritative session and never prints the token", async () => {
   const { store, fake } = await signedIn();
   const output = capture();
-  assert.equal(await runCli(["node", "thctl", "whoami", "--json"], { store, streams: output.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "whoami"], { store, streams: output.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   const payload = JSON.parse(output.stdout());
   assert.equal(payload.profile, "cp.test");
   assert.equal(payload.user.primaryUsername, "admin");
@@ -99,14 +113,14 @@ test("whoami reads the authoritative session and never prints the token", async 
   assert.doesNotMatch(output.stdout() + output.stderr(), new RegExp(fake.state.sessionToken));
 
   const human = capture();
-  assert.equal(await runCli(["node", "thctl", "whoami"], { store, streams: human.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "whoami", "--table"], { store, streams: human.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(human.stdout(), /Signed in to http:\/\/cp\.test as admin\./);
 });
 
 test("read commands consume the authoritative projections", async () => {
   const { store, fake } = await signedIn();
   const list = capture();
-  assert.equal(await runCli(["node", "thctl", "instance", "list", "--json"], { store, streams: list.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "instance", "list"], { store, streams: list.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   const listed = JSON.parse(list.stdout());
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, fake.instanceEntry.id);
@@ -115,7 +129,7 @@ test("read commands consume the authoritative projections", async () => {
   assert.equal(listed[0].aiSessions.runningCount, 1);
 
   const table = capture();
-  assert.equal(await runCli(["node", "thctl", "instance", "list"], { store, streams: table.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "instance", "list", "--table"], { store, streams: table.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(table.stdout(), /instance\s+name\s+status/);
   assert.match(table.stdout(), /fake-instance\s+running\s+ok\s+online/);
 
@@ -129,7 +143,11 @@ test("read commands consume the authoritative projections", async () => {
 
   const missing = capture();
   assert.equal(await runCli(["node", "thctl", "instance", "show", "instance_missing"], { store, streams: missing.streams, fetchImpl: fake.fetchImpl, isTty: false }), 7);
-  assert.match(missing.stderr(), /CLI_INSTANCE_NOT_FOUND/);
+  assert.equal(JSON.parse(missing.stderr()).error.code, "CLI_INSTANCE_NOT_FOUND");
+
+  const conflict = capture();
+  assert.equal(await runCli(["node", "thctl", "instance", "list", "--json", "--table"], { store, streams: conflict.streams, fetchImpl: fake.fetchImpl, isTty: false }), 2);
+  assert.match(conflict.stderr(), /CLI_OUTPUT_FORMAT_CONFLICT/);
 
   const sessions = capture();
   assert.equal(await runCli(["node", "thctl", "ai-session", "list", "--json"], { store, streams: sessions.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
@@ -139,7 +157,7 @@ test("read commands consume the authoritative projections", async () => {
   assert.equal(sessionView.instances[0].aiSessions.sessions[0].title, "Fake session");
 
   const sessionTable = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "list"], { store, streams: sessionTable.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "list", "--table"], { store, streams: sessionTable.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(sessionTable.stdout(), /Fake session/);
 
   const detail = capture();
@@ -165,7 +183,7 @@ test("write commands require explicit confirmation and honour --dry-run", async 
   assert.equal(fake.state.calls.filter((call) => call.method === "POST" && call.path.endsWith("/stop")).length, postsBefore);
 
   const confirmed = capture();
-  assert.equal(await runCli(["node", "thctl", "instance", "stop", "instance_fake001", "--yes"], { store, streams: confirmed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "instance", "stop", "instance_fake001", "--yes", "--table"], { store, streams: confirmed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.equal(fake.state.calls.filter((call) => call.method === "POST" && call.path.endsWith("/stop")).length, postsBefore + 1);
   assert.match(confirmed.stdout(), /instance_fake001\s+stopping/);
 
@@ -177,12 +195,12 @@ test("write commands require explicit confirmation and honour --dry-run", async 
   assert.equal(renameRequest.body.name, "renamed");
 
   const renamed = capture();
-  assert.equal(await runCli(["node", "thctl", "instance", "rename", "instance_fake001", "renamed", "--yes"], { store, streams: renamed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "instance", "rename", "instance_fake001", "renamed", "--yes", "--table"], { store, streams: renamed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.equal(fake.instanceEntry.name, "renamed");
   assert.match(renamed.stdout(), /renamed/);
 
   const interactive = capture();
-  assert.equal(await runCli(["node", "thctl", "instance", "restart", "instance_fake001"], {
+  assert.equal(await runCli(["node", "thctl", "instance", "restart", "instance_fake001", "--table"], {
     store, streams: interactive.streams, fetchImpl: fake.fetchImpl, isTty: true, confirm: async () => true,
   }), 0);
   assert.match(interactive.stdout(), /restarting/);
@@ -244,15 +262,15 @@ test("ai-session content reads and lifecycle mutations use the authoritative wir
   assert.ok(forkPlan.body.clientRequestId);
 
   const forked = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "fork", instance, session, "--yes"], { store, streams: forked.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "fork", instance, session, "--yes", "--table"], { store, streams: forked.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(forked.stdout(), /ais_forked0001\s+created/);
 
   const closed = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "close", instance, session, "--yes"], { store, streams: closed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "close", instance, session, "--yes", "--table"], { store, streams: closed.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(closed.stdout(), /closed/);
 
   const model = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "model", instance, session, "--entity", "mdl_fake01", "--name", "gpt-5.6", "--yes"], { store, streams: model.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "model", instance, session, "--entity", "mdl_fake01", "--name", "gpt-5.6", "--yes", "--table"], { store, streams: model.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(model.stdout(), /accepted/);
   const modelCall = fake.state.calls.find((entry) => entry.method === "PUT" && entry.path.endsWith("/model-selection"));
   assert.deepEqual(modelCall.body.modelSelection, { modelEntityId: "mdl_fake01", modelName: "gpt-5.6" });
@@ -271,13 +289,13 @@ test("ai-session content reads and lifecycle mutations use the authoritative wir
   assert.match(editBlocked.stderr(), /CLI_OPTION_MISSING/);
 
   const edited = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "queue", "edit", instance, session, "queue_fake01", "--message", "updated text", "--yes"], { store, streams: edited.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "queue", "edit", instance, session, "queue_fake01", "--message", "updated text", "--yes", "--table"], { store, streams: edited.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(edited.stdout(), /queue_fake01.*updated/);
   const editCall = fake.state.calls.find((entry) => entry.method === "PATCH" && entry.path.endsWith("/queue/queue_fake01"));
   assert.deepEqual(editCall.body, { expectedRevision: 0, message: "updated text" });
 
   const reordered = capture();
-  assert.equal(await runCli(["node", "thctl", "ai-session", "queue", "reorder", instance, session, "--queue", "queue_fake01", "--queue", "queue_fake02", "--yes"], { store, streams: reordered.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "ai-session", "queue", "reorder", instance, session, "--queue", "queue_fake01", "--queue", "queue_fake02", "--yes", "--table"], { store, streams: reordered.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(reordered.stdout(), /reordered/);
   const reorderCall = fake.state.calls.find((entry) => entry.method === "PATCH" && entry.path.endsWith("/queue/reorder"));
   assert.deepEqual(reorderCall.body, { expectedRevision: 0, queueIds: ["queue_fake01", "queue_fake02"] });
@@ -329,7 +347,7 @@ test("trigger session bindings follow the wire routes and require confirmation",
   assert.equal(bindCalls().length, 0);
 
   const bound = capture();
-  assert.equal(await runCli(["node", "thctl", "trigger", "bind", instance, session, configHash, "--yes"], { store, streams: bound.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "trigger", "bind", instance, session, configHash, "--yes", "--table"], { store, streams: bound.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(bound.stdout(), /bound to AI session/);
   assert.equal(bindCalls().length, 1);
   assert.deepEqual(bindCalls()[0].body, { configHash });
@@ -349,7 +367,7 @@ test("trigger session bindings follow the wire routes and require confirmation",
   assert.equal(unbindCalls().length, 0);
 
   const unbound = capture();
-  assert.equal(await runCli(["node", "thctl", "trigger", "unbind", instance, session, configHash, "--yes"], { store, streams: unbound.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "trigger", "unbind", instance, session, configHash, "--yes", "--table"], { store, streams: unbound.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(unbound.stdout(), /unbound from AI session/);
   assert.equal(unbindCalls().length, 1);
 });
@@ -386,7 +404,7 @@ test("trigger apply posts one deduplicated fan-out with an explicit enabled flag
   assert.equal(applyCalls().length, 0);
 
   const applied = capture();
-  assert.equal(await runCli(["node", "thctl", "trigger", "apply", configHash, "--instance", instance, "--session", session, "--yes"], { store, streams: applied.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
+  assert.equal(await runCli(["node", "thctl", "trigger", "apply", configHash, "--instance", instance, "--session", session, "--yes", "--table"], { store, streams: applied.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0);
   assert.match(applied.stdout(), /applied to 1 instance/);
   assert.equal(applyCalls().length, 1);
   assert.deepEqual(applyCalls()[0].body, expectedBody);
@@ -448,7 +466,7 @@ test("app-session rename, access and restart drive the shared client behind the 
   assert.match(accessUnavailable.stderr(), /APP_SESSION_ACCESS_UNAVAILABLE/);
 
   const accessTable = capture();
-  assert.equal(await runCli(["node", "thctl", "app-session", "access", "instance_fake001", "appsess_fakegui1", "--yes"], { store, streams: accessTable.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0, accessTable.stderr());
+  assert.equal(await runCli(["node", "thctl", "app-session", "access", "instance_fake001", "appsess_fakegui1", "--yes", "--table"], { store, streams: accessTable.streams, fetchImpl: fake.fetchImpl, isTty: false }), 0, accessTable.stderr());
   assert.match(accessTable.stdout(), /vnc\s+http:\/\/cp\.test\/apps\/access\/vnc\?token=lease_fake\s+\S+\s+lease_fake/);
 
   const accessJson = capture();

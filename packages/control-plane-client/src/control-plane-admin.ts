@@ -27,7 +27,7 @@ const CloudIdentitySchema = z.object({
   algorithm: z.literal("Ed25519"),
   publicKey: z.string(),
   fingerprint: z.string(),
-}).strict();
+}).strip();
 
 const CloudConnectivitySchema = z.object({
   version: z.literal(2),
@@ -52,8 +52,8 @@ const CloudConnectivitySchema = z.object({
     revision: z.number().int().positive().optional(),
     publishedAt: z.string().datetime().optional(),
     errorCode: z.string().trim().min(1).max(120).optional(),
-  }).strict().optional(),
-}).strict();
+  }).strip().optional(),
+}).strip();
 
 export const CloudAccessRoleSchema = z.object({
   roleId: z.string().regex(/^role_[a-z0-9][a-z0-9_-]*$/).max(80),
@@ -61,7 +61,7 @@ export const CloudAccessRoleSchema = z.object({
   description: z.string().trim().min(1).max(500).optional(),
   system: z.boolean(),
   status: z.enum(["active", "archived"]),
-}).strict();
+}).strip();
 
 export const CloudAccessSettingsSchema = z.object({
   bindingId: z.string(),
@@ -71,15 +71,15 @@ export const CloudAccessSettingsSchema = z.object({
   updatedAt: z.string().datetime(),
   catalogRevision: z.number().int().nonnegative(),
   roles: z.array(CloudAccessRoleSchema).max(256),
-}).strict();
+}).strip();
 
 export type CloudAccessSettings = z.infer<typeof CloudAccessSettingsSchema>;
 export type CloudAccessRole = z.infer<typeof CloudAccessRoleSchema>;
 
 /** Account node directory projection: only allowlisted identity fields, never endpoints or business data. */
 const CloudResourceAccessSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("owner") }).strict(),
-  z.object({ kind: z.literal("shared"), shareId: z.string(), revision: z.number().int().positive(), role: z.literal("use"), expiresAt: z.string().datetime() }).strict(),
+  z.object({ kind: z.literal("owner") }).strip(),
+  z.object({ kind: z.literal("shared"), shareId: z.string(), revision: z.number().int().positive(), role: z.literal("use"), expiresAt: z.string().datetime() }).strip(),
 ]);
 
 const CloudAccountNodeSchema = z.object({
@@ -91,13 +91,13 @@ const CloudAccountNodeSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   access: CloudResourceAccessSchema.optional(),
-}).strict();
+}).strip();
 
 const CloudNodeRelayStateSchema = z.object({
-  channels: z.array(z.object({ nodeHandle: z.string(), nodeId: z.string(), allocationId: z.string(), connectedAt: z.string(), connected: z.boolean() }).strict()),
-  claims: z.array(z.object({ nodeHandle: z.string(), requestedAt: z.string() }).strict()),
-  errors: z.array(z.object({ nodeHandle: z.string(), code: z.string(), message: z.string(), at: z.string() }).strict()),
-  onboarding: z.array(z.object({ nodeHandle: z.string(), tokenId: z.string().optional(), at: z.string() }).strict()),
+  channels: z.array(z.object({ nodeHandle: z.string(), nodeId: z.string(), allocationId: z.string(), connectedAt: z.string(), connected: z.boolean() }).strip()),
+  claims: z.array(z.object({ nodeHandle: z.string(), requestedAt: z.string() }).strip()),
+  errors: z.array(z.object({ nodeHandle: z.string(), code: z.string(), message: z.string(), at: z.string() }).strip()),
+  onboarding: z.array(z.object({ nodeHandle: z.string(), tokenId: z.string().optional(), at: z.string() }).strip()),
   trust: z.array(z.object({
     nodeHandle: z.string(),
     nodeId: z.string(),
@@ -111,14 +111,14 @@ const CloudNodeRelayStateSchema = z.object({
     requestedAt: z.string(),
     expiresAt: z.string().optional(),
     observedAt: z.string(),
-  }).strict()).default([]),
-}).strict();
+  }).strip()).default([]),
+}).strip();
 
 const CloudAccountNodesSchema = z.object({
   signedIn: z.boolean(),
   nodeRelay: CloudNodeRelayStateSchema,
   items: z.array(CloudAccountNodeSchema),
-}).strict();
+}).strip();
 
 const CloudNodeClaimSchema = z.object({
   claimed: z.boolean(),
@@ -151,16 +151,16 @@ const CloudNodeBindingTokenSchema = z.object({
   expiresAt: z.string(),
   command: z.string(),
   installCommand: z.string(),
-}).strict();
+}).strip();
 
-const CloudNodeBindingTokenCancelSchema = z.object({ tokenId: z.string(), cancelled: z.literal(true) }).strict();
+const CloudNodeBindingTokenCancelSchema = z.object({ tokenId: z.string(), cancelled: z.literal(true) }).strip();
 
 const CloudAccountRequestSchema = z.object({
   requestId: z.string(),
   scope: z.string(),
   expiresAt: z.string(),
   authorizationUrl: z.string(),
-}).strict();
+}).strip();
 
 const CloudAccountSessionSchema = z.object({
   signedIn: z.boolean(),
@@ -168,9 +168,9 @@ const CloudAccountSessionSchema = z.object({
   email: z.string().optional(),
   sessionExpiresAt: z.string().optional(),
   reauthRequired: z.boolean().optional(),
-  pendingRequest: z.object({ requestId: z.string(), authorizationUrl: z.string().optional(), scope: z.string().optional(), expiresAt: z.string().optional() }).strict().optional(),
-  requestFailure: z.object({ requestId: z.string(), scope: z.string().optional(), code: z.string() }).strict().optional(),
-}).strict();
+  pendingRequest: z.object({ requestId: z.string(), authorizationUrl: z.string().optional(), scope: z.string().optional(), expiresAt: z.string().optional() }).strip().optional(),
+  requestFailure: z.object({ requestId: z.string(), scope: z.string().optional(), code: z.string() }).strip().optional(),
+}).strip();
 
 const CloudBindingChallengeSchema = z.object({
   challengeCode: z.string(),
@@ -180,9 +180,9 @@ const CloudBindingChallengeSchema = z.object({
     publicKeyFingerprint: z.string(),
     expiresAt: z.string(),
     hostname: z.string().optional(),
-  }).strict(),
+  }).strip(),
   signature: z.string(),
-}).strict();
+}).strip();
 
 const ProxyDiagnosticSchema = z.object({
   bindingId: z.string(),

@@ -261,7 +261,7 @@ test("runCli prints the cached notice after a command and honours --no-update-ch
     cli: { latestVersion: "1.2.3", tag: "latest" },
   });
   const output = capture();
-  const code = await runCli(["node", "thctl", "profile", "list"], {
+  const code = await runCli(["node", "thctl", "profile", "list", "--table"], {
     store: context.store,
     streams: output.streams,
     env: {},

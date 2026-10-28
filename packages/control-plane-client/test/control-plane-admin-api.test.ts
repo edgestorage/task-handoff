@@ -75,39 +75,73 @@ test("control-plane admin cloud routes", async () => {
         data: {
           challengeCode: "code",
           authorizationUrl: "https://cloud.example.com/authorize",
-          payload: { controlPlaneId: "cp_1", publicKeyFingerprint: "sha256:fp", expiresAt: TS, hostname: "studio-box" },
+          payload: { controlPlaneId: "cp_1", publicKeyFingerprint: "sha256:fp", expiresAt: TS, hostname: "studio-box", futurePayloadField: true },
           signature: "sig",
+          futureChallengeField: true,
         },
       };
     }
     if (path === "/api/cloud-account") {
-      return { data: { signedIn: false, pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: `https://cloud.example.com/authorize/control-plane?request=request_a` } } };
+      return { data: { signedIn: false, futureAccountField: true, pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: `https://cloud.example.com/authorize/control-plane?request=request_a`, futurePendingField: true } } };
     }
-    if (path === "/api/cloud-account/sign-in-requests") return { data: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a" } };
-    if (path === "/api/cloud-connectivity/binding-requests") return { data: { requestId: "request_b", scope: "control-plane:bind", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_b" } };
+    if (path === "/api/cloud-account/sign-in-requests") return { data: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a", futureRequestField: true } };
+    if (path === "/api/cloud-connectivity/binding-requests") return { data: { requestId: "request_b", scope: "control-plane:bind", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_b", futureRequestField: true } };
     if (path === "/api/cloud-account/sign-out") return { data: { signedIn: false } };
-    return { data: cloud() };
+    if (path === "/api/cloud-connectivity/access-settings") return { data: {
+      bindingId: "binding_a",
+      ownerRoleId: "role_owner",
+      availableRoleIds: ["role_owner"],
+      settingsRevision: 1,
+      updatedAt: TS,
+      catalogRevision: 1,
+      roles: [{ roleId: "role_owner", name: "Owner", system: true, status: "active", futureRoleField: true }],
+      futureSettingsField: true,
+    } };
+    return { data: cloud({
+      futureCloudField: true,
+      identity: { controlPlaneId: "cp_1", algorithm: "Ed25519", publicKey: "key", fingerprint: "sha256:fp", futureIdentityField: true },
+      catalogPublication: { status: "published", futureCatalogField: true },
+    }) };
   });
 
-  const account = {
+  const expectedAccount = {
     signedIn: false,
     pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a" },
   };
 
-  assert.equal((await api.cloudConnectivity()).version, 2);
+  const connectivity = await api.cloudConnectivity();
+  assert.equal(connectivity.version, 2);
+  assert.equal("futureCloudField" in connectivity, false);
+  assert.equal("futureIdentityField" in connectivity.identity, false);
+  assert.equal("futureCatalogField" in (connectivity.catalogPublication ?? {}), false);
+  const accessSettings = await api.cloudAccessSettings();
+  assert.equal(accessSettings.ownerRoleId, "role_owner");
+  assert.equal("futureSettingsField" in accessSettings, false);
+  assert.equal("futureRoleField" in (accessSettings.roles[0] ?? {}), false);
   const challenge = await api.createCloudChallenge();
   assert.equal(challenge.challengeCode, "code");
   assert.equal(challenge.payload.hostname, "studio-box");
+  assert.equal("futureChallengeField" in challenge, false);
+  assert.equal("futurePayloadField" in challenge.payload, false);
   await api.setCloudRemoteAccess(false);
   assert.deepEqual((await api.setCloudScopes({ deviceAccess: false, nodeRelay: true })).scopes, { deviceAccess: true, nodeRelay: false });
   await api.disconnectCloud();
-  assert.equal((await api.cloudAccount()).pendingRequest?.scope, "account:sign-in");
-  assert.equal((await api.createCloudSignInRequest()).scope, "account:sign-in");
-  assert.equal((await api.createCloudBindingRequest()).scope, "control-plane:bind");
+  const account = await api.cloudAccount();
+  assert.equal(account.signedIn, expectedAccount.signedIn);
+  assert.deepEqual(account.pendingRequest, expectedAccount.pendingRequest);
+  assert.equal("futureAccountField" in account, false);
+  assert.equal("futurePendingField" in (account.pendingRequest ?? {}), false);
+  const accountRequest = await api.createCloudSignInRequest();
+  assert.equal(accountRequest.scope, "account:sign-in");
+  assert.equal("futureRequestField" in accountRequest, false);
+  const bindingRequest = await api.createCloudBindingRequest();
+  assert.equal(bindingRequest.scope, "control-plane:bind");
+  assert.equal("futureRequestField" in bindingRequest, false);
   assert.equal((await api.signOutCloudAccount()).signedIn, false);
 
   assert.deepEqual(requests.map((entry) => [entry.path, entry.init?.method]), [
     ["/api/cloud-connectivity", undefined],
+    ["/api/cloud-connectivity/access-settings", undefined],
     ["/api/cloud-connectivity/challenges", "POST"],
     ["/api/cloud-connectivity/remote-access", "POST"],
     ["/api/cloud-connectivity/remote-access", "POST"],
@@ -128,20 +162,21 @@ test("control-plane admin node relay account routes", async () => {
     revision: 1,
     createdAt: TS,
     updatedAt: TS,
-    access: { kind: "shared", shareId: "shr_node_alpha", revision: 2, role: "use", expiresAt: TS },
+    access: { kind: "shared", shareId: "shr_node_alpha", revision: 2, role: "use", expiresAt: TS, futureAccessField: true },
+    futureNodeField: true,
   };
   const relayState = {
-    channels: [{ nodeHandle: "nrh_node_alpha", nodeId: "node_nrh_node_alpha", allocationId: "alloc_a", connectedAt: TS, connected: true }],
+    channels: [{ nodeHandle: "nrh_node_alpha", nodeId: "node_nrh_node_alpha", allocationId: "alloc_a", connectedAt: TS, connected: true, futureChannelField: true }],
     claims: [],
     errors: [],
     onboarding: [{ nodeHandle: "nrh_node_alpha", tokenId: "nrb_1", at: TS }],
   };
   const { api, requests } = fixture((path, init) => {
-    if (path === "/api/cloud-connectivity/account-nodes") return { data: { signedIn: true, nodeRelay: { ...relayState, channels: [], onboarding: [] }, items: [node] } };
+    if (path === "/api/cloud-connectivity/account-nodes") return { data: { signedIn: true, futureDirectoryField: true, nodeRelay: { ...relayState, channels: [], onboarding: [], futureRelayField: true }, items: [node] } };
     if (path.endsWith("/claim") && init?.method === "POST") return { data: { claimed: true, nodeHandle: "nrh_node_alpha", controlPlaneId: "cp_1", status: "active", revision: 1 } };
     if (path.endsWith("/claim") && init?.method === "DELETE") return { data: { nodeHandle: "nrh_node_alpha", status: "revoked", revision: 2 } };
-    if (path === "/api/cloud-connectivity/node-binding-tokens") return { data: { tokenId: "nrb_1", expiresAt: TS, command: "sudo task-handoff-node-agent cloud-bind", installCommand: "curl -fsSL https://cp.example.com/install-node-agent.sh | sudo sh -s --" } };
-    if (path.endsWith("/node-binding-tokens/nrb_1")) return { data: { tokenId: "nrb_1", cancelled: true } };
+    if (path === "/api/cloud-connectivity/node-binding-tokens") return { data: { tokenId: "nrb_1", expiresAt: TS, command: "sudo task-handoff-node-agent cloud-bind", installCommand: "curl -fsSL https://cp.example.com/install-node-agent.sh | sudo sh -s --", futureTokenField: true } };
+    if (path.endsWith("/node-binding-tokens/nrb_1")) return { data: { tokenId: "nrb_1", cancelled: true, futureCancellationField: true } };
     if (path === "/api/nodes/nod_1/cloud-relay-binding") return { data: { bound: true, nodeHandle: "nrh_node_alpha", accountId: "account_a", tokenId: "nrb_2", expiresAt: TS } };
     return { data: relayState };
   });
@@ -150,14 +185,22 @@ test("control-plane admin node relay account routes", async () => {
   assert.equal(directory.signedIn, true);
   assert.equal(directory.items[0]?.displayName, "Alpha box");
   assert.equal(directory.items[0]?.access?.kind, "shared");
+  assert.equal("futureDirectoryField" in directory, false);
+  assert.equal("futureNodeField" in (directory.items[0] ?? {}), false);
+  assert.equal("futureAccessField" in (directory.items[0]?.access ?? {}), false);
+  assert.equal("futureRelayField" in directory.nodeRelay, false);
   assert.equal((await api.claimCloudAccountNode("nrh_node_alpha")).claimed, true);
   assert.equal((await api.releaseCloudAccountNodeClaim("nrh_node_alpha")).status, "revoked");
   const token = await api.createCloudNodeBindingToken({ displayName: "Alpha box" });
   assert.equal(token.tokenId, "nrb_1");
   assert.ok(token.installCommand.includes("/install-node-agent.sh"));
-  assert.equal((await api.cancelCloudNodeBindingToken("nrb_1")).cancelled, true);
+  assert.equal("futureTokenField" in token, false);
+  const cancellation = await api.cancelCloudNodeBindingToken("nrb_1");
+  assert.equal(cancellation.cancelled, true);
+  assert.equal("futureCancellationField" in cancellation, false);
   const state = await api.cloudNodeRelayState();
   assert.equal(state.channels[0]?.connected, true);
+  assert.equal("futureChannelField" in (state.channels[0] ?? {}), false);
   const bound = await api.bindCloudRelayNode("nod_1");
   assert.equal(bound.bound, true);
   assert.equal(bound.nodeHandle, "nrh_node_alpha");

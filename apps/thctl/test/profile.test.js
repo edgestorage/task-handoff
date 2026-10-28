@@ -84,7 +84,7 @@ test("profile add pins the identity and reuses an existing profile for the same 
   const store = tempStore();
   const fake = createFakeControlPlane({ origin: "http://cp.test" });
   const first = capture();
-  assert.equal(await runCli(["node", "thctl", "profile", "add", "http://cp.test", "--label", "dev"], {
+  assert.equal(await runCli(["node", "thctl", "profile", "add", "http://cp.test", "--label", "dev", "--table"], {
     store, streams: first.streams, fetchImpl: fake.fetchImpl, isTty: false,
   }), 0);
   assert.match(first.stdout(), /Added profile `dev`/);

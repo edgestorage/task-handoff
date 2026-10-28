@@ -54,7 +54,7 @@ test("app-session logs reads the instance log tail", async () => {
   const call = fake.state.calls.find((entry) => entry.path.endsWith("/logs"));
   assert.equal(call?.search, "?maxBytes=2048");
 
-  const text = await run(fake, store, ["app-session", "logs", "instance_fake001", "appsess_fakegui1"]);
+  const text = await run(fake, store, ["app-session", "logs", "instance_fake001", "appsess_fakegui1", "--table"]);
   assert.equal(text.code, 0, text.stderr());
   assert.match(text.stdout(), /==> session\.log <==/);
   assert.match(text.stdout(), /fake log line 2/);
@@ -82,7 +82,7 @@ test("app-session screenshot saves the PNG and surfaces unavailable GUI sessions
 
 test("ai-session transcript prints the tail and keeps the wire model with --json", async () => {
   const { store, fake } = await signedIn();
-  const text = await run(fake, store, ["ai-session", "transcript", "instance_fake001", "ais_fake0000001"]);
+  const text = await run(fake, store, ["ai-session", "transcript", "instance_fake001", "ais_fake0000001", "--table"]);
   assert.equal(text.code, 0, text.stderr());
   assert.match(text.stdout(), /fake transcript line 2/);
   assert.match(text.stdout(), /42 line\(s\)/);

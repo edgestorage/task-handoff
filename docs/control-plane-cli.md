@@ -77,7 +77,7 @@ thctl whoami        # discovers the local Control Plane, writes the managed `loc
 
 ## Command surface
 
-Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <file>`, `--token-stdin`, `--no-update-check`.
+Global options: `--profile <label>`, `--json`, `--table`, `--yes`, `--dry-run`, `--token-stdin`, `--no-update-check`. Commands that accept a request body declare `--config <file>` separately. Output is JSON by default, including errors. `--table` opts into human-readable tables, while `--json` remains an explicit compatibility alias; supplying both is a usage error.
 
 | group | commands |
 | --- | --- |
@@ -100,14 +100,14 @@ Global options: `--profile <label>`, `--json`, `--yes`, `--dry-run`, `--config <
 | `chat` | `status`, `bridges list`, `bridges create`, `bridges update`, `bridges start`, `bridges stop`, `bridges remove`, `sessions list`, `sessions show` |
 | `mobile-session` | `list`, `revoke` |
 | `control-plane` | `status`, `settings show`, `settings update`, `diagnostic-logs export` |
-| `cloud` | `show`, `challenge`, `remote-access`, `disconnect` |
+| `cloud` | `show`, `account show`, `account sign-in`, `account sign-out`, `bind`, `challenge`, `remote-access`, `scopes set`, `disconnect`, `account-nodes list`, `account-nodes claim`, `account-nodes release` |
 | `proxy` | `invites list`, `invites create`, `invites remove`, `bindings list`, `bindings remove`, `diagnostics`, `pending-claims list`, `pending-claims resume`, `pending-claims remove` |
 | `user` | `list`, `show`, `sessions`, `session-revoke`, `create`, `update`, `access`, `password-reset`, `role list`, `role create`, `role update`, `role remove`, `permission list`, `identity-provider list`, `identity-provider create`, `identity-provider update`, `identity-provider remove`, `external-identity list`, `external-identity approve`, `external-identity reject` |
 | `skill` | `status`, `install`, `update` |
 | stream | `events` |
 | contract | `schema` |
 
-- Data goes to stdout, diagnostics to stderr; `--json` keeps the server wire field names.
+- Data goes to stdout, diagnostics to stderr; the default JSON output keeps the server wire field names. `--table` uses human-readable tables where the command declares columns.
 - `--config <file>` carries a JSON request body for commands whose input is too large for flags (write inputs such as `instance create`, `instance update`, `instance app catalog custom update`, `node create`, `project create`, `image create`, `model create`, `chat bridges create`); the file must parse to a JSON object. `--token-stdin` reads a one-time token from stdin (for example `node-join complete` and `app-session revoke-access`). Secrets are never accepted as positional arguments, so `--config` and `--token-stdin` are the only secret input channels.
 - Write commands require confirmation. Non-TTY callers must pass `--yes`; `--dry-run` prints the request (or the ordered requests of a multi-step write) without sending it.
 - The Control Plane decides which operations require Web approval. A CLI write that receives an approval request waits up to five minutes for the initiating user's Web decision, then submits the same request once with its approval ID. `--yes` skips only local confirmation. By default the server gates `instance delete`, `node remove`, `node updates apply`, `user access`, `user role update/remove`, `user identity-provider update/remove`, and `git-credential assignments assign`. `node settings external-listener set` can be gated through `TASK_HANDOFF_OPERATION_APPROVAL_POLICY` (disabled by default). These commands probe only the overall approval protocol before sending a write, protecting against older servers without approval support; the CLI does not decide whether any individual gate is enabled.
@@ -138,8 +138,8 @@ thctl skill update --force --yes       # replace a locally modified copy
 Both the CLI and the skill share one throttled background check:
 
 - Any CLI invocation may spawn a detached `thctl __update-check` child at most once per 24 hours; it records the latest `@task-handoff/thctl` dist-tag version and skill index version in `<cli config dir>/update-check.json`.
-- The next interactive invocation prints the cached hint to stderr, for example `thctl 0.0.24 → 0.0.25 is available: npm install -g @task-handoff/thctl@latest` or `skill taskhandoff 5 → 6 is available: thctl skill update`. Nothing is printed under `--json` or on non-TTY streams, and the CLI hint stays quiet for local/dev builds (their source is not comparable to the registry); the skill hint still applies, and when the published skill needs a newer CLI it says `update the CLI first` instead.
-- `--no-update-check` and `TASK_HANDOFF_CLI_UPDATE_CHECK=0` disable the check and the hint; `TASK_HANDOFF_CLI_UPDATE_CHECK=1` forces the hint on non-interactive and `--json` runs, and `TASK_HANDOFF_CLI_UPDATE_CHECK_INTERVAL` (seconds) overrides the 24-hour window.
+- The next interactive invocation prints the cached hint to stderr, for example `thctl 0.0.24 → 0.0.25 is available: npm install -g @task-handoff/thctl@latest` or `skill taskhandoff 5 → 6 is available: thctl skill update`. Nothing is printed in the default JSON mode or on non-TTY streams, and the CLI hint stays quiet for local/dev builds (their source is not comparable to the registry); the skill hint still applies, and when the published skill needs a newer CLI it says `update the CLI first` instead.
+- `--no-update-check` and `TASK_HANDOFF_CLI_UPDATE_CHECK=0` disable the check and the hint; `TASK_HANDOFF_CLI_UPDATE_CHECK=1` forces the hint on non-interactive and JSON runs, and `TASK_HANDOFF_CLI_UPDATE_CHECK_INTERVAL` (seconds) overrides the 24-hour window.
 - Prerelease builds compare against their own dist-tag (`alpha`, `beta`, else `latest`); `TASK_HANDOFF_CLI_REGISTRY`, `npm_config_registry` and `~/.npmrc` select the registry in that order.
 - A failed check retries after one hour. Checks and hints never change a command's output, exit code, or error handling.
 
@@ -205,7 +205,15 @@ echo "$NEW_PASSWORD" | thctl user password-reset <userId> --token-stdin --yes
 thctl chat status --json
 thctl control-plane settings show --json
 thctl control-plane diagnostic-logs export --out ./diagnostic-logs.tar.gz
+thctl cloud account show --json
+thctl cloud account sign-in --yes
+thctl cloud bind --yes
+thctl cloud account-nodes list --json
+thctl cloud account-nodes claim <nodeHandle> --yes
+thctl cloud account-nodes release <nodeHandle> --yes
+thctl cloud account sign-out --yes
 thctl cloud challenge --json
+thctl cloud scopes set --device-access true --node-relay true --yes
 
 # Access management
 thctl user create --config ./user.json --yes
@@ -216,6 +224,10 @@ thctl user external-identity approve <approvalId> --yes
 
 - `node updates apply --wait` polls `updates/jobs` until the rollout reaches a terminal state; an interrupted wait exits `15`.
 - `control-plane diagnostic-logs export` streams the archive to `--out` and never prints the payload to stdout.
+- `cloud account sign-in` starts a pending cloud-account authorization and returns its URL in JSON. In an interactive terminal, `--table` also opens the approval URL automatically; `cloud account show` reports the account, expiry, and pending request.
+- `cloud bind` starts the current browser-approval binding flow and requires a signed-in cloud account. It returns only the request metadata and authorization URL in JSON; interactive `--table` runs also open the approval URL. The Control Plane and Coordinator exchange the one-time challenge internally.
+- `cloud account-nodes list|claim|release` reads and changes the signed-in cloud account's node directory. Claim and release require `--yes` or an interactive confirmation.
+- `cloud scopes set --device-access <true|false> --node-relay <true|false>` sets both independent connection scopes. The legacy `cloud remote-access --enabled` command refuses to run while node relay is enabled because its wire format resets that scope to false.
 - `user create|update|access|password-reset`, `role *`, `identity-provider *`, and `external-identity *` are each independently gated by `userManagement`, `customRoles`, and `externalIdentityLogin`; losing one does not disable `user list|show|sessions`.
 
 ## Event stream

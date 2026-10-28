@@ -2,9 +2,10 @@ import { Command, CommanderError } from "commander";
 import { CliProfileStore, resolveCliConfigDir } from "./config.ts";
 import type { CliEventSocketFactory } from "./event-socket.ts";
 import { CLI_GROUPS, type CliLeaf } from "./contracts.ts";
-import { CLI_EXIT_CODES, ThctlError, notImplementedError, toThctlError } from "./errors.ts";
+import { CLI_EXIT_CODES, ThctlError, notImplementedError, toThctlError, usageError } from "./errors.ts";
 import { THCTL_VERSION } from "./client-info.ts";
 import { openInBrowser } from "./login.ts";
+import { CLI_GLOBAL_OPTIONS } from "./global-options.ts";
 import { CliOutput, defaultStreams, type CliStreams } from "./output.ts";
 import type { CliResult } from "./runtime.ts";
 import { promptConfirm, type CliContext } from "./runtime.ts";
@@ -15,18 +16,18 @@ import {
   runUpdateCheckChild,
 } from "./update-check.ts";
 
-const GLOBAL_OPTIONS: readonly [string, string][] = [
-  ["--profile <label>", "Profile to use (overrides TASK_HANDOFF_CLI_PROFILE)"],
-  ["--json", "Emit machine-readable JSON on stdout"],
-  ["--yes", "Skip interactive confirmation for write commands"],
-  ["--dry-run", "Print the request a write command would send without sending it"],
-  ["--token-stdin", "Read a secret (token, join token, credential) from stdin instead of a flag"],
-  ["--no-update-check", "Skip the background CLI and skill update check"],
-];
-
 function addGlobalOptions(command: Command) {
-  for (const [flags, description] of GLOBAL_OPTIONS) command.option(flags, description);
+  for (const option of CLI_GLOBAL_OPTIONS) command.option(option.flags, option.description);
   return command;
+}
+
+/** 解析失败时叶子还没执行，先按原始参数选择错误输出的格式。 */
+function requestedTableOutput(argv: readonly string[]) {
+  for (const arg of argv.slice(2)) {
+    if (arg === "--") break;
+    if (arg === "--table") return true;
+  }
+  return false;
 }
 
 /** commander 的 repeatable 选项需要显式 collector，否则只保留最后一次取值。 */
@@ -77,8 +78,11 @@ async function executeLeaf(leaf: CliLeaf, context: CliContext, command: Command)
     args[arg.name] = arg.variadic ? (command.args.slice(index).join(" ") || undefined) : value;
   });
   const options = normalizeParsedOptions(command.optsWithGlobals() as Record<string, unknown>);
-  // 错误渲染沿用同一个输出对象，`--json` 时顶层错误也要是结构化 JSON。
-  context.output.json = options.json === true;
+  // JSON 是脚本优先的默认格式；--table 显式切回人读表格。--json 保留为兼容别名。
+  context.output.json = options.table !== true;
+  if (options.table === true && options.json === true) {
+    throw usageError("CLI_OUTPUT_FORMAT_CONFLICT", "`--json` and `--table` cannot be used together.");
+  }
   const invocationContext: CliContext = {
     ...context,
     profile: typeof options.profile === "string" ? options.profile : context.profile,
@@ -117,7 +121,8 @@ export function buildProgram(context: CliContext) {
     .showSuggestionAfterError(false)
     .configureOutput({
       writeOut: (text) => context.output.streams.stdout(text),
-      writeErr: (text) => context.output.streams.stderr(text),
+      // runCli catches CommanderError and renders it once in the selected output mode.
+      writeErr: () => {},
     });
   addGlobalOptions(program);
   program.configureHelp({ sortSubcommands: false });
@@ -171,7 +176,7 @@ export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
   const streams = options.streams ?? defaultStreams();
   return {
     store: options.store ?? new CliProfileStore(resolveCliConfigDir(env)),
-    output: new CliOutput(streams, false),
+    output: new CliOutput(streams, true),
     fetchImpl: options.fetchImpl ?? fetch,
     env,
     yes: false,
@@ -187,6 +192,7 @@ export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
 
 export async function runCli(argv: string[], options: RunCliOptions = {}) {
   const context = createRuntimeContext(options);
+  context.output.json = !requestedTableOutput(argv);
   // 隐藏子进程入口：只刷新更新检查状态，不解析命令、不产生输出。
   if (argv[2] === UPDATE_CHECK_CHILD_ARG) {
     await runUpdateCheckChild(context);

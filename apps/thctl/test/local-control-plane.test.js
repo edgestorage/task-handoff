@@ -73,7 +73,7 @@ test("lock discovery only trusts live loopback control planes", () => {
 test("first run discovers the local control plane, writes a managed profile and mints a local session", async () => {
   const { store, fake, env } = localSetup();
   const output = capture();
-  const code = await runCli(["node", "thctl", "whoami"], { store, streams: output.streams, fetchImpl: fake.fetchImpl, isTty: false, env });
+  const code = await runCli(["node", "thctl", "whoami", "--table"], { store, streams: output.streams, fetchImpl: fake.fetchImpl, isTty: false, env });
   assert.equal(code, 0, output.stderr());
   assert.match(output.stdout(), /Local Operator/);
   assert.match(output.stdout(), /local trust session/);
