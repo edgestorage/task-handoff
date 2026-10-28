@@ -9,6 +9,7 @@ import { mobileBrowserTabStore, type MobileBrowserTab } from './store';
 import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTransportAddress } from './url';
 import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
+import { EmbeddedPaneHeaderOptions } from '../components/EmbeddedPaneHeader';
 import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
@@ -20,12 +21,14 @@ type TabViewState = { loading: boolean; error: string };
 
 export function BrowserTabScreen({
   browserTabId,
+  embeddedHeader = false,
   instanceId,
   onClosed,
   onSelectTab,
   pane = false,
 }: {
   browserTabId: string;
+  embeddedHeader?: boolean;
   instanceId: string;
   onClosed?(): void;
   onSelectTab?(tab: MobileBrowserTab): void;
@@ -166,7 +169,9 @@ export function BrowserTabScreen({
   }));
 
   return <SafeAreaView edges={pane ? [] : ['bottom']} style={[styles.root, { backgroundColor: colors.background }]}>
-    {pane ? null : <Stack.Screen options={{ headerLargeTitle: false, title: tab.title || t('browser.browser') }} />}
+    {embeddedHeader
+      ? <EmbeddedPaneHeaderOptions enabled title={tab.title || t('browser.browser')} />
+      : pane ? null : <Stack.Screen options={{ headerLargeTitle: false, title: tab.title || t('browser.browser') }} />}
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.content}>
       <View style={[styles.addressRow, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
         <View style={[styles.addressField, { backgroundColor: colors.surface }]}>

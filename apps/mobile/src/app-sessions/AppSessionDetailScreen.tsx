@@ -7,6 +7,7 @@ import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/
 
 import { useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { Icon } from '../components/Icon';
+import { EmbeddedPaneHeaderOptions } from '../components/EmbeddedPaneHeader';
 import { MenuView, type MenuAction } from '../components/MenuView';
 import { useMobileToast } from '../components/MobileToast';
 import { SessionRenameModal } from '../components/SessionRenameModal';
@@ -27,11 +28,13 @@ type TerminalGrid = { cols: number; rows: number };
 type TerminalSnapshot = TerminalGrid & { data: string; pendingEscape: string };
 
 export function AppSessionDetailScreen({
+  embeddedHeader = false,
   instanceId,
   onClosed,
   pane = false,
   sessionId,
 }: {
+  embeddedHeader?: boolean;
   instanceId: string;
   onClosed?(): void;
   pane?: boolean;
@@ -212,11 +215,13 @@ export function AppSessionDetailScreen({
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView> : undefined;
-  const header = <><Stack.Screen options={pane
-    ? { headerRight: menu ? () => menu : undefined }
-    : { title, headerRight: menu ? () => menu : undefined }} />
-    <PaneHeaderRestore pane={pane} />
-  </>;
+  const header = embeddedHeader
+    ? <EmbeddedPaneHeaderOptions enabled headerRight={menu} title={title} />
+    : <><Stack.Screen options={pane
+      ? { headerRight: menu ? () => menu : undefined }
+      : { title, headerRight: menu ? () => menu : undefined }} />
+      <PaneHeaderRestore pane={pane} />
+    </>;
 
   if (!session || (accessMode !== 'tty' && accessMode !== 'vnc')) {
     return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.background }]}><Text style={[styles.unavailableText, { color: colors.text }]}>{t('appSessions.viewUnavailable')}</Text></View></>;

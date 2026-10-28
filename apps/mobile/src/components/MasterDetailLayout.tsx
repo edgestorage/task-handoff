@@ -1,21 +1,26 @@
 import { useContext, useEffect, useMemo, type ReactNode } from 'react';
-import { BackHandler, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { BackHandler, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { AdaptiveContentWidthProvider } from './adaptive-layout';
 import { EmptyState } from './EmptyState';
+import type { NativeSplitPaneOptions } from './NativeSplitMasterDetail';
 import { useMobileTheme } from './theme';
 import type { IconName } from './Icon';
 
 /** Below this usable width the native stack keeps the compact single-column flow. */
 export const MASTER_DETAIL_MIN_WIDTH = 720;
 export const MASTER_DETAIL_LIST_MIN_WIDTH = 300;
-export const MASTER_DETAIL_LIST_MAX_WIDTH = 352;
+/** Initial list width retained from the pre-resizable layout. */
+export const MASTER_DETAIL_LIST_DEFAULT_WIDTH = 352;
 export const MASTER_DETAIL_DETAIL_MIN_WIDTH = 420;
+/** The native divider may grow the list to half of the usable width. */
+export const MASTER_DETAIL_LIST_MAX_FRACTION = 0.5;
 
 export type MasterDetailMetrics = {
   availableWidth: number;
   detailWidth: number;
+  listMaxWidth: number;
   listWidth: number;
   wide: boolean;
 };
@@ -28,17 +33,20 @@ export function masterDetailMetrics(
   const right = Math.max(0, safeAreaInsets.right ?? 0);
   const availableWidth = Math.max(0, windowWidth - left - right);
   const wide = availableWidth >= MASTER_DETAIL_MIN_WIDTH;
-  if (!wide) return { availableWidth, detailWidth: availableWidth, listWidth: availableWidth, wide };
+  if (!wide) return { availableWidth, detailWidth: availableWidth, listMaxWidth: availableWidth, listWidth: availableWidth, wide };
 
-  const widthForDetail = Math.max(MASTER_DETAIL_LIST_MIN_WIDTH, availableWidth - MASTER_DETAIL_DETAIL_MIN_WIDTH);
-  const listWidth = Math.min(
-    MASTER_DETAIL_LIST_MAX_WIDTH,
-    widthForDetail,
-    Math.max(MASTER_DETAIL_LIST_MIN_WIDTH, Math.round(availableWidth * 0.36)),
+  const listMaxWidth = Math.max(
+    MASTER_DETAIL_LIST_MIN_WIDTH,
+    Math.min(
+      availableWidth * MASTER_DETAIL_LIST_MAX_FRACTION,
+      availableWidth - MASTER_DETAIL_DETAIL_MIN_WIDTH - StyleSheet.hairlineWidth,
+    ),
   );
+  const listWidth = Math.min(MASTER_DETAIL_LIST_DEFAULT_WIDTH, listMaxWidth);
   return {
     availableWidth,
     detailWidth: Math.max(0, availableWidth - listWidth - StyleSheet.hairlineWidth),
+    listMaxWidth,
     listWidth,
     wide,
   };
@@ -57,16 +65,33 @@ export function MasterDetailLayout({
   detail,
   emptyDetail,
   list,
+  nativeSplitOptions,
   testID = 'master-detail-layout',
 }: {
   detail?: ReactNode;
   emptyDetail?: ReactNode;
   list: ReactNode;
+  nativeSplitOptions?: NativeSplitPaneOptions;
   testID?: string;
 }) {
   const { colors } = useMobileTheme();
   const insets = useContext(SafeAreaInsetsContext);
   const metrics = useMasterDetailLayout();
+  if (nativeSplitOptions && Platform.OS === 'ios' && metrics.wide) {
+    const { NativeSplitMasterDetail } = require('./NativeSplitMasterDetail') as typeof import('./NativeSplitMasterDetail');
+    return <NativeSplitMasterDetail
+      detail={detail ?? emptyDetail}
+      detailMinWidth={MASTER_DETAIL_DETAIL_MIN_WIDTH}
+      detailOptions={nativeSplitOptions.detail}
+      detailWidth={metrics.detailWidth}
+      list={list}
+      listMaxWidth={metrics.listMaxWidth}
+      listMinWidth={MASTER_DETAIL_LIST_MIN_WIDTH}
+      listOptions={nativeSplitOptions.list}
+      listWidth={metrics.listWidth}
+      testID={testID}
+    />;
+  }
   return <View
     collapsable={false}
     style={[

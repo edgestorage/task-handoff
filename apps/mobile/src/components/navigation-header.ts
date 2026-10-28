@@ -51,3 +51,23 @@ export function iosSessionHeaderOptions(dark: boolean) {
     },
   } as const;
 }
+
+/** Shared native-split list pane header: large title plus the iOS 26/27 edge treatment. */
+export function iosSplitListHeaderOptions(dark: boolean, title: string) {
+  return {
+    headerLargeStyle: { backgroundColor: 'transparent' },
+    headerLargeTitle: true,
+    headerLargeTitleShadowVisible: true,
+    title,
+    ...iosTransparentHeaderOptions(dark),
+  } as const;
+}
+
+/** Shared native-split detail pane header. Each detail screen supplies its dynamic title. */
+export function iosSplitDetailHeaderOptions(dark: boolean, title: string) {
+  return {
+    headerLargeTitle: false,
+    title,
+    ...iosSessionHeaderOptions(dark),
+  } as const;
+}

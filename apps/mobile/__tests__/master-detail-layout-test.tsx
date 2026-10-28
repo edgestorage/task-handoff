@@ -4,11 +4,12 @@ import { Dimensions, Pressable, StyleSheet, Text } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import {
+  MASTER_DETAIL_LIST_DEFAULT_WIDTH,
   MASTER_DETAIL_MIN_WIDTH,
   MasterDetailLayout,
   masterDetailMetrics,
 } from '../src/components/MasterDetailLayout';
-import { useAdaptiveContentLayout } from '../src/components/adaptive-layout';
+import { AdaptiveContentWidthProvider, useAdaptiveContentLayout } from '../src/components/adaptive-layout';
 
 const initialWindowMetrics = Dimensions.get('window');
 const initialScreenMetrics = Dimensions.get('screen');
@@ -44,8 +45,13 @@ describe('master-detail metrics', () => {
     const metrics = masterDetailMetrics(width, { right });
     expect(metrics.wide).toBe(true);
     expect(metrics.listWidth).toBeGreaterThanOrEqual(300);
+    expect(metrics.listWidth).toBe(Math.min(MASTER_DETAIL_LIST_DEFAULT_WIDTH, metrics.listMaxWidth));
+    expect(metrics.listMaxWidth).toBeGreaterThanOrEqual(metrics.listWidth);
     expect(metrics.detailWidth).toBeGreaterThanOrEqual(420 - StyleSheet.hairlineWidth);
     expect(metrics.listWidth + metrics.detailWidth + StyleSheet.hairlineWidth).toBeCloseTo(metrics.availableWidth);
+    if (metrics.availableWidth >= 2 * 420) {
+      expect(metrics.listMaxWidth).toBeCloseTo(metrics.availableWidth / 2);
+    }
   });
 });
 
@@ -67,12 +73,28 @@ test('scopes adaptive content to the list pane and applies a side safe area once
     paddingLeft: 0,
     paddingRight: 84,
   });
-  expect(StyleSheet.flatten(screen.getByTestId('master-detail-layout-list').props.style)).toMatchObject({ width: 312 });
+  expect(StyleSheet.flatten(screen.getByTestId('master-detail-layout-list').props.style)).toMatchObject({ width: 352 });
   expect(JSON.parse(screen.getByTestId('layout-probe').props.children)).toMatchObject({
     contentInsets: { left: 0, right: 0 },
     regular: false,
   });
   expect(screen.getByText('Detail')).toBeTruthy();
+});
+
+test('applies an explicit safe-area inset inside a native split detail pane', async () => {
+  await act(async () => { setViewportWidth(951); });
+  const screen = await render(
+    <SafeAreaInsetsContext.Provider value={{ bottom: 34, left: 0, right: 84, top: 0 }}>
+      <AdaptiveContentWidthProvider availableWidth={638} horizontalInsets={{ right: 84 }}>
+        <LayoutProbe />
+      </AdaptiveContentWidthProvider>
+    </SafeAreaInsetsContext.Provider>,
+  );
+
+  expect(JSON.parse(screen.getByTestId('layout-probe').props.children)).toMatchObject({
+    contentInsets: { left: 0, right: 84 },
+    contentWidth: 554,
+  });
 });
 
 test('does not mount the detail pane in compact mode', async () => {
@@ -84,6 +106,20 @@ test('does not mount the detail pane in compact mode', async () => {
   expect(screen.getByText('List')).toBeTruthy();
   expect(screen.queryByText('Detail')).toBeNull();
   expect(screen.queryByTestId('master-detail-layout-detail')).toBeNull();
+});
+
+test('keeps window safe-area insets in the compact single-column layout', async () => {
+  await act(async () => { setViewportWidth(390); });
+  const screen = await render(
+    <SafeAreaInsetsContext.Provider value={{ bottom: 0, left: 24, right: 24, top: 0 }}>
+      <MasterDetailLayout detail={<Text>Detail</Text>} list={<LayoutProbe />} />
+    </SafeAreaInsetsContext.Provider>,
+  );
+
+  expect(JSON.parse(screen.getByTestId('layout-probe').props.children)).toMatchObject({
+    contentInsets: { left: 24, right: 24 },
+    contentWidth: 342,
+  });
 });
 
 test('keeps the wide split root in the native hierarchy', async () => {

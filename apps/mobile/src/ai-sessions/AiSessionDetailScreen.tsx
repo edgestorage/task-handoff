@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Stack, useNavigation, useRouter } from 'expo-router';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import { MenuView, type MenuAction } from '../components/MenuView';
@@ -23,18 +23,21 @@ import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
 
 export function AiSessionDetailScreen({
   instanceId,
+  embeddedHeader = false,
   onClosed,
   onOpenSession,
   pane = false,
   sessionId,
 }: {
   instanceId: string;
+  embeddedHeader?: boolean;
   onClosed?(): void;
   onOpenSession?(instanceId: string, sessionId: string): void;
   pane?: boolean;
   sessionId: string;
 }) {
   const router = useRouter();
+  const navigation = useNavigation();
   const { actions, client, controlPlaneId, refresh } = useActiveAiSessionsRuntime();
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
@@ -159,6 +162,25 @@ export function AiSessionDetailScreen({
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView>;
+  const menuRef = useRef<ReactNode>(menu);
+  useLayoutEffect(() => { menuRef.current = menu; });
+  const embeddedHeaderRight = useCallback(() => menuRef.current, []);
+  const headerMenuKey = [
+    detailMode,
+    canRename,
+    renaming,
+    Boolean(actions),
+    sessionView.syncPhase,
+    liveActivityAction?.id,
+    liveActivityAction?.title,
+    trackedHere,
+    triggers.available,
+    closing,
+  ].join('|');
+  useLayoutEffect(() => {
+    if (!embeddedHeader) return;
+    navigation.setOptions({ headerRight: embeddedHeaderRight, title });
+  }, [embeddedHeader, embeddedHeaderRight, headerMenuKey, navigation, title]);
   const workspace = <SessionWorkspace
     actions={actions}
     controlPlaneId={controlPlaneId || '__booting__'}
@@ -187,8 +209,8 @@ export function AiSessionDetailScreen({
     timelines={sessionView.timelines}
   />;
   return <>
-    <Stack.Screen options={pane ? { headerRight: () => menu } : { title, headerRight: () => menu }} />
-    <PaneHeaderRestore pane={pane} />
+    {embeddedHeader ? null : <Stack.Screen options={pane ? { headerRight: () => menu } : { title, headerRight: () => menu }} />}
+    {embeddedHeader ? null : <PaneHeaderRestore pane={pane} />}
     <View style={styles.workspace}>{workspace}</View>
     <SessionRenameModal
       busy={renaming}

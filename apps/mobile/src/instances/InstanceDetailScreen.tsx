@@ -8,6 +8,7 @@ import { mobileAiSessionStore } from '../ai-sessions/store';
 import { useActiveAiSessions } from '../ai-sessions/use-active-sessions';
 import { Screen } from '../components/Screen';
 import { EmptyState } from '../components/EmptyState';
+import { EmbeddedPaneHeaderOptions } from '../components/EmbeddedPaneHeader';
 import { useMobileToast } from '../components/MobileToast';
 import { Icon } from '../components/Icon';
 import { MenuView, type MenuAction } from '../components/MenuView';
@@ -22,7 +23,7 @@ import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from './resource-name'
 type RenameTarget = 'instance' | 'node';
 const PRIMARY_LIFECYCLE_ACTIONS = ['start', 'stop', 'restart'] as const;
 
-export function InstanceDetailScreen({ instanceId, pane = false }: { instanceId: string; pane?: boolean }) {
+export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane = false }: { embeddedHeader?: boolean; instanceId: string; pane?: boolean }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const toast = useMobileToast();
@@ -160,8 +161,9 @@ export function InstanceDetailScreen({ instanceId, pane = false }: { instanceId:
     </Pressable>
   </MenuView>;
   return <>
-    <Stack.Screen options={pane ? { headerRight: () => menu } : { title: instance.name, headerRight: () => menu }} />
-    <PaneHeaderRestore pane={pane} />
+    {embeddedHeader
+      ? <EmbeddedPaneHeaderOptions enabled headerRight={menu} title={instance.name} />
+      : <><Stack.Screen options={pane ? { headerRight: () => menu } : { title: instance.name, headerRight: () => menu }} /><PaneHeaderRestore pane={pane} /></>}
     <Screen>
       <View style={[styles.statusSummary, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {lifecycleAction ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: statusColor }]} />}

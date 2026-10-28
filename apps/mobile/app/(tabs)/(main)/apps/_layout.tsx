@@ -1,15 +1,19 @@
-import { router } from 'expo-router';
+import { Platform } from 'react-native';
+
+import { useAppSessionInboxHeaderActions } from '../../../../src/app-sessions/use-app-session-inbox-header-actions';
+import { useMasterDetailLayout } from '../../../../src/components/MasterDetailLayout';
 import { PrimaryTabStack } from '../../../../src/components/PrimaryTabStack';
 import { useI18n } from '../../../../src/i18n';
-import { useInstanceScope } from '../../../../src/instance-scope/use-instance-scope';
 export default function AppsLayout() {
   const { t } = useI18n();
-  const { scope } = useInstanceScope();
+  const { wide } = useMasterDetailLayout();
+  const { headerRight, headerRightItems, openNewSession } = useAppSessionInboxHeaderActions();
   return <PrimaryTabStack
     addAccessibilityLabel={t('appSessions.newAccessibility')}
-    onAdd={() => router.push(scope.kind === 'instance'
-      ? { pathname: '/app-sessions/new', params: { instanceId: scope.instanceId } }
-      : '/app-sessions/new')}
+    headerShown={!(Platform.OS === 'ios' && wide)}
+    headerRight={headerRight}
+    headerRightItems={headerRightItems}
+    onAdd={openNewSession}
     title={t('nav.appSessions')}
   />;
 }

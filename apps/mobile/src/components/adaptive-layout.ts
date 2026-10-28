@@ -12,7 +12,12 @@ export const REGULAR_LAYOUT_MIN_WIDTH = 700;
 export const ADAPTIVE_CONTENT_MAX_WIDTH = 840;
 export const ADAPTIVE_READING_MAX_WIDTH = 780;
 
-const AdaptiveContentWidthContext = createContext<number | undefined>(undefined);
+type AdaptiveContentContextValue = {
+  availableWidth?: number;
+  horizontalInsets?: Partial<AdaptiveHorizontalInsets>;
+};
+
+const AdaptiveContentWidthContext = createContext<AdaptiveContentContextValue | undefined>(undefined);
 
 export type AdaptiveHorizontalInsets = {
   left: number;
@@ -114,16 +119,33 @@ export function adaptiveScrollIndicatorInsets(
  * already positioned inside the horizontal safe area, so its children must
  * not apply the window safe area a second time.
  */
-export function AdaptiveContentWidthProvider({ availableWidth, children }: PropsWithChildren<{ availableWidth?: number }>) {
-  return createElement(AdaptiveContentWidthContext.Provider, { value: availableWidth }, children);
+export function AdaptiveContentWidthProvider({
+  availableWidth,
+  children,
+  horizontalInsets,
+}: PropsWithChildren<{
+  availableWidth?: number;
+  horizontalInsets?: Partial<AdaptiveHorizontalInsets>;
+}>) {
+  const value = useMemo(
+    () => availableWidth === undefined && horizontalInsets === undefined
+      ? undefined
+      : { availableWidth, horizontalInsets },
+    [availableWidth, horizontalInsets],
+  );
+  return createElement(AdaptiveContentWidthContext.Provider, { value }, children);
 }
 
 export function useAdaptiveContentLayout(maxWidth = ADAPTIVE_CONTENT_MAX_WIDTH) {
   const { width } = useWindowDimensions();
   const safeAreaInsets = useContext(SafeAreaInsetsContext);
-  const paneWidth = useContext(AdaptiveContentWidthContext);
+  const pane = useContext(AdaptiveContentWidthContext);
   return useMemo(
-    () => adaptiveContentLayout(paneWidth ?? width, maxWidth, paneWidth === undefined ? safeAreaInsets ?? {} : {}),
-    [maxWidth, paneWidth, safeAreaInsets, width],
+    () => adaptiveContentLayout(
+      pane?.availableWidth ?? width,
+      maxWidth,
+      pane ? pane.horizontalInsets ?? {} : safeAreaInsets ?? {},
+    ),
+    [maxWidth, pane, safeAreaInsets, width],
   );
 }

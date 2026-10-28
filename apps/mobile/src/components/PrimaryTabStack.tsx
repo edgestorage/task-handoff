@@ -23,6 +23,7 @@ export function usePrimaryTabHeaderDefaults() {
 export function PrimaryTabStack({
   title,
   addAccessibilityLabel,
+  headerShown = true,
   onAdd,
   headerRight,
   headerRightItems,
@@ -30,6 +31,7 @@ export function PrimaryTabStack({
 }: {
   title: string;
   addAccessibilityLabel?: string;
+  headerShown?: boolean;
   onAdd?(): void;
   headerRight?: () => ReactNode;
   headerRightItems?: () => NativeStackHeaderItem[];
@@ -58,6 +60,7 @@ export function PrimaryTabStack({
     <Stack screenOptions={{
       contentStyle: { backgroundColor: colors.background },
       headerShadowVisible: false,
+      headerShown,
       headerTintColor: colors.primary,
       headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '600' },
       title,

@@ -1,5 +1,5 @@
 diff --git a/ios/RNSScreen.mm b/ios/RNSScreen.mm
-index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..23cf2256c77f7abfb7d442adba8f75de71f879d9 100644
+index 9b66012..4066bf4 100644
 --- a/ios/RNSScreen.mm
 +++ b/ios/RNSScreen.mm
 @@ -599,6 +599,11 @@ - (void)didMoveToWindow
@@ -14,12 +14,10 @@ index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..23cf2256c77f7abfb7d442adba8f75de
  }
  
  - (nullable RCTSurfaceTouchHandler *)touchHandler
-@@ -1417,6 +1422,39 @@
-   BOOL _isSwiping;
-   BOOL _shouldNotify;
+@@ -1419,6 +1424,39 @@ @implementation RNSScreen {
    BOOL _isRemovedFromParent;
-+}
-+
+ }
+ 
 +#if !TARGET_OS_TV
 +- (nullable UIScrollView *)firstDescendantScrollViewInView:(UIView *)view
 +{
@@ -50,13 +48,14 @@ index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..23cf2256c77f7abfb7d442adba8f75de
 +  }
 +
 +  return [super contentScrollViewForEdge:edge];
- }
++}
 +#endif // !TARGET_OS_TV
--
 +
  #pragma mark - Common
+ 
+ - (instancetype)initWithView:(UIView *)view
 diff --git a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
-index f0a72ccece723748ba57e9b54174a5f999bf6173..b0b35d899ea69fcb03f1006239e4ce7e686729e1 100644
+index f0a72cc..b0b35d8 100644
 --- a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
 +++ b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
 @@ -160,6 +160,9 @@ - (void)didMoveToWindow
@@ -69,8 +68,91 @@ index f0a72ccece723748ba57e9b54174a5f999bf6173..b0b35d899ea69fcb03f1006239e4ce7e
    }
  }
  
+diff --git a/ios/gamma/split/RNSSplitHostComponentView.mm b/ios/gamma/split/RNSSplitHostComponentView.mm
+index 3c1b9d5..c241517 100644
+--- a/ios/gamma/split/RNSSplitHostComponentView.mm
++++ b/ios/gamma/split/RNSSplitHostComponentView.mm
+@@ -130,6 +130,12 @@ - (void)didMoveToWindow
+                        toViewControllerManaging:self.reactSuperview
+                               withContainerView:self];
+   }
++
++  if (self.window != nil && _controller.viewControllers.count == 0 && [self getNumberOfColumns] >= 2) {
++    // React Native can attach the host after the first mounting transaction, leaving the native split empty.
++    [_controller setNeedsUpdateOfChildViewControllers];
++    [_controller reactMountingTransactionDidMount];
++  }
+ }
+ 
+ RNS_IGNORE_SUPER_CALL_BEGIN
+diff --git a/ios/gamma/split/RNSSplitNavigationController.swift b/ios/gamma/split/RNSSplitNavigationController.swift
+index 6fb3c84..6192e0e 100644
+--- a/ios/gamma/split/RNSSplitNavigationController.swift
++++ b/ios/gamma/split/RNSSplitNavigationController.swift
+@@ -19,6 +19,7 @@ protocol RNSSplitNavigationControllerViewFrameObserver: AnyObject {
+ @objc
+ public class RNSSplitNavigationController: UINavigationController {
+   private var viewFrameObservation: NSKeyValueObservation?
++  private var isApplyingSafeAreaCorrection = false
+   weak var viewFrameOriginChangeObserver: RNSSplitNavigationControllerViewFrameObserver?
+ 
+   ///
+@@ -29,6 +30,11 @@ public class RNSSplitNavigationController: UINavigationController {
+   override public func viewDidLoad() {
+     super.viewDidLoad()
+ 
++    // A split column is a layout container; header chrome belongs to the native
++    // stack rendered inside it. Leaving the wrapper bar visible creates a second,
++    // empty navigation bar and offsets the column header.
++    setNavigationBarHidden(true, animated: false)
++
+     viewFrameObservation?.invalidate()
+     viewFrameObservation = self.view.observe(\.frame, options: [.old, .new]) {
+       [weak self] (view, change) in
+@@ -40,6 +46,41 @@ public class RNSSplitNavigationController: UINavigationController {
+     }
+   }
+ 
++  ///
++  /// @brief Keeps the column wrapper aligned with the split host's safe area.
++  ///
++  /// UISplitViewController can add the enclosing top safe area a second time while
++  /// a column is resized. The wrapper has no navigation chrome of its own, so its
++  /// top inset must match its parent. Compensate without touching horizontal or
++  /// bottom insets, which can carry device safe area into the column.
++  ///
++  override public func viewSafeAreaInsetsDidChange() {
++    super.viewSafeAreaInsetsDidChange()
++    correctSafeAreaIfNeeded()
++  }
++
++  private func correctSafeAreaIfNeeded() {
++    guard !isApplyingSafeAreaCorrection, let parentView = parent?.view else { return }
++
++    let currentInsets = view.safeAreaInsets
++    let appliedInsets = additionalSafeAreaInsets
++    let systemInsets = UIEdgeInsets(
++      top: currentInsets.top - appliedInsets.top,
++      left: currentInsets.left - appliedInsets.left,
++      bottom: currentInsets.bottom - appliedInsets.bottom,
++      right: currentInsets.right - appliedInsets.right
++    )
++    let correctedTop = parentView.safeAreaInsets.top - systemInsets.top
++    guard abs(correctedTop - appliedInsets.top) >= 0.5 else { return }
++
++    var correction = appliedInsets
++    correction.top = correctedTop
++
++    isApplyingSafeAreaCorrection = true
++    additionalSafeAreaInsets = correction
++    isApplyingSafeAreaCorrection = false
++  }
++
+   private func onViewOriginChange() {
+     viewFrameOriginChangeObserver?.splitNavCtrlViewDidChangeFrameOrigin(self)
+   }
 diff --git a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
-index b1c43b7d04da93062e4dcf953154a732c2c50ded..9caae561b0af62ebf5ba1e8c44d8765ff2b55809 100644
+index b1c43b7..9caae56 100644
 --- a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
 +++ b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
 @@ -12,4 +12,5 @@
@@ -80,7 +162,7 @@ index b1c43b7d04da93062e4dcf953154a732c2c50ded..9caae561b0af62ebf5ba1e8c44d8765f
 ++ (BOOL)hasOnlyAutomaticEffects:(nonnull id<RNSScrollEdgeEffectProviding>)provider;
  @end
 diff --git a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
-index c0fb1333ea2ab281f057cff15b2d0aad7f0043f1..3c521e7ff7c341b3edb335563f03234057d1d007 100644
+index c0fb133..3c521e7 100644
 --- a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
 +++ b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
 @@ -20,6 +20,14 @@ + (void)applyToScrollView:(nonnull UIScrollView *)scrollView

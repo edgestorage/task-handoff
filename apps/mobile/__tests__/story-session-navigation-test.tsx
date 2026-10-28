@@ -29,6 +29,7 @@ const mockSessionProps: { current?: MockSessionProps } = { current: undefined };
 jest.mock('expo-router', () => ({
   router: { dismissTo: jest.fn(), push: jest.fn() },
   useLocalSearchParams: () => mockRouteParams.current,
+  useNavigation: () => ({ setOptions: jest.fn() }),
 }));
 
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => {
@@ -185,4 +186,3 @@ describe('Story session navigation', () => {
     expect(storyDetailSelection.get()).toMatchObject({ storyId: 'story-1' });
   });
 });
-

@@ -1,15 +1,20 @@
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { AppSessionDetailScreen } from '../../../../src/app-sessions/AppSessionDetailScreen';
 import { AppSessionList } from '../../../../src/app-sessions/AppSessionList';
+import { useAppSessionInboxHeaderActions } from '../../../../src/app-sessions/use-app-session-inbox-header-actions';
 import { BrowserTabList } from '../../../../src/browser/BrowserTabList';
 import { BrowserTabScreen } from '../../../../src/browser/BrowserTabScreen';
 import { useActiveAppSessions } from '../../../../src/app-sessions/use-active-app-sessions';
 import { useMobileControlPlaneRuntime } from '../../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../../../../src/directories/use-directories';
+import { InstanceScopeHeaderButton } from '../../../../src/instance-scope/InstanceScopeHeaderButton';
 import { useInstanceScope } from '../../../../src/instance-scope/use-instance-scope';
+import { useOpenInstanceDrawer } from '../../../../src/instance-scope/use-open-instance-drawer';
 import { MasterDetailEmptyState, MasterDetailLayout, useMasterDetailBack, useMasterDetailLayout } from '../../../../src/components/MasterDetailLayout';
+import { NativeSplitEmptyDetail } from '../../../../src/components/NativeSplitEmptyDetail';
+import { iosSplitDetailHeaderOptions, iosSplitListHeaderOptions } from '../../../../src/components/navigation-header';
 import { useMobileTheme } from '../../../../src/components/theme';
 import { useI18n } from '../../../../src/i18n';
 import {
@@ -25,7 +30,10 @@ export default function AppsRoute() {
   const { state: directory } = useActiveDirectories();
   const { scope } = useInstanceScope();
   const { t } = useI18n();
+  const { dark } = useMobileTheme();
   const { wide } = useMasterDetailLayout();
+  const openDrawer = useOpenInstanceDrawer();
+  const appHeader = useAppSessionInboxHeaderActions();
   const storedApp = useDetailSelection(appSessionDetailSelection);
   const storedBrowser = useDetailSelection(browserTabDetailSelection);
   const selectedApp = storedApp?.controlPlaneId === controlPlaneId ? storedApp : undefined;
@@ -59,14 +67,10 @@ export default function AppsRoute() {
     if (section === 'browser') browserTabDetailSelection.clear();
     else appSessionDetailSelection.clear();
   });
-  const emptyDetail = <MasterDetailEmptyState
-    icon={section === 'browser' ? 'globe-outline' : 'cube-outline'}
-    message={t(section === 'browser' ? 'masterDetail.selectBrowserTab' : 'masterDetail.selectAppSession')}
-    testID="app-session-detail-empty"
-  />;
   const detail = section === 'browser'
     ? selectedBrowser ? <BrowserTabScreen
       browserTabId={selectedBrowser.browserTabId}
+      embeddedHeader={Platform.OS === 'ios' && wide}
       instanceId={selectedBrowser.instanceId}
       key={`browser:${selectedBrowser.instanceId}:${selectedBrowser.browserTabId}`}
       onClosed={() => browserTabDetailSelection.clear()}
@@ -74,12 +78,33 @@ export default function AppsRoute() {
       pane
     /> : undefined
     : selectedApp ? <AppSessionDetailScreen
+      embeddedHeader={Platform.OS === 'ios' && wide}
       instanceId={selectedApp.instanceId}
       key={`app:${selectedApp.instanceId}:${selectedApp.sessionId}`}
       onClosed={() => appSessionDetailSelection.clear()}
       pane
       sessionId={selectedApp.sessionId}
     /> : undefined;
+  const splitView = Platform.OS === 'ios' && wide;
+  const detailTitle = section === 'browser' ? t('browser.browser') : t('nav.appSessions');
+  const nativeSplitOptions = splitView ? {
+    detail: iosSplitDetailHeaderOptions(dark, detailTitle),
+    list: {
+      ...iosSplitListHeaderOptions(dark, t('nav.appSessions')),
+      headerLeft: () => <InstanceScopeHeaderButton onPress={openDrawer} />,
+      unstable_headerRightItems: appHeader.headerRightItems,
+    },
+  } : undefined;
+  const emptyDetail = nativeSplitOptions ? <NativeSplitEmptyDetail
+    icon={section === 'browser' ? 'globe-outline' : 'cube-outline'}
+    message={t(section === 'browser' ? 'masterDetail.selectBrowserTab' : 'masterDetail.selectAppSession')}
+    testID="app-session-detail-empty"
+    title={detailTitle}
+  /> : <MasterDetailEmptyState
+    icon={section === 'browser' ? 'globe-outline' : 'cube-outline'}
+    message={t(section === 'browser' ? 'masterDetail.selectBrowserTab' : 'masterDetail.selectAppSession')}
+    testID="app-session-detail-empty"
+  />;
   const header = <SectionTabs onChange={setSection} section={section} />;
   return <MasterDetailLayout
     detail={detail}
@@ -97,6 +122,7 @@ export default function AppsRoute() {
         selected={wide ? selectedApp : undefined}
         state={state}
       />}
+    nativeSplitOptions={nativeSplitOptions}
     testID="app-session-workbench"
   />;
 }
