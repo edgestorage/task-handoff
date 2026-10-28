@@ -158,6 +158,7 @@ export class CloudConnectivityBackgroundRuntime {
       verifyGrant,
       connector: relayConnector,
       ...(persistResume ? { sessionStatePath: options.cloudRelaySessionsPath } : {}),
+      logger: options.logger,
       clock: this.clock,
     });
     this.events = new CloudAuthorityEventConsumer({

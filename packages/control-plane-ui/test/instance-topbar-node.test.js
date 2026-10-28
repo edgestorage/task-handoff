@@ -78,6 +78,7 @@ test("instance switcher follows the group-by-node preference", () => {
   assert.match(workbench, /<DropdownMenuLabel v-if="switcherGroupedByNode" class="control-plane-instance-menu-group">[\s\S]*?\{\{ group\.label \}\}/);
   assert.match(workbench, /<template v-for="group in switcherInstanceGroups" :key="group\.key">/);
   assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-group\) \{[\s\S]*?font-size: 11px;[\s\S]*?font-weight: 400;/);
+  assert.doesNotMatch(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-group\) \{[^}]*text-transform: uppercase;/);
   assert.match(workbench, /const switcherMenuGroupCount = computed\(\(\) => switcherGroupedByNode\.value \? switcherInstanceGroups\.value\.length : 0\);/);
   assert.match(styles, /:global\(\.control-plane-instance-menu \.control-plane-instance-menu-group\) \{[\s\S]*?min-height: var\(--instance-menu-group-height\);/);
   assert.doesNotMatch(workbench, /:data-grouped/);

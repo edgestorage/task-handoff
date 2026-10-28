@@ -49,6 +49,12 @@
             </div>
               </div>
               <div class="node-detail-header-actions">
+                <Button variant="outline" size="sm" :aria-busy="headerActionState.connection.busy" :disabled="headerActionState.connection.disabled" @click="actions.setNodeConnection(selectedNode, selectedNode.connectionEnabled === false)">
+                  <RefreshCw v-if="headerActionState.connection.busy" class="animate-spin motion-reduce:animate-none" :size="14" />
+                  <Plug v-else-if="selectedNode.connectionEnabled === false" :size="14" />
+                  <Unplug v-else :size="14" />
+                  <span>{{ headerActionState.connection.label }}</span>
+                </Button>
                 <Button variant="outline" size="sm" :disabled="headerActionState.check.disabled" @click="actions.checkSettingsNode(selectedNode.id)">
                   <RefreshCw :size="14" />
                   <span>{{ headerActionState.check.label }}</span>
@@ -60,6 +66,7 @@
                       size="icon-sm"
                       :aria-busy="headerActionState.menu.busy"
                       :aria-label="headerActionState.menu.label"
+                      :disabled="headerActionState.menu.disabled"
                     >
                       <RefreshCw v-if="headerActionState.menu.busy" class="animate-spin motion-reduce:animate-none" :size="16" />
                       <MoreHorizontal v-else :size="16" />
@@ -671,7 +678,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plug, Plus, RefreshCw, ServerCog, Settings, Trash2, Unplug } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
@@ -695,6 +702,7 @@ import CloudNodeTrustPanel from "./CloudNodeTrustPanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeResourceEmptyState from "./NodeResourceEmptyState.vue";
 import { nodeLocalFolderDisplayName } from "../nodePath";
+import type { NodeConnectionAction } from "../useNodeConnectionActions";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
 import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
@@ -745,6 +753,7 @@ type NodeDetailActions = {
   removeControlPlaneConnection: (nodeId: string, connectionId: string) => void | Promise<void>;
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
+  setNodeConnection: (node: Node, enabled: boolean) => void | Promise<void>;
   setModelRelayEnabled: (enabled: boolean) => void | Promise<void>;
   setModelRelayImagePruningEnabled: (enabled: boolean) => void;
   setModelRelayImagePruningOnTooLarge: (policy: NodeAgentModelRelayImagePruning["onTooLarge"]) => void;
@@ -758,7 +767,7 @@ type NodeDetailActions = {
 };
 
 type NodeDetailBusy = {
-  checkingNodeId: string;
+  connectionAction?: NodeConnectionAction;
   checkingRuntimeId: string;
   checkingUpdateNodeId: string;
   applyingUpdateNodeId: string;
@@ -875,7 +884,8 @@ const localizedDateTime = (value: string) => {
 const headerActionState = computed(() => nodeDetailActionState({
   nodeId: props.selectedNode?.id || "",
   isBuiltinNode: props.selectedNode ? props.status.isBuiltinNode(props.selectedNode) : false,
-  checkingNodeId: props.busy.checkingNodeId,
+  connectionEnabled: props.selectedNode?.connectionEnabled !== false,
+  connectionAction: props.busy.connectionAction,
   creatingPairingInviteNodeId: props.busy.creatingPairingInviteNodeId,
   deletingNodeId: props.busy.deletingNodeId,
   renamingNodeId: props.busy.renamingNodeId,

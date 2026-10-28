@@ -363,6 +363,7 @@
         :is-instance-action-busy="isInstanceActionBusy"
         :is-closing-all-sessions="isClosingAllInstanceSessions"
         :loading="nodes.isLoading.value"
+        :node-action="instanceNodeAction"
         :node-states="board.nodeStates.value"
         :nodes="nodes.data.value || []"
         :open-menu-id="openInstanceMenuId"
@@ -377,8 +378,10 @@
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
         @close-all-sessions="confirmCloseAllInstanceSessions"
+        @check-node="checkInstanceNodeConnection"
         @open-config-sync="openConfigSync"
         @select-instance="selectInstance"
+        @set-node-connection="setInstanceNodeConnection"
         @set-menu-open="setInstanceMenuOpen"
       />
 
@@ -675,7 +678,7 @@ import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
-import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
+import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type Node, type NodeLocalFolder, type NodeStatus, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-menu";
@@ -705,6 +708,7 @@ import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type St
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import { loadNodeVisibilityFilter, persistNodeVisibilityFilter } from "./shared/nodeVisibilityPreference";
+import { useNodeConnectionActions } from "./useNodeConnectionActions";
 import { useStoryCatalog } from "./story/useStoryCatalog";
 import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibilityFilter, selectOnlyNode, toggleNodeVisibility, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
@@ -1007,6 +1011,8 @@ const instanceSettingsOpen = computed({
 const models = useModelsQuery(computed(() => !standaloneMode.value || instanceSettingsOpen.value));
 const copiedText = ref("");
 const { clearToasts, showToast } = useControlPlaneToasts();
+const successToast = "success" as const;
+const errorToast = "error" as const;
 const closingAllSessionInstanceId = ref("");
 const isClosingAllInstanceSessions = (instance: InstanceBoardItem) => closingAllSessionInstanceId.value === instance.id;
 const instanceAiSessions = (instanceId: string) => controlPlaneAiSessions.data.value?.instances
@@ -1039,6 +1045,40 @@ const lastRefreshAt = ref(new Date().toISOString());
 const appLaunchMenuOpen = ref(false);
 const sessionMenuOpen = ref(false);
 const openInstanceMenuId = ref("");
+
+async function refreshNodeConnectionViews() {
+  await Promise.allSettled([
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
+  ]);
+}
+
+function updateNodeConnectionView(updated: Node) {
+  queryClient.setQueryData<Node[]>(controlPlaneQueryKeys.nodes, (current) => current?.map((node) => (
+    node.id === updated.id ? updated : node
+  )));
+}
+
+const {
+  actionFor: nodeConnectionAction,
+  checkNodeConnection: checkInstanceNodeConnection,
+  setNodeConnection: setInstanceNodeConnection,
+} = useNodeConnectionActions({
+  confirmDisconnect: (node) => window.confirm(t("instances.nodeConnection.disconnectConfirm", { name: node.name || node.id })),
+  notify: showToast,
+  onNodeChecked: (status: NodeStatus) => {
+    if (status.status !== "online" && status.status !== "offline") return;
+    queryClient.setQueryData<Node[]>(controlPlaneQueryKeys.nodes, (current) => current?.map((node) => (
+      node.id === status.id ? { ...node, status: status.status as Node["status"] } : node
+    )));
+  },
+  onNodeUpdated: updateNodeConnectionView,
+  refresh: refreshNodeConnectionViews,
+  translate: t,
+  translateError: errorText,
+});
+
+const instanceNodeAction = (node: Node) => nodeConnectionAction(node.id);
 const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
@@ -1684,7 +1724,7 @@ const {
   closeFloatingLayers,
   errorText,
   focusAppSession,
-  notifyError: (message: string) => showToast(message, "error"),
+  notifyError: (message: string) => showToast(message, errorToast),
   refresh,
   sessionMenuOpen,
   t,
@@ -2072,7 +2112,7 @@ const {
     openInstanceMenuId.value = "";
   },
   errorText,
-  notifyError: (message: string) => showToast(message, "error"),
+  notifyError: (message: string) => showToast(message, errorToast),
   refresh,
   translate: t,
 });
@@ -2097,7 +2137,7 @@ async function confirmSaveEnvironmentTemplate(name: string) {
   try {
     await saveEnvironmentTemplate(instance.id, name);
     await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.environmentTemplates(instance.nodeId) });
-    showToast(t("instances.environmentTemplateDialog.saved", { name }), "success");
+    showToast(t("instances.environmentTemplateDialog.saved", { name }), successToast);
     saveTemplateInstance.value = undefined;
   } catch (error) {
     saveTemplateError.value = errorText(error);
@@ -2263,7 +2303,7 @@ async function openInstanceWindow(instance: InstanceBoardItem, session?: BoardSe
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"), "error");
+    showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"), errorToast);
   }
   // i18n-audit-allow-next-line code-token: toast presentation variant
   else if (result.action === "focused") showToast(t("instances.window.focusedExisting"), "info");
@@ -2298,7 +2338,7 @@ async function selectInstance(id: string) {
   }
   if (desktopResult && desktopResult.action !== "switched") {
     finishInstanceSwitch(switchSequence);
-    showToast(t("instances.window.switchFailed"), "error");
+    showToast(t("instances.window.switchFailed"), errorToast);
     closeFloatingLayers();
     return;
   }

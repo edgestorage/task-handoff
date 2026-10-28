@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
-import { applyNodeUpdate, checkNode, checkNodeUpdate, createNode, createNodeControlPlaneConnection, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeControlPlaneConnection, deleteNodeControlPlanePairing, listNodeControlPlaneConnections, listNodeControlPlanePairings, listNodeDockerImages, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
+import { applyNodeUpdate, checkNodeUpdate, createNode, createNodeControlPlaneConnection, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeControlPlaneConnection, deleteNodeControlPlanePairing, listNodeControlPlaneConnections, listNodeControlPlanePairings, listNodeDockerImages, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
 import type { LocalDockerImage, Node, NodeControlPlaneConnection, NodeControlPlanePairing, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import { useNodeConnectionActions } from "../useNodeConnectionActions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
@@ -12,6 +13,7 @@ type UseNodeSettingsInput = {
   errorText: (error: unknown) => string;
   notify?: typeof showControlPlaneToast;
   onNodeRenamed: (node: Node) => void | Promise<void>;
+  onNodeUpdated: (node: Node) => void;
   refreshNodeRuntimeState: () => Promise<void>;
   refreshNodeTopology: () => Promise<void>;
   nodes: () => Node[];
@@ -21,12 +23,11 @@ type UseNodeSettingsInput = {
 };
 
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
-export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeRenamed, refreshNodeRuntimeState, refreshNodeTopology, nodes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
+export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeRenamed, onNodeUpdated, refreshNodeRuntimeState, refreshNodeTopology, nodes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingNode = ref(false);
   const syncingLocalNode = ref(false);
   const deletingNodeId = ref("");
-  const checkingNodeId = ref("");
   const creatingPairingInviteNodeId = ref("");
   const creatingJoinInvite = ref(false);
   const connectingRemoteNodeId = ref("");
@@ -70,6 +71,16 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const canCreateNode = computed(() => Boolean(settingsNode.endpoint.trim()));
   const canConnectRemote = computed(() => Boolean(remoteConnect.controlPlaneUrl.trim() && remoteConnect.joinToken.trim()));
   const nodeRename = useNodeRename({ errorText, nodes, notify, onNodeRenamed, translate: t, updateNode: updateNodeAction });
+  const nodeConnectionActions = useNodeConnectionActions({
+    confirmDisconnect: (node) => window.confirm(t("instances.nodeConnection.disconnectConfirm", { name: node.name || node.id })),
+    notify,
+    onNodeChecked: (status) => { nodeStatusById[status.id] = status; },
+    onNodeUpdated,
+    refresh: refreshNodeTopology,
+    translate: t,
+    translateError,
+    updateNode: updateNodeAction,
+  });
 
   function clearNodeFeedback() {
     settingsNodeSuccess.value = "";
@@ -188,19 +199,14 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
   }
 
-  async function checkSettingsNode(id: string) {
-    if (checkingNodeId.value) {
-      return;
-    }
-    checkingNodeId.value = id;
-    try {
-      nodeStatusById[id] = await checkNode(id);
-    } catch (error) {
-      showControlPlaneToast(translateError(error), "error");
-    } finally {
-      checkingNodeId.value = "";
-    }
-  }
+  const checkSettingsNode = (id: string) => {
+    const target = nodes().find((node) => node.id === id);
+    if (target) void nodeConnectionActions.checkNodeConnection(target);
+  };
+
+  const setNodeConnection = (target: Node, enabled: boolean) => {
+    void nodeConnectionActions.setNodeConnection(target, enabled);
+  };
 
   async function loadNodeImages(id: string) {
     if (loadingNodeImagesId.value) {
@@ -427,7 +433,6 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     checkSettingsNode,
     checkManagedUpdate,
     checkingUpdateNodeId,
-    checkingNodeId,
     clearNodeFeedback,
     connectSelectedNodeToRemote,
     connectingRemoteNodeId,
@@ -459,6 +464,8 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     controlPlaneConnectionsByNodeId,
     remoteKeysErrorByNodeId,
     remoteConnect,
+    nodeConnectionAction: nodeConnectionActions.actionFor,
+    setNodeConnection,
     settingsNode,
     settingsNodeSuccess,
     syncingLocalNode,

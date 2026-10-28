@@ -263,6 +263,64 @@ test("relay data connection retries after a transient resume failure", { timeout
   assert.equal(resumeCalls, 2);
 });
 
+test("relay data connection logs background resume failures and recovery", { timeout: 5_000 }, async () => {
+  const warnings = [];
+  const infos = [];
+  let resumeCalls = 0;
+  let disconnect;
+  let resolveRecovered;
+  const recovered = new Promise((resolve) => { resolveRecovered = resolve; });
+  const manager = new CloudRelayDataConnectionManager({
+    verifyAllocation: async (value) => value,
+    verifyGrant: async (grant) => ({ allocationId: grant.allocationId, relayUrl: grant.relayUrl, epoch: 1, channelKind: "access", grant }),
+    logger: {
+      warn: (data, message) => warnings.push({ data, message }),
+      info: (data, message) => {
+        infos.push({ data, message });
+        if (message === "cloud_relay_resume_recovered") resolveRecovered();
+      },
+    },
+    connector: {
+      async connect() { throw new Error("unexpected new connection"); },
+      async resume(input) {
+        resumeCalls += 1;
+        if (resumeCalls === 1) {
+          disconnect = input.onDisconnected;
+          return { async close() {} };
+        }
+        if (resumeCalls === 2) throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+        return { async close() {} };
+      },
+    },
+  });
+
+  assert.equal((await manager.applyGrant({
+    allocationId: "allocation_resume_logging",
+    relayUrl: "wss://relay.example.test/connect",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })).status, "resumed");
+  assert.equal(typeof disconnect, "function");
+  disconnect();
+  await Promise.race([
+    recovered,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("resume recovery log was not emitted")), 3_000)),
+  ]);
+
+  assert.equal(resumeCalls, 3);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].message, "cloud_relay_resume_failed");
+  assert.equal(warnings[0].data.allocationId, "allocation_resume_logging");
+  assert.equal(warnings[0].data.relayUrl, "wss://relay.example.test/connect");
+  assert.equal(warnings[0].data.attempt, 1);
+  assert.equal(warnings[0].data.errorCode, "ECONNRESET");
+  assert.equal(warnings[0].data.retryScheduled, true);
+  assert.equal(warnings[0].data.nextRetryMs, 500);
+  assert.equal(infos.length, 1);
+  assert.equal(infos[0].message, "cloud_relay_resume_recovered");
+  assert.equal(infos[0].data.allocationId, "allocation_resume_logging");
+  assert.equal(infos[0].data.attempt, 2);
+});
+
 test("relay data connection discards a missing Relay session from the close reason", async () => {
   let resumeCalls = 0;
   const manager = new CloudRelayDataConnectionManager({

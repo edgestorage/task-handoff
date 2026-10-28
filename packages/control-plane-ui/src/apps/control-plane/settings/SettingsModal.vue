@@ -724,11 +724,15 @@ const refreshNodeTopology = () => invalidateControlPlaneDomains(queryClient, ["n
 const refreshNodeRuntimeState = () => invalidateControlPlaneDomains(queryClient, ["nodeRuntimeState"]);
 const refreshNodeFolders = () => invalidateControlPlaneDomains(queryClient, ["nodeFolders"]);
 
-async function syncRenamedNode(renamed: Node) {
+function syncUpdatedNode(updated: Node) {
   queryClient.setQueryData<Node[]>(["control-plane-nodes"], (current) => {
-    if (!current) return [renamed];
-    return current.map((node) => node.id === renamed.id ? renamed : node);
+    if (!current) return [updated];
+    return current.map((node) => node.id === updated.id ? updated : node);
   });
+}
+
+async function syncRenamedNode(renamed: Node) {
+  syncUpdatedNode(renamed);
   await Promise.allSettled([
     queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes }),
     queryClient.refetchQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
@@ -1017,7 +1021,6 @@ const {
   checkSettingsNode,
   checkManagedUpdate,
   checkingUpdateNodeId,
-  checkingNodeId,
   clearNodeFeedback,
   connectSelectedNodeToRemote,
   connectingRemoteNodeId,
@@ -1043,12 +1046,14 @@ const {
   removeNode,
   removeRemoteKey,
   removeControlPlaneConnection,
+  setNodeConnection,
   renamingNodeId,
   resetNodeRename,
   nodeImageError,
   nodeImages,
   nodeStatusById,
   nodeNameById,
+  nodeConnectionAction,
   selectedImageNodeId,
   remoteConnectResultByNodeId,
   controlPlanePairingsByNodeId,
@@ -1066,6 +1071,7 @@ const {
 } = useNodeSettings({
   errorText,
   onNodeRenamed: syncRenamedNode,
+  onNodeUpdated: syncUpdatedNode,
   refreshNodeRuntimeState,
   refreshNodeTopology,
   nodes: () => nodes.data.value || [],
@@ -1325,6 +1331,7 @@ const nodeDetailActions = computed(() => ({
   removeControlPlaneConnection,
   removeRuntime,
   saveExternalListener,
+  setNodeConnection,
   setModelRelayEnabled,
   setModelRelayImagePruningEnabled,
   setModelRelayImagePruningOnTooLarge,
@@ -1338,7 +1345,7 @@ const nodeDetailActions = computed(() => ({
 }));
 
 const nodeDetailBusy = computed(() => ({
-  checkingNodeId: checkingNodeId.value,
+  connectionAction: nodeConnectionAction(selectedNode.value?.id || ""),
   checkingUpdateNodeId: checkingUpdateNodeId.value,
   applyingUpdateNodeId: applyingUpdateNodeId.value,
   checkingRuntimeId: checkingRuntimeId.value,
@@ -1562,11 +1569,13 @@ function nodeInstanceSummary(nodeId: string) {
 
 function nodeStatusValue(nodeId: string) {
   const node = (nodes.data.value || []).find((item) => item.id === nodeId);
+  if (node?.connectionEnabled === false) return "disconnected";
   if (nodeEventTransport(nodeId)?.status === "congested") return "degraded";
   return nodeStatusById[nodeId]?.status || node?.status || "unknown";
 }
 
 function nodeStatusLabel(nodeId: string) {
+  if (nodeStatusValue(nodeId) === "disconnected") return t("instances.list.nodeDisconnected");
   return translateStatus(connectionStatusKeys, nodeStatusValue(nodeId), t);
 }
 
@@ -1862,6 +1871,11 @@ function errorText(error: unknown) {
 .node-status-dot.status-failed {
   background: var(--status-danger);
   box-shadow: 0 0 0 3px var(--status-danger-bg);
+}
+
+.node-status-dot.status-disconnected {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 3px var(--surface-subtle);
 }
 
 .node-list-meta {

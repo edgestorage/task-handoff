@@ -14,7 +14,7 @@ function state(overrides = {}) {
   return nodeDetailActionState({
     nodeId: "node_selected",
     isBuiltinNode: false,
-    checkingNodeId: "",
+    connectionEnabled: true,
     creatingPairingInviteNodeId: "",
     deletingNodeId: "",
     renamingNodeId: "",
@@ -25,19 +25,19 @@ function state(overrides = {}) {
 test("remote node detail exposes delete while builtin node detail omits it", () => {
   assert.equal(state().canDelete, true);
   assert.equal(state({ isBuiltinNode: true }).canDelete, false);
-  assert.deepEqual(state().menu, { busy: false, label: "More node actions" });
+  assert.deepEqual(state().menu, { busy: false, disabled: false, label: "More node actions" });
 });
 
 test("selected node action state reports busy labels and prevents duplicate actions", () => {
   const actions = state({
-    checkingNodeId: "node_selected",
+    connectionAction: "check",
     creatingPairingInviteNodeId: "node_selected",
     deletingNodeId: "node_selected",
     renamingNodeId: "node_selected",
   });
 
   assert.deepEqual(actions.check, { busy: true, disabled: true, label: "Checking connection" });
-  assert.deepEqual(actions.menu, { busy: true, label: "Node action in progress" });
+  assert.deepEqual(actions.menu, { busy: true, disabled: true, label: "Node action in progress" });
   assert.deepEqual(actions.rename, { busy: true, disabled: true, label: "Renaming" });
   assert.deepEqual(actions.pairingInvite, { busy: true, disabled: true, label: "Generating join token" });
   assert.deepEqual(actions.remove, { busy: true, disabled: true, label: "Deleting node" });
@@ -45,14 +45,13 @@ test("selected node action state reports busy labels and prevents duplicate acti
 
 test("an action running on another node disables duplicates without showing the selected node as busy", () => {
   const actions = state({
-    checkingNodeId: "node_other",
     creatingPairingInviteNodeId: "node_other",
     deletingNodeId: "node_other",
     renamingNodeId: "node_other",
   });
 
-  assert.deepEqual(actions.check, { busy: false, disabled: true, label: "Check connection" });
-  assert.deepEqual(actions.menu, { busy: false, label: "More node actions" });
+  assert.deepEqual(actions.check, { busy: false, disabled: false, label: "Check connection" });
+  assert.deepEqual(actions.menu, { busy: false, disabled: false, label: "More node actions" });
   assert.deepEqual(actions.rename, { busy: false, disabled: true, label: "Rename" });
   assert.deepEqual(actions.pairingInvite, { busy: false, disabled: true, label: "Generate join token" });
   assert.deepEqual(actions.remove, { busy: false, disabled: true, label: "Delete node" });
@@ -61,16 +60,30 @@ test("an action running on another node disables duplicates without showing the 
 test("the exposed menu trigger stays visibly busy while a selected menu action is running", () => {
   assert.deepEqual(state({ creatingPairingInviteNodeId: "node_selected" }).menu, {
     busy: true,
+    disabled: false,
     label: "Node action in progress",
   });
   assert.deepEqual(state({ deletingNodeId: "node_selected" }).menu, {
     busy: true,
+    disabled: false,
     label: "Node action in progress",
   });
   assert.deepEqual(state({ renamingNodeId: "node_selected" }).menu, {
     busy: false,
+    disabled: false,
     label: "More node actions",
   });
+});
+
+test("node detail connection actions follow the control-plane connection switch", () => {
+  assert.deepEqual(state().connection, { busy: false, disabled: false, label: "Disconnect" });
+  assert.deepEqual(state({ connectionEnabled: false }).connection, { busy: false, disabled: false, label: "Reconnect" });
+  assert.deepEqual(state({ connectionEnabled: false }).check, { busy: false, disabled: true, label: "Check connection" });
+  assert.deepEqual(state({ connectionAction: "disconnect" }).connection, { busy: true, disabled: true, label: "Disconnecting" });
+  assert.deepEqual(state({ connectionAction: "disconnect" }).menu, { busy: true, disabled: true, label: "Node action in progress" });
+  assert.equal(state({ connectionAction: "disconnect" }).rename.disabled, true);
+  assert.equal(state({ connectionAction: "disconnect" }).pairingInvite.disabled, true);
+  assert.equal(state({ connectionAction: "disconnect" }).remove.disabled, true);
 });
 
 test("node detail actions use icon, title, and description menu items", () => {

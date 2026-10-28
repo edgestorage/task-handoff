@@ -228,6 +228,10 @@ export class CloudRelayDataConnectionManager {
       resume?(input: { relayUrl: string; grant: unknown; onDisconnected?: () => void }): Promise<ManagedConnection>;
     };
     sessionStatePath?: string;
+    logger?: {
+      info?: (data: Record<string, unknown>, message?: string) => void;
+      warn?: (data: Record<string, unknown>, message?: string) => void;
+    };
     clock?: () => number;
   };
   constructor(options: CloudRelayDataConnectionManager["options"]) {
@@ -441,10 +445,38 @@ export class CloudRelayDataConnectionManager {
       return;
     }
     entry.attempts += 1;
-    const delay = Math.min(5_000, 250 * 2 ** Math.min(entry.attempts - 1, 5));
+    const delay = resumeDelayMs(entry.attempts);
+    const attempt = entry.attempts;
+    const startedAt = this.clock();
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
-      void this.resume(allocationId).catch(() => undefined);
+      void this.resume(allocationId).then(() => {
+        if (this.connections.get(allocationId) !== entry || !entry.connection) return;
+        if (attempt <= 1) return;
+        this.options.logger?.info?.({
+          code: "CLOUD_RELAY_RESUME_RECOVERED",
+          allocationId,
+          relayUrl: entry.relayUrl,
+          channelKind: entry.channelKind,
+          attempt,
+          durationMs: Math.max(0, this.clock() - startedAt),
+        }, "cloud_relay_resume_recovered");
+      }).catch((error) => {
+        const retryScheduled = this.connections.get(allocationId) === entry && Boolean(entry.timer);
+        this.options.logger?.warn?.({
+          code: "CLOUD_RELAY_RESUME_FAILED",
+          allocationId,
+          relayUrl: entry.relayUrl,
+          channelKind: entry.channelKind,
+          attempt,
+          durationMs: Math.max(0, this.clock() - startedAt),
+          errorCode: errorCode(error) ?? "RELAY_RESUME_FAILED",
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message.slice(0, 240) : String(error ?? "").slice(0, 240),
+          retryScheduled,
+          ...(retryScheduled ? { nextRetryMs: resumeDelayMs(entry.attempts) } : {}),
+        }, "cloud_relay_resume_failed");
+      });
     }, delay);
     entry.timer.unref?.();
   }
@@ -545,6 +577,10 @@ export class CloudRelayDataConnectionManager {
 
 function connectionError(code: string) {
   return Object.assign(new Error("Cloud connection state is invalid."), { code });
+}
+
+function resumeDelayMs(attempt: number) {
+  return Math.min(5_000, 250 * 2 ** Math.min(Math.max(1, attempt) - 1, 5));
 }
 
 function terminalResumeFailure(error: unknown) {

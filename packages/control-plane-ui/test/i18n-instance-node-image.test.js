@@ -40,7 +40,8 @@ function nodeActions(t) {
   return nodeDetailActionState({
     nodeId: "node_i18n",
     isBuiltinNode: false,
-    checkingNodeId: "node_i18n",
+    connectionEnabled: true,
+    connectionAction: "check",
     creatingPairingInviteNodeId: "",
     deletingNodeId: "",
     renamingNodeId: "",

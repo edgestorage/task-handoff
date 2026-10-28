@@ -27,6 +27,7 @@
           :is-closing-all-sessions="isClosingAllSessions"
           :loading="loading"
           :node-states="nodeStates"
+          :node-action="nodeAction"
           :nodes="nodes"
           :open-menu-id="openMenuId"
           :sort-mode="sortMode"
@@ -40,8 +41,10 @@
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
           @close-all-sessions="(instance) => $emit('closeAllSessions', instance)"
+          @check-node="(node) => $emit('checkNode', node)"
           @open-config-sync="(direction, instance) => $emit('openConfigSync', direction, instance)"
           @select-instance="selectTemporaryInstance"
+          @set-node-connection="(node, enabled) => $emit('setNodeConnection', node, enabled)"
           @set-menu-open="(instanceId, open) => $emit('setMenuOpen', instanceId, open)"
           @update:filter="$emit('update:filter', $event)"
           @update:group-by-node="$emit('update:groupByNode', $event)"
@@ -85,21 +88,42 @@
       <ScrollArea v-else class="instance-rows">
         <div class="instance-rows-content">
         <template v-for="group in instanceGroups" :key="group.key">
-          <button
-            v-if="groupByNode"
-            type="button"
-            class="instance-group-label"
-            :aria-expanded="!collapsedGroups[group.key]"
-            @click="toggleGroup(group.key)"
-          >
-            <Server class="instance-group-icon" :size="15" />
-            <span class="instance-group-name">{{ group.label }}</span>
-            <span v-if="group.connectionLabel" class="instance-group-status" :data-phase="group.resourcePhase || group.connectionPhase">
-              <LoaderCircle v-if="group.resourcePhase === 'loading' || group.resourcePhase === 'uninitialized' || (group.connectionPhase && group.connectionPhase !== 'offline')" :size="13" aria-hidden="true" />
-              {{ group.connectionLabel }}
-            </span>
-            <ChevronRight class="instance-group-chevron" :class="{ open: !collapsedGroups[group.key] }" :size="15" />
-          </button>
+          <ContextMenu v-if="groupByNode">
+            <ContextMenuTrigger as-child :disabled="!group.node">
+              <button
+                type="button"
+                class="instance-group-label"
+                :aria-expanded="!collapsedGroups[group.key]"
+                :aria-busy="group.busy"
+                :data-connection="group.disconnected ? 'disabled' : 'enabled'"
+                @click="toggleGroup(group.key)"
+              >
+                <Server class="instance-group-icon" :size="15" />
+                <span class="instance-group-name">{{ group.label }}</span>
+                <span v-if="group.pendingAction || group.connectionLabel" class="instance-group-status" :data-phase="group.resourcePhase || group.connectionPhase" :data-busy="group.busy">
+                  <LoaderCircle v-if="group.busy" :size="13" aria-hidden="true" />
+                  <Unplug v-else-if="group.disconnected" :size="13" aria-hidden="true" />
+                  {{ group.pendingAction ? instanceNodeActionLabel(group.pendingAction) : group.connectionLabel }}
+                </span>
+                <ChevronRight class="instance-group-chevron" :class="{ open: !collapsedGroups[group.key] }" :size="15" />
+              </button>
+            </ContextMenuTrigger>
+            <ContextMenuContent v-if="group.node" class="instance-action-menu">
+              <ContextMenuItem v-if="group.disconnected" class="instance-action-item" :disabled="group.busy" @select="requestNodeConnection(group.node, true)">
+                <Plug :size="14" />
+                <span>{{ t("instances.nodeConnection.reconnect") }}</span>
+              </ContextMenuItem>
+              <ContextMenuItem v-else class="instance-action-item danger" :disabled="group.busy" @select="requestNodeConnection(group.node, false)">
+                <Unplug :size="14" />
+                <span>{{ t("instances.nodeConnection.disconnect") }}</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem class="instance-action-item" :disabled="group.disconnected || group.busy" @select="requestNodeCheck(group.node)">
+                <RefreshCw :size="14" />
+                <span>{{ t("instances.nodeConnection.check") }}</span>
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
           <Transition name="instance-group-collapse">
           <div v-if="!collapsedGroups[group.key]" class="instance-group-collapse">
           <div class="instance-group-collapse-inner">
@@ -179,11 +203,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Search, Server, Terminal } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plug, Plus, RefreshCw, Search, Server, Terminal, Unplug } from "@lucide/vue";
 import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -194,6 +218,21 @@ import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";
 
 const { t } = useI18n();
+
+type InstanceNodeAction = "connect" | "disconnect" | "check";
+
+type InstanceGroup = {
+  key: string;
+  label: string;
+  instances: InstanceBoardItem[];
+  node?: Node;
+  connectionPhase?: Node["connectionPhase"];
+  resourcePhase?: NodeFleetResourceState["phase"];
+  connectionLabel?: string;
+  disconnected: boolean;
+  pendingAction?: InstanceNodeAction;
+  busy: boolean;
+};
 
 defineOptions({ name: "InstanceList" });
 
@@ -213,6 +252,7 @@ const props = defineProps<{
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   isClosingAllSessions: (instance: InstanceBoardItem) => boolean;
   loading: boolean;
+  nodeAction?: (node: Node) => InstanceNodeAction | undefined;
   nodeStates?: NodeFleetResourceState[];
   nodes: Node[];
   openMenuId: string;
@@ -231,7 +271,9 @@ const emit = defineEmits<{
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   closeAllSessions: [instance: InstanceBoardItem];
   openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
+  checkNode: [node: Node];
   selectInstance: [instanceId: string, source?: "click" | "contextmenu"];
+  setNodeConnection: [node: Node, enabled: boolean];
   setMenuOpen: [instanceId: string, open: boolean];
   "update:filter": [value: string];
   "update:groupByNode": [value: boolean];
@@ -268,34 +310,70 @@ const instanceNodeStates = computed(() => new Map((props.nodeStates || [])
   .filter((state) => state.resource === "instances")
   .map((state) => [state.nodeId, state])));
 const hasPendingNodes = computed(() => props.nodes.some((node) => {
+  if (node.connectionEnabled === false) return false;
   const phase = instanceNodeStates.value.get(node.id)?.phase;
   return phase === "uninitialized" || phase === "loading";
 }));
 
-const instanceGroups = computed(() => {
+function instanceNodeActionLabel(action: InstanceNodeAction) {
+  if (action === "connect") return t("instances.list.nodeConnectPending");
+  if (action === "disconnect") return t("instances.list.nodeDisconnectPending");
+  return t("instances.list.nodeCheckPending");
+}
+
+const instanceGroups = computed<InstanceGroup[]>(() => {
   if (!props.groupByNode) {
-    return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.instances }];
+    return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.instances, disconnected: false, busy: false }];
   }
-  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[]; connectionPhase?: Node["connectionPhase"]; resourcePhase?: NodeFleetResourceState["phase"]; connectionLabel?: string }>();
+  const groups = new Map<string, InstanceGroup>();
   for (const node of props.nodes) {
     const resourceState = instanceNodeStates.value.get(node.id);
-    const connectionLabel = resourceState?.phase === "uninitialized" || resourceState?.phase === "loading"
-      ? t("instances.list.nodeLoading")
-      : resourceState?.phase === "stale"
-        ? t("instances.list.nodeStale")
-        : resourceState?.phase === "error"
-          ? t("instances.list.nodeLoadFailed")
-          : node.connectionPhase === "connecting" || node.connectionPhase === "handshaking"
-      ? t("instances.list.nodeConnecting")
-      : node.connectionPhase === "reconnecting"
-        ? t("instances.list.nodeReconnecting")
-        : undefined;
-    groups.set(node.id, { key: node.id, label: node.name || node.id, instances: [], connectionPhase: node.connectionPhase, resourcePhase: resourceState?.phase, connectionLabel });
+    const pendingAction = props.nodeAction?.(node);
+    const disconnected = node.connectionEnabled === false;
+    const connectionSpinning = resourceState?.phase === "uninitialized"
+      || resourceState?.phase === "loading"
+      || node.connectionPhase === "connecting"
+      || node.connectionPhase === "handshaking"
+      || node.connectionPhase === "reconnecting";
+    const connectionLabel = disconnected
+      ? t("instances.list.nodeDisconnected")
+      : resourceState?.phase === "uninitialized" || resourceState?.phase === "loading"
+        ? t("instances.list.nodeLoading")
+        : resourceState?.phase === "stale"
+          ? t("instances.list.nodeStale")
+          : resourceState?.phase === "error"
+            ? t("instances.list.nodeLoadFailed")
+            : node.connectionPhase === "connecting" || node.connectionPhase === "handshaking"
+              ? t("instances.list.nodeConnecting")
+              : node.connectionPhase === "reconnecting"
+                ? t("instances.list.nodeReconnecting")
+                : undefined;
+    groups.set(node.id, {
+      key: node.id,
+      label: node.name || node.id,
+      instances: [],
+      node,
+      connectionPhase: node.connectionPhase,
+      resourcePhase: resourceState?.phase,
+      connectionLabel,
+      disconnected,
+      pendingAction,
+      busy: Boolean(pendingAction) || (!disconnected && connectionSpinning),
+    });
   }
   for (const instance of props.instances) {
     const key = instance.nodeId || "__unknown__";
     const node = props.nodes.find((candidate) => candidate.id === key);
-    const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [], connectionPhase: node?.connectionPhase, resourcePhase: instanceNodeStates.value.get(key)?.phase };
+    const current: InstanceGroup = groups.get(key) || {
+      key,
+      label: instanceNodeLabel(instance),
+      instances: [],
+      node,
+      connectionPhase: node?.connectionPhase,
+      resourcePhase: instanceNodeStates.value.get(key)?.phase,
+      disconnected: node?.connectionEnabled === false,
+      busy: false,
+    };
     current.instances.push(instance);
     groups.set(key, current);
   }
@@ -317,6 +395,14 @@ watch(
 
 function toggleGroup(key: string) {
   collapsedGroups[key] = !collapsedGroups[key];
+}
+
+function requestNodeConnection(node: Node | undefined, enabled: boolean) {
+  if (node) emit("setNodeConnection", node, enabled);
+}
+
+function requestNodeCheck(node: Node | undefined) {
+  if (node) emit("checkNode", node);
 }
 
 function selectTemporaryInstance(instanceId: string, source?: "click" | "contextmenu") {
@@ -558,7 +644,7 @@ function openNewInstanceFromTemporaryList() {
   font-weight: 400;
 }
 
-.instance-group-status svg {
+.instance-group-status[data-busy="true"] svg {
   flex: 0 0 auto;
   animation: instance-pending-spin 900ms linear infinite;
 }
@@ -718,6 +804,10 @@ function openNewInstanceFromTemporaryList() {
 .instance-group-label:focus-visible {
   background: var(--surface-hover);
   outline: none;
+}
+
+.instance-group-label[data-connection="disabled"] .instance-group-name {
+  color: var(--text-muted);
 }
 
 .instance-group-label span {

@@ -45,7 +45,7 @@ test("Story deletion failures use the global toast instead of the page error sur
 test("saved-outcome toasts use the success variant", () => {
   assert.match(storyView, /showControlPlaneToast\(t\("stories\.editor\.agentToolsSaved"\), "success"\)/);
   assert.match(storyView, /showControlPlaneToast\(t\("stories\.editor\.entryAgentsSaved"\), "success"\)/);
-  assert.match(workbench, /showToast\(t\("instances\.environmentTemplateDialog\.saved", \{ name \}\), "success"\)/);
+  assert.match(workbench, /showToast\(t\("instances\.environmentTemplateDialog\.saved", \{ name \}\), successToast\)/);
 });
 
 test("goal command output is informational", () => {

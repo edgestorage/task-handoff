@@ -1296,7 +1296,7 @@ export type CreateNodeInput = {
   labels?: Record<string, string>;
 };
 
-export type UpdateNodeInput = Pick<Node, "name">;
+export type UpdateNodeInput = Partial<Pick<Node, "name" | "connectionEnabled">>;
 
 export type CreateNodeLocalFolderInput = {
   name: string;
