@@ -57,8 +57,10 @@ test("generated cloud-relay commands can switch installer source without changin
     installerSource: "control-plane",
   });
 
-  assert.match(switched, /^curl -fsSL 'https:\/\/control\.example\.com\/base\/install-node-agent\.sh' \| sudo sh -s --/);
-  assert.match(switched, /--cloud-relay-bind-token 'binding_secret'/);
+  assert.equal(
+    switched,
+    "curl -fsSL 'https://control.example.com/base/install-node-agent.sh' | sudo sh -s -- \\\n  --cloud-relay-origin 'https://cloud.example.com' \\\n  --cloud-relay-bind-token 'binding_secret'",
+  );
   assert.equal(withNodeAgentInstallerSource("sudo task-handoff-node-agent cloud-bind", {
     controlPlaneUrl: "https://control.example.com",
     installerSource: "github",

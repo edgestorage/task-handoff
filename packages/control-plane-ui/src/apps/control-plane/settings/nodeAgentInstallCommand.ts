@@ -62,6 +62,6 @@ export function withNodeAgentInstallerSource(command: string, input: {
   const marker = " | sudo sh -s --";
   const markerIndex = firstLine.indexOf(marker);
   if (!firstLine.startsWith("curl -fsSL ") || markerIndex === -1) return command;
-  const suffix = `${marker}${command.slice(firstLine.length)}`;
+  const suffix = command.slice(markerIndex);
   return `curl -fsSL ${shellQuote(nodeAgentInstallerUrl(input.installerSource, input.controlPlaneUrl))}${suffix}`;
 }
