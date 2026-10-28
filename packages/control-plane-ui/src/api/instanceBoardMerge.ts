@@ -39,19 +39,20 @@ export function mergeNewerLifecycleProjection(
   incoming: InstanceBoardItem,
   lifecycle: InstanceBoardItem,
 ): InstanceBoardItem {
+  const nodeDisconnected = incoming.node?.connectionEnabled === false;
   return {
     ...incoming,
     stateRevision: lifecycle.stateRevision,
     updatedAt: lifecycle.updatedAt,
     status: lifecycle.status,
     health: lifecycle.health,
-    connectionStatus: lifecycle.connectionStatus,
+    connectionStatus: nodeDisconnected ? "offline" : lifecycle.connectionStatus,
     imageProvisioning: lifecycle.imageProvisioning,
     runtimeVersion: lifecycle.runtimeVersion,
-    ready: lifecycle.ready,
+    ready: nodeDisconnected ? false : lifecycle.ready,
     workspace: lifecycle.workspace,
     lastHeartbeatAt: lifecycle.lastHeartbeatAt,
-    access: { ...incoming.access, status: lifecycle.access.status },
+    access: { ...incoming.access, status: nodeDisconnected ? "endpoint-unreachable" : lifecycle.access.status },
   };
 }
 

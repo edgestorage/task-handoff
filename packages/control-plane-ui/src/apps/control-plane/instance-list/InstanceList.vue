@@ -149,7 +149,11 @@
                       </span>
                       <strong>{{ instanceDisplayName(instance) }}</strong>
                     </span>
-                    <small v-if="instanceRowStatus(instance)" class="instance-row-status">
+                    <small v-if="isInstanceNodeDisconnected(instance)" class="instance-row-status instance-row-node-status">
+                      <Unplug :size="11" aria-hidden="true" />
+                      <span>{{ t("instances.lifecycle.nodeDisconnected") }}</span>
+                    </small>
+                    <small v-else-if="instanceRowStatus(instance)" class="instance-row-status">
                       <LoaderCircle :size="11" aria-hidden="true" />
                       <span>{{ instanceRowStatus(instance) }}</span>
                     </small>
@@ -212,7 +216,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../..
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instancePendingStatusLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instancePendingStatusLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceNodeDisconnected, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";
@@ -964,6 +968,10 @@ function openNewInstanceFromTemporaryList() {
 .instance-row-main .instance-row-status svg {
   flex: 0 0 auto;
   animation: instance-pending-spin 900ms linear infinite;
+}
+
+.instance-row-main .instance-row-node-status svg {
+  animation: none;
 }
 
 .instance-row-main .instance-row-status span {

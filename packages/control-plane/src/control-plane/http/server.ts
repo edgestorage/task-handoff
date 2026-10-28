@@ -1250,16 +1250,26 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const input = z.object({ displayName: z.string().trim().max(120).optional() }).strict().parse(request.body ?? {});
     const issued = await cloudConnectivityRuntime.issueNodeBindingToken(input.displayName ? { displayName: input.displayName } : {});
     const bindingToken = typeof issued.bindingToken === "string" ? issued.bindingToken : "";
+    const cloudOrigin = cloudConnectivity.snapshot().serviceOrigin;
+    // The npm-installed Node Agent carries the production discovery record, so
+    // only a production Control Plane may omit the seed. Staging has its own
+    // `_cloud.aaasu.com` record, but keeps the explicit origin until staging
+    // installs a Node Agent artifact built with that environment.
+    const discoverableCloudOrigin = cloudEnvironment.id === "production"
+      && configuredCloudDiscovery?.fallbackOrigin === cloudOrigin
+      ? undefined
+      : cloudOrigin;
     const installCommand = bindingToken
       ? nodeRelayInstallCommand({
         controlPlaneUrl: controlPlanePublicOrigin(service, request),
-        cloudOrigin: cloudConnectivity.snapshot().serviceOrigin,
+        ...(discoverableCloudOrigin ? { cloudOrigin: discoverableCloudOrigin } : {}),
         bindingToken,
       })
       : "";
     // `command` (already rendered cloud-side) is the CLI bind; the install
-    // command is rendered here because only this Control Plane serves the
-    // installer. The plaintext token is never stored or echoed again.
+    // command defaults to the GitHub-hosted installer and can be switched to
+    // this Control Plane's copy in the command preview. The plaintext token is
+    // never stored or echoed again.
     return { data: { tokenId: issued.tokenId, expiresAt: issued.expiresAt, command: issued.command, installCommand } };
   });
 

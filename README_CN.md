@@ -187,10 +187,10 @@ task-handoff-control-plane.service
 
 ## 接入远程节点
 
-远程机器只需安装 Node Agent。先在 Control Plane 生成一次性加入令牌，并优先复制界面提供的完整安装命令；其中的包版本会根据当前 Control Plane 发布版本生成。等价形式如下：
+远程机器只需安装 Node Agent。先在 Control Plane 生成一次性加入令牌，并优先复制界面提供的完整安装命令；命令默认从 GitHub 仓库下载安装脚本，也可以在命令预览中切换为当前 Control Plane 提供的 `/install-node-agent.sh`。其中的包版本会根据当前 Control Plane 发布版本生成。等价形式如下：
 
 ```sh
-curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/edgestorage/task-handoff/main/scripts/install-node-agent.sh | sudo sh -s -- \
   --control-plane https://CONTROL_PLANE_HOST \
   --join-token JOIN_TOKEN \
   --npm-package @task-handoff/node-agent \

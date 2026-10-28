@@ -25,6 +25,7 @@
     "packages",
     "shared",
     "scripts/install-server-services.sh",
+    "scripts/install-node-agent.sh",
     "scripts/install-server.sh",
     "README.md",
     "LICENSE",

@@ -19,8 +19,8 @@ test("control-plane query keys expose stable roots and scoped factories", () => 
 });
 
 test("node local-folder query options share the centralized key factory", () => {
-  assert.match(source, /export function nodeLocalFoldersQueryOptions\(nodeId: string\) \{[\s\S]*queryKey: controlPlaneQueryKeys\.nodeLocalFolders\(nodeId\)[\s\S]*enabled: Boolean\(nodeId\)/);
-  assert.match(source, /useQuery\(computed\(\(\) => nodeLocalFoldersQueryOptions\(resolvedNodeId\.value\)\)\)/);
+  assert.match(source, /export function nodeLocalFoldersQueryOptions\(nodeId: string, enabled = true\) \{[\s\S]*queryKey: controlPlaneQueryKeys\.nodeLocalFolders\(nodeId\)[\s\S]*enabled: Boolean\(nodeId\) && enabled/);
+  assert.match(source, /useQuery\(computed\(\(\) => nodeLocalFoldersQueryOptions\(resolvedNodeId\.value, resolvedEnabled\.value\)\)\)/);
 });
 
 test("plain and payload hooks share one payload cache per resource", () => {

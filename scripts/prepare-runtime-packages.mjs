@@ -86,6 +86,13 @@ for (const [name, definition] of selected) {
     fs.cpSync(uiSource, path.join(packageDir, "ui"), { recursive: true });
   }
 
+  for (const asset of definition.assets || []) {
+    const destination = path.join(packageDir, asset.target);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (asset.executable) copyLinuxExecutable(path.join(root, asset.source), destination);
+    else fs.copyFileSync(path.join(root, asset.source), destination);
+  }
+
   const binDir = path.join(packageDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const bin = {};
@@ -159,6 +166,7 @@ for (const [name, definition] of selected) {
       "bin",
       ...(definition.input ? ["dist"] : []),
       ...(definition.uiDir ? ["ui"] : []),
+      ...new Set((definition.assets || []).map((asset) => asset.target.split("/")[0])),
       ...(name === "node-agent" ? ["docker"] : []),
       ...(name === "node-agent" && fs.existsSync(path.join(packageDir, "builtin-projects")) ? ["builtin-projects"] : []),
       ...(name === "node-agent" && fs.existsSync(path.join(packageDir, "runtime-artifacts")) ? ["runtime-artifacts"] : []),

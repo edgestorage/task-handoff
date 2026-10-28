@@ -397,6 +397,8 @@ export const instances = {
     unhealthyDetail: "The instance health check is {health}. Restart the instance or inspect its runtime.",
     stoppingDetail: "Waiting for the instance runtime to stop safely.",
     waitingDetail: "Waiting for the controlled instance to connect · {status} · {connection}",
+    nodeDisconnected: "Node disconnected",
+    nodeDisconnectedDetail: "This node's connection is paused. Its instances keep running; reconnect the node to view and control them again.",
     checkingImage: "Checking image",
     pullingImage: "Pulling image",
     pullingImageProgress: "Pulling image · {message}",

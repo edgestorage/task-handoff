@@ -5,6 +5,10 @@ import type { Node, NodeStatus } from "../../api/types.ts";
 
 export type NodeConnectionAction = "connect" | "disconnect" | "check";
 
+export function isNodeConnectionEnabled(node: Pick<Node, "connectionEnabled"> | null | undefined) {
+  return node?.connectionEnabled !== false;
+}
+
 export type NodeConnectionActionsOptions = {
   checkNode: (nodeId: string) => Promise<NodeStatus>;
   confirmDisconnect: (node: Node) => boolean;
@@ -43,7 +47,7 @@ export function createNodeConnectionActions({
   }
 
   async function setNodeConnection(node: Node, enabled: boolean) {
-    if (!node.id || actionFor(node.id) || (node.connectionEnabled !== false) === enabled) return false;
+    if (!node.id || actionFor(node.id) || isNodeConnectionEnabled(node) === enabled) return false;
     if (!enabled && !confirmDisconnect(node)) return false;
     actions[node.id] = enabled ? "connect" : "disconnect";
     try {
@@ -63,7 +67,7 @@ export function createNodeConnectionActions({
   }
 
   async function checkNodeConnection(node: Node) {
-    if (!node.id || actionFor(node.id) || node.connectionEnabled === false) return false;
+    if (!node.id || actionFor(node.id) || !isNodeConnectionEnabled(node)) return false;
     actions[node.id] = "check";
     try {
       const result = await checkNode(node.id);

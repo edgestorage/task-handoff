@@ -59,12 +59,15 @@ function boardInstance(input: {
   runtime?: NodeRuntime;
 }) {
   const heartbeatAgeMs = input.instance.lastHeartbeatAt ? input.currentTime - Date.parse(input.instance.lastHeartbeatAt) : undefined;
-  const connectionStatus = heartbeatAgeMs !== undefined && heartbeatAgeMs > 30_000 ? "offline" : input.instance.connectionStatus;
+  const nodeDisconnected = input.node?.connectionEnabled === false;
+  const connectionStatus = nodeDisconnected ? "offline" : heartbeatAgeMs !== undefined && heartbeatAgeMs > 30_000 ? "offline" : input.instance.connectionStatus;
   const item = publicInstanceWithAccess(input.instance);
   return {
     ...item,
     aiSessions: aiSessionsBoardSummary(item.aiSessions),
     connectionStatus,
+    ready: nodeDisconnected ? false : item.ready,
+    access: nodeDisconnected ? { ...item.access, status: "endpoint-unreachable" as const } : item.access,
     heartbeatAgeMs,
     project: input.project,
     image: input.image,

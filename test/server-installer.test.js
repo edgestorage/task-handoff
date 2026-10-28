@@ -9,6 +9,7 @@ const test = require("node:test");
 const { currentServerInstallArgs } = require("../packages/core/src/core/server-update-installation.ts");
 
 const root = path.resolve(__dirname, "..");
+const nodeAgentInstallerPath = path.join(root, "scripts", "install-node-agent.sh");
 
 test("server update installation arguments preserve the authoritative service configuration", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-install-args-"));
@@ -84,7 +85,7 @@ test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths witho
 });
 
 test("remote node-agent bootstrap installs Node.js portably without a native build environment", () => {
-  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const installer = fs.readFileSync(nodeAgentInstallerPath, "utf8");
 
   assert.match(installer, /MIN_NODE_VERSION="24\.15\.0"/);
   assert.match(installer, /ensure_node_environment/);
@@ -98,6 +99,15 @@ test("remote node-agent bootstrap installs Node.js portably without a native bui
   assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
   assert.doesNotMatch(installer, /dpkg --compare-versions/);
   assert.match(installer, /case "\$current_node_version" in[\s\S]*24\.\*/);
+});
+
+test("the repository installer is the same script served by the Control Plane", async () => {
+  const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
+  assert.equal(nodeAgentInstallScript(), fs.readFileSync(nodeAgentInstallerPath, "utf8"));
+  assert.notEqual(fs.statSync(nodeAgentInstallerPath).mode & 0o111, 0);
+
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+  assert.doesNotMatch(workflow, /release\/npm\/artifacts\/install-node-agent\.sh/);
 });
 
 test("remote node-agent bootstrap accepts a compatible preinstalled Node without a distro package manager", async () => {
@@ -148,7 +158,7 @@ test("remote node-agent bootstrap accepts a compatible preinstalled Node without
 });
 
 test("remote node-agent bootstrap restarts and verifies the installed service through IPC", () => {
-  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const installer = fs.readFileSync(nodeAgentInstallerPath, "utf8");
   const enable = installer.indexOf("systemctl enable task-handoff-node-agent.service");
   const restart = installer.indexOf("systemctl restart task-handoff-node-agent.service");
   const readiness = installer.indexOf('curl --unix-socket "$IPC_PATH" -fsS "http://localhost/api/node-agent/health"');
@@ -179,7 +189,7 @@ test("global server package pins and resolves all three runtime packages", async
 
 test("server services default to root for host workspace and runtime ownership", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(nodeAgentInstallerPath, "utf8");
 
   assert.match(installer, /SERVICE_USER="root"/);
   assert.match(installer, /systemd service user, default root/);
@@ -243,7 +253,7 @@ test("installer rejects runtime commands inaccessible to the service user", () =
 
 test("node agent services persist the absolute npm command for managed updates", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(nodeAgentInstallerPath, "utf8");
   const worker = fs.readFileSync(path.join(root, "scripts", "node-update-worker.cts"), "utf8");
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
 
@@ -260,7 +270,7 @@ test("node agent services persist the absolute npm command for managed updates",
 
 test("node agent updates discover the package that owns their launcher", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(nodeAgentInstallerPath, "utf8");
   const updater = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "updates.ts"), "utf8");
 
   assert.doesNotMatch(installer, /TASK_HANDOFF_NODE_UPDATE_PACKAGE/);
@@ -299,6 +309,7 @@ test("server package owns the unified management command and runtimes stay indep
     assert.deepEqual(runtimePackages[name].bundledNativeDependencies, ["node-pty"]);
   }
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
+  assert.deepEqual(runtimePackages["control-plane"].assets, [{ source: "scripts/install-node-agent.sh", target: "dist/install-node-agent.sh", executable: true }]);
   assert.doesNotMatch(prepare, /task-handoff-server-install/);
   assert.doesNotMatch(prepare, /name === "control-plane"/);
   assert.match(prepare, /task-handoff-install-server-services/);
@@ -340,7 +351,7 @@ test("runtime package builds transform and execute CommonJS TypeScript workers",
 
 test("standalone node-agent CLI can create pairing invites over local IPC", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(nodeAgentInstallerPath, "utf8");
 
   assert.match(runtimeCli, /\.command\("invite"\)/);
   assert.match(runtimeCli, /fetchNodeAgentIpc/);
@@ -381,13 +392,13 @@ test("node-agent installer binds the machine to a cloud account after install", 
   assert.match(installer, /--cloud-relay-origin\) CLOUD_RELAY_ORIGIN="\$\{2:-\}"/);
   assert.match(installer, /--cloud-relay-bind-token\) CLOUD_RELAY_BIND_TOKEN="\$\{2:-\}"/);
   assert.match(installer, /Either --control-plane or --cloud-relay-bind-token is required\./);
-  assert.match(installer, /--cloud-relay-origin is required with --cloud-relay-bind-token\./);
   assert.match(installer, /--cloud-relay-bind-token is required with --cloud-relay-origin\./);
   // The post-install step talks to the local node agent over its IPC socket,
   // never to the cloud with the token on the command line.
   assert.match(installer, /--unix-socket "\$IPC_PATH"/);
   assert.match(installer, /"http:\/\/localhost\/api\/node-agent\/cloud-relay\/bind"/);
-  assert.match(installer, /retry with: sudo task-handoff-node-agent cloud-bind --cloud-origin \$CLOUD_RELAY_ORIGIN --binding-token <token>/);
+  assert.match(installer, /retry with: sudo task-handoff-node-agent cloud-bind --binding-token <token>/);
+  assert.match(installer, /bind_request="\{\\"bindingToken\\":\\"\$CLOUD_RELAY_BIND_TOKEN\\"\}"/);
   assert.match(installer, /Node agent bound to the cloud platform account; waiting for the first claim\./);
 
   // Argument validation runs before any installation step, so a mixed-up pair
@@ -396,7 +407,6 @@ test("node-agent installer binds the machine to a cloud account after install", 
     .replace(/^need_root$/m, "true")
     .replace("\nif ! command -v systemctl", "\nexit 0\nif ! command -v systemctl");
   for (const [args, expected] of [
-    [["--cloud-relay-bind-token", "thnb_test"], /--cloud-relay-origin is required/],
     [["--cloud-relay-origin", "https://cloud.example.com"], /--cloud-relay-bind-token is required/],
     [[], /Either --control-plane or --cloud-relay-bind-token is required/],
   ]) {
@@ -404,12 +414,14 @@ test("node-agent installer binds the machine to a cloud account after install", 
     assert.notEqual(result.status, 0, args.join(" "));
     assert.match(result.stderr, expected);
   }
+  const discoveryOnly = spawnSync("/bin/sh", ["-s", "--", "--cloud-relay-bind-token", "thnb_test"], { input: guarded, encoding: "utf8" });
+  assert.equal(discoveryOnly.status, 0, discoveryOnly.stderr);
 });
 
 test("standalone node-agent CLI can bind and unbind the cloud relay over local IPC", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
   assert.match(runtimeCli, /\.command\("cloud-bind"\)/);
-  assert.match(runtimeCli, /\.requiredOption\("--cloud-origin <url>"/);
+  assert.match(runtimeCli, /\.option\("--cloud-origin <url>"/);
   assert.match(runtimeCli, /\.requiredOption\("--binding-token <token>"/);
   assert.match(runtimeCli, /INSTALLED_NODE_AGENT_IPC_PATH = "\/run\/task-handoff\/node-agent\.sock"/);
   assert.match(runtimeCli, /statSync\(INSTALLED_NODE_AGENT_IPC_PATH\)\.isSocket\(\)/);
@@ -431,7 +443,7 @@ test("test deployment switches the global command symlinks with the server runti
 });
 
 test("node-agent installer honors an explicit npm package before an ambient binary", () => {
-  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const installer = fs.readFileSync(nodeAgentInstallerPath, "utf8");
   const explicitPackage = installer.indexOf('elif [ -n "$NPM_PACKAGE" ]; then');
   const ambientBinary = installer.indexOf("elif command -v task-handoff-node-agent");
 

@@ -131,21 +131,33 @@
             </template>
 
             <template v-else>
-              <p class="cloud-node-onboarding-instruction">{{ t("settings.nodeRelay.commandOnce") }}</p>
-              <div class="cloud-node-onboarding-command-head">
-                <span>{{ t(commandMode === "install" ? "settings.nodeRelay.installCommand" : "settings.nodeRelay.bindCommand") }}</span>
-                <Button type="button" size="sm" variant="outline" :disabled="bindingTokenExpired" @click="copyCommand">
-                  <Check v-if="copied" :size="14" /><Copy v-else :size="14" />
-                  <span>{{ copied ? t("settings.nodeRelay.copied") : t("settings.nodeRelay.copy") }}</span>
-                </Button>
+              <div class="cloud-node-onboarding-command-card">
+                <div class="cloud-node-onboarding-command-head">
+                  <div class="cloud-node-onboarding-command-title">
+                    <span>{{ t(commandMode === "install" ? "settings.nodeRelay.installCommand" : "settings.nodeRelay.bindCommand") }}</span>
+                    <small><KeyRound :size="13" aria-hidden="true" />{{ t("settings.nodeRelay.commandOnce") }}</small>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" :disabled="bindingTokenExpired" @click="copyCommand">
+                    <Check v-if="copied" :size="14" /><Copy v-else :size="14" />
+                    <span>{{ copied ? t("settings.nodeRelay.copied") : t("settings.nodeRelay.copy") }}</span>
+                  </Button>
+                </div>
+                <NodeAgentInstallerSourceToggle v-if="commandMode === 'install'" v-model="installerSource" />
+                <ScrollArea class="cloud-node-onboarding-command-code">
+                  <pre tabindex="0"><code>{{ generatedCommand }}</code></pre>
+                </ScrollArea>
+                <div class="cloud-node-onboarding-command-footer">
+                  <div class="cloud-node-onboarding-status" :class="{ expired: bindingTokenExpired }" role="status">
+                    <Clock3 :size="15" />
+                    <span>{{ bindingTokenExpired ? t("settings.nodeRelay.expired") : t("settings.nodeRelay.expiresIn", { time: formattedExpiry }) }}</span>
+                  </div>
+                  <Button type="button" size="sm" variant="ghost" class="cloud-node-onboarding-command-cancel" :disabled="busy" @click="cancelBindingToken">{{ t("settings.nodeRelay.cancelToken") }}</Button>
+                </div>
               </div>
-              <pre><code>{{ generatedCommand }}</code></pre>
-              <div class="cloud-node-onboarding-status" :class="{ expired: bindingTokenExpired }" role="status">
-                <Clock3 v-if="bindingTokenExpired" :size="16" />
-                <LoaderCircle v-else class="spin" :size="16" />
-                <span>{{ bindingTokenExpired ? t("settings.nodeRelay.expired") : t("settings.nodeRelay.expiresIn", { time: formattedExpiry }) }}</span>
+              <div v-if="cloudRelayWaitingForNode" class="cloud-node-onboarding-waiting" role="status">
+                <LoaderCircle class="spin" :size="15" />
+                <span>{{ t("settings.nodeRelay.waitingForInstall") }}</span>
               </div>
-              <p v-if="cloudRelayWaitingForNode" class="cloud-node-onboarding-instruction" role="status">{{ t("settings.nodeRelay.waitingForInstall") }}</p>
               <CloudNodeTrustStatus
                 v-if="attempt"
                 :phase="attempt.phase"
@@ -156,9 +168,6 @@
                 @retry="retryOnboardingPoll"
                 @cancel="cancelBindingToken"
               />
-              <div class="cloud-node-onboarding-actions">
-                <Button type="button" variant="destructive" :disabled="busy" @click="cancelBindingToken">{{ t("settings.nodeRelay.cancelToken") }}</Button>
-              </div>
             </template>
           </section>
 
@@ -190,7 +199,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { ArrowLeft, Check, CircleCheck, Clock3, Cloud, Copy, Download, LoaderCircle } from "@lucide/vue";
+import { ArrowLeft, Check, CircleCheck, Clock3, Cloud, Copy, Download, KeyRound, LoaderCircle } from "@lucide/vue";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -212,6 +221,8 @@ import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
+import { withNodeAgentInstallerSource } from "./nodeAgentInstallCommand";
+import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
 import {
   beginCloudNodeOnboarding,
   completeCloudNodeOnboarding,
@@ -223,6 +234,7 @@ import {
   syncCloudNodeOnboarding,
   useCloudNodeOnboardingAttempt,
 } from "./cloudNodeOnboardingAttempt";
+import { DEFAULT_NODE_AGENT_INSTALLER_SOURCE, type NodeAgentInstallerSource } from "@task-handoff/protocol/control-plane";
 
 type Step = "source" | "connect" | "complete";
 type NodeSource = "existing" | "new";
@@ -231,6 +243,7 @@ type CommandMode = "install" | "bind";
 const props = defineProps<{
   open: boolean;
   nodes: Node[];
+  controlPlaneUrl: string;
 }>();
 const emit = defineEmits<{ close: []; created: [node: Node]; "open-cloud-settings": [] }>();
 const { t } = useI18n();
@@ -239,6 +252,7 @@ const queryClient = useQueryClient();
 const step = ref<Step>("source");
 const source = ref<NodeSource>();
 const commandMode = ref<CommandMode>("install");
+const installerSource = ref<NodeAgentInstallerSource>(DEFAULT_NODE_AGENT_INSTALLER_SOURCE);
 const displayNameDraft = ref("");
 const copied = ref(false);
 const busy = ref(false);
@@ -283,7 +297,13 @@ const accountNodeAccess = (item: CloudAccountNode) => item.access?.kind === 'sha
   ? t("settings.nodeRelay.accountAccessShared", { expiresAt: formatDateTime(new Date(item.access.expiresAt), locale.value) })
   : t("settings.nodeRelay.accountAccessOwner");
 const relayAccountError = computed(() => accountNodes.data.value?.nodeRelay.errors[0]?.message || "");
-const generatedCommand = computed(() => commandMode.value === "install" ? bindingToken.value?.installCommand ?? "" : bindingToken.value?.command ?? "");
+const generatedCommand = computed(() => {
+  if (commandMode.value === "bind") return bindingToken.value?.command ?? "";
+  const command = bindingToken.value?.installCommand ?? "";
+  return command
+    ? withNodeAgentInstallerSource(command, { controlPlaneUrl: props.controlPlaneUrl, installerSource: installerSource.value })
+    : "";
+});
 const bindingTokenExpired = computed(() => Boolean(bindingToken.value && Date.parse(bindingToken.value.expiresAt) <= nowMs.value));
 const cloudRelayWaitingForNode = computed(() => {
   if (!bindingToken.value || bindingTokenExpired.value) return false;
@@ -316,6 +336,10 @@ watch(() => accountNodes.error.value, (error) => {
   }
 });
 
+watch(installerSource, () => {
+  copied.value = false;
+});
+
 watch(() => props.nodes, applyOnboardingState, { deep: false });
 
 onBeforeUnmount(stopClock);
@@ -325,6 +349,7 @@ function resetView() {
   step.value = "source";
   source.value = undefined;
   commandMode.value = "install";
+  installerSource.value = DEFAULT_NODE_AGENT_INSTALLER_SOURCE;
   displayNameDraft.value = "";
   copied.value = false;
   busy.value = false;
@@ -672,8 +697,7 @@ function retryOnboardingPoll() {
   box-shadow: 0 0 0 3px var(--status-warning-bg);
 }
 
-.cloud-node-onboarding-account-meta,
-.cloud-node-onboarding-actions {
+.cloud-node-onboarding-account-meta {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -711,7 +735,7 @@ function retryOnboardingPoll() {
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
   padding: 0 10px;
   white-space: nowrap;
   cursor: pointer;
@@ -743,26 +767,105 @@ function retryOnboardingPoll() {
 
 .cloud-node-onboarding-command-head {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cloud-node-onboarding-command-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.cloud-node-onboarding-command-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cloud-node-onboarding-command-title > span {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cloud-node-onboarding-command-title small {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.cloud-node-onboarding-command-title small > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--brand-accent);
+}
+
+.cloud-node-onboarding-command-footer {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text-strong);
-  font-size: 13px;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
 }
 
-.cloud-node-onboarding-section pre {
-  max-height: 220px;
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
+.cloud-node-onboarding-command-cancel {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.cloud-node-onboarding-command-cancel:hover {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.cloud-node-onboarding-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cloud-node-onboarding-waiting > svg {
+  flex: 0 0 auto;
+  color: var(--brand-accent);
+}
+
+.cloud-node-onboarding-command-code {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-inset);
+}
+
+.cloud-node-onboarding-command-code :deep(pre) {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 12px 12px 18px;
+  overflow: visible;
   color: var(--text);
   font-size: 12px;
   line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
 }
 
 .cloud-node-onboarding-error {
@@ -812,6 +915,11 @@ function retryOnboardingPoll() {
 
   .cloud-node-onboarding-command-head {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cloud-node-onboarding-command-footer {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

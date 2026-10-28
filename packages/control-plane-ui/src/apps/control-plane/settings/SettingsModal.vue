@@ -296,6 +296,7 @@
         @open-cloud-node-wizard="openCloudNodeWizardFromOnboarding"
       />
       <CloudNodeOnboardingDialog
+        :control-plane-url="nodeAgentInstallControlPlaneUrl"
         :nodes="nodes.data.value || []"
         :open="cloudNodeOnboardingOpen"
         @close="cloudNodeOnboardingOpen = false"
@@ -483,6 +484,7 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
 import { modelSupportsApp } from "../instance-settings/instanceSettingsState";
+import { isNodeConnectionEnabled } from "../nodeConnectionActions";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
@@ -808,7 +810,7 @@ const savingExternalListener = ref(false);
 
 async function loadExternalListener() {
   const node = selectedNode.value;
-  if (!node || !isControlPlaneBuiltinNode(node)) {
+  if (!node || !isNodeConnectionEnabled(node) || !isControlPlaneBuiltinNode(node)) {
     externalListener.value = undefined;
     externalListenerError.value = "";
     return;
@@ -876,7 +878,7 @@ const selectedNodeSupportsModelRelayImagePruning = computed(() => nodeSupportsMo
 
 async function loadModelRelay() {
   const node = selectedNode.value;
-  if (!node || !nodeSupportsModelRelay(node)) {
+  if (!node || !isNodeConnectionEnabled(node) || !nodeSupportsModelRelay(node)) {
     modelRelay.value = undefined;
     imagePruningDraft.value = undefined;
     modelRelayError.value = "";
@@ -1372,7 +1374,7 @@ const nodeDetailResources = computed(() => ({
   images: nodeImages.value,
   imagesError: nodeImageError.value,
   instances: selectedNodeInstances.value,
-  localFoldersError: nodeLocalFolders.error.value ? errorText(nodeLocalFolders.error.value) : "",
+  localFoldersError: nodeLocalFolders.error.value && isNodeConnectionEnabled(selectedNode.value) ? errorText(nodeLocalFolders.error.value) : "",
   localFolders: nodeLocalFolders.data.value || [],
   remoteConnect,
   remoteConnectResultByNodeId,

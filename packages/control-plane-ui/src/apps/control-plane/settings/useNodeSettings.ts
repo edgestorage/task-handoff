@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
 import { applyNodeUpdate, checkNodeUpdate, createNode, createNodeControlPlaneConnection, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeControlPlaneConnection, deleteNodeControlPlanePairing, listNodeControlPlaneConnections, listNodeControlPlanePairings, listNodeDockerImages, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
 import type { LocalDockerImage, Node, NodeControlPlaneConnection, NodeControlPlanePairing, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import { isNodeConnectionEnabled } from "../nodeConnectionActions";
 import { useNodeConnectionActions } from "../useNodeConnectionActions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
@@ -215,6 +216,11 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     loadingNodeImagesId.value = id;
     selectedImageNodeId.value = id;
     nodeImageError.value = "";
+    if (!isNodeConnectionEnabled(nodes().find((node) => node.id === id))) {
+      nodeImages.value = [];
+      loadingNodeImagesId.value = "";
+      return;
+    }
     try {
       nodeImages.value = await listNodeDockerImages(id);
     } catch (error) {
@@ -227,6 +233,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
 
   async function loadControlPlaneAccess(id: string) {
     if (!id || loadingRemoteKeysNodeId.value) {
+      return;
+    }
+    if (!isNodeConnectionEnabled(nodes().find((node) => node.id === id))) {
+      controlPlanePairingsByNodeId[id] = [];
+      controlPlaneConnectionsByNodeId[id] = [];
+      remoteKeysErrorByNodeId[id] = "";
       return;
     }
     loadingRemoteKeysNodeId.value = id;
@@ -248,6 +260,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   }
 
   async function checkManagedUpdate(nodeId: string) {
+    if (!isNodeConnectionEnabled(nodes().find((node) => node.id === nodeId))) return;
     checkingUpdateNodeId.value = nodeId;
     try {
       updateChecks[nodeId] = await checkNodeUpdate(nodeId, updateChannel());
@@ -259,6 +272,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   }
 
   async function applyManagedUpdate(nodeId: string, checkOverride?: UpdateCheckResult) {
+    if (!isNodeConnectionEnabled(nodes().find((candidate) => candidate.id === nodeId))) return;
     const check = checkOverride || updateChecks[nodeId];
     if (!check?.supported || !check.updateAvailable || !check.preflightToken || applyingUpdateNodeId.value) return;
     const node = nodes().find((candidate) => candidate.id === nodeId);
@@ -344,6 +358,10 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     const revision = ++updateJobsLoadRevision;
     if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
     updateJobsRefreshTimer = undefined;
+    if (!isNodeConnectionEnabled(nodes().find((node) => node.id === nodeId))) {
+      updateJobs.value = [];
+      return;
+    }
     try {
       const jobs = await listNodeUpdateJobs(nodeId);
       if (revision !== updateJobsLoadRevision) return;

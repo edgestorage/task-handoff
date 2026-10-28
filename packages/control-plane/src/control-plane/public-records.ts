@@ -106,6 +106,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     accessStatus: item.access.status,
     imageProvisioningPhase: item.imageProvisioning?.phase,
     gitProvisioningPhase: item.workspace.gitProvisioning?.phase,
+    nodeConnectionEnabled: item.node?.connectionEnabled !== false,
   });
   return ControlPlaneInstanceDirectoryEntrySchema.parse({
     id: item.id,

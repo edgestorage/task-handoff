@@ -110,7 +110,7 @@
                   </div>
                 </TooltipContent>
               </Tooltip>
-              <Badge variant="secondary">{{ instanceStatusLabel(instance.status) }}</Badge>
+              <Badge variant="secondary">{{ instanceStatusBadgeLabel(instance, t) }}</Badge>
               <Tooltip>
                 <TooltipTrigger as-child>
                   <span class="diagnostic-badge" :aria-label="buildTitle(instance)">
@@ -287,18 +287,17 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel, instanceStatusBadgeLabel } from "../useInstanceStatus";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
+import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import type { NativeNodeFolderPicker } from "../nodePath";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 
 const { t } = useI18n();
-const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 const props = defineProps<{

@@ -303,12 +303,20 @@ export class NodeAgentCloudRelayClient {
     return this.options.identity.cloudRelayBinding();
   }
 
-  async bind(input: { cloudOrigin: string; bindingToken: string; displayName?: string }) {
+  async bind(input: { cloudOrigin?: string; bindingToken: string; displayName?: string }) {
     const current = this.binding();
     if (current?.status === "active") {
       throw Object.assign(new Error("This node is already bound to a cloud account."), { statusCode: 409, code: "NODE_AGENT_CLOUD_RELAY_ALREADY_BOUND" });
     }
-    const cloudOrigin = resolveCloudOrigin(input.cloudOrigin);
+    const discovery = this.options.cloudDiscovery;
+    const requestedOrigin = input.cloudOrigin?.trim() || discovery?.fallbackOrigin;
+    if (!requestedOrigin) {
+      throw Object.assign(new Error("Cloud relay origin is required when the build has no cloud discovery record."), {
+        statusCode: 400,
+        code: "NODE_AGENT_CLOUD_RELAY_ORIGIN_REQUIRED",
+      });
+    }
+    const cloudOrigin = resolveCloudOrigin(requestedOrigin);
     const resolver = await this.discoveryResolver(cloudOrigin);
     const cloud = await this.cloudClient(cloudOrigin);
     const relayKeys = generateRelayKeyPair();

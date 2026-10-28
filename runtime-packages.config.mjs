@@ -77,6 +77,7 @@ export const runtimePackages = {
     entryFile: "cli.js",
     binName: "task-handoff-control-plane",
     uiDir: "packages/control-plane-ui/dist",
+    assets: [{ source: "scripts/install-node-agent.sh", target: "dist/install-node-agent.sh", executable: true }],
     // Pure JavaScript compression support belongs in the portable runtime bundle.
     // Keeping it out of the external dependency set lets Control Plane-only updates
     // reuse an existing installation even when compression is introduced.

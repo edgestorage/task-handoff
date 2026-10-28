@@ -330,6 +330,30 @@ test("board HTTP merge accepts newer revisions and authoritative removals", () =
   assert.equal(merged.data[0].status, "running");
 });
 
+test("a newer lifecycle projection cannot restore availability on a paused node", () => {
+  const pausedNode = { id: "node_paused", connectionEnabled: false };
+  const previous = {
+    ...boardInstance("inst_target", 2, "running"),
+    connectionStatus: "online",
+    ready: true,
+    access: { strategy: "control-plane-proxy", status: "reachable" },
+    node: pausedNode,
+  };
+  const incoming = {
+    ...boardInstance("inst_target", 1, "running"),
+    connectionStatus: "offline",
+    node: pausedNode,
+  };
+
+  const merged = mergeInstanceBoardPayload({ data: [previous] }, { data: [incoming] });
+
+  assert.equal(merged.data[0].stateRevision, 2);
+  assert.equal(merged.data[0].status, "running");
+  assert.equal(merged.data[0].connectionStatus, "offline");
+  assert.equal(merged.data[0].ready, false);
+  assert.equal(merged.data[0].access.status, "endpoint-unreachable");
+});
+
 test("a board heartbeat cannot overwrite an authoritative trigger projection", () => {
   markInstanceTriggerProjectionAuthoritative("inst_target");
   const previous = {

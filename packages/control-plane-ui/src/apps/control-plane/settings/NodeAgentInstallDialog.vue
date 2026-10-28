@@ -30,6 +30,7 @@
         <section class="node-agent-install-step">
           <span class="node-agent-install-step-number">3</span>
           <div class="node-agent-install-step-content">
+            <NodeAgentInstallerSourceToggle v-model="installerSource" />
             <div class="node-agent-install-command-head">
               <strong>{{ t("settings.nodeDialogs.runCommand") }}</strong>
               <Button size="sm" :disabled="!installCommand" @click="copyCommand">
@@ -57,9 +58,11 @@ import { useI18n } from "vue-i18n";
 import { Check, Copy } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { DEFAULT_NODE_AGENT_INSTALLER_SOURCE, type NodeAgentInstallerSource } from "@task-handoff/protocol/control-plane";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { nodeAgentInstallCommand } from "./nodeAgentInstallCommand";
+import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 
@@ -76,10 +79,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>();
 const controlPlaneUrl = ref(props.initialControlPlaneUrl);
+const installerSource = ref<NodeAgentInstallerSource>(DEFAULT_NODE_AGENT_INSTALLER_SOURCE);
 const copied = ref(false);
 const installCommand = computed(() => nodeAgentInstallCommand({
   controlPlaneUrl: controlPlaneUrl.value,
   joinToken: props.joinToken,
+  installerSource: installerSource.value,
   version: props.version,
 }));
 const formattedExpiry = computed(() => {
@@ -89,10 +94,11 @@ const formattedExpiry = computed(() => {
 
 watch(() => [props.joinToken, props.initialControlPlaneUrl], () => {
   controlPlaneUrl.value = props.initialControlPlaneUrl;
+  installerSource.value = DEFAULT_NODE_AGENT_INSTALLER_SOURCE;
   copied.value = false;
 });
 
-watch(controlPlaneUrl, () => {
+watch([controlPlaneUrl, installerSource], () => {
   copied.value = false;
 });
 

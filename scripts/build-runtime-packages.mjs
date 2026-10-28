@@ -37,6 +37,7 @@ function run(command, args, options = {}) {
 function requiredExecutablePaths(name, definition) {
   return [
     `bin/${definition.binName}`,
+    ...(definition.assets || []).filter((asset) => asset.executable).map((asset) => asset.target),
     ...(name === "server" ? ["bin/task-handoff-install-server", "bin/task-handoff-install-server-services"] : []),
     ...(definition.updateWorkerInput ? ["bin/task-handoff-node-update-worker"] : []),
     ...(name === "node-agent" ? [
@@ -57,7 +58,9 @@ function requiredExecutablePaths(name, definition) {
  * materialized instead of naming one specific project.
  */
 function requiredAssetPaths(name) {
-  if (name !== "node-agent" || !resolveFeatureFlags().builtinProjects) return [];
+  const definition = runtimePackages[name];
+  const assets = (definition.assets || []).filter((asset) => !asset.executable).map((asset) => asset.target);
+  if (name !== "node-agent" || !resolveFeatureFlags().builtinProjects) return assets;
   const source = path.join(root, "builtin-projects");
   const manifests = fs.existsSync(source)
     ? fs.readdirSync(source, { withFileTypes: true })
@@ -66,7 +69,7 @@ function requiredAssetPaths(name) {
       .map((entry) => `builtin-projects/${entry.name}/${builtinProjects.BUILTIN_PROJECT_MANIFEST_FILE}`)
     : [];
   if (!manifests.length) throw new Error("Built-in projects are enabled but no project was materialized; run node scripts/sync-builtin-projects.mjs first.");
-  return manifests;
+  return [...assets, ...manifests];
 }
 
 async function verifyArchiveExecutables(name, definition, archivePath) {

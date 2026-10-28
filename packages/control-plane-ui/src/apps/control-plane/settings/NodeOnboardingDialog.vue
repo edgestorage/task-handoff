@@ -149,6 +149,7 @@
               </div>
             </div>
             <template v-else>
+              <NodeAgentInstallerSourceToggle v-if="agentInstalled === false" v-model="installerSource" />
               <div class="node-onboarding-command-head">
                 <span>{{ t("settings.nodeOnboarding.reverse.runCommand") }}</span>
                 <Button type="button" size="sm" variant="outline" :disabled="inviteExpired || !installCommand" @click="copyReverseValue('command')">
@@ -272,6 +273,7 @@ import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { nodeAgentConnectCommand, nodeAgentInstallCommand } from "./nodeAgentInstallCommand";
+import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
 import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 import {
   applyReachabilityProbe,
@@ -282,6 +284,7 @@ import {
   selectReachability,
   type ReachabilityValue,
 } from "./nodeOnboardingState";
+import { DEFAULT_NODE_AGENT_INSTALLER_SOURCE, type NodeAgentInstallerSource } from "@task-handoff/protocol/control-plane";
 
 type Step = "network" | "target" | "connect" | "complete";
 type ConnectionPath = "reverse" | "direct" | "proxy";
@@ -303,6 +306,7 @@ const step = ref<Step>("network");
 const decision = ref(initialReachabilityDecision());
 const controlPlaneOrigin = ref("");
 const agentInstalled = ref<boolean>();
+const installerSource = ref<NodeAgentInstallerSource>(DEFAULT_NODE_AGENT_INSTALLER_SOURCE);
 const nodeAgentPublic = ref<boolean>();
 const nodeName = ref("");
 const tokenSource = ref<"managed" | "standalone">("managed");
@@ -339,7 +343,12 @@ const installCommand = computed(() => {
   if (!joinInvite.value) return "";
   return agentInstalled.value
     ? nodeAgentConnectCommand({ controlPlaneUrl: controlPlaneOrigin.value, joinToken: joinInvite.value.joinToken })
-    : nodeAgentInstallCommand({ controlPlaneUrl: controlPlaneOrigin.value, joinToken: joinInvite.value.joinToken, version: props.version });
+    : nodeAgentInstallCommand({
+      controlPlaneUrl: controlPlaneOrigin.value,
+      joinToken: joinInvite.value.joinToken,
+      installerSource: installerSource.value,
+      version: props.version,
+    });
 });
 const inviteExpired = computed(() => Boolean(joinInvite.value && Date.parse(joinInvite.value.expiresAt) <= nowMs.value));
 const formattedExpiry = computed(() => joinInvite.value ? formatDateTime(new Date(joinInvite.value.expiresAt), locale.value) : "");
@@ -352,6 +361,10 @@ watch(() => props.open, (open) => {
   reset();
   void runProbe();
   clock = setInterval(() => { nowMs.value = Date.now(); }, 1_000);
+});
+
+watch(installerSource, () => {
+  if (copiedReverseValue.value === "command") copiedReverseValue.value = undefined;
 });
 
 watch(() => props.nodeJoinedEvent, (event) => {
@@ -375,6 +388,7 @@ function reset() {
   decision.value = initialReachabilityDecision();
   controlPlaneOrigin.value = props.publicBaseUrl.trim() || window.location.origin;
   agentInstalled.value = undefined;
+  installerSource.value = DEFAULT_NODE_AGENT_INSTALLER_SOURCE;
   nodeAgentPublic.value = undefined;
   nodeName.value = "";
   tokenSource.value = "managed";

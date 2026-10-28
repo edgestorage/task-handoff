@@ -50,6 +50,15 @@ test("an installed Node Agent can connect from the UI or the local IPC command",
   assert.match(dialog, /reverseConnectionMethod\.value = "ui"/);
 });
 
+test("node onboarding can switch the installer script next to the copy action", () => {
+  const dialog = read("src/apps/control-plane/settings/NodeOnboardingDialog.vue");
+  assert.match(dialog, /installerSource = ref<NodeAgentInstallerSource>\(DEFAULT_NODE_AGENT_INSTALLER_SOURCE\)/);
+  assert.match(dialog, /<NodeAgentInstallerSourceToggle v-if="agentInstalled === false" v-model="installerSource" \/>/);
+  assert.match(dialog, /installerSource: installerSource\.value/);
+  assert.match(dialog, /installerSource\.value = DEFAULT_NODE_AGENT_INSTALLER_SOURCE/);
+  assert.match(dialog, /watch\(installerSource, \(\) => \{\n  if \(copiedReverseValue\.value === "command"\) copiedReverseValue\.value = undefined;/);
+});
+
 test("node onboarding keeps secrets local and clears them on completion and close", () => {
   const dialog = read("src/apps/control-plane/settings/NodeOnboardingDialog.vue");
   assert.match(dialog, /joinInvite\.value = undefined/);

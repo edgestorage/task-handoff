@@ -2671,7 +2671,9 @@ export const NodeAgentDeleteResponseSchema = z
  */
 export const NodeAgentCloudRelayBindRequestSchema = z
   .object({
-    cloudOrigin: z.string().trim().url().max(2048),
+    // Optional for nodes built with the official cloud discovery record. The
+    // explicit form remains accepted for older Control Planes and ad-hoc tests.
+    cloudOrigin: z.string().trim().url().max(2048).optional(),
     bindingToken: z.string().trim().min(1).max(4096),
     displayName: z.string().trim().min(1).max(160).optional(),
   })
@@ -3838,6 +3840,33 @@ export type PendingRoute = z.infer<typeof PendingRouteSchema>;
 
 export const DEFAULT_MENTION_TRIGGER = "@";
 export const DEFAULT_COMMAND_TRIGGER = "/";
+
+export const DEFAULT_NODE_AGENT_INSTALLER_SOURCE = "github" as const;
+export const GITHUB_NODE_AGENT_INSTALLER_URL = "https://raw.githubusercontent.com/edgestorage/task-handoff/main/scripts/install-node-agent.sh";
+
+export type NodeAgentInstallerSource = "github" | "control-plane";
+
+export function isNodeAgentInstallerSource(value: unknown): value is NodeAgentInstallerSource {
+  return value === "github" || value === "control-plane";
+}
+
+export function normalizeControlPlaneBaseUrl(value: string) {
+  const trimmed = value.trim();
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return trimmed.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+export function nodeAgentInstallerUrl(source: NodeAgentInstallerSource, controlPlaneUrl: string) {
+  if (source === "github") return GITHUB_NODE_AGENT_INSTALLER_URL;
+  return `${normalizeControlPlaneBaseUrl(controlPlaneUrl)}/install-node-agent.sh`;
+}
 
 export function isValidMentionTrigger(value: string) {
   return Array.from(value).length === 1

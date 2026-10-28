@@ -189,10 +189,10 @@ See [`scripts/install-server.sh`](scripts/install-server.sh) for supported insta
 
 ## Connect a Remote Node
 
-Remote machines only need the Node Agent. Generate a one-time join token in the Control Plane and prefer the exact installation command shown there. Its package version is resolved from the running Control Plane release. The equivalent form is:
+Remote machines only need the Node Agent. Generate a one-time join token in the Control Plane and prefer the exact installation command shown there. The command downloads the installer from the GitHub repository by default; switch the installer source in the command preview when the target must use the Control Plane's own `/install-node-agent.sh`. Its package version is resolved from the running Control Plane release. The equivalent form is:
 
 ```sh
-curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/edgestorage/task-handoff/main/scripts/install-node-agent.sh | sudo sh -s -- \
   --control-plane https://CONTROL_PLANE_HOST \
   --join-token JOIN_TOKEN \
   --npm-package @task-handoff/node-agent \

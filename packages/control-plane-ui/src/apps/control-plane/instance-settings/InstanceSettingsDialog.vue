@@ -55,7 +55,7 @@
               </div>
               <dl class="instance-settings-grid instance-settings-surface">
                 <div><dt>{{ t("instances.settings.id") }}</dt><dd><code>{{ instance.id }}</code></dd></div>
-                <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
+                <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusBadgeLabel(instance, t) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
                 <div><dt>{{ t("instances.settings.node") }}</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
                 <div><dt>{{ t("instances.settings.runtime") }}</dt><dd>{{ instance.runtime?.name || instance.runtimeId }}</dd></div>
                 <div><dt>{{ t("instances.settings.image") }}</dt><dd>{{ instance.image?.name || instance.imageSelection?.imageId || t("instances.settings.none") }}</dd></div>
@@ -390,15 +390,15 @@ import BrowserProfilesSection from "./BrowserProfilesSection.vue";
 import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
-import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
+import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { instanceModelEntityId, instanceModelIdMatches } from "./instanceSettingsState";
+import { instanceStatusBadgeLabel } from "../useInstanceStatus";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
-const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 type InstanceSettingsSection = "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps";

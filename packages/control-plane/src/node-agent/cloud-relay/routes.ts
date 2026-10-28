@@ -17,7 +17,7 @@ export function registerNodeAgentCloudRelayRoutes(app: FastifyInstance, options:
   app.post("/api/node-agent/cloud-relay/bind", async (request, reply) => {
     const input = NodeAgentCloudRelayBindRequestSchema.parse(request.body ?? {});
     const status = await options.client.bind({
-      cloudOrigin: input.cloudOrigin,
+      ...(input.cloudOrigin ? { cloudOrigin: input.cloudOrigin } : {}),
       bindingToken: input.bindingToken,
       ...(input.displayName ? { displayName: input.displayName } : {}),
     });

@@ -121,15 +121,16 @@ function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEn
 function nodeLocationFailure(nodeId: string, error: unknown): ModelLocationSyncResult {
   const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const statusCode = typeof record.statusCode === "number" ? record.statusCode : undefined;
+  const code = typeof record.code === "string" && record.code.trim() ? record.code : undefined;
   // Transport failures and 5xx responses are transient; the replica stays
-  // pending and converges on the next retry. 4xx responses need an operator.
-  const state = statusCode && statusCode < 500 ? "error" : "pending";
+  // pending and converges on the next retry. A locally paused node is also
+  // intentionally unavailable, so it must not retire its convergence intent as
+  // a permanent operator error. Other 4xx responses need an operator.
+  const state = code !== "NODE_AGENT_CONNECTION_DISABLED" && statusCode && statusCode < 500 ? "error" : "pending";
   return ModelLocationSyncResultSchema.parse({
     nodeId,
     state,
-    code: typeof record.code === "string" && record.code.trim()
-      ? record.code
-      : state === "pending" ? "NODE_MODEL_SYNC_DEFERRED" : "NODE_MODEL_SYNC_FAILED",
+    code: code || (state === "pending" ? "NODE_MODEL_SYNC_DEFERRED" : "NODE_MODEL_SYNC_FAILED"),
     message: error instanceof Error ? error.message : String(error),
   });
 }
@@ -829,7 +830,7 @@ export class ControlPlaneModelService {
    */
   private async withFreshNodeCapabilities(nodes: Node[], force: boolean): Promise<Node[]> {
     if (!this.options.ensureNodeCapabilities || !nodes.length) return nodes;
-    return Promise.all(nodes.map(async (node) => {
+    return Promise.all(nodes.filter((node) => node.connectionEnabled !== false).map(async (node) => {
       try {
         return await this.options.ensureNodeCapabilities!(node, { force });
       } catch {
@@ -859,6 +860,16 @@ export class ControlPlaneModelService {
     const pending = new Set<string>();
     for (const node of nodes) {
       if (targets ? !targets.has(node.id) : !holderIds.has(node.id)) continue;
+      if (node.connectionEnabled === false) {
+        pending.add(node.id);
+        results.push(ModelLocationSyncResultSchema.parse({
+          nodeId: node.id,
+          state: "pending",
+          code: "NODE_AGENT_CONNECTION_DISABLED",
+          message: "Node agent connection is disabled locally.",
+        }));
+        continue;
+      }
       // A reachable node that no longer reports the replica has removed it;
       // retrying would recreate the entity behind the operator's back.
       if (targets && !holderIds.has(node.id) && nodePhases.get(node.id) === "ready") continue;

@@ -139,3 +139,51 @@ test("fleet refreshes revalidate runtimes and models without dropping cached sna
   assert.deepEqual(gateway.readFleetRuntimes([node]).items.map((item) => item.id), ["runtime_conditional"]);
   assert.deepEqual(gateway.readFleetModels([node]).items.map(({ model: item }) => item.id), ["model_conditional"]);
 });
+
+test("paused nodes keep cached fleet snapshots without requesting the node agent", async () => {
+  let requests = 0;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [model()] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetSnapshotFreshMs: 0 });
+  const pausedNode = { ...node, connectionEnabled: false } as Node;
+
+  await gateway.refreshFleetModels([pausedNode]);
+  const neverLoaded = gateway.readFleetModels([pausedNode]);
+  assert.equal(requests, 0);
+  assert.deepEqual(neverLoaded.items, []);
+  assert.deepEqual(neverLoaded.nodeErrors, []);
+
+  await gateway.refreshFleetModels([node]);
+  assert.equal(requests, 1);
+  await gateway.refreshFleetModels([pausedNode]);
+  const cached = gateway.readFleetModels([pausedNode]);
+  assert.equal(requests, 1);
+  assert.deepEqual(cached.items.map(({ model: item }) => item.id), ["model_conditional"]);
+  assert.deepEqual(cached.nodeErrors, []);
+});
+
+test("paused nodes suppress retained node-agent diagnostics", async () => {
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      throw Object.assign(new Error("Node agent connection is disabled locally."), {
+        code: "NODE_AGENT_CONNECTION_DISABLED",
+        statusCode: 409,
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetSnapshotFreshMs: 0 });
+
+  await gateway.refreshFleetModels([node]);
+  assert.equal(gateway.readFleetModels([node]).nodeErrors[0]?.code, "NODE_AGENT_CONNECTION_DISABLED");
+  const paused = gateway.readFleetModels([{ ...node, connectionEnabled: false }]);
+  assert.deepEqual(paused.nodeErrors, []);
+  assert.equal(paused.nodeStates[0]?.error, undefined);
+  gateway.dispose();
+});

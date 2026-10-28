@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
-import { createNodeConnectionActions } from "../src/apps/control-plane/nodeConnectionActions.ts";
+import { createNodeConnectionActions, isNodeConnectionEnabled } from "../src/apps/control-plane/nodeConnectionActions.ts";
 
 const instanceList = readFileSync(new URL("../src/apps/control-plane/instance-list/InstanceList.vue", import.meta.url), "utf8");
 const workbench = readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 const settingsModal = readFileSync(new URL("../src/apps/control-plane/settings/SettingsModal.vue", import.meta.url), "utf8");
 const nodeDetailPanel = readFileSync(new URL("../src/apps/control-plane/settings/NodeDetailPanel.vue", import.meta.url), "utf8");
 const nodeSettings = readFileSync(new URL("../src/apps/control-plane/settings/useNodeSettings.ts", import.meta.url), "utf8");
+const nodeResourceSettings = readFileSync(new URL("../src/apps/control-plane/settings/useNodeResourceSettings.ts", import.meta.url), "utf8");
 
 test("node groups expose disconnect, reconnect, and connection check actions", () => {
   assert.match(instanceList, /<ContextMenu v-if="groupByNode">[\s\S]*?<ContextMenuTrigger as-child :disabled="!group\.node">[\s\S]*?class="instance-group-label"/);
@@ -53,6 +54,20 @@ test("node detail connection changes use the existing node update API", () => {
   assert.match(nodeSettings, /refresh: refreshNodeTopology/);
   assert.match(nodeSettings, /onNodeUpdated/);
   assert.doesNotMatch(nodeSettings, /async function setNodeConnection/);
+});
+
+test("paused nodes do not auto-load live detail resources", () => {
+  assert.equal(isNodeConnectionEnabled({ connectionEnabled: false }), false);
+  assert.equal(isNodeConnectionEnabled({ connectionEnabled: true }), true);
+  assert.equal(isNodeConnectionEnabled({}), true);
+  assert.match(nodeSettings, /isNodeConnectionEnabled\(nodes\(\)\.find\(\(node\) => node\.id === id\)\)/);
+  assert.match(nodeSettings, /isNodeConnectionEnabled\(nodes\(\)\.find\(\(node\) => node\.id === nodeId\)\)/);
+  assert.match(nodeResourceSettings, /useNodeLocalFoldersQuery\(\(\) => selectedNodeId\.value, selectedNodeConnectionEnabled\)/);
+  assert.match(settingsModal, /!isNodeConnectionEnabled\(node\) \|\| !isControlPlaneBuiltinNode\(node\)/);
+  assert.match(settingsModal, /!isNodeConnectionEnabled\(node\) \|\| !nodeSupportsModelRelay\(node\)/);
+  assert.match(settingsModal, /nodeLocalFolders\.error\.value && isNodeConnectionEnabled\(selectedNode\.value\)/);
+  assert.match(nodeDetailPanel, /selectedNode\.connectionEnabled === false \|\| busy\.checkingUpdateNodeId/);
+  assert.match(nodeDetailPanel, /selectedNode\.connectionEnabled === false \|\| busy\.loadingRemoteKeysNodeId/);
 });
 
 test("successful node updates do not become failures when projection refresh fails", async () => {

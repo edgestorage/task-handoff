@@ -65,7 +65,7 @@
               </button>
               <div class="board-card-badges">
                 <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ connectionStatusLabel(instance.connectionStatus) }}</Badge>
-                <Badge variant="secondary">{{ instanceStatusLabel(instance.status) }}</Badge>
+                <Badge variant="secondary">{{ instanceStatusBadgeLabel(instance, t) }}</Badge>
               </div>
             </header>
             <p v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
@@ -243,7 +243,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel, isInstanceAppReady } from "../useInstanceStatus";
+import { canShowInstanceAction, gitProvisioningLabel, imageProvisioningLabel, instanceProvisioningRetryAction, instanceProvisioningRetryLabel, instanceSourceLabel, instanceStatusBadgeLabel, isInstanceAppReady } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";

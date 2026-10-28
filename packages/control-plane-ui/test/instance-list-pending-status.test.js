@@ -47,7 +47,7 @@ test("settled and runtime-blocked states keep the regular row presentation", () 
 
 test("instance rows render pending copy instead of the source label", () => {
   const instanceList = read("apps/control-plane/instance-list/InstanceList.vue");
-  assert.match(instanceList, /<small v-if="instanceRowStatus\(instance\)" class="instance-row-status">[\s\S]*?<LoaderCircle :size="11" aria-hidden="true" \/>[\s\S]*?<span>{{ instanceRowStatus\(instance\) }}<\/span>/);
+  assert.match(instanceList, /<small v-else-if="instanceRowStatus\(instance\)" class="instance-row-status">[\s\S]*?<LoaderCircle :size="11" aria-hidden="true" \/>[\s\S]*?<span>{{ instanceRowStatus\(instance\) }}<\/span>/);
   assert.match(instanceList, /<small v-else>{{ instanceSourceLabel\(instance, t\) }}<\/small>/);
   assert.match(instanceList, /return instancePendingStatusLabel\(instance, t\) \?\? props\.activeInstanceActionLabel\?\.\(instance\);/);
   assert.match(instanceList, /\.instance-row-main \.instance-row-status \{[\s\S]*?font-size: 12px;/);

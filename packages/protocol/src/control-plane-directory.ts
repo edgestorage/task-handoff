@@ -119,7 +119,9 @@ export function instanceDirectoryAvailableActions(input: {
   accessStatus?: z.infer<typeof ControlPlaneInstanceAccessStatusSchema> | "unknown";
   imageProvisioningPhase?: string;
   gitProvisioningPhase?: string;
+  nodeConnectionEnabled?: boolean;
 }): ControlPlaneInstanceAction[] {
+  if (input.nodeConnectionEnabled === false) return [];
   const { status, connectionStatus } = input;
   const running = status === "running" || connectionStatus === "online" || input.accessStatus === "reachable";
   const connecting = !["failed", "stopped", "stopping", "unhealthy"].includes(status)

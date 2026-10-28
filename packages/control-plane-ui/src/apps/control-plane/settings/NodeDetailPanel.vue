@@ -334,11 +334,11 @@
                   </div>
                   <div class="settings-row-actions">
                     <Badge variant="secondary">{{ localizedStatus(nodeRuntimeStatusKeys, runtime.status) }}</Badge>
-                    <Button variant="outline" size="sm" :disabled="busy.checkingRuntimeId === runtime.id" @click="actions.checkRuntime(runtime)">
+                    <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || busy.checkingRuntimeId === runtime.id" @click="actions.checkRuntime(runtime)">
                       <RefreshCw :size="14" />
                       <span>{{ busy.checkingRuntimeId === runtime.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                     </Button>
-                    <Button v-if="runtime.labels['task-handoff.node-agent.builtin'] !== 'true'" variant="outline" size="sm" :disabled="busy.deletingRuntimeId === runtime.id" @click="actions.removeRuntime(runtime)">
+                    <Button v-if="runtime.labels['task-handoff.node-agent.builtin'] !== 'true'" variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || busy.deletingRuntimeId === runtime.id" @click="actions.removeRuntime(runtime)">
                       <Trash2 :size="14" />
                       <span>{{ busy.deletingRuntimeId === runtime.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
@@ -351,7 +351,7 @@
             <div class="node-detail-section">
               <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
-                <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
+                <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
                   <Monitor :size="14" />
                   <span>{{ busy.loadingNodeImagesId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>
@@ -389,11 +389,11 @@
                     <code>{{ updateSummary(status.build(selectedNode.id)?.packageVersion) }}</code>
                   </div>
                   <div class="settings-row-actions">
-                    <Button variant="outline" size="sm" :disabled="busy.checkingUpdateNodeId === selectedNode.id" @click="actions.checkManagedUpdate(selectedNode.id)">
+                    <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || busy.checkingUpdateNodeId === selectedNode.id" @click="actions.checkManagedUpdate(selectedNode.id)">
                       <RefreshCw :size="14" />
                       <span>{{ busy.checkingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                     </Button>
-                    <Button variant="outline" size="sm" :disabled="!canApplyUpdate() || busy.applyingUpdateNodeId === selectedNode.id" @click="actions.applyManagedUpdate(selectedNode.id)">
+                    <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || !canApplyUpdate() || busy.applyingUpdateNodeId === selectedNode.id" @click="actions.applyManagedUpdate(selectedNode.id)">
                       <Download :size="14" />
                       <span>{{ busy.applyingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
                     </Button>
@@ -428,7 +428,7 @@
             <div class="node-detail-section">
               <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.updateJobs", { count: resources.updateJobs.length }) }}</span>
-                <Button variant="outline" size="sm" @click="actions.loadManagedUpdateJobs(selectedNode.id)">
+                <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false" @click="actions.loadManagedUpdateJobs(selectedNode.id)">
                   <RefreshCw :size="14" />
                   <span>{{ t("settings.nodeDetail.refresh") }}</span>
                 </Button>
@@ -534,7 +534,7 @@
             <div class="node-remote-panel">
               <div class="section-head has-actions">
                 <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.controlPlanePairings.length }) }}</span>
-                <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadControlPlaneAccess(selectedNode.id)">
+                <Button variant="outline" size="sm" :disabled="selectedNode.connectionEnabled === false || busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadControlPlaneAccess(selectedNode.id)">
                   <RefreshCw :size="14" />
                   <span>{{ busy.loadingRemoteKeysNodeId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>

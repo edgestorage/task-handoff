@@ -119,7 +119,7 @@ async function connectControlPlane(options: {
 }
 
 async function bindCloudRelay(options: {
-  cloudOrigin: string;
+  cloudOrigin?: string;
   bindingToken: string;
   displayName?: string;
   endpoint?: string;
@@ -131,7 +131,7 @@ async function bindCloudRelay(options: {
     ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
   };
   const body = JSON.stringify({
-    cloudOrigin: options.cloudOrigin,
+    ...(options.cloudOrigin ? { cloudOrigin: options.cloudOrigin } : {}),
     bindingToken: options.bindingToken,
     ...(options.displayName ? { displayName: options.displayName } : {}),
   });
@@ -353,7 +353,7 @@ async function main() {
   program
     .command("cloud-bind")
     .description("Bind this Node Agent to a cloud platform account with a one-time binding token.")
-    .requiredOption("--cloud-origin <url>", "Cloud platform origin that issued the binding command")
+    .option("--cloud-origin <url>", "Cloud platform origin for ad-hoc deployments without cloud discovery")
     .requiredOption("--binding-token <token>", "One-time binding token from the cloud platform")
     .option("--display-name <name>", "Display name shown in the account node directory")
     .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")

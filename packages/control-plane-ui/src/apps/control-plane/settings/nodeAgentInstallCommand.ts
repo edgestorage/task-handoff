@@ -1,3 +1,12 @@
+import {
+  DEFAULT_NODE_AGENT_INSTALLER_SOURCE,
+  nodeAgentInstallerUrl,
+  normalizeControlPlaneBaseUrl,
+  type NodeAgentInstallerSource,
+} from "@task-handoff/protocol/control-plane";
+
+export { normalizeControlPlaneBaseUrl };
+
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
@@ -15,19 +24,6 @@ export function nodeAgentConnectCommand(input: {
   ].map((line, index, lines) => index < lines.length - 1 ? `${line} \\` : line).join("\n");
 }
 
-export function normalizeControlPlaneBaseUrl(value: string) {
-  const trimmed = value.trim();
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return trimmed.replace(/\/+$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return trimmed.replace(/\/+$/, "");
-  }
-}
-
 function isHttpUrl(value: string) {
   try {
     const url = new URL(value);
@@ -40,11 +36,12 @@ function isHttpUrl(value: string) {
 export function nodeAgentInstallCommand(input: {
   controlPlaneUrl: string;
   joinToken: string;
+  installerSource?: NodeAgentInstallerSource;
   version?: string;
 }) {
   const controlPlaneUrl = normalizeControlPlaneBaseUrl(input.controlPlaneUrl);
   if (!isHttpUrl(controlPlaneUrl) || !input.joinToken) return "";
-  const installerUrl = `${controlPlaneUrl}/install-node-agent.sh`;
+  const installerUrl = nodeAgentInstallerUrl(input.installerSource ?? DEFAULT_NODE_AGENT_INSTALLER_SOURCE, controlPlaneUrl);
   const command = [
     `curl -fsSL ${shellQuote(installerUrl)} | sudo sh -s --`,
     `  --control-plane ${shellQuote(controlPlaneUrl)}`,
@@ -54,4 +51,17 @@ export function nodeAgentInstallCommand(input: {
     ...(input.version ? [`  --version ${shellQuote(input.version)}`] : []),
   ];
   return command.map((line, index) => index < command.length - 1 ? `${line} \\` : line).join("\n");
+}
+
+export function withNodeAgentInstallerSource(command: string, input: {
+  controlPlaneUrl: string;
+  installerSource: NodeAgentInstallerSource;
+}) {
+  const lineEnd = command.indexOf("\n");
+  const firstLine = lineEnd === -1 ? command : command.slice(0, lineEnd);
+  const marker = " | sudo sh -s --";
+  const markerIndex = firstLine.indexOf(marker);
+  if (!firstLine.startsWith("curl -fsSL ") || markerIndex === -1) return command;
+  const suffix = `${marker}${command.slice(firstLine.length)}`;
+  return `curl -fsSL ${shellQuote(nodeAgentInstallerUrl(input.installerSource, input.controlPlaneUrl))}${suffix}`;
 }

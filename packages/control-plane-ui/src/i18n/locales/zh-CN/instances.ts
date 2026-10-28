@@ -381,6 +381,8 @@ export const instances = {
     readyToStart: "实例已可启动。", failedDetail: "实例无法启动。请重试失败操作或检查其运行环境。",
     stoppedDetail: "实例已停止，可在准备好后重新启动。", unhealthyDetail: "实例健康检查状态为 {health}。请重启实例或检查其运行环境。",
     stoppingDetail: "正在等待实例运行环境安全停止。", waitingDetail: "正在等待受管实例连接 · {status} · {connection}",
+    nodeDisconnected: "节点已断开",
+    nodeDisconnectedDetail: "此节点的连接已暂停。实例不会被停止；重新连接节点后可继续查看和操作。",
     checkingImage: "正在检查镜像", pullingImage: "正在拉取镜像", pullingImageProgress: "正在拉取镜像 · {message}",
     resolvingDigest: "正在解析镜像 digest", imageProvisionFailed: "镜像准备失败", imageReady: "镜像已就绪", source: "来源",
     localFolder: "本地文件夹", localFolderLower: "本地文件夹",

@@ -35,19 +35,33 @@ test("cloud node onboarding derives query readiness before creating the query", 
 test("cloud node onboarding shows one generated command for the selected node state", () => {
   const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
   assert.match(dialog, /commandMode = ref<CommandMode>\("install"\)/);
-  assert.match(dialog, /commandMode\.value === "install" \? bindingToken\.value\?\.installCommand/);
+  assert.match(dialog, /const command = bindingToken\.value\?\.installCommand \?\? ""/);
+  assert.match(dialog, /withNodeAgentInstallerSource\(command, \{ controlPlaneUrl: props\.controlPlaneUrl, installerSource: installerSource\.value \}\)/);
   assert.match(dialog, /bindingToken\.value\?\.command/);
+  assert.match(dialog, /installerSource = ref<NodeAgentInstallerSource>\(DEFAULT_NODE_AGENT_INSTALLER_SOURCE\)/);
+  assert.match(dialog, /watch\(installerSource, \(\) => \{\n  copied\.value = false;/);
+  assert.match(dialog, /<NodeAgentInstallerSourceToggle v-if="commandMode === 'install'" v-model="installerSource" \/>/);
   assert.match(dialog, /<Tabs v-model="commandMode">/);
   assert.match(dialog, /<TabsTrigger value="install">/);
   assert.match(dialog, /<TabsTrigger value="bind">/);
   assert.doesNotMatch(dialog, /cloud-node-onboarding-source-switch/);
-  assert.equal((dialog.match(/<pre><code>\{\{ generatedCommand \}\}<\/code><\/pre>/g) || []).length, 1);
+  assert.equal((dialog.match(/<ScrollArea class="cloud-node-onboarding-command-code">\n\s*<pre tabindex="0"><code>\{\{ generatedCommand \}\}<\/code><\/pre>/g) || []).length, 1);
 
-  const tokenStart = dialog.indexOf('<template v-else>\n              <p class="cloud-node-onboarding-instruction">{{ t("settings.nodeRelay.commandOnce") }}</p>');
+  const tokenStart = dialog.indexOf('<div class="cloud-node-onboarding-command-card">');
   const tokenEnd = dialog.indexOf('</template>', tokenStart);
   const tokenSection = dialog.slice(tokenStart, tokenEnd);
+  assert.match(tokenSection, /settings\.nodeRelay\.commandOnce/);
   assert.match(tokenSection, /settings\.nodeRelay\.installCommand/);
   assert.match(tokenSection, /settings\.nodeRelay\.bindCommand/);
+});
+
+test("the generated command groups its actions into one compact card", () => {
+  const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
+  assert.match(dialog, /class="cloud-node-onboarding-command-footer"/);
+  assert.match(dialog, /class="cloud-node-onboarding-command-cancel"/);
+  assert.match(dialog, /<ScrollArea class="cloud-node-onboarding-command-code">/);
+  assert.match(dialog, /\.cloud-node-onboarding-command-code :deep\(pre\) \{[\s\S]*?white-space: pre;/);
+  assert.doesNotMatch(dialog, /variant="destructive"[^>]*cancelBindingToken/);
 });
 
 test("cloud account nodes use the compact settings-style separated list", () => {

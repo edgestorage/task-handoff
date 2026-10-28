@@ -105,6 +105,7 @@ type NodeAgentInstanceParseResult = {
 
 type NodeAgentFleetSnapshot<T> = {
   connectionKey: string;
+  connectionEnabled?: boolean;
   items: T[];
   phase: NodeFleetResourcePhase;
   revision: number;
@@ -955,9 +956,9 @@ export class ControlPlaneNodeAgentGateway {
         continue;
       }
       result.items.push(...snapshot.items.map((item) => ({ nodeId: node.id, item })));
-      const state = this.publicFleetState(node.id, resource, snapshot);
+      const state = this.publicFleetState(node.id, resource, snapshot, node.connectionEnabled === false ? false : snapshot.connectionEnabled);
       result.nodeStates.push(state);
-      if (snapshot.error) result.nodeErrors.push(snapshot.error);
+      if (state.error && snapshot.error) result.nodeErrors.push(snapshot.error);
     }
     return result;
   }
@@ -972,7 +973,21 @@ export class ControlPlaneNodeAgentGateway {
     force: boolean,
   ) {
     this.reconcileFleetConnections(nodes, resource, snapshots);
-    await Promise.all(nodes.map((node) => this.refreshFleetNode(node, resource, route, init, snapshots, load, force)));
+    // A paused node is intentionally offline. Keep its last authoritative
+    // snapshot for offline projections, but never turn the pause switch into a
+    // transport failure or a recurring fleet diagnostic.
+    const connectedNodes = nodes.filter((node) => node.connectionEnabled !== false);
+    for (const node of nodes) {
+      if (node.connectionEnabled !== false) continue;
+      this.resetFleetRetry(`${resource}:${node.id}`);
+      const snapshot = snapshots.get(node.id);
+      if (!snapshot) continue;
+      const hadError = Boolean(snapshot.error);
+      snapshot.connectionEnabled = false;
+      snapshot.revision = this.nextFleetRevision(node.id, resource);
+      if (hadError) this.emitFleetState(node.id, resource, snapshot, { contentChanged: false });
+    }
+    await Promise.all(connectedNodes.map((node) => this.refreshFleetNode(node, resource, route, init, snapshots, load, force)));
   }
 
   private refreshFleetNode<T>(
@@ -1006,6 +1021,7 @@ export class ControlPlaneNodeAgentGateway {
     // refetch the same fleet projection and amplify one refresh across all windows.
     const loading: NodeAgentFleetSnapshot<T> = {
       connectionKey,
+      connectionEnabled: true,
       items: current?.connectionKey === connectionKey ? [...current.items] : [],
       phase: retryingFailure
         ? current.phase
@@ -1039,6 +1055,7 @@ export class ControlPlaneNodeAgentGateway {
           }
           const unchanged: NodeAgentFleetSnapshot<T> = {
             connectionKey,
+            connectionEnabled: true,
             items: [...previous.items],
             phase: "ready",
             revision,
@@ -1054,6 +1071,7 @@ export class ControlPlaneNodeAgentGateway {
         const invalidPayloadError = loaded.nodeErrors[0];
         const ready: NodeAgentFleetSnapshot<T> = {
           connectionKey,
+          connectionEnabled: true,
           items: [...loaded.items],
           phase: invalidPayloadError ? "stale" : "ready",
           revision,
@@ -1138,8 +1156,13 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  private publicFleetState<T>(nodeId: string, resource: NodeFleetResource, snapshot: NodeAgentFleetSnapshot<T>): NodeFleetResourceState {
-    const error = snapshot.error ? {
+  private publicFleetState<T>(
+    nodeId: string,
+    resource: NodeFleetResource,
+    snapshot: NodeAgentFleetSnapshot<T>,
+    connectionEnabled = snapshot.connectionEnabled,
+  ): NodeFleetResourceState {
+    const error = snapshot.error && connectionEnabled !== false ? {
       nodeId: snapshot.error.nodeId,
       route: snapshot.error.route,
       method: snapshot.error.method,
@@ -1188,6 +1211,7 @@ export class ControlPlaneNodeAgentGateway {
   private sameFleetState<T>(resource: NodeFleetResource, left: NodeAgentFleetSnapshot<T>, right: NodeAgentFleetSnapshot<T>) {
     const comparable = (snapshot: NodeAgentFleetSnapshot<T>) => ({
       phase: snapshot.phase,
+      connectionEnabled: snapshot.connectionEnabled,
       // `updatedAt` records the observation time and advances on every
       // malformed response. It is not a semantic state change and must not
       // keep invalidating progressive consumers while the failure is stable.
@@ -1237,6 +1261,7 @@ export class ControlPlaneNodeAgentGateway {
     const previous = snapshots.get(node.id);
     const snapshot: NodeAgentFleetSnapshot<T> = {
       connectionKey: this.fleetConnectionKey(node),
+      connectionEnabled: node.connectionEnabled !== false,
       items: [...result.items],
       phase: result.nodeErrors.length ? "stale" : "ready",
       revision: this.nextFleetRevision(node.id, resource),

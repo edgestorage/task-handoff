@@ -16,14 +16,18 @@ export function isInstanceConnecting(instance: InstanceBoardItem) {
   return ["provisioning", "starting", "registering", "registered"].includes(instance.status);
 }
 
+export function isInstanceNodeDisconnected(instance: Pick<InstanceBoardItem, "node">) {
+  return instance.node?.connectionEnabled === false;
+}
+
 export function hasInstanceStatusPage(instance: InstanceBoardItem) {
-  return instance.status !== "running" || isInstanceRuntimeUpdating(instance) || isInstanceRuntimeUnavailable(instance);
+  return isInstanceNodeDisconnected(instance) || instance.status !== "running" || isInstanceRuntimeUpdating(instance) || isInstanceRuntimeUnavailable(instance);
 }
 
 export function isInstanceStatusPending(instance: InstanceBoardItem) {
   // An unavailable base runtime is an external condition, not work in progress:
   // the instance waits on the runtime instead of retrying, so no spinner.
-  if (isInstanceRuntimeUnavailable(instance)) return false;
+  if (isInstanceNodeDisconnected(instance) || isInstanceRuntimeUnavailable(instance)) return false;
   return isInstanceRuntimeUpdating(instance)
     || ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
 }
@@ -89,6 +93,7 @@ export function isInstanceAppReady(instance: InstanceBoardItem) {
 }
 
 export function canShowInstanceAction(instance: InstanceBoardItem, action: InstanceAction) {
+  if (isInstanceNodeDisconnected(instance)) return false;
   if (action === "delete") {
     return true;
   }
@@ -128,6 +133,7 @@ export function instanceProvisioningRetryLabel(instance: InstanceBoardItem, t: T
 }
 
 export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
+  if (isInstanceNodeDisconnected(instance)) return t("instances.lifecycle.nodeDisconnected");
   if (isInstanceRuntimeUnavailable(instance)) return instanceRuntimeUnavailableLabel(instance, t);
   if (isInstanceRuntimeUpdating(instance)) return t("instances.lifecycle.updatingRuntime");
   if (instance.status !== "stopping" && instance.status !== "stopped") {
@@ -150,6 +156,7 @@ export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
 }
 
 export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) {
+  if (isInstanceNodeDisconnected(instance)) return t("instances.lifecycle.nodeDisconnectedDetail");
   if (isInstanceRuntimeUnavailable(instance)) {
     const runtime = instanceRuntimeNameLabel(instance, t);
     const reason = instanceRuntimeUnavailableReason(instance);
@@ -188,6 +195,12 @@ export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) 
     status: translateStatus(instanceStatusKeys, instance.status, t),
     connection: translateStatus(connectionStatusKeys, instance.connectionStatus, t),
   });
+}
+
+export function instanceStatusBadgeLabel(instance: InstanceBoardItem, t: Translate) {
+  return isInstanceNodeDisconnected(instance)
+    ? t("instances.lifecycle.nodeDisconnected")
+    : translateStatus(instanceStatusKeys, instance.status, t);
 }
 
 export function imageProvisioningLabel(instance: InstanceBoardItem, t: Translate) {

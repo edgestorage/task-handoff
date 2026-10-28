@@ -518,6 +518,7 @@ export const settings = {
     installTitle: "安装远程节点", installDescription: "在远程主机上运行生成的命令。node-agent 将作为 systemd 服务安装并连接回此控制面板。",
     checkHost: "检查远程主机", requirements: "需要带 systemd 的 Linux、包含 npm 的 Node.js 24 和 curl。只有 Docker 运行环境需要 Docker。",
     publicUrl: "控制面板公开 URL", reachableUrl: "远程主机必须能够访问此 URL。", runCommand: "运行安装命令",
+    installerSource: "安装源", installerSourceGitHub: "GitHub", installerSourceControlPlane: "当前控制面",
     copied: "已复制", copyCommand: "复制命令", enterUrl: "输入公开 URL 以生成命令。", expiresHint: "此一次性 token 将于 {time} 过期。过期后请生成新命令。", close: "关闭",
     clipboardUnavailable: "剪贴板访问不可用。", copyCommandFailed: "无法复制安装命令。", copyToken: "复制 token", copyTokenFailed: "无法复制 token。",
     tokenOnce: "此 token 只显示一次，请在关闭对话框前复制。", expires: "过期时间：{time}", addLocalFolder: "添加本地文件夹 · {name}",

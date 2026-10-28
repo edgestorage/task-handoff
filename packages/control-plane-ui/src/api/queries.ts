@@ -509,18 +509,19 @@ export function useNodeRuntimesPayloadQuery() {
   });
 }
 
-export function nodeLocalFoldersQueryOptions(nodeId: string) {
+export function nodeLocalFoldersQueryOptions(nodeId: string, enabled = true) {
   return queryOptions({
     queryKey: controlPlaneQueryKeys.nodeLocalFolders(nodeId),
     queryFn: ({ signal }) => sharedControlPlaneClient.nodeAdmin.listFolders(nodeId, signal),
-    enabled: Boolean(nodeId),
+    enabled: Boolean(nodeId) && enabled,
     retry: false,
   });
 }
 
-export function useNodeLocalFoldersQuery(nodeId: MaybeRefOrGetter<string>) {
+export function useNodeLocalFoldersQuery(nodeId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
   const resolvedNodeId = computed(() => toValue(nodeId));
-  return useQuery(computed(() => nodeLocalFoldersQueryOptions(resolvedNodeId.value)));
+  const resolvedEnabled = computed(() => toValue(enabled));
+  return useQuery(computed(() => nodeLocalFoldersQueryOptions(resolvedNodeId.value, resolvedEnabled.value)));
 }
 
 export function listNodeFolderTree(nodeId: string, input: { path?: string; depth?: number } = {}) {

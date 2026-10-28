@@ -6,6 +6,7 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeStorageFolderPicker } from "./useNodeStorageFolderPicker";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
+import { isNodeConnectionEnabled } from "../nodeConnectionActions.ts";
 
 type ChooseProjectFolder = () => Promise<string | { path: string; ownerNodeId?: string } | undefined>;
 
@@ -31,10 +32,11 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
   const checkingRuntimeId = ref("");
   const deletingRuntimeId = ref("");
   const renamingNodeLocalFolderId = ref("");
-  const nodeLocalFolders = useNodeLocalFoldersQuery(() => selectedNodeId.value);
 
   const orderedNodes = computed(() => [...(nodes.value || [])].sort((a, b) => Number(isControlPlaneLocalNode(b)) - Number(isControlPlaneLocalNode(a)) || a.name.localeCompare(b.name)));
   const selectedNode = computed(() => (nodes.value || []).find((node) => node.id === selectedNodeId.value) || orderedNodes.value[0]);
+  const selectedNodeConnectionEnabled = computed(() => isNodeConnectionEnabled(selectedNode.value));
+  const nodeLocalFolders = useNodeLocalFoldersQuery(() => selectedNodeId.value, selectedNodeConnectionEnabled);
   const localNodeId = computed(() => (nodes.value || []).find(isControlPlaneLocalNode)?.id || orderedNodes.value[0]?.id || "");
   const selectedNodeRuntimes = computed(() => selectedNode.value ? (runtimes.value || []).filter((runtime) => runtime.nodeId === selectedNode.value?.id) : []);
   const selectedNodeInstances = computed(() => selectedNode.value ? (instances.value || []).filter((instance) => instance.nodeId === selectedNode.value?.id) : []);
@@ -66,7 +68,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
   });
 
   async function checkRuntime(runtime: NodeRuntime) {
-    if (!selectedNode.value || checkingRuntimeId.value) {
+    if (!selectedNode.value || !isNodeConnectionEnabled(selectedNode.value) || checkingRuntimeId.value) {
       return;
     }
     checkingRuntimeId.value = runtime.id;
@@ -81,7 +83,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
   }
 
   async function removeRuntime(runtime: NodeRuntime) {
-    if (!selectedNode.value || deletingRuntimeId.value) {
+    if (!selectedNode.value || !isNodeConnectionEnabled(selectedNode.value) || deletingRuntimeId.value) {
       return;
     }
     deletingRuntimeId.value = runtime.id;
@@ -97,7 +99,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
 
   async function submitNodeLocalFolder() {
     const node = selectedNode.value;
-    if (!node) {
+    if (!node || !isNodeConnectionEnabled(node)) {
       return;
     }
     if (folderSelectionMode.value === "node") {
@@ -134,7 +136,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
   }
 
   async function removeNodeLocalFolder(folderId: string) {
-    if (!selectedNode.value || deletingNodeLocalFolderId.value) {
+    if (!selectedNode.value || !isNodeConnectionEnabled(selectedNode.value) || deletingNodeLocalFolderId.value) {
       return;
     }
     deletingNodeLocalFolderId.value = folderId;
@@ -149,7 +151,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, errorText, instan
   }
 
   async function renameNodeLocalFolder(folder: NodeLocalFolder, name: string) {
-    if (!selectedNode.value || selectedNode.value.id !== folder.nodeId || renamingNodeLocalFolderId.value) return false;
+    if (!selectedNode.value || !isNodeConnectionEnabled(selectedNode.value) || selectedNode.value.id !== folder.nodeId || renamingNodeLocalFolderId.value) return false;
     renamingNodeLocalFolderId.value = folder.id;
     try {
       await updateNodeLocalFolder(folder.nodeId, folder.id, { name });

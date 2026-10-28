@@ -1517,7 +1517,7 @@ watch([sortedInstances, activeInstanceId], ([instances]) => {
   nodeLocalFolderNodeIds.value = next;
 }, { immediate: true });
 const nodeLocalFolderQueries = useQueries({
-  queries: () => nodeLocalFolderNodeIds.value.map(nodeLocalFoldersQueryOptions),
+  queries: () => nodeLocalFolderNodeIds.value.map((nodeId) => nodeLocalFoldersQueryOptions(nodeId)),
 });
 const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() => Object.fromEntries(
   nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),

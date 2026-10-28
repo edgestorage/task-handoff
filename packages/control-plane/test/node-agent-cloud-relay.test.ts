@@ -304,12 +304,35 @@ test("node agent discovers the cloud origin from TXT before binding", async (t) 
     },
   });
 
-  const bound = await bind(app, stub);
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { bindingToken: stub.state.bindingToken },
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  const bound = response.json().data;
   assert.equal(bound.cloudOrigin, SERVICE_ORIGIN);
   assert.equal(identityService.cloudRelayBinding()?.cloudOrigin, SERVICE_ORIGIN);
   assert.ok(calls.some((url) => url.startsWith("https://dns.alidns.com/")), "the node must resolve the discovery TXT record");
   assert.ok(calls.some((url) => url === "https://backup.cloud.example.com/api/v1/node-relay/v1/redeem"), "redemption must use the discovered origin");
   assert.equal(calls.some((url) => url === `${SERVICE_ORIGIN}/api/v1/node-relay/v1/redeem`), false);
+});
+
+test("binding without an origin fails closed when no discovery record is configured", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app } = await cloudRelayFixture(t, stub);
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { bindingToken: stub.state.bindingToken },
+  });
+
+  assert.equal(response.statusCode, 400, response.body);
+  assert.equal(response.json().error.code, "NODE_AGENT_CLOUD_RELAY_ORIGIN_REQUIRED");
+  assert.deepEqual(stub.state.redemptions, []);
 });
 
 test("a claiming Control Plane gets a paired channel, tunnel requests round-trip and the pairing survives reconnect", async (t) => {

@@ -137,3 +137,67 @@ test("control-plane model deletion is protected by instance assignments only", a
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("paused node model convergence remains pending until the node reconnects", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-paused-node-"));
+  const paths = controlPlaneStorePaths(directory);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const repository = new ControlPlaneModelRepository(database, secrets);
+  try {
+    let modelId = "";
+    let deployCalls = 0;
+    const node = {
+      id: "node_paused",
+      connectionEnabled: false,
+      capabilities: {
+        agent: {
+          capabilities: {
+            managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+          },
+        },
+      },
+    } as never;
+    const fleet = () => ({
+      items: modelId ? [{ nodeId: "node_paused", model: { id: modelId } }] : [],
+      nodeErrors: [],
+      nodeStates: [{ nodeId: "node_paused", resource: "models", phase: "ready" }],
+    });
+    const service = new ControlPlaneModelService({
+      repository,
+      gateway: {
+        listFleetModels: async () => fleet(),
+        readFleetModels: () => fleet(),
+        deployModel: async () => { deployCalls += 1; return {}; },
+      } as never,
+      listNodes: () => [node],
+      requireNode: () => node,
+      fetchImpl: fetch,
+    });
+    await service.init();
+    modelId = (await service.create({
+      name: "Paused replica",
+      endpoint: "https://api.example.test/v1",
+      key: "secret",
+      model: "paused-model",
+      app: "codex",
+    })).id;
+
+    const updated = await service.update(modelId, { name: "Paused replica renamed" });
+    assert.equal(deployCalls, 0);
+    assert.deepEqual(updated.locations, [{
+      nodeId: "node_paused",
+      state: "pending",
+      code: "NODE_AGENT_CONNECTION_DISABLED",
+      message: "Node agent connection is disabled locally.",
+    }]);
+
+    (node as { connectionEnabled: boolean }).connectionEnabled = true;
+    await service.flushPendingModelSyncs();
+    assert.equal(deployCalls, 1);
+  } finally {
+    await database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
