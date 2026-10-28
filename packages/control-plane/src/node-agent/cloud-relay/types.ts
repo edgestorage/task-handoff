@@ -18,6 +18,12 @@ export type NodeAgentCloudRelayBinding = {
   nodeHandle: string;
   accountId: string;
   cloudOrigin: string;
+  /**
+   * Records whether `cloudOrigin` came from discovery or an explicit operator
+   * pin. This intent cannot be reconstructed after restart: the bundled
+   * discovery record can redirect an explicitly selected staging origin.
+   */
+  cloudOriginMode: "discovered" | "pinned";
   serviceOrigin: string;
   credential: string;
   credentialExpiresAt: string;

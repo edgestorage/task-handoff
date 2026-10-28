@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { createNodeAgentApp } from "../src/node-agent/app.ts";
 import { createNodeAgentHmacHeaders } from "../src/shared/security/node-agent-auth.ts";
 import type { NodeAgentIdentityService } from "../src/node-agent/identity/service.ts";
-import type { NodeAgentCloudRelayClient } from "../src/node-agent/cloud-relay/client.ts";
+import { NodeAgentCloudRelayClient } from "../src/node-agent/cloud-relay/client.ts";
 import type { CloudDiscovery } from "../../../shared/cloud-environments.cjs";
 import {
   cloudRelayCloudStub,
@@ -314,9 +314,134 @@ test("node agent discovers the cloud origin from TXT before binding", async (t) 
   const bound = response.json().data;
   assert.equal(bound.cloudOrigin, SERVICE_ORIGIN);
   assert.equal(identityService.cloudRelayBinding()?.cloudOrigin, SERVICE_ORIGIN);
+  assert.equal(identityService.cloudRelayBinding()?.cloudOriginMode, "discovered");
   assert.ok(calls.some((url) => url.startsWith("https://dns.alidns.com/")), "the node must resolve the discovery TXT record");
   assert.ok(calls.some((url) => url === "https://backup.cloud.example.com/api/v1/node-relay/v1/redeem"), "redemption must use the discovered origin");
   assert.equal(calls.some((url) => url === `${SERVICE_ORIGIN}/api/v1/node-relay/v1/redeem`), false);
+});
+
+test("an explicit cloud origin bypasses the bundled discovery record", async (t) => {
+  const explicitOrigin = "https://staging.cloud.example.com";
+  const stub = cloudRelayCloudStub({ serviceOrigin: explicitOrigin });
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push(url.href);
+    if (url.hostname === "dns.alidns.com") {
+      return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 cloud.example.com" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return stub.fetchImpl(input, init);
+  };
+  const { app, identityService } = await cloudRelayFixture(t, stub, {
+    fetchImpl,
+    cloudDiscovery: {
+      record: "_cloud.example.com",
+      fallbackOrigin: SERVICE_ORIGIN,
+      allowedHostSuffixes: ["example.com"],
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { cloudOrigin: explicitOrigin, bindingToken: stub.state.bindingToken },
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(response.json().data.cloudOrigin, explicitOrigin);
+  assert.equal(identityService.cloudRelayBinding()?.cloudOrigin, explicitOrigin);
+  assert.equal(identityService.cloudRelayBinding()?.cloudOriginMode, "pinned");
+  assert.equal(calls.some((url) => url.startsWith("https://dns.alidns.com/")), false, "explicit origin must bypass discovery");
+  assert.ok(calls.includes(`${explicitOrigin}/api/v1/node-relay/v1/redeem`), "redemption must use the pinned origin");
+  assert.equal(calls.some((url) => url.startsWith(SERVICE_ORIGIN)), false, "pinned binding must not use another discovered origin");
+});
+
+test("an explicit cloud origin stays pinned after the relay client restarts", async (t) => {
+  const explicitOrigin = "https://staging.cloud.example.com";
+  const cloudDiscovery = {
+    record: "_cloud.example.com",
+    fallbackOrigin: SERVICE_ORIGIN,
+    allowedHostSuffixes: ["example.com"],
+  } satisfies CloudDiscovery;
+  const stub = cloudRelayCloudStub({ serviceOrigin: explicitOrigin });
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push(url.href);
+    if (url.hostname === "dns.alidns.com") {
+      return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 cloud.example.com" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return stub.fetchImpl(input, init);
+  };
+  const { app, relay, identityService } = await cloudRelayFixture(t, stub, { fetchImpl, cloudDiscovery });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { cloudOrigin: explicitOrigin, bindingToken: stub.state.bindingToken },
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(identityService.cloudRelayBinding()?.cloudOriginMode, "pinned");
+
+  relay.stop();
+  calls.length = 0;
+  const restarted = new NodeAgentCloudRelayClient({
+    identity: identityService,
+    nodeId: "node_cloud_relay",
+    host: {
+      log: app.log,
+      inject: (input) => app.inject(input),
+      currentListenerPort: () => app.nodeAgentState!.currentListenerPort,
+    },
+    fetchImpl,
+    cloudDiscovery,
+    pollIntervalMs: 50,
+    idlePollIntervalMs: 50,
+  });
+  t.after(() => restarted.stop());
+  restarted.start();
+
+  await waitFor(() => calls.includes(`${explicitOrigin}/api/v1/node-relay/v1/allocations`), "the restarted client to poll the pinned origin");
+  assert.equal(calls.some((url) => url.startsWith("https://dns.alidns.com/")), false, "a pinned binding must not consult discovery after restart");
+  assert.equal(calls.some((url) => url.startsWith(SERVICE_ORIGIN)), false, "a pinned binding must not drift to another cloud origin after restart");
+});
+
+test("an explicit cloud origin cannot bypass the configured host suffix policy", async (t) => {
+  const untrustedOrigin = "https://cloud.untrusted.example.net";
+  const stub = cloudRelayCloudStub({ serviceOrigin: untrustedOrigin });
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push(url.href);
+    return stub.fetchImpl(input, init);
+  };
+  const { app, identityService } = await cloudRelayFixture(t, stub, {
+    fetchImpl,
+    cloudDiscovery: {
+      record: "_cloud.example.com",
+      fallbackOrigin: SERVICE_ORIGIN,
+      allowedHostSuffixes: ["example.com"],
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { cloudOrigin: untrustedOrigin, bindingToken: stub.state.bindingToken },
+  });
+
+  assert.equal(response.statusCode, 400, response.body);
+  assert.equal(response.json().error.code, "NODE_AGENT_CLOUD_RELAY_ORIGIN_UNTRUSTED");
+  assert.equal(identityService.cloudRelayBinding(), undefined);
+  assert.deepEqual(calls, [], "an untrusted origin must be rejected before any network request");
 });
 
 test("binding without an origin fails closed when no discovery record is configured", async (t) => {

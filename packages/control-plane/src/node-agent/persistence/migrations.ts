@@ -512,6 +512,16 @@ CREATE TABLE na_initialization_markers (
 );
 `;
 
+// Explicit --cloud-origin bindings are pins, not discovery fallbacks. Persist
+// that operator intent so a restart cannot redirect renewals or allocations to
+// the production record bundled in the Node Agent package. Existing rows keep
+// the previous discovery behavior.
+const cloudRelayOriginMode = `
+ALTER TABLE na_cloud_relay_bindings
+  ADD COLUMN cloud_origin_mode TEXT NOT NULL DEFAULT 'discovered'
+  CHECK(cloud_origin_mode IN ('discovered','pinned'));
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -534,4 +544,5 @@ export const nodeAgentMigrations = [
   migration("0017_cloud_relay_binding", cloudRelayBinding),
   migration("0018_cloud_control_plane_trust", cloudControlPlaneTrust),
   migration("0019_initialization_markers", initializationMarkers),
+  migration("0020_cloud_relay_origin_mode", cloudRelayOriginMode),
 ] as const;

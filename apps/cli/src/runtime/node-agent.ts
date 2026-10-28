@@ -353,7 +353,7 @@ async function main() {
   program
     .command("cloud-bind")
     .description("Bind this Node Agent to a cloud platform account with a one-time binding token.")
-    .option("--cloud-origin <url>", "Cloud platform origin for ad-hoc deployments without cloud discovery")
+    .option("--cloud-origin <url>", "Pin the cloud platform origin and bypass cloud discovery")
     .requiredOption("--binding-token <token>", "One-time binding token from the cloud platform")
     .option("--display-name <name>", "Display name shown in the account node directory")
     .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")

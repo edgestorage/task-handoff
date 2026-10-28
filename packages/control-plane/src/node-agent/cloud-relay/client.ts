@@ -12,7 +12,7 @@ import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
 import { probeNodeRelayTargets } from "./probe.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
 import type { NodeAgentCloudControlPlanePin, NodeAgentCloudControlPlaneTrustContext, NodeAgentCloudControlPlaneTrustRequest } from "./trust-types.ts";
-import { resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
+import { cloudOriginError, resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
 import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
@@ -308,8 +308,9 @@ export class NodeAgentCloudRelayClient {
     if (current?.status === "active") {
       throw Object.assign(new Error("This node is already bound to a cloud account."), { statusCode: 409, code: "NODE_AGENT_CLOUD_RELAY_ALREADY_BOUND" });
     }
+    const explicitOrigin = input.cloudOrigin?.trim();
     const discovery = this.options.cloudDiscovery;
-    const requestedOrigin = input.cloudOrigin?.trim() || discovery?.fallbackOrigin;
+    const requestedOrigin = explicitOrigin || discovery?.fallbackOrigin;
     if (!requestedOrigin) {
       throw Object.assign(new Error("Cloud relay origin is required when the build has no cloud discovery record."), {
         statusCode: 400,
@@ -317,8 +318,18 @@ export class NodeAgentCloudRelayClient {
       });
     }
     const cloudOrigin = resolveCloudOrigin(requestedOrigin);
-    const resolver = await this.discoveryResolver(cloudOrigin);
-    const cloud = await this.cloudClient(cloudOrigin);
+    const parsedCloudOrigin = new URL(cloudOrigin);
+    if (explicitOrigin && discovery && parsedCloudOrigin.protocol === "https:" && !discovery.allowedHostSuffixes.some((suffix) => hostMatchesSuffix(parsedCloudOrigin.hostname, suffix))) {
+      throw cloudOriginError(
+        "NODE_AGENT_CLOUD_RELAY_ORIGIN_UNTRUSTED",
+        "Cloud relay origin must belong to the configured cloud environment.",
+      );
+    }
+    // An explicit command-line origin is a pin, not a discovery fallback. The
+    // npm package ships the production discovery record, so consulting it here
+    // would silently redirect a staging --cloud-origin to production.
+    const resolver = explicitOrigin ? undefined : await this.discoveryResolver(cloudOrigin);
+    const cloud = await this.cloudClient(cloudOrigin, !explicitOrigin);
     const relayKeys = generateRelayKeyPair();
     // Redemption is the only step that can fail before anything local changes:
     // an invalid, expired or replayed token leaves the node exactly as it was.
@@ -348,6 +359,7 @@ export class NodeAgentCloudRelayClient {
       nodeHandle: redeemed.nodeHandle,
       accountId: redeemed.accountId,
       cloudOrigin,
+      cloudOriginMode: explicitOrigin ? "pinned" : "discovered",
       serviceOrigin: redeemedOrigin,
       credential: redeemed.credential,
       credentialExpiresAt: redeemed.credentialExpiresAt,
@@ -368,7 +380,7 @@ export class NodeAgentCloudRelayClient {
     if (!binding) return { unbound: false, cloudUnbind: "not-bound" as const };
     let cloudUnbind: "confirmed" | "unavailable" = "unavailable";
     try {
-      await (await this.cloudClient(binding.cloudOrigin)).unbind(binding.credential);
+      await (await this.boundCloudClient(binding)).unbind(binding.credential);
       cloudUnbind = "confirmed";
     } catch (error) {
       this.options.host.log.warn({
@@ -442,8 +454,8 @@ export class NodeAgentCloudRelayClient {
     this.schedulePoll(0);
   }
 
-  private async cloudClient(cloudOrigin: string) {
-    const resolver = await this.discoveryResolver(cloudOrigin);
+  private async cloudClient(cloudOrigin: string, useDiscovery = true) {
+    const resolver = useDiscovery ? await this.discoveryResolver(cloudOrigin) : undefined;
     return new NodeRelayCloudClient({
       cloudOrigin: resolver ? () => resolver.activeOrigin : cloudOrigin,
       ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
@@ -452,6 +464,10 @@ export class NodeAgentCloudRelayClient {
         onOriginFailure: (origin: string) => resolver.markFailure(origin),
       } : {}),
     });
+  }
+
+  private boundCloudClient(binding: NodeAgentCloudRelayBinding) {
+    return this.cloudClient(binding.cloudOrigin, binding.cloudOriginMode === "discovered");
   }
 
   private discoveryResolver(cloudOrigin: string) {
@@ -548,7 +564,7 @@ export class NodeAgentCloudRelayClient {
   }
 
   private async reconnectAllocations(binding: NodeAgentCloudRelayBinding, refreshControlPlaneIds: string[]) {
-    const cloud = await this.cloudClient(binding.cloudOrigin);
+    const cloud = await this.boundCloudClient(binding);
     const request = {
       nodeId: this.options.nodeId,
       ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
@@ -592,7 +608,7 @@ export class NodeAgentCloudRelayClient {
   private async renewCredentialIfDue(binding: NodeAgentCloudRelayBinding) {
     const renewBefore = this.options.credentialRenewBeforeMs ?? DEFAULT_CREDENTIAL_RENEW_BEFORE_MS;
     if (Date.parse(binding.credentialExpiresAt) - this.now() > renewBefore) return;
-    const renewed = await (await this.cloudClient(binding.cloudOrigin)).renew(binding.credential);
+    const renewed = await (await this.boundCloudClient(binding)).renew(binding.credential);
     this.options.identity.updateCloudRelayBinding((current) => ({
       ...current,
       credential: renewed.credential,

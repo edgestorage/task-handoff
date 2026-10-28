@@ -120,6 +120,7 @@ export const cloudRelayBindings = sqliteTable("na_cloud_relay_bindings", {
   nodeHandle: text("node_handle").notNull(),
   accountId: text("account_id").notNull(),
   cloudOrigin: text("cloud_origin").notNull(),
+  cloudOriginMode: text("cloud_origin_mode", { enum: ["discovered", "pinned"] }).notNull(),
   serviceOrigin: text("service_origin").notNull(),
   credential: text("credential").notNull(),
   credentialExpiresAt: text("credential_expires_at").notNull(),
