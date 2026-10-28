@@ -103,7 +103,7 @@ test("an existing database is upgraded in place and keeps runtime references", (
     id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL
   )`);
   const record = legacy.prepare("INSERT INTO na_migration_ledger VALUES (?, ?, ?, ?)");
-  for (const migration of nodeAgentMigrations.slice(0, -1)) {
+  for (const migration of nodeAgentMigrations.filter((candidate) => candidate.id !== "0016_runtime_type_wsl")) {
     legacy.exec(migration.sql);
     record.run(migration.id, migration.checksum, timestamp, "{}");
   }

@@ -223,7 +223,7 @@ test("0018 upgrade never turns an existing cloud binding or relay pairing into a
     const legacy = new DatabaseSync(paths.databasePath);
     legacy.exec("CREATE TABLE na_migration_ledger (id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL)");
     const insert = legacy.prepare("INSERT INTO na_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
-    for (const migration of nodeAgentMigrations.slice(0, -1)) {
+    for (const migration of nodeAgentMigrations.filter((candidate) => candidate.id !== "0018_cloud_control_plane_trust")) {
       legacy.exec(migration.sql);
       insert.run(migration.id, migration.checksum, NOW, JSON.stringify({ release: "stage-b-pre-0018" }));
     }

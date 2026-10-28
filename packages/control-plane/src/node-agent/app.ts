@@ -55,7 +55,9 @@ import { RuntimeConvergenceCoordinator, instanceGitPreparationPending, instanceI
 import {
   NodeAgentState,
   runtimeUsesManagedArtifacts,
+  type DefaultWorkspaceInstanceInitializationResult,
 } from "./state.ts";
+import { resolveDefaultWorkspacePath } from "./default-workspace.ts";
 import { registerNodeModelRoutes } from "./models/routes.ts";
 import { NodeModelRelaySettings, registerNodeModelRelaySettingsRoutes } from "./models/relay-settings.ts";
 import { NodeModelRelayResolver, parseModelRelayRoutePathname } from "./models/relay-routes.ts";
@@ -163,6 +165,7 @@ declare module "fastify" {
     nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
     nodeAgentCloudRelay?: NodeAgentCloudRelayClient;
     nodeAgentListenerManager?: NodeAgentExternalListenerManager;
+    nodeAgentEnsureDefaultWorkspaceInstance?: () => DefaultWorkspaceInstanceInitializationResult;
     nodeAgentRestoreManagedInstances?: () => Promise<void>;
     nodeAgentRecoverManagedInstances?: () => Promise<void>;
     nodeAgentStartRecoverySupervisor?: () => void;
@@ -236,6 +239,8 @@ export type CreateNodeAgentAppOptions = {
   arch?: NodeJS.Architecture;
   /** Test-only built-in project catalog override. Production always reads the shipped bundle. */
   builtinProjectsDir?: string;
+  /** Test-only default workspace path override. Production uses `~/th-workspace`. */
+  defaultWorkspacePath?: string;
   /** Test-only lock-path injection. Production always uses the host-user global lock. */
   localControlledInstanceLockPath?: string;
   resolveRuntimeArtifactRelease?: (version: string, platform: string, arch: string) => Promise<PublishedRuntimeArtifact>;
@@ -817,6 +822,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const platform = options.platform || process.platform;
   const arch = options.arch || process.arch;
   const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform, storyRepository);
+  const defaultWorkspacePath = resolveDefaultWorkspacePath(options.defaultWorkspacePath);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
@@ -1798,6 +1804,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.decorate("nodeAgentRestoreManagedInstances", () => recoverySupervisor.restoreManagedInstances());
+  app.decorate("nodeAgentEnsureDefaultWorkspaceInstance", () => state.ensureDefaultWorkspaceInstance(defaultWorkspacePath));
   app.decorate("nodeAgentRecoverManagedInstances", () => recoverySupervisor.recoverManagedInstances());
   app.decorate("nodeAgentStartRecoverySupervisor", () => recoverySupervisor.start());
   app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
@@ -2255,6 +2262,20 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     };
     const app = await createNodeAgentApp(effectiveOptions);
     startup("application initialized", { ipcPath });
+    try {
+      const initialized = app.nodeAgentEnsureDefaultWorkspaceInstance?.();
+      if (initialized) {
+        startup("default workspace instance ensured", {
+          status: initialized.status,
+          instanceId: initialized.instanceId,
+          workspacePath: initialized.workspacePath,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      startup("default workspace instance initialization failed", { error: message });
+      app.log.warn({ error: message }, "default workspace instance initialization failed");
+    }
     const nodeAgentState = app.nodeAgentState;
     if (!nodeAgentState) {
       throw new Error("Node agent state was not initialized.");

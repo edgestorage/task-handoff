@@ -504,6 +504,14 @@ CREATE INDEX na_cloud_control_plane_trust_audit_request_idx ON na_cloud_control_
 CREATE INDEX na_cloud_control_plane_trust_audit_pin_idx ON na_cloud_control_plane_trust_audit(pin_id, created_at);
 `;
 
+const initializationMarkers = `
+CREATE TABLE na_initialization_markers (
+  key TEXT PRIMARY KEY NOT NULL,
+  instance_id TEXT REFERENCES na_instances(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  created_at TEXT NOT NULL
+);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -525,4 +533,5 @@ export const nodeAgentMigrations = [
   migration("0016_runtime_type_wsl", runtimeTypeWsl, { foreignKeysOff: true }),
   migration("0017_cloud_relay_binding", cloudRelayBinding),
   migration("0018_cloud_control_plane_trust", cloudControlPlaneTrust),
+  migration("0019_initialization_markers", initializationMarkers),
 ] as const;

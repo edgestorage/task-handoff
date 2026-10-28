@@ -39,6 +39,12 @@ function runImmediate<T>(client: DatabaseSync, operation: () => T): T {
   }
 }
 
+export type InitializationMarker = {
+  key: string;
+  instanceId?: string;
+  createdAt: string;
+};
+
 export class NodeIdentityRepository {
   private readonly client: DatabaseSync;
   constructor(client: DatabaseSync) { this.client = client; }
@@ -58,6 +64,27 @@ export class NodeIdentityRepository {
       this.client.prepare("INSERT INTO na_node_identity (singleton_key, node_id, created_at, updated_at) VALUES (1, ?, ?, ?)").run(nodeId, timestamp, timestamp);
     }
     return this.get()!;
+  }
+}
+
+export class InitializationMarkerRepository {
+  private readonly client: DatabaseSync;
+  constructor(client: DatabaseSync) { this.client = client; }
+
+  get(key: string): InitializationMarker | undefined {
+    const row = this.client.prepare("SELECT key, instance_id, created_at FROM na_initialization_markers WHERE key = ?").get(key) as Row | undefined;
+    return row ? {
+      key: String(row.key),
+      ...(row.instance_id ? { instanceId: String(row.instance_id) } : {}),
+      createdAt: String(row.created_at),
+    } : undefined;
+  }
+
+  put(input: InitializationMarker): InitializationMarker {
+    this.client.prepare(`INSERT INTO na_initialization_markers (key, instance_id, created_at)
+      VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING`)
+      .run(input.key, input.instanceId ?? null, input.createdAt);
+    return this.get(input.key)!;
   }
 }
 
@@ -212,6 +239,7 @@ export class InstanceRepository {
 export function createTopologyRepositories(client: DatabaseSync) {
   return {
     nodeIdentity: new NodeIdentityRepository(client),
+    initializationMarkers: new InitializationMarkerRepository(client),
     localFolders: new LocalFolderRepository(client),
     runtimes: new RuntimeRepository(client),
     instances: new InstanceRepository(client),

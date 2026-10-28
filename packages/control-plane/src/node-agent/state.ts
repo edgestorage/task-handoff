@@ -31,7 +31,12 @@ import { createId, createSecret } from "../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 import { createNodeAgentRepository, type NodeAgentRepository } from "./persistence/repository.ts";
 import { openNodeAgentDatabaseSync } from "./persistence/database.ts";
-import type { InstanceRepository, LocalFolderRepository, RuntimeRepository } from "./persistence/topology-repository.ts";
+import type {
+  InstanceRepository,
+  LocalFolderRepository,
+  InitializationMarkerRepository,
+  RuntimeRepository,
+} from "./persistence/topology-repository.ts";
 import {
   CreateLocalFolderSchema,
   UpdateLocalFolderSchema,
@@ -61,10 +66,21 @@ import { nowIso as now } from "@task-handoff/core/core/time";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { resolveGitCredential } from "@task-handoff/protocol/managed-git-credentials";
 import { normalizeWslRuntimeCapabilities } from "@task-handoff/protocol/control-plane";
+import {
+  DEFAULT_WORKSPACE_INSTANCE_INITIALIZATION_KEY,
+  defaultWorkspaceInstanceName,
+  prepareDefaultWorkspace,
+} from "./default-workspace.ts";
 
 const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
 const BUILTIN_WSL_RUNTIME_ID = "runtime_wsl_host";
 const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
+
+export type DefaultWorkspaceInstanceInitializationResult = {
+  status: "created" | "existing-local-runtime" | "already-initialized";
+  workspacePath: string;
+  instanceId?: string;
+};
 
 function userRuntimeLabels(labels: Record<string, string> | undefined) {
   const sanitized = { ...labels };
@@ -181,6 +197,7 @@ export class NodeAgentState {
   readonly nodeId: string;
   readonly paths: NodeAgentStorePaths;
   readonly persistence: NodeAgentRepository;
+  readonly initializationMarkers: InitializationMarkerRepository;
   readonly localFolders: LocalFolderRepository;
   readonly nodeRuntimes: RuntimeRepository;
   readonly controlledInstances: ControlledInstanceCollection;
@@ -203,6 +220,7 @@ export class NodeAgentState {
     const persistence = repository || createNodeAgentRepository(openNodeAgentDatabaseSync(paths));
     this.persistence = persistence;
     persistence.topology.nodeIdentity.ensure(nodeId, now());
+    this.initializationMarkers = persistence.topology.initializationMarkers;
     this.localFolders = persistence.topology.localFolders;
     this.nodeRuntimes = persistence.topology.runtimes;
     this.instancePrivateConfigs = new InstancePrivateConfigStore(paths);
@@ -318,6 +336,76 @@ export class NodeAgentState {
       }
     }
     this.normalizeInstanceRuntimeVersions();
+  }
+
+  /**
+   * Ensures the first default workspace instance exactly once. The durable
+   * initialization row records that seeding was attempted, so deleting the
+   * instance never makes it reappear on a later Node Agent restart.
+   */
+  ensureDefaultWorkspaceInstance(workspacePath: string): DefaultWorkspaceInstanceInitializationResult {
+    const resolvedWorkspacePath = path.resolve(workspacePath);
+    return this.persistence.transactionSync(() => {
+      const initialized = this.initializationMarkers.get(DEFAULT_WORKSPACE_INSTANCE_INITIALIZATION_KEY);
+      if (initialized) {
+        return {
+          status: "already-initialized" as const,
+          workspacePath: resolvedWorkspacePath,
+          ...(initialized.instanceId ? { instanceId: initialized.instanceId } : {}),
+        };
+      }
+
+      const existingLocalInstance = this.listInstances().find((instance) => (
+        this.requireRuntime(instance.runtimeId).type === "local"
+      ));
+      if (existingLocalInstance) {
+        this.initializationMarkers.put({
+          key: DEFAULT_WORKSPACE_INSTANCE_INITIALIZATION_KEY,
+          instanceId: existingLocalInstance.id,
+          createdAt: now(),
+        });
+        return {
+          status: "existing-local-runtime" as const,
+          workspacePath: resolvedWorkspacePath,
+          instanceId: existingLocalInstance.id,
+        };
+      }
+
+      const preparedWorkspacePath = prepareDefaultWorkspace(resolvedWorkspacePath);
+      const existingFolder = this.localFolders.list().find((folder) => path.resolve(folder.path) === preparedWorkspacePath);
+      const folder = existingFolder || this.createLocalFolder({
+        name: path.basename(preparedWorkspacePath) || "th-workspace",
+        path: preparedWorkspacePath,
+        labels: {},
+      });
+      const instance = this.createInstance({
+        runtimeId: BUILTIN_LOCAL_RUNTIME_ID,
+        name: defaultWorkspaceInstanceName(this.node.name),
+        source: {
+          type: "local-folder",
+          localFolderId: folder.id,
+          path: folder.path,
+          ownerNodeId: this.nodeId,
+        },
+        sourceSnapshot: {
+          localFolderId: folder.id,
+          path: folder.path,
+          name: folder.name,
+        },
+        modelSelection: {},
+      });
+      this.applyInstanceLifecycle(instance.id, { type: "start-requested" });
+      this.initializationMarkers.put({
+        key: DEFAULT_WORKSPACE_INSTANCE_INITIALIZATION_KEY,
+        instanceId: instance.id,
+        createdAt: now(),
+      });
+      return {
+        status: "created" as const,
+        workspacePath: preparedWorkspacePath,
+        instanceId: instance.id,
+      };
+    });
   }
 
   private normalizeInstanceRuntimeVersions() {
