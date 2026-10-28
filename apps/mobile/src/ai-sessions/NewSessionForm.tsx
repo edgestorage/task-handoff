@@ -127,7 +127,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
         </TextInputWrapper>
 
         {props.attachments.length ? <View style={styles.attachments}>
-          {props.attachments.map((attachment) => <View key={attachment.id} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
+          {props.attachments.map((attachment) => <View key={attachment.id} style={[styles.attachment, { backgroundColor: colors.surface }]}>
             <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={15} />
             <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size || 0, locale)}` : attachment.name} style={styles.attachmentCopy}>
               <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>

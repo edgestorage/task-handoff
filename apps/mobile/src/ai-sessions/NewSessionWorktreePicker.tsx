@@ -41,7 +41,7 @@ export function NewSessionWorktreePicker(props: {
               <Icon color={colors.textMuted} name="close" size={17} />
             </Pressable>
           </View>
-          <View style={[styles.search, { backgroundColor: colors.surfaceMuted }]}>
+          <View style={[styles.search, { backgroundColor: colors.surface }]}>
             <Icon color={colors.textMuted} name="search" size={15} />
             <TextInput
               autoCapitalize="none"
@@ -58,7 +58,7 @@ export function NewSessionWorktreePicker(props: {
             keyExtractor={(item) => item.id}
             keyboardShouldPersistTaps="handled"
             ListEmptyComponent={<Text style={[styles.empty, { color: colors.textMuted }]}>{t('sessions.noWorktrees')}</Text>}
-            ListFooterComponent={<Pressable accessibilityRole="button" onPress={() => { close(); props.onNewWorktree(); }} style={({ pressed }) => [styles.row, styles.newRow, { borderTopColor: colors.border }, pressed && { backgroundColor: colors.surfaceMuted }]}>
+            ListFooterComponent={<Pressable accessibilityRole="button" onPress={() => { close(); props.onNewWorktree(); }} style={({ pressed }) => [styles.row, styles.newRow, { borderTopColor: colors.border }, pressed && { backgroundColor: colors.surface }]}>
               <Icon color={colors.primary} name="add" size={16} />
               <Text style={[styles.rowLabel, { color: colors.primary }]}>{props.newWorktreeLabel}</Text>
             </Pressable>}
@@ -71,7 +71,7 @@ export function NewSessionWorktreePicker(props: {
                 accessibilityState={{ disabled, selected }}
                 disabled={disabled}
                 onPress={() => { close(); props.onSelect(item.id); }}
-                style={({ pressed }) => [styles.row, disabled && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+                style={({ pressed }) => [styles.row, disabled && styles.disabled, pressed && { backgroundColor: colors.surface }]}
               >
                 <Icon color={colors.text} name="git-branch-outline" size={16} />
                 <View style={styles.rowCopy}>

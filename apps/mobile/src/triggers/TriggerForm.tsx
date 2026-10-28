@@ -133,7 +133,7 @@ export function TriggerForm({ initial = emptyTriggerDraft(), submitLabel, onSubm
             onPress={() => setAdvancedOpen((value) => !value)}
             style={({ pressed }) => [styles.advancedHeader, pressed && styles.pressed]}
           >
-            <View style={[styles.advancedIcon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.primary} name="options-outline" size={18} /></View>
+            <View style={[styles.advancedIcon, { backgroundColor: colors.surface }]}><Icon color={colors.primary} name="options-outline" size={18} /></View>
             <View style={styles.advancedCopy}>
               <Text style={[styles.advancedTitle, { color: colors.text }]}>{t('triggers.form.advanced')}</Text>
               <Text style={[styles.advancedDescription, { color: colors.textMuted }]}>{t('triggers.form.advancedDescription')}</Text>
@@ -228,9 +228,9 @@ function SourceChoice({ active, description, label, last, onPress, type }: { act
       accessibilityRole="radio"
       accessibilityState={{ checked: active }}
       onPress={onPress}
-      style={({ pressed }) => [styles.sourceChoice, pressed && { backgroundColor: colors.surfaceMuted }]}
+      style={({ pressed }) => [styles.sourceChoice, pressed && { backgroundColor: colors.surface }]}
     >
-      <View style={[styles.sourceIcon, { backgroundColor: active ? colors.primarySoft : colors.surfaceMuted }]}><Icon color={active ? colors.primary : colors.textMuted} name={icon} size={19} /></View>
+      <View style={[styles.sourceIcon, { backgroundColor: active ? colors.primarySoft : colors.surface }]}><Icon color={active ? colors.primary : colors.textMuted} name={icon} size={19} /></View>
       <View style={styles.sourceCopy}><Text style={[styles.sourceLabel, { color: active ? colors.primary : colors.text }]}>{label}</Text><Text style={[styles.sourceDescription, { color: colors.textMuted }]}>{description}</Text></View>
       <Icon color={active ? colors.primary : colors.border} name={active ? 'checkmark-circle' : 'ellipse-outline'} size={20} />
     </Pressable>
@@ -242,7 +242,7 @@ function SegmentedChoices({ compact, label, onSelect, options, selected }: { com
   const { colors } = useMobileTheme();
   return <View style={[styles.field, compact && styles.compactChoices]}>
     {label ? <Text style={[styles.label, { color: colors.text }]}>{label}</Text> : null}
-    <View style={[styles.segmented, { backgroundColor: colors.surfaceMuted }]}>
+    <View style={[styles.segmented, { backgroundColor: colors.surface }]}>
       {options.map((option) => <Pressable
         accessibilityLabel={option.label}
         accessibilityRole="radio"

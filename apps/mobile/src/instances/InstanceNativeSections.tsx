@@ -54,7 +54,7 @@ export function InstanceHistory({ items, loading, onOpen, standalone = false }: 
     {!loading && items.map((item, index) => <View key={item.id}>
       {index ? <Separator /> : null}
       <Pressable accessibilityRole="button" onPress={() => onOpen(item)} style={({ pressed }) => [styles.history, pressed && styles.pressed]}>
-        <View style={[styles.historyIcon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.textMuted} name="time-outline" size={18} /></View>
+        <View style={[styles.historyIcon, { backgroundColor: colors.surface }]}><Icon color={colors.textMuted} name="time-outline" size={18} /></View>
         <View style={styles.historyText}><Text numberOfLines={2} style={[styles.historyTitle, { color: colors.text }]}>{item.title || item.userPrompt || t('instance.archivedSession')}</Text><Text style={[styles.meta, { color: colors.textMuted }]}>{item.agent} · {new Date(item.lastActiveAt).toLocaleString(locale)}</Text></View>
         <Icon color={colors.textMuted} name="chevron-forward" size={13} />
       </Pressable>

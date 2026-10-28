@@ -4,7 +4,7 @@ import { useMobileTheme } from './theme';
 
 export function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: IconName; label: string; onPress?: () => void }) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surfaceMuted }, disabled && styles.disabled, pressed && styles.pressed]}>
+  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surface }, disabled && styles.disabled, pressed && styles.pressed]}>
     <Icon color={colors.textMuted} name={icon} size={15} />
     <Text numberOfLines={1} style={[styles.contextLabel, { color: colors.text }]}>{label}</Text>
     <Icon color={colors.textMuted} name="chevron-down" size={11} />

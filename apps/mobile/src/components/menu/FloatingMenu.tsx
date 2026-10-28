@@ -86,7 +86,7 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
 
   if (stack.length) {
     rows.push(separator('back-divider'));
-    rows.push(<Pressable accessibilityRole="button" key="back" onPress={() => setStack((current) => current.slice(0, -1))} style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surfaceMuted }]}>
+    rows.push(<Pressable accessibilityRole="button" key="back" onPress={() => setStack((current) => current.slice(0, -1))} style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surface }]}>
       <View style={styles.iconSlot}><MenuIcon color={colors.primary} name="chevron-back" size={18} /></View>
       <Text numberOfLines={1} style={[styles.menuTitle, styles.rowLabel, { color: colors.text }]}>{page.title || initialPage.title || ''}</Text>
     </Pressable>);
@@ -135,7 +135,7 @@ function renderItem(item: FloatingMenuItem, colors: MobileThemeColors, leading: 
     disabled={item.disabled}
     key={item.key}
     onPress={() => pick(item)}
-    style={({ pressed }) => [styles.row, pressed && !item.disabled && { backgroundColor: colors.surfaceMuted }]}
+    style={({ pressed }) => [styles.row, pressed && !item.disabled && { backgroundColor: colors.surface }]}
   >
     {leading ? <View style={styles.iconSlot}>
       {item.selected

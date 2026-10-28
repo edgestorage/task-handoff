@@ -1025,7 +1025,7 @@ export function SessionWorkspace({
             setRuntimeCandidates([]);
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
-        {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
+        {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
           <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
             <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>

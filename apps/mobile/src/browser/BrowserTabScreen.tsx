@@ -169,7 +169,7 @@ export function BrowserTabScreen({
     {pane ? null : <Stack.Screen options={{ headerLargeTitle: false, title: tab.title || t('browser.browser') }} />}
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.content}>
       <View style={[styles.addressRow, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-        <View style={[styles.addressField, { backgroundColor: colors.surfaceMuted }]}>
+        <View style={[styles.addressField, { backgroundColor: colors.surface }]}>
           <Icon color={colors.textMuted} name="globe-outline" size={16} />
           <TextInput
             accessibilityLabel={t('browser.address')}

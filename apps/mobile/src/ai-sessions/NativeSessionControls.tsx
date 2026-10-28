@@ -42,7 +42,7 @@ export function SessionComposerToolbar(props: ComposerToolbarProps) {
       {(open) => <IconButton disabled={attachmentDisabled} label={t('composer.addAttachment')} name="add-circle-outline" onPress={open} />}
     </FloatingMenuTrigger>
     <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onPermissionModeChange} options={permissionOptions} selectedValue={props.permissionMode} title={t('composer.permissionMode')}>
-      {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={open} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}>
+      {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={open} style={[styles.permission, { backgroundColor: colors.surface }]}>
         <Icon color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} name={permissionIcon(props.permissionMode)} size={15} />
         <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode, t)}</Text>
         <Icon color={colors.textMuted} name="chevron-down" size={10} />

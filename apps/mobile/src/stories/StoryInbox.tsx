@@ -303,7 +303,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: storyMuted ? colors.textMuted : colors.text }]}>{story.title}</Text>
-                {story.archivedAt ? <Text style={[styles.archived, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{t('stories.archived')}</Text> : null}
+                {story.archivedAt ? <Text style={[styles.archived, { backgroundColor: colors.surface, color: colors.textMuted }]}>{t('stories.archived')}</Text> : null}
               </View>
               {preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{nodeLabel(story.ownerNodeId)}</Text> : null}
               {unavailable ? <Text style={[styles.unavailable, { color: colors.noticeText }]}>{t('stories.nodeUnavailable')}</Text> : null}

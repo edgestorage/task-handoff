@@ -1475,6 +1475,7 @@ test('safe markdown renders semantic headings, emphasis, lists, and code', async
   expect(screen.getByTestId('markdown-code-scroll')).toBeTruthy();
   screen.getByText('ts');
   expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-toolbar').parent?.props.style).backgroundColor).toBe(mobileLightColors.surface);
   expect(screen.getByTestId('markdown-table-scroll')).toBeTruthy();
   expect(StyleSheet.flatten(screen.getByText('const').props.style).color).toBe('#cf222e');
   expect(screen.getAllByTestId('markdown-list-item-content').every((item) => StyleSheet.flatten(item.props.style).flex === 0)).toBe(true);

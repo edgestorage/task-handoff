@@ -62,7 +62,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
           </Pressable>
         </View>
         <Text style={[styles.description, { color: colors.textMuted }]}>{props.description}</Text>
-        <View style={[styles.modes, { backgroundColor: colors.surfaceMuted }]}>
+        <View style={[styles.modes, { backgroundColor: colors.surface }]}>
           {(['existing-branch', 'new-branch'] as const).map((candidate) => <Pressable
             accessibilityRole="button"
             accessibilityState={{ selected: mode === candidate }}
@@ -88,7 +88,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
                 selectedValue={branchName}
                 title={t('sessions.branch')}
               >
-                {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surfaceMuted, borderColor: colors.border }]}>
+                {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   <Text numberOfLines={1} style={[styles.inputText, { color: branchName ? colors.text : colors.textMuted }]}>{branchName || t('sessions.selectBranch')}</Text>
                   <Icon color={colors.textMuted} name="chevron-down" size={12} />
                 </Pressable>}
@@ -107,7 +107,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
                 onChangeText={setNewBranchName}
                 placeholder={t('sessions.worktreeBranch')}
                 placeholderTextColor={colors.textMuted}
-                style={[styles.textField, { backgroundColor: colors.surfaceMuted, borderColor: colors.border, color: colors.text }]}
+                style={[styles.textField, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
                 testID="new-worktree-branch-name"
                 value={newBranchName}
               />
@@ -122,7 +122,7 @@ function NewWorktreeDialogBody(props: NewWorktreeDialogProps) {
                 selectedValue={startRef}
                 title={t('sessions.worktreeStartRef')}
               >
-                {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surfaceMuted, borderColor: colors.border }]} testID="new-worktree-start-ref">
+                {(onPress) => <Pressable accessibilityRole="button" disabled={props.busy} onPress={onPress} style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border }]} testID="new-worktree-start-ref">
                   <Text numberOfLines={1} style={[styles.inputText, { color: colors.text }]}>{startRef}</Text>
                   <Icon color={colors.textMuted} name="chevron-down" size={12} />
                 </Pressable>}

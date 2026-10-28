@@ -61,7 +61,7 @@ export function StoryDecisionAnswer({
                 pressed && styles.pressed,
               ]}
             >
-              <View style={[styles.choiceIndex, { backgroundColor: selected ? colors.primary : colors.surfaceMuted }]}>
+              <View style={[styles.choiceIndex, { backgroundColor: selected ? colors.primary : colors.surface }]}>
                 <Text style={[styles.choiceIndexText, { color: selected ? colors.surface : colors.textMuted }]}>{index + 1}</Text>
               </View>
               <Text style={[styles.choiceLabel, { color: colors.text }]}>{option.label}</Text>
@@ -83,7 +83,7 @@ export function StoryDecisionAnswer({
               pressed && styles.pressed,
             ]}
           >
-            <View style={[styles.choiceIndex, { backgroundColor: replySelected ? colors.primary : colors.surfaceMuted }]}>
+            <View style={[styles.choiceIndex, { backgroundColor: replySelected ? colors.primary : colors.surface }]}>
               <Text style={[styles.choiceIndexText, { color: replySelected ? colors.surface : colors.textMuted }]}>{decision.options.length + 1}</Text>
             </View>
             <Text style={[styles.choiceLabel, { color: colors.text }]}>{t('stories.decisionReplyOption')}</Text>
@@ -119,7 +119,7 @@ export function StoryDecisionAnswer({
           accessibilityState={{ disabled: disabled || busy }}
           disabled={disabled || busy}
           onPress={onCancel}
-          style={({ pressed }) => [styles.cancel, { backgroundColor: colors.surfaceMuted }, (disabled || busy) && styles.disabled, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.cancel, { backgroundColor: colors.surface }, (disabled || busy) && styles.disabled, pressed && styles.pressed]}
         >
           <Text style={[styles.cancelText, { color: colors.textMuted }]}>{t('stories.decisionCancel')}</Text>
         </Pressable>

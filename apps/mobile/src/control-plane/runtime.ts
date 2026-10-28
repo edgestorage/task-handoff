@@ -8,6 +8,7 @@ import { mobileAiSessionStore } from '../ai-sessions/store';
 import { mobileDirectoryStore } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { mobileTriggerStore } from '../triggers/store';
+import { clearScopeSelectionPreferences } from '../scope-selection/preferences';
 import type { ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
 import { staleCloudControlPlaneProfiles, type MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
@@ -136,6 +137,7 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   const remaining = await mobileProfileStore.remove(profile);
   mobileAiSessionStore.clearProfile(controlPlaneId);
   mobileDirectoryStore.clearProfile(controlPlaneId);
+  clearScopeSelectionPreferences(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
   await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   return remaining;

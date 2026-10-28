@@ -171,7 +171,7 @@ function AuthDivider({ label }: { label: string }) {
 
 function ProviderButton({ disabled, label, mark, onPress }: { disabled: boolean; label: string; mark: string; onPress: () => void }) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.providerButton, { backgroundColor: colors.surface, borderColor: colors.border }, disabled && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}><Text style={[styles.providerMark, { color: colors.text }]}>{mark}</Text><Text style={[styles.providerLabel, { color: colors.text }]}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.providerButton, { backgroundColor: colors.surface, borderColor: colors.border }, disabled && styles.disabled, pressed && { backgroundColor: colors.surface }]}><Text style={[styles.providerMark, { color: colors.text }]}>{mark}</Text><Text style={[styles.providerLabel, { color: colors.text }]}>{label}</Text></Pressable>;
 }
 
 function cloudErrorCode(error: unknown) { return typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''; }

@@ -121,7 +121,7 @@ export default function IconGalleryScreen() {
                   style={({ pressed }) => [
                     styles.iconOption,
                     {
-                      backgroundColor: active ? colors.surfaceMuted : colors.surface,
+                      backgroundColor: active ? colors.surface : colors.surface,
                       borderColor: active ? colors.primary : colors.border,
                     },
                     pressed && styles.pressed,

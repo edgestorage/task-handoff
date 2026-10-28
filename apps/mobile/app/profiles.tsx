@@ -105,9 +105,9 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                   accessibilityLabel={t('profiles.viewDetails', { name: profile.identity.displayName || t('profiles.defaultName') })}
                   accessibilityRole="button"
                   onPress={() => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId, fingerprint: profile.identity.publicKeyFingerprint, kind: profile.access.kind } })}
-                  style={({ pressed }) => [styles.profileRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+                  style={({ pressed }) => [styles.profileRow, pressed && { backgroundColor: colors.surface }]}
                 >
-                  <View style={[styles.profileIcon, { backgroundColor: colors.surfaceMuted }]}> 
+                  <View style={[styles.profileIcon, { backgroundColor: colors.surface }]}>
                     <Icon color={colors.textMuted} name="server-outline" size={19} />
                   </View>
                   <View style={styles.profileIdentity}>
@@ -125,7 +125,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/control-planes/add')}
-              style={({ pressed }) => [styles.addRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+              style={({ pressed }) => [styles.addRow, pressed && { backgroundColor: colors.surface }]}
             >
               <View style={[styles.addIcon, { backgroundColor: colors.primarySoft }]}> 
                 <Icon color={colors.primary} name="add" size={17} />
@@ -201,7 +201,7 @@ function CloudAccountRow({ cloudAccount, onPress }: { cloudAccount: CloudAccount
       onPress={onPress}
       style={({ pressed }) => [styles.accountRow, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.buttonPressed, loading && styles.accountRowDisabled]}
     >
-      <View style={[styles.accountAvatar, { backgroundColor: colors.surfaceMuted }]}>
+      <View style={[styles.accountAvatar, { backgroundColor: colors.surface }]}>
         {email ? <Text style={[styles.accountInitial, { color: colors.text }]}>{email.slice(0, 1).toUpperCase()}</Text> : <Icon color={colors.textMuted} name="person-outline" size={19} />}
       </View>
       <View style={styles.accountCopy}>
@@ -284,12 +284,12 @@ function DiagnosticLogsRow() {
         />
       </View>
       <View style={[styles.diagnosticsDivider, { backgroundColor: colors.border }]} />
-      <Pressable accessibilityRole="button" onPress={() => { void copyLogs(); }} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surfaceMuted }]}>
+      <Pressable accessibilityRole="button" onPress={() => { void copyLogs(); }} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surface }]}>
         <Icon color={colors.primary} name="copy-outline" size={18} />
         <Text style={[styles.diagnosticsActionText, { color: colors.primary }]}>{t('diagnostics.copyRecent')}</Text>
       </Pressable>
       <View style={[styles.diagnosticsDivider, { backgroundColor: colors.border }]} />
-      <Pressable accessibilityRole="button" onPress={clearLogs} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surfaceMuted }]}>
+      <Pressable accessibilityRole="button" onPress={clearLogs} style={({ pressed }) => [styles.diagnosticsAction, pressed && { backgroundColor: colors.surface }]}>
         <Icon color={colors.error} name="trash-outline" size={18} />
         <Text style={[styles.diagnosticsActionText, { color: colors.error }]}>{t('diagnostics.clear')}</Text>
       </Pressable>

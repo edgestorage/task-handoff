@@ -159,7 +159,7 @@ function CloudAccountSecurityForm({ controller }: { controller: CloudAccountSecu
             accessibilityState={{ disabled: busy }}
             disabled={busy}
             onPress={controller.signOut}
-            style={({ pressed }) => [styles.signOutRow, busy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+            style={({ pressed }) => [styles.signOutRow, busy && styles.disabled, pressed && { backgroundColor: colors.surface }]}
           >
             <Text style={[styles.signOutLabel, { color: colors.error }]}>{t('cloudAccount.signOutAction')}</Text>
           </Pressable>
@@ -200,7 +200,7 @@ function ActionRow({ destructive = false, disabled = false, icon, label, onPress
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && !disabled && { backgroundColor: colors.surfaceMuted }]}
+      style={({ pressed }) => [styles.row, pressed && !disabled && { backgroundColor: colors.surface }]}
     >
       <RowIcon icon={icon} tint={tint}/>
       <Text style={[styles.rowLabel, styles.grow, { color: tint }]}>{label}</Text>

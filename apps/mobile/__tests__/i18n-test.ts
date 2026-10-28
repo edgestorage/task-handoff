@@ -38,7 +38,6 @@ describe('mobile i18n', () => {
     expect(mobileDarkColors.background).toBe('#101012');
     expect(mobileDarkColors.surface).toBe('#17181c');
     expect(mobileDarkColors.border).toBe('#2a2c32');
-    expect(mobileDarkColors.surfaceMuted).toBe('#173038');
     expect(mobileDarkColors.workbenchSelectionBackground).toBe('#23252a');
     expect(mobileDarkColors.workbenchSelectionBorder).toBe('#2a2c32');
     expect(mobileDarkColors.workbenchCardBorder).toBe('#2a2c32');

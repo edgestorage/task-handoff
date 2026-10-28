@@ -1,7 +1,12 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { allNodesVisible, normalizeNodeVisibilityFilter, type NodeVisibilityFilter } from '@task-handoff/control-plane-client';
 
 import { useActiveDirectories } from '../directories/use-directories';
+import {
+  getScopeSelectionPreferences,
+  setStoryNodeFilterSelection,
+  subscribeScopeSelectionPreferences,
+} from '../scope-selection/preferences';
 
 type StoryNodeFilterContextValue = {
   filter: NodeVisibilityFilter;
@@ -17,19 +22,18 @@ const Context = createContext<StoryNodeFilterContextValue>(DEFAULT_VALUE);
 
 export function StoryNodeFilterProvider({ children }: { children: ReactNode }) {
   const { controlPlaneId, state } = useActiveDirectories();
-  const [filters, setFilters] = useState<Record<string, NodeVisibilityFilter>>({});
-  const key = controlPlaneId || '__booting__';
+  const preferences = useSyncExternalStore(
+    subscribeScopeSelectionPreferences,
+    getScopeSelectionPreferences,
+    getScopeSelectionPreferences,
+  );
+  const requested = controlPlaneId
+    ? preferences.storyNodeFilterByControlPlane[controlPlaneId] ?? ALL_NODES
+    : ALL_NODES;
   const availableNodeIds = useMemo(() => state.nodes.map((node) => node.id), [state.nodes]);
-  const filter = normalizeNodeVisibilityFilter(filters[key] ?? ALL_NODES, availableNodeIds);
+  const filter = normalizeNodeVisibilityFilter(requested, availableNodeIds);
   const setFilter = useCallback((next: NodeVisibilityFilter) => {
-    if (!controlPlaneId) return;
-    const normalized = normalizeNodeVisibilityFilter(next, availableNodeIds);
-    setFilters((current) => {
-      const previous = normalizeNodeVisibilityFilter(current[controlPlaneId] ?? ALL_NODES, availableNodeIds);
-      const unchanged = previous.kind === normalized.kind
-        && (previous.kind === 'all' || (normalized.kind === 'selected' && previous.nodeIds.join('\0') === normalized.nodeIds.join('\0')));
-      return unchanged ? current : { ...current, [controlPlaneId]: normalized };
-    });
+    setStoryNodeFilterSelection(controlPlaneId, normalizeNodeVisibilityFilter(next, availableNodeIds));
   }, [availableNodeIds, controlPlaneId]);
   const value = useMemo(() => ({ filter, setFilter }), [filter, setFilter]);
   return <Context.Provider value={value}>{children}</Context.Provider>;

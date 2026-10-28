@@ -4,7 +4,7 @@ import { Appearance, useColorScheme, type ColorSchemeName } from 'react-native';
 import { setApplicationNightMode } from '../../modules/task-handoff-appearance/src';
 
 export const mobileLightColors = {
-  background: '#f8f8fa', surface: '#ffffff', surfaceMuted: '#e9e9ef', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
+  background: '#f8f8fa', surface: '#ffffff', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
   sessionActivityMuted: '#636366', sessionActivityHighlight: '#1c1c1e', statusFilterSelectedBackground: '#ffffff',
   sessionRunningIndicator: 'rgba(0, 0, 0, 0.30)', sessionRunningTrack: 'rgba(0, 0, 0, 0.10)',
   primary: '#007aff', primaryButton: '#007aff', destructiveButton: '#c9342f', primarySoft: '#e5f1ff', notice: '#fff4ce', noticeText: '#7a4b00', error: '#c9342f', errorSoft: '#ffe9e7', code: '#1c1c1e', codeText: '#f2f2f7',
@@ -14,7 +14,7 @@ export const mobileLightColors = {
 } as const;
 
 export const mobileDarkColors = {
-  background: '#101012', surface: '#17181c', surfaceMuted: '#173038', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#2a2c32',
+  background: '#101012', surface: '#17181c', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#2a2c32',
   sessionActivityMuted: '#8fa5ad', sessionActivityHighlight: '#f3fbfc', statusFilterSelectedBackground: '#101012',
   sessionRunningIndicator: 'rgba(255, 255, 255, 0.30)', sessionRunningTrack: 'rgba(255, 255, 255, 0.10)',
   primary: '#0a84ff', primaryButton: '#0a84ff', destructiveButton: '#b3261e', primarySoft: '#0c3158', notice: '#3b2f05', noticeText: '#ffd76a', error: '#ff6961', errorSoft: '#3f1715', code: '#1c1c1e', codeText: '#f2f2f7',

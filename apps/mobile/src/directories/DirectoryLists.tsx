@@ -69,7 +69,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
         <Text numberOfLines={1} style={[styles.nodeStatusText, { color: colors.textMuted }]}>{node ? `${nodeStateLabel(node, t)} · ${connectionModeLabel(node.connectionMode, t)}` : t('directories.nodeUnavailable')}</Text>
       </View>
     ) : null}
-    {nodeId ? <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directories.instances')}</Text><Text style={[styles.sectionCount, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{instances.length}</Text></View> : null}
+    {nodeId ? <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directories.instances')}</Text><Text style={[styles.sectionCount, { backgroundColor: colors.surface, color: colors.textMuted }]}>{instances.length}</Text></View> : null}
     <View accessibilityRole="toolbar" style={styles.filterBar}>
       <ScrollView contentContainerStyle={styles.filterBarContent} horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false}>
         {!nodeId && nodes.length > 1 ? <FilterPill label={t('nav.node')} onChange={setSelectedNode} options={nodeOptions} title={t('nav.node')} value={selectedNode} /> : null}
@@ -183,7 +183,7 @@ function DirectoryCard({ title, subtitle, children, icon, onPress, selected = fa
     borderColor: selected ? colors.workbenchSelectionBorder : colors.workbenchCardBorder,
   }, pressed && styles.cardPressed]}>
     <View style={styles.cardHeader}>
-      <View style={[styles.cardIcon, { backgroundColor: colors.surfaceMuted }]}>
+      <View style={[styles.cardIcon, { backgroundColor: colors.surface }]}>
         <Icon color={colors.textMuted} name={icon === 'node' ? 'server-outline' : 'layers-outline'} size={20} />
       </View>
       <View style={styles.cardHeading}>

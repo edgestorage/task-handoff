@@ -127,7 +127,7 @@ function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabl
     onPress={onPress}
     style={({ pressed }) => [styles.row, width === undefined ? styles.rowBeforeLayout : { width }, disabled && styles.disabled, pressed && styles.pressed]}
   >
-    <View style={[styles.icon, { backgroundColor: colors.surfaceMuted }]}><Icon color={colors.primary} name={icon} size={19} /></View>
+    <View style={[styles.icon, { backgroundColor: colors.surface }]}><Icon color={colors.primary} name={icon} size={19} /></View>
     <View style={styles.rowText}>
       <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
       <Text numberOfLines={1} style={[styles.rowValue, { color: colors.text }]}>{value}</Text>

@@ -78,7 +78,7 @@ export function NewSessionBranchPicker(props: {
               <Icon color={colors.textMuted} name="close" size={17} />
             </Pressable>
           </View>
-          <View style={[styles.search, { backgroundColor: colors.surfaceMuted }]}>
+          <View style={[styles.search, { backgroundColor: colors.surface }]}>
             <Icon color={colors.textMuted} name="search" size={15} />
             <TextInput
               autoCapitalize="none"
@@ -102,7 +102,7 @@ export function NewSessionBranchPicker(props: {
                 accessibilityState={{ disabled }}
                 disabled={disabled}
                 onPress={() => item.kind === 'folder' ? toggleFolder(item.id) : select(item.branch)}
-                style={({ pressed }) => [styles.row, { paddingLeft: 12 + item.depth * 18 }, disabled && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+                style={({ pressed }) => [styles.row, { paddingLeft: 12 + item.depth * 18 }, disabled && styles.disabled, pressed && { backgroundColor: colors.surface }]}
               >
                 <View style={styles.toggleSlot}>
                   {item.kind === 'folder' ? <Icon

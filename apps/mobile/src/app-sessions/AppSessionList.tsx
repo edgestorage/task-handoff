@@ -104,7 +104,7 @@ function AppSessionCard({ entry, locale, onPress, selected }: { entry: Entry; lo
     <Pressable accessibilityRole={onPress ? 'button' : undefined} accessibilityState={{ selected }} disabled={!onPress} onPress={onPress} style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}>
       <View style={styles.heading}>
         <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{title}</Text>
-        <View style={[styles.badge, { backgroundColor: colors.surfaceMuted }]}><View style={[styles.dot, { backgroundColor: statusColor }]} /><Text style={[styles.status, { color: statusColor }]}>{entry.session.status}</Text></View>
+        <View style={[styles.badge, { backgroundColor: colors.surface }]}><View style={[styles.dot, { backgroundColor: statusColor }]} /><Text style={[styles.status, { color: statusColor }]}>{entry.session.status}</Text></View>
       </View>
       <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.session.appId || t('appSessions.unknownApp')} · {entry.instanceName}</Text>
       {entry.session.workspace?.cwd || value ? <View style={styles.footer}>

@@ -9,7 +9,7 @@ export function NativeSessionModePicker({ mode, onChange }: { mode: SessionDetai
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   return (
-    <View accessibilityRole="tablist" style={[styles.picker, { backgroundColor: colors.surfaceMuted }]}> 
+    <View accessibilityRole="tablist" style={[styles.picker, { backgroundColor: colors.surface }]}>
       {(['conversation', 'turn'] as const).map((option) => (
         <Pressable accessibilityRole="tab" accessibilityState={{ selected: mode === option }} key={option} onPress={() => onChange(option)} style={[styles.option, mode === option && { backgroundColor: colors.surface }]}>
           <Text style={[styles.text, { color: mode === option ? colors.text : colors.textMuted }]}>{option === 'conversation' ? t('sessions.conversation') : t('sessions.compact')}</Text>

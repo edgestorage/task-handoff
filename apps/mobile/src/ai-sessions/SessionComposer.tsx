@@ -206,7 +206,7 @@ export function SessionComposer(props: SessionComposerProps) {
                   accessibilityState={{ disabled: props.actionBusy }}
                   disabled={props.actionBusy}
                   onPress={onPress}
-                  style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+                  style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surface }]}
                 >
                   <View style={styles.permissionIconSlot}>
                     <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(effectivePermissionMode)} strokeWidth={1.8} />

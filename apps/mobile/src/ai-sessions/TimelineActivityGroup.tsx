@@ -130,7 +130,7 @@ function TimelineCommandResult({ command, exitCode, output }: { command?: string
     <View style={[styles.commandResultHeader, { borderBottomColor: colors.border }]}>
       <Text style={[styles.commandResultHeaderText, { color: colors.textMuted }]}>{t('sessions.timelineCommandShell')}</Text>
       {failed ? <Text style={[styles.commandResultHeaderText, { color: colors.error }]}>{t('sessions.timelineExitCode', { code: exitCode })}</Text> : null}
-      {content ? <Pressable accessibilityLabel={copied ? t('sessions.codeCopied') : t('sessions.timelineCopyOutput')} accessibilityRole="button" hitSlop={6} onPress={() => void copyOutput()} style={({ pressed }) => [styles.commandResultCopy, pressed && { backgroundColor: colors.surfaceMuted }]}>
+      {content ? <Pressable accessibilityLabel={copied ? t('sessions.codeCopied') : t('sessions.timelineCopyOutput')} accessibilityRole="button" hitSlop={6} onPress={() => void copyOutput()} style={({ pressed }) => [styles.commandResultCopy, pressed && { backgroundColor: colors.surface }]}>
         {copied ? <Check color={colors.textMuted} size={mobileWebMetric(14)} /> : <Copy color={colors.textMuted} size={mobileWebMetric(14)} />}
       </Pressable> : null}
     </View>
