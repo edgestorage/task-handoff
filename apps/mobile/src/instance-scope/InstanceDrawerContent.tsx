@@ -11,12 +11,14 @@ import { useActiveDirectories } from '../directories/use-directories';
 import { instanceStateLabel, nodeDisplayName, nodeStateLabel } from '../directories/presentation';
 import { useI18n } from '../i18n';
 import { useInstanceScope } from './use-instance-scope';
+import { useDismissInstanceDrawerOnAppBackground } from './use-instance-drawer-lifecycle';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useCloudAccountState } from '../control-plane/use-cloud-account-state';
 import { isMobileFeatureEnabled } from '../platform/build-variant';
 import { useStoryNodeFilter } from '../stories/use-story-node-filter';
 
 export function InstanceDrawerContent(props: DrawerContentComponentProps) {
+  useDismissInstanceDrawerOnAppBackground(props.navigation);
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const { controlPlaneOrigin, state } = useActiveDirectories();
