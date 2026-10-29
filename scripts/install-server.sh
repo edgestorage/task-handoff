@@ -117,7 +117,7 @@ select_install_source() {
   NPM_REGISTRY="$NPM_REGISTRY_OVERRIDE"
   if [ -z "$NODE_DIST_URL" ]; then
     if [ "$EFFECTIVE_INSTALL_SOURCE" = "china" ]; then
-      NODE_DIST_URL="https://npmmirror.com/mirrors/node"
+      NODE_DIST_URL="https://mirrors.cloud.tencent.com/nodejs-release"
     else
       NODE_DIST_URL="https://nodejs.org/dist"
     fi
@@ -196,8 +196,12 @@ version_is_at_least() {
 node_is_compatible() {
   command -v node >/dev/null 2>&1 || return 1
   current_node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
-  case "$current_node_version" in
-    24.*) version_is_at_least "$current_node_version" "$MIN_NODE_VERSION" ;;
+  node_version_is_compatible "$current_node_version"
+}
+
+node_version_is_compatible() {
+  case "$1" in
+    24.*) version_is_at_least "$1" "$MIN_NODE_VERSION" ;;
     *) return 1 ;;
   esac
 }
@@ -250,6 +254,11 @@ else
     "$NODE_DIST_URL/latest-v24.x/SHASUMS256.txt" -o "$node_tmp/SHASUMS256.txt"
   node_archive="$(awk -v suffix="linux-$node_arch.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "$node_tmp/SHASUMS256.txt")"
   [ -n "$node_archive" ] || die "could not find the Node.js 24 archive for $node_arch at $NODE_DIST_URL"
+  # A mirror's latest alias can lag behind our minimum; reject it before replacing Node.js.
+  node_archive_version="${node_archive#node-v}"
+  node_archive_version="${node_archive_version%-linux-*}"
+  node_version_is_compatible "$node_archive_version" \
+    || die "$NODE_DIST_URL provides Node.js $node_archive_version; Node.js $MIN_NODE_VERSION or newer within the Node.js 24 release line is required. Choose another mirror with --node-dist-url."
   curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
     "$NODE_DIST_URL/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
   expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
@@ -261,6 +270,82 @@ else
 fi
 node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer is required; found $(node --version 2>/dev/null || echo none)"
 command -v npm >/dev/null 2>&1 || die "npm was not installed with Node.js"
+
+npm_is_usable() {
+  npm ls -g --depth=0 >/dev/null 2>&1
+}
+
+rebuild_npm_runtime() {
+  for command in awk curl mktemp sha256sum tar; do command -v "$command" >/dev/null 2>&1 || die "$command is required"; done
+  [ -n "${node_arch:-}" ] || die "cannot determine the Linux architecture for npm repair"
+
+  node_version="$(node -p 'process.versions.node')"
+  npm_global_root="$(npm root -g 2>/dev/null || true)"
+  [ -n "$npm_global_root" ] && [ -d "$npm_global_root/npm" ] \
+    || die "could not determine npm's global package directory"
+
+  npm_tmp="$(mktemp -d)"
+  npm_archive="node-v${node_version}-linux-${node_arch}.tar.gz"
+  npm_dist_url="$NODE_DIST_URL/v$node_version"
+  curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 \
+    "$npm_dist_url/SHASUMS256.txt" -o "$npm_tmp/SHASUMS256.txt"
+  expected_checksum="$(awk -v archive="$npm_archive" '$2 == archive { print $1; exit }' "$npm_tmp/SHASUMS256.txt")"
+  [ -n "$expected_checksum" ] || die "could not find the Node.js $node_version archive for $node_arch"
+  curl -fsSL --connect-timeout 10 --max-time 600 --retry 2 \
+    "$npm_dist_url/$npm_archive" -o "$npm_tmp/$npm_archive"
+  actual_checksum="$(sha256sum "$npm_tmp/$npm_archive" | awk '{ print $1 }')"
+  [ "$actual_checksum" = "$expected_checksum" ] || die "Node.js archive checksum verification failed during npm repair"
+
+  mkdir -p "$npm_tmp/extracted"
+  tar -xzf "$npm_tmp/$npm_archive" -C "$npm_tmp/extracted" --strip-components=3 \
+    "node-v${node_version}-linux-${node_arch}/lib/node_modules/npm"
+  npm_clean="$npm_tmp/extracted/npm"
+  [ -f "$npm_clean/package.json" ] || die "the Node.js archive did not contain npm"
+
+  npm_backup="$npm_global_root/npm.broken-$(date +%Y%m%d%H%M%S)-$$"
+  echo "Rebuilding npm from Node.js $node_version; previous installation moved to $npm_backup" >&2
+  mv "$npm_global_root/npm" "$npm_backup"
+  if ! cp -a "$npm_clean" "$npm_global_root/npm"; then
+    rm -rf "$npm_global_root/npm"
+    mv "$npm_backup" "$npm_global_root/npm"
+    die "failed to install the clean npm runtime"
+  fi
+  if ! npm --version >/dev/null 2>&1 || ! npm_is_usable; then
+    rm -rf "$npm_global_root/npm"
+    mv "$npm_backup" "$npm_global_root/npm"
+    die "rebuilt npm is still unusable; restored $npm_backup"
+  fi
+  rm -rf "$npm_tmp"
+}
+
+ensure_npm_runtime() {
+  command -v npm >/dev/null 2>&1 || die "npm is required"
+  npm_is_usable && return 0
+
+  npm_probe_output="$(npm ls -g --depth=0 2>&1 >/dev/null || true)"
+  case "$npm_probe_output" in
+    *"Class extends value undefined is not a constructor or null"*) ;;
+    *) return 0 ;;
+  esac
+
+  npm_global_root="$(npm root -g 2>/dev/null || true)"
+  npm_stale_minipass="$npm_global_root/npm/node_modules/minipass-flush/node_modules"
+  if [ -n "$npm_global_root" ] && [ -d "$npm_stale_minipass" ]; then
+    echo "Repairing npm's stale minipass dependency at $npm_stale_minipass" >&2
+    rm -rf "$npm_stale_minipass"
+    npm_is_usable && return 0
+    npm_probe_output="$(npm ls -g --depth=0 2>&1 >/dev/null || true)"
+  fi
+
+  case "$npm_probe_output" in
+    *"Class extends value undefined is not a constructor or null"*) ;;
+    *) return 0 ;;
+  esac
+
+  rebuild_npm_runtime
+}
+
+ensure_npm_runtime
 
 echo "[3/5] Ensuring Docker is available"
 if [ "$INSTALL_DOCKER" = "1" ]; then

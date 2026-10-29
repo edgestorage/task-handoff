@@ -405,3 +405,33 @@ jobs:
           if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
             gh release edit "$GITHUB_REF_NAME" --draft=false
           fi
+
+  sync-npmmirror:
+    name: Sync npmmirror (best effort)
+    needs: [publish, runtime-packages]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The npm registry remains the authoritative source. A mirror delay or outage
+    # must be visible in this job, but must not invalidate an otherwise complete release.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+
+      - name: Trigger and verify npmmirror sync
+        env:
+          RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
+          NPM_DIST_TAG: ${{ needs.runtime-packages.outputs.npm_tag }}
+        shell: bash
+        run: |
+          node scripts/sync-npmmirror.mjs \
+            --version "$RELEASE_VERSION" \
+            --dist-tag "$NPM_DIST_TAG"

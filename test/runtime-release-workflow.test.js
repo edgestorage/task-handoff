@@ -75,6 +75,21 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.doesNotMatch(workflow, /npm dist-tag add .* latest/);
 });
 
+test("runtime releases sync npmmirror as a non-blocking post-publish step", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+  const syncJob = workflow.slice(workflow.indexOf("  sync-npmmirror:"));
+
+  assert.ok(syncJob.length > 0);
+  assert.match(syncJob, /name: Sync npmmirror \(best effort\)/);
+  assert.match(syncJob, /needs: \[publish, runtime-packages\]/);
+  assert.match(syncJob, /if: needs\.publish\.result == 'success'/);
+  assert.match(syncJob, /continue-on-error: true/);
+  assert.match(syncJob, /node scripts\/sync-npmmirror\.mjs/);
+  assert.match(syncJob, /--version "\$RELEASE_VERSION"/);
+  assert.match(syncJob, /--dist-tag "\$NPM_DIST_TAG"/);
+  assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
+});
+
 test("runtime release builds one Linux controlled-instance artifact from supported node-pty prebuilds", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
 

@@ -67,7 +67,7 @@ test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths witho
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
   assert.match(bootstrap, /INSTALL_SOURCE="\$\{TASK_HANDOFF_INSTALL_SOURCE:-auto\}"/);
   assert.match(bootstrap, /https:\/\/nodejs\.org\/dist/);
-  assert.match(bootstrap, /https:\/\/npmmirror\.com\/mirrors\/node/);
+  assert.match(bootstrap, /https:\/\/mirrors\.cloud\.tencent\.com\/nodejs-release/);
   assert.match(bootstrap, /--connect-timeout 10 --max-time 600 --retry 2/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
   assert.doesNotMatch(bootstrap, /g\+\+|gcc-c\+\+|make python3/);
@@ -93,12 +93,12 @@ test("remote node-agent bootstrap installs Node.js portably without a native bui
   assert.match(installer, /apt_get install -y ca-certificates curl xz-utils/);
   assert.match(installer, /dnf install -y ca-certificates curl tar xz/);
   assert.match(installer, /https:\/\/nodejs\.org\/dist/);
-  assert.match(installer, /https:\/\/npmmirror\.com\/mirrors\/node/);
+  assert.match(installer, /https:\/\/mirrors\.cloud\.tencent\.com\/nodejs-release/);
   assert.match(installer, /--connect-timeout 10 --max-time 600 --retry 2/);
   assert.match(installer, /Node\.js archive checksum verification failed/);
   assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
   assert.doesNotMatch(installer, /dpkg --compare-versions/);
-  assert.match(installer, /case "\$current_node_version" in[\s\S]*24\.\*/);
+  assert.match(installer, /case "\$1" in[\s\S]*24\.\*/);
 });
 
 test("the repository installer is the same script served by the Control Plane", async () => {
@@ -109,6 +109,183 @@ test("the repository installer is the same script served by the Control Plane", 
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
   assert.doesNotMatch(workflow, /release\/npm\/artifacts\/install-node-agent\.sh/);
 });
+
+for (const filename of ["install-node-agent.sh", "install-server.sh"]) {
+  const source = fs.readFileSync(path.join(root, "scripts", filename), "utf8");
+  const functions = source.match(/^[a-z_]+\(\) \{\n[\s\S]*?^\}/gm).join("\n");
+
+  test(`${filename} selects Tencent for China and preserves explicit source overrides`, () => {
+    for (const [profile, nodeOverride, npmOverride, expectedNode, expectedNpm] of [
+      ["china", "", "", "https://mirrors.cloud.tencent.com/nodejs-release", "https://registry.npmmirror.com"],
+      ["official", "", "", "https://nodejs.org/dist", ""],
+      ["china", "https://custom.example/node", "https://custom.example/npm", "https://custom.example/node", "https://custom.example/npm"],
+    ]) {
+      const result = spawnSync("/bin/sh", ["-s", "--", profile, nodeOverride, npmOverride], {
+        input: `set -eu\n${functions}\nINSTALL_SOURCE="$1"\nNODE_DIST_URL_OVERRIDE="$2"\nNPM_REGISTRY_OVERRIDE="$3"\nselect_install_source\nprintf '%s\\n' "$NODE_DIST_URL" "$NPM_REGISTRY"\n`,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(result.stdout.trimEnd().split("\n").slice(1), expectedNpm ? [expectedNode, expectedNpm] : [expectedNode]);
+    }
+  });
+
+  test(`${filename} rejects stale or wrong-major manifests before downloading or replacing Node.js`, () => {
+    const start = source.indexOf('  node_tmp="$(mktemp -d)"');
+    const end = source.indexOf("  trap - EXIT HUP INT TERM", start);
+    assert.ok(start >= 0 && end > start);
+    const download = source.slice(start, end);
+    for (const arch of ["x64", "arm64"]) {
+      for (const version of ["24.9.0", "24.14.9", "24.15.0", "24.22.2", "25.0.0"]) {
+        // Run the actual download block with an in-memory manifest. Stop at the archive
+        // request so this regression test cannot install anything on the host.
+        const result = spawnSync("/bin/sh", ["-s", "--", version, arch], {
+          input: `set -eu
+${functions}
+MIN_NODE_VERSION="24.15.0"
+NODE_DIST_URL="https://mirror.example/node"
+fixture_version="$1"
+node_arch="$2"
+curl() {
+  case "$*" in
+    *SHASUMS256.txt*)
+      for output; do :; done
+      printf 'checksum  node-v%s-linux-%s.tar.xz\\n' "$fixture_version" "$node_arch" > "$output"
+      ;;
+    *) echo archive-requested; exit 77 ;;
+  esac
+}
+tar() { echo unexpected-install >&2; exit 78; }
+${download}
+`,
+          encoding: "utf8",
+        });
+        const supported = version === "24.15.0" || version === "24.22.2";
+        assert.equal(result.status, supported ? 77 : 1, `${filename} ${arch} ${version}: ${result.stderr}`);
+        if (supported) {
+          assert.match(result.stdout, /archive-requested/);
+        } else {
+          assert.match(result.stderr, /Choose another mirror with --node-dist-url/);
+          assert.ok(result.stderr.includes(`provides Node.js ${version}`));
+          assert.doesNotMatch(result.stdout, /archive-requested/);
+        }
+        assert.doesNotMatch(result.stderr, /unexpected-install/);
+      }
+    }
+  });
+
+  test(`${filename} repairs npm's stale minipass dependency before installing packages`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-npm-repair-"));
+    const bin = path.join(directory, "bin");
+    const npmRoot = path.join(directory, "lib", "node_modules");
+    const staleMinipass = path.join(npmRoot, "npm", "node_modules", "minipass-flush", "node_modules");
+    fs.mkdirSync(path.join(staleMinipass, "minipass"), { recursive: true });
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "npm"), `#!/bin/sh
+if [ "$1" = "root" ] && [ "$2" = "-g" ]; then
+  printf '%s\\n' '${npmRoot}'
+  exit 0
+fi
+if [ "$1" = "ls" ]; then
+  if [ -d '${staleMinipass}' ]; then
+    echo 'npm error Class extends value undefined is not a constructor or null' >&2
+    exit 1
+  fi
+  exit 0
+fi
+exit 2
+`, { mode: 0o755 });
+
+    const result = spawnSync("/bin/sh", ["-s"], {
+      input: `set -eu\n${functions}\nensure_npm_runtime\nprintf 'npm-ready\\n'\n`,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
+    });
+    try {
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /npm-ready/);
+      assert.match(result.stderr, /Repairing npm's stale minipass dependency/);
+      assert.equal(fs.existsSync(staleMinipass), false);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test(`${filename} rebuilds npm when targeted repair cannot restore it`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-npm-rebuild-"));
+    const bin = path.join(directory, "bin");
+    const npmRoot = path.join(directory, "lib", "node_modules");
+    const brokenNpm = path.join(npmRoot, "npm");
+    fs.mkdirSync(brokenNpm, { recursive: true });
+    fs.writeFileSync(path.join(brokenNpm, "package.json"), '{"name":"npm","broken":true}\n');
+    fs.mkdirSync(bin);
+
+    fs.writeFileSync(path.join(bin, "node"), `#!/bin/sh
+if [ "$1" = "-p" ]; then
+  printf '%s\\n' 24.22.2
+  exit 0
+fi
+exit 2
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "npm"), `#!/bin/sh
+if [ "$1" = "root" ] && [ "$2" = "-g" ]; then
+  printf '%s\\n' '${npmRoot}'
+  exit 0
+fi
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' 11.19.1
+  exit 0
+fi
+if [ "$1" = "ls" ]; then
+  if grep -q '"clean":true' '${brokenNpm}/package.json' 2>/dev/null; then
+    exit 0
+  fi
+  echo 'npm error Class extends value undefined is not a constructor or null' >&2
+  exit 1
+fi
+exit 2
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "curl"), `#!/bin/sh
+for output do :; done
+case "$*" in
+  *SHASUMS256.txt*)
+    printf '%s\\n' 'checksum  node-v24.22.2-linux-x64.tar.gz' > "$output"
+    ;;
+  *)
+    printf '%s\\n' archive > "$output"
+    ;;
+esac
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "sha256sum"), `#!/bin/sh
+printf 'checksum  %s\\n' "$1"
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "tar"), `#!/bin/sh
+target=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "-C" ]; then target="$argument"; fi
+  previous="$argument"
+done
+[ -n "$target" ] || exit 3
+mkdir -p "$target/npm"
+printf '%s\\n' '{"name":"npm","clean":true}' > "$target/npm/package.json"
+`, { mode: 0o755 });
+
+    const result = spawnSync("/bin/sh", ["-s"], {
+      input: `set -eu\n${functions}\nnode_arch=x64\nNODE_DIST_URL=https://mirror.example/node\nensure_npm_runtime\nprintf 'npm-rebuilt\\n'\n`,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
+    });
+    try {
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /npm-rebuilt/);
+      assert.match(result.stderr, /Rebuilding npm from Node\.js 24\.22\.2/);
+      assert.match(fs.readFileSync(path.join(brokenNpm, "package.json"), "utf8"), /"clean":true/);
+      assert.ok(fs.readdirSync(npmRoot).some((entry) => entry.startsWith("npm.broken-")));
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("remote node-agent bootstrap accepts a compatible preinstalled Node without a distro package manager", async () => {
   const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
@@ -140,7 +317,7 @@ test("remote node-agent bootstrap accepts a compatible preinstalled Node without
   });
   try {
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Using china install sources \(Node\.js: https:\/\/npmmirror\.com\/mirrors\/node, npm: https:\/\/registry\.npmmirror\.com\)/);
+    assert.match(result.stdout, /Using china install sources \(Node\.js: https:\/\/mirrors\.cloud\.tencent\.com\/nodejs-release, npm: https:\/\/registry\.npmmirror\.com\)/);
     assert.match(result.stdout, /Using existing Node\.js/);
     assert.doesNotMatch(result.stdout, /package metadata|prerequisites with dnf/);
 
