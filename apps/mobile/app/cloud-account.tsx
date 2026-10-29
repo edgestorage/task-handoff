@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
+import type { OfficialProviderSummary } from '@task-handoff/cloud-contracts/mobile';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
@@ -32,12 +33,8 @@ function CloudAccountContent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [availableProviders, setAvailableProviders] = useState<string[]>([]);
-
-  // Sign in with Apple must be present for any third-party option to be shown at all.
-  const thirdPartyProviders = availableProviders.includes('apple') ? availableProviders.filter((id) => ['apple', 'google', 'github'].includes(id)) : [];
-  const providerLabel = (id: string) => id === 'apple' ? t('cloudAccount.signInApple') : id === 'google' ? 'Google' : id === 'github' ? 'GitHub' : id;
-  const providerMark = (id: string) => id === 'apple' ? '' : id === 'google' ? 'G' : id === 'github' ? '⌘' : '•';
+  const [availableProviders, setAvailableProviders] = useState<OfficialProviderSummary[]>([]);
+  const thirdPartyProviders = availableProviders;
 
   const complete = useCallback(async (url: string) => {
     const parsed = new URL(url);
@@ -62,15 +59,13 @@ function CloudAccountContent() {
 
   useEffect(() => {
     let cancelled = false;
-    // App Store guideline 4.8: third-party sign-in may only be offered next to Sign in with Apple,
-    // so the directory decides what the login screen may show.
     void account.client.publicProviders()
-      .then((providers) => { if (!cancelled) setAvailableProviders(providers.map((provider) => provider.id)); })
+      .then((providers) => { if (!cancelled) setAvailableProviders(providers); })
       .catch(() => { if (!cancelled) setAvailableProviders([]); });
     return () => { cancelled = true; };
   }, []);
 
-  async function authenticate(providerId: 'email' | 'google' | 'github' | 'apple') {
+  async function authenticate(providerId: string) {
     Keyboard.dismiss(); setBusy(true); setError(undefined); setNotice(undefined);
     try {
       const result = await account.beginLogin({
@@ -151,7 +146,7 @@ function CloudAccountContent() {
       {mode === 'login' && thirdPartyProviders.length ? <>
         <AuthDivider label={t('cloudAccount.orContinue')}/>
         <View style={styles.providers}>
-          {thirdPartyProviders.map((providerId) => <ProviderButton key={providerId} disabled={busy} label={providerLabel(providerId)} mark={providerMark(providerId)} onPress={() => void authenticate(providerId as 'apple' | 'google' | 'github')}/>)}
+          {thirdPartyProviders.map((provider) => <ProviderButton key={provider.id} disabled={busy} label={provider.displayName} mark={providerMark(provider)} onPress={() => void authenticate(provider.id)}/>)}
         </View>
       </> : null}
 
@@ -174,6 +169,12 @@ function ProviderButton({ disabled, label, mark, onPress }: { disabled: boolean;
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.providerButton, { backgroundColor: colors.surface, borderColor: colors.border }, disabled && styles.disabled, pressed && { backgroundColor: colors.surface }]}><Text style={[styles.providerMark, { color: colors.text }]}>{mark}</Text><Text style={[styles.providerLabel, { color: colors.text }]}>{label}</Text></Pressable>;
 }
 
+function providerMark(provider: OfficialProviderSummary) {
+  if (provider.id === 'google') return 'G';
+  if (provider.id === 'github') return '⌘';
+  return provider.displayName.trim().charAt(0).toUpperCase() || '•';
+}
+
 function cloudErrorCode(error: unknown) { return typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''; }
 
 const styles = StyleSheet.create({
@@ -183,8 +184,8 @@ const styles = StyleSheet.create({
   input: { flex: 1, fontSize: 16, minHeight: 50, paddingVertical: 0 },
   standaloneInput: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, fontSize: 16, minHeight: 52, paddingHorizontal: 13 },
   passwordHint: { fontSize: 12, lineHeight: 17 },
-  providers: { flexDirection: 'row', gap: 10 },
-  providerButton: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flex: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 48, paddingHorizontal: 12 },
+  providers: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  providerButton: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexBasis: 96, flexGrow: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 48, paddingHorizontal: 12 },
   providerMark: { fontSize: 17, fontWeight: '800' },
   providerLabel: { fontSize: 15, fontWeight: '600' },
   dividerRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },

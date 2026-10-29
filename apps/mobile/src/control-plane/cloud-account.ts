@@ -47,7 +47,7 @@ export class MobileCloudAccountSession {
   register(input: { email: string; password: string; termsVersion: string; acceptTerms: true }) { return this.client.register(input); }
   verifyEmail(input: { email: string; code: string } | { capability: string }) { return this.client.verifyEmail(input); }
 
-  async beginLogin(input: { providerId: 'email' | 'google' | 'github' | 'apple'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
+  async beginLogin(input: { providerId: string; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
     if (input.providerId === 'email' && !input.totpCode && !input.recoveryCode) this.pendingEmailSecondFactor = undefined;
     try {
       return await this.authorize(input);
@@ -86,7 +86,7 @@ export class MobileCloudAccountSession {
     }
   }
 
-  private async authorize(input: { providerId: 'email' | 'google' | 'github' | 'apple'; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
+  private async authorize(input: { providerId: string; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
     const state = randomUrlSafe(24); const verifier = randomUrlSafe(48);
     const challenge = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, { encoding: Crypto.CryptoEncoding.BASE64 });
     this.prunePending(); this.pending.set(state, { verifier, createdAt: Date.now() });

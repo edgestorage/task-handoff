@@ -83,23 +83,15 @@ The `Mobile Release` workflow runs every Expo, Gradle, and Xcode step with `TASK
 - Android waits at the protected `android-production` environment, generates the native project, builds a signed release APK with Gradle, verifies its signature and embedded production manifest, and attaches it as `TaskHandoff-<version>-android.apk` to the tag's GitHub Release.
 - iOS waits at the protected `ios-production` environment. After approval, a GitHub-hosted macOS runner generates the native project, imports the Apple Distribution certificate and both provisioning profiles into temporary signing stores, archives and exports the IPA with Xcode, verifies the IPA's version, build number, extensions, and embedded production manifest, and uploads it to App Store Connect.
 
-## App Store review: Sign in with Apple
+## Cloud account providers
 
-Sign in with Apple is required by App Store Review Guideline 4.8 because the cloud account screen
-offers Google and GitHub sign-in. The login screen therefore only renders third-party providers when
-the server's public provider directory lists `apple`; if the directory omits it (feature flag off, or
-the lookup failed), Google and GitHub are hidden and only email/password sign-in remains.
+Email/password sign-in is always available. The mobile login screen renders every provider returned
+by the cloud platform's public provider directory (`GET /api/v1/auth/providers`), in server order,
+using the directory's `displayName`. The client does not filter or add providers; enabling or
+disabling Google, GitHub, Apple or another provider is entirely a server configuration decision.
 
-Before submitting a build that shows the Apple button, confirm:
-
-1. The cloud platform has `FEATURE_OFFICIAL_APPLE_SIGN_IN=true` and a valid
-   `coordinator/providers/apple` credential, so `GET /api/v1/auth/providers` returns `apple`.
-2. The Apple Developer portal has a Services ID whose redirect URL is
-   `https://cloud.thandoff.com/api/v1/auth/providers/apple/callback`.
-3. The App Store privacy answers and review notes mention that Apple sign-in data (stable identifier,
-   optional verified or private-relay email, display name) is used to identify the account.
-
-The one-time Apple Developer setup above covers certificates and provisioning only; the Services ID,
-key and team identifier are configured in the cloud platform, not in this repository.
+The one-time Apple Developer setup above covers iOS signing only. If the server directory enables a
+third-party login method, confirm the App Store distribution path satisfies Review Guideline 4.8
+before submission.
 
 The iOS upload appears in App Store Connect/TestFlight after Apple finishes processing it. App metadata, screenshots, privacy answers, age rating, pricing, export compliance, review notes, phased release, and the final `Submit for Review` action remain controlled in App Store Connect. Android is not submitted to Google Play by this workflow.
