@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DateTimeStringSchema, NonEmptyTrimmedTextSchema, TrimmedTextSchema } from "./internal/text-schemas.ts";
 import {
   AI_SESSION_HISTORY_DEFAULT_LIMIT,
   AI_SESSION_HISTORY_MAX_LIMIT,
@@ -44,16 +45,16 @@ export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", "2026-09-24", "2026-09-29", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
-const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
+const AiSessionCapabilityAgentSchema = NonEmptyTrimmedTextSchema.max(120);
 
 export const CodexModelVerbositySchema = z.enum(["low", "medium", "high"]);
 export const CodexPersonalitySchema = z.enum(["none", "friendly", "pragmatic"]);
 export const CodexSubagentModelSchema = z.object({
-  modelEntityId: z.string().trim().min(1).max(120),
-  modelName: z.string().trim().min(1).max(240),
+  modelEntityId: NonEmptyTrimmedTextSchema.max(120),
+  modelName: NonEmptyTrimmedTextSchema.max(240),
   // Stable model identity; see AiSessionModelSelectionSchema. Optional so
   // settings written before the identity split still parse.
-  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
+  modelUpstreamName: NonEmptyTrimmedTextSchema.max(240).optional(),
 }).strict();
 export const CodexInstanceSettingsSchema = z.object({
   modelVerbosity: CodexModelVerbositySchema.optional(),
@@ -261,7 +262,7 @@ export const ControlledInstanceCapabilitiesSchema = z.object({
 }).passthrough();
 
 export const UpdateControlledInstanceNodeAgentConnectionSchema = z.object({
-  nodeAgentUrl: z.string().trim().url().max(2_048).refine((value) => {
+  nodeAgentUrl: TrimmedTextSchema.url().max(2_048).refine((value) => {
     const parsed = new URL(value);
     return /^https?:$/.test(parsed.protocol)
       && !parsed.username
@@ -327,8 +328,11 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "aiSessionSendIdempotency",
     "aiSessionQueuePause",
   ] as const) {
-    const parsed = z.boolean().safeParse(features[feature]);
-    if (parsed.success) normalizedFeatures[feature] = parsed.data;
+    // Capability queries run on heartbeats and fleet reads. A boolean has no
+    // coercion or refinements here; avoid allocating a schema (and validation
+    // errors for absent N-1 fields) on every query. The document is parsed below.
+    const value = features[feature];
+    if (typeof value === "boolean") normalizedFeatures[feature] = value;
   }
   const timeline = AiSessionTimelineCapabilitiesSchema.safeParse(features.aiSessionTimeline);
   if (timeline.success) normalizedFeatures.aiSessionTimeline = timeline.data;
@@ -510,8 +514,8 @@ export function supportsAiSessionTimelineCapability(
   return aiSessionTimelineCapabilityAgents(capabilities, capability).includes(agent);
 }
 
-const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
-const TimestampSchema = z.string().datetime();
+const IdSchema = NonEmptyTrimmedTextSchema.max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
+const TimestampSchema = DateTimeStringSchema;
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
 
@@ -605,7 +609,7 @@ export function parseDockerImageReference(input: string) {
   };
 }
 
-export const DockerImageReferenceSchema = z.string().trim().min(1).max(512).transform((value, context) => {
+export const DockerImageReferenceSchema = NonEmptyTrimmedTextSchema.max(512).transform((value, context) => {
   try {
     return normalizeDockerImageReference(value);
   } catch (error) {
@@ -614,7 +618,7 @@ export const DockerImageReferenceSchema = z.string().trim().min(1).max(512).tran
   }
 });
 
-export const DockerImageDigestSchema = z.string().trim().transform((value, context) => {
+export const DockerImageDigestSchema = TrimmedTextSchema.transform((value, context) => {
   const match = DockerDigestPattern.exec(value);
   if (!match) {
     context.addIssue({ code: "custom", message: "Docker image digest must use sha256 followed by 64 hexadecimal characters." });
@@ -639,7 +643,7 @@ export const ModelSelectionSchema = z
 
 export const ImageSelectionSchema = z.object({
   imageId: IdSchema,
-  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  tag: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern).optional(),
 }).strict();
 
 export const EnvironmentSourceSchema = z.discriminatedUnion("type", [
@@ -658,8 +662,8 @@ export const FinalComputerPlatformSchema = z.enum(["linux", "darwin", "win32", "
 export const FinalComputerArchSchema = z.enum(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64", "unknown"]);
 
 export const EnvironmentTemplateErrorSchema = z.object({
-  code: z.string().trim().min(1).max(120),
-  message: z.string().trim().min(1).max(2048),
+  code: NonEmptyTrimmedTextSchema.max(120),
+  message: NonEmptyTrimmedTextSchema.max(2048),
   phase: z.enum(["validate", "commit", "inspect", "security-check", "persist", "delete", "recovery"]).optional(),
 }).strict();
 
@@ -667,7 +671,7 @@ export const EnvironmentTemplateOriginSchema = z.object({
   templateId: IdSchema,
   nodeId: IdSchema,
   imageId: DockerImageDigestSchema,
-  name: z.string().trim().min(1).max(160),
+  name: NonEmptyTrimmedTextSchema.max(160),
   platform: FinalComputerPlatformSchema,
   architecture: FinalComputerArchSchema,
 }).strict();
@@ -680,12 +684,12 @@ export const InstanceDeleteInputSchema = z.object({
 
 export const InstanceVolumeDispositionSchema = z.object({
   role: InstanceVolumeRoleSchema,
-  name: z.string().trim().min(1).max(255),
-  mountPath: z.string().trim().startsWith("/").max(4096),
+  name: NonEmptyTrimmedTextSchema.max(255),
+  mountPath: TrimmedTextSchema.startsWith("/").max(4096),
   status: z.enum(["deleted", "retained", "missing", "failed"]),
   error: z.object({
-    code: z.string().trim().min(1).max(120),
-    message: z.string().trim().min(1).max(2048),
+    code: NonEmptyTrimmedTextSchema.max(120),
+    message: NonEmptyTrimmedTextSchema.max(2048),
   }).strict().optional(),
 }).strict();
 
@@ -745,7 +749,7 @@ export function sanitizeStoredNodeLocalFolder(input: unknown) {
 export const InstanceAppInventoryItemSchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(120),
+    name: NonEmptyTrimmedTextSchema.max(120),
     kind: z.enum(["tty", "gui", "web"]),
     source: z.enum(["builtin", "custom"]),
     availability: z.enum(["available", "missing-dependency"]),
@@ -764,7 +768,7 @@ export const InstanceAppInventoryItemSchema = z
 export const InstanceAppInventoryIssueSchema = z
   .object({
     code: z.enum(["APP_CATALOG_INVALID"]),
-    message: z.string().trim().min(1).max(500),
+    message: NonEmptyTrimmedTextSchema.max(500),
   })
   .strict();
 
@@ -778,11 +782,11 @@ export const InstanceAppInventorySchema = z
 
 export const EnvironmentTemplateSchema = z.object({
   id: IdSchema,
-  name: z.string().trim().min(1).max(160),
+  name: NonEmptyTrimmedTextSchema.max(160),
   sourceInstanceId: IdSchema,
   nodeId: IdSchema,
   imageId: DockerImageDigestSchema.optional(),
-  internalTag: z.string().trim().min(1).max(512).optional(),
+  internalTag: NonEmptyTrimmedTextSchema.max(512).optional(),
   platform: FinalComputerPlatformSchema.optional(),
   architecture: FinalComputerArchSchema.optional(),
   sizeBytes: z.number().int().nonnegative().optional(),
@@ -843,27 +847,27 @@ export const ManagedAppStateSchema = z.enum(["installed", "not-installed", "brok
 export const ManagedAppManagementSourceSchema = z.enum(["recipe", "bundled", "external", "none"]);
 export const ManagedAppActionReasonSchema = z.object({
   code: z.enum(["BUNDLED", "EXTERNALLY_MANAGED", "ALREADY_INSTALLED", "NOT_INSTALLED", "UNSUPPORTED_PLATFORM", "INSTALLER_UNAVAILABLE", "INSTALLER_NOT_WRITABLE", "INSUFFICIENT_PRIVILEGE", "OPERATION_IN_PROGRESS"]),
-  message: z.string().trim().min(1).max(500),
+  message: NonEmptyTrimmedTextSchema.max(500),
 }).strict();
 export const ManagedAppUpdateStatusSchema = z.enum(["update-available", "up-to-date", "unknown", "unsupported"]);
 // Read-only result of the most recent manual update check. Omitted until the
 // user checks and by instances that predate the update-check capability.
 export const ManagedAppUpdateStateSchema = z.object({
   status: ManagedAppUpdateStatusSchema,
-  installedVersion: z.string().trim().max(120).optional(),
-  latestVersion: z.string().trim().max(120).optional(),
+  installedVersion: TrimmedTextSchema.max(120).optional(),
+  latestVersion: TrimmedTextSchema.max(120).optional(),
   checkedAt: TimestampSchema,
-  reason: z.string().trim().max(500).optional(),
+  reason: TrimmedTextSchema.max(500).optional(),
 }).strict();
 export const ManagedAppUpdateCheckSchema = ManagedAppUpdateStateSchema.extend({ appId: IdSchema }).strict();
 export const ManagedAppProjectionSchema = z.object({
   id: IdSchema,
-  name: z.string().trim().min(1).max(120),
+  name: NonEmptyTrimmedTextSchema.max(120),
   kind: z.enum(["tty", "gui", "web"]),
-  description: z.string().trim().max(500).optional(),
+  description: TrimmedTextSchema.max(500).optional(),
   state: ManagedAppStateSchema,
   managementSource: ManagedAppManagementSourceSchema,
-  version: z.string().trim().max(120).optional(),
+  version: TrimmedTextSchema.max(120).optional(),
   canInstall: z.boolean(),
   canUninstall: z.boolean(),
   // Optional for N-1 compatibility: instances that predate app updates omit these
@@ -881,18 +885,18 @@ export const AppManagementJobStateSchema = z.enum(["queued", "running", "succeed
 export const AppManagementProgressSchema = z.object({
   current: z.number().finite().nonnegative().optional(),
   total: z.number().finite().positive().optional(),
-  unit: z.string().trim().min(1).max(40).optional(),
+  unit: NonEmptyTrimmedTextSchema.max(40).optional(),
 }).strict().refine((value) => value.total === undefined || value.current === undefined || value.current <= value.total, {
   message: "Progress current must not exceed total.",
   path: ["current"],
 });
 export const AppManagementCommandSchema = z.object({
-  executable: z.string().trim().min(1).max(4096),
+  executable: NonEmptyTrimmedTextSchema.max(4096),
   args: z.array(z.string().max(4096)).max(128),
 }).strict();
 export const AppManagementErrorSchema = z.object({
-  code: z.string().trim().min(1).max(120).regex(/^[a-z0-9][a-z0-9._-]*$/),
-  message: z.string().trim().min(1).max(4096),
+  code: NonEmptyTrimmedTextSchema.max(120).regex(/^[a-z0-9][a-z0-9._-]*$/),
+  message: NonEmptyTrimmedTextSchema.max(4096),
   retryable: z.boolean(),
   sessionIds: z.array(IdSchema).max(64).optional(),
 }).strict();
@@ -902,7 +906,7 @@ export const AppManagementJobSchema = z.object({
   appId: IdSchema,
   operation: AppManagementOperationSchema,
   state: AppManagementJobStateSchema,
-  phase: z.string().trim().min(1).max(120).optional(),
+  phase: NonEmptyTrimmedTextSchema.max(120).optional(),
   progress: AppManagementProgressSchema.optional(),
   command: AppManagementCommandSchema.optional(),
   logTail: z.string().max(32768).optional(),
@@ -945,14 +949,14 @@ export const AppManagementEventSchema = z.object({
 export const BuildInfoSchema = z
   .object({
     component: z.enum(["control-plane", "node-agent", "controlled-instance"]),
-    packageName: z.string().trim().max(160).optional(),
-    packageVersion: z.string().trim().max(80).optional(),
+    packageName: TrimmedTextSchema.max(160).optional(),
+    packageVersion: TrimmedTextSchema.max(80).optional(),
     protocolVersion: ProtocolVersionSchema.optional(),
-    buildId: z.string().trim().max(160).optional(),
-    builtAt: z.string().trim().max(120).optional(),
-    gitCommit: z.string().trim().max(120).optional(),
-    imageRef: z.string().trim().max(512).optional(),
-    imageDigest: z.string().trim().max(240).optional(),
+    buildId: TrimmedTextSchema.max(160).optional(),
+    builtAt: TrimmedTextSchema.max(120).optional(),
+    gitCommit: TrimmedTextSchema.max(120).optional(),
+    imageRef: TrimmedTextSchema.max(512).optional(),
+    imageDigest: TrimmedTextSchema.max(240).optional(),
   })
   .strict();
 
@@ -963,7 +967,7 @@ export const ControlPlaneHealthResponseSchema = z.object({
     protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.extend({
       component: z.literal("control-plane"),
-      packageVersion: z.string().trim().min(1).max(80),
+      packageVersion: NonEmptyTrimmedTextSchema.max(80),
     }).loose(),
     serverTime: TimestampSchema,
   }).loose(),
@@ -972,12 +976,12 @@ export const ControlPlaneHealthResponseSchema = z.object({
 export const UpdateChannelSchema = z.enum(["stable", "beta", "alpha"]);
 export const RuntimeArtifactIdentitySchema = z.object({
   packageName: z.literal("@task-handoff/controlled-instance"),
-  version: z.string().trim().min(1).max(80),
-  platform: z.string().trim().min(1).max(40),
-  arch: z.string().trim().min(1).max(40),
+  version: NonEmptyTrimmedTextSchema.max(80),
+  platform: NonEmptyTrimmedTextSchema.max(40),
+  arch: NonEmptyTrimmedTextSchema.max(40),
   formatVersion: z.number().int().positive(),
   launcherAbi: z.number().int().positive(),
-  entrypoint: z.string().trim().min(1).max(512),
+  entrypoint: NonEmptyTrimmedTextSchema.max(512),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export const RuntimeConvergenceErrorSchema = z.object({
@@ -993,14 +997,14 @@ export const RuntimeConvergenceErrorSchema = z.object({
     "NODE_UPDATE_FAILED",
     "LEGACY_INSTANCE_UPDATE_RETIRED",
   ]),
-  message: z.string().trim().min(1).max(4096),
-  expectedVersion: z.string().trim().min(1).max(80).optional(),
-  actualVersion: z.string().trim().min(1).max(80).optional(),
+  message: NonEmptyTrimmedTextSchema.max(4096),
+  expectedVersion: NonEmptyTrimmedTextSchema.max(80).optional(),
+  actualVersion: NonEmptyTrimmedTextSchema.max(80).optional(),
   retryable: z.boolean().default(false),
 }).strict();
 export const RuntimeVersionStateSchema = z.object({
-  desiredVersion: z.string().trim().min(1).max(80),
-  actualVersion: z.string().trim().min(1).max(80).optional(),
+  desiredVersion: NonEmptyTrimmedTextSchema.max(80),
+  actualVersion: NonEmptyTrimmedTextSchema.max(80).optional(),
   phase: z.enum(["pending", "draining", "installing", "restarting", "verifying", "matched", "failed"]),
   attempt: z.number().int().nonnegative().default(0),
   lastAttemptAt: TimestampSchema.optional(),
@@ -1020,8 +1024,8 @@ export const NodeRolloutSummarySchema = z.object({
   // Compatibility for v0.0.32: instance rollout phases and counters remain
   // readable, but current server update jobs do not own instance convergence.
   phase: z.enum(["queued", "updating-node", "restarting-node", "converging-instances", "succeeded", "degraded", "failed"]),
-  desiredVersion: z.string().trim().min(1).max(80),
-  nodeVersion: z.string().trim().min(1).max(80).optional(),
+  desiredVersion: NonEmptyTrimmedTextSchema.max(80),
+  nodeVersion: NonEmptyTrimmedTextSchema.max(80).optional(),
   expectedInstanceIds: z.array(IdSchema).max(1024).default([]),
   expectedInstanceCount: z.number().int().nonnegative(),
   matchedInstanceCount: z.number().int().nonnegative(),
@@ -1035,25 +1039,25 @@ export const UpdateCheckRequestSchema = z.object({
 export const UpdateCheckResultSchema = z.object({
   source: z.literal("npm"),
   channel: UpdateChannelSchema,
-  currentVersion: z.string().trim().max(240).optional(),
-  availableVersion: z.string().trim().min(1).max(240),
-  artifactRef: z.string().trim().min(1).max(512).optional(),
+  currentVersion: TrimmedTextSchema.max(240).optional(),
+  availableVersion: NonEmptyTrimmedTextSchema.max(240),
+  artifactRef: NonEmptyTrimmedTextSchema.max(512).optional(),
   runtimeArtifacts: z.array(RuntimeArtifactIdentitySchema).default([]),
   impact: NodeUpdateImpactSchema,
   updateAvailable: z.boolean(),
   supported: z.boolean().default(true),
-  reason: z.string().trim().max(2048).optional(),
+  reason: TrimmedTextSchema.max(2048).optional(),
   checkedAt: TimestampSchema,
-  preflightToken: z.string().trim().min(16).max(240).optional(),
+  preflightToken: TrimmedTextSchema.min(16).max(240).optional(),
 }).strict();
 export const UpdateJobSchema = z.object({
   id: IdSchema,
   nodeId: IdSchema,
   source: z.literal("npm"),
   channel: UpdateChannelSchema,
-  fromVersion: z.string().trim().max(240).optional(),
-  toVersion: z.string().trim().min(1).max(240),
-  artifactRef: z.string().trim().min(1).max(512).optional(),
+  fromVersion: TrimmedTextSchema.max(240).optional(),
+  toVersion: NonEmptyTrimmedTextSchema.max(240),
+  artifactRef: NonEmptyTrimmedTextSchema.max(512).optional(),
   runtimeArtifacts: z.array(RuntimeArtifactIdentitySchema).default([]),
   impact: NodeUpdateImpactSchema,
   rollout: NodeRolloutSummarySchema,
@@ -1066,18 +1070,18 @@ export const UpdateJobSchema = z.object({
 }).strict();
 export const ApplyUpdateRequestSchema = z.object({
   channel: UpdateChannelSchema,
-  targetVersion: z.string().trim().min(1).max(240),
-  preflightToken: z.string().trim().min(16).max(240),
+  targetVersion: NonEmptyTrimmedTextSchema.max(240),
+  preflightToken: TrimmedTextSchema.min(16).max(240),
 }).strict();
 
 const GitNamedRefSchema = z.object({
   type: z.enum(["branch", "tag"]),
-  name: z.string().trim().min(1).max(240),
+  name: NonEmptyTrimmedTextSchema.max(240),
 }).strict();
 
 const GitCommitRefSchema = z.object({
   type: z.literal("commit"),
-  commit: z.string().trim().regex(/^[0-9a-fA-F]{4,64}$/, "commit must be a hexadecimal Git object id"),
+  commit: TrimmedTextSchema.regex(/^[0-9a-fA-F]{4,64}$/, "commit must be a hexadecimal Git object id"),
 }).strict();
 
 export const GitRefSchema = z.discriminatedUnion("type", [GitNamedRefSchema, GitCommitRefSchema]);
@@ -1088,7 +1092,7 @@ export const GitAuthSchema = z
     // Compatibility for v0.0.21: preserve the existing field on read. Current
     // Repository producers use it as a managed credential reference; it never
     // carries secret material or directly grants an instance assignment.
-    secretId: z.string().trim().min(1).max(120).optional(),
+    secretId: NonEmptyTrimmedTextSchema.max(120).optional(),
   })
   .strict();
 
@@ -1097,7 +1101,7 @@ export const GitCloneOptionsSchema = z
     depth: z.number().int().positive().max(100000).optional(),
     submodules: z.boolean().default(false),
     lfs: z.boolean().default(false),
-    subdirectory: z.string().trim().max(240).refine(
+    subdirectory: TrimmedTextSchema.max(240).refine(
       (value) => !value.startsWith("/") && !value.split("/").some((segment) => segment === ".."),
       "subdirectory must be a relative path within the repository",
     ).transform((value) => value.split("/").filter((segment) => segment && segment !== ".").join("/")).default(""),
@@ -1107,9 +1111,9 @@ export const GitCloneOptionsSchema = z
 export const GitRepositorySchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(160),
-    url: z.string().trim().min(1).max(2048),
-    provider: z.string().trim().max(80).optional(),
+    name: NonEmptyTrimmedTextSchema.max(160),
+    url: NonEmptyTrimmedTextSchema.max(2048),
+    provider: TrimmedTextSchema.max(80).optional(),
     ref: GitRefSchema.default({ type: "branch", name: "main" }),
     auth: GitAuthSchema.default({ type: "none" }),
     clone: GitCloneOptionsSchema.default({ submodules: false, lfs: false, subdirectory: "" }),
@@ -1138,16 +1142,16 @@ export const NodeLocalFolderOriginSchema = z.enum(["user", "builtin"]);
  * `name` stays the canonical fallback for every locale that has no entry.
  */
 export const NodeLocalFolderLocalizedNamesSchema = z.record(
-  z.string().trim().min(2).max(35),
-  z.string().trim().min(1).max(160),
+  TrimmedTextSchema.min(2).max(35),
+  NonEmptyTrimmedTextSchema.max(160),
 );
 
 export const NodeLocalFolderSchema = z
   .object({
     id: IdSchema,
     nodeId: IdSchema,
-    name: z.string().trim().min(1).max(160),
-    path: z.string().trim().min(1).max(4096),
+    name: NonEmptyTrimmedTextSchema.max(160),
+    path: NonEmptyTrimmedTextSchema.max(4096),
     // Additive, node-agent-derived field. Readers strip unknown keys, so older
     // control planes keep working against a newer node agent and simply treat the
     // folder as operator-owned.
@@ -1168,8 +1172,8 @@ export const ProjectSourceSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("git-repository"),
       repositoryId: IdSchema.optional(),
-      url: z.string().trim().min(1).max(2048),
-      provider: z.string().trim().max(80).optional(),
+      url: NonEmptyTrimmedTextSchema.max(2048),
+      provider: TrimmedTextSchema.max(80).optional(),
       ref: GitRefSchema.default({ type: "branch", name: "main" }),
       auth: GitAuthSchema.default({ type: "none" }),
       clone: GitCloneOptionsSchema.default({ submodules: false, lfs: false, subdirectory: "" }),
@@ -1178,8 +1182,8 @@ export const ProjectSourceSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("git-template"),
-      url: z.string().trim().min(1).max(2048),
-      templateId: z.string().trim().min(1).max(120).optional(),
+      url: NonEmptyTrimmedTextSchema.max(2048),
+      templateId: NonEmptyTrimmedTextSchema.max(120).optional(),
       ref: GitRefSchema.default({ type: "branch", name: "main" }),
       auth: GitAuthSchema.default({ type: "none" }),
       clone: GitCloneOptionsSchema.default({ submodules: false, lfs: false, subdirectory: "" }),
@@ -1189,7 +1193,7 @@ export const ProjectSourceSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("local-folder"),
       localFolderId: IdSchema.optional(),
-      path: z.string().trim().min(1).max(4096),
+      path: NonEmptyTrimmedTextSchema.max(4096),
       ownerNodeId: IdSchema.optional(),
     })
     .strict(),
@@ -1213,8 +1217,8 @@ export const projectSourceWithoutLegacyGitSecretId = projectSourceWithoutGitCred
 export const WorkspacePolicySchema = z
   .object({
     mode: z.enum(["local-bind", "git-clone", "empty-volume", "persistent-volume"]),
-    path: z.string().trim().min(1).max(4096).default("/workspace"),
-    volumeName: z.string().trim().max(240).optional(),
+    path: NonEmptyTrimmedTextSchema.max(4096).default("/workspace"),
+    volumeName: TrimmedTextSchema.max(240).optional(),
     readOnly: z.boolean().default(false),
   })
   .strict();
@@ -1228,11 +1232,11 @@ export function defaultModelProtocols(app: ModelApp): ModelProtocol[] {
 }
 
 export const ModelNameEntrySchema = z.object({
-  name: z.string().trim().min(1).max(240),
+  name: NonEmptyTrimmedTextSchema.max(240),
   // Current writers include the upstream model name only when it differs from
   // the external name; readers normalize a missing value to `name`. The field
   // is additive, so v0.0.34 records stay readable without migration.
-  upstreamName: z.string().trim().min(1).max(240).optional(),
+  upstreamName: NonEmptyTrimmedTextSchema.max(240).optional(),
   order: z.number().int().min(0).max(1_000_000).default(0),
 }).strict();
 export type ModelNameEntry = z.infer<typeof ModelNameEntrySchema>;
@@ -1263,8 +1267,8 @@ export const ModelNameEntriesSchema = z.array(ModelNameEntrySchema).max(256).def
  * adding a mapping never changes how an already-resolvable name resolves.
  */
 export const ModelRequestMappingSchema = z.object({
-  name: z.string().trim().min(1).max(240),
-  upstreamName: z.string().trim().min(1).max(240),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  upstreamName: NonEmptyTrimmedTextSchema.max(240),
   order: z.number().int().min(0).max(1_000_000).default(0),
 }).strict();
 export type ModelRequestMapping = z.infer<typeof ModelRequestMappingSchema>;
@@ -1306,7 +1310,7 @@ export type ModelRequestMappingPreset = (typeof MODEL_REQUEST_MAPPING_PRESETS)[n
 export const ProjectSchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(160),
+    name: NonEmptyTrimmedTextSchema.max(160),
     source: ProjectSourceSchema,
     defaultImageSelection: ImageSelectionSchema.optional(),
     defaultNodeId: IdSchema.optional(),
@@ -1320,10 +1324,10 @@ export const ProjectSchema = z
 export const ModelConfigSchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(160),
-    endpoint: z.string().trim().min(1).max(2048),
-    key: z.string().trim().min(1).max(4096),
-    model: z.string().trim().min(1).max(240),
+    name: NonEmptyTrimmedTextSchema.max(160),
+    endpoint: NonEmptyTrimmedTextSchema.max(2048),
+    key: NonEmptyTrimmedTextSchema.max(4096),
+    model: NonEmptyTrimmedTextSchema.max(240),
     // Ordered names served by this endpoint; legacy records are normalized from `model`.
     modelNames: ModelNameEntriesSchema,
     // Relay-only request name rewrites; never projected into the exposed model
@@ -1344,12 +1348,12 @@ export const ModelConfigSchema = z
 export const NodeModelConfigSchema = ModelConfigSchema;
 
 export const PublicModelConfigSchema = ModelConfigSchema.omit({ key: true }).extend({
-  keyPreview: z.string().trim().min(1).max(160),
+  keyPreview: NonEmptyTrimmedTextSchema.max(160),
   keySet: z.boolean(),
   // Content revision of the stored record. Optional so that N-1 node-agents
   // and historical public snapshots stay readable; consumers treat a missing
   // revision as "unknown" instead of assuming the entity is in sync.
-  revision: z.string().trim().min(1).max(160).optional(),
+  revision: NonEmptyTrimmedTextSchema.max(160).optional(),
 }).strict();
 
 export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
@@ -1379,7 +1383,7 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     name: ModelConfigSchema.shape.name,
     enabled: ModelConfigSchema.shape.enabled,
     order: ModelConfigSchema.shape.order,
-    revision: z.string().trim().min(1).max(160).optional(),
+    revision: NonEmptyTrimmedTextSchema.max(160).optional(),
   }).strict(),
   z.object({
     type: z.literal("node"),
@@ -1388,7 +1392,7 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     enabled: ModelConfigSchema.shape.enabled,
     order: ModelConfigSchema.shape.order,
     referenceCount: z.number().int().min(0),
-    revision: z.string().trim().min(1).max(160).optional(),
+    revision: NonEmptyTrimmedTextSchema.max(160).optional(),
   }).strict(),
 ]);
 
@@ -1401,8 +1405,8 @@ export const FederatedModelGroupSchema = z.object({
 
 export const ModelRegistryNodeDiagnosticSchema = z.object({
   nodeId: IdSchema,
-  code: z.string().trim().min(1).max(120),
-  message: z.string().trim().min(1).max(2000),
+  code: NonEmptyTrimmedTextSchema.max(120),
+  message: NonEmptyTrimmedTextSchema.max(2000),
 }).strict();
 
 export const FederatedModelRegistrySchema = z.object({
@@ -1430,8 +1434,8 @@ export const ModelLocationSyncStateSchema = z.enum(["synced", "pending", "unsupp
 export const ModelLocationSyncResultSchema = z.object({
   nodeId: IdSchema,
   state: ModelLocationSyncStateSchema,
-  code: z.string().trim().min(1).max(120).optional(),
-  message: z.string().trim().min(1).max(2000).optional(),
+  code: NonEmptyTrimmedTextSchema.max(120).optional(),
+  message: NonEmptyTrimmedTextSchema.max(2000).optional(),
 }).strict();
 
 export const ModelMutationResultSchema = z.object({
@@ -1450,8 +1454,8 @@ export const ModelMergeLocationResultSchema = z.object({
   nodeId: IdSchema,
   merged: z.boolean(),
   reassignedInstances: z.array(IdSchema).default([]),
-  code: z.string().trim().min(1).max(120).optional(),
-  message: z.string().trim().min(1).max(2000).optional(),
+  code: NonEmptyTrimmedTextSchema.max(120).optional(),
+  message: NonEmptyTrimmedTextSchema.max(2000).optional(),
 }).strict();
 
 export const ModelMergeResultSchema = z.object({
@@ -1715,11 +1719,11 @@ export const MarketLifecycleStatusSchema = z.enum(["active", "deprecated", "yank
 export const ImageCoverSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("builtin"),
-    key: z.string().trim().min(1).max(120),
+    key: NonEmptyTrimmedTextSchema.max(120),
   }).strict(),
   z.object({
     kind: z.literal("remote"),
-    url: z.string().trim().url().max(2048),
+    url: TrimmedTextSchema.url().max(2048),
     mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional(),
     digest: DockerImageDigestSchema.optional(),
   }).strict(),
@@ -1727,24 +1731,24 @@ export const ImageCoverSchema = z.discriminatedUnion("kind", [
 
 export const DEFAULT_IMAGE_COVER = { kind: "builtin", key: "default-image-cover" } as const;
 
-const ImageCapabilitiesSchema = z.array(z.string().trim().min(1).max(80)).default([]);
-const ImageOptionalAppsSchema = z.array(z.string().trim().min(1).max(120)).default([]);
+const ImageCapabilitiesSchema = z.array(NonEmptyTrimmedTextSchema.max(80)).default([]);
+const ImageOptionalAppsSchema = z.array(NonEmptyTrimmedTextSchema.max(120)).default([]);
 const LocalizedImageDescriptionsSchema = z.record(
-  z.string().trim().min(2).max(35),
-  z.string().trim().min(1).max(4096),
+  TrimmedTextSchema.min(2).max(35),
+  NonEmptyTrimmedTextSchema.max(4096),
 );
 
 export const MarketImagePlatformArtifactSchema = z.object({
-  os: z.string().trim().min(1).max(40),
-  architecture: z.string().trim().min(1).max(40),
+  os: NonEmptyTrimmedTextSchema.max(40),
+  architecture: NonEmptyTrimmedTextSchema.max(40),
   digest: DockerImageDigestSchema.optional(),
   downloadSizeBytes: z.number().int().positive().optional(),
   unpackedSizeBytes: z.number().int().positive().optional(),
 }).strict();
 
 export const MarketImageTagSchema = z.object({
-  name: z.string().trim().min(1).max(128).regex(DockerTagPattern),
-  version: z.string().trim().min(1).max(160).optional(),
+  name: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern),
+  version: NonEmptyTrimmedTextSchema.max(160).optional(),
   reference: DockerImageReferenceSchema,
   manifestDigest: DockerImageDigestSchema.optional(),
   publishedAt: TimestampSchema.optional(),
@@ -1754,14 +1758,14 @@ export const MarketImageTagSchema = z.object({
 
 export const MarketImageSchema = z.object({
   id: IdSchema,
-  publisher: z.string().trim().min(1).max(160),
-  slug: z.string().trim().min(1).max(160),
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().min(1).max(4096),
+  publisher: NonEmptyTrimmedTextSchema.max(160),
+  slug: NonEmptyTrimmedTextSchema.max(160),
+  name: NonEmptyTrimmedTextSchema.max(160),
+  description: NonEmptyTrimmedTextSchema.max(4096),
   localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
   cover: ImageCoverSchema.optional(),
-  repository: z.string().trim().min(1).max(512),
-  defaultTag: z.string().trim().min(1).max(128).regex(DockerTagPattern),
+  repository: NonEmptyTrimmedTextSchema.max(512),
+  defaultTag: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern),
   tags: z.array(MarketImageTagSchema).min(1),
   capabilities: ImageCapabilitiesSchema,
   optionalApps: ImageOptionalAppsSchema,
@@ -1777,7 +1781,7 @@ export const MarketImageSchema = z.object({
 export const MarketCatalogSnapshotSchema = z.object({
   protocolVersion: ProtocolVersionSchema,
   catalogId: IdSchema,
-  revision: z.string().trim().min(1).max(240),
+  revision: NonEmptyTrimmedTextSchema.max(240),
   source: z.enum(["embedded", "remote", "cache"]),
   generatedAt: TimestampSchema,
   expiresAt: TimestampSchema.optional(),
@@ -1787,9 +1791,9 @@ export const MarketCatalogSnapshotSchema = z.object({
 export const MarketCatalogStatusSchema = z.object({
   source: z.enum(["embedded", "remote", "cache"]),
   state: z.enum(["ready", "refreshing", "stale", "failed"]),
-  revision: z.string().trim().min(1).max(240),
+  revision: NonEmptyTrimmedTextSchema.max(240),
   updatedAt: TimestampSchema,
-  error: z.string().trim().max(4096).optional(),
+  error: TrimmedTextSchema.max(4096).optional(),
 }).strict();
 
 export function sanitizeStoredMarketCatalogSnapshot(
@@ -1821,13 +1825,13 @@ export function sanitizeStoredMarketCatalogSnapshot(
 export const CustomImageProfileSchema = z.object({
   id: IdSchema,
   origin: z.literal("custom"),
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(4096).optional(),
+  name: NonEmptyTrimmedTextSchema.max(160),
+  description: TrimmedTextSchema.max(4096).optional(),
   localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
   cover: ImageCoverSchema.optional(),
   reference: DockerImageReferenceSchema,
-  repository: z.string().trim().min(1).max(512),
-  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  repository: NonEmptyTrimmedTextSchema.max(512),
+  tag: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern).optional(),
   pullPolicy: z.literal("if-not-present").default("if-not-present"),
   capabilities: ImageCapabilitiesSchema,
   optionalApps: ImageOptionalAppsSchema,
@@ -1841,8 +1845,8 @@ export const CustomImageProfileSchema = z.object({
 export const ImageProfileSchema = CustomImageProfileSchema;
 
 export const SelectableImageTagSchema = z.object({
-  name: z.string().trim().min(1).max(128).regex(DockerTagPattern),
-  version: z.string().trim().min(1).max(160).optional(),
+  name: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern),
+  version: NonEmptyTrimmedTextSchema.max(160).optional(),
   reference: DockerImageReferenceSchema,
   manifestDigest: DockerImageDigestSchema.optional(),
   status: MarketLifecycleStatusSchema,
@@ -1851,12 +1855,12 @@ export const SelectableImageTagSchema = z.object({
 export const SelectableImageSchema = z.object({
   id: IdSchema,
   origin: ImageOriginSchema,
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(4096).optional(),
+  name: NonEmptyTrimmedTextSchema.max(160),
+  description: TrimmedTextSchema.max(4096).optional(),
   localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
   cover: ImageCoverSchema,
-  repository: z.string().trim().min(1).max(512),
-  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  repository: NonEmptyTrimmedTextSchema.max(512),
+  tag: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern).optional(),
   availableTags: z.array(SelectableImageTagSchema),
   reference: DockerImageReferenceSchema,
   digest: DockerImageDigestSchema.optional(),
@@ -1870,21 +1874,21 @@ export const SelectableImageSchema = z.object({
   lifecycleStatus: MarketLifecycleStatusSchema.optional(),
   market: z.object({
     catalogId: IdSchema,
-    catalogRevision: z.string().trim().min(1).max(240),
-    publisher: z.string().trim().min(1).max(160),
-    version: z.string().trim().min(1).max(160).optional(),
+    catalogRevision: NonEmptyTrimmedTextSchema.max(240),
+    publisher: NonEmptyTrimmedTextSchema.max(160),
+    version: NonEmptyTrimmedTextSchema.max(160).optional(),
   }).strict().optional(),
 }).strict();
 
 export const InstanceImageSnapshotSchema = z.object({
   id: IdSchema,
   origin: ImageOriginSchema,
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(4096).optional(),
+  name: NonEmptyTrimmedTextSchema.max(160),
+  description: TrimmedTextSchema.max(4096).optional(),
   localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
   cover: ImageCoverSchema.optional(),
-  repository: z.string().trim().min(1).max(512),
-  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  repository: NonEmptyTrimmedTextSchema.max(512),
+  tag: NonEmptyTrimmedTextSchema.max(128).regex(DockerTagPattern).optional(),
   requestedReference: DockerImageReferenceSchema,
   resolvedDigest: DockerImageDigestSchema.optional(),
   resolvedReference: DockerImageReferenceSchema.optional(),
@@ -1896,9 +1900,9 @@ export const InstanceImageSnapshotSchema = z.object({
   labels: LabelsSchema,
   market: z.object({
     catalogId: IdSchema,
-    catalogRevision: z.string().trim().min(1).max(240),
-    publisher: z.string().trim().min(1).max(160),
-    version: z.string().trim().min(1).max(160).optional(),
+    catalogRevision: NonEmptyTrimmedTextSchema.max(240),
+    publisher: NonEmptyTrimmedTextSchema.max(160),
+    version: NonEmptyTrimmedTextSchema.max(160).optional(),
   }).strict().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
@@ -1908,7 +1912,7 @@ export const ImageProvisioningSchema = z.object({
   phase: z.enum(["checking-image", "pulling-image", "resolving-image", "ready", "failed"]),
   requestedReference: DockerImageReferenceSchema,
   generation: z.number().int().nonnegative().default(0),
-  error: z.string().trim().max(4096).optional(),
+  error: TrimmedTextSchema.max(4096).optional(),
   startedAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict();
@@ -1951,7 +1955,7 @@ export const ImagePullProgressSchema = ImagePullEventIdentitySchema.extend({
     total: z.number().finite().positive(),
   }).strict().optional(),
   percent: z.number().finite().min(0).max(100).optional(),
-  message: z.string().trim().min(1).max(500),
+  message: NonEmptyTrimmedTextSchema.max(500),
   terminalTail: z.string().max(262144).optional(),
   terminalTruncated: z.boolean().optional(),
 }).strict();
@@ -1973,9 +1977,9 @@ export const GitWorkspaceProvisioningPhaseSchema = z.enum([
 
 export const GitWorkspaceProvisioningStatusSchema = z.object({
   phase: GitWorkspaceProvisioningPhaseSchema,
-  remoteUrl: z.string().trim().min(1).max(2048),
+  remoteUrl: NonEmptyTrimmedTextSchema.max(2048),
   generation: z.number().int().nonnegative().default(0),
-  error: z.string().trim().max(4096).optional(),
+  error: TrimmedTextSchema.max(4096).optional(),
   startedAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict();
@@ -1990,7 +1994,7 @@ export const GitProvisioningTerminalEventType = {
 const GitProvisioningEventIdentitySchema = z.object({
   instanceId: IdSchema,
   generation: z.number().int().nonnegative(),
-  remoteUrl: z.string().trim().min(1).max(2048),
+  remoteUrl: NonEmptyTrimmedTextSchema.max(2048),
   sequence: z.number().int().nonnegative(),
   observedAt: TimestampSchema,
 }).strict();
@@ -2015,7 +2019,7 @@ export const GitProvisioningProgressSchema = GitProvisioningEventIdentitySchema.
     total: z.number().finite().positive(),
   }).strict().optional(),
   percent: z.number().finite().min(0).max(100).optional(),
-  message: z.string().trim().min(1).max(500),
+  message: NonEmptyTrimmedTextSchema.max(500),
   terminalTail: z.string().max(262144).optional(),
   terminalTruncated: z.boolean().optional(),
 }).strict();
@@ -2129,7 +2133,7 @@ export const NodeConnectionPathSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("cloud-relay"),
     /** Account-level node handle; the Control Plane never stores an address for this node. */
-    nodeHandle: z.string().trim().min(8).max(160).regex(/^[a-z][a-z0-9_-]*$/),
+    nodeHandle: TrimmedTextSchema.min(8).max(160).regex(/^[a-z][a-z0-9_-]*$/),
   }).strict(),
 ]);
 
@@ -2168,7 +2172,7 @@ export const NodeControlPlaneProxyStateSchema = z.object({
   reachability: z.enum(["unknown", "reachable", "unreachable"]),
   bindingStatus: z.enum(["unknown", "active", "revoked"]),
   bindingRevision: z.number().int().positive().optional(),
-  streamId: z.string().trim().min(1).max(160).optional(),
+  streamId: NonEmptyTrimmedTextSchema.max(160).optional(),
   revision: z.number().int().nonnegative().optional(),
   observedAt: TimestampSchema.optional(),
   target: ProxyTargetStateSchema.optional(),
@@ -2194,7 +2198,7 @@ export const CLOUD_RELAY_CLAIM_DISABLED_LABEL = "cloudRelayClaimDisabled";
 export const NodeSchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(160),
+    name: NonEmptyTrimmedTextSchema.max(160),
     connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy", "cloud-relay"]).default("direct-http"),
     connectionPath: NodeConnectionPathSchema.default({ kind: "direct" }),
     connectionEnabled: z.boolean().default(true),
@@ -2202,12 +2206,12 @@ export const NodeSchema = z
       .object({
         mode: z.enum(["local-static-key", "paired-hmac", "proxy-binding"]).default("local-static-key"),
         keyId: IdSchema.optional(),
-        secret: z.string().trim().max(4096).optional(),
+        secret: TrimmedTextSchema.max(4096).optional(),
         pairedAt: TimestampSchema.optional(),
         pairing: z
           .object({
             status: z.enum(["pending", "paired", "expired"]).default("pending"),
-            joinToken: z.string().trim().max(4096).optional(),
+            joinToken: TrimmedTextSchema.max(4096).optional(),
             expiresAt: TimestampSchema.optional(),
           })
           .strict()
@@ -2215,10 +2219,10 @@ export const NodeSchema = z
       })
       .strict()
       .default({ mode: "local-static-key" }),
-    endpoint: z.string().trim().max(2048).optional(),
-    controlEndpoint: z.string().trim().max(2048).optional(),
-    containerEndpoint: z.string().trim().max(2048).optional(),
-    publicWebBase: z.string().trim().max(2048).optional(),
+    endpoint: TrimmedTextSchema.max(2048).optional(),
+    controlEndpoint: TrimmedTextSchema.max(2048).optional(),
+    containerEndpoint: TrimmedTextSchema.max(2048).optional(),
+    publicWebBase: TrimmedTextSchema.max(2048).optional(),
     status: z.enum(["unknown", "online", "offline", "degraded"]).default("unknown"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
@@ -2333,7 +2337,7 @@ export const NodeRuntimeSchema = z
   .object({
     id: IdSchema,
     nodeId: IdSchema,
-    name: z.string().trim().min(1).max(160),
+    name: NonEmptyTrimmedTextSchema.max(160),
     type: NodeRuntimeTypeSchema,
     status: z.enum(["unknown", "online", "offline", "degraded"]).default("unknown"),
     accessStrategy: z.enum(["node-proxy", "direct-port", "kubernetes-ingress", "kubernetes-port-forward"]).default("node-proxy"),
@@ -2383,7 +2387,7 @@ export const NodeRuntimeWslCapabilitiesSchema = z.object({
     git: z.boolean().default(false),
     localFolder: z.boolean().default(false),
   }).strip().default({ git: false, localFolder: false }),
-  baseProfiles: z.array(z.string().trim().min(1).max(120)).max(8).default([]),
+  baseProfiles: z.array(NonEmptyTrimmedTextSchema.max(120)).max(8).default([]),
 }).strip();
 
 export type NodeRuntimeWslCapabilities = z.infer<typeof NodeRuntimeWslCapabilitiesSchema>;
@@ -2414,7 +2418,7 @@ export const InstanceResourceMetricsSchema = z.object({
     writeBytes: z.number().nonnegative(),
   }).strict().optional(),
   pids: z.number().int().nonnegative().optional(),
-  error: z.string().trim().max(2048).optional(),
+  error: TrimmedTextSchema.max(2048).optional(),
 }).strict();
 
 export const InstanceResourceMetricsEventType = {
@@ -2443,7 +2447,7 @@ export const NodeAgentHealthSchema = z
     // Additive health field: absent on node-agents before v0.0.38. The control
     // plane uses it only as the node's default display name when no name was
     // entered; a stored name (typed or renamed) always wins over it.
-    hostname: z.string().trim().min(1).max(255).optional(),
+    hostname: NonEmptyTrimmedTextSchema.max(255).optional(),
     platform: FinalComputerPlatformSchema.optional(),
     arch: FinalComputerArchSchema.optional(),
     protocolVersion: ProtocolVersionSchema.optional(),
@@ -2451,10 +2455,10 @@ export const NodeAgentHealthSchema = z
     build: BuildInfoSchema.strip().optional(),
     process: z.object({
       pid: z.number().int().positive(),
-      startIdentity: z.string().trim().min(1).optional(),
+      startIdentity: NonEmptyTrimmedTextSchema.optional(),
     }).strip().optional(),
     listener: z.object({
-      host: z.string().trim().min(1),
+      host: NonEmptyTrimmedTextSchema,
       port: z.number().int().min(1).max(65535),
     }).strip().optional(),
     instanceProxy: z.object({
@@ -2484,7 +2488,7 @@ export const NodeAgentExternalListenerSchema = NodeAgentExternalListenerConfigSc
   host: z.enum(["127.0.0.1", "0.0.0.0"]),
   status: z.enum(["listening", "error"]),
   source: z.enum(["bootstrap", "persisted"]),
-  error: z.string().trim().max(2048).optional(),
+  error: TrimmedTextSchema.max(2048).optional(),
 }).strict();
 
 export const UpdateNodeAgentExternalListenerSchema = NodeAgentExternalListenerConfigSchema;
@@ -2584,7 +2588,7 @@ export function parseNodeAgentModelRelaySettings(input: unknown) {
 export const NodeAgentPairingInviteResponseSchema = z
   .object({
     nodeId: IdSchema,
-    joinToken: z.string().trim().min(1),
+    joinToken: NonEmptyTrimmedTextSchema,
     expiresAt: TimestampSchema,
   })
   .passthrough();
@@ -2600,7 +2604,7 @@ export const NodeAgentControlPlanePairingSchema = z
   .object({
     id: IdSchema,
     keyId: IdSchema,
-    name: z.string().trim().min(1).max(160).optional(),
+    name: NonEmptyTrimmedTextSchema.max(160).optional(),
     pairedAt: TimestampSchema,
     updatedAt: TimestampSchema,
     current: z.boolean(),
@@ -2617,8 +2621,8 @@ export const NodeAgentControlPlaneConnectionSchema = z
   .object({
     id: IdSchema,
     pairingKeyId: IdSchema,
-    url: z.string().trim().min(1).max(2048),
-    name: z.string().trim().min(1).max(160).optional(),
+    url: NonEmptyTrimmedTextSchema.max(2048),
+    name: NonEmptyTrimmedTextSchema.max(160).optional(),
     enabled: z.boolean(),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -2642,8 +2646,8 @@ export const NodeAgentControlPlaneConnectionCreateResultSchema = z
       .object({
         id: IdSchema,
         pairingKeyId: IdSchema,
-        url: z.string().trim().min(1).max(2048),
-        name: z.string().trim().min(1).max(160).optional(),
+        url: NonEmptyTrimmedTextSchema.max(2048),
+        name: NonEmptyTrimmedTextSchema.max(160).optional(),
         enabled: z.boolean(),
         createdAt: TimestampSchema,
         updatedAt: TimestampSchema,
@@ -2652,7 +2656,7 @@ export const NodeAgentControlPlaneConnectionCreateResultSchema = z
     tunnel: z
       .object({
         status: z.enum(["disabled", "saved", "connecting", "connected", "failed"]),
-        error: z.string().trim().max(2048).optional(),
+        error: TrimmedTextSchema.max(2048).optional(),
       })
       .passthrough(),
   })
@@ -2673,16 +2677,16 @@ export const NodeAgentCloudRelayBindRequestSchema = z
   .object({
     // Optional for nodes built with the official cloud discovery record. The
     // explicit form remains accepted for older Control Planes and ad-hoc tests.
-    cloudOrigin: z.string().trim().url().max(2048).optional(),
-    bindingToken: z.string().trim().min(1).max(4096),
-    displayName: z.string().trim().min(1).max(160).optional(),
+    cloudOrigin: TrimmedTextSchema.url().max(2048).optional(),
+    bindingToken: NonEmptyTrimmedTextSchema.max(4096),
+    displayName: NonEmptyTrimmedTextSchema.max(160).optional(),
   })
   .strict();
 
 export const NodeAgentCloudRelayErrorSchema = z
   .object({
-    code: z.string().trim().min(1).max(160),
-    message: z.string().trim().max(2048),
+    code: NonEmptyTrimmedTextSchema.max(160),
+    message: TrimmedTextSchema.max(2048),
     at: TimestampSchema,
     retryable: z.boolean().optional(),
   })
@@ -2691,12 +2695,12 @@ export const NodeAgentCloudRelayErrorSchema = z
 export const NodeAgentCloudRelayChannelSchema = z
   .object({
     controlPlaneId: IdSchema,
-    name: z.string().trim().min(1).max(160).optional(),
+    name: NonEmptyTrimmedTextSchema.max(160).optional(),
     status: z.enum(["connecting", "connected", "reconnecting", "failed"]),
     connectedAt: TimestampSchema.optional(),
     lastDisconnectedAt: TimestampSchema.optional(),
     nextRetryAt: TimestampSchema.optional(),
-    error: z.string().trim().max(2048).optional(),
+    error: TrimmedTextSchema.max(2048).optional(),
   })
   .passthrough();
 
@@ -2706,9 +2710,9 @@ export const NodeAgentCloudRelayStatusSchema = z
     // True while the account binding exists but its credential was refused:
     // the node keeps its local identity and asks for a fresh binding command.
     rebindRequired: z.boolean().optional(),
-    nodeHandle: z.string().trim().min(1).max(160).optional(),
+    nodeHandle: NonEmptyTrimmedTextSchema.max(160).optional(),
     accountId: IdSchema.optional(),
-    cloudOrigin: z.string().trim().min(1).max(2048).optional(),
+    cloudOrigin: NonEmptyTrimmedTextSchema.max(2048).optional(),
     boundAt: TimestampSchema.optional(),
     credentialExpiresAt: TimestampSchema.optional(),
     channels: z.array(NodeAgentCloudRelayChannelSchema),
@@ -2719,21 +2723,21 @@ export const NodeAgentCloudRelayStatusSchema = z
 export const NodeAgentCloudRelayUnbindResultSchema = z
   .object({
     unbound: z.boolean(),
-    nodeHandle: z.string().trim().min(1).max(160).optional(),
+    nodeHandle: NonEmptyTrimmedTextSchema.max(160).optional(),
     cloudUnbind: z.enum(["confirmed", "unavailable", "not-bound"]).optional(),
   })
   .passthrough();
 
 export const LocalDockerImageSchema = z
   .object({
-    repository: z.string().trim().optional(),
-    tag: z.string().trim().optional(),
-    id: z.string().trim(),
-    createdSince: z.string().trim().optional(),
-    size: z.string().trim().optional(),
+    repository: TrimmedTextSchema.optional(),
+    tag: TrimmedTextSchema.optional(),
+    id: TrimmedTextSchema,
+    createdSince: TrimmedTextSchema.optional(),
+    size: TrimmedTextSchema.optional(),
     sizeBytes: z.number().int().nonnegative().optional(),
-    reference: z.string().trim().min(1),
-    repoDigests: z.array(z.string().trim().min(1).max(512)).default([]),
+    reference: NonEmptyTrimmedTextSchema,
+    repoDigests: z.array(NonEmptyTrimmedTextSchema.max(512)).default([]),
   })
   .passthrough();
 
@@ -2744,7 +2748,7 @@ export const NodeImageAvailabilitySchema = z.object({
   localSizeBytes: z.number().int().nonnegative().optional(),
   downloadSizeBytes: z.number().int().positive().optional(),
   unpackedSizeBytes: z.number().int().positive().optional(),
-  error: z.string().trim().max(2048).optional(),
+  error: TrimmedTextSchema.max(2048).optional(),
 }).strict();
 
 export type NodeFolderTreeEntry = {
@@ -2755,16 +2759,16 @@ export type NodeFolderTreeEntry = {
 
 export const NodeFolderTreeEntrySchema: z.ZodType<NodeFolderTreeEntry> = z.lazy(() => z
   .object({
-    name: z.string().trim().min(1),
-    path: z.string().trim().min(1).max(4096),
+    name: NonEmptyTrimmedTextSchema,
+    path: NonEmptyTrimmedTextSchema.max(4096),
     children: z.array(NodeFolderTreeEntrySchema),
   })
   .passthrough());
 
 export const NodeFolderPlaceSchema = z.object({
   kind: z.enum(["home", "root"]),
-  name: z.string().trim().min(1),
-  path: z.string().trim().min(1).max(4096),
+  name: NonEmptyTrimmedTextSchema,
+  path: NonEmptyTrimmedTextSchema.max(4096),
 }).passthrough();
 
 export type NodeFolderPlace = z.infer<typeof NodeFolderPlaceSchema>;
@@ -2780,11 +2784,11 @@ export const NodeAgentInstanceProxyRawResponseSchema = z
 export const InstanceTargetSchema = z
   .object({
     strategy: z.enum(["node-proxy", "direct-port", "kubernetes-ingress", "kubernetes-port-forward"]).default("node-proxy"),
-    web: z.string().trim().max(2048).optional(),
-    api: z.string().trim().max(2048).optional(),
-    vnc: z.string().trim().max(2048).optional(),
-    tty: z.string().trim().max(2048).optional(),
-    logs: z.string().trim().max(2048).optional(),
+    web: TrimmedTextSchema.max(2048).optional(),
+    api: TrimmedTextSchema.max(2048).optional(),
+    vnc: TrimmedTextSchema.max(2048).optional(),
+    tty: TrimmedTextSchema.max(2048).optional(),
+    logs: TrimmedTextSchema.max(2048).optional(),
     status: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
   })
   .strict();
@@ -2800,9 +2804,9 @@ const LegacyControlledInstanceReportedTargetSchema = z
 export const InstanceAccessSchema = z
   .object({
     strategy: z.enum(["control-plane-proxy", "direct-port", "node-proxy", "kubernetes-ingress", "kubernetes-port-forward"]).default("control-plane-proxy"),
-    web: z.string().trim().max(2048).optional(),
-    api: z.string().trim().max(2048).optional(),
-    ws: z.string().trim().max(2048).optional(),
+    web: TrimmedTextSchema.max(2048).optional(),
+    api: TrimmedTextSchema.max(2048).optional(),
+    ws: TrimmedTextSchema.max(2048).optional(),
     status: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
   })
   .strict()
@@ -2812,9 +2816,9 @@ export const WorkspaceStatusSchema = z
   .object({
     mode: z.enum(["local-bind", "git-clone", "empty-volume", "persistent-volume"]).optional(),
     status: z.enum(["unknown", "pending", "ready", "failed"]).default("unknown"),
-    path: z.string().trim().max(4096).optional(),
-    resolvedCommit: z.string().trim().max(120).optional(),
-    error: z.string().trim().max(2048).optional(),
+    path: TrimmedTextSchema.max(4096).optional(),
+    resolvedCommit: TrimmedTextSchema.max(120).optional(),
+    error: TrimmedTextSchema.max(2048).optional(),
     // Additive workspace materialization state. Older readers keep accepting the
     // workspace record and simply ignore unknown keys, so node agents can report
     // Git provisioning progress without a protocol-version gate.
@@ -2825,7 +2829,7 @@ export const WorkspaceStatusSchema = z
 export const ControlledInstanceSchema = z
   .object({
     id: IdSchema,
-    name: z.string().trim().min(1).max(160),
+    name: NonEmptyTrimmedTextSchema.max(160),
     projectId: IdSchema.optional(),
     source: ProjectSourceSchema,
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
@@ -2838,7 +2842,7 @@ export const ControlledInstanceSchema = z
     imageSnapshot: InstanceImageSnapshotSchema.optional(),
     imageProvisioning: ImageProvisioningSchema.optional(),
     stateRevision: z.number().int().min(0).default(0),
-    processIncarnationId: z.string().trim().min(1).max(120).optional(),
+    processIncarnationId: NonEmptyTrimmedTextSchema.max(120).optional(),
     status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "deleting", "failed", "unhealthy"]).default("created"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]).default("unknown"),
@@ -2847,7 +2851,7 @@ export const ControlledInstanceSchema = z
     uiAccessStatus: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
     protocolVersion: ProtocolVersionSchema.optional(),
-    instanceVersion: z.string().trim().max(80).optional(),
+    instanceVersion: TrimmedTextSchema.max(80).optional(),
     build: BuildInfoSchema.optional(),
     runtimeVersion: RuntimeVersionStateSchema.optional(),
     ready: z.boolean().default(false),
@@ -2892,7 +2896,7 @@ export const ControlledInstanceSchema = z
         runningCount: z.number().int().min(0).default(0),
         errorCount: z.number().int().min(0).default(0),
         configs: z.array(z.object({
-          configHash: z.string().trim().min(1),
+          configHash: NonEmptyTrimmedTextSchema,
           config: TriggerConfigSchema,
           deployments: z.array(TriggerDeploymentSchema).default([]),
           runtime: z.array(TriggerRuntimeStateSchema).default([]),
@@ -2903,17 +2907,17 @@ export const ControlledInstanceSchema = z
       .optional(),
     runtime: z
       .object({
-        kind: z.string().trim().max(80).optional(),
-        containerName: z.string().trim().max(240).optional(),
-        containerId: z.string().trim().max(240).optional(),
-        workspacePath: z.string().trim().max(4096).optional(),
+        kind: TrimmedTextSchema.max(80).optional(),
+        containerName: TrimmedTextSchema.max(240).optional(),
+        containerId: TrimmedTextSchema.max(240).optional(),
+        workspacePath: TrimmedTextSchema.max(4096).optional(),
         pid: z.number().int().positive().optional(),
         port: z.number().int().positive().max(65535).optional(),
         labels: z.record(z.string(), z.string()).default({}),
       })
       .strict()
       .default({ labels: {} }),
-    registrationToken: z.string().trim().min(1).max(240).optional(),
+    registrationToken: NonEmptyTrimmedTextSchema.max(240).optional(),
     lastHeartbeatAt: TimestampSchema.optional(),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -2965,8 +2969,8 @@ export const InstanceCreateInputSchema = z.object({
 export const InstanceCreateStartOutcomeSchema = z.object({
   status: z.enum(["not-requested", "started", "failed"]),
   error: z.object({
-    code: z.string().trim().min(1).max(120),
-    message: z.string().trim().min(1).max(2048),
+    code: NonEmptyTrimmedTextSchema.max(120),
+    message: NonEmptyTrimmedTextSchema.max(2048),
   }).strict().optional(),
 }).strict();
 
@@ -3163,7 +3167,9 @@ function sanitizeStoredStrictObject<T>(
   instanceId?: string,
 ): T | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
-  let candidate = structuredClone(input);
+  // Zod returns a parsed copy. Only clone the source if migration needs to
+  // delete unknown fields; current snapshots dominate heartbeat/fleet reads.
+  let candidate = input;
   let changed = false;
   for (let pass = 0; pass < 20; pass += 1) {
     const parsed = schema.safeParse(candidate);
@@ -3174,6 +3180,7 @@ function sanitizeStoredStrictObject<T>(
     let removedUnknown = false;
     for (const issue of parsed.error.issues) {
       if (issue.code !== "unrecognized_keys") continue;
+      if (candidate === input) candidate = structuredClone(input);
       const parent = valueAtPath(candidate, issue.path);
       if (!parent || typeof parent !== "object" || Array.isArray(parent)) continue;
       for (const key of issue.keys) {
@@ -3465,7 +3472,7 @@ export const ControlledInstanceRegisterSchema = z
     nodeId: IdSchema.optional(),
     runtimeId: IdSchema.optional(),
     imageSelection: ImageSelectionSchema.optional(),
-    instanceVersion: z.string().trim().max(80).optional(),
+    instanceVersion: TrimmedTextSchema.max(80).optional(),
     protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.optional(),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
@@ -3473,8 +3480,8 @@ export const ControlledInstanceRegisterSchema = z
     appInventory: InstanceAppInventorySchema.optional(),
     target: LegacyControlledInstanceReportedTargetSchema.optional(),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
-    registrationToken: z.string().trim().max(240).optional(),
-    processIncarnationId: z.string().trim().min(1).max(120).optional(),
+    registrationToken: TrimmedTextSchema.max(240).optional(),
+    processIncarnationId: NonEmptyTrimmedTextSchema.max(120).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -3496,7 +3503,7 @@ export const ControlledInstanceHeartbeatSchema = z
     triggers: ControlledInstanceSchema.shape.triggers.optional(),
     workspace: WorkspaceStatusSchema.optional(),
     target: LegacyControlledInstanceReportedTargetSchema.optional(),
-    processIncarnationId: z.string().trim().min(1).max(120).optional(),
+    processIncarnationId: NonEmptyTrimmedTextSchema.max(120).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -3620,11 +3627,11 @@ export const ChatBridgeConfigSchema = z
   .object({
     id: IdSchema,
     channel: ChatChannelSchema,
-    name: z.string().trim().min(1).max(160),
+    name: NonEmptyTrimmedTextSchema.max(160),
     enabled: z.boolean().default(false),
-    token: z.string().trim().max(4096).optional(),
-    defaultChatId: z.string().trim().max(240).optional(),
-    allowedUserIds: z.array(z.string().trim().min(1).max(240)).default([]),
+    token: TrimmedTextSchema.max(4096).optional(),
+    defaultChatId: TrimmedTextSchema.max(240).optional(),
+    allowedUserIds: z.array(NonEmptyTrimmedTextSchema.max(240)).default([]),
     pollIntervalMs: z.number().int().positive().max(60000).default(3000),
     settings: z.record(z.string(), z.unknown()).default({}),
     createdAt: TimestampSchema,
@@ -3637,11 +3644,11 @@ export const ChatSessionBindingSchema = z
     id: IdSchema,
     channel: ChatChannelSchema,
     bridgeId: IdSchema.optional(),
-    chatSessionId: z.string().trim().min(1).max(240),
-    userId: z.string().trim().max(240).optional(),
+    chatSessionId: NonEmptyTrimmedTextSchema.max(240),
+    userId: TrimmedTextSchema.max(240).optional(),
     activeProjectId: IdSchema.optional(),
     activeInstanceId: IdSchema.optional(),
-    activeAiSessionId: z.string().trim().min(1).max(120).optional(),
+    activeAiSessionId: NonEmptyTrimmedTextSchema.max(120).optional(),
     lastUsedAt: TimestampSchema,
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -3655,13 +3662,13 @@ export const ChatGatewayMessageSchema = z
         type: z.literal("chat-gateway").default("chat-gateway"),
         channel: ChatChannelSchema,
         bridgeId: IdSchema.optional(),
-        chatSessionId: z.string().trim().min(1).max(240),
-        userId: z.string().trim().max(240).optional(),
+        chatSessionId: NonEmptyTrimmedTextSchema.max(240),
+        userId: TrimmedTextSchema.max(240).optional(),
       })
       .strict(),
     message: z
       .object({
-        text: z.string().trim().max(20000).default(""),
+        text: TrimmedTextSchema.max(20000).default(""),
         attachments: z.array(AiSessionMessageAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
       })
       .strict()
@@ -3678,7 +3685,7 @@ export const ChatGatewayMessageSchema = z
     target: z
       .object({
         instanceId: IdSchema,
-        aiSessionId: z.string().trim().min(1).max(120),
+        aiSessionId: NonEmptyTrimmedTextSchema.max(120),
       })
       .strict()
       .optional(),
@@ -3690,14 +3697,14 @@ export const PendingRouteSchema = z
     id: IdSchema,
     instanceId: IdSchema,
     projectId: IdSchema.optional(),
-    aiSessionId: z.string().trim().min(1).max(120),
-    providerSessionId: z.string().trim().max(240).optional(),
+    aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+    providerSessionId: TrimmedTextSchema.max(240).optional(),
     result: z.string().default(""),
     timeoutMs: z.number().positive().optional(),
-    source: z.string().trim().max(120).optional(),
+    source: TrimmedTextSchema.max(120).optional(),
     kind: z.enum(["task", "approval"]).default("task"),
     status: z.enum(["pending", "unreachable"]).default("pending"),
-    error: z.string().trim().max(2048).optional(),
+    error: TrimmedTextSchema.max(2048).optional(),
     lastSeenAt: TimestampSchema,
   })
   .strict();
@@ -3886,7 +3893,7 @@ export function isValidCommandTrigger(value: string) {
 export const CommandTriggerSchema = z.string().refine(isValidCommandTrigger, "Command trigger must be one printable non-alphanumeric character other than \\.");
 
 export const ControlPlaneSettingsSchema = z.object({
-  publicBaseUrl: z.string().trim().max(2048).optional(),
+  publicBaseUrl: TrimmedTextSchema.max(2048).optional(),
   updateChannel: UpdateChannelSchema.default("stable"),
   mentionTrigger: MentionTriggerSchema.default(DEFAULT_MENTION_TRIGGER),
   commandTrigger: CommandTriggerSchema.default(DEFAULT_COMMAND_TRIGGER),
@@ -3896,7 +3903,7 @@ export const ControlPlaneSettingsSchema = z.object({
 });
 
 export const UpdateControlPlaneSettingsSchema = z.object({
-  publicBaseUrl: z.string().trim().max(2048).optional(),
+  publicBaseUrl: TrimmedTextSchema.max(2048).optional(),
   updateChannel: UpdateChannelSchema.optional(),
   mentionTrigger: MentionTriggerSchema.optional(),
   commandTrigger: CommandTriggerSchema.optional(),
@@ -3950,8 +3957,8 @@ export const CreateImageInputSchema = z.object({
   id: CustomImageProfileSchema.shape.id.optional(), name: CustomImageProfileSchema.shape.name,
   description: CustomImageProfileSchema.shape.description, cover: CustomImageProfileSchema.shape.cover,
   reference: CustomImageProfileSchema.shape.reference,
-  pullPolicy: CustomImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),
-  optionalApps: z.array(z.string().trim().min(1).max(120)).optional(), defaultEnv: CustomImageProfileSchema.shape.defaultEnv.optional(),
+  pullPolicy: CustomImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(NonEmptyTrimmedTextSchema.max(80)).optional(),
+  optionalApps: z.array(NonEmptyTrimmedTextSchema.max(120)).optional(), defaultEnv: CustomImageProfileSchema.shape.defaultEnv.optional(),
   labels: CustomImageProfileSchema.shape.labels.optional(),
 }).strict();
 export const UpdateImageInputSchema = CreateImageInputSchema.omit({ id: true }).partial().strict();
@@ -3991,11 +3998,11 @@ export const ModelTestInputSchema = ModelDiscoveryInputSchema.extend({
 export const NodeAuthInputSchema = z.object({
   mode: z.enum(["local-static-key", "paired-hmac", "proxy-binding"]).default("local-static-key"),
   keyId: NodeSchema.shape.id.optional(),
-  secret: z.string().trim().max(4096).optional(),
+  secret: TrimmedTextSchema.max(4096).optional(),
   pairedAt: NodeSchema.shape.createdAt.optional(),
   pairing: z.object({
     status: z.enum(["pending", "paired", "expired"]).default("pending"),
-    joinToken: z.string().trim().max(4096).optional(),
+    joinToken: TrimmedTextSchema.max(4096).optional(),
     expiresAt: NodeSchema.shape.createdAt.optional(),
   }).strict().optional(),
 }).strict();
@@ -4009,7 +4016,7 @@ export const CreateNodeInputSchema = z.object({
   connectionPath: NodeSchema.shape.connectionPath.optional(),
   connectionEnabled: NodeSchema.shape.connectionEnabled.optional(),
   auth: NodeAuthInputSchema.optional(),
-  joinToken: z.string().trim().min(1).max(4096).optional(),
+  joinToken: NonEmptyTrimmedTextSchema.max(4096).optional(),
   endpoint: NodeSchema.shape.endpoint,
   controlEndpoint: NodeSchema.shape.controlEndpoint,
   containerEndpoint: NodeSchema.shape.containerEndpoint,
@@ -4039,13 +4046,13 @@ export const UpdateNodeInputSchema = z.object({
 }).strict();
 
 export const CreateNodeControlPlaneConnectionInputSchema = z.object({
-  controlPlaneUrl: z.string().trim().url().max(2048),
-  joinToken: z.string().trim().min(1).max(4096),
-  controlPlaneName: z.string().trim().min(1).max(160).optional(),
+  controlPlaneUrl: TrimmedTextSchema.url().max(2048),
+  joinToken: NonEmptyTrimmedTextSchema.max(4096),
+  controlPlaneName: NonEmptyTrimmedTextSchema.max(160).optional(),
   activate: z.boolean().optional(),
 }).strict();
 
 export const CreateNodeJoinInviteInputSchema = z.object({
-  nodeName: z.string().trim().min(1).max(160).optional(),
+  nodeName: NonEmptyTrimmedTextSchema.max(160).optional(),
   expiresInMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
 }).strict();

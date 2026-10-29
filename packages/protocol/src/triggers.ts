@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DateTimeStringSchema, NonEmptyTrimmedTextSchema, TrimmedTextSchema } from "./internal/text-schemas.ts";
 
 export const ScheduleSourceSchema = z.union([
   z.object({
@@ -10,14 +11,14 @@ export const ScheduleSourceSchema = z.union([
     type: z.literal("schedule"),
     scheduleKind: z.literal("daily"),
     timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-    timezone: z.string().trim().min(1).max(120),
+    timezone: NonEmptyTrimmedTextSchema.max(120),
   }).strict(),
   z.object({
     type: z.literal("schedule"),
     scheduleKind: z.literal("weekly"),
     weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
     timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-    timezone: z.string().trim().min(1).max(120),
+    timezone: NonEmptyTrimmedTextSchema.max(120),
   }).strict(),
 ]);
 
@@ -25,21 +26,21 @@ export const TriggerSourceSchema = z.union([
   ScheduleSourceSchema,
   z.object({
     type: z.literal("file-change"),
-    roots: z.array(z.string().trim().min(1).max(4096)).min(1).max(50),
-    globs: z.array(z.string().trim().min(1).max(500)).min(1).max(100),
-    ignore: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
+    roots: z.array(NonEmptyTrimmedTextSchema.max(4096)).min(1).max(50),
+    globs: z.array(NonEmptyTrimmedTextSchema.max(500)).min(1).max(100),
+    ignore: z.array(NonEmptyTrimmedTextSchema.max(500)).max(100).optional(),
     debounceMs: z.number().int().min(100).max(60_000).default(1_500),
   }).strict(),
   z.object({
     type: z.literal("ai-session"),
-    agent: z.string().trim().min(1).max(80).optional(),
+    agent: NonEmptyTrimmedTextSchema.max(80).optional(),
     statuses: z.array(z.enum(["running", "waiting", "idle", "failed"])).max(20).optional(),
     phases: z.array(z.enum(["thinking", "tool", "editing", "approval", "responding", "unknown"])).max(20).optional(),
   }).strict(),
 ]);
 
 export const TriggerActionSchema = z.object({
-  promptTemplate: z.string().trim().min(1).max(20_000),
+  promptTemplate: NonEmptyTrimmedTextSchema.max(20_000),
 }).strict();
 
 export const TriggerPolicySchema = z.object({
@@ -49,61 +50,61 @@ export const TriggerPolicySchema = z.object({
 }).strict();
 
 export const TriggerConfigSchema = z.object({
-  configHash: z.string().trim().min(8).max(80),
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(1000).optional(),
+  configHash: TrimmedTextSchema.min(8).max(80),
+  name: NonEmptyTrimmedTextSchema.max(160),
+  description: TrimmedTextSchema.max(1000).optional(),
   source: TriggerSourceSchema,
   action: TriggerActionSchema,
   policy: TriggerPolicySchema.default({ maxConcurrentRuns: 1, whenBusy: "skip" }),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: DateTimeStringSchema,
+  updatedAt: DateTimeStringSchema,
 }).strict();
 
 export const TriggerTargetSchema = z
   .object({
     type: z.literal("ai-session"),
-    aiSessionId: z.string().trim().min(1).max(160),
+    aiSessionId: NonEmptyTrimmedTextSchema.max(160),
   })
   .strict();
 
 export const TriggerDeploymentSchema = z.object({
-  configHash: z.string().trim().min(8).max(80),
-  deploymentId: z.string().trim().min(1).max(240).optional(),
-  instanceId: z.string().trim().min(1).max(160),
+  configHash: TrimmedTextSchema.min(8).max(80),
+  deploymentId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
   origin: z.enum(["control-plane", "controlled-instance"]).default("controlled-instance"),
   enabled: z.boolean().default(true),
   target: TriggerTargetSchema,
-  localName: z.string().trim().min(1).max(160).optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  localName: NonEmptyTrimmedTextSchema.max(160).optional(),
+  createdAt: DateTimeStringSchema,
+  updatedAt: DateTimeStringSchema,
 }).strict();
 
 export const TriggerRuntimeStateSchema = z.object({
-  configHash: z.string().trim().min(8).max(80),
-  deploymentId: z.string().trim().min(1).max(240).optional(),
-  instanceId: z.string().trim().min(1).max(160),
+  configHash: TrimmedTextSchema.min(8).max(80),
+  deploymentId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
   status: z.enum(["idle", "running", "disabled", "error"]).default("idle"),
-  lastTriggeredAt: z.string().datetime().optional(),
-  lastCompletedAt: z.string().datetime().optional(),
-  lastSkippedAt: z.string().datetime().optional(),
-  lastError: z.string().trim().max(4000).optional(),
+  lastTriggeredAt: DateTimeStringSchema.optional(),
+  lastCompletedAt: DateTimeStringSchema.optional(),
+  lastSkippedAt: DateTimeStringSchema.optional(),
+  lastError: TrimmedTextSchema.max(4000).optional(),
   runCount: z.number().int().min(0).default(0),
   skippedCount: z.number().int().min(0).default(0),
 }).strict();
 
 export const TriggerRunSchema = z.object({
-  id: z.string().trim().min(1).max(160),
-  configHash: z.string().trim().min(8).max(80),
-  deploymentId: z.string().trim().min(1).max(240).optional(),
-  instanceId: z.string().trim().min(1).max(160),
+  id: NonEmptyTrimmedTextSchema.max(160),
+  configHash: TrimmedTextSchema.min(8).max(80),
+  deploymentId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
   eventType: z.enum(["manual", "schedule", "file-change", "ai-session"]),
   status: z.enum(["started", "completed", "failed", "skipped"]),
   target: TriggerTargetSchema,
-  promptPreview: z.string().trim().max(500),
-  eventSummary: z.string().trim().max(1000).optional(),
-  error: z.string().trim().max(4000).optional(),
-  startedAt: z.string().datetime(),
-  completedAt: z.string().datetime().optional(),
+  promptPreview: TrimmedTextSchema.max(500),
+  eventSummary: TrimmedTextSchema.max(1000).optional(),
+  error: TrimmedTextSchema.max(4000).optional(),
+  startedAt: DateTimeStringSchema,
+  completedAt: DateTimeStringSchema.optional(),
 }).strict();
 
 export const TriggerIndexSchema = z.object({
@@ -121,32 +122,32 @@ export const TriggerMutationResultSchema = z.object({
 }).strict();
 
 export const ControlPlaneAiSessionTriggerBoundEventSchema = z.object({
-  instanceId: z.string().trim().min(1).max(160),
-  sessionId: z.string().trim().min(1).max(160),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
+  sessionId: NonEmptyTrimmedTextSchema.max(160),
   // Compatibility for v0.0.23: deployment events did not carry the
   // authoritative mutation result. Current consumers recover via GET.
   mutation: TriggerMutationResultSchema.optional(),
 }).strip();
 
 export const ControlPlaneAiSessionTriggerUnboundEventSchema = z.object({
-  instanceId: z.string().trim().min(1).max(160),
-  sessionId: z.string().trim().min(1).max(160),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
+  sessionId: NonEmptyTrimmedTextSchema.max(160),
   configHash: TriggerConfigSchema.shape.configHash,
 }).strip();
 
 export const ControlPlaneTriggerDeploymentEntrySchema = z.object({
-  instanceId: z.string().trim().min(1).max(160),
-  instanceName: z.string().trim().min(1).max(160),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
+  instanceName: NonEmptyTrimmedTextSchema.max(160),
   deployment: TriggerDeploymentSchema,
   runtime: TriggerRuntimeStateSchema.optional(),
 }).strip();
 
 export const ControlPlaneTriggerRunSchema = TriggerRunSchema.extend({
-  instanceName: z.string().trim().min(1).max(160).optional(),
+  instanceName: NonEmptyTrimmedTextSchema.max(160).optional(),
 }).strip();
 
 export const ControlPlaneTriggerSchema = z.object({
-  configHash: z.string().trim().min(8).max(80),
+  configHash: TrimmedTextSchema.min(8).max(80),
   config: TriggerConfigSchema,
   deploymentCount: z.number().int().min(0),
   enabledCount: z.number().int().min(0),
@@ -159,7 +160,7 @@ export const ControlPlaneTriggerSchema = z.object({
 }).strip();
 
 export const ControlPlaneTriggersSchema = z.object({
-  updatedAt: z.string().datetime(),
+  updatedAt: DateTimeStringSchema,
   triggers: z.array(ControlPlaneTriggerSchema),
 }).strip();
 
@@ -175,10 +176,10 @@ export const ControlPlaneTriggerTemplateInputSchema = z.object({
 // planes omit this field, so clients normalize it to an empty list.
 export const ControlPlaneTriggerMutationFailureSchema = z.object({
   scope: z.enum(["node", "instance"]),
-  nodeId: z.string().trim().min(1).max(160).optional(),
-  instanceId: z.string().trim().min(1).max(160).optional(),
-  code: z.string().trim().min(1).max(160),
-  message: z.string().trim().min(1).max(4000),
+  nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  instanceId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  code: NonEmptyTrimmedTextSchema.max(160),
+  message: NonEmptyTrimmedTextSchema.max(4000),
 }).strip();
 
 export type TriggerSource = z.infer<typeof TriggerSourceSchema>;

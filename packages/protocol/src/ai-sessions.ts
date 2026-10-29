@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DateTimeStringSchema, NonEmptyTrimmedTextSchema, TrimmedTextSchema } from "./internal/text-schemas.ts";
 import { ClientRequestIdSchema, OptionalClientRequestIdSchema } from "./client-request-id.ts";
 import { StoryIdSchema } from "./story-id.ts";
 
@@ -26,7 +27,7 @@ export const AiSessionEventType = {
 export const AI_SESSION_TOMBSTONE_RETENTION_MS = 60 * 60 * 1000;
 export const AI_SESSION_DELTA_RETENTION_MS = AI_SESSION_TOMBSTONE_RETENTION_MS;
 
-export const AiAgentKindSchema = z.string().trim().min(1).max(80);
+export const AiAgentKindSchema = NonEmptyTrimmedTextSchema.max(80);
 
 export const AiSessionCreationSourceSchema = z.enum(["app-session", "ai-session"]);
 
@@ -34,10 +35,10 @@ export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
 
 const AiSessionAttachmentDraftFields = {
   scopeType: z.enum(["session", "create-request"]),
-  scopeId: z.string().trim().min(1).max(160),
+  scopeId: NonEmptyTrimmedTextSchema.max(160),
   kind: AiSessionAttachmentKindSchema,
-  name: z.string().trim().min(1).max(240),
-  mime: z.string().trim().min(1).max(120),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  mime: NonEmptyTrimmedTextSchema.max(120),
 };
 
 export const AiSessionAttachmentDraftUploadQuerySchema = z.object({
@@ -65,10 +66,10 @@ export const AiSessionAttachmentDraftStreamOffsetSchema = z.object({
 export const AiSessionAttachmentDraftSchema = z.object({
   id: AiSessionAttachmentDraftStreamIdSchema,
   kind: AiSessionAttachmentKindSchema,
-  name: z.string().trim().min(1).max(240),
-  mime: z.string().trim().min(1).max(120),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  mime: NonEmptyTrimmedTextSchema.max(120),
   size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
-  expiresAt: z.string().datetime(),
+  expiresAt: DateTimeStringSchema,
 });
 
 export function isAiSessionInlineImageMime(mime: string) {
@@ -76,10 +77,10 @@ export function isAiSessionInlineImageMime(mime: string) {
 }
 
 const AiSessionMessageAttachmentBaseSchema = z.object({
-  id: z.string().trim().min(1).max(120),
+  id: NonEmptyTrimmedTextSchema.max(120),
   kind: AiSessionAttachmentKindSchema,
-  name: z.string().trim().min(1).max(240),
-  mime: z.string().trim().min(1).max(120),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  mime: NonEmptyTrimmedTextSchema.max(120),
   size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
 });
 
@@ -90,7 +91,7 @@ export const AiSessionConversationAttachmentSchema = AiSessionMessageAttachmentB
 }).strict();
 
 export const AiSessionUserMessageDetailSchema = z.object({
-  id: z.string().trim().min(1).max(240),
+  id: NonEmptyTrimmedTextSchema.max(240),
   text: z.string(),
   attachments: z.array(AiSessionConversationAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
 }).strict();
@@ -113,11 +114,11 @@ export const AiSessionPhaseSchema = z.enum([
 
 export const AiSessionToolSchema = z
   .object({
-    id: z.string().trim().min(1).max(240).optional(),
-    kind: z.string().trim().min(1).max(80).optional(),
-    name: z.string().trim().min(1).max(120),
-    inputPreview: z.string().trim().max(500).optional(),
-    startedAt: z.string().datetime().optional(),
+    id: NonEmptyTrimmedTextSchema.max(240).optional(),
+    kind: NonEmptyTrimmedTextSchema.max(80).optional(),
+    name: NonEmptyTrimmedTextSchema.max(120),
+    inputPreview: TrimmedTextSchema.max(500).optional(),
+    startedAt: DateTimeStringSchema.optional(),
   })
   .strict();
 
@@ -129,8 +130,8 @@ export const AiSessionTimelineActivityStatusSchema = z.enum([
 ]);
 
 const AiSessionTimelineItemBaseSchema = z.object({
-  id: z.string().trim().min(1).max(240),
-  turnId: z.string().trim().min(1).max(240),
+  id: NonEmptyTrimmedTextSchema.max(240),
+  turnId: NonEmptyTrimmedTextSchema.max(240),
 }).strict();
 
 export const AiSessionTimelineUserMessageSchema = AiSessionTimelineItemBaseSchema.extend({
@@ -146,13 +147,13 @@ export const AiSessionTimelineAgentMessageSchema = AiSessionTimelineItemBaseSche
 
 export const AiSessionTimelineActivitySchema = AiSessionTimelineItemBaseSchema.extend({
   type: z.literal("activity"),
-  activityKind: z.string().trim().min(1).max(120),
-  title: z.string().trim().min(1).max(240),
+  activityKind: NonEmptyTrimmedTextSchema.max(120),
+  title: NonEmptyTrimmedTextSchema.max(240),
   status: AiSessionTimelineActivityStatusSchema.optional(),
   summary: z.string().max(4_000).optional(),
   input: z.string().max(100_000).optional(),
   output: z.string().max(1_000_000).optional(),
-  paths: z.array(z.string().trim().min(1).max(4096)).max(500).optional(),
+  paths: z.array(NonEmptyTrimmedTextSchema.max(4096)).max(500).optional(),
   exitCode: z.number().int().optional(),
   durationMs: z.number().int().nonnegative().optional(),
 }).strict();
@@ -164,17 +165,17 @@ export const AiSessionTimelineItemSchema = z.discriminatedUnion("type", [
 ]);
 
 export const AiSessionTimelineSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   items: z.array(AiSessionTimelineItemSchema),
-  generatedAt: z.string().datetime(),
+  generatedAt: DateTimeStringSchema,
 }).strict();
 
 export const AiSessionTurnTimelineSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  turnId: z.string().trim().min(1).max(240),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  turnId: NonEmptyTrimmedTextSchema.max(240),
   items: z.array(AiSessionTimelineItemSchema),
-  generatedAt: z.string().datetime(),
+  generatedAt: DateTimeStringSchema,
 }).strict();
 
 export const AiSessionSubAgentStatusSchema = z.enum([
@@ -195,12 +196,12 @@ export const AiSessionSubAgentActivitySchema = z.enum([
 
 export const AiSessionSubAgentSchema = z
   .object({
-    threadId: z.string().trim().min(1).max(240),
-    path: z.string().trim().max(4096).optional(),
+    threadId: NonEmptyTrimmedTextSchema.max(240),
+    path: TrimmedTextSchema.max(4096).optional(),
     status: AiSessionSubAgentStatusSchema,
     activity: AiSessionSubAgentActivitySchema.optional(),
-    message: z.string().trim().max(1000).optional(),
-    updatedAt: z.string().datetime(),
+    message: TrimmedTextSchema.max(1000).optional(),
+    updatedAt: DateTimeStringSchema,
   })
   .strict();
 
@@ -236,13 +237,13 @@ export const AiSessionActionsSchema = z
     close: z.boolean().optional(),
   });
 
-const AiSessionParentProviderSessionIdSchema = z.string().trim().min(1).max(240);
+const AiSessionParentProviderSessionIdSchema = NonEmptyTrimmedTextSchema.max(240);
 
 export const AiSessionLineageSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("fork"),
     parentProviderSessionId: AiSessionParentProviderSessionIdSchema,
-    throughTurnId: z.string().trim().min(1).max(240).optional(),
+    throughTurnId: NonEmptyTrimmedTextSchema.max(240).optional(),
   }).strict(),
   z.object({
     kind: z.literal("subagent"),
@@ -298,7 +299,7 @@ export const AiSessionMessageAttachmentSchema = z.union([
   AiSessionMessageAttachmentBaseSchema.extend({
     source: z.object({
       type: z.literal("runtime-path"),
-      path: z.string().trim().min(1).max(4096),
+      path: NonEmptyTrimmedTextSchema.max(4096),
     }).strict(),
   }).strict(),
 ]);
@@ -309,20 +310,20 @@ export const AiSessionMessageAttachmentMetaSchema = AiSessionMessageAttachmentBa
 
 export const AiSessionMessageAttachmentRefSchema = z.union([
   z.object({
-    id: z.string().trim().min(1).max(120),
+    id: NonEmptyTrimmedTextSchema.max(120),
     kind: AiSessionAttachmentKindSchema.optional(),
     source: z.object({ type: z.literal("upload-ref") }).strict().default({ type: "upload-ref" }),
   }).strict(),
   z.object({
-    id: z.string().trim().min(1).max(120),
+    id: NonEmptyTrimmedTextSchema.max(120),
     kind: AiSessionAttachmentKindSchema,
-    name: z.string().trim().min(1).max(240),
-    mime: z.string().trim().min(1).max(120),
+    name: NonEmptyTrimmedTextSchema.max(240),
+    mime: NonEmptyTrimmedTextSchema.max(120),
     size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     // Server-side file pickers resolve their selection to this same instance path form.
     source: z.object({
       type: z.literal("runtime-path"),
-      path: z.string().trim().min(1).max(4096),
+      path: NonEmptyTrimmedTextSchema.max(4096),
     }).strict(),
   }).strict(),
 ]);
@@ -335,7 +336,7 @@ export const AiSessionCommandNameSchema = z.enum(["review", "rename", "goal", "c
 
 export const AiSessionCommandInputSchema = z.object({
   command: AiSessionCommandNameSchema,
-  argument: z.string().trim().max(4000).optional(),
+  argument: TrimmedTextSchema.max(4000).optional(),
 }).strict().superRefine((input, context) => {
   if (input.command === "rename" && !input.argument) {
     context.addIssue({ code: "custom", path: ["argument"], message: "Rename requires a thread name." });
@@ -348,41 +349,41 @@ export const AiSessionCommandInputSchema = z.object({
 export const AiSessionCommandResultSchema = z.object({
   command: AiSessionCommandNameSchema,
   value: z.string().max(4000).optional(),
-  turnId: z.string().trim().min(1).max(240).optional(),
+  turnId: NonEmptyTrimmedTextSchema.max(240).optional(),
 }).strict();
 
 export const AiSessionRenameInputSchema = z.object({
-  title: z.string().trim().max(120),
-  expectedTitle: z.string().trim().max(240).optional(),
+  title: TrimmedTextSchema.max(120),
+  expectedTitle: TrimmedTextSchema.max(240).optional(),
   clientRequestId: ClientRequestIdSchema,
 }).strict();
 
 export const AiSessionRenameResultSchema = z.object({
   disposition: z.enum(["renamed", "already-named"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  appSessionId: z.string().trim().min(1).max(120).optional(),
-  title: z.string().trim().max(120),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  appSessionId: NonEmptyTrimmedTextSchema.max(120).optional(),
+  title: TrimmedTextSchema.max(120),
 }).strict();
 
 export const AiSessionReferenceKindSchema = z.enum(["skill", "app", "plugin"]);
 
 const AiSessionReferenceBaseSchema = z.object({
-  name: z.string().trim().min(1).max(240),
-  path: z.string().trim().min(1).max(4096),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  path: NonEmptyTrimmedTextSchema.max(4096),
 });
 
 export const AiSessionReferenceSchema = z.discriminatedUnion("kind", [
   AiSessionReferenceBaseSchema.extend({
     kind: z.literal("skill"),
-    path: z.string().trim().min(1).max(4096).refine((value) => value.startsWith("/"), "Skill paths must be absolute."),
+    path: NonEmptyTrimmedTextSchema.max(4096).refine((value) => value.startsWith("/"), "Skill paths must be absolute."),
   }).strict(),
   AiSessionReferenceBaseSchema.extend({
     kind: z.literal("app"),
-    path: z.string().trim().min(7).max(4096).regex(/^app:\/\/[^\s/]+$/, "App paths must use app://<id>."),
+    path: TrimmedTextSchema.min(7).max(4096).regex(/^app:\/\/[^\s/]+$/, "App paths must use app://<id>."),
   }).strict(),
   AiSessionReferenceBaseSchema.extend({
     kind: z.literal("plugin"),
-    path: z.string().trim().min(10).max(4096).regex(/^plugin:\/\/[^\s/]+$/, "Plugin paths must use plugin://<id>."),
+    path: TrimmedTextSchema.min(10).max(4096).regex(/^plugin:\/\/[^\s/]+$/, "Plugin paths must use plugin://<id>."),
   }).strict(),
 ]);
 
@@ -392,10 +393,10 @@ export const AiSessionMentionKindSchema = z.enum(["plugin", "skill", "file", "di
 
 export const AiSessionMentionCandidateSchema = z.object({
   kind: AiSessionMentionKindSchema,
-  name: z.string().trim().min(1).max(240),
-  description: z.string().trim().max(1000).optional(),
-  path: z.string().trim().min(1).max(4096),
-  icon: z.string().trim().max(4096).optional(),
+  name: NonEmptyTrimmedTextSchema.max(240),
+  description: TrimmedTextSchema.max(1000).optional(),
+  path: NonEmptyTrimmedTextSchema.max(4096),
+  icon: TrimmedTextSchema.max(4096).optional(),
 }).strict().superRefine((candidate, context) => {
   if (candidate.kind === "skill" && !candidate.path.startsWith("/")) {
     context.addIssue({ code: "custom", path: ["path"], message: "Skill paths must be absolute." });
@@ -413,33 +414,33 @@ export const AiSessionMentionCandidateSchema = z.object({
 
 export const AiSessionMentionDiagnosticSchema = z.object({
   category: z.enum(["skills", "plugins", "apps", "files"]),
-  code: z.string().trim().min(1).max(160),
-  message: z.string().trim().min(1).max(2000),
+  code: NonEmptyTrimmedTextSchema.max(160),
+  message: NonEmptyTrimmedTextSchema.max(2000),
 }).strict();
 
 export const AiSessionMentionCatalogSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
-  cwd: z.string().trim().min(1).max(4096),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
+  cwd: NonEmptyTrimmedTextSchema.max(4096),
   candidates: z.array(AiSessionMentionCandidateSchema).max(1000).default([]),
   diagnostics: z.array(AiSessionMentionDiagnosticSchema).max(20).default([]),
 }).strict();
 
 export const AiSessionMentionFileSearchInputSchema = z.object({
-  query: z.string().trim().max(240).default(""),
+  query: TrimmedTextSchema.max(240).default(""),
 }).strict();
 
 export const AiSessionMentionFileSearchSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  cwd: z.string().trim().min(1).max(4096),
-  query: z.string().trim().max(240),
-  requestId: z.string().trim().min(1).max(160),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  cwd: NonEmptyTrimmedTextSchema.max(4096),
+  query: TrimmedTextSchema.max(240),
+  requestId: NonEmptyTrimmedTextSchema.max(160),
   candidates: z.array(AiSessionMentionCandidateSchema.refine((candidate) => candidate.kind === "file" || candidate.kind === "directory", "File search only returns files and directories.")).max(200).default([]),
   complete: z.boolean().default(false),
 }).strict();
 
 const AiSessionMessageBaseSchema = z.object({
-  message: z.string().trim().min(1).max(20000),
+  message: NonEmptyTrimmedTextSchema.max(20000),
   mode: AiSessionSendModeSchema.optional(),
   permissionMode: AiSessionPermissionModeSchema.optional(),
   // Compatibility for v0.0.33: 旧实例的 strict 入参不接受该增量字段，只有声明发送幂等能力的实例才据它去重。
@@ -467,7 +468,7 @@ export const AiSessionMessageRefInputSchema = AiSessionMessageBaseSchema.extend(
 
 export const AiSessionRuntimePathSchema = z.object({
   type: z.literal("runtime-path"),
-  path: z.string().trim().min(1).max(4096).refine(
+  path: NonEmptyTrimmedTextSchema.max(4096).refine(
     (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value),
     "Runtime paths must be absolute in the target controlled instance.",
   ),
@@ -483,9 +484,9 @@ export const AiSessionRuntimePathSchema = z.object({
 // resolved. Records written before this field existed fall back to matching by
 // `modelName`.
 export const AiSessionModelSelectionSchema = z.object({
-  modelEntityId: z.string().trim().min(1).max(120),
-  modelName: z.string().trim().min(1).max(240),
-  modelUpstreamName: z.string().trim().min(1).max(240).optional(),
+  modelEntityId: NonEmptyTrimmedTextSchema.max(120),
+  modelName: NonEmptyTrimmedTextSchema.max(240),
+  modelUpstreamName: NonEmptyTrimmedTextSchema.max(240).optional(),
 }).strict();
 
 /** Stable model identity of a selection; `modelName` is only the display label. */
@@ -519,30 +520,30 @@ export const AI_SESSION_DEFAULT_REASONING_EFFORT = "medium" as const;
 export const AiSessionCreateWorkspaceSelectionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("current-folder"),
-    branch: z.string().trim().min(1).max(1024),
+    branch: NonEmptyTrimmedTextSchema.max(1024),
   }).strict(),
   z.object({
     type: z.literal("existing-worktree"),
-    repositoryContextId: z.string().trim().min(1).max(160),
-    worktreeId: z.string().trim().min(1).max(160),
+    repositoryContextId: NonEmptyTrimmedTextSchema.max(160),
+    worktreeId: NonEmptyTrimmedTextSchema.max(160),
   }).strict(),
   z.object({
     type: z.literal("new-worktree"),
-    branchName: z.string().trim().min(1).max(255),
-    startRef: z.string().trim().min(1).max(2048),
-    expectedSnapshotId: z.string().trim().min(1).max(160),
+    branchName: NonEmptyTrimmedTextSchema.max(255),
+    startRef: NonEmptyTrimmedTextSchema.max(2048),
+    expectedSnapshotId: NonEmptyTrimmedTextSchema.max(160),
   }).strict(),
 ]);
 
 export const AiSessionGitSelectionSchema = z.object({
   mode: z.enum(["current-folder", "worktree"]),
-  branch: z.string().trim().min(1).max(1024),
+  branch: NonEmptyTrimmedTextSchema.max(1024),
 }).strict();
 
 export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.safeExtend({
   agent: AiAgentKindSchema,
   cwd: AiSessionRuntimePathSchema,
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
   clientRequestId: ClientRequestIdSchema,
@@ -553,7 +554,7 @@ export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.safeExtend
 
 export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
   agent: AiAgentKindSchema,
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
   clientRequestId: ClientRequestIdSchema,
@@ -568,7 +569,7 @@ export const AiSessionModelSelectionInputSchema = z.object({
 }).strict();
 
 export const AiSessionModelSelectionActionResponseSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   accepted: z.literal(true),
 }).strict();
 
@@ -578,12 +579,12 @@ export const AiSessionReasoningEffortInputSchema = z.object({
 }).strict();
 
 export const AiSessionWorkspaceCheckoutInputSchema = z.object({
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
-  branch: z.string().trim().min(1).max(1024),
+  cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
+  branch: NonEmptyTrimmedTextSchema.max(1024),
 }).strict();
 
 export const AiSessionReasoningEffortActionResponseSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   accepted: z.literal(true),
 }).strict();
 
@@ -592,25 +593,25 @@ export const AiSessionStoryInputSchema = z.object({
 }).strict();
 
 export const AiSessionStoryActionResponseSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   storyId: StoryIdSchema.optional(),
 }).strict();
 
 export const AiSessionReadResultSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   unread: z.boolean(),
 }).strict();
 
 export const AiSessionTranscriptSchema = z.object({
-  path: z.string().trim().min(1).max(4096),
+  path: NonEmptyTrimmedTextSchema.max(4096),
   lineCount: z.number().int().nonnegative(),
   tail: z.string(),
 }).strict();
 
 export const AiSessionCreateResultSchema = z.object({
   disposition: z.enum(["created", "already-created"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   creationSource: z.literal("ai-session"),
 }).strict();
 
@@ -620,14 +621,14 @@ export const AiSessionForkWorkspaceSchema = z.object({
 
 export const AiSessionForkInputSchema = z.object({
   clientRequestId: ClientRequestIdSchema,
-  throughTurnId: z.string().trim().min(1).max(240).optional(),
+  throughTurnId: NonEmptyTrimmedTextSchema.max(240).optional(),
   workspace: AiSessionForkWorkspaceSchema.optional().default({ mode: "current" }),
 }).strict();
 
 export const AiSessionForkResultSchema = z.object({
   disposition: z.enum(["created", "already-created"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   creationSource: z.literal("ai-session"),
 }).strict();
 
@@ -637,9 +638,9 @@ export const AiSessionOpenAppInputSchema = z.object({
 
 export const AiSessionOpenAppResultSchema = z.object({
   disposition: z.enum(["opened", "already-open"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
-  appSessionId: z.string().trim().min(1).max(120),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
+  appSessionId: NonEmptyTrimmedTextSchema.max(120),
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
@@ -649,15 +650,15 @@ export const AiSessionCloseInputSchema = z.object({
 
 export const AiSessionCloseResultSchema = z.object({
   disposition: z.enum(["closed", "already-closed"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
 export const AiSessionClearResultSchema = z.object({
   disposition: z.enum(["cleared", "already-cleared"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  clearedSessionIds: z.array(z.string().trim().min(1).max(120)),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  clearedSessionIds: z.array(NonEmptyTrimmedTextSchema.max(120)),
 }).strict();
 
 export const AiSessionActionErrorSchema = z.object({
@@ -671,10 +672,10 @@ export const AiSessionActionErrorSchema = z.object({
     "close-failed",
     "conflict",
   ]),
-  message: z.string().trim().min(1).max(4000),
+  message: NonEmptyTrimmedTextSchema.max(4000),
   retryable: z.boolean().default(false),
-  aiSessionId: z.string().trim().min(1).max(120).optional(),
-  providerSessionId: z.string().trim().min(1).max(240).optional(),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120).optional(),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240).optional(),
 }).strict();
 
 export const AiSessionApprovalInputSchema = z.object({
@@ -683,7 +684,7 @@ export const AiSessionApprovalInputSchema = z.object({
 
 export const AiSessionQueueReorderInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
-  queueIds: z.array(z.string().trim().min(1).max(120)).max(100),
+  queueIds: z.array(NonEmptyTrimmedTextSchema.max(120)).max(100),
 }).strict();
 
 export const AiSessionQueuePauseInputSchema = z.object({
@@ -692,10 +693,10 @@ export const AiSessionQueuePauseInputSchema = z.object({
 
 export const AiSessionQueueEditInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
-  message: z.string().trim().min(1).max(20000),
+  message: NonEmptyTrimmedTextSchema.max(20000),
   attachments: z.array(z.union([
     z.object({
-      id: z.string().trim().min(1).max(120),
+      id: NonEmptyTrimmedTextSchema.max(120),
       source: z.object({ type: z.literal("retained") }).strict(),
     }).strict(),
     AiSessionMessageAttachmentRefSchema,
@@ -703,25 +704,25 @@ export const AiSessionQueueEditInputSchema = z.object({
 }).strict();
 
 export const AiSessionControlErrorSchema = z.object({
-  code: z.string().trim().min(1).max(160),
+  code: NonEmptyTrimmedTextSchema.max(160),
   message: z.string(),
-  instanceId: z.string().trim().min(1).max(160).optional(),
-  nodeId: z.string().trim().min(1).max(160).optional(),
-  route: z.string().trim().min(1).max(4096).optional(),
+  instanceId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  route: NonEmptyTrimmedTextSchema.max(4096).optional(),
 }).strict();
 
 export const AiSessionQueuedMessageSchema = z
   .object({
-    id: z.string().trim().min(1).max(120),
-    messageId: z.string().trim().min(1).max(240).optional(),
-    message: z.string().trim().min(1).max(20000),
+    id: NonEmptyTrimmedTextSchema.max(120),
+    messageId: NonEmptyTrimmedTextSchema.max(240).optional(),
+    message: NonEmptyTrimmedTextSchema.max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
     references: AiSessionReferencesSchema,
     permissionMode: AiSessionPermissionModeSchema.optional(),
     status: z.enum(["queued", "sending", "failed"]).default("queued"),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    error: z.string().trim().max(4000).optional(),
+    createdAt: DateTimeStringSchema,
+    updatedAt: DateTimeStringSchema,
+    error: TrimmedTextSchema.max(4000).optional(),
   })
   .strict();
 
@@ -749,33 +750,33 @@ export const AiSessionSourceSchema = z.enum([
 
 export const AiSessionContextCompactionSchema = z
   .object({
-    id: z.string().trim().min(1).max(240),
+    id: NonEmptyTrimmedTextSchema.max(240),
     status: z.enum(["running", "completed"]),
-    startedAt: z.string().datetime().optional(),
-    completedAt: z.string().datetime().optional(),
+    startedAt: DateTimeStringSchema.optional(),
+    completedAt: DateTimeStringSchema.optional(),
   })
   .strict();
 
 export const AiSessionTurnSchema = z
   .object({
-    id: z.string().trim().min(1).max(240),
-    providerTurnId: z.string().trim().max(240).optional(),
+    id: NonEmptyTrimmedTextSchema.max(240),
+    providerTurnId: TrimmedTextSchema.max(240).optional(),
     source: AiSessionSourceSchema.optional(),
-    userPrompt: z.string().trim().optional(),
+    userPrompt: TrimmedTextSchema.optional(),
     userMessages: z.array(AiSessionUserMessageDetailSchema).max(100).optional(),
     status: z.enum(["queued", "running", "waiting", "completed", "failed"]).default("running"),
     phase: AiSessionPhaseSchema.optional(),
-    summary: z.string().trim().max(1000).optional(),
-    lastMessage: z.string().trim().optional(),
-    lastMessageItemId: z.string().trim().max(240).optional(),
+    summary: TrimmedTextSchema.max(1000).optional(),
+    lastMessage: TrimmedTextSchema.optional(),
+    lastMessageItemId: TrimmedTextSchema.max(240).optional(),
     contextCompactions: z.array(AiSessionContextCompactionSchema).max(20).optional(),
     revision: z.number().int().min(0).default(0),
     sourcePriority: z.number().int().min(0).max(100).optional(),
     snapshotVersion: z.number().int().min(0).optional(),
-    observedAt: z.string().datetime().optional(),
-    startedAt: z.string().datetime().optional(),
-    updatedAt: z.string().datetime().optional(),
-    completedAt: z.string().datetime().optional(),
+    observedAt: DateTimeStringSchema.optional(),
+    startedAt: DateTimeStringSchema.optional(),
+    updatedAt: DateTimeStringSchema.optional(),
+    completedAt: DateTimeStringSchema.optional(),
   })
   .strict();
 
@@ -796,39 +797,39 @@ export const AiSessionHistoryTurnSchema = AiSessionTurnSchema.pick({
 
 export const AiSessionStatusSchema = z
   .object({
-    id: z.string().trim().min(1).max(120),
+    id: NonEmptyTrimmedTextSchema.max(120),
     agent: AiAgentKindSchema,
     creationSource: AiSessionCreationSourceSchema.default("app-session"),
-    appSessionId: z.string().trim().max(120).optional(),
-    appId: z.string().trim().max(120).optional(),
-    providerSessionId: z.string().trim().max(240).optional(),
+    appSessionId: TrimmedTextSchema.max(120).optional(),
+    appId: TrimmedTextSchema.max(120).optional(),
+    providerSessionId: TrimmedTextSchema.max(240).optional(),
     lineage: AiSessionLineageReadSchema,
     providerMeta: z.record(z.string(), z.unknown()).optional(),
     modelSelection: AiSessionModelSelectionSchema.optional(),
     reasoningEffort: AiSessionReasoningEffortSchema.optional(),
     storyId: StoryIdSchema.optional(),
-    appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
+    appBindingKeys: z.array(NonEmptyTrimmedTextSchema.max(240)).max(20).optional(),
     actions: AiSessionActionsSchema.optional(),
-    activeTurnId: z.string().trim().max(240).optional(),
-    title: z.string().trim().max(240).optional(),
-    cwd: z.string().trim().max(4096).optional(),
-    cwdFolderId: z.string().trim().min(1).max(120).optional(),
-    userPrompt: z.string().trim().optional(),
+    activeTurnId: TrimmedTextSchema.max(240).optional(),
+    title: TrimmedTextSchema.max(240).optional(),
+    cwd: TrimmedTextSchema.max(4096).optional(),
+    cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
+    userPrompt: TrimmedTextSchema.optional(),
     turns: z.array(AiSessionTurnSchema).max(50).optional(),
     status: AiSessionLifecycleSchema.default("running"),
     phase: AiSessionPhaseSchema.default("unknown"),
-    summary: z.string().trim().max(1000).optional(),
-    lastMessage: z.string().trim().optional(),
-    lastMessageItemId: z.string().trim().max(240).optional(),
+    summary: TrimmedTextSchema.max(1000).optional(),
+    lastMessage: TrimmedTextSchema.optional(),
+    lastMessageItemId: TrimmedTextSchema.max(240).optional(),
     currentTool: AiSessionToolSchema.optional(),
     toolCallsSinceLastMessage: z.number().int().min(0).default(0),
     subAgents: AiSessionCurrentSubAgentsSchema.default([]),
-    transcriptPath: z.string().trim().max(4096).optional(),
+    transcriptPath: TrimmedTextSchema.max(4096).optional(),
     transcriptSize: z.number().int().min(0).optional(),
-    startedAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    completedAt: z.string().datetime().optional(),
-    error: z.string().trim().max(4000).optional(),
+    startedAt: DateTimeStringSchema,
+    updatedAt: DateTimeStringSchema,
+    completedAt: DateTimeStringSchema.optional(),
+    error: TrimmedTextSchema.max(4000).optional(),
     counters: AiSessionCountersSchema,
     queue: AiSessionQueueSchema,
     // Owned by the controlled-instance AI session runtime: set when a turn
@@ -862,22 +863,22 @@ export const AiSessionTurnIndexEntrySchema = AiSessionTurnSchema.pick({
   updatedAt: true,
   completedAt: true,
 }).extend({
-  bodyRevision: z.string().trim().min(1).max(64),
+  bodyRevision: NonEmptyTrimmedTextSchema.max(64),
 }).strict();
 
 export const AiSessionTurnIndexSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  revision: z.string().trim().min(1).max(64),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  revision: NonEmptyTrimmedTextSchema.max(64),
   turns: z.array(AiSessionTurnIndexEntrySchema).max(50),
 }).strict();
 
 export const AiSessionTurnBodySchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
-  revision: z.string().trim().min(1).max(64),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  revision: NonEmptyTrimmedTextSchema.max(64),
   turn: AiSessionTurnSchema,
 }).strict();
 
-const AiSessionProjectionRevisionSchema = z.string().trim().min(1).max(64);
+const AiSessionProjectionRevisionSchema = NonEmptyTrimmedTextSchema.max(64);
 const AiSessionProjectionNotModifiedSchema = z.object({
   kind: z.literal("not-modified"),
   revision: AiSessionProjectionRevisionSchema,
@@ -929,7 +930,7 @@ export const AiSessionTurnTimelineReadSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const AiSessionTimelineItemRevisionSchema = z.object({
-  id: z.string().trim().min(1).max(240),
+  id: NonEmptyTrimmedTextSchema.max(240),
   revision: AiSessionProjectionRevisionSchema,
 }).strict();
 
@@ -956,36 +957,36 @@ export const AiSessionTimelineSyncReadSchema = z.discriminatedUnion("kind", [
     kind: z.literal("delta"),
     revision: AiSessionProjectionRevisionSchema,
     upserted: z.array(AiSessionTimelineVersionedItemSchema),
-    removed: z.array(z.string().trim().min(1).max(240)),
+    removed: z.array(NonEmptyTrimmedTextSchema.max(240)),
     // The client already holds the previous order. Servers omit this field
     // when removed items and tail-appended upserts fully determine the next
     // order; a full ID list is only needed for middle insertion or reordering.
-    order: z.array(z.string().trim().min(1).max(240)).optional(),
+    order: z.array(NonEmptyTrimmedTextSchema.max(240)).optional(),
   }).strict(),
 ]);
 
 export const AiSessionActionResultSchema = z.object({
   session: AiSessionStatusSchema,
-  provider: z.string().trim().min(1).max(80),
+  provider: NonEmptyTrimmedTextSchema.max(80),
   action: z.enum(["send", "queue", "steer", "interrupt", "approval"]),
   decision: z.enum(["allow", "deny", "skip"]).optional(),
-  turnId: z.string().trim().min(1).max(240).optional(),
-  providerTurnId: z.string().trim().min(1).max(240).optional(),
-  queueId: z.string().trim().min(1).max(120).optional(),
+  turnId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  providerTurnId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  queueId: NonEmptyTrimmedTextSchema.max(120).optional(),
 }).strict();
 
 // Public action acknowledgement. The runtime-owned full session remains an
 // internal reducer result and must not cross HTTP/reverse-proxy boundaries.
 export const AiSessionActionResponseSchema = AiSessionActionResultSchema.omit({ session: true }).extend({
-  sessionId: z.string().trim().min(1).max(120),
-  messageId: z.string().trim().min(1).max(240).optional(),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  messageId: NonEmptyTrimmedTextSchema.max(240).optional(),
 }).strict();
 
 export const AiSessionQueueMutationResponseSchema = z.object({
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   queueRevision: z.number().int().min(0),
   action: z.enum(["retry", "remove", "edit", "reorder", "pause"]),
-  queueId: z.string().trim().min(1).max(120).optional(),
+  queueId: NonEmptyTrimmedTextSchema.max(120).optional(),
 }).strict();
 
 export function projectAiSessionActionResponse(result: z.infer<typeof AiSessionActionResultSchema>) {
@@ -1030,21 +1031,21 @@ export const AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS = 365;
 export const AI_SESSION_HISTORY_LIMIT = AI_SESSION_HISTORY_DEFAULT_LIMIT;
 
 export const AiSessionHistoryItemSchema = z.object({
-  id: z.string().trim().min(1).max(120),
+  id: NonEmptyTrimmedTextSchema.max(120),
   agent: AiAgentKindSchema,
   creationSource: AiSessionCreationSourceSchema,
-  providerSessionId: z.string().trim().min(1).max(240),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   lineage: AiSessionLineageReadSchema,
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema.optional(),
-  title: z.string().trim().max(240).optional(),
-  userPrompt: z.string().trim().optional(),
-  lastMessage: z.string().trim().optional(),
-  cwd: z.string().trim().min(1).max(4096),
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
-  lastActiveAt: z.string().datetime(),
-  archivedAt: z.string().datetime(),
+  title: TrimmedTextSchema.max(240).optional(),
+  userPrompt: TrimmedTextSchema.optional(),
+  lastMessage: TrimmedTextSchema.optional(),
+  cwd: NonEmptyTrimmedTextSchema.max(4096),
+  cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
+  lastActiveAt: DateTimeStringSchema,
+  archivedAt: DateTimeStringSchema,
 }).strict();
 
 export const AiSessionHistoryIndexSchema = z.object({
@@ -1068,9 +1069,9 @@ export const AiSessionResumeInputSchema = z.object({
 
 export const AiSessionResumeResultSchema = z.object({
   disposition: z.enum(["resumed", "already-open"]),
-  aiSessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
-  appSessionId: z.string().trim().min(1).max(120).optional(),
+  aiSessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
+  appSessionId: NonEmptyTrimmedTextSchema.max(120).optional(),
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
@@ -1119,19 +1120,19 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   // of treating updatedAt as a reason to reload the complete conversation.
   // Compatibility for v0.0.23: older producers omit it and consumers retain
   // the list projection as authoritative while only enriching Turn metadata.
-  detailRevision: z.string().trim().min(1).max(64).optional(),
+  detailRevision: NonEmptyTrimmedTextSchema.max(64).optional(),
   // Independent version for the Turn index/body domain. It is not a display
   // key and must not remount or fade the owning session.
-  turnsRevision: z.string().trim().min(1).max(64).optional(),
+  turnsRevision: NonEmptyTrimmedTextSchema.max(64).optional(),
   // Minimal pointer used to refresh the live Turn body without reloading the
   // complete Turn index. The index revision only describes list structure.
   latestTurnRef: z.object({
     id: AiSessionTurnSchema.shape.id,
-    bodyRevision: z.string().trim().min(1).max(64),
+    bodyRevision: NonEmptyTrimmedTextSchema.max(64),
   }).strict().optional(),
   turnCount: z.number().int().min(0).optional(),
   subAgentCount: z.number().int().min(0).optional(),
-  lastUserMessageAt: z.string().datetime().optional(),
+  lastUserMessageAt: DateTimeStringSchema.optional(),
 }).strict();
 
 export const AiSessionsSnapshotSchema = z
@@ -1140,15 +1141,15 @@ export const AiSessionsSnapshotSchema = z
     waitingCount: z.number().int().min(0).default(0),
     staleCount: z.number().int().min(0).default(0),
     sessions: z.array(AiSessionSummarySchema).default([]),
-    updatedAt: z.string().datetime(),
+    updatedAt: DateTimeStringSchema,
   })
   .strict();
 
 export const AiSessionsStateSchema = z
   .object({
-    streamId: z.string().trim().min(1).max(240),
+    streamId: NonEmptyTrimmedTextSchema.max(240),
     revision: z.number().int().min(0),
-    lastEventAt: z.string().datetime(),
+    lastEventAt: DateTimeStringSchema,
     snapshot: AiSessionsSnapshotSchema,
   })
   .strict();
@@ -1191,13 +1192,13 @@ export const AiSessionEventReasonSchema = z.enum([
 
 export const AiSessionEventMetaSchema = z
   .object({
-    streamId: z.string().trim().min(1).max(240),
-    instanceId: z.string().trim().min(1).max(160),
-    nodeId: z.string().trim().min(1).max(160).optional(),
+    streamId: NonEmptyTrimmedTextSchema.max(240),
+    instanceId: NonEmptyTrimmedTextSchema.max(160),
+    nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
     revision: z.number().int().min(0),
     previousRevision: z.number().int().min(0).optional(),
-    traceId: z.string().trim().min(1).max(160),
-    generatedAt: z.string().datetime(),
+    traceId: NonEmptyTrimmedTextSchema.max(160),
+    generatedAt: DateTimeStringSchema,
     reason: AiSessionEventReasonSchema,
   })
   .strict();
@@ -1213,30 +1214,30 @@ export const AiSessionPatchEventSchema = z
   .object({
     meta: AiSessionEventMetaSchema,
     upserted: z.array(AiSessionSummarySchema).default([]),
-    removed: z.array(z.string().trim().min(1).max(120)).default([]),
+    removed: z.array(NonEmptyTrimmedTextSchema.max(120)).default([]),
   })
   .strict();
 
 export const AiSessionRemovedEventSchema = z
   .object({
     meta: AiSessionEventMetaSchema,
-    sessionIds: z.array(z.string().trim().min(1).max(120)).default([]),
-    expiresAt: z.string().datetime(),
+    sessionIds: z.array(NonEmptyTrimmedTextSchema.max(120)).default([]),
+    expiresAt: DateTimeStringSchema,
   })
   .strict();
 
 export const AiSessionMessageDeltaEventSchema = z
   .object({
-    instanceId: z.string().trim().min(1).max(160),
-    nodeId: z.string().trim().min(1).max(160).optional(),
-    sessionId: z.string().trim().min(1).max(120),
+    instanceId: NonEmptyTrimmedTextSchema.max(160),
+    nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
+    sessionId: NonEmptyTrimmedTextSchema.max(120),
     // Compatibility for v0.0.23: compact delta producers omit the provider
     // identity after resolving the authoritative AI Session id.
-    providerSessionId: z.string().trim().min(1).max(240).optional(),
-    turnId: z.string().trim().min(1).max(240),
-    itemId: z.string().trim().min(1).max(240),
+    providerSessionId: NonEmptyTrimmedTextSchema.max(240).optional(),
+    turnId: NonEmptyTrimmedTextSchema.max(240),
+    itemId: NonEmptyTrimmedTextSchema.max(240),
     delta: z.string().min(1),
-    generatedAt: z.string().datetime(),
+    generatedAt: DateTimeStringSchema,
   })
   .strict();
 
@@ -1263,26 +1264,26 @@ export function normalizeAiSessionMessageDeltaEvent(input: unknown, instanceId: 
 }
 
 export const AiSessionTimelineItemEventSchema = z.object({
-  instanceId: z.string().trim().min(1).max(160),
-  nodeId: z.string().trim().min(1).max(160).optional(),
-  sessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
+  nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240),
   item: AiSessionTimelineItemSchema,
-  generatedAt: z.string().datetime(),
+  generatedAt: DateTimeStringSchema,
 }).strict();
 
 export const AiSessionTimelineItemDeltaEventSchema = z.object({
   // Compatibility for v0.0.28: this remains a separate additive transient
   // event so older strict consumers can ignore it and recover the final item.
-  instanceId: z.string().trim().min(1).max(160),
-  nodeId: z.string().trim().min(1).max(160).optional(),
-  sessionId: z.string().trim().min(1).max(120),
-  providerSessionId: z.string().trim().min(1).max(240).optional(),
-  turnId: z.string().trim().min(1).max(240),
-  itemId: z.string().trim().min(1).max(240),
+  instanceId: NonEmptyTrimmedTextSchema.max(160),
+  nodeId: NonEmptyTrimmedTextSchema.max(160).optional(),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  providerSessionId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  turnId: NonEmptyTrimmedTextSchema.max(240),
+  itemId: NonEmptyTrimmedTextSchema.max(240),
   field: z.literal("output"),
   delta: z.string().min(1),
-  generatedAt: z.string().datetime(),
+  generatedAt: DateTimeStringSchema,
 }).strict();
 
 export const AiSessionTimelineItemDeltaCompactEventSchema = AiSessionTimelineItemDeltaEventSchema
@@ -1313,8 +1314,8 @@ export function normalizeAiSessionTimelineItemDeltaEvent(input: unknown, instanc
 
 export const AiSessionDeltaResponseSchema = z
   .object({
-    streamId: z.string().trim().min(1).max(240),
-    instanceId: z.string().trim().min(1).max(160),
+    streamId: NonEmptyTrimmedTextSchema.max(240),
+    instanceId: NonEmptyTrimmedTextSchema.max(160),
     sinceRevision: z.number().int().min(0),
     latestRevision: z.number().int().min(0),
     earliestRetainedRevision: z.number().int().min(0),
@@ -1329,11 +1330,11 @@ export const AiSessionDeltaResponseSchema = z
 
 export const AiSessionInstanceSnapshotSchema = z
   .object({
-    instanceId: z.string().trim().min(1).max(160),
-    streamId: z.string().trim().min(1).max(240),
+    instanceId: NonEmptyTrimmedTextSchema.max(160),
+    streamId: NonEmptyTrimmedTextSchema.max(240),
     aiSessions: AiSessionsSnapshotSchema,
     revision: z.number().int().min(0),
-    lastEventAt: z.string().datetime(),
+    lastEventAt: DateTimeStringSchema,
   })
   .strict();
 
@@ -1347,8 +1348,8 @@ export const AiSessionsSyncRequestSchema = z
       .array(
         z
           .object({
-            instanceId: z.string().trim().min(1).max(160),
-            streamId: z.string().trim().min(1).max(240),
+            instanceId: NonEmptyTrimmedTextSchema.max(160),
+            streamId: NonEmptyTrimmedTextSchema.max(240),
             revision: z.number().int().min(0),
           })
           .strict(),
@@ -1360,22 +1361,22 @@ export const AiSessionsSyncRequestSchema = z
 
 export const AiSessionsSyncResponseSchema = z
   .object({
-    updatedAt: z.string().datetime(),
+    updatedAt: DateTimeStringSchema,
     instances: z
       .array(
         z.union([
           AiSessionInstanceSnapshotSchema,
           z
             .object({
-              instanceId: z.string().trim().min(1).max(160),
-              streamId: z.string().trim().min(1).max(240),
+              instanceId: NonEmptyTrimmedTextSchema.max(160),
+              streamId: NonEmptyTrimmedTextSchema.max(240),
               delta: AiSessionDeltaResponseSchema,
             })
             .strict(),
         ]),
       )
       .default([]),
-    removedInstanceIds: z.array(z.string().trim().min(1).max(160)).default([]),
+    removedInstanceIds: z.array(NonEmptyTrimmedTextSchema.max(160)).default([]),
   })
   .strict();
 
@@ -1534,61 +1535,61 @@ export const AiSessionInputBaseSchema = z
   .object({
     source: AiSessionSourceSchema,
     sourcePriority: z.number().int().min(0).max(100).optional(),
-    observedAt: z.string().datetime().optional(),
+    observedAt: DateTimeStringSchema.optional(),
     snapshotVersion: z.number().int().min(0).optional(),
   })
   .strict();
 
 export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("snapshot"),
-  agent: z.string().trim().min(1).max(80),
+  agent: NonEmptyTrimmedTextSchema.max(80),
   creationSource: AiSessionCreationSourceSchema.optional(),
-  appSessionId: z.string().trim().max(120).optional(),
-  appId: z.string().trim().max(120).optional(),
-  providerSessionId: z.string().trim().max(240).optional(),
+  appSessionId: TrimmedTextSchema.max(120).optional(),
+  appId: TrimmedTextSchema.max(120).optional(),
+  providerSessionId: TrimmedTextSchema.max(240).optional(),
   lineage: AiSessionLineageSchema.optional(),
   providerMeta: z.record(z.string(), z.unknown()).optional(),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema.optional(),
-  appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
+  appBindingKeys: z.array(NonEmptyTrimmedTextSchema.max(240)).max(20).optional(),
   actions: AiSessionActionsSchema.optional(),
-  title: z.string().trim().max(240).optional(),
-  cwd: z.string().trim().max(4096).optional(),
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
-  activeTurnId: z.string().trim().max(240).optional(),
-  userPrompt: z.string().trim().optional(),
+  title: TrimmedTextSchema.max(240).optional(),
+  cwd: TrimmedTextSchema.max(4096).optional(),
+  cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
+  activeTurnId: TrimmedTextSchema.max(240).optional(),
+  userPrompt: TrimmedTextSchema.optional(),
   turns: z.array(AiSessionTurnSchema).max(50).optional(),
   status: AiSessionLifecycleSchema.optional(),
   phase: AiSessionPhaseSchema.optional(),
-  summary: z.string().trim().max(1000).optional(),
-  lastMessage: z.string().trim().optional(),
-  lastMessageItemId: z.string().trim().max(240).optional(),
-  error: z.string().trim().max(4000).optional(),
+  summary: TrimmedTextSchema.max(1000).optional(),
+  lastMessage: TrimmedTextSchema.optional(),
+  lastMessageItemId: TrimmedTextSchema.max(240).optional(),
+  error: TrimmedTextSchema.max(4000).optional(),
   currentTool: AiSessionToolSchema.optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: AiSessionCurrentSubAgentsSchema.optional(),
-  transcriptPath: z.string().trim().max(4096).optional(),
+  transcriptPath: TrimmedTextSchema.max(4096).optional(),
   transcriptSize: z.number().int().min(0).optional(),
   replaceActivity: z.boolean().optional(),
 }).strict();
 
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
-  sessionId: z.string().trim().min(1).max(120),
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
   kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort"]),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
-  activeTurnId: z.string().trim().max(240).optional(),
-  providerTurnId: z.string().trim().max(240).optional(),
-  userPrompt: z.string().trim().optional(),
+  activeTurnId: TrimmedTextSchema.max(240).optional(),
+  providerTurnId: TrimmedTextSchema.max(240).optional(),
+  userPrompt: TrimmedTextSchema.optional(),
   userMessage: AiSessionUserMessageDetailSchema.optional(),
   text: z.string().optional(),
-  itemId: z.string().trim().max(240).optional(),
+  itemId: TrimmedTextSchema.max(240).optional(),
   status: AiSessionLifecycleSchema.optional(),
   phase: AiSessionPhaseSchema.optional(),
-  summary: z.string().trim().max(1000).optional(),
-  error: z.string().trim().max(4000).optional(),
+  summary: TrimmedTextSchema.max(1000).optional(),
+  error: TrimmedTextSchema.max(4000).optional(),
   currentTool: AiSessionToolSchema.nullable().optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: AiSessionCurrentSubAgentsSchema.optional(),

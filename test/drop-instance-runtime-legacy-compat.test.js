@@ -34,6 +34,7 @@ const RETAINED_NODE_AGENT_COMPAT_SITES = new Map([
   ["packages/control-plane/src/node-agent/node-update-controller.ts", "更新与救援链路"],
   ["packages/control-plane/src/node-agent/persistence/legacy-migration.ts", "历史数据：P0 JSON 迁移"],
   ["packages/control-plane/src/node-agent/persistence/migrations.ts", "历史数据：已发布行的可读性"],
+  ["packages/control-plane/src/node-agent/persistence/topology-repository.ts", "历史数据：P0 SQLite 实例快照的当前协议清洗"],
   ["packages/control-plane/src/node-agent/runtimes/docker.ts", "历史数据与更新链路：卷标签迁移与 artifact 热替换"],
   ["packages/control-plane/src/node-agent/schemas.ts", "客户端边界：旧控制面的可选字段"],
   ["packages/control-plane/src/node-agent/stories/action-execution-service.ts", "历史数据：历史 Story Action"],

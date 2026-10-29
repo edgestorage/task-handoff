@@ -97,6 +97,29 @@ test("template origin survives generic stored instance sanitization", () => {
   assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-10-02");
 });
 
+test("stored instance recovery never mutates nested input when dropping unknown or invalid optional fields", () => {
+  const input = {
+    environmentSource: { type: "template", environmentTemplateId: "envtpl_one", future: { enabled: true } },
+    build: { component: "controlled-instance", packageVersion: 123, future: true },
+    runtime: { labels: { retained: "yes" }, future: true },
+  };
+  const original = structuredClone(input);
+  const freeze = (value) => {
+    if (value && typeof value === "object") {
+      Object.values(value).forEach(freeze);
+      Object.freeze(value);
+    }
+  };
+  freeze(input);
+  const sanitized = sanitizeStoredControlledInstance(input);
+  assert.deepEqual(input, original);
+  assert.deepEqual(sanitized.environmentSource, { type: "template", environmentTemplateId: "envtpl_one" });
+  assert.deepEqual(sanitized.build, { component: "controlled-instance" });
+  assert.deepEqual(sanitized.runtime.labels, { retained: "yes" });
+  sanitized.runtime.labels.retained = "changed";
+  assert.equal(input.runtime.labels.retained, "yes");
+});
+
 test("instance deletion protocol requires one total volume choice and reports each resource", () => {
   assert.throws(() => InstanceDeleteInputSchema.parse({}));
   assert.throws(() => InstanceDeleteInputSchema.parse({ deleteVolumes: true, deleteWorkspace: false }));

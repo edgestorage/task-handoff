@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
+  safeParseStoredControlledInstance,
   NodeLocalFolderSchema,
   NodeRuntimeSchema,
   sanitizeStoredControlledInstance,
@@ -154,20 +156,61 @@ export class RuntimeRepository {
 
 export class InstanceRepository {
   private readonly client: DatabaseSync;
+  private cache?: {
+    dataVersion: number;
+    entries: Map<string, { value?: ControlledInstance; error?: Error }>;
+  };
   constructor(client: DatabaseSync) { this.client = client; }
 
+  invalidate() {
+    this.cache = undefined;
+  }
+
   list(): ControlledInstance[] {
-    return (this.client.prepare(`SELECT i.*, o.health, o.connection_status, o.ready, o.observed_json,
-      o.last_heartbeat_at, o.updated_at AS observation_updated_at
-      FROM na_instances i LEFT JOIN na_instance_observations o ON o.instance_id = i.id ORDER BY i.id`).all() as Row[])
-      .map((row) => instanceFromRow(this.client, row));
+    return [...this.snapshot().entries.values()].flatMap((entry) => entry.value ? [structuredClone(entry.value)] : []);
   }
 
   get(id: string): ControlledInstance | undefined {
-    const row = this.client.prepare(`SELECT i.*, o.health, o.connection_status, o.ready, o.observed_json,
+    const entry = this.snapshot().entries.get(id);
+    if (!entry) return undefined;
+    if (entry.error) throw entry.error;
+    return structuredClone(entry.value!);
+  }
+
+  // Fleet reads and heartbeat fan-out repeatedly need the same persisted
+  // snapshot. Sanitizing and Zod-parsing every instance on each call dominates
+  // idle allocation, while the process is the only writer. Cache the parsed
+  // projection and use SQLite's cross-connection data_version as the external
+  // invalidation anchor; callers still receive independent mutable copies.
+  private snapshot() {
+    const dataVersion = Number((this.client.prepare("PRAGMA data_version").get() as { data_version?: number }).data_version || 0);
+    // Reads inside an open transaction may include uncommitted writes. Do not
+    // publish those rows into the cache, because a later rollback cannot be
+    // observed through data_version on the same connection.
+    const inTransaction = Boolean((this.client as DatabaseSync & { isTransaction?: boolean }).isTransaction);
+    if (!inTransaction && this.cache?.dataVersion === dataVersion) return this.cache;
+    const entries = new Map<string, { value?: ControlledInstance; error?: Error }>();
+    const rows = this.client.prepare(`SELECT i.*, o.health, o.connection_status, o.ready, o.observed_json,
       o.last_heartbeat_at, o.updated_at AS observation_updated_at
-      FROM na_instances i LEFT JOIN na_instance_observations o ON o.instance_id = i.id WHERE i.id = ?`).get(id) as Row | undefined;
-    return row ? instanceFromRow(this.client, row) : undefined;
+      FROM na_instances i LEFT JOIN na_instance_observations o ON o.instance_id = i.id ORDER BY i.id`).all() as Row[];
+    for (const row of rows) {
+      const id = String(row.id);
+      const parsed = instanceFromRow(this.client, row);
+      if (parsed.success) {
+        entries.set(id, { value: parsed.data });
+      } else {
+        const detail = parsed.error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ");
+        entries.set(id, {
+          error: Object.assign(
+            new Error(`Stored instance ${id} is not compatible with protocol ${CONTROL_PLANE_PROTOCOL_VERSION}: ${detail}`),
+            { statusCode: 409, code: "NODE_INSTANCE_PAYLOAD_INVALID" },
+          ),
+        });
+      }
+    }
+    const snapshot = { dataVersion, entries };
+    if (!inTransaction) this.cache = snapshot;
+    return snapshot;
   }
 
   put(input: ControlledInstance): ControlledInstance {
@@ -206,6 +249,7 @@ export class InstanceRepository {
           ready=excluded.ready, observed_json=excluded.observed_json, last_heartbeat_at=excluded.last_heartbeat_at,
           updated_at=excluded.updated_at`)
         .run(parsed.id, parsed.health, parsed.connectionStatus, parsed.ready ? 1 : 0, json(observed), parsed.lastHeartbeatAt ?? null, parsed.updatedAt);
+      this.invalidate();
       return this.get(parsed.id)!;
     });
   }
@@ -227,12 +271,15 @@ export class InstanceRepository {
           ready=excluded.ready, observed_json=excluded.observed_json, last_heartbeat_at=excluded.last_heartbeat_at,
           updated_at=excluded.updated_at`)
         .run(parsed.id, parsed.health, parsed.connectionStatus, parsed.ready ? 1 : 0, json(observationProjection(parsed)), parsed.lastHeartbeatAt ?? null, parsed.updatedAt);
+      this.invalidate();
       return this.get(parsed.id)!;
     });
   }
 
   delete(id: string) {
-    return Number(this.client.prepare("DELETE FROM na_instances WHERE id = ?").run(id).changes) > 0;
+    const deleted = Number(this.client.prepare("DELETE FROM na_instances WHERE id = ?").run(id).changes) > 0;
+    if (deleted) this.invalidate();
+    return deleted;
   }
 }
 
@@ -272,7 +319,10 @@ function runtimeFromRow(row: Row): NodeRuntime {
   });
 }
 
-function instanceFromRow(client: DatabaseSync, row: Row): ControlledInstance {
+// Compatibility for v0.0.46: stored desired/observed JSON can contain legacy
+// shapes or fields from a newer peer. Sanitize and validate exactly once at the
+// persistence read boundary; callers receive an independent current-model value.
+function instanceFromRow(client: DatabaseSync, row: Row) {
   const desired = parseJson<Record<string, unknown>>(row.desired_json);
   const observed = row.observed_json ? parseJson<Record<string, unknown>>(row.observed_json) : {};
   const assignment = client.prepare("SELECT * FROM na_instance_model_assignments WHERE instance_id = ?").get(String(row.id)) as Row | undefined;
@@ -285,7 +335,7 @@ function instanceFromRow(client: DatabaseSync, row: Row): ControlledInstance {
     ...(assignment.legacy_claude_model_id ? { claudeModelHash: String(assignment.legacy_claude_model_id) } : {}),
     ...(assignment.legacy_opencode_model_id ? { opencodeModelHash: String(assignment.legacy_opencode_model_id) } : {}),
   } : desired.modelSelection;
-  return ControlledInstanceSchema.parse({
+  return safeParseStoredControlledInstance({
     ...desired,
     ...observed,
     modelSelection,

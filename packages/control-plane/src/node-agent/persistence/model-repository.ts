@@ -18,7 +18,11 @@ function parseJson<T>(value: unknown): T { return JSON.parse(String(value)) as T
 
 export class ModelRepository {
   private readonly client: DatabaseSync;
-  constructor(client: DatabaseSync) { this.client = client; }
+  private readonly onInstanceProjectionChange: () => void;
+  constructor(client: DatabaseSync, onInstanceProjectionChange: () => void = () => {}) {
+    this.client = client;
+    this.onInstanceProjectionChange = onInstanceProjectionChange;
+  }
 
   list(): NodeModelConfig[] {
     return (this.client.prepare("SELECT * FROM na_models ORDER BY display_order, id").all() as Row[]).map(modelFromRow);
@@ -48,7 +52,10 @@ export class ModelRepository {
    * with ON UPDATE CASCADE, so one update re-points every instance reference.
    */
   rename(id: string, nextId: string) {
-    this.client.prepare("UPDATE na_models SET id = ? WHERE id = ?").run(nextId, id);
+    const changed = Number(this.client.prepare("UPDATE na_models SET id = ? WHERE id = ?").run(nextId, id).changes) > 0;
+    // Assignment entity rows change through ON UPDATE CASCADE without touching
+    // na_instances, so the aggregate instance projection must be invalidated.
+    if (changed) this.onInstanceProjectionChange();
   }
 
   delete(id: string) {
@@ -77,7 +84,11 @@ export class ModelRepository {
 
 export class ModelAssignmentRepository {
   private readonly client: DatabaseSync;
-  constructor(client: DatabaseSync) { this.client = client; }
+  private readonly onInstanceProjectionChange: () => void;
+  constructor(client: DatabaseSync, onInstanceProjectionChange: () => void = () => {}) {
+    this.client = client;
+    this.onInstanceProjectionChange = onInstanceProjectionChange;
+  }
 
   get(instanceId: string): NodeModelAssignment | undefined {
     const row = this.client.prepare("SELECT * FROM na_instance_model_assignments WHERE instance_id = ?").get(instanceId) as Row | undefined;
@@ -108,11 +119,16 @@ export class ModelAssignmentRepository {
       const insert = this.client.prepare("INSERT INTO na_instance_model_entities (instance_id, model_id, display_order) VALUES (?, ?, ?)");
       for (const [displayOrder, modelId] of value.modelEntityIds.entries()) insert.run(value.instanceId, modelId, displayOrder);
     });
+    // Instance reads join these tables; invalidate only after the transaction
+    // (or the enclosing transaction) has finished writing them.
+    this.onInstanceProjectionChange();
     return this.get(value.instanceId)!;
   }
 
   delete(instanceId: string) {
-    return Number(this.client.prepare("DELETE FROM na_instance_model_assignments WHERE instance_id = ?").run(instanceId).changes) > 0;
+    const deleted = Number(this.client.prepare("DELETE FROM na_instance_model_assignments WHERE instance_id = ?").run(instanceId).changes) > 0;
+    if (deleted) this.onInstanceProjectionChange();
+    return deleted;
   }
 
   private transaction<T>(operation: () => T): T {
@@ -129,10 +145,10 @@ export class ModelAssignmentRepository {
   }
 }
 
-export function createModelRepositories(client: DatabaseSync) {
+export function createModelRepositories(client: DatabaseSync, onInstanceProjectionChange: () => void = () => {}) {
   return {
-    models: new ModelRepository(client),
-    assignments: new ModelAssignmentRepository(client),
+    models: new ModelRepository(client, onInstanceProjectionChange),
+    assignments: new ModelAssignmentRepository(client, onInstanceProjectionChange),
     transaction<T>(operation: () => T): T {
       if ((client as DatabaseSync & { isTransaction?: boolean }).isTransaction) return operation();
       client.exec("BEGIN IMMEDIATE");

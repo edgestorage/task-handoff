@@ -203,7 +203,7 @@ export function migrateLegacyP0State(
     try {
       const access = new AccessRepository(client);
       const topology = createTopologyRepositories(client);
-      const model = createModelRepositories(client);
+      const model = createModelRepositories(client, () => topology.instances.invalidate());
       const git = new GitPersistenceRepository(client);
       if (identity) access.writeIdentity(identity);
       for (const folder of folders) topology.localFolders.put(folder);

@@ -165,3 +165,17 @@ test("controlled instance capability normalization isolates malformed feature do
   assert.deepEqual(normalized.features.futureFeature, { enabled: true });
   assert.equal(normalized.futureDocumentField, "preserved");
 });
+
+test("capability booleans accept only primitive booleans and keep independent domains usable", () => {
+  const defaults = normalizeControlledInstanceCapabilities({ features: {} });
+  const booleanFeatures = Object.keys(defaults.features).filter((key) => typeof defaults.features[key] === "boolean");
+  for (const feature of booleanFeatures) {
+    for (const value of [true, false, undefined, null, 0, 1, "true", "false", [], {}, new Boolean(true)]) {
+      const input = { features: { [feature]: value, aiSessionTimeline: { sessionReadAgents: ["codex"] } } };
+      const normalized = normalizeControlledInstanceCapabilities(input);
+      assert.equal(normalized.features[feature], value === true, `${feature}: ${String(value)}`);
+      assert.deepEqual(normalized.features.aiSessionTimeline.sessionReadAgents, ["codex"]);
+      assert.equal(input.features[feature], value);
+    }
+  }
+});

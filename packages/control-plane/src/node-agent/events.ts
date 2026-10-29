@@ -643,7 +643,8 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sync() {
-    const instanceIds = new Set(this.state.listInstances().map((instance) => instance.id));
+    const instances = this.state.listInstances();
+    const instanceIds = new Set(instances.map((instance) => instance.id));
     for (const projectionInstanceId of this.aiSessionProjectionByInstance.keys()) {
       if (!instanceIds.has(projectionInstanceId)) this.aiSessionProjectionByInstance.delete(projectionInstanceId);
     }
@@ -670,7 +671,7 @@ export class NodeAgentInstanceEventForwarder {
       return;
     }
     const active = new Set<string>();
-    for (const instance of this.state.listInstances()) {
+    for (const instance of instances) {
       const url = instanceEventUrl(instance);
       if (!url) {
         continue;

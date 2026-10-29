@@ -15,7 +15,6 @@ import {
   ProjectSourceSchema,
   projectSourceWithoutLegacyGitSecretId,
   WorkspacePolicySchema,
-  safeParseStoredControlledInstance,
   sanitizeStoredControlledInstance,
   sanitizeStoredNodeLocalFolder,
   supportsGitCliCredentialBroker,
@@ -135,14 +134,6 @@ function warnProtocolVersion(protocolVersion: string, peer: string) {
   }));
 }
 
-function storedInstancePayloadError(id: string, issues: Array<{ path: PropertyKey[]; message: string }>) {
-  const detail = issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ");
-  return Object.assign(
-    new Error(`Stored instance ${id} is not compatible with protocol ${CONTROL_PLANE_PROTOCOL_VERSION}: ${detail}`),
-    { statusCode: 409, code: "NODE_INSTANCE_PAYLOAD_INVALID" },
-  );
-}
-
 // capability 默认值的唯一真源见 ./runtime-capabilities.ts（refactor-runtime-adapter-registry D4）。
 export { runtimeRequiresImage, runtimeUsesManagedArtifacts } from "./runtime-capabilities.ts";
 
@@ -169,13 +160,15 @@ export class ControlledInstanceCollection {
   }
 
   put(record: ControlledInstance) {
-    const hydrated = this.records.put(ControlledInstanceSchema.parse(record));
+    // The repository owns the persistence-boundary sanitize/validate step.
+    // Re-parsing here only duplicates the same in-memory model on every write.
+    const hydrated = this.records.put(record);
     this.onStored?.(hydrated);
     return hydrated;
   }
 
   putObservation(record: ControlledInstance) {
-    const hydrated = this.records.putObservation(ControlledInstanceSchema.parse(record));
+    const hydrated = this.records.putObservation(record);
     this.onStored?.(hydrated);
     return hydrated;
   }
@@ -629,11 +622,7 @@ export class NodeAgentState {
       Object.assign(error, { statusCode: 404, code: "NODE_INSTANCE_NOT_FOUND" });
       throw error;
     }
-    const parsed = safeParseStoredControlledInstance(instance);
-    if (!parsed.success) {
-      throw storedInstancePayloadError(id, parsed.error.issues);
-    }
-    return parsed.data;
+    return instance;
   }
 
   applyInstanceLifecycle(id: string, event: InstanceLifecycleEvent) {
@@ -641,10 +630,7 @@ export class NodeAgentState {
   }
 
   listInstances() {
-    return this.controlledInstances.list().flatMap((instance) => {
-      const parsed = safeParseStoredControlledInstance(instance);
-      return parsed.success ? [parsed.data] : [];
-    });
+    return this.controlledInstances.list();
   }
 
   resolvedAssignedModelEnvironment(instanceId: string) {

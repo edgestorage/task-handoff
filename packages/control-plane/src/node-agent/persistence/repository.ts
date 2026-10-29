@@ -52,6 +52,7 @@ export type NodeAgentRepository = ReturnType<typeof createNodeAgentRepository>;
 
 export function createNodeAgentRepository(database: NodeAgentDatabase) {
   const db: NodeSQLiteDatabase = database.db;
+  const topology = createTopologyRepositories(database.client);
   const queue = new MutationQueue();
   const transactionContext = new AsyncLocalStorage<boolean>();
   let closed = false;
@@ -129,8 +130,8 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     decisions: decisionRepository(db, read, mutate),
     fileMutations: fileMutationRepository(db, read, mutate),
     deletionIntents: deletionIntentRepository(db, read, mutate),
-    topology: createTopologyRepositories(database.client),
-    model: createModelRepositories(database.client),
+    topology,
+    model: createModelRepositories(database.client, () => topology.instances.invalidate()),
     agents: createAgentRepositories(database.client),
     access: new AccessRepository(database.client),
     git: new GitPersistenceRepository(database.client),
