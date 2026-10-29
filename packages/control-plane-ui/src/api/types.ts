@@ -102,8 +102,8 @@ export type CloudConnectivity = {
   version: 1;
   serviceOrigin: string;
   status: "unbound" | "pending-claim" | "active" | "pending-revocation" | "clone-conflict";
-  /** Two independent cloud-relay scopes; only both being off stops the cloud connection. */
-  scopes: { deviceAccess: boolean; nodeRelay: boolean };
+  /** Account-device access. Node relay follows the active binding. */
+  scopes: { deviceAccess: boolean };
   remoteAccessEnabled: boolean;
   accountId?: string;
   bindingId?: string;

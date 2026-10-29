@@ -80,6 +80,13 @@ export const models = pgTable("cp_models", {
   protocols: jsonb("protocols").$type<string[]>().notNull(), app: text("app").notNull(), enabled: boolean("enabled").notNull(),
   order: integer("display_order").notNull(), labels: jsonb("labels").$type<Record<string, string>>().notNull(), ...timestamps,
 }, (table) => [index("cp_models_order_idx").on(table.order, table.name, table.id)]);
+export const modelPendingNodeEdits = pgTable("cp_model_pending_node_edits", {
+  id: text("id").primaryKey(), modelId: text("model_id").notNull(), nodeId: text("node_id").notNull(),
+  patchCiphertext: text("patch_ciphertext").notNull(), updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("cp_model_pending_node_edits_identity_uq").on(table.modelId, table.nodeId),
+  index("cp_model_pending_node_edits_node_idx").on(table.nodeId),
+]);
 export const chatBridges = pgTable("cp_chat_bridges", {
   id: text("id").primaryKey(), channel: text("channel").notNull(), name: text("name").notNull(), enabled: boolean("enabled").notNull(),
   credentialCiphertext: text("credential_ciphertext"),

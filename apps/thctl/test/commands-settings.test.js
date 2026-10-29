@@ -100,7 +100,7 @@ function settingsFetch(fake) {
       return json(200, { data: { version: 2, serviceOrigin: "https://cloud.example.com", status: "unbound", scopes: cloudScopes, remoteAccessEnabled: cloudScopes.deviceAccess, updatedAt: now, identity: { controlPlaneId: "cp_fake", algorithm: "Ed25519", publicKey: "pk", fingerprint: "sha256:x" }, hasBackgroundCredential: false } });
     }
     if (method === "POST" && parsed.pathname === "/api/cloud-connectivity/remote-access") {
-      cloudScopes = body?.scopes ?? { deviceAccess: body?.enabled === true, nodeRelay: false };
+      cloudScopes = { deviceAccess: body?.scopes?.deviceAccess ?? body?.enabled === true, nodeRelay: true };
       return json(200, { data: { version: 2, serviceOrigin: "https://cloud.example.com", status: "unbound", scopes: cloudScopes, remoteAccessEnabled: cloudScopes.deviceAccess, updatedAt: now, identity: { controlPlaneId: "cp_fake", algorithm: "Ed25519", publicKey: "pk", fingerprint: "sha256:x" }, hasBackgroundCredential: false } });
     }
     if (method === "POST" && parsed.pathname === "/api/cloud-connectivity/challenges") {
@@ -200,40 +200,40 @@ test("cloud challenge never prints the binding secret", async () => {
   assert.match(output.stdout(), /cloud\.example\.com\/bindings\/authorize/);
 });
 
-test("cloud scope commands protect node relay and preserve the legacy route", async () => {
+test("cloud scope commands expose only device access", async () => {
   const { store, fake } = await signedIn();
   const admin = settingsFetch(fake);
-
-  const blocked = capture();
-  assert.equal(await runCli(["node", "thctl", "cloud", "remote-access", "--enabled", "true", "--yes"], {
-    store, streams: blocked.streams, fetchImpl: admin.fetchImpl, isTty: false,
-  }), 8, blocked.stderr());
-  assert.match(blocked.stderr(), /CLI_CLOUD_SCOPE_CONFLICT/);
-  assert.match(blocked.stderr(), /cloud scopes set/);
-  assert.equal(admin.calls.some((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access"), false);
-
-  const preview = capture();
-  assert.equal(await runCli(["node", "thctl", "cloud", "scopes", "set", "--device-access", "false", "--node-relay", "false", "--dry-run"], {
-    store, streams: preview.streams, fetchImpl: admin.fetchImpl, isTty: false,
-  }), 0, preview.stderr());
-  assert.deepEqual(JSON.parse(preview.stdout()).body, { scopes: { deviceAccess: false, nodeRelay: false } });
-  assert.equal(admin.calls.some((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access"), false);
-
-  const scoped = capture();
-  assert.equal(await runCli(["node", "thctl", "cloud", "scopes", "set", "--device-access", "false", "--node-relay", "false", "--yes"], {
-    store, streams: scoped.streams, fetchImpl: admin.fetchImpl, isTty: false,
-  }), 0, scoped.stderr());
-  assert.deepEqual(JSON.parse(scoped.stdout()).scopes, { deviceAccess: false, nodeRelay: false });
-  assert.deepEqual(admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").at(-1)?.body, {
-    scopes: { deviceAccess: false, nodeRelay: false },
-  });
 
   const legacy = capture();
   assert.equal(await runCli(["node", "thctl", "cloud", "remote-access", "--enabled", "true", "--yes"], {
     store, streams: legacy.streams, fetchImpl: admin.fetchImpl, isTty: false,
   }), 0, legacy.stderr());
-  assert.deepEqual(JSON.parse(legacy.stdout()).scopes, { deviceAccess: true, nodeRelay: false });
-  assert.deepEqual(admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").at(-1)?.body, { enabled: true });
+  assert.deepEqual(JSON.parse(legacy.stdout()).scopes, { deviceAccess: true });
+  assert.deepEqual(admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").at(-1)?.body, {
+    scopes: { deviceAccess: true, nodeRelay: true },
+  });
+  const writesBeforePreview = admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").length;
+
+  const preview = capture();
+  assert.equal(await runCli(["node", "thctl", "cloud", "scopes", "set", "--device-access", "false", "--dry-run"], {
+    store, streams: preview.streams, fetchImpl: admin.fetchImpl, isTty: false,
+  }), 0, preview.stderr());
+  assert.deepEqual(JSON.parse(preview.stdout()).body, { scopes: { deviceAccess: false, nodeRelay: true } });
+  assert.equal(admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").length, writesBeforePreview);
+
+  const scoped = capture();
+  assert.equal(await runCli(["node", "thctl", "cloud", "scopes", "set", "--device-access", "false", "--yes"], {
+    store, streams: scoped.streams, fetchImpl: admin.fetchImpl, isTty: false,
+  }), 0, scoped.stderr());
+  assert.deepEqual(JSON.parse(scoped.stdout()).scopes, { deviceAccess: false });
+  assert.deepEqual(admin.calls.filter((call) => call.method === "POST" && call.path === "/api/cloud-connectivity/remote-access").at(-1)?.body, {
+    scopes: { deviceAccess: false, nodeRelay: true },
+  });
+
+  const unsupported = capture();
+  assert.notEqual(await runCli(["node", "thctl", "cloud", "scopes", "set", "--node-relay", "false", "--dry-run"], {
+    store, streams: unsupported.streams, fetchImpl: admin.fetchImpl, isTty: false,
+  }), 0);
 });
 
 test("cloud account and account-node commands use the current API surface", async () => {

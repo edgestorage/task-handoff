@@ -84,6 +84,25 @@ test("cloud identity is persisted separately from the local Control Plane identi
   assert.equal(restarted.cloudControlPlaneId(), "cp_cloud_a");
 });
 
+test("N-1 node-relay state migrates to the binding-derived value", () => {
+  const { root, identity } = fixture();
+  const statePath = path.join(root, "binding.json");
+  const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  fs.writeFileSync(statePath, JSON.stringify({
+    ...stored,
+    status: "active",
+    accountId: "account_a",
+    bindingId: "binding_a",
+    bindingRevision: 1,
+    backgroundCredential: "c".repeat(43),
+    scopes: { deviceAccess: false, nodeRelay: false },
+  }));
+  const restarted = new CloudConnectivityService({ statePath, identity, serviceOrigin: "https://cloud.example.test" });
+  restarted.init();
+  assert.deepEqual(restarted.snapshot().scopes, { deviceAccess: false, nodeRelay: true });
+  assert.equal(restarted.backgroundCredential(), "c".repeat(43), "device access being off must not stop node claims");
+});
+
 test("role catalog revision is monotonic, persisted, and keeps publication failures retryable", () => {
   const { root, identity, service } = fixture();
   assert.equal(service.catalogRevision(), 1);
@@ -172,9 +191,9 @@ test("service outage keeps local disable and pending revocation instead of allow
   const pending = await lifecycle.disconnect();
   assert.equal(pending.status, "pending-revocation");
   assert.throws(() => service.createChallenge(), { code: "BINDING_STATE_CONFLICT" });
-  // The outbound control connection is kept for the retry; only the scope
-  // change stopped it before disconnect was attempted.
-  assert.deepEqual(stopped, ["scope-disabled"]);
+  // Device access is independent from node relay, so the outbound control
+  // connection stays available for both node claims and the revoke retry.
+  assert.deepEqual(stopped, []);
   assert.equal(service.revocationCredential(), "c".repeat(43));
 });
 
@@ -201,7 +220,7 @@ test("disconnect confirms the remote revoke before dropping the control connecti
   assert.deepEqual(calls, ["ensure", "revoke:binding_a", "stop:binding-revoked"]);
 });
 
-test("turning both relay scopes off notifies the cloud before stopping the outbound connection", async () => {
+test("turning device access off notifies the cloud without stopping node relay", async () => {
   const { service } = fixture();
   const challenge = service.createChallenge();
   service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });
@@ -214,10 +233,10 @@ test("turning both relay scopes off notifies the cloud before stopping the outbo
   });
   const result = await lifecycle.setRemoteAccess({ deviceAccess: false, nodeRelay: false });
   assert.equal(result.remoteResult, "confirmed");
-  assert.deepEqual(calls, ["remote:false:false", "stop:scope-disabled"]);
+  assert.deepEqual(calls, ["remote:false:true"]);
 });
 
-test("turning a relay scope back on reconnects before notifying the cloud", async () => {
+test("changing device access keeps the control connection and reconnects before notifying the cloud", async () => {
   const { service } = fixture();
   const challenge = service.createChallenge();
   service.consumeChallenge({ challengeCode: challenge.challengeCode, controlPlaneId: challenge.payload.controlPlaneId, fingerprint: challenge.payload.publicKeyFingerprint });

@@ -204,7 +204,12 @@ export function useCloudConnectivityQuery() {
     queryKey: controlPlaneQueryKeys.cloudConnectivity,
     queryFn: () => sharedControlPlaneClient.admin.cloudConnectivity(),
     retry: false,
-    refetchInterval: (query) => query.state.data?.status === "active" ? 10_000 : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "active") return 10_000;
+      if (status === "pending-claim" || status === "pending-revocation") return 3_000;
+      return false;
+    },
   });
 }
 
@@ -246,10 +251,6 @@ export function createCloudBindingChallenge() {
 
 export function updateCloudRemoteAccess(enabled: boolean) {
   return sharedControlPlaneClient.admin.setCloudRemoteAccess(enabled);
-}
-
-export function updateCloudScopes(scopes: { deviceAccess: boolean; nodeRelay: boolean }) {
-  return sharedControlPlaneClient.admin.setCloudScopes(scopes);
 }
 
 export function updateCloudAvailableRoles(input: { expectedSettingsRevision: number; availableRoleIds: string[] }) {

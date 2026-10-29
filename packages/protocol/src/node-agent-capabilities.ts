@@ -138,6 +138,10 @@ export const NodeAgentCapabilitiesSchema = z.object({
   stories: NodeAgentStoryCapabilitiesSchema.optional(),
   // Compatibility for v0.0.28: absent node-agents reject codexSettings in instance patches.
   codexManagedSettings: z.boolean().optional(),
+  // Additive capability: older Node Agents expose neither the trust snapshot
+  // nor its decision routes, so readers close this feature domain instead of
+  // polling an endpoint that returns 404.
+  controlPlaneTrust: z.boolean().optional(),
   // Compatibility for v0.0.32: 缺失该字段只关闭 Agent 功能域，不影响其它 Node 能力。
   agentExecution: NodeAgentAgentExecutionCapabilitiesSchema.optional(),
 }).strip();
@@ -231,6 +235,11 @@ export function supportsNodeModelRelayImagePruning(capabilities: unknown) {
 
 export function supportsNodeCodexManagedSettings(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).codexManagedSettings === true;
+}
+
+/** 缺失即不支持；旧 Node Agent 不提供控制面信任快照与撤销接口。 */
+export function supportsNodeControlPlaneTrust(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.controlPlaneTrust === true;
 }
 
 export function supportsNodeStories(capabilities: unknown) {

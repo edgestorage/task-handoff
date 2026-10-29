@@ -272,8 +272,7 @@ const account = useCloudAccountQuery();
 const connectivity = useCloudConnectivityQuery();
 const cloudRelaySignedIn = computed(() => Boolean(account.data.value?.signedIn));
 const cloudRelayBound = computed(() => connectivity.data.value?.status === "active");
-const cloudRelayScopeEnabled = computed(() => connectivity.data.value?.scopes?.nodeRelay === true);
-const cloudRelayUsable = computed(() => cloudRelaySignedIn.value && cloudRelayBound.value && cloudRelayScopeEnabled.value);
+const cloudRelayUsable = computed(() => cloudRelaySignedIn.value && cloudRelayBound.value);
 const accountNodes = useCloudAccountNodesQuery({
   enabled: () => cloudRelayUsable.value && (props.open || onboarding.active.value),
   refetchIntervalMs: () => onboarding.active.value ? 2_000 : false,
@@ -288,7 +287,7 @@ const steps = computed(() => [
 const stepIndex = computed(() => steps.value.findIndex((item) => item.id === step.value));
 const cloudRelayUnavailableReason = computed(() => !cloudRelaySignedIn.value
   ? t("settings.nodeRelay.unavailableSignedIn")
-  : !cloudRelayBound.value ? t("settings.nodeRelay.unavailableUnbound") : t("settings.nodeRelay.unavailableScope"));
+  : t("settings.nodeRelay.unavailableUnbound"));
 const accountNodeItems = computed(() => (accountNodes.data.value?.items ?? []).filter((item) => item.status === "active"));
 const accountNodeConnected = (nodeHandle: string) => Boolean(accountNodes.data.value?.nodeRelay.channels.some((channel) => channel.nodeHandle === nodeHandle && channel.connected));
 const accountNodeClaimed = (nodeHandle: string) => attempt.value?.nodeHandle === nodeHandle || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle)) || accountNodeConnected(nodeHandle);

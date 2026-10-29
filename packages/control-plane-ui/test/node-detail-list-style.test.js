@@ -62,7 +62,8 @@ test("cloud relay panels keep a standalone card layout and support an embedded m
     assert.doesNotMatch(component, /node-remote-panel|class="section-head/);
   }
 
-  assert.match(bind, /cloudRelayBindRequiresScope/);
+  assert.doesNotMatch(bind, /cloudRelayBindRequiresScope|cloudRelayBindEnableScope/);
+  assert.doesNotMatch(bind, /updateCloudScopes|nodeRelay/);
   assert.match(node, /\.cloud-relay-panel-row\s*\{[^}]*padding: 10px 12px;/s);
 });
 
@@ -71,13 +72,17 @@ test("cloud node trust lists active control planes and revokes with revision fen
   const detail = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
   const relay = read("src/apps/control-plane/settings/CloudRelayNodePanel.vue");
+  const trustInbox = read("src/apps/control-plane/action-inbox/useNodeControlPlaneTrustInbox.ts");
   const english = read("src/i18n/locales/en-US/settings.ts");
   const chinese = read("src/i18n/locales/zh-CN/settings.ts");
 
   assert.match(detail, /CLOUD_ACCOUNT_NODE_HANDLE_LABEL/);
   assert.match(detail, /connectionPath\?\.kind === "cloud-relay"/);
   assert.match(detail, /canManageSettings: boolean/);
-  assert.match(detail, /showCloudNodeTrust = computed\(\(\) => props\.canManageSettings && Boolean/);
+  assert.match(detail, /cloudNodeTrustAvailable = computed\(\(\) => Boolean\(props\.selectedNode && \(/);
+  assert.match(detail, /nodeSupportsControlPlaneTrust\(props\.selectedNode\)/);
+  assert.match(detail, /showCloudNodeTrust = computed\(\(\) => props\.canManageSettings && cloudNodeTrustAvailable\.value\)/);
+  assert.match(detail, /showCloudNodeTrustPanelPlaceholder[\s\S]*?cloudRelayTrustUnsupported/);
   assert.match(settings, /<NodeDetailPanel[\s\S]*:can-manage-settings="canManageSettings"/);
   assert.equal((detail.match(/class="node-cloud-connection-card"/g) || []).length, 2);
   assert.match(detail, /\.node-cloud-connection-card\s*\{[^}]*overflow:\s*hidden;[^}]*border:\s*1px solid var\(--line\);[^}]*border-radius:\s*8px;[^}]*background:\s*var\(--surface-raised\);/s);
@@ -85,9 +90,10 @@ test("cloud node trust lists active control planes and revokes with revision fen
   assert.match(detail, /<CloudRelayNodePanel :selected-node="selectedNode" embedded \/>[\s\S]*<CloudNodeTrustPanel/);
   assert.match(detail, /<CloudRelayBindPanel :selected-node="selectedNode" embedded[^>]*\/>[\s\S]*<CloudNodeTrustPanel/);
   assert.equal((detail.match(/v-if="showCloudNodeTrust"/g) || []).length, 2);
-  assert.equal((detail.match(/:can-manage-settings="canManageSettings"/g) || []).length, 2);
+  assert.equal((detail.match(/:can-manage-settings="canManageSettings && nodeSupportsControlPlaneTrust\(selectedNode\)"/g) || []).length, 2);
   assert.match(trust, /\.cloud-node-trust-panel-embedded\s*\{[^}]*border:\s*0;[^}]*border-top:\s*1px solid var\(--line\);/s);
   assert.doesNotMatch(relay, /nodeControlPlaneTrustQueryOptions|cloudRelayTrust/);
+  assert.match(trustInbox, /nodeSupportsControlPlaneTrust\(node\)/);
   assert.match(trust, /canManageSettings: boolean/);
   assert.match(trust, /nodeControlPlaneTrustQueryOptions\(props\.selectedNode\.id, props\.canManageSettings\)/);
   assert.match(trust, /\.filter\(\(pin\) => pin\.status === "active"\)/);
@@ -103,7 +109,7 @@ test("cloud node trust lists active control planes and revokes with revision fen
   assert.match(trust, /expectedRevision: targetPin\.revision/);
   assert.match(trust, /nodeId: props\.selectedNode\.id, pin/);
 
-  for (const key of ["cloudRelayTrustedControlPlanes", "cloudRelayTrustEmpty", "cloudRelayTrustCurrent", "cloudRelayTrustCurrentHint", "cloudRelayTrustCurrentUnknownHint", "cloudRelayTrustRevokeTitle", "cloudRelayTrustRevokeDescription", "cloudRelayTrustRevokeDone", "cloudRelayTrustRevokeFailed"]) {
+  for (const key of ["cloudRelayTrustedControlPlanes", "cloudRelayTrustEmpty", "cloudRelayTrustUnsupported", "cloudRelayTrustCurrent", "cloudRelayTrustCurrentHint", "cloudRelayTrustCurrentUnknownHint", "cloudRelayTrustRevokeTitle", "cloudRelayTrustRevokeDescription", "cloudRelayTrustRevokeDone", "cloudRelayTrustRevokeFailed"]) {
     assert.match(english, new RegExp(`${key}:`));
     assert.match(chinese, new RegExp(`${key}:`));
   }
@@ -115,12 +121,10 @@ test("cloud permission copy exposes an inline node picker", () => {
   const chinese = read("src/i18n/locales/zh-CN/settings.ts");
   const english = read("src/i18n/locales/en-US/settings.ts");
 
-  assert.match(chinese, /scopesTitle: "云平台权限"/);
-  assert.match(chinese, /nodeListTitle: "当前控制面节点"/);
-  assert.match(chinese, /nodeAddAndEnable: "开启权限并添加"/);
+  assert.match(chinese, /scopesTitle: "云端访问"/);
+  assert.match(chinese, /nodeListTitle: "本控制面节点"/);
   assert.match(chinese, /cloudRelayBindAction: "添加到云平台"/);
-  assert.match(english, /scopesTitle: "Cloud permissions"/);
+  assert.match(english, /scopesTitle: "Cloud access"/);
   assert.match(english, /nodeListTitle: "Nodes in this Control Plane"/);
-  assert.match(english, /nodeAddAndEnable: "Enable access and add"/);
   assert.match(english, /cloudRelayBindAction: "Add to cloud"/);
 });

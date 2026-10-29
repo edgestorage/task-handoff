@@ -1448,7 +1448,9 @@ export class ControlPlaneService {
       throw error;
     }
     this.nodeAgentGateway.forgetNode(id);
-    return this.nodes.delete(id);
+    const deleted = await this.nodes.delete(id);
+    if (deleted) await this.modelService.deletePendingNodeEditsForNode(id);
+    return deleted;
   }
 
   private observeNode(node: Node) {

@@ -5,10 +5,6 @@
         <p>{{ t("settings.cloud.description") }}</p>
         <Badge :variant="state?.status === 'active' ? 'default' : 'secondary'">{{ statusLabel }}</Badge>
       </header>
-      <p v-if="requestFailure" class="cloud-warning" role="alert">
-        {{ requestFailureMessage }}
-        <code>{{ requestFailure.code }}</code>
-      </p>
       <Tabs v-model="tab" class="cloud-tabs">
         <TabsList class="cloud-tabs-list">
           <TabsTrigger value="connection">{{ t("settings.cloud.tabs.connection") }}</TabsTrigger>
@@ -20,65 +16,89 @@
 
       <template v-if="tab === 'connection'">
       <section class="cloud-directory">
-        <header class="cloud-directory-head"><strong>{{ t("settings.cloud.accountTitle") }}</strong></header>
-        <div v-if="account.error.value" class="cloud-error" role="alert"><span>{{ errorText(account.error.value) }}</span><Button variant="outline" size="sm" @click="account.refetch()">{{ t("common.actions.retry") }}</Button></div>
-        <div v-else-if="account.isLoading.value" class="cloud-state" role="status">{{ t("settings.cloud.loading") }}</div>
-        <div v-else class="cloud-content">
-          <p class="cloud-note">{{ t("settings.cloud.accountNote") }}</p>
-          <p v-if="reauthRequired && !waitingForSignIn" class="cloud-warning" role="alert">{{ t("settings.cloud.sessionExpired") }}</p>
-          <dl v-if="signedIn" class="cloud-identity">
-            <div><dt>{{ t("settings.cloud.accountEmail") }}</dt><dd>{{ session?.email || session?.accountId }}</dd></div>
-            <div v-if="session?.sessionExpiresAt"><dt>{{ t("settings.cloud.accountExpires") }}</dt><dd>{{ formatDate(session.sessionExpiresAt) }}</dd></div>
-          </dl>
-          <p v-if="waitingForSignIn" class="cloud-pending" role="status">
-            {{ t("settings.cloud.waitingSignIn") }}
-            <button type="button" class="cloud-link" @click="reopen(pendingUrl)">{{ t("settings.cloud.reopen") }}</button>
-          </p>
-          <div class="cloud-actions">
-            <Button v-if="!signedIn && !waitingForSignIn" :disabled="busy" @click="signIn">{{ busy ? t("settings.cloud.opening") : t("settings.cloud.signIn") }}</Button>
-            <Button v-if="signedIn" variant="outline" :disabled="busy" @click="signOut">{{ t("settings.cloud.signOut") }}</Button>
-          </div>
-        </div>
-      </section>
-
-      <section class="cloud-directory">
         <header class="cloud-directory-head"><strong>{{ t("settings.cloud.relayTitle") }}</strong></header>
-        <div v-if="query.isLoading.value" class="cloud-state" role="status">{{ t("settings.cloud.loading") }}</div>
-        <div v-else-if="query.error.value" class="cloud-error" role="alert"><span>{{ errorText(query.error.value) }}</span><Button variant="outline" size="sm" @click="query.refetch()">{{ t("common.actions.retry") }}</Button></div>
+        <div v-if="query.isLoading.value || account.isLoading.value" class="cloud-state" role="status">{{ t("settings.cloud.loading") }}</div>
+        <div v-else-if="query.error.value" class="cloud-error" role="alert">
+          <span>{{ errorText(query.error.value) }}</span>
+          <Button variant="outline" size="sm" @click="query.refetch()">{{ t("common.actions.retry") }}</Button>
+        </div>
+        <div v-else-if="account.error.value" class="cloud-error" role="alert">
+          <span>{{ errorText(account.error.value) }}</span>
+          <Button variant="outline" size="sm" @click="account.refetch()">{{ t("common.actions.retry") }}</Button>
+        </div>
         <div v-else-if="state" class="cloud-content">
-          <dl class="cloud-identity">
-            <div><dt>{{ t("settings.cloud.controlPlaneId") }}</dt><dd>{{ state.identity.controlPlaneId }}</dd></div>
-            <div v-if="state.cloudControlPlaneId"><dt>{{ t("settings.cloud.cloudControlPlaneId") }}</dt><dd>{{ state.cloudControlPlaneId }}</dd></div>
-            <div><dt>{{ t("settings.cloud.fingerprint") }}</dt><dd><code>{{ state.identity.fingerprint }}</code></dd></div>
-            <div v-if="state.bindingRevision"><dt>{{ t("settings.cloud.revision") }}</dt><dd>{{ state.bindingRevision }}</dd></div>
-            <div v-if="state.accountId"><dt>{{ t("settings.cloud.boundAccount") }}</dt><dd>{{ session?.email || state.accountId }}</dd></div>
-            <div><dt>{{ t("settings.cloud.background") }}</dt><dd>{{ state.hasBackgroundCredential ? t("settings.cloud.running") : t("settings.cloud.notConnected") }}</dd></div>
-          </dl>
-          <p class="cloud-note">{{ t("settings.cloud.backgroundNote") }}</p>
-          <p v-if="!signedIn && (state.status === 'unbound' || state.status === 'pending-claim')" class="cloud-warning" role="status">{{ t("settings.cloud.signInFirst") }}</p>
-          <p v-else-if="waitingForBinding" class="cloud-pending" role="status">
-            {{ t("settings.cloud.waitingBinding") }}
+          <div class="cloud-summary">
+            <strong>{{ stageTitle }}</strong>
+            <span>{{ stageDetail }}</span>
+          </div>
+          <p v-if="connectionStage === 'active'" class="cloud-hint">{{ t("settings.cloud.backgroundNote") }}</p>
+          <p v-if="requestFailure" class="cloud-warning" role="alert">
+            {{ requestFailureMessage }}
+            <code>{{ requestFailure.code }}</code>
+          </p>
+          <p v-if="reauthRequired && !waitingForSignIn" class="cloud-warning" role="alert">
+            {{ t("settings.cloud.sessionExpired") }}
+            <button type="button" class="cloud-link" :disabled="busy" @click="signIn('sign-in')">{{ t("settings.cloud.signIn") }}</button>
+          </p>
+          <p v-if="waitingForSignIn || waitingForBinding" class="cloud-pending" role="status">
+            {{ pendingMessage }}
             <button type="button" class="cloud-link" @click="reopen(pendingUrl)">{{ t("settings.cloud.reopen") }}</button>
           </p>
-          <div class="cloud-actions">
-            <Button v-if="signedIn && (state.status === 'unbound' || state.status === 'pending-claim')" :disabled="busy || waitingForBinding" @click="beginBinding">{{ busy ? t("settings.cloud.opening") : t("settings.cloud.connect") }}</Button>
-            <Button v-if="state.status !== 'unbound'" variant="destructive" :disabled="busy" @click="disconnect">{{ t("settings.cloud.disconnect") }}</Button>
-          </div>
           <p v-if="state.remoteResult === 'unknown' || state.status === 'pending-revocation'" class="cloud-warning" role="status">{{ t("settings.cloud.resultUnknown") }}</p>
-          <p v-if="state.status === 'clone-conflict'" class="cloud-warning" role="alert">{{ t("settings.cloud.cloneConflict") }}</p>
+
+          <section v-if="connectionStage === 'active'" class="cloud-subsection">
+            <header class="cloud-subsection-head"><strong>{{ t("settings.cloud.scopesTitle") }}</strong></header>
+            <label class="cloud-scope">
+              <Checkbox :model-value="state.scopes.deviceAccess" :disabled="busy" @update:model-value="(value) => setDeviceAccess(value === true)" />
+              <span><strong>{{ t("settings.cloud.deviceAccess") }}</strong><small>{{ t("settings.cloud.deviceAccessHint") }}</small></span>
+            </label>
+            <p v-if="!state.scopes.deviceAccess" class="cloud-hint" role="status">{{ t("settings.cloud.deviceAccessOffNote") }}</p>
+          </section>
+
+          <div v-if="showConnectionActions" class="cloud-connection-actions">
+            <template v-if="connectionStage === 'signed-out'">
+              <Button :disabled="busy" @click="signIn('bind')">{{ busy ? t("settings.cloud.opening") : t("settings.cloud.loginAndBind") }}</Button>
+              <Button variant="outline" :disabled="busy" @click="signIn('sign-in')">{{ t("settings.cloud.signInOnly") }}</Button>
+            </template>
+            <template v-else-if="connectionStage === 'signed-in-unbound'">
+              <Button :disabled="busy" @click="beginBinding">{{ busy ? t("settings.cloud.opening") : t("settings.cloud.bindToAccount") }}</Button>
+              <Button variant="outline" :disabled="busy" @click="signOutOpen = true">{{ t("settings.cloud.signOut") }}</Button>
+            </template>
+            <template v-else-if="connectionStage === 'active'">
+              <Button v-if="!signedIn && !waitingForSignIn && !reauthRequired" :disabled="busy" @click="signIn('sign-in')">{{ busy ? t("settings.cloud.opening") : t("settings.cloud.signIn") }}</Button>
+              <Button v-else-if="signedIn" variant="outline" :disabled="busy" @click="tab = 'node-management'">{{ t("settings.cloud.manageNodes") }}</Button>
+              <Button v-if="signedIn" variant="outline" :disabled="busy" @click="signOutOpen = true">{{ t("settings.cloud.signOut") }}</Button>
+            </template>
+            <template v-else-if="connectionStage === 'revoking'">
+              <Button variant="outline" :disabled="busy" @click="retryRevocation">{{ busy ? t("settings.cloud.loading") : t("settings.cloud.retryRevocation") }}</Button>
+            </template>
+          </div>
+
+          <details class="cloud-advanced">
+            <summary>{{ t("settings.cloud.advanced") }}</summary>
+            <dl class="cloud-identity">
+              <div><dt>{{ t("settings.cloud.controlPlaneId") }}</dt><dd>{{ state.identity.controlPlaneId }}</dd></div>
+              <div v-if="state.cloudControlPlaneId"><dt>{{ t("settings.cloud.cloudControlPlaneId") }}</dt><dd>{{ state.cloudControlPlaneId }}</dd></div>
+              <div><dt>{{ t("settings.cloud.fingerprint") }}</dt><dd><code>{{ state.identity.fingerprint }}</code></dd></div>
+              <div v-if="state.bindingRevision"><dt>{{ t("settings.cloud.revision") }}</dt><dd>{{ state.bindingRevision }}</dd></div>
+              <div v-if="state.accountId"><dt>{{ t("settings.cloud.boundAccount") }}</dt><dd>{{ session?.email || state.accountId }}</dd></div>
+              <div v-if="session?.sessionExpiresAt"><dt>{{ t("settings.cloud.accountExpires") }}</dt><dd>{{ formatDate(session.sessionExpiresAt) }}</dd></div>
+              <div><dt>{{ t("settings.cloud.background") }}</dt><dd>{{ state.hasBackgroundCredential ? t("settings.cloud.running") : t("settings.cloud.notConnected") }}</dd></div>
+            </dl>
+          </details>
+
+          <div v-if="canDisconnect" class="cloud-danger">
+            <p class="cloud-hint">{{ t("settings.cloud.disconnectNote") }}</p>
+            <Button variant="destructive" size="sm" :disabled="busy" @click="disconnectOpen = true">{{ t("settings.cloud.disconnect") }}</Button>
+          </div>
         </div>
       </section>
-
       </template>
 
       <section v-if="tab === 'node-management' && state?.status === 'active'" class="cloud-directory">
         <header class="cloud-directory-head"><strong>{{ t("settings.cloud.tabs.nodeManagement") }}</strong></header>
         <div class="cloud-content">
           <p class="cloud-note">{{ t("settings.cloud.nodeManagementNote") }}</p>
-          <label class="cloud-scope">
-            <Checkbox :model-value="state.scopes.nodeRelay" :disabled="busy" @update:model-value="(value) => setScope('nodeRelay', value === true)" />
-            <span><strong>{{ t("settings.cloud.nodeRelay") }}</strong><small>{{ t("settings.cloud.nodeRelayHint") }}</small></span>
-          </label>
           <section class="cloud-node-picker" :aria-label="t('settings.cloud.nodeListTitle')">
             <header class="cloud-node-picker-head">
               <span>
@@ -87,8 +107,12 @@
               </span>
               <small>{{ t("settings.cloud.nodeListCount", { count: cloudNodes.length }) }}</small>
             </header>
-            <p v-if="!canAddCloudNodes" class="cloud-node-picker-warning" role="status">
-              {{ signedIn ? t("settings.cloud.nodeAddRequiresBinding") : t("settings.cloud.nodeAddRequiresSignIn") }}
+            <p v-if="!signedIn" class="cloud-node-picker-warning" role="status">
+              <span>{{ t("settings.cloud.nodeAddRequiresSignIn") }}</span>
+              <button type="button" class="cloud-link" :disabled="busy || waitingForSignIn" @click="signIn('sign-in')">{{ t("settings.cloud.signIn") }}</button>
+            </p>
+            <p v-else-if="!canAddCloudNodes" class="cloud-node-picker-warning" role="status">
+              {{ t("settings.cloud.nodeAddRequiresBinding") }}
             </p>
             <p v-if="nodes.isLoading.value" class="cloud-node-picker-state" role="status">{{ t("settings.cloud.nodeListLoading") }}</p>
             <div v-else-if="nodes.error.value" class="cloud-node-picker-error" role="alert">
@@ -119,7 +143,6 @@
               </button>
             </div>
           </section>
-          <p v-if="!state.scopes.nodeRelay" class="cloud-note" role="status">{{ t("settings.cloud.nodeRelayOffNote") }}</p>
           <p class="cloud-note">{{ t("settings.cloud.nodeManagementUnbindNote") }}</p>
         </div>
       </section>
@@ -182,20 +205,6 @@
 
       <p v-if="tab === 'roles' && state?.status !== 'active'" class="cloud-state">{{ t("settings.cloud.rolesRequiresConnection") }}</p>
       <TrustedDevicesSettingsSection v-if="tab === 'trusted-devices'" />
-
-      <section v-if="tab === 'connection' && state?.status === 'active'" class="cloud-directory">
-        <header class="cloud-directory-head"><strong>{{ t("settings.cloud.scopesTitle") }}</strong></header>
-        <div class="cloud-content">
-          <p class="cloud-note">{{ t("settings.cloud.scopesNote") }}</p>
-          <label class="cloud-scope">
-            <Checkbox :model-value="state.scopes.deviceAccess" :disabled="busy" @update:model-value="(value) => setScope('deviceAccess', value === true)" />
-            <span><strong>{{ t("settings.cloud.deviceAccess") }}</strong><small>{{ t("settings.cloud.deviceAccessHint") }}</small></span>
-          </label>
-          <p v-if="!state.scopes.deviceAccess" class="cloud-note" role="status">{{ t("settings.cloud.deviceAccessOffNote") }}</p>
-          <p v-if="!state.scopes.deviceAccess && !state.scopes.nodeRelay" class="cloud-warning" role="status">{{ t("settings.cloud.bothScopesOffNote") }}</p>
-          <p class="cloud-note">{{ t("settings.cloud.unbindClearsScopes") }}</p>
-        </div>
-      </section>
     </div>
   </ScrollArea>
 
@@ -218,6 +227,32 @@
       </form>
     </DialogContent>
   </Dialog>
+
+  <AlertDialog :open="signOutOpen" @update:open="(open) => { if (!busy) signOutOpen = open; }">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{{ t("settings.cloud.signOut") }}</AlertDialogTitle>
+        <AlertDialogDescription>{{ t("settings.cloud.signOutConfirm") }}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel :disabled="busy">{{ t("common.actions.cancel") }}</AlertDialogCancel>
+        <Button variant="outline" :disabled="busy" @click="signOut">{{ t("settings.cloud.signOut") }}</Button>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+
+  <AlertDialog :open="disconnectOpen" @update:open="(open) => { if (!busy) disconnectOpen = open; }">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{{ t("settings.cloud.disconnect") }}</AlertDialogTitle>
+        <AlertDialogDescription>{{ t("settings.cloud.disconnectConfirm") }}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel :disabled="busy">{{ t("common.actions.cancel") }}</AlertDialogCancel>
+        <Button variant="destructive" :disabled="busy" @click="disconnect">{{ t("settings.cloud.disconnect") }}</Button>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>
 
 <script setup lang="ts">
@@ -226,6 +261,7 @@ import { useI18n } from "vue-i18n";
 import { Cloud } from "@lucide/vue";
 import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import { ApiError } from "../../../api/client";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -233,19 +269,26 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "../../../components/ui/input";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
-import { bindCloudRelayNode, createCloudBindingRequest, createCloudSignInRequest, disconnectCloudAccount, signOutCloudAccount, stepUpControlPlaneAuthentication, updateCloudAvailableRoles, updateCloudScopes, useCloudAccessSettingsQuery, useCloudAccountQuery, useCloudConnectivityQuery, useCloudNodeRelayQuery, useNodesQuery } from "../../../api/queries";
+import { bindCloudRelayNode, createCloudBindingRequest, createCloudSignInRequest, disconnectCloudAccount, signOutCloudAccount, stepUpControlPlaneAuthentication, updateCloudAvailableRoles, updateCloudRemoteAccess, useCloudAccessSettingsQuery, useCloudAccountQuery, useCloudConnectivityQuery, useCloudNodeRelayQuery, useNodesQuery } from "../../../api/queries";
 import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { nodeConnectionModeKeys, nodeRuntimeStatusKeys, translateStatus } from "../../../i18n/status";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import TrustedDevicesSettingsSection from "./TrustedDevicesSettingsSection.vue";
+import { resolveCloudConnectionStage, type CloudConnectionStage, type CloudLoginIntent } from "./cloudConnectionState";
 
 const { locale, t } = useI18n();
+type ConnectionStage = CloudConnectionStage;
+type LoginIntent = CloudLoginIntent;
+
 const tab = ref<"connection" | "node-management" | "roles" | "trusted-devices">("connection");
 const query = useCloudConnectivityQuery();
 const account = useCloudAccountQuery();
 const nodes = useNodesQuery();
 const busy = ref(false);
+const loginIntent = ref<LoginIntent | null>(null);
+const signOutOpen = ref(false);
+const disconnectOpen = ref(false);
 const addingNodeId = ref("");
 const addedCloudNodeHandles = ref<Record<string, string>>({});
 const state = computed(() => query.data.value);
@@ -268,6 +311,39 @@ const requestFailureMessage = computed(() => requestFailure.value?.scope === "co
 const waitingForSignIn = computed(() => pendingScope.value === "account:sign-in");
 const waitingForBinding = computed(() => pendingScope.value === "control-plane:bind");
 const statusLabel = computed(() => state.value ? t(`settings.cloud.status.${state.value.status}`) : "");
+const connectionStage = computed<ConnectionStage>(() => resolveCloudConnectionStage({
+  status: state.value?.status,
+  signedIn: signedIn.value,
+  pendingScope: pendingScope.value,
+}));
+const accountLabel = computed(() => session.value?.email || session.value?.accountId || state.value?.accountId || "");
+const stageTitle = computed(() => {
+  switch (connectionStage.value) {
+    case "awaiting-sign-in": return t("settings.cloud.stage.awaitingSignIn");
+    case "awaiting-binding": return t("settings.cloud.stage.awaitingBinding");
+    case "signed-in-unbound": return t("settings.cloud.stage.signedInUnbound");
+    case "active": return t("settings.cloud.stage.active");
+    case "revoking": return t("settings.cloud.stage.revoking");
+    case "conflict": return t("settings.cloud.stage.conflict");
+    default: return t("settings.cloud.stage.signedOut");
+  }
+});
+const stageDetail = computed(() => {
+  switch (connectionStage.value) {
+    case "awaiting-sign-in": return t("settings.cloud.stageDetail.awaitingSignIn");
+    case "awaiting-binding": return t("settings.cloud.stageDetail.awaitingBinding");
+    case "signed-in-unbound": return t("settings.cloud.stageDetail.signedInUnbound", { account: accountLabel.value });
+    case "active": return t("settings.cloud.stageDetail.active", { account: accountLabel.value });
+    case "revoking": return t("settings.cloud.stageDetail.revoking");
+    case "conflict": return t("settings.cloud.cloneConflict");
+    default: return t("settings.cloud.stageDetail.signedOut");
+  }
+});
+const pendingMessage = computed(() => waitingForSignIn.value
+  ? t("settings.cloud.waitingSignIn")
+  : t("settings.cloud.waitingBinding"));
+const showConnectionActions = computed(() => ["signed-out", "signed-in-unbound", "active", "revoking"].includes(connectionStage.value));
+const canDisconnect = computed(() => state.value?.status === "active" || state.value?.status === "clone-conflict");
 const roleDraft = ref<string[]>([]);
 const roleDraftInitialized = ref(false);
 const savingRoles = ref(false);
@@ -314,12 +390,7 @@ const nodeCloudHandle = (node: Node) => {
   return nodeRelay.data.value?.channels.find((channel) => channel.nodeId === node.id && channel.connected)?.nodeHandle || "";
 };
 const nodeActionLabel = (node: Node) => {
-  if (addingNodeId.value === node.id) return state.value?.scopes.nodeRelay
-    ? t("settings.cloud.nodeAdding")
-    : t("settings.cloud.nodeAddAndEnabling");
-  return state.value?.scopes.nodeRelay
-    ? t("settings.cloud.nodeAdd")
-    : t("settings.cloud.nodeAddAndEnable");
+  return addingNodeId.value === node.id ? t("settings.cloud.nodeAdding") : t("settings.cloud.nodeAdd");
 };
 const formatDate = (value: string) => new Intl.DateTimeFormat(locale.value, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 const reopen = (url?: string) => { if (url) window.open(url, "_blank", "noopener,noreferrer"); };
@@ -334,6 +405,22 @@ watch(() => accessSettings.data.value, (settings) => {
 watch(() => state.value?.catalogPublication?.revision, (revision) => {
   if (!revision || state.value?.catalogPublication?.status !== "published" || revision === accessSettings.data.value?.catalogRevision) return;
   void accessSettings.refetch();
+});
+watch([signedIn, busy], async ([value, isBusy]) => {
+  if (!value || isBusy) return;
+  const intent = loginIntent.value;
+  if (!intent) return;
+  loginIntent.value = null;
+  await query.refetch().catch(() => undefined);
+  if (intent !== "bind") return;
+  const status = state.value?.status;
+  if (status !== "unbound" && status !== "pending-claim") return;
+  await beginBinding();
+});
+watch(() => session.value?.pendingRequest?.requestId, async (current, previous) => {
+  if (!previous || current) return;
+  await query.refetch().catch(() => undefined);
+  if (!signedIn.value) loginIntent.value = null;
 });
 function resetRoleDraft() {
   const settings = accessSettings.data.value;
@@ -443,19 +530,51 @@ async function saveAvailableRoles() {
     savingRoles.value = false;
   }
 }
-async function signIn() { busy.value = true; try { const request = await createCloudSignInRequest(); reopen(request.authorizationUrl); await refresh(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
-async function signOut() { if (!window.confirm(t("settings.cloud.signOutConfirm"))) return; busy.value = true; try { await signOutCloudAccount(); await refresh(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
-async function beginBinding() { busy.value = true; try { const request = await createCloudBindingRequest(); reopen(request.authorizationUrl); await refresh(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
-async function setScope(scope: "deviceAccess" | "nodeRelay", enabled: boolean) { busy.value = true; try { await updateCloudScopes({ ...state.value!.scopes, [scope]: enabled }); await query.refetch(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
+async function signIn(intent: LoginIntent) {
+  loginIntent.value = intent;
+  busy.value = true;
+  try {
+    const request = await createCloudSignInRequest();
+    reopen(request.authorizationUrl);
+    await refresh();
+  } catch (error) {
+    loginIntent.value = null;
+    showControlPlaneToast(errorText(error), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+async function signOut() {
+  signOutOpen.value = false;
+  loginIntent.value = null;
+  busy.value = true;
+  try {
+    await signOutCloudAccount();
+    await refresh();
+  } catch (error) {
+    showControlPlaneToast(errorText(error), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+async function beginBinding() {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const request = await createCloudBindingRequest();
+    reopen(request.authorizationUrl);
+    await refresh();
+  } catch (error) {
+    showControlPlaneToast(errorText(error), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+async function setDeviceAccess(enabled: boolean) { busy.value = true; try { await updateCloudRemoteAccess(enabled); await query.refetch(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
 async function addNode(node: Node) {
   if (addingNodeId.value || busy.value || !canAddCloudNodes.value || nodeCloudHandle(node)) return;
-  const enablingScope = state.value?.scopes.nodeRelay !== true;
   addingNodeId.value = node.id;
   try {
-    if (enablingScope) {
-      await updateCloudScopes({ ...state.value!.scopes, nodeRelay: true });
-      await query.refetch();
-    }
     const result = await bindCloudRelayNode(node.id);
     if (!result.bound) throw new Error(t("settings.cloud.nodeAddFailed"));
     if (result.nodeHandle) {
@@ -464,17 +583,34 @@ async function addNode(node: Node) {
     showControlPlaneToast(t("settings.cloud.nodeAddDone", { name: node.name }), "success");
     await Promise.all([nodeRelay.refetch(), nodes.refetch()]);
   } catch (error) {
-    if (enablingScope) await query.refetch().catch(() => undefined);
     showControlPlaneToast(translateApiError(error, t, t("settings.cloud.nodeAddFailed")), "error");
   } finally {
     addingNodeId.value = "";
   }
 }
-async function disconnect() { if (!window.confirm(t("settings.cloud.disconnectConfirm"))) return; busy.value = true; try { await disconnectCloudAccount(); await query.refetch(); } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { busy.value = false; } }
+async function performDisconnect() {
+  busy.value = true;
+  try {
+    await disconnectCloudAccount();
+    await query.refetch();
+  } catch (error) {
+    showControlPlaneToast(errorText(error), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+async function disconnect() {
+  disconnectOpen.value = false;
+  await performDisconnect();
+}
+async function retryRevocation() {
+  await performDisconnect();
+}
 </script>
 
 <style scoped>
 .cloud-connectivity-scroll{height:100%;min-height:0;width:100%}.cloud-connectivity-page{display:grid;gap:12px}.cloud-tabs{max-width:100%;min-width:0}.cloud-tabs-list{align-self:start;background:var(--surface-inset);border:1px solid var(--line);border-radius:7px;gap:1px;height:32px;justify-self:start;max-width:100%;min-height:32px;overflow-x:auto;padding:2px;scrollbar-width:none;width:fit-content}.cloud-tabs-list::-webkit-scrollbar{display:none}.cloud-tabs-list :deep(button){border-radius:5px;color:var(--text-muted);flex:0 0 auto;font-size:12px;font-weight:500;height:26px;min-height:26px;padding:0 10px}.cloud-tabs-list :deep(button:not([data-state="active"]):hover){background:var(--surface-hover);color:var(--text-strong)}.cloud-tabs-list :deep(button[data-state="active"]){background:var(--surface-active);color:var(--text-strong);box-shadow:none}.cloud-page-head{align-items:center;display:flex;gap:16px;justify-content:space-between}.cloud-page-head p,.cloud-note{color:var(--text-muted);font-size:12px;line-height:1.45;margin:0}.cloud-scope{align-items:flex-start;cursor:pointer;display:flex;gap:10px}.cloud-scope span{display:grid;gap:2px}.cloud-scope strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-scope small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-directory{background:var(--surface-raised);border:1px solid var(--line);border-radius:8px;overflow:hidden}.cloud-directory-head{align-items:center;border-bottom:1px solid var(--line);display:flex;min-height:38px;padding:0 12px}.cloud-directory-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-content{display:grid;gap:14px;padding:12px}.cloud-state{color:var(--text-muted);font-size:12px;padding:48px 20px;text-align:center}.cloud-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;justify-content:space-between;min-height:80px;padding:12px}.cloud-identity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.cloud-identity>div{display:grid;gap:4px;min-width:0;padding:8px 10px}.cloud-identity dt{color:var(--text-muted);font-size:12px}.cloud-identity dd{color:var(--text);font-size:13px;margin:0;min-width:0;overflow-wrap:anywhere}.cloud-identity code{font-size:12px}.cloud-note{background:var(--surface-inset);border:1px solid var(--line);border-radius:7px;padding:10px 12px}.cloud-pending{background:var(--surface-active);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;margin:0;padding:10px 12px}.cloud-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}.cloud-actions{border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;padding-top:12px}.cloud-warning{color:var(--status-warning);font-size:12px;margin:0}@media(max-width:720px){.cloud-page-head{align-items:stretch;flex-direction:column}.cloud-page-head>span{align-self:flex-start}.cloud-identity{grid-template-columns:1fr}}
-.cloud-node-picker{display:grid;border:1px solid var(--line);border-radius:7px;overflow:hidden}.cloud-node-picker-head{align-items:center;background:var(--surface-inset);border-bottom:1px solid var(--line);display:flex;gap:12px;justify-content:space-between;padding:9px 10px}.cloud-node-picker-head>span{display:grid;gap:2px;min-width:0}.cloud-node-picker-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-picker-head small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-node-picker-head>small{flex:0 0 auto}.cloud-node-picker-warning{border-bottom:1px solid var(--line);color:var(--status-warning);font-size:12px;line-height:1.45;margin:0;padding:9px 10px}.cloud-node-picker-state{color:var(--text-muted);font-size:12px;margin:0;padding:12px 10px;text-align:center}.cloud-node-picker-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;gap:12px;justify-content:space-between;padding:10px}.cloud-node-picker-list{display:grid}.cloud-node-row{align-items:center;appearance:none;background:transparent;border:0;border-bottom:1px solid var(--line);color:inherit;cursor:pointer;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) auto;padding:10px;text-align:left;width:100%}.cloud-node-row:last-child{border-bottom:0}.cloud-node-row:not(:disabled):hover{background:var(--surface-hover)}.cloud-node-row:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}.cloud-node-row:disabled{cursor:default}.cloud-node-identity{display:grid;gap:3px;min-width:0}.cloud-node-identity strong,.cloud-node-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cloud-node-identity strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-identity small{color:var(--text-muted);font-size:12px}.cloud-node-action{align-items:center;color:var(--accent);display:inline-flex;font-size:12px;font-weight:500;gap:6px;white-space:nowrap}.cloud-node-row:disabled .cloud-node-action{color:var(--text-muted)}@media(max-width:560px){.cloud-node-row{gap:7px;grid-template-columns:1fr}.cloud-node-action{justify-self:start}}
+.cloud-node-picker{display:grid;border:1px solid var(--line);border-radius:7px;overflow:hidden}.cloud-node-picker-head{align-items:center;background:var(--surface-inset);border-bottom:1px solid var(--line);display:flex;gap:12px;justify-content:space-between;padding:9px 10px}.cloud-node-picker-head>span{display:grid;gap:2px;min-width:0}.cloud-node-picker-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-picker-head small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-node-picker-head>small{flex:0 0 auto}.cloud-node-picker-warning{align-items:center;border-bottom:1px solid var(--line);color:var(--status-warning);display:flex;flex-wrap:wrap;font-size:12px;gap:8px 12px;justify-content:space-between;line-height:1.45;margin:0;padding:9px 10px}.cloud-node-picker-state{color:var(--text-muted);font-size:12px;margin:0;padding:12px 10px;text-align:center}.cloud-node-picker-error{align-items:center;color:var(--status-danger);display:flex;font-size:12px;gap:12px;justify-content:space-between;padding:10px}.cloud-node-picker-list{display:grid}.cloud-node-row{align-items:center;appearance:none;background:transparent;border:0;border-bottom:1px solid var(--line);color:inherit;cursor:pointer;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) auto;padding:10px;text-align:left;width:100%}.cloud-node-row:last-child{border-bottom:0}.cloud-node-row:not(:disabled):hover{background:var(--surface-hover)}.cloud-node-row:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}.cloud-node-row:disabled{cursor:default}.cloud-node-identity{display:grid;gap:3px;min-width:0}.cloud-node-identity strong,.cloud-node-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cloud-node-identity strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-node-identity small{color:var(--text-muted);font-size:12px}.cloud-node-action{align-items:center;color:var(--accent);display:inline-flex;font-size:12px;font-weight:500;gap:6px;white-space:nowrap}.cloud-node-row:disabled .cloud-node-action{color:var(--text-muted)}@media(max-width:560px){.cloud-node-row{gap:7px;grid-template-columns:1fr}.cloud-node-action{justify-self:start}}
 .cloud-directory-head{gap:8px;justify-content:space-between}.cloud-revision,.cloud-catalog-meta{color:var(--text-muted);font-size:12px}.cloud-revision{white-space:nowrap}.cloud-catalog-meta{align-items:center;display:flex;flex-wrap:wrap;gap:4px 12px}.cloud-role-publication-error code,.cloud-role-error code{font-size:12px}.cloud-role-list{display:grid;border:1px solid var(--line);border-radius:7px;overflow:hidden}.cloud-role-row{align-items:center;display:grid;gap:10px;grid-template-columns:auto minmax(0,1fr) auto;padding:10px;border-bottom:1px solid var(--line)}.cloud-role-row:last-child{border-bottom:0}.cloud-role-row[data-archived="true"]{background:var(--surface-inset)}.cloud-role-copy{display:grid;gap:3px;min-width:0}.cloud-role-title{align-items:center;display:flex;flex-wrap:wrap;gap:6px}.cloud-role-title strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-role-copy small{color:var(--text-muted);font-size:12px;line-height:1.45}.cloud-role-copy code{color:var(--text-muted);font-size:12px;overflow-wrap:anywhere}.cloud-role-state{color:var(--text-muted);font-size:12px;white-space:nowrap}.cloud-role-actions{align-items:center;justify-content:flex-end}.cloud-role-dirty{color:var(--text-muted);font-size:12px;margin-right:auto}.cloud-role-error{background:color-mix(in srgb,var(--status-danger) 7%,transparent);border:1px solid color-mix(in srgb,var(--status-danger) 24%,var(--line));border-radius:7px;color:var(--status-danger);display:grid;gap:6px;font-size:12px;padding:10px 12px}.cloud-role-error strong{font-weight:500}.cloud-role-error ul{display:grid;gap:3px;margin:0;padding-left:18px}.cloud-role-error code{color:var(--text-muted)}.cloud-step-up-dialog{max-width:480px}.cloud-step-up-form{display:grid;gap:14px}.cloud-step-up-field{display:grid;gap:6px;font-size:12px}.cloud-step-up-field span{color:var(--text-muted)}@media(max-width:620px){.cloud-role-row{align-items:start;grid-template-columns:auto minmax(0,1fr)}.cloud-role-state{grid-column:2}.cloud-role-actions{align-items:stretch}.cloud-role-dirty{flex-basis:100%;margin:0}.cloud-directory-head{align-items:flex-start;flex-direction:column;justify-content:center;padding-block:9px}.cloud-revision{white-space:normal}}
+.cloud-summary{display:grid;gap:4px}.cloud-summary strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-summary span,.cloud-hint{color:var(--text-muted);font-size:12px;line-height:1.45;margin:0}.cloud-pending{align-items:center;display:flex;flex-wrap:wrap;gap:6px}.cloud-subsection{border-top:1px solid var(--line);display:grid;gap:10px;padding-top:12px}.cloud-subsection-head strong{color:var(--text-strong);font-size:13px;font-weight:500}.cloud-connection-actions{display:flex;flex-wrap:wrap;gap:8px}.cloud-advanced{border-top:1px solid var(--line);display:grid;gap:10px;padding-top:12px}.cloud-advanced summary{color:var(--text-strong);cursor:pointer;font-size:13px;font-weight:500}.cloud-advanced .cloud-identity{padding:0}.cloud-danger{border-top:1px solid var(--line);display:grid;gap:10px;justify-items:start;padding-top:12px}
 </style>

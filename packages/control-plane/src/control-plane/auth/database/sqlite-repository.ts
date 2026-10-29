@@ -21,6 +21,7 @@ import {
   type ControlPlaneGitAuditCollection,
   type ControlPlaneGitProvisioningCollection,
   type ControlPlaneIdentityCollection,
+  type ControlPlaneModelPendingNodeEditCollection,
   type ControlPlaneRecordCollection,
   type ControlPlaneSessionCollection,
   type ControlPlaneUserRepository,
@@ -101,6 +102,49 @@ function collection<T extends { id: string }>(
       return mutate(async () => {
         const result = await db.delete(table).where(eq(table.id, id));
         return Number(result.changes) > 0;
+      });
+    },
+  };
+}
+
+function modelPendingNodeEditCollection(db: any, mutate: <R>(operation: () => Promise<R>) => Promise<R>): ControlPlaneModelPendingNodeEditCollection {
+  const table = schema.modelPendingNodeEdits;
+  const identity = (modelId: string, nodeId: string) => and(eq(table.modelId, modelId), eq(table.nodeId, nodeId));
+  const parse = (row: Record<string, unknown>) => recordFromDatabase(p0RecordSchemas.modelPendingNodeEdits, row);
+  return {
+    async list() {
+      const rows = await db.select().from(table).orderBy(asc(table.id));
+      return rows.map((row: Record<string, unknown>) => parse(row));
+    },
+    async get(modelId, nodeId) {
+      const rows = await db.select().from(table).where(identity(modelId, nodeId)).limit(1);
+      return rows[0] ? parse(rows[0]) : undefined;
+    },
+    put(input) {
+      return mutate(async () => {
+        const record = p0RecordSchemas.modelPendingNodeEdits.parse(input);
+        const values = rowForDatabase(record as Record<string, unknown>);
+        const set = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "id"));
+        await db.insert(table).values(values as any).onConflictDoUpdate({ target: [table.modelId, table.nodeId], set: set as any });
+        return parse(values);
+      });
+    },
+    delete(modelId, nodeId) {
+      return mutate(async () => {
+        const result = await db.delete(table).where(identity(modelId, nodeId));
+        return Number(result.changes) > 0;
+      });
+    },
+    deleteIfCiphertext(modelId, nodeId, patchCiphertext) {
+      return mutate(async () => {
+        const result = await db.delete(table).where(and(identity(modelId, nodeId), eq(table.patchCiphertext, patchCiphertext)));
+        return Number(result.changes) > 0;
+      });
+    },
+    deleteForNode(nodeId) {
+      return mutate(async () => {
+        const result = await db.delete(table).where(eq(table.nodeId, nodeId));
+        return Number(result.changes);
       });
     },
   };
@@ -453,6 +497,7 @@ function repositoryFor(
     nodes: collection(db, schema.nodes, p0RecordSchemas.nodes, mutate),
     pairingRevocations: collection(db, schema.pairingRevocations, p0RecordSchemas.pairingRevocations, mutate),
     models: collection(db, schema.models, p0RecordSchemas.models, mutate),
+    modelPendingNodeEdits: modelPendingNodeEditCollection(db, mutate),
     chatBridges: collection(db, schema.chatBridges, p0RecordSchemas.chatBridges, mutate),
     chatSessions: collection(db, schema.chatSessions, p0RecordSchemas.chatSessions, mutate),
     gitCredentials: collection(db, schema.gitCredentials, p0RecordSchemas.gitCredentials, mutate),

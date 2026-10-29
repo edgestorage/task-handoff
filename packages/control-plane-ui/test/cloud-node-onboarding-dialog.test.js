@@ -13,6 +13,7 @@ test("cloud node onboarding is a standalone source and connection flow", () => {
   assert.match(dialog, /settings\.nodeRelay\.sourceExisting/);
   assert.match(dialog, /settings\.nodeRelay\.sourceNew/);
   assert.match(dialog, /cloudRelayUsable/);
+  assert.doesNotMatch(dialog, /scopes\?\.nodeRelay|cloudRelayScopeEnabled|unavailableScope/);
   assert.match(dialog, /settings\.nodeRelay\.unavailableSignedIn/);
   assert.match(dialog, /emit\('open-cloud-settings'\)/);
   assert.match(dialog, /claimCloudAccountNode/);

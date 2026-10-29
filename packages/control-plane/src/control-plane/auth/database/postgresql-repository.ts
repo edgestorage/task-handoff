@@ -20,6 +20,7 @@ import {
   type ControlPlaneGitAuditCollection,
   type ControlPlaneGitProvisioningCollection,
   type ControlPlaneIdentityCollection,
+  type ControlPlaneModelPendingNodeEditCollection,
   type ControlPlaneRecordCollection,
   type ControlPlaneSessionCollection,
   type ControlPlaneUserRepository,
@@ -91,6 +92,43 @@ function collection<T extends { id: string }>(db: any, table: any, recordSchema:
     async delete(id) {
       const rows = await db.delete(table).where(eq(table.id, id)).returning({ id: table.id });
       return rows.length > 0;
+    },
+  };
+}
+
+function modelPendingNodeEditCollection(db: any): ControlPlaneModelPendingNodeEditCollection {
+  const table = schema.modelPendingNodeEdits;
+  const identity = (modelId: string, nodeId: string) => and(eq(table.modelId, modelId), eq(table.nodeId, nodeId));
+  const parse = (row: Record<string, unknown>) => recordFromDatabase(p0RecordSchemas.modelPendingNodeEdits, row);
+  return {
+    async list() {
+      const rows = await db.select().from(table).orderBy(asc(table.id));
+      return rows.map((row: Record<string, unknown>) => parse(row));
+    },
+    async get(modelId, nodeId) {
+      const rows = await db.select().from(table).where(identity(modelId, nodeId)).limit(1);
+      return rows[0] ? parse(rows[0]) : undefined;
+    },
+    async put(input) {
+      const record = p0RecordSchemas.modelPendingNodeEdits.parse(input);
+      const values = rowForDatabase(record as Record<string, unknown>);
+      const set = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "id"));
+      await db.insert(table).values(values as any).onConflictDoUpdate({ target: [table.modelId, table.nodeId], set: set as any });
+      return parse(values);
+    },
+    async delete(modelId, nodeId) {
+      const rows = await db.delete(table).where(identity(modelId, nodeId)).returning({ id: table.id });
+      return rows.length > 0;
+    },
+    async deleteIfCiphertext(modelId, nodeId, patchCiphertext) {
+      const rows = await db.delete(table)
+        .where(and(identity(modelId, nodeId), eq(table.patchCiphertext, patchCiphertext)))
+        .returning({ id: table.id });
+      return rows.length > 0;
+    },
+    async deleteForNode(nodeId) {
+      const rows = await db.delete(table).where(eq(table.nodeId, nodeId)).returning({ id: table.id });
+      return rows.length;
     },
   };
 }
@@ -397,6 +435,7 @@ function repositoryFor(db: any, close: () => Promise<void>, inTransaction = fals
     nodes: collection(db, schema.nodes, p0RecordSchemas.nodes),
     pairingRevocations: collection(db, schema.pairingRevocations, p0RecordSchemas.pairingRevocations),
     models: collection(db, schema.models, p0RecordSchemas.models),
+    modelPendingNodeEdits: modelPendingNodeEditCollection(db),
     chatBridges: collection(db, schema.chatBridges, p0RecordSchemas.chatBridges),
     chatSessions: collection(db, schema.chatSessions, p0RecordSchemas.chatSessions),
     gitCredentials: collection(db, schema.gitCredentials, p0RecordSchemas.gitCredentials),

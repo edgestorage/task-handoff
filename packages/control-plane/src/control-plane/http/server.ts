@@ -1191,13 +1191,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   app.post("/api/cloud-connectivity/remote-access", async (request) => {
     await requireCloudConnectivityAdmin(request);
-    // New clients send both scopes; the legacy `enabled` field remains the
-    // device-access switch so older callers keep their exact meaning.
+    // Device access is the only configurable relay scope. `nodeRelay` and the
+    // legacy `enabled` field remain accepted for N-1 callers, but node relay is
+    // always available to an active binding and the value is ignored.
     const input = z.object({
       enabled: z.boolean().optional(),
-      scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean() }).strict().optional(),
+      scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean().optional() }).strict().optional(),
     }).strict().refine((value) => value.enabled !== undefined || value.scopes !== undefined, { message: "scopes or enabled is required" }).parse(request.body);
-    const scopes = input.scopes ?? { deviceAccess: input.enabled === true, nodeRelay: false };
+    const scopes = { deviceAccess: input.scopes?.deviceAccess ?? input.enabled === true, nodeRelay: true };
     return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.setRemoteAccess(scopes) : cloudConnectivity.setScopes(scopes) };
   });
 

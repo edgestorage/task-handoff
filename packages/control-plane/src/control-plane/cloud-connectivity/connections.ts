@@ -109,10 +109,10 @@ export class CloudControlConnectionManager {
       : this.options.state.backgroundCredential();
     // An unbound Control Plane still registers so it can sign in to a Thandoff account; the
     // Coordinator rejects it if the account already holds a live binding. An active binding
-    // keeps the cloud connection while either cloud-relay scope is on; only turning both off
-    // stops it.
+    // keeps the cloud connection alive because node relay depends on it, independently of
+    // whether account devices are currently allowed to reach this Control Plane.
     const canRegister = snapshot.status === "unbound" || snapshot.status === "pending-claim"
-      || (snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay) && Boolean(credential))
+      || (snapshot.status === "active" && Boolean(credential))
       || (snapshot.status === "pending-revocation" && Boolean(snapshot.bindingId) && Boolean(credential));
     if (!canRegister) return { status: "disabled" as const };
     // The registration carries the binding identity that was current when the
@@ -143,7 +143,7 @@ export class CloudControlConnectionManager {
         credential: undefined,
         bindingId: undefined,
         bindingRevision: undefined,
-        scopes: { deviceAccess: false, nodeRelay: false },
+        scopes: { deviceAccess: false, nodeRelay: true },
         cloudControlPlaneId: snapshot.cloudControlPlaneId,
         processInstanceId: this.processInstanceId,
         epoch,

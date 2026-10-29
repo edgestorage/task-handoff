@@ -361,17 +361,16 @@ export const cloudGroup = group("cloud", "Manage the cloud connectivity binding"
   { id: "cloud bind", group: "cloud", name: "bind", stage: "B", write: true, summary: "Start browser approval to bind this Control Plane to the signed-in cloud account", input: emptyInput, ...loose, handler: cloudBind },
   { id: "cloud challenge", group: "cloud", name: "challenge", stage: "B", write: true, summary: "Create a cloud binding challenge (the challenge secret is never printed)", input: emptyInput, ...loose, handler: cloudChallenge },
   {
-    id: "cloud remote-access", group: "cloud", name: "remote-access", stage: "B", write: true, summary: "Set the legacy device-access switch (blocked while node relay is enabled)",
-    options: [{ flags: "--enabled <true|false>", description: "Whether device access should be enabled; use cloud scopes set when node relay is enabled" }],
+    id: "cloud remote-access", group: "cloud", name: "remote-access", stage: "B", write: true, summary: "Set account-device access to this Control Plane",
+    options: [{ flags: "--enabled <true|false>", description: "Whether account devices may reach this Control Plane" }],
     input: inputOf({ enabled: z.string() }), ...loose, handler: cloudRemoteAccess,
   },
   {
-    id: "cloud scopes set", group: "cloud", name: "scopes set", stage: "B", write: true, summary: "Set the independent device-access and node-relay scopes",
+    id: "cloud scopes set", group: "cloud", name: "scopes set", stage: "B", write: true, summary: "Set account-device access to this Control Plane",
     options: [
       { flags: "--device-access <true|false>", description: "Whether account devices may reach this Control Plane" },
-      { flags: "--node-relay <true|false>", description: "Whether this Control Plane may claim account nodes" },
     ],
-    input: inputOf({ deviceAccess: z.string(), nodeRelay: z.string() }), ...loose, handler: cloudScopesSet,
+    input: inputOf({ deviceAccess: z.string() }), ...loose, handler: cloudScopesSet,
   },
   { id: "cloud disconnect", group: "cloud", name: "disconnect", stage: "B", write: true, summary: "Disconnect the cloud binding", input: emptyInput, ...loose, handler: cloudDisconnect },
   { id: "cloud account-nodes list", group: "cloud", name: "account-nodes list", stage: "B", summary: "List nodes in the signed-in cloud account", input: emptyInput, ...loose, handler: cloudAccountNodesList },

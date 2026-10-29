@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
@@ -31,6 +32,8 @@ function instance(overrides = {}) {
 
 const english = createControlPlaneI18nForTest("en-US").global.t;
 const chinese = createControlPlaneI18nForTest("zh-CN").global.t;
+const nodeDetailPanel = fs.readFileSync(new URL("../src/apps/control-plane/settings/NodeDetailPanel.vue", import.meta.url), "utf8");
+const settingsModal = fs.readFileSync(new URL("../src/apps/control-plane/settings/SettingsModal.vue", import.meta.url), "utf8");
 
 test("a disconnected node presents its running instances as unavailable", () => {
   const paused = instance();
@@ -55,4 +58,10 @@ test("paused-node instances expose no lifecycle actions until the node reconnect
   assert.equal(hasInstanceStatusPage(connected), false);
   assert.equal(instanceStatusBadgeLabel(connected, english), "Running");
   assert.equal(canShowInstanceAction(connected, "restart"), true);
+});
+
+test("node details and the node sidebar derive paused-node instances from the shared status model", () => {
+  assert.match(nodeDetailPanel, /\{\{ instanceStatusBadgeLabel\(instance, t\) \}\}/);
+  assert.match(nodeDetailPanel, /instance\.node\?\.connectionEnabled !== false/);
+  assert.match(settingsModal, /function nodeInstanceSummary\(nodeId: string\) \{[\s\S]*?node\?\.connectionEnabled === false[\s\S]*?instanceNodeDisconnected/);
 });

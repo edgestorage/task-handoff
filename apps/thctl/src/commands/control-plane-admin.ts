@@ -233,17 +233,6 @@ export async function cloudChallenge(context: CliContext) {
 export async function cloudRemoteAccess(context: CliContext, invocation: CliInvocation) {
   const enabled = parseBooleanOption(invocation, "enabled");
   const connection = await openConnection(context);
-  // The legacy wire field resets nodeRelay to false. Refuse to make that change
-  // implicitly; callers that need both scopes use `cloud scopes set`.
-  const current = await connection.client.admin.cloudConnectivity(context.signal);
-  if (current.scopes.nodeRelay) {
-    throw new ThctlError(
-      "CLI_CLOUD_SCOPE_CONFLICT",
-      "The legacy `cloud remote-access` command would disable node relay. Use `thctl cloud scopes set --device-access <true|false> --node-relay <true|false>` instead.",
-      CLI_EXIT_CODES.conflict,
-      { nodeRelay: true },
-    );
-  }
   const result = await performWrite(
     context,
     "cloud remote-access",
@@ -251,24 +240,24 @@ export async function cloudRemoteAccess(context: CliContext, invocation: CliInvo
     () => connection.client.admin.setCloudRemoteAccess(enabled),
   );
   if (!result) return;
-  return { data: result, message: `Cloud device access ${enabled ? "enabled" : "disabled"}; node relay remains disabled.` };
+  return { data: result, message: `Cloud device access ${enabled ? "enabled" : "disabled"}.` };
 }
 
 export async function cloudScopesSet(context: CliContext, invocation: CliInvocation) {
   const deviceAccess = parseBooleanOption(invocation, "device-access");
-  const nodeRelay = parseBooleanOption(invocation, "node-relay");
-  const scopes = { deviceAccess, nodeRelay };
+  const scopes = { deviceAccess };
+  const requestScopes = { ...scopes, nodeRelay: true };
   const connection = await openConnection(context);
   const result = await performWrite(
     context,
     "cloud scopes set",
-    () => ({ method: "POST", path: "/api/cloud-connectivity/remote-access", body: { scopes } }),
+    () => ({ method: "POST", path: "/api/cloud-connectivity/remote-access", body: { scopes: requestScopes } }),
     () => connection.client.admin.setCloudScopes(scopes),
   );
   if (!result) return;
   return {
     data: result,
-    message: `Cloud scopes set: device access ${deviceAccess ? "enabled" : "disabled"}, node relay ${nodeRelay ? "enabled" : "disabled"}.`,
+    message: `Cloud device access ${deviceAccess ? "enabled" : "disabled"}.`,
   };
 }
 

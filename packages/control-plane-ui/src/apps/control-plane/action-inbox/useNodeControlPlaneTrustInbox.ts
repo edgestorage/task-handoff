@@ -2,6 +2,7 @@ import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { useQueries } from "@tanstack/vue-query";
 import { nodeControlPlaneTrustQueryOptions, useNodesQuery } from "../../../api/queries";
 import type { CloudNodeRelayTrust } from "../../../api/types";
+import { nodeSupportsControlPlaneTrust } from "../../../api/nodeCapabilities";
 import { nodeControlPlaneTrustProjection } from "./items";
 
 /**
@@ -13,7 +14,8 @@ export function useNodeControlPlaneTrustInbox(enabled: MaybeRefOrGetter<boolean>
   const nodesQuery = useNodesQuery();
   const nodes = computed(() => nodesQuery.data.value || []);
   const managedNodes = computed(() => nodes.value
-    .filter((node) => node.connectionEnabled !== false && node.status !== "offline" && node.status !== "unknown"));
+    .filter((node) => node.connectionEnabled !== false && node.status !== "offline" && node.status !== "unknown")
+    .filter((node) => nodeSupportsControlPlaneTrust(node)));
   const trustQueries = useQueries({
     queries: () => managedNodes.value.map((node) => nodeControlPlaneTrustQueryOptions(node.id, enabled)),
   });

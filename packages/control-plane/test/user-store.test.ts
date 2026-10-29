@@ -39,6 +39,7 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
       "0010_cloud_device_trust",
       "0011_cloud_device_trust_revision_bigint",
       "0012_cloud_device_trust_authorization_revision_bigint",
+      "0013_model_pending_node_edits",
     ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);
@@ -243,6 +244,7 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
         "cp_login_identities",
         "cp_metadata",
         "cp_migration_ledger",
+        "cp_model_pending_node_edits",
         "cp_models",
         "cp_node_pairing_revocations",
         "cp_nodes",

@@ -8,7 +8,7 @@ const CloudConnectivityStateSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]),
   serviceOrigin: z.string().url(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
-  /** Two independent cloud-relay scopes; only both being off stops the cloud connection. */
+  /** `nodeRelay` remains on the wire for N-1 clients, but is no longer a switch. */
   scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean() }).optional(),
   /** Pre-scope state files only carried the single remote-access switch. */
   remoteAccessEnabled: z.boolean().optional(),
@@ -30,6 +30,7 @@ const CloudConnectivityStateSchema = z.object({
   }).strict().optional(),
 }).strip();
 
+/** Serialized shape retained for compatibility with Control Planes at v0.0.46. */
 export type CloudRelayScopes = { deviceAccess: boolean; nodeRelay: boolean };
 type StoredCloudConnectivityState = z.infer<typeof CloudConnectivityStateSchema>;
 export type CloudConnectivityState = Omit<StoredCloudConnectivityState, "scopes" | "remoteAccessEnabled"> & { scopes: CloudRelayScopes };
@@ -51,7 +52,7 @@ export class CloudConnectivityService {
     this.identity = options.identity;
     this.serviceOrigin = new URL(options.serviceOrigin).origin;
     this.clock = options.clock ?? Date.now;
-    this.state = new JsonFile<StoredCloudConnectivityState>(options.statePath, () => ({ version: 2, serviceOrigin: this.serviceOrigin, status: "unbound", scopes: { deviceAccess: true, nodeRelay: false }, updatedAt: new Date(this.clock()).toISOString(), connectionEpoch: 0, catalogRevision: 1 }), {
+    this.state = new JsonFile<StoredCloudConnectivityState>(options.statePath, () => ({ version: 2, serviceOrigin: this.serviceOrigin, status: "unbound", scopes: { deviceAccess: true, nodeRelay: true }, updatedAt: new Date(this.clock()).toISOString(), connectionEpoch: 0, catalogRevision: 1 }), {
       schema: CloudConnectivityStateSchema,
       directoryMode: 0o700,
       fileMode: 0o600,
@@ -63,12 +64,14 @@ export class CloudConnectivityService {
     const raw = this.state.get();
     if (raw.serviceOrigin !== this.serviceOrigin) throw cloudError("CLOUD_SERVICE_ORIGIN_CHANGED", "Cloud service origin does not match persisted binding authority.");
     // Older state files had one remote-access switch; it becomes the
-    // device-access scope, and node relay starts off until switched on.
-    if (!raw.scopes || raw.version !== 2 || raw.catalogRevision === undefined) {
+    // device-access scope. Compatibility for v0.0.46: node relay used to be a
+    // separate switch, so migrate every persisted value to its permanent,
+    // always-enabled wire value. Only the binding decides whether it applies.
+    if (!raw.scopes || raw.version !== 2 || raw.catalogRevision === undefined || raw.scopes.nodeRelay !== true) {
       this.state.put({
         ...raw,
         version: 2,
-        scopes: raw.scopes ?? { deviceAccess: raw.remoteAccessEnabled !== false, nodeRelay: false },
+        scopes: { deviceAccess: raw.scopes?.deviceAccess ?? raw.remoteAccessEnabled !== false, nodeRelay: true },
         catalogRevision: raw.catalogRevision ?? 1,
         ...(raw.catalogPublication ? { catalogPublication: raw.catalogPublication } : {}),
       });
@@ -133,21 +136,20 @@ export class CloudConnectivityService {
       throw cloudError("CONTROL_PLANE_ALREADY_BOUND", "Control Plane is already bound to another account.");
     }
     if (current.status !== "pending-claim") throw cloudError("BINDING_STATE_CONFLICT", "Control Plane has no pending binding claim.");
-    this.state.put({ ...current, status: "active", scopes: { deviceAccess: true, nodeRelay: false }, ...input, updatedAt: new Date(this.clock()).toISOString() });
+    this.state.put({ ...current, status: "active", scopes: { deviceAccess: current.scopes.deviceAccess, nodeRelay: true }, ...input, updatedAt: new Date(this.clock()).toISOString() });
     return this.snapshot();
   }
 
-  /** Updates both scopes; only both being off stops the outbound control connection. */
-  setScopes(scopes: CloudRelayScopes) {
+  /** Updates account-device access. Node relay follows the active binding. */
+  setScopes(scopes: Pick<CloudRelayScopes, "deviceAccess">) {
     const current = this.current();
-    this.state.put({ ...current, scopes: { deviceAccess: scopes.deviceAccess === true, nodeRelay: scopes.nodeRelay === true }, updatedAt: new Date(this.clock()).toISOString() });
+    this.state.put({ ...current, scopes: { deviceAccess: scopes.deviceAccess === true, nodeRelay: true }, updatedAt: new Date(this.clock()).toISOString() });
     return this.snapshot();
   }
 
   /** Legacy single-switch helper: it only moves the device-access scope. */
   setRemoteAccess(enabled: boolean) {
-    const current = this.current();
-    return this.setScopes({ ...current.scopes, deviceAccess: enabled === true });
+    return this.setScopes({ deviceAccess: enabled === true });
   }
 
   setCloudControlPlaneId(cloudControlPlaneId: string) {
@@ -165,7 +167,7 @@ export class CloudConnectivityService {
     const current = this.current();
     if (current.status === "unbound") return this.snapshot();
     this.challenges.clear();
-    this.state.put({ ...current, status: "pending-revocation", scopes: { deviceAccess: false, nodeRelay: false }, updatedAt: new Date(this.clock()).toISOString() });
+    this.state.put({ ...current, status: "pending-revocation", scopes: { deviceAccess: false, nodeRelay: true }, updatedAt: new Date(this.clock()).toISOString() });
     return this.snapshot();
   }
 
@@ -175,7 +177,7 @@ export class CloudConnectivityService {
       version: 2,
       serviceOrigin: current.serviceOrigin,
       status: "unbound",
-      scopes: { deviceAccess: false, nodeRelay: false },
+      scopes: { deviceAccess: false, nodeRelay: true },
       ...(current.cloudControlPlaneId ? { cloudControlPlaneId: current.cloudControlPlaneId } : {}),
       updatedAt: new Date(this.clock()).toISOString(),
       connectionEpoch: current.connectionEpoch,
@@ -187,13 +189,13 @@ export class CloudConnectivityService {
   markCloneConflict() {
     const current = this.current();
     this.challenges.clear();
-    this.state.put({ ...current, status: "clone-conflict", scopes: { deviceAccess: false, nodeRelay: false }, backgroundCredential: undefined, updatedAt: new Date(this.clock()).toISOString() });
+    this.state.put({ ...current, status: "clone-conflict", scopes: { deviceAccess: false, nodeRelay: true }, backgroundCredential: undefined, updatedAt: new Date(this.clock()).toISOString() });
     return this.snapshot();
   }
 
   backgroundCredential() {
     const current = this.current();
-    return current.status === "active" && (current.scopes.deviceAccess || current.scopes.nodeRelay) ? current.backgroundCredential : undefined;
+    return current.status === "active" ? current.backgroundCredential : undefined;
   }
 
   /**
@@ -232,14 +234,9 @@ export class CloudConnectivityService {
     } as const;
   }
 
-  private putScopes(scopes: CloudRelayScopes) {
-    const current = this.state.get();
-    this.state.put({ ...current, scopes: { deviceAccess: scopes.deviceAccess === true, nodeRelay: scopes.nodeRelay === true }, updatedAt: new Date(this.clock()).toISOString() });
-  }
-
   private current(): StoredCloudConnectivityState & { scopes: CloudRelayScopes } {
     const raw = this.state.get();
-    return { ...raw, scopes: raw.scopes ?? { deviceAccess: raw.remoteAccessEnabled !== false, nodeRelay: false } };
+    return { ...raw, scopes: { deviceAccess: raw.scopes?.deviceAccess ?? raw.remoteAccessEnabled !== false, nodeRelay: true } };
   }
 
   private prune() {

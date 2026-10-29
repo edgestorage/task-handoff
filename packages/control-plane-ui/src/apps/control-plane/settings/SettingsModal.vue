@@ -1565,6 +1565,8 @@ function nodeRuntimeSummary(nodeId: string) {
 
 function nodeInstanceSummary(nodeId: string) {
   const instances = boardItems.value.filter((instance) => instance.nodeId === nodeId);
+  const node = (nodes.data.value || []).find((item) => item.id === nodeId);
+  if (node?.connectionEnabled === false) return t("settings.nodeDetail.instanceNodeDisconnected");
   const running = instances.filter((instance) => instance.status === "running").length;
   return t("settings.nodeDetail.runningCount", { running, total: instances.length });
 }

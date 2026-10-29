@@ -8,6 +8,7 @@ import {
   type GitAuditRecord,
   type GitCredentialRecord,
   type GitProvisioningIntentRecord,
+  type ModelPendingNodeEditRecord,
   type ModelRecord,
   type NodeConfigRecord,
   type PairingRevokeRecord,
@@ -56,6 +57,14 @@ export type ControlPlaneGitProvisioningCollection = ControlPlaneRecordCollection
 };
 export type ControlPlaneGitAuditCollection = Pick<ControlPlaneRecordCollection<GitAuditRecord>, "list" | "get"> & {
   append(record: GitAuditRecord): Promise<void>;
+};
+export type ControlPlaneModelPendingNodeEditCollection = {
+  list(): Promise<ModelPendingNodeEditRecord[]>;
+  get(modelId: string, nodeId: string): Promise<ModelPendingNodeEditRecord | undefined>;
+  put(record: ModelPendingNodeEditRecord): Promise<ModelPendingNodeEditRecord>;
+  delete(modelId: string, nodeId: string): Promise<boolean>;
+  deleteIfCiphertext(modelId: string, nodeId: string, patchCiphertext: string): Promise<boolean>;
+  deleteForNode(nodeId: string): Promise<number>;
 };
 export type ControlPlaneIdentityCollection = ControlPlaneRecordCollection<LoginIdentityRecord> & {
   findByLoginName(normalizedLoginName: string): Promise<LoginIdentityRecord | undefined>;
@@ -109,6 +118,7 @@ export type ControlPlaneDatabaseRepository = {
   readonly nodes: ControlPlaneRecordCollection<NodeConfigRecord>;
   readonly pairingRevocations: ControlPlaneRecordCollection<PairingRevokeRecord>;
   readonly models: ControlPlaneRecordCollection<ModelRecord>;
+  readonly modelPendingNodeEdits: ControlPlaneModelPendingNodeEditCollection;
   readonly chatBridges: ControlPlaneRecordCollection<ChatBridgeRecord>;
   readonly chatSessions: ControlPlaneRecordCollection<ChatSessionRecord>;
   readonly gitCredentials: ControlPlaneRecordCollection<GitCredentialRecord>;

@@ -501,7 +501,7 @@
                     <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageSelection?.imageId }}</code>
                   </div>
                   <div class="node-resource-row-actions">
-                    <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ localizedStatus(instanceStatusKeys, instance.status) }}</Badge>
+                    <Badge :variant="instance.connectionStatus === 'online' && instance.node?.connectionEnabled !== false ? 'default' : 'secondary'">{{ instanceStatusBadgeLabel(instance, t) }}</Badge>
                     <Button variant="outline" size="sm" :aria-label="t('settings.nodeDetail.instanceSettings', { name: instance.name })" @click="actions.openInstanceSettings(instance.id)">
                       <Settings :size="14" />
                       <span>{{ t("settings.nodeDetail.settings") }}</span>
@@ -525,10 +525,13 @@
               <CloudRelayNodePanel :selected-node="selectedNode" embedded />
               <CloudNodeTrustPanel
                 v-if="showCloudNodeTrust"
-                :can-manage-settings="canManageSettings"
+                :can-manage-settings="canManageSettings && nodeSupportsControlPlaneTrust(selectedNode)"
                 :selected-node="selectedNode"
                 embedded
               />
+              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-relay-description node-relay-upgrade">
+                {{ t("settings.nodeDetail.cloudRelayTrustUnsupported") }}
+              </p>
             </div>
             <template v-else>
             <div class="node-remote-panel">
@@ -599,10 +602,13 @@
               <CloudRelayBindPanel :selected-node="selectedNode" embedded @open-cloud-settings="emit('open-cloud-settings')" />
               <CloudNodeTrustPanel
                 v-if="showCloudNodeTrust"
-                :can-manage-settings="canManageSettings"
+                :can-manage-settings="canManageSettings && nodeSupportsControlPlaneTrust(selectedNode)"
                 :selected-node="selectedNode"
                 embedded
               />
+              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-relay-description node-relay-upgrade">
+                {{ t("settings.nodeDetail.cloudRelayTrustUnsupported") }}
+              </p>
             </div>
             <div class="node-remote-panel">
               <div class="node-detail-section-body">
@@ -682,7 +688,7 @@ import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, 
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
-import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
+import { nodeSupportsControlPlaneTrust, nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -705,7 +711,8 @@ import { nodeLocalFolderDisplayName } from "../nodePath";
 import type { NodeConnectionAction } from "../useNodeConnectionActions";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
-import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
+import { externalListenerSourceKeys, externalListenerStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
+import { instanceStatusBadgeLabel } from "../useInstanceStatus";
 import { formatDateTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 
@@ -844,10 +851,17 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ "open-cloud-settings": [] }>();
 
-const showCloudNodeTrust = computed(() => props.canManageSettings && Boolean(props.selectedNode && (
+const cloudNodeTrustAvailable = computed(() => Boolean(props.selectedNode && (
   props.selectedNode.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL]
   || props.selectedNode.connectionPath?.kind === "cloud-relay"
-)));
+)) && nodeSupportsControlPlaneTrust(props.selectedNode));
+const showCloudNodeTrust = computed(() => props.canManageSettings && cloudNodeTrustAvailable.value);
+const showCloudNodeTrustPanelPlaceholder = computed(() => props.canManageSettings
+  && Boolean(props.selectedNode && (
+    props.selectedNode.labels[CLOUD_ACCOUNT_NODE_HANDLE_LABEL]
+    || props.selectedNode.connectionPath?.kind === "cloud-relay"
+  ))
+  && !cloudNodeTrustAvailable.value);
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
 const localFolderRenameTarget = ref<NodeLocalFolder>();

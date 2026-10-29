@@ -76,6 +76,13 @@ test("relay copy ships in both locales", () => {
   }
 });
 
+test("paused-node model saves surface a localized deferred sync instead of a backend error", () => {
+  assert.match(modelSettingsComposable, /location\.code === "NODE_AGENT_CONNECTION_DISABLED"[\s\S]*?syncNodeDisconnected/);
+  assert.match(modelSettingsComposable, /failed\.some\(\(location\) => location\.state === "error"\) \? "error" : "info"/);
+  assert.match(zhSettings, /syncNodeDisconnected: "已保存。节点已断开，重新连接后会自动同步。"/);
+  assert.match(enSettings, /syncNodeDisconnected: "Saved\. The node is disconnected; the edit will sync after it reconnects\."/);
+});
+
 test("session selectors consume only the shared external-name directory", () => {
   const selection = fs.readFileSync(new URL("../src/components/models/ModelEntitySelection.vue", import.meta.url), "utf8");
   assert.doesNotMatch(selection, /upstreamName/);

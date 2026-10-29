@@ -6,6 +6,7 @@ import {
   ModelLocationSyncResultSchema,
   CreateNodeModelSchema,
   UpdateNodeModelSchema,
+  NodeModelPublicRecordSchema,
   createModelEntityId,
   defaultModelProtocols,
   isModelEntityId,
@@ -28,6 +29,7 @@ import {
   type PublicModelConfig,
 } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneModelRepository } from "./repository.ts";
+import type { PendingNodeOwnedEdit } from "./repository.ts";
 import { CopyModelInputSchema, CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
@@ -93,6 +95,56 @@ function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInpu
   };
 }
 
+/** Later writes win per field; omitted fields keep the earlier deferred edit. */
+function mergeModelUpdatePatches(current: UpdateModelInput | undefined, next: UpdateModelInput): UpdateModelInput {
+  const merged: Record<string, unknown> = { ...(current ?? {}) };
+  for (const [field, value] of Object.entries(next)) {
+    if (value !== undefined) merged[field] = value;
+  }
+  // Both operands were already strictly validated. Re-parsing would materialize
+  // CreateModelInput defaults for fields neither PATCH supplied.
+  return merged as UpdateModelInput;
+}
+
+/**
+ * UpdateModelInputSchema is built from CreateModelInputSchema, whose optional
+ * wrappers still materialize model defaults. PATCH semantics are defined by the
+ * keys the caller sent, not by those defaults, so retain only supplied fields
+ * after strict validation. This keeps partial edits from resetting order,
+ * labels, protocols, or the name list.
+ */
+function suppliedModelPatch(input: unknown, parsed: UpdateModelInput): UpdateModelInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return parsed;
+  const supplied = Object.fromEntries(Object.entries(parsed).filter(([field]) => Object.hasOwn(input, field)));
+  return supplied as UpdateModelInput;
+}
+
+/**
+ * Apply a deferred edit to a node-owned public record for reads. The credential
+ * is not projected; a replacement key only flips the public availability flags.
+ */
+function applyNodeOwnedPatch(model: NodeModelPublicRecord, patch: UpdateModelInput): NodeModelPublicRecord {
+  const { key, ...publicPatch } = patch;
+  const app = patch.app ?? model.app;
+  const modelNames = patch.modelNames?.length
+    ? normalizeModelNames(patch.modelNames, patch.model || model.model)
+    : patch.model
+      ? normalizeModelNames(undefined, patch.model)
+      : normalizeModelNameEntries(model.modelNames, model.model, { renumber: false });
+  return NodeModelPublicRecordSchema.parse({
+    ...model,
+    ...publicPatch,
+    app,
+    modelNames: projectModelNameEntries(modelNames),
+    mappings: patch.mappings !== undefined ? normalizeModelRequestMappings(patch.mappings) : model.mappings,
+    protocols: patch.protocols?.length ? patch.protocols : model.protocols,
+    model: modelNames[0]?.name || model.model,
+    keyPreview: key ? "set" : model.keyPreview,
+    keySet: key ? true : model.keySet,
+    updatedAt: model.updatedAt,
+  });
+}
+
 // Compatibility for v0.0.34: nodes without the request-mapping capability
 // have a strict wire schema that rejects the additive field, so it is removed
 // entirely instead of being sent as an empty list.
@@ -154,7 +206,16 @@ export class ControlPlaneModelService {
   // Replica node ids that still need an edit pushed to them. Entries are
   // retried on registry reads and by the explicit sync endpoint.
   private readonly pendingModelSyncs = new Map<string, Set<string>>();
-  private flushingPendingSyncs = false;
+  // Node-owned edits that one or more holders still need to apply. This is a
+  // cache of the durable repository records; a patch is consumed per node so
+  // one reconnecting replica cannot discard another replica's pending edit.
+  private readonly pendingNodeOwnedEdits = new Map<string, Map<string, PendingNodeOwnedEdit>>();
+  // Edits, retries, and retries started by background reads must observe one
+  // ordered revision per replica. The repository can atomically replace a row,
+  // but read-merge-write still needs a single-writer boundary in this process.
+  private readonly pendingNodeEditQueues = new Map<string, Promise<void>>();
+  private flushingPendingSyncs: Promise<void> | undefined;
+  private flushPendingSyncsAgain = false;
 
   constructor(options: ControlPlaneModelServiceOptions) {
     this.options = options;
@@ -163,6 +224,10 @@ export class ControlPlaneModelService {
   async init() {
     this.databaseModels.clear();
     for (const model of await this.options.repository.list()) this.databaseModels.set(model.id, model);
+    this.pendingNodeOwnedEdits.clear();
+    for (const edit of await this.options.repository.listPendingNodeEdits()) {
+      this.setPendingNodeEditCache(edit);
+    }
   }
 
   /**
@@ -204,6 +269,7 @@ export class ControlPlaneModelService {
       >;
       referenceCount: number;
     }>();
+    const pendingGroupRevision = new Map<string, string>();
     for (const model of this.listAll()) {
       groups.set(model.id, {
         id: model.id,
@@ -213,20 +279,29 @@ export class ControlPlaneModelService {
       });
     }
     for (const { nodeId, model } of fleet.items) {
-      const { referenceCount: _referenceCount, ...publicModelRecord } = model;
       const entityId = this.replicaEntityId(model.id);
+      const pending = this.pendingNodeOwnedEdits.get(entityId)?.get(nodeId);
+      const projected = pending ? applyNodeOwnedPatch(model, pending.patch) : model;
+      const { referenceCount: _referenceCount, ...publicModelRecord } = projected;
       const group = groups.get(entityId);
       if (group) {
         group.locations.push({
           type: "node",
           nodeId,
-          name: model.name,
-          enabled: model.enabled,
-          order: model.order,
-          referenceCount: model.referenceCount,
-          ...(model.revision ? { revision: model.revision } : {}),
+          name: projected.name,
+          enabled: projected.enabled,
+          order: projected.order,
+          referenceCount: projected.referenceCount,
+          ...(projected.revision ? { revision: projected.revision } : {}),
         });
-        group.referenceCount += model.referenceCount;
+        group.referenceCount += projected.referenceCount;
+        // A deferred edit is the operator's latest desired state. Make it the
+        // group summary too, otherwise a quick refresh reports the old value
+        // even though the per-location projection has the new one.
+        if (pending && (!pendingGroupRevision.get(entityId) || pending.updatedAt.localeCompare(pendingGroupRevision.get(entityId)!) >= 0)) {
+          group.model = publicModelRecord;
+          pendingGroupRevision.set(entityId, pending.updatedAt);
+        }
       } else {
         groups.set(entityId, {
           id: entityId,
@@ -234,14 +309,15 @@ export class ControlPlaneModelService {
           locations: [{
             type: "node",
             nodeId,
-            name: model.name,
-            enabled: model.enabled,
-            order: model.order,
-            referenceCount: model.referenceCount,
-            ...(model.revision ? { revision: model.revision } : {}),
+            name: projected.name,
+            enabled: projected.enabled,
+            order: projected.order,
+            referenceCount: projected.referenceCount,
+            ...(projected.revision ? { revision: projected.revision } : {}),
           }],
-          referenceCount: model.referenceCount,
+          referenceCount: projected.referenceCount,
         });
+        if (pending) pendingGroupRevision.set(entityId, pending.updatedAt);
       }
     }
     // Reading the registry is the natural retry point for replicas that were
@@ -293,7 +369,7 @@ export class ControlPlaneModelService {
   }
 
   async update(id: string, input: unknown) {
-    const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
+    const parsedInput = suppliedModelPatch(input, UpdateModelInputSchema.parse(input));
     const current = this.modelGet(id);
     return current ? this.updateOwnedEntity(current, parsedInput) : this.updateNodeOwnedEntity(id, parsedInput);
   }
@@ -347,13 +423,58 @@ export class ControlPlaneModelService {
     if (!holderIds.size) {
       throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found on the control plane or any node.`);
     }
-    const holders = await this.withFreshNodeCapabilities(nodes.filter((node) => holderIds.has(node.id)), true);
+    const holderNodes = nodes.filter((node) => holderIds.has(node.id));
+    const holders = await this.withFreshNodeCapabilities(holderNodes, true);
     const locations: ModelLocationSyncResult[] = [];
     let updated: PublicModelConfig | undefined;
-    for (const node of holders) {
-      const applied = await this.applyNodeEntityUpdate(node, id, parsedInput, "edit");
+    for (const node of holderNodes) {
+      const applied = await this.withPendingNodeEditLock(id, node.id, async () => {
+        const pending = this.pendingNodeOwnedEdits.get(id)?.get(node.id);
+        // A new edit must be layered on top of anything this node still needs
+        // to apply. Otherwise a partial PATCH would erase an earlier field.
+        const patch = pending ? mergeModelUpdatePatches(pending.patch, parsedInput) : parsedInput;
+        if (node.connectionEnabled === false) {
+          await this.persistPendingNodeEdit(id, node.id, patch);
+          return {
+            location: ModelLocationSyncResultSchema.parse({
+              nodeId: node.id,
+              state: "pending",
+              code: "NODE_AGENT_CONNECTION_DISABLED",
+              message: "Node agent connection is disabled locally.",
+            }),
+          };
+        }
+        // If an earlier intent is waiting for this node, advance the durable
+        // row to the merged revision before writing the node. A crash after the
+        // node accepts the write can then only replay this newer intent, never
+        // the stale one it superseded.
+        const durable = pending ? await this.persistPendingNodeEdit(id, node.id, patch) : undefined;
+        const resolved = holders.find((candidate) => candidate.id === node.id) || node;
+        const result = await this.applyNodeEntityUpdate(resolved, id, patch, "edit");
+        if (result.location.state === "synced" && durable) {
+          await this.clearPendingNodeEdit(id, node.id, durable.token);
+        } else if (result.location.state === "pending" && !durable) {
+          await this.persistPendingNodeEdit(id, node.id, patch);
+        }
+        return result;
+      });
       if (applied.record) updated = updated || applied.record;
       locations.push(applied.location);
+    }
+    const permanentlyFailed = locations.some((location) => location.state === "error" || location.state === "unsupported");
+    if (!updated && !permanentlyFailed) {
+      // The first holder may be offline. Project the newest deferred intent
+      // from the fleet snapshot so the response matches the pending list view.
+      const fleet = this.options.gateway.readFleetModels(nodes);
+      const pending = fleet.items
+        .flatMap(({ nodeId, model }) => {
+          const edit = this.pendingNodeOwnedEdits.get(id)?.get(nodeId);
+          if (!edit || this.replicaEntityId(model.id) !== id) return [];
+          const { referenceCount: _referenceCount, ...record } = applyNodeOwnedPatch(model, edit.patch);
+          return [{ record, edit }];
+        })
+        .sort((left, right) => right.edit.updatedAt.localeCompare(left.edit.updatedAt))[0];
+      updated = pending?.record;
     }
     if (!updated) {
       const detail = locations.find((location) => location.message)?.message;
@@ -366,6 +487,53 @@ export class ControlPlaneModelService {
       });
     }
     return ModelMutationResultSchema.parse({ model: updated, locations });
+  }
+
+  private setPendingNodeEditCache(edit: PendingNodeOwnedEdit) {
+    const edits = this.pendingNodeOwnedEdits.get(edit.modelId) || new Map<string, PendingNodeOwnedEdit>();
+    edits.set(edit.nodeId, edit);
+    this.pendingNodeOwnedEdits.set(edit.modelId, edits);
+  }
+
+  private deletePendingNodeEditCache(modelId: string, nodeId: string) {
+    const edits = this.pendingNodeOwnedEdits.get(modelId);
+    if (!edits) return;
+    edits.delete(nodeId);
+    if (!edits.size) this.pendingNodeOwnedEdits.delete(modelId);
+  }
+
+  private async persistPendingNodeEdit(modelId: string, nodeId: string, patch: UpdateModelInput) {
+    const stored = await this.options.repository.putPendingNodeEdit({
+      modelId,
+      nodeId,
+      patch,
+      updatedAt: now(),
+    });
+    this.setPendingNodeEditCache(stored);
+    return stored;
+  }
+
+  private async withPendingNodeEditLock<T>(modelId: string, nodeId: string, operation: () => Promise<T>): Promise<T> {
+    const key = `${modelId}\u001f${nodeId}`;
+    const previous = this.pendingNodeEditQueues.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.pendingNodeEditQueues.set(key, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.pendingNodeEditQueues.get(key) === tail) this.pendingNodeEditQueues.delete(key);
+    }
+  }
+
+  private async clearPendingNodeEdit(modelId: string, nodeId: string, token?: string) {
+    if (!token) return;
+    if (await this.options.repository.deletePendingNodeEditIfCurrent(modelId, nodeId, token)) {
+      this.deletePendingNodeEditCache(modelId, nodeId);
+    }
   }
 
   /**
@@ -583,8 +751,23 @@ export class ControlPlaneModelService {
     return resolved || node;
   }
 
-  deleteOnNode(nodeId: string, modelId: string) {
-    return this.options.gateway.deleteModel(this.options.requireNode(nodeId), modelId);
+  async deleteOnNode(nodeId: string, modelId: string) {
+    const result = await this.options.gateway.deleteModel(this.options.requireNode(nodeId), modelId);
+    if (result.deleted) {
+      // An explicit deletion supersedes any deferred edit; otherwise a later
+      // reconnect would resurrect the record the operator just removed.
+      await this.options.repository.deletePendingNodeEdit(modelId, nodeId);
+      this.deletePendingNodeEditCache(modelId, nodeId);
+    }
+    return result;
+  }
+
+  async deletePendingNodeEditsForNode(nodeId: string) {
+    await this.options.repository.deletePendingNodeEditsForNode(nodeId);
+    for (const [modelId, edits] of [...this.pendingNodeOwnedEdits]) {
+      edits.delete(nodeId);
+      if (!edits.size) this.pendingNodeOwnedEdits.delete(modelId);
+    }
   }
 
   discover(input: unknown) {
@@ -900,9 +1083,45 @@ export class ControlPlaneModelService {
 
   /** Best-effort convergence for replicas that were unreachable during an edit. */
   async flushPendingModelSyncs() {
-    if (this.flushingPendingSyncs || !this.pendingModelSyncs.size) return;
-    this.flushingPendingSyncs = true;
-    try {
+    if (!this.pendingModelSyncs.size && !this.pendingNodeOwnedEdits.size) return;
+    if (this.flushingPendingSyncs) {
+      // A read-triggered drain can start before a node reconnects. Callers that
+      // request a flush after that must wait for the current pass and schedule
+      // one more pass against the now-current node state.
+      this.flushPendingSyncsAgain = true;
+      await this.flushingPendingSyncs;
+      if (this.flushPendingSyncsAgain && (this.pendingModelSyncs.size || this.pendingNodeOwnedEdits.size)) {
+        return this.flushPendingModelSyncs();
+      }
+      return;
+    }
+    let tracked!: Promise<void>;
+    tracked = this.drainPendingModelSyncs().finally(() => {
+      if (this.flushingPendingSyncs === tracked) this.flushingPendingSyncs = undefined;
+    });
+    this.flushingPendingSyncs = tracked;
+    return tracked;
+  }
+
+  private async drainPendingModelSyncs() {
+    do {
+      this.flushPendingSyncsAgain = false;
+      for (const [modelId, edits] of [...this.pendingNodeOwnedEdits]) {
+        const nodes = new Map(this.options.listNodes().map((node) => [node.id, node]));
+        for (const [nodeId] of [...edits]) {
+          await this.withPendingNodeEditLock(modelId, nodeId, async () => {
+            const edit = this.pendingNodeOwnedEdits.get(modelId)?.get(nodeId);
+            if (!edit) return;
+            const node = nodes.get(nodeId);
+            if (!node || node.connectionEnabled === false) return;
+            const applied = await this.applyNodeEntityUpdate(node, modelId, edit.patch, "edit");
+            // Consume exactly the durable revision that was sent. A concurrent
+            // newer edit leaves its own row in place for the next retry.
+            if (applied.location.state === "synced") await this.clearPendingNodeEdit(modelId, nodeId, edit.token);
+          });
+        }
+        if (!this.pendingNodeOwnedEdits.get(modelId)?.size) this.pendingNodeOwnedEdits.delete(modelId);
+      }
       for (const [modelId, nodeIds] of [...this.pendingModelSyncs]) {
         const model = this.modelGet(modelId);
         if (!model) {
@@ -911,9 +1130,7 @@ export class ControlPlaneModelService {
         }
         await this.syncEntityToReplicas(model, nodeIds);
       }
-    } finally {
-      this.flushingPendingSyncs = false;
-    }
+    } while (this.flushPendingSyncsAgain && (this.pendingModelSyncs.size || this.pendingNodeOwnedEdits.size));
   }
 
   private resolvePrivateInput<T extends ModelDiscoveryInput | ModelTestInput>(input: T): T & { key: string } {

@@ -236,7 +236,7 @@ export class CloudConnectivityBackgroundRuntime {
       serviceOrigin: () => options.cloudDiscovery?.activeOrigin ?? options.state.snapshot().serviceOrigin,
       // Hints only matter once the Control Plane is bound and reachable, and they
       // feed both channel kinds, so either scope keeps the probe running.
-      enabled: () => { const snapshot = options.state.snapshot(); return snapshot.status === "active" && (snapshot.scopes.deviceAccess || snapshot.scopes.nodeRelay); },
+      enabled: () => options.state.snapshot().status === "active",
       report: (links) => this.request("report-relay-links", { links }),
       fetch: this.options.fetch,
       clock: this.clock,
@@ -578,14 +578,14 @@ export class CloudConnectivityBackgroundRuntime {
     if (!this.running || !this.nodeRelayChannels || !this.options.nodeRelay?.nodes.listForClaim) return;
     if (this.nodeRelayRestore) return;
     const snapshot = this.options.state.snapshot();
-    if (snapshot.status !== "active" || !snapshot.scopes.nodeRelay || !snapshot.bindingId) return;
+    if (snapshot.status !== "active" || !snapshot.bindingId) return;
     const bindingId = snapshot.bindingId;
     this.nodeRelayRestore = (async () => {
       const nodes = await Promise.resolve(this.options.nodeRelay!.nodes.listForClaim!());
       for (const node of nodes) {
         if (!this.running) return;
         const current = this.options.state.snapshot();
-        if (current.status !== "active" || !current.scopes.nodeRelay || current.bindingId !== bindingId) return;
+        if (current.status !== "active" || current.bindingId !== bindingId) return;
         if (this.nodeRelayChannels?.hasClaimOrChannel(node.nodeHandle)) continue;
         try {
           await this.claimAccountNode(node.nodeHandle);
@@ -612,7 +612,7 @@ export class CloudConnectivityBackgroundRuntime {
   private async recoverNodeRelayClaim(nodeHandle: string) {
     if (!this.running || !this.nodeRelayChannels || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
     const snapshot = this.options.state.snapshot();
-    if (snapshot.status !== "active" || snapshot.scopes.nodeRelay !== true) return;
+    if (snapshot.status !== "active") return;
     this.nodeRelayRecoveryInFlight.add(nodeHandle);
     let failure: unknown;
     let pending = false;
@@ -770,7 +770,7 @@ export class CloudConnectivityBackgroundRuntime {
   private schedule(delay = this.control.reconnectDelay()) {
     if (!this.running || this.timer) return;
     const state = this.options.state.snapshot();
-    const active = state.status === "active" && (state.scopes.deviceAccess || state.scopes.nodeRelay);
+    const active = state.status === "active";
     const revoking = state.status === "pending-revocation" && Boolean(state.bindingId) && Boolean(this.options.state.revocationCredential());
     if (!active && !revoking) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.ensureConnected().catch(() => this.schedule()); }, delay);

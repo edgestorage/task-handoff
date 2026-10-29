@@ -33,10 +33,9 @@ const CloudConnectivitySchema = z.object({
   version: z.literal(2),
   serviceOrigin: z.string(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
-  // Two independent scopes: device access (account devices reach this Control
-  // Plane) and node relay (this Control Plane claims account nodes). Only both
-  // being off stops the cloud connection.
-  scopes: z.object({ deviceAccess: z.boolean(), nodeRelay: z.boolean() }),
+  // Node relay follows the active binding; `nodeRelay` is ignored for N-1 wire
+  // compatibility and is not part of the current client model.
+  scopes: z.object({ deviceAccess: z.boolean() }).strip(),
   remoteAccessEnabled: z.boolean(),
   accountId: z.string().optional(),
   bindingId: z.string().optional(),
@@ -240,10 +239,12 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
       return requestData("/api/cloud-connectivity/binding-requests", CloudAccountRequestSchema, jsonRequest("POST", {}));
     },
     setCloudRemoteAccess(enabled: boolean) {
-      return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { enabled }));
+      // Send the legacy field as enabled so an N-1 Control Plane cannot tear
+      // down node relay when the operator changes device access.
+      return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { scopes: { deviceAccess: enabled, nodeRelay: true } }));
     },
-    setCloudScopes(scopes: { deviceAccess: boolean; nodeRelay: boolean }) {
-      return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { scopes }));
+    setCloudScopes(scopes: { deviceAccess: boolean }) {
+      return requestData("/api/cloud-connectivity/remote-access", CloudConnectivitySchema, jsonRequest("POST", { scopes: { deviceAccess: scopes.deviceAccess, nodeRelay: true } }));
     },
     disconnectCloud() {
       return requestData("/api/cloud-connectivity/disconnect", CloudConnectivitySchema, jsonRequest("POST", {}));

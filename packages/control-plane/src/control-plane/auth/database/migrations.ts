@@ -369,6 +369,14 @@ CREATE TABLE cp_cloud_device_trust_revisions (
 `),
   migration("0011_cloud_device_trust_revision_bigint", "SELECT 1;"),
   migration("0012_cloud_device_trust_authorization_revision_bigint", "SELECT 1;"),
+  migration("0013_model_pending_node_edits", `
+CREATE TABLE cp_model_pending_node_edits (
+  id TEXT PRIMARY KEY NOT NULL, model_id TEXT NOT NULL, node_id TEXT NOT NULL,
+  patch_ciphertext TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX cp_model_pending_node_edits_identity_uq ON cp_model_pending_node_edits(model_id, node_id);
+CREATE INDEX cp_model_pending_node_edits_node_idx ON cp_model_pending_node_edits(node_id);
+`),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -458,4 +466,12 @@ CREATE TABLE cp_cloud_device_trust_revisions (
 `),
   migration("0011_cloud_device_trust_revision_bigint", "ALTER TABLE cp_cloud_device_trust_revisions ALTER COLUMN revision TYPE BIGINT;"),
   migration("0012_cloud_device_trust_authorization_revision_bigint", "ALTER TABLE cp_cloud_device_pins ALTER COLUMN authorization_revision TYPE BIGINT;"),
+  migration("0013_model_pending_node_edits", `
+CREATE TABLE cp_model_pending_node_edits (
+  id TEXT PRIMARY KEY NOT NULL, model_id TEXT NOT NULL, node_id TEXT NOT NULL,
+  patch_ciphertext TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX cp_model_pending_node_edits_identity_uq ON cp_model_pending_node_edits(model_id, node_id);
+CREATE INDEX cp_model_pending_node_edits_node_idx ON cp_model_pending_node_edits(node_id);
+`),
 ];

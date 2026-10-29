@@ -5,6 +5,7 @@ import {
   normalizeControlledInstanceCapabilities,
   parseCodexInstanceSettings,
   supportsControlledInstanceCodexManagedSettings,
+  supportsNodeControlPlaneTrust,
   supportsNodeCodexManagedSettings,
 } from "../src/control-plane.ts";
 
@@ -37,6 +38,9 @@ test("managed Codex capability is additive and defaults to unsupported for v0.0.
   assert.equal(supportsNodeCodexManagedSettings({}), false);
   assert.equal(supportsControlledInstanceCodexManagedSettings({ features: {} }), false);
   assert.equal(supportsNodeCodexManagedSettings({ codexManagedSettings: true, future: true }), true);
+  assert.equal(supportsNodeControlPlaneTrust({}), false);
+  assert.equal(supportsNodeControlPlaneTrust({ controlPlaneTrust: true, future: true }), true);
+  assert.equal(supportsNodeControlPlaneTrust({ controlPlaneTrust: "true" }), false);
   const capabilities = normalizeControlledInstanceCapabilities({ features: { codexManagedSettings: true, future: true } });
   assert.equal(capabilities.features.codexManagedSettings, true);
 });

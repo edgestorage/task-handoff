@@ -148,7 +148,6 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(state, /testModel\(\{/);
   assert.match(state, /modelNames: settingsModel\.modelNames\.map/);
   assert.match(state, /model: settingsModel\.modelNames\[0\]\?\.name\.trim\(\) \|\| ""/);
-  assert.match(state, /existingModelId: editingModelId\.value \|\| copyingModelId\.value/);
   assert.match(state, /showControlPlaneToast\(t\("settings\.modelRegistry\.testSucceeded"[^;]+"success"\)/);
   assert.match(state, /showDelayedControlPlaneLoadingToast\(t\("settings\.modelRegistry\.testing"\)\)/);
   assert.match(state, /showDelayedControlPlaneLoadingToast\(t\("settings\.modelRegistry\.discovering"\)\)/);
@@ -176,11 +175,11 @@ test("model settings owns endpoint protocols independently from consuming apps",
   assert.match(state, /protocols: \[\.\.\.settingsModel\.protocols\]/);
 });
 
-test("only control-plane model locations expose secret-preserving copy", () => {
+test("all model locations expose copy while only control-plane sources inherit credentials", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   const queries = read("src/api/queries.ts");
-  assert.match(settings, /v-if="model\.locations\?\.some\(\(location\) => location\.type === 'control-plane'\)" @select="openCopyDialog\(model\)"/);
+  assert.match(settings, /<DropdownMenuItem @select="openCopyDialog\(model\)"/);
   assert.match(settings, /v-else-if="copyingModelId" class="model-scope-notice"/);
   assert.match(state, /function copyModelDraft\(model: ModelConfig\)/);
   assert.match(state, /saved = await copyModel\(copyingModelId\.value, payload\)/);

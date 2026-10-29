@@ -1851,6 +1851,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           aiSessionAttachmentRetention: true,
           aiSessionFileAttachmentLimit: true,
           codexManagedSettings: true,
+          controlPlaneTrust: true,
           folderPlaces: true,
           localFolderNameUpdate: true,
           managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false, wsl: runtimeAdapters.has("wsl") } },

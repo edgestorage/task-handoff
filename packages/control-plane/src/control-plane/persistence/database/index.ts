@@ -11,7 +11,7 @@ import {
 // than to authentication.
 export type ControlPlaneDatabase = ControlPlaneDatabaseRepository;
 
-const collectionMutationMethods = new Set(["put", "delete", "putIfRevision", "insert", "append"]);
+const collectionMutationMethods = new Set(["put", "delete", "putIfRevision", "insert", "append", "deleteIfCiphertext", "deleteForNode"]);
 
 function normalizeDatabaseMutationError(error: unknown) {
   let current: unknown = error;

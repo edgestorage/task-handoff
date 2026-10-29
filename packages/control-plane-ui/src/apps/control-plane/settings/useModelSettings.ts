@@ -59,6 +59,10 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   const serializeDraft = () => JSON.stringify({ ...settingsModel });
   initialDraft.value = serializeDraft();
   const modelDraftDirty = computed(() => serializeDraft() !== initialDraft.value);
+  // Only the Control Plane's own records can supply an inherited credential.
+  // Node copies use the public draft and the regular create endpoint instead.
+  const canInheritCopyCredential = computed(() => Boolean(copyingModelId.value && models()
+    .find((model) => model.id === copyingModelId.value)?.locations?.some((location) => location.type === "control-plane")));
 
   const formModelBusyId = computed(() => editingModelId.value || copyingModelId.value || "__new_model__");
   const selectedNodeSupportsModelEndpointProbe = computed(() => {
@@ -85,7 +89,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     selectedNodeSupportsModelEndpointProbe.value
     &&
     settingsModel.endpoint.trim()
-    && (settingsModel.key.trim() || editingModelId.value || copyingModelId.value),
+    && (settingsModel.key.trim() || editingModelId.value || canInheritCopyCredential.value),
   ));
   const canTestModel = computed(() => canDiscoverModels.value && Boolean(settingsModel.model.trim()) && settingsModel.protocols.length > 0);
   const canSaveModel = computed(() => {
@@ -93,7 +97,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       return false;
     }
     if (!settingsModel.modelNames.length || settingsModel.modelNames.some((entry) => !entry.name.trim())) return false;
-    if (!editingModelId.value && !copyingModelId.value && !settingsModel.key.trim()) {
+    if (!editingModelId.value && !canInheritCopyCredential.value && !settingsModel.key.trim()) {
       return false;
     }
     if (!editingModelId.value && settingsModel.locationScope !== "control-plane" && !nodes().some((node) => node.id === settingsModel.locationScope)) {
@@ -188,10 +192,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   );
 
   function endpointDraft() {
+    const existingModelId = editingModelId.value || (canInheritCopyCredential.value ? copyingModelId.value : "");
     return {
       endpoint: settingsModel.endpoint.trim(),
       ...(settingsModel.key.trim() ? { key: settingsModel.key.trim() } : {}),
-      ...(editingModelId.value || copyingModelId.value ? { existingModelId: editingModelId.value || copyingModelId.value } : {}),
+      ...(existingModelId ? { existingModelId } : {}),
     };
   }
 
@@ -357,8 +362,12 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         const deferred = result.locations.filter((location) => location.state !== "synced");
         // Surface the actionable per-location reason (for example a node that
         // must be updated first) instead of only a count.
-        if (deferred.length) syncNotice = deferred[0].message || t("settings.modelRegistry.syncIncomplete", { count: deferred.length });
-      } else if (copyingModelId.value) {
+        if (deferred.length) {
+          syncNotice = deferred.some((location) => location.code === "NODE_AGENT_CONNECTION_DISABLED")
+            ? t("settings.modelRegistry.syncNodeDisconnected")
+            : deferred[0].message || t("settings.modelRegistry.syncIncomplete", { count: deferred.length });
+        }
+      } else if (copyingModelId.value && canInheritCopyCredential.value) {
         saved = await copyModel(copyingModelId.value, payload);
       } else {
         saved = settingsModel.locationScope === "control-plane"
@@ -381,23 +390,52 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     }
   }
 
-  async function removeModel(model: ModelConfig, location: ModelLocation): Promise<boolean> {
-    if (deletingModelId.value) {
+  function canDeleteModelEverywhere(model: ModelConfig) {
+    return Boolean(model.locations?.length) && !(model.referenceCount > 0)
+      && !model.locations?.some((location) => location.type === "node" && location.referenceCount > 0);
+  }
+
+  function removeModel(model: ModelConfig, location: ModelLocation): Promise<boolean> {
+    return removeModelLocations(model, [location]);
+  }
+
+  function removeModelEverywhere(model: ModelConfig): Promise<boolean> {
+    if (!canDeleteModelEverywhere(model)) return Promise.resolve(false);
+    // Retain the Control Plane configuration if a node cannot be deleted.
+    const locations = model.locations || [];
+    return removeModelLocations(model, [
+      ...locations.filter((location) => location.type === "node"),
+      ...locations.filter((location) => location.type === "control-plane"),
+    ]);
+  }
+
+  async function removeModelLocations(model: ModelConfig, locations: ModelLocation[]): Promise<boolean> {
+    if (deletingModelId.value || !locations.length) {
       return false;
     }
     deletingModelId.value = model.id;
     clearModelFeedback();
+    let completed = 0;
     try {
-      if (location.type === "node") await deleteNodeModel(location.nodeId, model.id);
-      else await deleteModel(model.id);
-      if (editingModelId.value === model.id && (model.locations?.length || 1) === 1) {
-        resetModelForm();
+      try {
+        for (const location of locations) {
+          if (location.type === "node") await deleteNodeModel(location.nodeId, model.id);
+          else await deleteModel(model.id);
+          completed++;
+        }
+        if (editingModelId.value === model.id && locations.length === (model.locations?.length || 1)) {
+          resetModelForm();
+        }
+        onModelDeleted(model.id);
+      } finally {
+        // Partial deletion must be reflected by an authoritative registry read.
+        await refreshModels();
       }
-      onModelDeleted(model.id);
-      await refreshModels();
       return true;
     } catch (error) {
-      showControlPlaneToast(translateError(error), "error");
+      showControlPlaneToast(completed > 0 && completed < locations.length
+        ? t("settings.modelRegistry.deleteIncomplete", { count: completed, total: locations.length, error: translateError(error) })
+        : translateError(error), "error");
       return false;
     } finally {
       deletingModelId.value = "";
@@ -450,7 +488,9 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       await refreshModels();
       const failed = result.locations.filter((location) => location.state !== "synced");
       if (failed.length) {
-        showControlPlaneToast(failed[0].message || t("settings.modelRegistry.syncFailed"), "error");
+        showControlPlaneToast(failed.some((location) => location.code === "NODE_AGENT_CONNECTION_DISABLED")
+          ? t("settings.modelRegistry.syncNodeDisconnected")
+          : failed[0].message || t("settings.modelRegistry.syncFailed"), failed.some((location) => location.state === "error") ? "error" : "info");
         return false;
       }
       showControlPlaneToast(t("settings.modelRegistry.synced"), "success");
@@ -494,6 +534,8 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   }
 
   return {
+    canDeleteModelEverywhere,
+    canInheritCopyCredential,
     canSaveModel,
     selectedNodeSupportsModelEndpointProbe,
     canDiscoverModels,
@@ -516,6 +558,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     modelDraftDirty,
     moveModel,
     removeModel,
+    removeModelEverywhere,
     resetModelForm,
     saveModel,
     savingModelId,

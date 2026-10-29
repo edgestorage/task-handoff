@@ -22,7 +22,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { Cloud } from "@lucide/vue";
 import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import { Button } from "../../../components/ui/button";
-import { bindCloudRelayNode, controlPlaneQueryKeys, updateCloudScopes, useCloudAccountQuery, useCloudConnectivityQuery } from "../../../api/queries";
+import { bindCloudRelayNode, controlPlaneQueryKeys, useCloudAccountQuery, useCloudConnectivityQuery } from "../../../api/queries";
 import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -38,26 +38,17 @@ const linkedHandle = computed(() => props.selectedNode.labels[CLOUD_ACCOUNT_NODE
 const account = useCloudAccountQuery();
 const connectivity = useCloudConnectivityQuery();
 const available = computed(() => Boolean(account.data.value?.signedIn)
-  && connectivity.data.value?.status === "active"
-  && connectivity.data.value?.scopes.nodeRelay === true);
-const scopeBlocked = computed(() => Boolean(account.data.value?.signedIn)
-  && connectivity.data.value?.status === "active"
-  && connectivity.data.value?.scopes.nodeRelay === false);
+  && connectivity.data.value?.status === "active");
 const primaryActionLabel = computed(() => {
-  if (busy.value) return scopeBlocked.value && !available.value
-    ? t("settings.nodeDetail.cloudRelayBindEnablingScope")
-    : t("settings.nodeDetail.cloudRelayBindBusy");
+  if (busy.value) return t("settings.nodeDetail.cloudRelayBindBusy");
   if (account.isLoading.value || connectivity.isLoading.value) return t("settings.nodeDetail.cloudRelayBindLoading");
   if (available.value) return t("settings.nodeDetail.cloudRelayBindAction");
   if (!account.data.value?.signedIn) return t("settings.nodeDetail.cloudRelayBindSignInAction");
-  if (connectivity.data.value?.status !== "active") return t("settings.nodeDetail.cloudRelayBindSetupAction");
-  return t("settings.nodeDetail.cloudRelayBindEnableScopeAction");
+  return t("settings.nodeDetail.cloudRelayBindSetupAction");
 });
 const unavailableReason = computed(() => !account.data.value?.signedIn
   ? t("settings.nodeDetail.cloudRelayBindRequiresSignIn")
-  : connectivity.data.value?.status !== "active"
-    ? t("settings.nodeDetail.cloudRelayBindRequiresBinding")
-    : t("settings.nodeDetail.cloudRelayBindRequiresScope"));
+  : t("settings.nodeDetail.cloudRelayBindRequiresBinding"));
 
 async function primaryAction() {
   if (busy.value || account.isLoading.value || connectivity.isLoading.value) return;
@@ -65,26 +56,7 @@ async function primaryAction() {
     await bind();
     return;
   }
-  if (!scopeBlocked.value) {
-    emit("open-cloud-settings");
-    return;
-  }
-  await enableNodeRelay();
-}
-
-async function enableNodeRelay() {
-  if (busy.value || !connectivity.data.value) return;
-  busy.value = true;
-  error.value = "";
-  result.value = null;
-  try {
-    await updateCloudScopes({ ...connectivity.data.value.scopes, nodeRelay: true });
-    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.cloudConnectivity });
-  } catch (failure) {
-    error.value = `${t("settings.nodeDetail.cloudRelayBindEnableScopeFailed")} ${translateApiError(failure, t)}`;
-  } finally {
-    busy.value = false;
-  }
+  emit("open-cloud-settings");
 }
 
 async function bind() {

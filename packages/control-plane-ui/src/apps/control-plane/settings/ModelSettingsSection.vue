@@ -45,7 +45,7 @@
         </div>
       </section>
 
-      <section class="model-directory" :aria-label="t('settings.modelRegistry.count', { count: filteredModels.length })">
+      <section v-if="models.isLoading.value || models.error.value || !filteredModels.length" class="model-directory" :aria-label="t('settings.modelRegistry.count', { count: filteredModels.length })">
         <header class="model-directory-head">
           <strong>{{ t("settings.modelRegistry.count", { count: filteredModels.length }) }}</strong>
           <span v-if="hasActiveFilters">{{ t("settings.modelRegistry.filteredFrom", { count: models.data.value?.length || 0 }) }}</span>
@@ -63,133 +63,150 @@
           <Button v-if="hasActiveFilters" variant="outline" size="sm" @click="clearFilters">{{ t("settings.modelRegistry.clearFilters") }}</Button>
           <Button v-else size="sm" @click="openCreateDialog"><Plus :size="14" />{{ t("settings.modelRegistry.add") }}</Button>
         </div>
-        <div v-else class="model-list">
-          <article v-for="model in filteredModels" :key="model.id" class="model-row" data-model-row>
-            <div class="model-row-main">
-              <div class="model-identity">
-                <div class="model-title-line">
-                  <strong>{{ model.name }}</strong>
-                  <Badge variant="secondary">{{ compatibleAppLabel(model) }}</Badge>
-                  <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? t("settings.modelRegistry.enabled") : t("settings.modelRegistry.disabled") }}</Badge>
+      </section>
+
+      <template v-else>
+        <section v-for="group in modelGroups" :key="group.id" class="model-directory" :aria-labelledby="`model-group-${group.id}`">
+          <header class="model-directory-head model-group-head">
+            <div class="model-group-heading">
+              <h2 :id="`model-group-${group.id}`">{{ t(group.titleKey, { count: group.models.length }) }}</h2>
+              <p>{{ t(group.descriptionKey) }}</p>
+            </div>
+            <span v-if="hasActiveFilters">{{ t("settings.modelRegistry.filteredFrom", { count: group.total }) }}</span>
+          </header>
+          <div v-if="!group.models.length" class="model-state">{{ hasActiveFilters ? t("settings.modelRegistry.noMatches") : t(group.emptyKey) }}</div>
+          <div v-else class="model-list">
+            <article v-for="model in group.models" :key="model.id" class="model-row" data-model-row>
+              <div class="model-row-main">
+                <div class="model-identity">
+                  <div class="model-title-line">
+                    <strong>{{ model.name }}</strong>
+                    <Badge variant="secondary">{{ compatibleAppLabel(model) }}</Badge>
+                    <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? t("settings.modelRegistry.enabled") : t("settings.modelRegistry.disabled") }}</Badge>
+                  </div>
+                  <code>{{ model.model }}</code>
+                  <span class="model-endpoint" :title="model.endpoint">{{ model.endpoint }}</span>
                 </div>
-                <code>{{ model.model }}</code>
-                <span class="model-endpoint" :title="model.endpoint">{{ model.endpoint }}</span>
-              </div>
-              <div class="model-summary">
-                <Popover>
-                  <PopoverTrigger as-child>
-                    <button type="button" class="model-summary-item model-summary-trigger">
-                      <MapPin :size="14" aria-hidden="true" />
-                      <span>{{ t("settings.modelRegistry.locationCount", { count: model.locations?.length || 0 }) }}</span>
-                      <ChevronDown :size="14" aria-hidden="true" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent class="model-summary-popover w-[min(272px,var(--reka-popover-content-available-width))] overflow-hidden p-0" align="start" :collision-padding="10" :side-offset="4">
-                    <header class="model-summary-popover-head"><strong>{{ t("settings.modelRegistry.locations") }}</strong><span>{{ t("settings.modelRegistry.locationCount", { count: model.locations?.length || 0 }) }}</span></header>
-                    <ScrollArea class="model-summary-popover-scroll" :horizontal="false">
-                      <div class="model-summary-popover-list">
-                        <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-summary-popover-row">
-                          <MapPin :size="14" aria-hidden="true" />
-                          <span>
-                            <strong>{{ modelLocationLabel(location) }}</strong>
-                            <small v-if="location.type === 'node' && location.revision && model.revision && location.revision !== model.revision" class="model-location-stale">{{ t("settings.modelRegistry.locationPending") }}</small>
-                            <small v-else-if="location.type === 'node' && location.revision && model.revision">{{ t("settings.modelRegistry.locationSynced") }}</small>
-                            <small v-else>{{ location.type === "node" ? t("settings.modelRegistry.references", { count: location.referenceCount }) : t("settings.modelRegistry.controlPlaneManaged") }}</small>
-                          </span>
-                        </div>
-                      </div>
-                    </ScrollArea>
-                  </PopoverContent>
-                </Popover>
-                <span v-if="staleLocations(model).length" class="model-summary-item model-summary-alert" role="status">
-                  <AlertTriangle :size="14" aria-hidden="true" />
-                  <span>{{ t("settings.modelRegistry.pendingSync", { count: staleLocations(model).length }) }}</span>
-                </span>
-                <Popover>
-                  <PopoverTrigger as-child>
-                    <button type="button" class="model-summary-item model-summary-trigger">
-                      <Link2 :size="14" aria-hidden="true" />
-                      <span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span>
-                      <ChevronDown :size="14" aria-hidden="true" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent class="model-summary-popover w-[min(272px,var(--reka-popover-content-available-width))] overflow-hidden p-0" align="start" :collision-padding="10" :side-offset="4">
-                    <header class="model-summary-popover-head"><strong>{{ t("settings.modelRegistry.referenceDistribution") }}</strong><span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span></header>
-                    <ScrollArea v-if="referenceLocations(model).length" class="model-summary-popover-scroll" :horizontal="false">
-                      <div class="model-summary-popover-list">
-                        <div v-for="location in referenceLocations(model)" :key="modelLocationKey(location)" class="model-reference-group">
-                          <button
-                            type="button"
-                            class="model-summary-popover-row model-reference-toggle"
-                            :aria-expanded="referenceGroupExpanded(model.id, location)"
-                            @click="toggleReferenceGroup(model.id, location)"
-                          >
-                            <Link2 :size="14" aria-hidden="true" />
-                            <span><strong>{{ modelLocationLabel(location) }}</strong><small>{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small></span>
-                            <ChevronDown :size="14" class="model-reference-chevron" :class="{ 'is-open': referenceGroupExpanded(model.id, location) }" aria-hidden="true" />
-                          </button>
-                          <div v-if="referenceGroupExpanded(model.id, location)" class="model-reference-instances">
-                            <button
-                              v-for="instance in nodeReferenceInstances(model, location)"
-                              :key="instance.id"
-                              type="button"
-                              class="model-reference-instance"
-                              :aria-label="t('settings.modelRegistry.openInstanceSettings', { name: instance.name })"
-                              @click="openInstanceModelSettings(instance)"
-                            >
-                              <span>{{ instance.name }}</span>
-                              <small>{{ localizedStatus(instanceStatusKeys, instance.status) }}</small>
-                            </button>
-                            <p v-if="unlistedReferenceCount(model, location)" class="model-reference-remainder">
-                              {{ t("settings.modelRegistry.unlistedReferences", { count: unlistedReferenceCount(model, location) }) }}
-                            </p>
+                <div class="model-summary">
+                  <Popover>
+                    <PopoverTrigger as-child>
+                      <button type="button" class="model-summary-item model-summary-trigger">
+                        <MapPin :size="14" aria-hidden="true" />
+                        <span>{{ t("settings.modelRegistry.locationCount", { count: model.locations?.length || 0 }) }}</span>
+                        <ChevronDown :size="14" aria-hidden="true" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent class="model-summary-popover w-[min(272px,var(--reka-popover-content-available-width))] overflow-hidden p-0" align="start" :collision-padding="10" :side-offset="4">
+                      <header class="model-summary-popover-head"><strong>{{ t("settings.modelRegistry.locations") }}</strong><span>{{ t("settings.modelRegistry.locationCount", { count: model.locations?.length || 0 }) }}</span></header>
+                      <ScrollArea class="model-summary-popover-scroll" :horizontal="false">
+                        <div class="model-summary-popover-list">
+                          <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-summary-popover-row">
+                            <MapPin :size="14" aria-hidden="true" />
+                            <span>
+                              <strong>{{ modelLocationLabel(location) }}</strong>
+                              <small v-if="location.type === 'node' && location.revision && model.revision && location.revision !== model.revision" class="model-location-stale">{{ t("settings.modelRegistry.locationPending") }}</small>
+                              <small v-else-if="location.type === 'node' && location.revision && model.revision">{{ t("settings.modelRegistry.locationSynced") }}</small>
+                              <small v-else>{{ location.type === "node" ? t("settings.modelRegistry.references", { count: location.referenceCount }) : t("settings.modelRegistry.controlPlaneManaged") }}</small>
+                            </span>
                           </div>
                         </div>
-                      </div>
-                    </ScrollArea>
-                    <p v-else class="model-summary-popover-empty">{{ t("settings.modelRegistry.noReferences") }}</p>
-                  </PopoverContent>
-                </Popover>
-                <span class="model-summary-item"><KeyRound :size="14" aria-hidden="true" />{{ t("settings.modelRegistry.credential", { value: model.keyPreview || (model.keySet ? t("settings.modelRegistry.set") : t("settings.modelRegistry.missing")) }) }}</span>
+                      </ScrollArea>
+                    </PopoverContent>
+                  </Popover>
+                  <span v-if="staleLocations(model).length" class="model-summary-item model-summary-alert" role="status">
+                    <AlertTriangle :size="14" aria-hidden="true" />
+                    <span>{{ t("settings.modelRegistry.pendingSync", { count: staleLocations(model).length }) }}</span>
+                  </span>
+                  <Popover>
+                    <PopoverTrigger as-child>
+                      <button type="button" class="model-summary-item model-summary-trigger">
+                        <Link2 :size="14" aria-hidden="true" />
+                        <span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span>
+                        <ChevronDown :size="14" aria-hidden="true" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent class="model-summary-popover w-[min(272px,var(--reka-popover-content-available-width))] overflow-hidden p-0" align="start" :collision-padding="10" :side-offset="4">
+                      <header class="model-summary-popover-head"><strong>{{ t("settings.modelRegistry.referenceDistribution") }}</strong><span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span></header>
+                      <ScrollArea v-if="referenceLocations(model).length" class="model-summary-popover-scroll" :horizontal="false">
+                        <div class="model-summary-popover-list">
+                          <div v-for="location in referenceLocations(model)" :key="modelLocationKey(location)" class="model-reference-group">
+                            <button
+                              type="button"
+                              class="model-summary-popover-row model-reference-toggle"
+                              :aria-expanded="referenceGroupExpanded(model.id, location)"
+                              @click="toggleReferenceGroup(model.id, location)"
+                            >
+                              <Link2 :size="14" aria-hidden="true" />
+                              <span><strong>{{ modelLocationLabel(location) }}</strong><small>{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small></span>
+                              <ChevronDown :size="14" class="model-reference-chevron" :class="{ 'is-open': referenceGroupExpanded(model.id, location) }" aria-hidden="true" />
+                            </button>
+                            <div v-if="referenceGroupExpanded(model.id, location)" class="model-reference-instances">
+                              <button
+                                v-for="instance in nodeReferenceInstances(model, location)"
+                                :key="instance.id"
+                                type="button"
+                                class="model-reference-instance"
+                                :aria-label="t('settings.modelRegistry.openInstanceSettings', { name: instance.name })"
+                                @click="openInstanceModelSettings(instance)"
+                              >
+                                <span>{{ instance.name }}</span>
+                                <small>{{ localizedStatus(instanceStatusKeys, instance.status) }}</small>
+                              </button>
+                              <p v-if="unlistedReferenceCount(model, location)" class="model-reference-remainder">
+                                {{ t("settings.modelRegistry.unlistedReferences", { count: unlistedReferenceCount(model, location) }) }}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </ScrollArea>
+                      <p v-else class="model-summary-popover-empty">{{ t("settings.modelRegistry.noReferences") }}</p>
+                    </PopoverContent>
+                  </Popover>
+                  <span class="model-summary-item"><KeyRound :size="14" aria-hidden="true" />{{ t("settings.modelRegistry.credential", { value: model.keyPreview || (model.keySet ? t("settings.modelRegistry.set") : t("settings.modelRegistry.missing")) }) }}</span>
+                </div>
+                <div class="model-row-actions">
+                  <Button variant="outline" size="sm" :disabled="savingModelId === model.id" @click="openEditDialog(model)"><Settings :size="14" /><span>{{ t("settings.modelRegistry.configure") }}</span></Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" :aria-label="t('settings.modelRegistry.moreActions')" :disabled="savingModelId === model.id || deletingModelId === model.id"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" :side-offset="6">
+                      <DropdownMenuItem @select="openCopyDialog(model)"><Copy :size="14" /><span>{{ t("settings.modelRegistry.copy") }}</span></DropdownMenuItem>
+                      <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
+                      <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, -1)" @select="moveModel(model.id, -1)"><ChevronUp :size="14" /><span>{{ t("settings.modelRegistry.moveUp") }}</span></DropdownMenuItem>
+                      <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, 1)" @select="moveModel(model.id, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveDown") }}</span></DropdownMenuItem>
+                      <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
+                      <DropdownMenuItem v-if="staleLocations(model).length" :disabled="syncingModelId === model.id" @select="syncModelLocations(model)"><RefreshCw :size="14" /><span>{{ t("settings.modelRegistry.syncLocations") }}</span></DropdownMenuItem>
+                      <DropdownMenuSub v-if="mergeCandidates(model).length">
+                        <DropdownMenuSubTrigger><Combine :size="14" /><span>{{ t("settings.modelRegistry.mergeInto") }}</span></DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent class="model-merge-menu">
+                          <DropdownMenuItem v-for="candidate in mergeCandidates(model)" :key="candidate.id" @select="requestMerge(model, candidate)">
+                            <span class="model-menu-copy">
+                              <strong>{{ candidate.name }} · {{ candidate.model }}</strong>
+                              <small>{{ t("settings.modelRegistry.mergeIntoDescription", { model: candidate.model, endpoint: candidate.endpoint }) }}</small>
+                            </span>
+                          </DropdownMenuItem>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuSeparator v-if="staleLocations(model).length || mergeCandidates(model).length" />
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger><Trash2 :size="14" /><span>{{ t("settings.modelRegistry.deleteFrom") }}</span></DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent class="model-delete-location-menu">
+                          <DropdownMenuItem v-for="location in model.locations || []" :key="modelLocationKey(location)" :disabled="location.type === 'node' && location.referenceCount > 0" @select="requestDelete(model, location)">
+                            <MapPin :size="14" /><span class="model-menu-copy"><strong>{{ modelLocationLabel(location) }}</strong><small v-if="location.type === 'node' && location.referenceCount > 0">{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small><small v-else>{{ t("settings.modelRegistry.deleteLocation") }}</small></span>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem :disabled="!canDeleteModelEverywhere(model)" @select="requestDelete(model, 'all')">
+                            <Trash2 :size="14" /><span class="model-menu-copy"><strong>{{ t("settings.modelRegistry.deleteAll") }}</strong><small>{{ t("settings.modelRegistry.deleteAllDescription") }}</small></span>
+                          </DropdownMenuItem>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
-              <div class="model-row-actions">
-                <Button variant="outline" size="sm" :disabled="savingModelId === model.id" @click="openEditDialog(model)"><Settings :size="14" /><span>{{ t("settings.modelRegistry.configure") }}</span></Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" :aria-label="t('settings.modelRegistry.moreActions')" :disabled="savingModelId === model.id || deletingModelId === model.id"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" :side-offset="6">
-                    <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" @select="openCopyDialog(model)"><Copy :size="14" /><span>{{ t("settings.modelRegistry.copy") }}</span></DropdownMenuItem>
-                    <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
-                    <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, -1)" @select="moveModel(model.id, -1)"><ChevronUp :size="14" /><span>{{ t("settings.modelRegistry.moveUp") }}</span></DropdownMenuItem>
-                    <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, 1)" @select="moveModel(model.id, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveDown") }}</span></DropdownMenuItem>
-                    <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
-                    <DropdownMenuItem v-if="staleLocations(model).length" :disabled="syncingModelId === model.id" @select="syncModelLocations(model)"><RefreshCw :size="14" /><span>{{ t("settings.modelRegistry.syncLocations") }}</span></DropdownMenuItem>
-                    <DropdownMenuSub v-if="mergeCandidates(model).length">
-                      <DropdownMenuSubTrigger><Combine :size="14" /><span>{{ t("settings.modelRegistry.mergeInto") }}</span></DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent class="model-merge-menu">
-                        <DropdownMenuItem v-for="candidate in mergeCandidates(model)" :key="candidate.id" @select="requestMerge(model, candidate)">
-                          <span class="model-menu-copy">
-                            <strong>{{ candidate.name }} · {{ candidate.model }}</strong>
-                            <small>{{ t("settings.modelRegistry.mergeIntoDescription", { model: candidate.model, endpoint: candidate.endpoint }) }}</small>
-                          </span>
-                        </DropdownMenuItem>
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                    <DropdownMenuSeparator v-if="staleLocations(model).length || mergeCandidates(model).length" />
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger><Trash2 :size="14" /><span>{{ t("settings.modelRegistry.deleteFrom") }}</span></DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent class="model-delete-location-menu">
-                        <DropdownMenuItem v-for="location in model.locations || []" :key="modelLocationKey(location)" :disabled="location.type === 'node' && location.referenceCount > 0" @select="requestDelete(model, location)">
-                          <MapPin :size="14" /><span class="model-menu-copy"><strong>{{ modelLocationLabel(location) }}</strong><small v-if="location.type === 'node' && location.referenceCount > 0">{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small><small v-else>{{ t("settings.modelRegistry.deleteLocation") }}</small></span>
-                        </DropdownMenuItem>
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          </article>
-        </div>
-      </section>
+            </article>
+          </div>
+        </section>
+      </template>
     </div>
   </ScrollArea>
 
@@ -205,7 +222,7 @@
       <ScrollArea class="model-editor-scroll" :horizontal="false">
         <form class="model-editor-form" @submit.prevent="submitModel">
           <div v-if="editingModelId" class="model-scope-notice"><Layers :size="16" aria-hidden="true" /><div><strong>{{ t("settings.modelRegistry.allLocations", { count: editingModelLocationCount }) }}</strong><span>{{ t("settings.modelRegistry.editScopeWarning") }}</span></div></div>
-          <div v-else-if="copyingModelId" class="model-scope-notice"><Copy :size="16" aria-hidden="true" /><div><strong>{{ t("settings.modelRegistry.controlPlane") }}</strong><span>{{ t("settings.modelRegistry.copyIdentityHint") }}</span></div></div>
+          <div v-else-if="copyingModelId" class="model-scope-notice"><Copy :size="16" aria-hidden="true" /><div><strong>{{ t("settings.modelRegistry.controlPlane") }}</strong><span>{{ canInheritCopyCredential ? t("settings.modelRegistry.copyIdentityHint") : t("settings.modelRegistry.nodeCopyCredential") }}</span></div></div>
 
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.basicInformation") }}</h3><p>{{ t("settings.modelRegistry.basicInformationDescription") }}</p></header>
@@ -234,7 +251,7 @@
               </ToggleGroup>
               <small>{{ t("settings.modelRegistry.protocolsDescription") }}</small>
             </div>
-            <label><span>{{ t("settings.fields.apiKey") }}</span><ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId || copyingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" /><small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small><small v-else-if="copyingModelId">{{ t("settings.modelRegistry.copyCredential") }}</small></label>
+            <label><span>{{ t("settings.fields.apiKey") }}</span><ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId || canInheritCopyCredential ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" /><small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small><small v-else-if="copyingModelId">{{ canInheritCopyCredential ? t("settings.modelRegistry.copyCredential") : t("settings.modelRegistry.nodeCopyCredential") }}</small></label>
           </section>
 
           <section class="model-form-section">
@@ -314,9 +331,13 @@
     </DialogContent>
   </Dialog>
 
-  <AlertDialog :open="Boolean(pendingDelete)" @update:open="(open) => !open && (pendingDelete = undefined)">
+  <AlertDialog :open="Boolean(pendingDelete)" @update:open="(open) => !open && !deletingModelId && (pendingDelete = undefined)">
     <AlertDialogContent>
-      <AlertDialogHeader><AlertDialogTitle>{{ t("settings.modelRegistry.deleteTitle") }}</AlertDialogTitle><AlertDialogDescription>{{ t("settings.modelRegistry.deleteConfirm", { name: pendingDelete?.model.name || '', location: pendingDelete ? modelLocationLabel(pendingDelete.location) : '' }) }}</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{{ pendingDelete?.location === 'all' ? t("settings.modelRegistry.deleteAllTitle") : t("settings.modelRegistry.deleteTitle") }}</AlertDialogTitle>
+        <AlertDialogDescription v-if="pendingDelete?.location === 'all'">{{ t("settings.modelRegistry.deleteAllConfirm", { name: pendingDelete.model.name, count: pendingDelete.model.locations?.length || 0 }) }}</AlertDialogDescription>
+        <AlertDialogDescription v-else>{{ t("settings.modelRegistry.deleteConfirm", { name: pendingDelete?.model.name || '', location: pendingDelete ? modelLocationLabel(pendingDelete.location) : '' }) }}</AlertDialogDescription>
+      </AlertDialogHeader>
       <AlertDialogFooter><AlertDialogCancel :disabled="Boolean(deletingModelId)">{{ t("common.actions.cancel") }}</AlertDialogCancel><Button variant="destructive" size="sm" :disabled="Boolean(deletingModelId)" @click="confirmDelete">{{ deletingModelId ? t("settings.modelRegistry.deleting") : t("common.actions.delete") }}</Button></AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>
@@ -383,11 +404,11 @@ const statusFilter = ref<"all" | "enabled" | "disabled">("all");
 const editorOpen = ref(false);
 const closeConfirmationOpen = ref(false);
 const modelPickerOpen = ref(false);
-const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
+const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation | "all" }>();
 const pendingMerge = ref<{ model: ModelConfig; target: ModelConfig }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
-const { addMapping, addModelName, applyMappingPreset, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, mappingsEditable, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveMapping, moveModel, moveModelName, reorderMapping, reorderModelName, removeMapping, removeModel, removeModelName, requestMappingInactive, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const { addMapping, addModelName, applyMappingPreset, canDeleteModelEverywhere, canDiscoverModels, canInheritCopyCredential, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, mappingsEditable, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveMapping, moveModel, moveModelName, reorderMapping, reorderModelName, removeMapping, removeModel, removeModelEverywhere, removeModelName, requestMappingInactive, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
 const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
 const mappingPresets = MODEL_REQUEST_MAPPING_PRESETS;
 const requestMappingLimit = 64;
@@ -408,6 +429,21 @@ const filteredModels = computed(() => {
     if (locationFilter.value !== "all" && !model.locations?.some((location) => locationFilter.value === "control-plane" ? location.type === "control-plane" : location.type === "node" && location.nodeId === locationFilter.value)) return false;
     return true;
   });
+});
+// Registry locations are authoritative; node replicas of a Control Plane model
+// stay in its group instead of appearing again among node-only models.
+const modelGroups = computed(() => {
+  const groups = [
+    { id: "control-plane", titleKey: "settings.modelRegistry.controlPlaneModels", descriptionKey: "settings.modelRegistry.controlPlaneModelsDescription", emptyKey: "settings.modelRegistry.noControlPlaneModels", models: [] as ModelConfig[], total: 0 },
+    { id: "nodes", titleKey: "settings.modelRegistry.nodeModels", descriptionKey: "settings.modelRegistry.nodeModelsDescription", emptyKey: "settings.modelRegistry.noNodeModels", models: [] as ModelConfig[], total: 0 },
+  ];
+  const filteredIds = new Set(filteredModels.value.map((model) => model.id));
+  for (const model of models.data.value || []) {
+    const group = groups[model.locations?.some((location) => location.type === "control-plane") ? 0 : 1]!;
+    group.total++;
+    if (filteredIds.has(model.id)) group.models.push(model);
+  }
+  return groups;
 });
 function clearFilters() { searchQuery.value = ""; appFilter.value = "all"; locationFilter.value = "all"; statusFilter.value = "all"; }
 function nodeName(nodeId: string) { return (nodes.data.value || []).find((node) => node.id === nodeId)?.name || nodeId; }
@@ -479,8 +515,21 @@ function selectDiscoveredModel(value: unknown) {
   }
   settingsModel.model = settingsModel.modelNames[0]?.name || "";
 }
-function requestDelete(model: ModelConfig, location: ModelLocation) { pendingDelete.value = { model, location }; }
-async function confirmDelete() { const target = pendingDelete.value; if (!target) return; if (await removeModel(target.model, target.location)) pendingDelete.value = undefined; }
+function requestDelete(model: ModelConfig, location: ModelLocation | "all") { pendingDelete.value = { model, location }; }
+async function confirmDelete() {
+  const target = pendingDelete.value;
+  if (!target) return;
+  if (target.location === "all") {
+    // A failed attempt may already have removed locations. Retry from the
+    // refreshed registry rather than resending the original location list.
+    const current = (models.data.value || []).find((model) => model.id === target.model.id);
+    if (!current || await removeModelEverywhere(current)) pendingDelete.value = undefined;
+    else {
+      const refreshed = (models.data.value || []).find((model) => model.id === target.model.id);
+      pendingDelete.value = refreshed ? { model: refreshed, location: "all" } : undefined;
+    }
+  } else if (await removeModel(target.model, target.location)) pendingDelete.value = undefined;
+}
 function requestMerge(model: ModelConfig, target: ModelConfig) { pendingMerge.value = { model, target }; }
 async function confirmMerge() {
   const target = pendingMerge.value;
@@ -513,6 +562,10 @@ async function confirmMerge() {
 .model-directory-head { align-items: center; border-bottom: 1px solid var(--line); display: flex; gap: 8px; min-height: 38px; padding: 0 12px; }
 .model-directory-head strong { color: var(--text-strong); font-size: 13px; font-weight: 500; }
 .model-directory-head span { color: var(--text-muted); font-size: 12px; }
+.model-group-head { flex-wrap: wrap; justify-content: space-between; padding: 10px 12px; }
+.model-group-heading { display: grid; gap: 3px; }
+.model-group-heading h2 { color: var(--text-strong); font-size: 13px; font-weight: 500; margin: 0; }
+.model-group-heading p { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: 0; }
 .model-list { display: grid; }
 .model-row + .model-row { border-top: 1px solid var(--line); }
 .model-row-main { align-items: center; display: grid; gap: 16px; grid-template-columns: minmax(220px,1.35fr) minmax(300px,1fr) auto; min-height: 92px; padding: 12px; }

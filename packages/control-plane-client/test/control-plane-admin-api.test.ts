@@ -124,7 +124,7 @@ test("control-plane admin cloud routes", async () => {
   assert.equal("futureChallengeField" in challenge, false);
   assert.equal("futurePayloadField" in challenge.payload, false);
   await api.setCloudRemoteAccess(false);
-  assert.deepEqual((await api.setCloudScopes({ deviceAccess: false, nodeRelay: true })).scopes, { deviceAccess: true, nodeRelay: false });
+  assert.deepEqual((await api.setCloudScopes({ deviceAccess: false })).scopes, { deviceAccess: true });
   await api.disconnectCloud();
   const account = await api.cloudAccount();
   assert.equal(account.signedIn, expectedAccount.signedIn);

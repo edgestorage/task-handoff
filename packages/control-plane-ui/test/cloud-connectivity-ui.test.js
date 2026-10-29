@@ -37,13 +37,14 @@ test("account state decides which relay action is offered", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
   const queries = read("src/api/queries.ts");
   assert.match(component, /const signedIn = computed/);
-  assert.match(component, /v-if="!signedIn && !waitingForSignIn"/);
-  assert.match(component, /v-if="!signedIn && \(state\.status === 'unbound' \|\| state\.status === 'pending-claim'\)" class="cloud-warning"/);
+  assert.match(component, /const connectionStage = computed/);
   assert.match(component, /settings\.cloud\.boundAccount/);
   assert.match(component, /settings\.cloud\.relayTitle/);
-  assert.match(component, /v-if="signedIn && \(state\.status === 'unbound' \|\| state\.status === 'pending-claim'\)"/);
+  assert.match(component, /settings\.cloud\.loginAndBind/);
+  assert.match(component, /settings\.cloud\.signInOnly/);
+  assert.match(component, /settings\.cloud\.bindToAccount/);
+  assert.match(component, /settings\.cloud\.manageNodes/);
   assert.match(component, /waitingForBinding/);
-  assert.match(component, /settings\.cloud\.signInFirst/);
   assert.match(component, /requestFailure/);
   assert.match(component, /signInDeliveryFailed/);
   assert.match(component, /reauthRequired/);
@@ -51,16 +52,38 @@ test("account state decides which relay action is offered", () => {
   assert.match(queries, /query\.state\.data\?\.signedIn \? 15_000/);
 });
 
+test("an active binding can sign back in after the account session is signed out", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  assert.match(component, /v-else-if="connectionStage === 'active'"[\s\S]{0,800}v-if="!signedIn[^"]*"[\s\S]{0,300}signIn\('sign-in'\)/);
+  assert.match(component, /<p v-if="!signedIn" class="cloud-node-picker-warning"[\s\S]{0,400}signIn\('sign-in'\)/);
+});
+
+test("signing in only and signing in to bind keep separate intents", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  const stateMachine = read("src/apps/control-plane/settings/cloudConnectionState.ts");
+
+  assert.match(stateMachine, /export type CloudLoginIntent = "sign-in" \| "bind"/);
+  assert.match(component, /type LoginIntent = CloudLoginIntent/);
+  assert.match(component, /const loginIntent = ref<LoginIntent \| null>\(null\)/);
+  assert.match(component, /signIn\('bind'\)/);
+  assert.match(component, /signIn\('sign-in'\)/);
+  assert.match(component, /watch\(\[signedIn, busy\], async \(\[value, isBusy\]\) => \{[\s\S]*if \(intent !== "bind"\) return;/);
+  assert.match(component, /if \(status !== "unbound" && status !== "pending-claim"\) return;/);
+});
+
 test("cloud settings explain background ownership and expose structured non-color states", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+  const stateMachine = read("src/apps/control-plane/settings/cloudConnectionState.ts");
   const english = read("src/i18n/locales/en-US/settings.ts");
   const chinese = read("src/i18n/locales/zh-CN/settings.ts");
   assert.match(component, /settings\.cloud\.backgroundNote/);
+  assert.match(component, /connectionStage/);
+  assert.match(component, /resolveCloudConnectionStage/);
   assert.match(component, /role="status"/);
   assert.match(component, /role="alert"/);
-  assert.match(component, /state\.status === 'clone-conflict'/);
-  assert.match(english, /Closing this page, signing out of the local UI/);
-  assert.match(chinese, /关闭此页面、退出本地 UI/);
+  assert.match(stateMachine, /status === "clone-conflict"\) return "conflict"/);
+  assert.match(english, /Runs in the background; closing this page or signing out of the local UI/);
+  assert.match(chinese, /后台独立运行；关闭页面或退出本地 UI/);
   assert.doesNotMatch(component, /font-size:(?:[0-9]|1[01])px/);
 });
 
@@ -75,7 +98,7 @@ test("Thandoff account follows the shared settings directory layout", () => {
   assert.doesNotMatch(component, /settings-panel-surface|modal-section/);
 });
 
-test("node management is an independent tab before cloud roles", () => {
+test("cloud nodes are published from an independent tab without a global relay switch", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
   const chinese = read("src/i18n/locales/zh-CN/settings.ts");
   const english = read("src/i18n/locales/en-US/settings.ts");
@@ -83,16 +106,17 @@ test("node management is an independent tab before cloud roles", () => {
 
   assert.match(tabs, /value="connection"[\s\S]*value="node-management"[\s\S]*value="roles"[\s\S]*value="trusted-devices"/);
   assert.match(component, /v-if="tab === 'node-management' && state\?\.status === 'active'"/);
-  assert.match(component, /tab === 'node-management'[\s\S]*settings\.cloud\.nodeRelay[\s\S]*v-for="node in cloudNodes"/);
+  assert.match(component, /tab === 'node-management'[\s\S]*settings\.cloud\.nodeManagementNote[\s\S]*v-for="node in cloudNodes"/);
+  assert.doesNotMatch(component, /settings\.cloud\.nodeRelay|setScope\('nodeRelay'/);
   assert.match(component, /nodeManagementRequiresConnection/);
   assert.match(component, /nodeManagementUnbindNote/);
-  assert.match(chinese, /nodeManagement: "节点管理"/);
-  assert.match(chinese, /不会删除节点、节点上的账号绑定或本地实例/);
-  assert.match(english, /nodeManagement: "Node management"/);
-  assert.match(english, /does not delete nodes, their account binding, or local instances/);
+  assert.match(chinese, /nodeManagement: "云平台节点"/);
+  assert.match(chinese, /节点与本控制面的原有连接不受影响/);
+  assert.match(english, /nodeManagement: "Cloud nodes"/);
+  assert.match(english, /existing node connections to this Control Plane are unchanged/);
 });
 
-test("blocked cloud node actions can be resolved without following a text-only instruction", () => {
+test("adding a cloud node never mutates a relay authorization switch", () => {
   const bind = read("src/apps/control-plane/settings/CloudRelayBindPanel.vue");
   const detail = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
@@ -100,20 +124,23 @@ test("blocked cloud node actions can be resolved without following a text-only i
   const english = read("src/i18n/locales/en-US/settings.ts");
 
   assert.match(bind, /@click="primaryAction"/);
-  assert.match(bind, /updateCloudScopes\(\{ \.\.\.connectivity\.data\.value\.scopes, nodeRelay: true \}\)/);
+  assert.match(bind, /async function bind\(\)[\s\S]*bindCloudRelayNode/);
+  assert.doesNotMatch(bind, /updateCloudScopes|nodeRelay/);
   assert.match(bind, /emit\("open-cloud-settings"\)/);
   assert.match(bind, /cloudRelayBindSignInAction/);
   assert.match(bind, /cloudRelayBindSetupAction/);
-  assert.match(bind, /cloudRelayBindEnableScopeAction/);
+  assert.doesNotMatch(bind, /cloudRelayBindEnableScope|cloudRelayBindRequiresScope/);
   assert.match(bind, /CLOUD_ACCOUNT_NODE_HANDLE_LABEL/);
   assert.match(bind, /Boolean\(linkedHandle\)/);
   assert.match(detail, /@open-cloud-settings="emit\('open-cloud-settings'\)"/);
   assert.match(settings, /<NodeDetailPanel[\s\S]*@open-cloud-settings="setSettingsSection\('cloud-connectivity'\)"/);
-  assert.match(chinese, /cloudRelayBindEnableScopeAction: "开启节点管理"/);
-  assert.match(english, /cloudRelayBindEnableScopeAction: "Enable node management"/);
+  assert.doesNotMatch(chinese, /cloudRelayBindEnableScopeAction|cloudRelayBindRequiresScope/);
+  assert.doesNotMatch(english, /cloudRelayBindEnableScopeAction|cloudRelayBindRequiresScope/);
+  assert.doesNotMatch(chinese, /bothScopesOffNote|unavailableScope/);
+  assert.doesNotMatch(english, /bothScopesOffNote|unavailableScope/);
 });
 
-test("node management exposes a clickable list of managed nodes", () => {
+test("cloud nodes expose a clickable list of local nodes to publish", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
 
   assert.match(component, /useNodesQuery\(\)/);
@@ -121,7 +148,7 @@ test("node management exposes a clickable list of managed nodes", () => {
   assert.match(component, /class="cloud-node-row"/);
   assert.match(component, /@click="addNode\(node\)"/);
   assert.match(component, /bindCloudRelayNode\(node\.id\)/);
-  assert.match(component, /updateCloudScopes\(\{ \.\.\.state\.value!\.scopes, nodeRelay: true \}\)/);
+  assert.doesNotMatch(component, /updateCloudScopes|setCloudScopes|nodeRelay\s*:/);
   assert.match(component, /nodeCloudHandle\(node\)/);
   assert.match(component, /CLOUD_ACCOUNT_NODE_HANDLE_LABEL/);
   assert.match(component, /node\.labels\[CLOUD_ACCOUNT_NODE_HANDLE_LABEL\]/);
@@ -156,7 +183,7 @@ test("Cloud roles use the published catalog and preserve conflict context", () =
   assert.match(component, /function roleName\(roleId: string\)[\s\S]*\?\.name \|\| roleId/);
   assert.match(queries, /useCloudAccessSettingsQuery[\s\S]*admin\.cloudAccessSettings\(\)/);
   assert.match(queries, /updateCloudAvailableRoles[\s\S]*admin\.updateCloudAccessSettings/);
-  assert.match(queries, /useCloudConnectivityQuery[\s\S]*refetchInterval:[\s\S]*status === "active" \? 10_000 : false/);
+  assert.match(queries, /useCloudConnectivityQuery[\s\S]*status === "active"\) return 10_000;[\s\S]*status === "pending-claim" \|\| status === "pending-revocation"\) return 3_000/);
   assert.match(component, /watch\(\(\) => state\.value\?\.catalogPublication\?\.revision[\s\S]*status !== "published"[\s\S]*accessSettings\.refetch\(\)/);
   assert.match(client, /cloudAccessSettings\(signal\?: AbortSignal\)/);
   assert.match(client, /updateCloudAccessSettings\(input: \{ expectedSettingsRevision: number; availableRoleIds: string\[\] \}\)/);

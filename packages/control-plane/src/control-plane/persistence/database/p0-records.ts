@@ -81,6 +81,16 @@ export const ModelRecordSchema = z.object({
   updatedAt: TimestampSchema,
 }).strict();
 
+// Durable deferred edit for a node-owned model replica. The patch can carry a
+// credential, so only its encrypted envelope is persisted here.
+export const ModelPendingNodeEditRecordSchema = z.object({
+  id: IdSchema,
+  modelId: IdSchema,
+  nodeId: IdSchema,
+  patchCiphertext: SecretEnvelopeSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
 export const ChatBridgeRecordSchema = z.object({
   id: IdSchema,
   channel: z.enum(["web", "telegram", "wechat", "dingding", "lark"]),
@@ -159,6 +169,7 @@ export const GitAuditRecordSchema = z.object({
 export type NodeConfigRecord = z.infer<typeof NodeConfigRecordSchema>;
 export type PairingRevokeRecord = z.infer<typeof PairingRevokeRecordSchema>;
 export type ModelRecord = z.infer<typeof ModelRecordSchema>;
+export type ModelPendingNodeEditRecord = z.infer<typeof ModelPendingNodeEditRecordSchema>;
 export type ChatBridgeRecord = z.infer<typeof ChatBridgeRecordSchema>;
 export type ChatSessionRecord = z.infer<typeof ChatSessionRecordSchema>;
 export type GitCredentialRecord = z.infer<typeof GitCredentialRecordSchema>;
@@ -170,6 +181,7 @@ export const p0RecordSchemas = {
   nodes: NodeConfigRecordSchema,
   pairingRevocations: PairingRevokeRecordSchema,
   models: ModelRecordSchema,
+  modelPendingNodeEdits: ModelPendingNodeEditRecordSchema,
   chatBridges: ChatBridgeRecordSchema,
   chatSessions: ChatSessionRecordSchema,
   gitCredentials: GitCredentialRecordSchema,

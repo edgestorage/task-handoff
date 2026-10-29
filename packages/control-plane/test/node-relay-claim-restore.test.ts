@@ -114,13 +114,12 @@ test("a fresh Coordinator connection restores existing cloud-relay node claims",
   }
 });
 
-test("claim restoration does not run while node management is disabled", async () => {
+test("claim restoration follows the binding even when an N-1 file says node relay is off", async () => {
   const { runtime, sockets } = runtimeFixture({ nodeRelay: false, handles: ["nrh_macmini"] });
   runtime.start();
   try {
-    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
-    await wait(20);
-    assert.equal(sockets[0]?.sent.some((message) => message.operation === "claim-node-relay-node"), false);
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.operation === "claim-node-relay-node"); attempt += 1) await wait(5);
+    assert.equal(sockets[0]?.sent.some((message) => message.operation === "claim-node-relay-node"), true);
   } finally {
     await runtime.stop();
   }

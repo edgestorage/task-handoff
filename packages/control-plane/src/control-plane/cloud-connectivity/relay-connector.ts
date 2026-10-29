@@ -149,9 +149,8 @@ export function verifyCoordinatorRelaySessionGrant(raw: unknown, state: { snapsh
 }
 
 /**
- * Node-relay allocation pushed to this Control Plane. The node-relay scope and
- * the local binding identity gate it exactly like the device-access path; the
- * claim grant itself is verified by the node agent, never here.
+ * Node-relay allocation pushed to this Control Plane. The active local binding
+ * identity gates it; the claim grant itself is verified by the node agent.
  */
 export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snapshot(): any }) {
   const event = NodeRelayAllocationEventSchema.parse(raw);
@@ -169,7 +168,7 @@ export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snap
   const sharedAuthorityValid = accessMode === "owner"
     ? Boolean(ownerAccountId) && ownerAccountId === granteeAccountId && attach.shareGrantId === undefined && attach.shareRevision === undefined && attach.shareRole === undefined
     : Boolean(ownerAccountId && granteeAccountId && ownerAccountId !== granteeAccountId && event.shareGrantId && event.shareRevision && event.shareRole === "use");
-  if (current.status !== "active" || current.scopes.nodeRelay !== true || current.cloudControlPlaneId !== event.controlPlaneId ||
+  if (current.status !== "active" || current.cloudControlPlaneId !== event.controlPlaneId ||
       attach.channelKind !== "node" || attach.role !== "control-plane" || attach.controlPlaneId !== event.controlPlaneId ||
       attach.accountId !== granteeAccountId || !sharedIdentityMatches || !sharedAuthorityValid ||
       attach.bindingId !== event.bindingId || attach.bindingRevision !== event.bindingRevision ||
