@@ -5,6 +5,7 @@ export const stories = {
   close: "Close",
   empty: "No Stories yet",
   nodeLoad: {
+    pausedNodes: "Connections to {count} nodes are paused",
     loading: "Loading",
     unavailable: "Unavailable",
     loadingNodes: "Loading Stories from {count} nodes...",

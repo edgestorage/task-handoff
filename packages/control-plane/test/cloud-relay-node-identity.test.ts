@@ -102,7 +102,9 @@ test("an explicit cloud-relay unbind survives restart and disables automatic rec
     await service.init();
 
     assert.deepEqual(service.listCloudRelayNodesToClaim(), []);
+    assert.equal(service.isCloudRelayNodeClaimEnabled(NODE_HANDLE), false);
     assert.equal(await service.setCloudRelayNodeClaimEnabled(NODE_HANDLE, true), true);
+    assert.equal(service.isCloudRelayNodeClaimEnabled(NODE_HANDLE), true);
     assert.deepEqual(service.listCloudRelayNodesToClaim(), [{ nodeHandle: NODE_HANDLE }]);
     assert.equal(service.requireNode(MACHINE_NODE_ID).labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL], undefined);
   } finally {
@@ -311,4 +313,43 @@ test("cloud-relay folders and runtimes use the Control Plane's local node identi
 
   assert.deepEqual((await gateway.listLocalFolders(node)).map((item) => item.nodeId), [node.id]);
   assert.deepEqual((await gateway.listRuntimes(node)).map((item) => item.nodeId), [node.id]);
+});
+
+
+test("v0.0.46 pending-pairing nodes survive restart and cancellation removes only unfinished enrollment", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-pending-relay-"));
+  const paths = controlPlaneStorePaths(root);
+  let database = await createControlPlaneDatabase(paths);
+  let secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  let service = new ControlPlaneService(paths, { database, secrets });
+  try {
+    await service.init();
+    await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+    // v0.0.46 persists no pending enum: absence of pairing credentials is
+    // sufficient to distinguish unfinished enrollment, including after restart.
+    assert.equal(service.requireNode(MACHINE_NODE_ID).auth.mode, "paired-hmac");
+    assert.equal(service.requireNode(MACHINE_NODE_ID).auth.keyId, undefined);
+    assert.equal(service.requireNode(MACHINE_NODE_ID).auth.secret, undefined);
+    service.dispose();
+    await database.close();
+    database = await createControlPlaneDatabase(paths);
+    secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+    secrets.init();
+    service = new ControlPlaneService(paths, { database, secrets });
+    await service.init();
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), [{ nodeHandle: NODE_HANDLE }]);
+    assert.equal(await service.deletePendingCloudRelayNode(NODE_HANDLE), true);
+    assert.equal(service.findCloudRelayNode(NODE_HANDLE), undefined);
+    assert.deepEqual(service.listCloudRelayNodesToClaim(), []);
+
+    await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+    await service.saveCloudRelayNodePairing(MACHINE_NODE_ID, { keyId: "key_paired", secret: "s".repeat(43) });
+    assert.equal(await service.deletePendingCloudRelayNode(NODE_HANDLE), false);
+    assert.equal(service.findCloudRelayNode(NODE_HANDLE)?.id, MACHINE_NODE_ID);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

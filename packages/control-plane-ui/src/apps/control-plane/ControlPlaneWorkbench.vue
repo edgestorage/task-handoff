@@ -105,11 +105,15 @@
                       :aria-current="nodeIsSelected(nodeFilter, node.id) ? 'true' : undefined"
                       @click="selectNodeFilter(node.id, $event)"
                     >
-                      <span class="status-dot" :data-state="node.status" />
+                      <span class="status-dot" :data-state="visibleNodeLoadState(node.id) === 'paused' ? 'paused' : node.status" />
                       <span class="control-plane-node-filter-menu-copy">
                         <strong>{{ node.name }}</strong>
                       </span>
-                      <span v-if="visibleNodeLoadState(node.id) === 'loading'" class="control-plane-node-filter-menu-load">
+                      <span v-if="visibleNodeLoadState(node.id) === 'paused'" class="control-plane-node-filter-menu-load" data-state="paused">
+                        <Pause :size="13" aria-hidden="true" />
+                        <span>{{ nodeLoadLabel.paused }}</span>
+                      </span>
+                      <span v-else-if="visibleNodeLoadState(node.id) === 'loading'" class="control-plane-node-filter-menu-load">
                         <LoaderCircle class="control-plane-node-filter-menu-spin" :size="13" aria-hidden="true" />
                         <span>{{ nodeLoadLabel.loading }}</span>
                       </span>
@@ -671,7 +675,7 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
+import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, Pause, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideNodeControlPlaneTrust, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, listNodeControlPlaneTrust, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useCloudAccountNodesQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
@@ -707,6 +711,7 @@ import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
 import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
+import type { NodeLoadState } from "./shared/nodeQueryLoad";
 import { loadNodeVisibilityFilter, persistNodeVisibilityFilter } from "./shared/nodeVisibilityPreference";
 import { useNodeConnectionActions } from "./useNodeConnectionActions";
 import { useStoryCatalog } from "./story/useStoryCatalog";
@@ -932,15 +937,16 @@ const storyCatalog = useStoryCatalog(storyMode);
 const agentCatalog = useAgentCatalog({ enabled: agentMode });
 // 顶部节点菜单展示当前视图目录的按节点加载态：Story 与 Agent 都按节点独立应答，
 // 先应答的节点先进入列表，尚未应答的节点在菜单里保持可见的加载/不可用提示。
-function visibleNodeLoadState(nodeId: string): "loading" | "ready" | "unavailable" {
+function visibleNodeLoadState(nodeId: string): NodeLoadState {
+  if (nodes.data.value?.find((node) => node.id === nodeId)?.connectionEnabled === false) return "paused";
   if (agentMode.value) return agentCatalog.nodeLoadState(nodeId);
   if (storyMode.value) return storyCatalog.nodeLoadState(nodeId);
   return "ready";
 }
 // 加载态文案随视图切换：两种目录各用自己的本地化文案，不互相复用。
 const nodeLoadLabel = computed(() => (agentMode.value
-  ? { loading: t("agents.list.loadingNode"), unavailable: t("agents.list.unavailableNode") }
-  : { loading: t("stories.nodeLoad.loading"), unavailable: t("stories.nodeLoad.unavailable") }));
+  ? { loading: t("agents.list.loadingNode"), unavailable: t("agents.list.unavailableNode"), paused: t("common.status.paused") }
+  : { loading: t("stories.nodeLoad.loading"), unavailable: t("stories.nodeLoad.unavailable"), paused: t("common.status.paused") }));
 const storySelection = ref<StorySelection>();
 const nodeFilter = ref<NodeVisibilityFilter>(loadNodeVisibilityFilter());
 const nodeFilterOpen = ref(false);

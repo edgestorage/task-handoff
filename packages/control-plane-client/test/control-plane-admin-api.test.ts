@@ -279,3 +279,16 @@ test("diagnostic log export reports a capability error without binary transport 
     (error as { code?: string }).code === "CLIENT_BINARY_UNSUPPORTED"
   ));
 });
+
+test("cloud origin diagnostics are optional for v0.0.46 and local reset has its own operation", async () => {
+  let conflict = false;
+  const { api, requests } = fixture((path) => ({ data: cloud(path === "/api/cloud-connectivity/reset-binding"
+    ? { status: "unbound", hasBackgroundCredential: false, serviceOrigin: "https://new.example.com" }
+    : conflict ? { originConflict: { configuredServiceOrigin: "https://new.example.com", futureField: true } } : {}) }));
+  assert.equal((await api.cloudConnectivity()).originConflict, undefined);
+  conflict = true;
+  assert.deepEqual((await api.cloudConnectivity()).originConflict, { configuredServiceOrigin: "https://new.example.com" });
+  assert.equal((await api.resetConflictingCloudBinding()).status, "unbound");
+  assert.equal(requests.at(-1)?.path, "/api/cloud-connectivity/reset-binding");
+  assert.equal(requests.at(-1)?.init?.method, "POST");
+});

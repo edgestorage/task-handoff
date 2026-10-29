@@ -41,6 +41,7 @@ export const common = {
     update: "Update",
   },
   status: {
+    paused: "Paused",
     enabled: "Enabled",
     disabled: "Disabled",
     running: "Running",

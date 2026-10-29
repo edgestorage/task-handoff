@@ -63,7 +63,7 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
     const blockedCode = agentBlockedCode({
       capability,
       available: capability?.definitions === true,
-      nodeOnline: node?.status === "online",
+      nodeOnline: node?.connectionEnabled !== false && node?.status === "online",
       instance,
       agent,
     });
@@ -75,7 +75,7 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
       description: agent.description,
       nodeId,
       nodeLabel: labels.get(nodeId) || nodeId,
-      nodeOnline: node?.status === "online",
+      nodeOnline: node?.connectionEnabled !== false && node?.status === "online",
       instanceId: agent.targetInstanceId,
       instanceLabel: instance ? `${instance.name} · ${instance.node?.name || nodeId}` : agent.targetInstanceId,
       cwdFolderId: agent.cwdFolderId,
@@ -102,7 +102,7 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
     const definitionIds = definitionIdsByNode.get(nodeId) ?? new Set<string>();
     const missingAgentIds = orchestration.agentIds.filter((agentId) => !definitionIds.has(agentId));
     const ownerAgentId = defaultAgentOrchestrationOwnerAgentId(orchestration.id);
-    const editable = capability?.orchestrations === true && node?.status === "online";
+    const editable = capability?.orchestrations === true && node?.connectionEnabled !== false && node?.status === "online";
     const blockedCode: AgentBlockedCode | undefined = missingAgentIds.length ? "missing-reference" : undefined;
     return {
       key: agentCatalogKey(nodeId, orchestration.id),

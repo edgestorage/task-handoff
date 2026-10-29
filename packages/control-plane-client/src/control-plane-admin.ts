@@ -32,6 +32,8 @@ const CloudIdentitySchema = z.object({
 const CloudConnectivitySchema = z.object({
   version: z.literal(2),
   serviceOrigin: z.string(),
+  // Runtime diagnostic, absent in v0.0.46 responses. Binding status is unchanged.
+  originConflict: z.object({ configuredServiceOrigin: z.string().url() }).strip().optional(),
   status: z.enum(["unbound", "pending-claim", "active", "pending-revocation", "clone-conflict"]),
   // Node relay follows the active binding; `nodeRelay` is ignored for N-1 wire
   // compatibility and is not part of the current client model.
@@ -248,6 +250,9 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     },
     disconnectCloud() {
       return requestData("/api/cloud-connectivity/disconnect", CloudConnectivitySchema, jsonRequest("POST", {}));
+    },
+    resetConflictingCloudBinding() {
+      return requestData("/api/cloud-connectivity/reset-binding", CloudConnectivitySchema, jsonRequest("POST", {}));
     },
     cloudAccountNodes(signal?: AbortSignal) {
       return requestData("/api/cloud-connectivity/account-nodes", CloudAccountNodesSchema, { signal });

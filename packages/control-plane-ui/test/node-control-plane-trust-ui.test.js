@@ -6,6 +6,7 @@ import {
   nodeControlPlaneTrustInboxItems,
   nodeControlPlaneTrustProjection,
 } from "../src/apps/control-plane/action-inbox/items.ts";
+import { cloudNodeTrustForNode, cloudNodeTrustPhase } from "../src/apps/control-plane/settings/cloudNodeTrust.ts";
 import {
   beginCloudNodeOnboarding,
   resetCloudNodeOnboarding,
@@ -158,7 +159,7 @@ test("a resumed attempt selects the newest trust request instead of an old rejec
   resetCloudNodeOnboarding();
 });
 
-test("a newer transport error replaces a stale pending trust outcome", () => {
+test("transport diagnostics do not replace a signed pending approval outcome", () => {
   resetCloudNodeOnboarding();
   beginCloudNodeOnboarding("existing");
   setCloudNodeOnboardingNodeHandle("node_handle_a");
@@ -168,7 +169,8 @@ test("a newer transport error replaces a stale pending trust outcome", () => {
   syncCloudNodeOnboarding(snapshot([trust({ observedAt: "2026-10-26T08:00:01.000Z" })], {
     errors: [{ nodeHandle: "node_handle_a", code: "NODE_RELAY_TRUST_TIMEOUT", message: "Node Agent did not answer the trust probe.", at: "2026-10-26T08:00:22.000Z" }],
   }));
-  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "failed");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.trust?.requestId, "cptreq_a");
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.error, "Node Agent did not answer the trust probe.");
 
   syncCloudNodeOnboarding(snapshot([trust({ observedAt: "2026-10-26T08:00:23.000Z", requestId: "cptreq_fresh" })]));
@@ -191,7 +193,7 @@ test("node trust UI exposes both approval entry points and never calls the devic
   const dialog = read("settings/CloudNodeOnboardingDialog.vue");
   const inbox = read("action-inbox/ActionInbox.vue");
   assert.match(status, /task-handoff-node-agent trust approve/);
-  assert.match(status, /settings\.nodeRelay\.nodeTrust\.connectedTitle/);
+  assert.match(status, /settings\.nodeRelay\.nodeTrust\.connectedDescription/);
   assert.match(status, /font-size: 12px/);
   assert.match(dialog, /CloudNodeTrustStatus/);
   assert.match(inbox, /decide-node-control-plane/);
@@ -206,4 +208,31 @@ test("node trust status has localized copy for every visible phase description",
     const messages = fs.readFileSync(new URL(`../../i18n/locales/${locale}/settings.ts`, root), "utf8");
     assert.match(messages, /"approved-connectingDescription":/);
   }
+});
+
+
+test("registry trust follows node identity and signed outcomes, then yields to a connected channel", () => {
+  const node = { id: "node_a", connectionPath: { kind: "cloud-relay", nodeHandle: "node_handle_a" }, labels: {} };
+  const pending = trust();
+  const relay = snapshot([pending]).nodeRelay;
+  assert.equal(cloudNodeTrustForNode(node, relay), pending);
+  assert.equal(cloudNodeTrustPhase(pending), "waiting-node-trust");
+  assert.equal(cloudNodeTrustPhase(trust({ state: "rejected" })), "rejected");
+  assert.equal(cloudNodeTrustForNode({ ...node, id: "another_node" }, relay), undefined);
+  assert.equal(cloudNodeTrustForNode({ ...node, connectionEnabled: false }, relay), undefined);
+  assert.equal(cloudNodeTrustForNode({ ...node, connectionPath: { kind: "direct" } }, relay), undefined);
+  assert.equal(cloudNodeTrustForNode(node, { ...relay, channels: [{ nodeHandle: "node_handle_a", nodeId: "node_a", connected: true }] }), undefined);
+  assert.equal(cloudNodeTrustForNode(node, { ...relay, trust: [] }), undefined);
+});
+
+test("a failed snapshot refresh keeps the approval request and its verification details", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle("node_handle_a");
+  syncCloudNodeOnboarding(snapshot([trust()]));
+  syncCloudNodeOnboarding(undefined, "Temporarily offline");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.trust?.requestId, "cptreq_a");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.error, "Temporarily offline");
+  resetCloudNodeOnboarding();
 });

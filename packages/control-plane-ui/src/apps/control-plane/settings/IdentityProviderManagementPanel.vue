@@ -1,23 +1,27 @@
 <template>
-  <div class="provider-management">
-    <div class="management-toolbar">
-      <div><strong>{{ t("settings.userAccess.providers.title") }}</strong><p>{{ t("settings.userAccess.providers.description") }}</p></div>
-      <Button size="sm" @click="openCreate"><Plus :size="14" />{{ t("settings.userAccess.providers.create") }}</Button>
-    </div>
-    <p v-if="providers.isLoading.value" class="management-state">{{ t("settings.userAccess.loading") }}</p>
-    <p v-else-if="providers.error.value" class="management-error">{{ errorText(providers.error.value) }}</p>
-    <div v-else class="management-list">
-      <article v-for="provider in providers.data.value" :key="provider.id" class="management-row">
-        <div class="management-primary"><div><strong>{{ provider.name }}</strong><span class="management-badge">{{ provider.kind.toUpperCase() }}</span><span class="management-badge" :data-status="provider.status">{{ provider.status }}</span></div><p>{{ provider.issuer || t("settings.userAccess.providers.githubIssuer") }} · {{ provider.callbackUrl }}</p></div>
-        <span class="management-meta">{{ provider.loginPolicy }} · {{ provider.clientSecretConfigured ? t("settings.userAccess.providers.secretConfigured") : t("settings.userAccess.providers.secretMissing") }}</span>
-        <div class="management-actions"><Button variant="outline" size="sm" @click="openEdit(provider)"><Pencil :size="14" />{{ t("common.actions.edit") }}</Button><Button variant="outline" size="sm" @click="toggleProvider(provider)"><Power :size="14" />{{ provider.status === "enabled" ? t("settings.userAccess.disable") : t("settings.userAccess.enable") }}</Button><Button variant="outline" size="icon" :aria-label="t('common.actions.delete')" @click="removeTarget = provider"><Trash2 :size="14" /></Button></div>
-      </article>
-      <p v-if="!providers.data.value?.length" class="management-state">{{ t("settings.userAccess.providers.empty") }}</p>
-    </div>
+  <div class="access-management-view">
+    <p class="management-description">{{ t("settings.userAccess.providers.description") }}</p>
+    <section class="access-directory" :aria-label="t('settings.userAccess.providers.title')">
+      <header class="management-toolbar">
+        <strong>{{ t("settings.userAccess.providers.title") }}</strong>
+        <Button size="sm" @click="openCreate"><Plus :size="14" />{{ t("settings.userAccess.providers.create") }}</Button>
+      </header>
+      <p v-if="providers.isLoading.value" class="management-state" role="status">{{ t("settings.userAccess.loading") }}</p>
+      <p v-else-if="providers.error.value" class="management-error" role="alert">{{ errorText(providers.error.value) }}</p>
+      <div v-else class="management-list">
+        <article v-for="provider in providers.data.value" :key="provider.id" class="management-row">
+          <div class="management-primary"><div><strong>{{ provider.name }}</strong><Badge class="management-badge" variant="outline">{{ provider.kind.toUpperCase() }}</Badge><Badge class="management-badge" :data-status="provider.status" variant="outline">{{ provider.status }}</Badge></div><p>{{ provider.issuer || t("settings.userAccess.providers.githubIssuer") }} · {{ provider.callbackUrl }}</p></div>
+          <span class="management-meta">{{ provider.loginPolicy }} · {{ provider.clientSecretConfigured ? t("settings.userAccess.providers.secretConfigured") : t("settings.userAccess.providers.secretMissing") }}</span>
+          <div class="management-actions"><Button variant="outline" size="sm" @click="openEdit(provider)"><Pencil :size="14" />{{ t("common.actions.edit") }}</Button><Button variant="outline" size="sm" @click="toggleProvider(provider)"><Power :size="14" />{{ provider.status === "enabled" ? t("settings.userAccess.disable") : t("settings.userAccess.enable") }}</Button><Button variant="outline" size="icon" :aria-label="t('common.actions.delete')" @click="removeTarget = provider"><Trash2 :size="14" /></Button></div>
+        </article>
+        <p v-if="!providers.data.value?.length" class="management-state">{{ t("settings.userAccess.providers.empty") }}</p>
+      </div>
+    </section>
 
-    <section class="approval-section">
-      <div><strong>{{ t("settings.userAccess.approvals.title") }}</strong><p>{{ t("settings.userAccess.approvals.description") }}</p></div>
-      <p v-if="approvals.isLoading.value" class="management-state">{{ t("settings.userAccess.loading") }}</p>
+    <p class="management-description">{{ t("settings.userAccess.approvals.description") }}</p>
+    <section class="access-directory" :aria-label="t('settings.userAccess.approvals.title')">
+      <header class="management-toolbar"><strong>{{ t("settings.userAccess.approvals.title") }}</strong></header>
+      <p v-if="approvals.isLoading.value" class="management-state" role="status">{{ t("settings.userAccess.loading") }}</p>
       <div v-else class="management-list">
         <article v-for="approval in pendingApprovals" :key="approval.id" class="management-row">
           <div class="management-primary"><strong>{{ approval.displayName || approval.verifiedEmail || approval.subject }}</strong><p>{{ providerName(approval.providerId) }} · {{ approval.verifiedEmail || approval.subject }}</p></div>
@@ -53,6 +57,7 @@ import { Pencil, Plus, Power, Trash2, UserCheck, UserX } from "@lucide/vue";
 import type { ControlPlaneExternalIdentityApprovalSummary, ControlPlaneIdentityProviderSummary } from "@task-handoff/protocol/control-plane-access";
 import { approveControlPlaneExternalIdentity, controlPlaneQueryKeys, createControlPlaneIdentityProvider, rejectControlPlaneExternalIdentity, removeControlPlaneIdentityProvider, updateControlPlaneIdentityProvider, useExternalIdentityApprovalsQuery, useIdentityProvidersQuery, useRolesQuery } from "../../../api/queries";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
@@ -84,6 +89,40 @@ async function confirmApprove() { if (!approveTarget.value) return; saving.value
 async function confirmDangerous() { saving.value = true; try { if (removeTarget.value) { await removeControlPlaneIdentityProvider(removeTarget.value.id); removeTarget.value = undefined; await providers.refetch(); } else if (rejectTarget.value) { await rejectControlPlaneExternalIdentity(rejectTarget.value.id); rejectTarget.value = undefined; await approvals.refetch(); } } catch (error) { showControlPlaneToast(errorText(error), "error"); } finally { saving.value = false; } }
 </script>
 
+<style scoped src="./AccessManagementDirectory.css"></style>
+
 <style scoped>
-.provider-management,.management-list,.management-primary,.approval-section{display:grid;gap:12px}.management-toolbar,.management-row,.management-actions,.management-primary>div{align-items:center;display:flex;gap:10px}.management-toolbar{justify-content:space-between}.management-toolbar>div,.approval-section>div{display:grid;gap:3px}.management-toolbar strong,.management-primary strong,.approval-section strong{font-size:14px}.management-toolbar p,.management-primary p,.approval-section p,.management-state,.management-meta{color:var(--text-muted);font-size:12px;margin:0}.management-row{border-bottom:1px solid var(--line);padding:12px 0}.management-primary{flex:1;min-width:0}.management-primary p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.management-badge{border:1px solid var(--line);border-radius:999px;color:var(--text-muted);font-size:12px;padding:1px 6px}.management-badge[data-status="enabled"]{color:var(--status-success)}.management-actions{margin-left:auto}.approval-section{border-top:1px solid var(--line);padding-top:16px}.provider-form{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}.provider-form label{display:grid;gap:6px;font-size:12px}.provider-form .wide{grid-column:1/-1}.provider-dialog{max-width:680px}.management-error{color:var(--status-danger);font-size:13px}@media(max-width:720px){.management-row{align-items:flex-start;flex-direction:column}.management-actions{margin-left:0}.provider-form{grid-template-columns:1fr}.provider-form .wide{grid-column:auto}}
+.management-primary p {
+  overflow-wrap: anywhere;
+}
+
+.provider-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.provider-form .wide {
+  grid-column: 1 / -1;
+}
+
+.provider-dialog {
+  max-width: 680px;
+}
+
+@media (max-width: 720px) {
+  .provider-form {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-form .wide {
+    grid-column: auto;
+  }
+}
 </style>

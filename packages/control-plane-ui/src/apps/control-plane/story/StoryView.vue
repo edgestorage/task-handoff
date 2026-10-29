@@ -159,6 +159,10 @@
               <LoaderCircle class="story-loading-spin" :size="13" />
               <span>{{ t("stories.nodeLoad.loadingNodes", { count: storyLoadingNodeIds.length }) }}</span>
             </div>
+            <div v-if="storyPausedNodeIds.length" class="story-node-load" data-state="paused">
+              <Pause :size="13" aria-hidden="true" />
+              <span>{{ t("stories.nodeLoad.pausedNodes", { count: storyPausedNodeIds.length }) }}</span>
+            </div>
             <div v-if="storyUnavailableNodeIds.length" class="story-node-load" data-state="warning">
               <CircleAlert :size="13" />
               <span>{{ t("stories.nodeLoad.unavailableNodes", { count: storyUnavailableNodeIds.length }) }}</span>
@@ -517,7 +521,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -705,6 +709,7 @@ const storiesPending = computed(() => storyCatalog.isPending.value);
 const storiesFetching = computed(() => storyCatalog.isFetching.value);
 const storyLoadingNodeIds = computed(() => storyCatalog.loadingNodeIds.value);
 const storyUnavailableNodeIds = computed(() => storyCatalog.unavailableNodeIds.value);
+const storyPausedNodeIds = computed(() => storyCatalog.pausedNodeIds.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
 type StoryDetailSection = "actions" | "documents" | "sessions" | "automations" | "decisions";
 type StoryAutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };

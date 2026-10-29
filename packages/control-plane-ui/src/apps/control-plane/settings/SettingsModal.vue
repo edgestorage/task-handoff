@@ -227,7 +227,8 @@
                   <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
                 </span>
                 <span class="node-list-meta">
-                  <Tooltip @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
+                  <Badge v-if="nodeTrust(target.id)" variant="secondary">{{ t(`settings.nodeRelay.nodeTrust.status.${nodeTrust(target.id)!.state}`) }}</Badge>
+                  <Tooltip v-else @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
                     <TooltipTrigger as-child>
                       <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
                         <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
@@ -244,7 +245,7 @@
                       <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
                     </TooltipContent>
                   </Tooltip>
-                  <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
+                  <small v-if="!nodeTrust(target.id)">{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
                 </span>
               </button>
               <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
@@ -252,7 +253,17 @@
             </ScrollArea>
           </section>
 
+          <CloudNodeTrustDetailPanel
+            v-if="selectedNode && selectedNodeTrust"
+            :key="selectedNode.id"
+            :node="selectedNode"
+            :trust="selectedNodeTrust"
+            :error="cloudNodeRelay.data.value?.errors.find((item) => item.nodeHandle === selectedNodeTrust?.nodeHandle)?.message"
+            @refresh="refreshCloudNodeTrust"
+            @cancelled="handleCloudNodeJoinCancelled"
+          />
           <NodeDetailPanel
+            v-else
             :actions="nodeDetailActions"
             :busy="nodeDetailBusy"
             :can-manage-settings="canManageSettings"
@@ -301,6 +312,7 @@
         :open="cloudNodeOnboardingOpen"
         @close="cloudNodeOnboardingOpen = false"
         @created="handleOnboardingCreated"
+        @show-trust="openCloudNodeTrustDetails"
         @open-cloud-settings="openCloudSettingsFromOnboarding"
       />
       <Dialog :open="nodeRenameOpen" @update:open="setNodeRenameOpen">
@@ -466,7 +478,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Cloud, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, getNodeModelRelay, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, updateNodeModelRelay, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useCloudNodeRelayQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeAgentModelRelay, NodeAgentModelRelayImagePruning, NodeAgentModelRelayUnknownModelPolicy, UpdateChannel } from "../../../api/types";
 import { nodeSupportsModelRelay, nodeSupportsModelRelayImagePruning, nodeSupportsModelRelayUnknownModelPolicy } from "../../../api/nodeCapabilities";
@@ -494,6 +506,9 @@ import { useNodeResourceSettings } from "./useNodeResourceSettings";
 import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
 import NodeDetailPanel from "./NodeDetailPanel.vue";
+import CloudNodeTrustDetailPanel from "./CloudNodeTrustDetailPanel.vue";
+import { cloudNodeTrustForNode } from "./cloudNodeTrust";
+import { resetCloudNodeOnboarding, useCloudNodeOnboardingAttempt } from "./cloudNodeOnboardingAttempt";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeOnboardingDialog from "./NodeOnboardingDialog.vue";
 import CloudNodeOnboardingDialog from "./CloudNodeOnboardingDialog.vue";
@@ -630,6 +645,41 @@ const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPla
 const remoteNodeDialogOpen = ref(false);
 const nodeOnboardingOpen = ref(false);
 const cloudNodeOnboardingOpen = ref(false);
+const cloudNodeOnboarding = useCloudNodeOnboardingAttempt();
+const cloudNodeRelay = useCloudNodeRelayQuery({
+  enabled: () => isFeatureEnabled("officialAccount") && canManageSettings.value,
+  refetchIntervalMs: () => settingsSection.value === "nodes" ? 2_000 : false,
+});
+function nodeTrust(nodeId: string) {
+  return cloudNodeTrustForNode(nodes.data.value?.find((node) => node.id === nodeId), cloudNodeRelay.data.value);
+}
+const selectedNodeTrust = computed(() => cloudNodeTrustForNode(selectedNode.value, cloudNodeRelay.data.value));
+watch(() => cloudNodeRelay.data.value, (relay) => {
+  if (relay && [...relay.trust, ...relay.channels].some((item) => !nodes.data.value?.some((node) => node.id === item.nodeId))) {
+    void nodes.refetch();
+  }
+});
+function refreshCloudNodeTrust() {
+  void cloudNodeRelay.refetch();
+  void nodes.refetch();
+}
+async function openCloudNodeTrustDetails(nodeId: string) {
+  if (!nodes.data.value?.some((node) => node.id === nodeId) || !nodeTrust(nodeId)) {
+    const [nodeResult, relayResult] = await Promise.all([nodes.refetch(), cloudNodeRelay.refetch()]);
+    const error = nodeResult.error || relayResult.error;
+    if (error || !nodes.data.value?.some((node) => node.id === nodeId)) {
+      showControlPlaneToast(error ? translateApiError(error, t) : t("settings.nodeRelay.directoryFailed"), "error");
+      return;
+    }
+  }
+  selectNode(nodeId);
+  cloudNodeOnboardingOpen.value = false;
+  refreshCloudNodeTrust();
+}
+function handleCloudNodeJoinCancelled(nodeHandle: string) {
+  if (cloudNodeOnboarding.attempt.value?.nodeHandle === nodeHandle) resetCloudNodeOnboarding();
+  refreshCloudNodeTrust();
+}
 const remoteNodeMode = ref<"direct" | "control-plane-proxy">("direct");
 const creatingProxyNode = ref(false);
 const proxyNodeError = ref("");
@@ -1415,10 +1465,11 @@ const nodeDetailStatus = {
 };
 
 watch(
-  () => selectedNode.value?.id,
-  (nodeId, previousNodeId) => {
+  () => [selectedNode.value?.id, selectedNodeTrust.value] as const,
+  ([nodeId, trust], previous) => {
+    const previousNodeId = previous?.[0];
     if (previousNodeId && nodeId !== previousNodeId) resetNodeRename();
-    if (nodeId) {
+    if (nodeId && !trust) {
       void loadControlPlaneAccess(nodeId);
       void loadManagedUpdateJobs(nodeId);
     }
@@ -1574,11 +1625,15 @@ function nodeInstanceSummary(nodeId: string) {
 function nodeStatusValue(nodeId: string) {
   const node = (nodes.data.value || []).find((item) => item.id === nodeId);
   if (node?.connectionEnabled === false) return "disconnected";
+  const trust = nodeTrust(nodeId);
+  if (trust) return trust.state === "pending" ? "pending-approval" : trust.state;
   if (nodeEventTransport(nodeId)?.status === "congested") return "degraded";
   return nodeStatusById[nodeId]?.status || node?.status || "unknown";
 }
 
 function nodeStatusLabel(nodeId: string) {
+  const trust = nodeTrust(nodeId);
+  if (trust) return t(`settings.nodeRelay.nodeTrust.status.${trust.state}`);
   if (nodeStatusValue(nodeId) === "disconnected") return t("instances.list.nodeDisconnected");
   return translateStatus(connectionStatusKeys, nodeStatusValue(nodeId), t);
 }
@@ -1593,6 +1648,7 @@ function nodeStatusClass(nodeId: string) {
 
 function refreshNodeConnectionDiagnostics(open: boolean, nodeId?: string) {
   if (!open) return;
+  if (nodeId && nodeTrust(nodeId)) return;
   if (nodeId) void checkSettingsNode(nodeId);
   else void nodes.refetch();
 }
@@ -1876,6 +1932,10 @@ function errorText(error: unknown) {
   background: var(--status-danger);
   box-shadow: 0 0 0 3px var(--status-danger-bg);
 }
+
+.node-status-dot.status-pending-approval,
+.node-status-dot.status-rejected,
+.node-status-dot.status-expired { background: var(--status-warning); }
 
 .node-status-dot.status-disconnected {
   background: var(--text-muted);

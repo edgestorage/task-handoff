@@ -202,6 +202,32 @@ test("catalog keeps orchestration members that are not resolvable instead of rew
   assert.deepEqual(catalog.orchestrations[0].agentIds, ["agent-a", "agent-missing"]);
 });
 
+test("paused nodes keep cached Agents and orchestrations read-only until reconnection is enabled", () => {
+  const target = { ...node("node-a", capableCapabilities), connectionEnabled: false };
+  const input = {
+    nodes: [target],
+    definitions: [{ nodeId: "node-a", agent: definition({}) }],
+    orchestrations: [{ nodeId: "node-a", orchestration: orchestration({}) }],
+    instances: [instance({})],
+    foldersByNode: new Map(),
+  };
+  const paused = buildAgentCatalog(input);
+  assert.equal(paused.agents.length, 1);
+  assert.equal(paused.agents[0].nodeOnline, false);
+  assert.equal(paused.agents[0].blockedCode, "node-offline");
+  assert.equal(paused.agents[0].executable, false);
+  assert.equal(paused.orchestrations[0].editable, false);
+  assert.equal(paused.orchestrations[0].executable, false);
+  assert.equal(agentManualRunAvailable(paused.agents[0], paused.orchestrations), false);
+
+  target.connectionEnabled = true;
+  const resumed = buildAgentCatalog(input);
+  assert.equal(resumed.agents[0].nodeOnline, true);
+  assert.equal(resumed.agents[0].executable, true);
+  assert.equal(resumed.orchestrations[0].editable, true);
+  assert.equal(agentManualRunAvailable(resumed.agents[0], resumed.orchestrations), true);
+});
+
 test("catalog projects authoritative Run members without inventing shared-space diagnostics", () => {
   const catalog = buildAgentCatalog({
     nodes: [node("node-a", capableCapabilities)],

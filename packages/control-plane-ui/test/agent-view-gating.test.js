@@ -56,11 +56,11 @@ test("agent view sources keep product text in the locale files", () => {
 test("the agent catalog follows each node answer and stays inert while the view is closed", () => {
   assert.match(hook, /controlPlaneAgentCapabilities\(node\.capabilities\)\.definitions/);
   assert.match(hook, /const activeNodeIds = computed\(\(\) => \(toValue\(options\.enabled \?\? true\) \? capableNodeIds\.value : \[\]\)\);/);
-  assert.match(hook, /activeNodeIds\.value\.map\(\(nodeId\) => agentNodeQueryOptions\(nodeId\)\)/);
-  assert.match(hook, /activeNodeIds\.value\.map\(\(nodeId\) => nodeLocalFoldersQueryOptions\(nodeId\)\)/);
+  assert.match(hook, /activeNodeIds\.value\.map\(\(nodeId\) => agentNodeQueryOptions\(nodeId, connectionEnabled\(nodeId\)\)\)/);
+  assert.match(hook, /activeNodeIds\.value\.map\(\(nodeId\) => nodeLocalFoldersQueryOptions\(nodeId, connectionEnabled\(nodeId\)\)\)/);
   assert.match(hook, /useAgentRunsQuery\(runsEnabled\)/);
   assert.match(hook, /controlPlaneAgentCapabilities\(node\.capabilities\)\.runs/);
-  assert.match(hook, /nodeQueryLoadState\(nodeId, index < 0 \? undefined : agentQueries\.value\[index\]\)/);
+  assert.match(hook, /nodeQueryLoadState\(nodeId, index < 0 \? undefined : agentQueries\.value\[index\], connectionEnabled\(nodeId\)\)/);
   assert.match(queries, /export function agentNodeQueryOptions\(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true\) \{[\s\S]*queryKey: controlPlaneQueryKeys\.agents\(nodeId\)/);
   assert.doesNotMatch(hook, /listAgents\(\)/, "the hook must query per node, not through one aggregate request");
 });

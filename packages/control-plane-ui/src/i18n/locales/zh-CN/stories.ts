@@ -8,6 +8,7 @@ export const stories = {
   close: "关闭",
   empty: "暂无 Story",
   nodeLoad: {
+    pausedNodes: "{count} 个节点已暂停连接",
     loading: "加载中",
     unavailable: "无法读取",
     loadingNodes: "正在加载 {count} 个节点的 Story...",

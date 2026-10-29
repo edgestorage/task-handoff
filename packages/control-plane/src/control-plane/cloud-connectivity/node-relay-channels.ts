@@ -25,6 +25,8 @@ export type CloudNodeRelayChannelsOptions = {
   /** Resolved lazily: the tunnel transport is wired after the runtime exists. */
   transport?: () => CloudNodeRelayChannelTransport | undefined;
   nodes: {
+    /** Derived from the persisted connection switch and explicit claim opt-out. */
+    claimEnabled?(nodeHandle: string): boolean;
     resolve(nodeHandle: string): { nodeId: string; pairing?: { keyId: string; secret: string }; preserveLocalConnection?: boolean } | undefined;
     inspectNode?(nodeId: string): { nodeId: string; connectionKind: string; nodeHandle?: string } | undefined;
     /** Nodes whose claim should be restored after a fresh Coordinator connection. */
@@ -77,6 +79,7 @@ export class CloudNodeRelayChannels {
   private readonly claims = new Map<string, { requestedAt: string }>();
   private readonly errors = new Map<string, { code: string; message: string; at: string }>();
   private readonly trust = new Map<string, NodeRelayControlPlaneTrustProjection>();
+  private readonly claimRevisions = new Map<string, number>();
 
   constructor(options: CloudNodeRelayChannelsOptions) {
     this.options = options;
@@ -95,13 +98,6 @@ export class CloudNodeRelayChannels {
     this.recordError(nodeHandle, error);
   }
 
-  recordTrustProbeTimeout(nodeHandle: string) {
-    this.recordError(nodeHandle, Object.assign(
-      new Error("Node Agent did not answer the Control Plane trust probe before the timeout."),
-      { code: "NODE_RELAY_TRUST_TIMEOUT", retryable: true },
-    ));
-  }
-
   trustState(nodeHandle: string) {
     return this.trust.get(nodeHandle)?.state;
   }
@@ -111,6 +107,7 @@ export class CloudNodeRelayChannels {
   }
 
   forgetNode(nodeHandle: string) {
+    this.claimRevisions.set(nodeHandle, (this.claimRevisions.get(nodeHandle) ?? 0) + 1);
     this.claims.delete(nodeHandle);
     this.errors.delete(nodeHandle);
     this.trust.delete(nodeHandle);
@@ -125,6 +122,13 @@ export class CloudNodeRelayChannels {
       this.recordError((raw as any)?.nodeHandle, error);
       throw error;
     }
+    const revision = this.claimRevisions.get(verified.nodeHandle) ?? 0;
+    const assertCurrentClaim = () => {
+      if ((this.claimRevisions.get(verified.nodeHandle) ?? 0) !== revision || this.options.nodes.claimEnabled?.(verified.nodeHandle) === false) {
+        throw Object.assign(new Error("The node relay claim was cancelled."), { code: "NODE_RELAY_CLAIM_REVOKED", retryable: false });
+      }
+    };
+    assertCurrentClaim();
     const resolved = this.options.nodes.resolve(verified.nodeHandle);
     const current = this.channels.get(verified.nodeHandle);
     const knownIdentity = verified.nodeId ? this.options.nodes.inspectNode?.(verified.nodeId) : undefined;
@@ -175,10 +179,33 @@ export class CloudNodeRelayChannels {
       ...(resolved?.pairing ? { pairing: resolved.pairing } : {}),
       createPairing: () => ({ keyId: `key_${crypto.randomUUID().replaceAll("-", "_")}`, secret: crypto.randomBytes(32).toString("base64url") }),
     }).catch((error: unknown) => {
+      assertCurrentClaim();
       this.recordError(verified.nodeHandle, error);
       throw error;
     });
+    try {
+      assertCurrentClaim();
+    } catch (error) {
+      if (connection.status !== "trust-required") closeConnection(connection.socket, "node-relay-claim-revoked");
+      throw error;
+    }
     if (connection.status === "trust-required") {
+      // The signed outcome proves the node identity, but grants no management
+      // access. Persist only the existing pending-pairing node model so claim
+      // recovery and the registry work before a human approves the request.
+      if (verified.nodeId && verified.nodeId !== connection.outcome.nodeId) {
+        const error = nodeIdentityMismatch(verified.nodeHandle, verified.nodeId, connection.outcome.nodeId);
+        this.recordError(verified.nodeHandle, error);
+        throw error;
+      }
+      try {
+        const node = resolved ?? await this.options.nodes.ensure({ nodeHandle: verified.nodeHandle, nodeId: connection.outcome.nodeId, displayName: verified.displayName });
+        assertCurrentClaim();
+        if (node.nodeId !== connection.outcome.nodeId) throw nodeIdentityMismatch(verified.nodeHandle, node.nodeId, connection.outcome.nodeId);
+      } catch (error) {
+        if ((error as { code?: string }).code !== "NODE_RELAY_CLAIM_REVOKED") this.recordError(verified.nodeHandle, error);
+        throw error;
+      }
       const identity = this.options.state.snapshot().identity;
       this.trust.set(verified.nodeHandle, {
         nodeHandle: verified.nodeHandle,
@@ -218,6 +245,12 @@ export class CloudNodeRelayChannels {
         this.recordError(verified.nodeHandle, error);
         throw error;
       }
+    }
+    try {
+      assertCurrentClaim();
+    } catch (error) {
+      closeConnection(connection.socket, "node-relay-claim-revoked");
+      throw error;
     }
     if (identity.nodeId !== connection.nodeId) {
       closeConnection(connection.socket, "node-relay-node-id-mismatch");

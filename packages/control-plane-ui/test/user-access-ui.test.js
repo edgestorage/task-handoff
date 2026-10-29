@@ -7,6 +7,7 @@ const settingsSections = fs.readFileSync(new URL("../src/apps/control-plane/sett
 const users = fs.readFileSync(new URL("../src/apps/control-plane/settings/UserAccessSettingsSection.vue", import.meta.url), "utf8");
 const roles = fs.readFileSync(new URL("../src/apps/control-plane/settings/RoleManagementPanel.vue", import.meta.url), "utf8");
 const providers = fs.readFileSync(new URL("../src/apps/control-plane/settings/IdentityProviderManagementPanel.vue", import.meta.url), "utf8");
+const directory = fs.readFileSync(new URL("../src/apps/control-plane/settings/AccessManagementDirectory.css", import.meta.url), "utf8");
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 const authGate = fs.readFileSync(new URL("../src/apps/control-plane/AuthGate.vue", import.meta.url), "utf8");
 const account = fs.readFileSync(new URL("../src/apps/control-plane/settings/AccountSecurityDialog.vue", import.meta.url), "utf8");
@@ -82,7 +83,11 @@ test("user access follows the shared settings page and directory layout", () => 
   assert.match(users, /class="user-access-scroll settings-page-scroll"/);
   assert.match(users, /class="user-access-settings settings-content-page"/);
   assert.match(users, /class="user-access-head"/);
-  assert.match(users, /\.access-tab-content\{[^}]*background:var\(--surface-raised\)[^}]*border:1px solid var\(--line\)/);
+  assert.match(directory, /\.access-directory\s*\{[^}]*background: var\(--surface-raised\)[^}]*border: 1px solid var\(--line\)/);
+  for (const component of [users, roles, providers]) {
+    assert.match(component, /<style scoped src="\.\/AccessManagementDirectory\.css"><\/style>/);
+    assert.match(component, /class="access-directory"/);
+  }
   assert.doesNotMatch(users, /settings-panel-surface|modal-section/);
 });
 

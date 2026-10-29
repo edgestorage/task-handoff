@@ -2,15 +2,25 @@
   <section class="cloud-relay-panel" :class="{ 'cloud-relay-panel-embedded': embedded }">
     <header class="cloud-relay-panel-head">
       <span>{{ t("settings.nodeDetail.cloudRelayBindTitle") }}</span>
-      <Button variant="outline" size="sm" :disabled="busy || Boolean(linkedHandle) || account.isLoading.value || connectivity.isLoading.value" @click="primaryAction">
-        <Cloud :size="14" />
-        <span>{{ linkedHandle ? t("settings.cloud.nodeAdded") : primaryActionLabel }}</span>
+      <Badge v-if="linkedHandle" variant="secondary" class="cloud-relay-panel-status">
+        <Check :size="14" aria-hidden="true" />
+        {{ t("settings.cloud.nodeAdded") }}
+      </Badge>
+      <Button v-else variant="outline" size="sm" :disabled="busy || account.isLoading.value || connectivity.isLoading.value" @click="primaryAction">
+        <Cloud :size="14" aria-hidden="true" />
+        <span>{{ primaryActionLabel }}</span>
       </Button>
     </header>
     <div class="cloud-relay-panel-body">
-      <p class="cloud-relay-panel-hint">{{ available ? t("settings.nodeDetail.cloudRelayBindHint") : unavailableReason }}</p>
-      <p v-if="linkedHandle" class="cloud-relay-panel-result">{{ t("settings.nodeDetail.cloudRelayBindDone", { handle: linkedHandle }) }}</p>
-      <p v-if="error" class="cloud-relay-panel-error">{{ error }}</p>
+      <template v-if="linkedHandle">
+        <dl class="cloud-relay-panel-identity">
+          <dt>{{ t("settings.nodeDetail.cloudRelayNodeHandle") }}</dt>
+          <dd><code>{{ linkedHandle }}</code></dd>
+        </dl>
+        <p class="cloud-relay-panel-hint">{{ t("settings.nodeDetail.cloudRelayBindLinkedHint") }}</p>
+      </template>
+      <p v-else class="cloud-relay-panel-hint">{{ available ? t("settings.nodeDetail.cloudRelayBindHint") : unavailableReason }}</p>
+      <p v-if="error" class="cloud-relay-panel-error" role="alert">{{ error }}</p>
     </div>
   </section>
 </template>
@@ -19,9 +29,10 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Cloud } from "@lucide/vue";
+import { Check, Cloud } from "@lucide/vue";
 import { CLOUD_ACCOUNT_NODE_HANDLE_LABEL } from "@task-handoff/protocol/control-plane";
 import { Button } from "../../../components/ui/button";
+import { Badge } from "../../../components/ui/badge";
 import { bindCloudRelayNode, controlPlaneQueryKeys, useCloudAccountQuery, useCloudConnectivityQuery } from "../../../api/queries";
 import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
@@ -96,6 +107,7 @@ async function bind() {
 
 .cloud-relay-panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -106,34 +118,52 @@ async function bind() {
 
 .cloud-relay-panel-head > span {
   min-width: 0;
-  overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.5;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.cloud-relay-panel-head > :deep(button),
+.cloud-relay-panel-status {
+  flex-shrink: 0;
+}
+
+.cloud-relay-panel-status {
+  color: var(--status-success);
+  font-weight: 400;
 }
 
 .cloud-relay-panel-body {
   display: grid;
   gap: 8px;
+  min-width: 0;
   padding: 12px;
 }
 
 .cloud-relay-panel-hint,
-.cloud-relay-panel-result,
 .cloud-relay-panel-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cloud-relay-panel-hint { color: var(--text-muted); }
+.cloud-relay-panel-error { color: var(--status-danger); }
+
+.cloud-relay-panel-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
 }
 
-.cloud-relay-panel-hint { color: var(--text-muted); }
-.cloud-relay-panel-result { color: var(--status-success); }
-.cloud-relay-panel-error { color: var(--status-danger); }
-
-@media (max-width: 720px) {
-  .cloud-relay-panel-head { align-items: flex-start; flex-direction: column; }
-}
+.cloud-relay-panel-identity dt { color: var(--text-muted); }
+.cloud-relay-panel-identity dd { min-width: 0; margin: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+.cloud-relay-panel-identity code { font-size: inherit; }
 </style>

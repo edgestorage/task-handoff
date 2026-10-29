@@ -301,6 +301,10 @@ export function disconnectCloudAccount() {
   return sharedControlPlaneClient.admin.disconnectCloud();
 }
 
+export function resetConflictingCloudBinding() {
+  return sharedControlPlaneClient.admin.resetConflictingCloudBinding();
+}
+
 export async function downloadControlPlaneDiagnosticLogs() {
   const response = await withApiError(api.get("control-plane/diagnostic-logs/export"));
   const disposition = response.headers.get("content-disposition") || "";

@@ -688,6 +688,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     transport: () => cloudRelayNodeTransport,
     nodes: {
       listForClaim: () => service.listCloudRelayNodesToClaim(),
+      claimEnabled: (nodeHandle: string) => service.isCloudRelayNodeClaimEnabled(nodeHandle),
       resolve: (nodeHandle: string) => {
         const linked = service.findNodeByCloudAccountHandle(nodeHandle);
         if (linked) return { nodeId: linked.id, preserveLocalConnection: true };
@@ -886,6 +887,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
   cloudConnectivity.init();
+  const cloudOriginConflict = cloudConnectivity.snapshot().originConflict;
+  if (cloudOriginConflict) app.log.warn({ code: "CLOUD_SERVICE_ORIGIN_CHANGED", bindingServiceOrigin: cloudConnectivity.snapshot().serviceOrigin, ...cloudOriginConflict }, "Cloud connections paused: binding authority differs from configured origin.");
   cloudAccountSession.init();
   if (cloudConnectivityEnabled) cloudConnectivityRuntime.start();
   let pairingRecoveryInFlight: Promise<void> | undefined;
@@ -1207,6 +1210,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.disconnect() : cloudConnectivity.beginRevocation() };
   });
 
+  app.post("/api/cloud-connectivity/reset-binding", async (request) => {
+    const actor = await requireCloudConnectivityAdmin(request);
+    if (actor.type !== "user" && actor.type !== "system") {
+      throw Object.assign(new Error("Cloud binding recovery requires a local administrator."), { code: "CLOUD_BINDING_RECOVERY_LOCAL_ONLY", statusCode: 403 });
+    }
+    return { data: await cloudConnectivityLifecycle.resetConflictingBinding() };
+  });
+
   // The account node directory backs the "add node from account" flow. It is
   // read through the signed-in account session (never the binding credential)
   // and degrades to `signedIn: false` so the UI can show sign-in guidance
@@ -1226,8 +1237,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.post("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
     await requireCloudConnectivityAdmin(request);
     const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
-    const data = await cloudConnectivityRuntime.claimAccountNode(nodeHandle);
     await service.setCloudRelayNodeClaimEnabled(nodeHandle, true);
+    const data = await cloudConnectivityRuntime.claimAccountNode(nodeHandle);
     return { data };
   });
 
@@ -1239,7 +1250,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     // must not silently reclaim a node that was explicitly unbound, even if
     // the Coordinator is temporarily unreachable during this request.
     await service.setCloudRelayNodeClaimEnabled(nodeHandle, false);
-    return { data: await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle) };
+    const data = await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle);
+    await cloudConnectivityRuntime.settleNodeRelayAttaches(nodeHandle);
+    const node = service.findCloudRelayNode(nodeHandle);
+    if (node && await service.deletePendingCloudRelayNode(nodeHandle)) {
+      events.publish("node.deleted", { nodeId: node.id, deleted: true });
+    }
+    return { data };
   });
 
   // Two commands from one token: the cloud-rendered CLI bind for a machine that

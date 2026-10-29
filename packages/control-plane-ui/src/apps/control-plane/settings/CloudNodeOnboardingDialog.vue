@@ -33,34 +33,32 @@
               <Button type="button" size="sm" variant="outline" @click="emit('open-cloud-settings')">{{ t("settings.nodeRelay.openSettings") }}</Button>
             </div>
 
-            <div v-else class="cloud-node-onboarding-choice-list" :aria-label="t('settings.nodeRelay.chooseSourceTitle')">
-              <button
-                type="button"
+            <ToggleGroup v-else type="single" orientation="vertical" class="cloud-node-onboarding-choice-list" :model-value="source" :aria-label="t('settings.nodeRelay.chooseSourceTitle')" @update:model-value="selectSource">
+              <ToggleGroupItem
+                value="existing"
                 class="cloud-node-onboarding-choice"
-                :class="{ selected: source === 'existing' }"
-                :aria-pressed="source === 'existing'"
-                @click="source = 'existing'"
+                variant="outline"
               >
-                <Cloud :size="18" />
-                <span>
+                <Cloud :size="18" aria-hidden="true" />
+                <span class="cloud-node-onboarding-choice-copy">
                   <strong>{{ t("settings.nodeRelay.sourceExisting") }}</strong>
                   <small>{{ t("settings.nodeRelay.sourceExistingHint") }}</small>
                 </span>
-              </button>
-              <button
-                type="button"
+                <span class="cloud-node-onboarding-choice-indicator" aria-hidden="true"><Check v-if="source === 'existing'" :size="12" /></span>
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="new"
                 class="cloud-node-onboarding-choice"
-                :class="{ selected: source === 'new' }"
-                :aria-pressed="source === 'new'"
-                @click="source = 'new'"
+                variant="outline"
               >
-                <Download :size="18" />
-                <span>
+                <Download :size="18" aria-hidden="true" />
+                <span class="cloud-node-onboarding-choice-copy">
                   <strong>{{ t("settings.nodeRelay.sourceNew") }}</strong>
                   <small>{{ t("settings.nodeRelay.sourceNewHint") }}</small>
                 </span>
-              </button>
-            </div>
+                <span class="cloud-node-onboarding-choice-indicator" aria-hidden="true"><Check v-if="source === 'new'" :size="12" /></span>
+              </ToggleGroupItem>
+            </ToggleGroup>
           </section>
 
           <section v-else-if="step === 'connect' && source === 'existing'" class="cloud-node-onboarding-section">
@@ -71,37 +69,43 @@
               <LoaderCircle class="spin" :size="15" />
               <span>{{ t("settings.nodeRelay.directoryLoading") }}</span>
             </div>
-            <div v-else-if="accountNodes.error.value" class="cloud-node-onboarding-error" role="alert">
+            <ul v-else-if="accountNodeItems.length" class="cloud-node-onboarding-account-list">
+              <li v-for="item in accountNodeItems" :key="item.nodeHandle" class="cloud-node-onboarding-account-item" :class="{ 'is-trust-entry': item.trust }">
+                <CloudNodeTrustEntry
+                  v-if="item.trust"
+                  :trust="item.trust"
+                  :display-name="item.displayName"
+                  @select="emit('show-trust', $event)"
+                />
+                <template v-else>
+                  <span
+                    class="cloud-node-onboarding-status-dot"
+                    :class="{
+                      'status-pending': accountNodeClaimed(item.nodeHandle),
+                    }"
+                  />
+                  <span class="cloud-node-onboarding-account-copy">
+                    <strong>{{ item.displayName || t("settings.nodeRelay.unnamedNode") }}</strong>
+                    <small>{{ accountNodeStatus(item) }} · {{ accountNodeAccess(item) }}</small>
+                  </span>
+                  <span class="cloud-node-onboarding-account-meta">
+                    <Badge v-if="accountNodeClaimed(item.nodeHandle)" variant="secondary">{{ t("settings.nodeRelay.waiting") }}</Badge>
+                    <Button v-else type="button" size="sm" variant="outline" :disabled="Boolean(relayBusyHandle)" @click="connectAccountNode(item.nodeHandle)">
+                      <LoaderCircle v-if="relayBusyHandle === item.nodeHandle" class="spin" :size="14" />
+                      <span>{{ relayBusyHandle === item.nodeHandle ? t("settings.nodeRelay.connecting") : t("settings.nodeRelay.connect") }}</span>
+                    </Button>
+                  </span>
+                </template>
+              </li>
+            </ul>
+            <p v-else-if="!accountNodes.error.value" class="cloud-node-onboarding-instruction">{{ t("settings.nodeRelay.directoryEmpty") }}</p>
+            <div v-if="accountNodes.error.value" class="cloud-node-onboarding-error" role="alert">
               <span>{{ t("settings.nodeRelay.directoryFailed") }} {{ translateApiError(accountNodes.error.value, t) }}</span>
               <Button type="button" size="sm" variant="outline" @click="accountNodes.refetch()">{{ t("settings.nodeRelay.directoryRetry") }}</Button>
             </div>
-            <ul v-else-if="accountNodeItems.length" class="cloud-node-onboarding-account-list">
-              <li v-for="item in accountNodeItems" :key="item.nodeHandle" class="cloud-node-onboarding-account-item">
-                <span
-                  class="cloud-node-onboarding-status-dot"
-                  :class="{
-                    'status-online': accountNodeConnected(item.nodeHandle),
-                    'status-pending': accountNodeClaimed(item.nodeHandle) && !accountNodeConnected(item.nodeHandle),
-                  }"
-                />
-                <span class="cloud-node-onboarding-account-copy">
-                  <strong>{{ item.displayName || t("settings.nodeRelay.unnamedNode") }}</strong>
-                  <small>{{ accountNodeStatus(item) }} · {{ accountNodeAccess(item) }}</small>
-                </span>
-                <span class="cloud-node-onboarding-account-meta">
-                  <Badge v-if="accountNodeConnected(item.nodeHandle)" variant="default">{{ t("settings.nodeRelay.claimed") }}</Badge>
-                  <Badge v-else-if="accountNodeClaimed(item.nodeHandle)" variant="secondary">{{ t("settings.nodeRelay.waiting") }}</Badge>
-                  <Button v-else type="button" size="sm" variant="outline" :disabled="Boolean(relayBusyHandle)" @click="connectAccountNode(item.nodeHandle)">
-                    <LoaderCircle v-if="relayBusyHandle === item.nodeHandle" class="spin" :size="14" />
-                    <span>{{ relayBusyHandle === item.nodeHandle ? t("settings.nodeRelay.connecting") : t("settings.nodeRelay.connect") }}</span>
-                  </Button>
-                </span>
-              </li>
-            </ul>
-            <p v-else class="cloud-node-onboarding-instruction">{{ t("settings.nodeRelay.directoryEmpty") }}</p>
             <p v-if="relayAccountError" class="cloud-node-onboarding-error" role="alert">{{ t("settings.nodeRelay.statusError", { message: relayAccountError }) }}</p>
             <CloudNodeTrustStatus
-              v-if="attempt?.source === 'existing' && attempt.nodeHandle"
+              v-if="attempt?.source === 'existing' && attempt.nodeHandle && !trust"
               :phase="attempt.phase"
               :trust="trust"
               :display-name="attempt.displayName"
@@ -116,7 +120,12 @@
             <h3>{{ t("settings.nodeRelay.installTitle") }}</h3>
             <p>{{ t("settings.nodeRelay.installHint") }}</p>
 
-            <template v-if="!bindingToken">
+            <ul v-if="trust" class="cloud-node-onboarding-account-list">
+              <li class="cloud-node-onboarding-account-item is-trust-entry">
+                <CloudNodeTrustEntry :trust="trust" :display-name="attempt?.displayName" @select="emit('show-trust', $event)" />
+              </li>
+            </ul>
+            <template v-else-if="!bindingToken">
               <label class="cloud-node-onboarding-field" for="cloud-node-onboarding-name">
                 <span>{{ t("settings.nodeRelay.displayName") }}</span>
                 <ControlPlaneInput id="cloud-node-onboarding-name" v-model="displayName" :maxlength="160" :placeholder="t('settings.nodeDetail.hostnameNamePlaceholder')" />
@@ -185,7 +194,7 @@
           <ArrowLeft :size="14" /><span>{{ t("common.actions.back") }}</span>
         </Button>
         <Button v-if="step === 'source'" type="button" :disabled="!source || !cloudRelayUsable" @click="step = 'connect'">{{ t("common.actions.continue") }}</Button>
-        <Button v-else-if="step === 'connect' && source === 'new'" type="button" :disabled="busy" @click="generateBindingToken">
+        <Button v-else-if="step === 'connect' && source === 'new' && !trust" type="button" :disabled="busy" @click="generateBindingToken">
           <LoaderCircle v-if="busy" class="spin" :size="14" /><Download v-else :size="14" />
           <span>{{ bindingToken ? t("settings.nodeRelay.regenerate") : t("settings.nodeRelay.generate") }}</span>
         </Button>
@@ -205,6 +214,7 @@ import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import {
   cancelCloudNodeBindingToken,
   claimCloudAccountNode,
@@ -221,6 +231,8 @@ import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
+import CloudNodeTrustEntry from "./CloudNodeTrustEntry.vue";
+import { cloudAccountNodeCandidates } from "./cloudAccountNodeCandidates";
 import { withNodeAgentInstallerSource } from "./nodeAgentInstallCommand";
 import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
 import {
@@ -245,12 +257,15 @@ const props = defineProps<{
   nodes: Node[];
   controlPlaneUrl: string;
 }>();
-const emit = defineEmits<{ close: []; created: [node: Node]; "open-cloud-settings": [] }>();
+const emit = defineEmits<{ close: []; created: [node: Node]; "show-trust": [nodeId: string]; "open-cloud-settings": [] }>();
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const queryClient = useQueryClient();
 const step = ref<Step>("source");
 const source = ref<NodeSource>();
+function selectSource(value: unknown) {
+  if (value === "existing" || value === "new") source.value = value;
+}
 const commandMode = ref<CommandMode>("install");
 const installerSource = ref<NodeAgentInstallerSource>(DEFAULT_NODE_AGENT_INSTALLER_SOURCE);
 const displayNameDraft = ref("");
@@ -288,9 +303,14 @@ const stepIndex = computed(() => steps.value.findIndex((item) => item.id === ste
 const cloudRelayUnavailableReason = computed(() => !cloudRelaySignedIn.value
   ? t("settings.nodeRelay.unavailableSignedIn")
   : t("settings.nodeRelay.unavailableUnbound"));
-const accountNodeItems = computed(() => (accountNodes.data.value?.items ?? []).filter((item) => item.status === "active"));
-const accountNodeConnected = (nodeHandle: string) => Boolean(accountNodes.data.value?.nodeRelay.channels.some((channel) => channel.nodeHandle === nodeHandle && channel.connected));
-const accountNodeClaimed = (nodeHandle: string) => attempt.value?.nodeHandle === nodeHandle || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle)) || accountNodeConnected(nodeHandle);
+const accountNodeItems = computed(() => {
+  const snapshot = accountNodes.data.value;
+  return cloudAccountNodeCandidates(snapshot, props.nodes).map((item) => ({
+    ...item,
+    trust: snapshot?.nodeRelay.trust.find((trust) => trust.nodeHandle === item.nodeHandle),
+  }));
+});
+const accountNodeClaimed = (nodeHandle: string) => attempt.value?.nodeHandle === nodeHandle || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle));
 const accountNodeStatus = (item: CloudAccountNode) => t(`settings.nodeRelay.accountStatus.${item.status}`);
 const accountNodeAccess = (item: CloudAccountNode) => item.access?.kind === 'shared'
   ? t("settings.nodeRelay.accountAccessShared", { expiresAt: formatDateTime(new Date(item.access.expiresAt), locale.value) })
@@ -330,7 +350,7 @@ watch(() => accountNodes.data.value, (data) => {
 
 watch(() => accountNodes.error.value, (error) => {
   if (error && onboarding.active.value) {
-    failCloudNodeOnboarding(translateApiError(error, t));
+    syncCloudNodeOnboarding(undefined, translateApiError(error, t));
     applyOnboardingState();
   }
 });
@@ -370,7 +390,7 @@ function stopClock() {
 }
 
 async function connectAccountNode(nodeHandle: string) {
-  if (relayBusyHandle.value) return;
+  if (relayBusyHandle.value || !accountNodeItems.value.some((item) => item.nodeHandle === nodeHandle)) return;
   relayBusyHandle.value = nodeHandle;
   beginCloudNodeOnboarding("existing");
   setCloudNodeOnboardingNodeHandle(nodeHandle);
@@ -405,8 +425,9 @@ async function cancelBindingToken() {
   if (busy.value) return;
   busy.value = true;
   try {
-    if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
-    else if (attempt.value?.source === "existing" && attempt.value.nodeHandle) await releaseCloudAccountNodeClaim(attempt.value.nodeHandle);
+    if (attempt.value?.nodeHandle) await releaseCloudAccountNodeClaim(attempt.value.nodeHandle);
+    else if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes });
     resetCloudNodeOnboarding();
     resetView();
     void accountNodes.refetch();
@@ -432,6 +453,12 @@ let completedAttemptId = 0;
 
 function applyOnboardingState() {
   if (!attempt.value) return;
+  if (attempt.value.phase === "waiting-node-trust" && attempt.value.trust) {
+    const node = props.nodes.find((item) => item.id === attempt.value?.trust?.nodeId);
+    if (!node) {
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes });
+    }
+  }
   if (attempt.value.phase === "complete") {
     const node = props.nodes.find((item) => item.id === attempt.value?.nodeId);
     if (node && completedAttemptId !== attempt.value.id) {
@@ -579,44 +606,71 @@ function retryOnboardingPoll() {
 .cloud-node-onboarding-choice-list {
   display: grid;
   gap: 8px;
+  justify-content: stretch;
 }
 
-.cloud-node-onboarding-choice {
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice) {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr) 18px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
+  height: auto;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: none;
   color: var(--text);
+  font-weight: 400;
   text-align: left;
+  white-space: normal;
   cursor: pointer;
 }
 
-.cloud-node-onboarding-choice:hover {
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice:hover) {
   border-color: var(--brand-accent);
   background: var(--surface-hover);
 }
 
-.cloud-node-onboarding-choice.selected {
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice:focus-visible) {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -3px;
+  box-shadow: none;
+}
+
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice[data-state="on"]) {
   border-color: var(--brand-accent);
   background: var(--surface-active);
 }
 
-.cloud-node-onboarding-choice.selected > svg {
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice[data-state="on"] > svg) {
   color: var(--brand-accent);
 }
 
-.cloud-node-onboarding-choice > span,
+.cloud-node-onboarding-choice-copy,
 .cloud-node-onboarding-unavailable > span,
 .cloud-node-onboarding-account-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.cloud-node-onboarding-choice-indicator {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.cloud-node-onboarding-choice-list :deep(.cloud-node-onboarding-choice[data-state="on"] .cloud-node-onboarding-choice-indicator) {
+  border-color: var(--brand-accent);
+  background: var(--brand-accent);
+  color: var(--brand-accent-foreground);
 }
 
 .cloud-node-onboarding-choice strong,
@@ -671,6 +725,11 @@ function retryOnboardingPoll() {
   border-top: 1px solid var(--line);
 }
 
+.cloud-node-onboarding-account-item.is-trust-entry {
+  display: block;
+  padding: 0;
+}
+
 .cloud-node-onboarding-account-copy strong,
 .cloud-node-onboarding-account-copy small {
   overflow: hidden;
@@ -684,11 +743,6 @@ function retryOnboardingPoll() {
   border-radius: 999px;
   background: var(--text-subtle);
   box-shadow: 0 0 0 3px var(--surface-subtle);
-}
-
-.cloud-node-onboarding-status-dot.status-online {
-  background: var(--status-success);
-  box-shadow: 0 0 0 3px var(--brand-accent-soft);
 }
 
 .cloud-node-onboarding-status-dot.status-pending {
@@ -850,7 +904,7 @@ function retryOnboardingPoll() {
 .cloud-node-onboarding-command-code {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-inset);
 }

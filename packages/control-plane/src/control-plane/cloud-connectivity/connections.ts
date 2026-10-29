@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
-import type { CloudConnectivityService } from "./service.ts";
+import { assertCloudOriginMatches, type CloudConnectivityService } from "./service.ts";
 import { RelaySessionStore, type PersistedRelaySession } from "./relay-session-store.ts";
 
 type ManagedConnection = { close(reason?: string): Promise<void> | void; renew?(grant: unknown): Promise<void> | void };
@@ -100,6 +100,7 @@ export class CloudControlConnectionManager {
 
   async connectOnce() {
     const snapshot = this.options.state.snapshot();
+    assertCloudOriginMatches(snapshot);
     // A pending revocation keeps the credential only so it can reconnect and
     // finish the remote revoke. Without this, a failed revoke would strand the
     // local state machine forever: no connection means no way to ask the cloud

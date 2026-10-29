@@ -145,3 +145,13 @@ test("delete all also supports a node-only model", async (context) => {
   assert.equal(await state.removeModelEverywhere(model), true);
   assert.deepEqual(calls, [{ method: "delete-node", nodeId: "node-a", id: model.id }]);
 });
+
+test("single-location deletion retains other locations and the open model editor", async (context) => {
+  const location = { type: "node", nodeId: "node-a", referenceCount: 0 };
+  const { model, state, calls, stop } = setup([{ type: "control-plane" }, location]);
+  context.after(stop);
+  state.editModel(model);
+  assert.equal(await state.removeModel(model, location), true);
+  assert.deepEqual(calls, [{ method: "delete-node", nodeId: "node-a", id: model.id }]);
+  assert.equal(state.editingModelId.value, model.id);
+});

@@ -1,0 +1,113 @@
+.access-management-view {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.access-directory {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.management-description,
+.management-primary p,
+.management-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.management-toolbar,
+.management-row,
+.management-actions,
+.management-primary > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.management-toolbar {
+  border-bottom: 1px solid var(--line);
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.management-toolbar strong,
+.management-primary strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.management-list {
+  display: grid;
+}
+
+.management-row {
+  padding: 12px;
+}
+
+.management-row + .management-row {
+  border-top: 1px solid var(--line);
+}
+
+.management-primary {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.management-primary > div {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.management-badge {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.management-badge[data-status="enabled"] {
+  color: var(--status-success);
+}
+
+.management-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.management-state,
+.management-error {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  margin: 0;
+  padding: 48px 20px;
+  text-align: center;
+}
+
+.management-error {
+  color: var(--status-danger);
+}
+
+@media (max-width: 720px) {
+  .management-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .management-actions {
+    margin-left: 0;
+  }
+}

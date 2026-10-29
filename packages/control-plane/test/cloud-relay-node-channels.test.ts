@@ -340,6 +340,9 @@ test("a trust-required outcome projects pending state without a pairing, channel
   const node = ed25519Identity();
   const cp = ed25519Identity();
   const store = nodeStore();
+  let claimEnabled = false;
+  let approved = false;
+  let waitForConnect: Promise<void> | undefined;
   let createPairingCalls = 0;
   let attachCalls = 0;
   const transport = {
@@ -361,7 +364,19 @@ test("a trust-required outcome projects pending state without a pairing, channel
       }),
     },
     connector: {
-      async connect() {
+      async connect(input) {
+        await waitForConnect;
+        if (approved) {
+          createPairingCalls += 1;
+          return {
+            socket: linkedFrameSockets().left,
+            key: new Uint8Array(32),
+            nodeId: node.nodeId,
+            paired: false,
+            allocationId: input.allocation.allocationId,
+            issuedPairing: input.createPairing(),
+          };
+        }
         return {
           status: "trust-required" as const,
           outcome: {
@@ -390,7 +405,7 @@ test("a trust-required outcome projects pending state without a pairing, channel
       },
     },
     transport: () => transport,
-    nodes: store.adapter,
+    nodes: { ...store.adapter, claimEnabled: () => claimEnabled },
   });
   const event = nodeRelayAllocationEvent({
     allocationId: "node_allocation_a",
@@ -403,6 +418,11 @@ test("a trust-required outcome projects pending state without a pairing, channel
     nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey),
   });
 
+  await assert.rejects(channels.attach(event), { code: "NODE_RELAY_CLAIM_REVOKED" });
+  assert.equal(store.records.size, 0, "persisted opt-outs reject allocations before dialing");
+  claimEnabled = true;
+  await assert.rejects(channels.attach({ ...event, nodeId: "node_wrong_hint" }), { code: "CLOUD_RELAY_NODE_ID_MISMATCH" });
+  assert.equal(store.records.size, 0, "a mismatched signed trust identity cannot create a node record");
   const result = await channels.attach(event);
   assert.equal(result.status, "trust-required");
   assert.equal(createPairingCalls, 0);
@@ -414,6 +434,27 @@ test("a trust-required outcome projects pending state without a pairing, channel
   assert.equal(channels.state().trust[0]?.requestId, "cptreq_pending");
   assert.equal(channels.state().trust[0]?.nodeId, node.nodeId);
   assert.equal(channels.state().trust[0]?.displayName, "Alpha box");
+  assert.equal(store.records.get("nrh_node_alpha")?.nodeId, node.nodeId);
+  assert.equal(store.records.get("nrh_node_alpha")?.pairing, undefined);
+
+  approved = true;
+  await channels.attach({ ...event, allocationId: "allocation_after_approval" });
+  assert.equal(store.records.size, 1, "approval reuses the registered pending node");
+  assert.equal(store.calls.saved.length, 1);
+  assert.deepEqual(store.calls.connected, [node.nodeId]);
+  assert.equal(attachCalls, 1);
+  assert.deepEqual(channels.state().trust, []);
+
+  let finishConnect!: () => void;
+  waitForConnect = new Promise<void>((resolve) => { finishConnect = resolve; });
+  approved = false;
+  const lateAttach = channels.attach({ ...event, allocationId: "allocation_cancelled" });
+  channels.forgetNode("nrh_node_alpha");
+  finishConnect();
+  await assert.rejects(lateAttach, { code: "NODE_RELAY_CLAIM_REVOKED" });
+  assert.deepEqual(channels.state().trust, []);
+  assert.deepEqual(channels.state().channels, []);
+  assert.equal(attachCalls, 1, "a cancelled claim cannot reattach after its response arrives");
 });
 
 test("forgetting a revoked node clears its pending claim projection", () => {

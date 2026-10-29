@@ -43,7 +43,7 @@ test("account state decides which relay action is offered", () => {
   assert.match(component, /settings\.cloud\.loginAndBind/);
   assert.match(component, /settings\.cloud\.signInOnly/);
   assert.match(component, /settings\.cloud\.bindToAccount/);
-  assert.match(component, /settings\.cloud\.manageNodes/);
+  assert.doesNotMatch(component, /settings\.cloud\.manageNodes|@click="tab = 'node-management'"/);
   assert.match(component, /waitingForBinding/);
   assert.match(component, /requestFailure/);
   assert.match(component, /signInDeliveryFailed/);
@@ -54,7 +54,11 @@ test("account state decides which relay action is offered", () => {
 
 test("an active binding can sign back in after the account session is signed out", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
-  assert.match(component, /v-else-if="connectionStage === 'active'"[\s\S]{0,800}v-if="!signedIn[^"]*"[\s\S]{0,300}signIn\('sign-in'\)/);
+  const accountRow = component.match(/<section v-if="signedIn \|\| connectionStage === 'active'"[\s\S]*?<\/section>/)?.[0] || "";
+  assert.match(accountRow, /v-if="signedIn"[\s\S]*@click="signOutOpen = true"/);
+  assert.match(accountRow, /<Button v-else[^>]*:disabled="busy \|\| waitingForSignIn \|\| Boolean\(originConflict\)"[^>]*@click="signIn\('sign-in'\)"/);
+  assert.match(accountRow, /settings\.cloud\.accountSessionNote/);
+  assert.match(accountRow, /settings\.cloud\.accountSignedOutNote/);
   assert.match(component, /<p v-if="!signedIn" class="cloud-node-picker-warning"[\s\S]{0,400}signIn\('sign-in'\)/);
 });
 
@@ -105,7 +109,7 @@ test("cloud nodes are published from an independent tab without a global relay s
   const tabs = component.match(/<TabsList[\s\S]*?<\/TabsList>/)?.[0] || "";
 
   assert.match(tabs, /value="connection"[\s\S]*value="node-management"[\s\S]*value="roles"[\s\S]*value="trusted-devices"/);
-  assert.match(component, /v-if="tab === 'node-management' && state\?\.status === 'active'"/);
+  assert.match(component, /v-if="tab === 'node-management' && state\?\.status === 'active' && !originConflict"/);
   assert.match(component, /tab === 'node-management'[\s\S]*settings\.cloud\.nodeManagementNote[\s\S]*v-for="node in cloudNodes"/);
   assert.doesNotMatch(component, /settings\.cloud\.nodeRelay|setScope\('nodeRelay'/);
   assert.match(component, /nodeManagementRequiresConnection/);
@@ -131,7 +135,7 @@ test("adding a cloud node never mutates a relay authorization switch", () => {
   assert.match(bind, /cloudRelayBindSetupAction/);
   assert.doesNotMatch(bind, /cloudRelayBindEnableScope|cloudRelayBindRequiresScope/);
   assert.match(bind, /CLOUD_ACCOUNT_NODE_HANDLE_LABEL/);
-  assert.match(bind, /Boolean\(linkedHandle\)/);
+  assert.match(bind, /<Badge v-if="linkedHandle"/);
   assert.match(detail, /@open-cloud-settings="emit\('open-cloud-settings'\)"/);
   assert.match(settings, /<NodeDetailPanel[\s\S]*@open-cloud-settings="setSettingsSection\('cloud-connectivity'\)"/);
   assert.doesNotMatch(chinese, /cloudRelayBindEnableScopeAction|cloudRelayBindRequiresScope/);
@@ -153,7 +157,7 @@ test("cloud nodes expose a clickable list of local nodes to publish", () => {
   assert.match(component, /CLOUD_ACCOUNT_NODE_HANDLE_LABEL/);
   assert.match(component, /node\.labels\[CLOUD_ACCOUNT_NODE_HANDLE_LABEL\]/);
   assert.match(component, /settings\.cloud\.nodeAdded/);
-  assert.match(component, /\.cloud-node-picker\s*\{[^}]*border:1px solid var\(--line\)/s);
+  assert.match(component, /class="cloud-directory cloud-node-picker"/);
 });
 
 test("archived Cloud roles can be removed but cannot be made available again", () => {

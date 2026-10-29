@@ -7,6 +7,9 @@ import test from "node:test";
 import { ControlPlaneIdentityService } from "../src/control-plane/identity/service.ts";
 import { CloudConnectivityService } from "../src/control-plane/cloud-connectivity/service.ts";
 import { can } from "../src/control-plane/auth/authorization.ts";
+import { CloudControlConnectionManager } from "../src/control-plane/cloud-connectivity/connections.ts";
+import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
+import { CloudAccountSessionService } from "../src/control-plane/cloud-connectivity/account-session.ts";
 import { CloudConnectivityLifecycle } from "../src/control-plane/cloud-connectivity/lifecycle.ts";
 import { createControlPlaneApp, trustedCloudCoordinatorOrigins, trustedCloudServiceOrigin } from "../src/control-plane/http/server.ts";
 import { resolveCloudEnvironment } from "../../../shared/cloud-environments.cjs";
@@ -295,15 +298,119 @@ test("Coordinator fallbacks follow the configured main-domain suffixes", () => {
   ], production.serviceOrigin, { production: true, environment: production }), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
 });
 
-test("a persisted binding authority rejects a different environment service origin", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-origin-change-"));
-  const identity = new ControlPlaneIdentityService(path.join(root, "identity.json"), () => "control_plane_a");
-  identity.init();
-  const statePath = path.join(root, "binding.json");
-  const productionOrigin = PRODUCTION_ENVIRONMENT.serviceOrigin;
-  new CloudConnectivityService({ statePath, identity, serviceOrigin: productionOrigin }).init();
-  assert.throws(() => new CloudConnectivityService({ statePath, identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin }).init(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
-  new CloudConnectivityService({ statePath, identity, serviceOrigin: `${productionOrigin}/path` }).init();
+test("v0.0.46 unbound state can switch clouds without retaining cloud identity", () => {
+  const { root, identity, service } = fixture();
+  service.setCloudControlPlaneId("cp_old_cloud");
+  service.createChallenge();
+  const changed = new CloudConnectivityService({ statePath: path.join(root, "binding.json"), identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+  changed.init();
+  const snapshot = changed.snapshot();
+  assert.equal(snapshot.serviceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+  assert.equal(snapshot.status, "unbound");
+  assert.equal(snapshot.originConflict, undefined);
+  assert.equal(snapshot.cloudControlPlaneId, undefined);
+  assert.equal(changed.createChallenge().payload.serviceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+});
+
+for (const status of ["active", "pending-revocation", "clone-conflict"]) {
+  test(`v0.0.46 ${status} binding survives an origin conflict, blocks every Coordinator and can recover locally`, async () => {
+    const { root, identity, service } = fixture();
+    service.createChallenge();
+    service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+    service.setCloudControlPlaneId("cp_old_cloud");
+    if (status === "pending-revocation") service.beginRevocation();
+    if (status === "clone-conflict") service.markCloneConflict();
+    const statePath = path.join(root, "binding.json");
+    const before = fs.readFileSync(statePath, "utf8");
+    const changed = new CloudConnectivityService({ statePath, identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+    changed.init();
+    assert.equal(fs.readFileSync(statePath, "utf8"), before);
+    assert.equal(changed.snapshot().status, status);
+    assert.deepEqual(changed.snapshot().originConflict, { configuredServiceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+    assert.equal(changed.snapshot().serviceOrigin, PRODUCTION_ENVIRONMENT.serviceOrigin);
+    const restored = new CloudConnectivityService({ statePath, identity, serviceOrigin: `${PRODUCTION_ENVIRONMENT.serviceOrigin}/path` });
+    restored.init();
+    assert.equal(restored.snapshot().originConflict, undefined);
+    assert.equal(restored.snapshot().status, status);
+    assert.equal(restored.backgroundCredential(), status === "active" ? "c".repeat(43) : undefined);
+    assert.equal(fs.readFileSync(statePath, "utf8"), before);
+    assert.equal("backgroundCredential" in changed.snapshot(), false);
+    assert.throws(() => changed.createChallenge(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
+    let connects = 0;
+    const manager = new CloudControlConnectionManager({ state: changed, coordinatorOrigins: [STAGING_ENVIRONMENT.serviceOrigin], connector: { async connect() { connects++; throw new Error("unexpected connect"); } }, onEvent() {} });
+    await assert.rejects(manager.connectOnce(), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
+    assert.equal(connects, 0);
+    const calls = [];
+    const lifecycle = new CloudConnectivityLifecycle({ state: changed,
+      connections: { async stop() { calls.push("stop"); }, async ensure() { throw Object.assign(new Error("blocked"), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" }); } },
+      dataConnections: { async closeByKind(kind) { calls.push(kind); } },
+      nodeChannels: { closeAll() { calls.push("nodes"); } },
+      remote: { async revoke() { assert.fail("must not revoke at another cloud"); }, async setRemoteAccess() { assert.fail(); } },
+    });
+    // The legacy operation must not pretend the old cloud confirmed revocation.
+    assert.equal((await lifecycle.disconnect()).status, "pending-revocation");
+    const recovered = await lifecycle.resetConflictingBinding();
+    assert.equal(recovered.status, "unbound");
+    assert.equal(recovered.serviceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+    assert.equal(recovered.originConflict, undefined);
+    for (const key of ["bindingId", "accountId", "cloudControlPlaneId"]) assert.equal(recovered[key], undefined);
+    assert.equal(recovered.hasBackgroundCredential, false);
+    assert.equal(changed.revocationCredential(), undefined);
+    assert.ok(calls.includes("stop") && calls.includes("access") && calls.includes("node") && calls.includes("nodes"));
+    await assert.rejects(lifecycle.resetConflictingBinding(), { code: "BINDING_STATE_CONFLICT" });
+    assert.equal(changed.createChallenge().payload.serviceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+    changed.activate({ accountId: "account_new", bindingId: "binding_new", bindingRevision: 1, backgroundCredential: "n".repeat(43) });
+    const restarted = new CloudConnectivityService({ statePath, identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+    restarted.init();
+    assert.equal(restarted.snapshot().accountId, "account_new");
+    assert.equal(restarted.snapshot().originConflict, undefined);
+  });
+}
+
+test("origin conflict leaves local HTTP healthy and exposes diagnostics and explicit recovery", async () => {
+  const { root, service } = fixture();
+  service.createChallenge();
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  fs.copyFileSync(path.join(root, "binding.json"), path.join(root, "cloud-connectivity.json"));
+  const app = await createControlPlaneApp({ dataDir: root, staticDir: path.join(root, "missing-ui"), logger: false, auth: { mode: "disabled" }, cloudServiceOrigin: STAGING_ENVIRONMENT.serviceOrigin, allowNonProductionCloudOrigin: true });
+  try {
+    assert.equal((await app.inject({ method: "GET", url: "/api/health" })).statusCode, 200);
+    const response = await app.inject({ method: "GET", url: "/api/cloud-connectivity" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().data.originConflict.configuredServiceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+    const binding = await app.inject({ method: "POST", url: "/api/cloud-connectivity/binding-requests", payload: {} });
+    assert.equal(binding.json().error.code, "CLOUD_SERVICE_ORIGIN_CHANGED");
+    const recovered = await app.inject({ method: "POST", url: "/api/cloud-connectivity/reset-binding", payload: {} });
+    assert.equal(recovered.statusCode, 200);
+    assert.equal(recovered.json().data.status, "unbound");
+    assert.equal(recovered.json().data.hasBackgroundCredential, false);
+    const repeated = await app.inject({ method: "POST", url: "/api/cloud-connectivity/reset-binding", payload: {} });
+    assert.equal(repeated.statusCode, 409);
+    assert.equal(repeated.json().error.code, "BINDING_STATE_CONFLICT");
+  } finally { await app.close(); }
+});
+
+test("origin conflict suppresses account refresh, persisted relay resume and registration at startup", async () => {
+  const { root, identity, service } = fixture();
+  service.createChallenge();
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  const changed = new CloudConnectivityService({ statePath: path.join(root, "binding.json"), identity, serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+  changed.init();
+  const accountSession = new CloudAccountSessionService({ statePath: path.join(root, "account.json"), serviceOrigin: STAGING_ENVIRONMENT.serviceOrigin });
+  accountSession.init();
+  accountSession.complete({ accountId: "account_new", deviceSessionId: "device_new", refreshCredential: "r".repeat(43) });
+  const calls = [];
+  const runtime = new CloudConnectivityBackgroundRuntime({ state: changed, accountSession, identity,
+    webSocket: class { constructor() { calls.push("socket"); throw new Error("unexpected socket"); } },
+    fetch: async () => { calls.push("fetch"); throw new Error("unexpected fetch"); },
+  });
+  runtime.dataConnections.resumePersistedSessions = async () => { calls.push("resume"); return []; };
+  try {
+    runtime.start();
+    await assert.rejects(runtime.beginAccountRequest({ scope: "account:sign-in" }), { code: "CLOUD_SERVICE_ORIGIN_CHANGED" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(calls, []);
+  } finally { await runtime.stop(); }
 });
 
 test("cloud connectivity feature flag disables only cloud routes", async () => {
@@ -313,7 +420,8 @@ test("cloud connectivity feature flag disables only cloud routes", async () => {
     const cloud = await app.inject({ method: "GET", url: "/api/cloud-connectivity" });
     const health = await app.inject({ method: "GET", url: "/api/health" });
     assert.equal(cloud.statusCode, 503);
-    assert.equal(cloud.json().error.code, "CLOUD_CONNECTIVITY_DISABLED");
+    // HTTP 5xx details are intentionally redacted by controlPlaneErrorPayload.
+    assert.equal(cloud.json().error.code, "CONTROL_PLANE_INTERNAL_ERROR");
     assert.equal(health.statusCode, 200);
   } finally { await app.close(); }
 });

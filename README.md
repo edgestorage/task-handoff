@@ -216,6 +216,16 @@ sudo task-handoff-node-agent update
 
 The command uses the `stable` channel by default, asks for confirmation, queues the update, and waits for the service restart to complete. When a local runtime package is installed, it also upgrades the matching `@task-handoff/controlled-instance` version. Use `--channel beta|alpha` for prereleases, `--yes` for non-interactive execution, `--no-wait` to return after queuing, or `--json` for machine-readable output.
 
+Review cloud Control Plane trust requests on the node:
+
+```bash
+sudo task-handoff-node-agent trust list
+sudo task-handoff-node-agent trust list --verbose
+sudo task-handoff-node-agent trust list --json
+```
+
+The summary uses the node hostname and existing Control Plane pairing names. Unnamed or duplicate names include a short ID. Compare the verification code with the Control Plane before running the printed approval command. `--verbose` includes full fingerprints, IDs, timestamps and revocation commands; `--json` retains the machine-readable trust snapshot. First-time cloud requests without a known pairing name appear as unnamed.
+
 An installed Node Agent can also generate a one-time invitation directly on the node:
 
 ```sh

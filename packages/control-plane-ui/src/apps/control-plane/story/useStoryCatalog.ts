@@ -1,4 +1,4 @@
-import { computed, type MaybeRefOrGetter } from "vue";
+import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { useQueries } from "@tanstack/vue-query";
 import type { Story } from "@task-handoff/protocol/stories";
 import { storyNodeQueryOptions, useNodesQuery } from "../../../api/queries";
@@ -15,9 +15,11 @@ export type { StoryNodeLoadState };
  */
 export function useStoryCatalog(enabled: MaybeRefOrGetter<boolean> = true) {
   const nodesQuery = useNodesQuery();
-  const nodeIds = computed(() => (nodesQuery.data.value || []).map((node) => node.id));
+  const nodes = computed(() => nodesQuery.data.value || []);
+  const nodeIds = computed(() => nodes.value.map((node) => node.id));
+  const connectionEnabled = (nodeId: string) => nodes.value.find((node) => node.id === nodeId)?.connectionEnabled !== false;
   const nodeQueries = useQueries({
-    queries: () => nodeIds.value.map((nodeId) => storyNodeQueryOptions(nodeId, enabled)),
+    queries: () => nodeIds.value.map((nodeId) => storyNodeQueryOptions(nodeId, toValue(enabled) && connectionEnabled(nodeId))),
   });
 
   function nodeQuery(nodeId: string) {
@@ -26,23 +28,25 @@ export function useStoryCatalog(enabled: MaybeRefOrGetter<boolean> = true) {
   }
 
   function nodeLoadState(nodeId: string): StoryNodeLoadState {
-    return storyNodeLoadState(nodeId, nodeQuery(nodeId));
+    return storyNodeLoadState(nodeId, nodeQuery(nodeId), connectionEnabled(nodeId));
   }
 
   const stories = computed<Story[]>(() => nodeIds.value.flatMap((_, index) => nodeQueries.value[index]?.data?.stories || []));
   const loadingNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "loading"));
   const unavailableNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "unavailable"));
+  const pausedNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "paused"));
   const isPending = computed(() => nodesQuery.isPending.value || loadingNodeIds.value.length > 0);
   const isFetching = computed(() => nodesQuery.isFetching.value || nodeQueries.value.some((query) => query.isFetching));
 
   async function refetch(nodeId?: string) {
     const targets = nodeIds.value
       .filter((id) => !nodeId || id === nodeId)
+      .filter(connectionEnabled)
       .map((id) => nodeQuery(id))
       .filter((query) => Boolean(query));
     if (!nodeId && !targets.length) await nodesQuery.refetch();
     return Promise.all(targets.map((query) => query?.refetch()));
   }
 
-  return { stories, nodeIds, loadingNodeIds, unavailableNodeIds, nodeLoadState, isPending, isFetching, refetch };
+  return { stories, nodeIds, loadingNodeIds, unavailableNodeIds, pausedNodeIds, nodeLoadState, isPending, isFetching, refetch };
 }

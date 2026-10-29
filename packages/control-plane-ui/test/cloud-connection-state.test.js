@@ -14,3 +14,9 @@ test("login-only and binding-pending states are distinct", () => {
   assert.equal(resolveCloudConnectionStage({ status: "unbound", signedIn: true }), "signed-in-unbound");
   assert.equal(resolveCloudConnectionStage({ status: "unbound", signedIn: false }), "signed-out");
 });
+
+test("server origin conflict takes precedence over binding and account states", () => {
+  for (const status of ["active", "pending-revocation", "clone-conflict"]) {
+    assert.equal(resolveCloudConnectionStage({ status, signedIn: true, pendingScope: "account:sign-in", originConflict: { configuredServiceOrigin: "https://new.example" } }), "origin-conflict");
+  }
+});

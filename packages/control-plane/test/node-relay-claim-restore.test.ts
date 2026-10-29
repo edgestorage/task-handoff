@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
+import type { CloudNodeRelayChannelsOptions } from "../src/control-plane/cloud-connectivity/node-relay-channels.ts";
 import { nodeRelayAllocationEvent } from "./support/cloud-relay-node-harness.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,7 +24,7 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; trustProbeTimeoutMs?: number }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"] }) {
   const sockets: FakeSocket[] = [];
   class FakeSocket {
     static OPEN = 1;
@@ -47,6 +48,9 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
           reportedControlPlaneId: "control_plane_test",
           leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
         }));
+      }
+      if (message.type === "request" && message.operation === "revoke-node-relay-claim") {
+        queueMicrotask(() => this.receive({ type: "response", requestId: message.requestId, data: { status: "revoked" } }));
       }
       if (message.type === "request" && message.operation === "claim-node-relay-node") {
         queueMicrotask(() => this.receive({ type: "response", requestId: message.requestId, data: { status: "pending" } }));
@@ -86,14 +90,42 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
     webSocket: FakeSocket as any,
     fetch: (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch,
     nodeRelay: {
-      nodes: cloudRelayNodes(input.handles),
+      nodes: input.nodes ?? cloudRelayNodes(input.handles),
       transport: () => input.transport ?? ({ attachNode: () => undefined, detachNode: () => true, connected: () => false }),
       ...(input.connector ? { connector: input.connector } : {}),
     },
-    ...(input.trustProbeTimeoutMs ? { nodeRelayTrustProbeTimeoutMs: input.trustProbeTimeoutMs } : {}),
   });
   return { runtime, sockets };
 }
+
+test("a node with an existing original connection cannot be claimed again over the cloud relay", async () => {
+  const { runtime, sockets } = runtimeFixture({
+    nodeRelay: true,
+    handles: [],
+    nodes: {
+      ...cloudRelayNodes([]),
+      resolve: (nodeHandle) => nodeHandle === "nrh_existing"
+        ? { nodeId: "node_original", preserveLocalConnection: true } : undefined,
+    },
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    for (const options of [{}, { refreshAllocation: true }]) {
+      await assert.rejects(runtime.claimAccountNode("nrh_existing", options), {
+        code: "CLOUD_NODE_ALREADY_MANAGED", statusCode: 409,
+      });
+    }
+    assert.equal(sockets[0].sent.some((message) => message.operation === "claim-node-relay-node"), false);
+    assert.deepEqual(runtime.nodeRelayState().claims, []);
+
+    await runtime.claimAccountNode("nrh_new");
+    assert.deepEqual(sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").map((message) => message.payload.nodeHandle), ["nrh_new"]);
+    assert.deepEqual(runtime.nodeRelayState().claims.map((claim) => claim.nodeHandle), ["nrh_new"]);
+  } finally {
+    await runtime.stop();
+  }
+});
 
 test("a fresh Coordinator connection restores existing cloud-relay node claims", async () => {
   const handles = ["nrh_macmini", "nrh_second"];
@@ -223,7 +255,7 @@ test("a live node channel closing refreshes the Coordinator claim", async () => 
   }
 });
 
-test("pending node trust keeps probing and becomes a transport failure when no fresh outcome arrives", async () => {
+test("pending node trust keeps probing without timing out human approval", async (t) => {
   const connector = {
     async connect(input: any) {
       return {
@@ -242,11 +274,10 @@ test("pending node trust keeps probing and becomes a transport failure when no f
       };
     },
   };
-  const { runtime, sockets, audit } = runtimeFixture({
+  const { runtime, sockets } = runtimeFixture({
     nodeRelay: true,
     handles: ["nrh_macmini"],
     connector,
-    trustProbeTimeoutMs: 80,
   });
   runtime.start();
   try {
@@ -261,20 +292,32 @@ test("pending node trust keeps probing and becomes a transport failure when no f
       nodePublicKeyFingerprint: `sha256:${"d".repeat(43)}`,
       relayUrl: "wss://cloud.example.test/relay",
     });
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     sockets[0].receive({ type: "event", event });
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().trust.length === 0; attempt += 1) await new Promise(setImmediate);
+    t.mock.timers.tick(250);
 
     let refresh: any;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       refresh = sockets[0].sent.find((message) => message.operation === "claim-node-relay-node" && message.payload.refreshAllocation === true);
       if (refresh) break;
-      await wait(5);
+      await new Promise(setImmediate);
     }
     assert.ok(refresh, "pending trust must keep requesting fresh allocations");
 
-    for (let attempt = 0; attempt < 100 && !runtime.nodeRelayState().errors.some((entry: any) => entry.code === "NODE_RELAY_TRUST_TIMEOUT"); attempt += 1) await wait(5);
-    const error = runtime.nodeRelayState().errors.find((entry: any) => entry.code === "NODE_RELAY_TRUST_TIMEOUT");
-    assert.ok(error, "a pending outcome without a fresh response must surface a transport failure");
-    assert.equal(error.nodeHandle, "nrh_macmini");
+    // Advance beyond the former 20-second transport timeout. The node has
+    // answered; only its signed trust outcome may end the approval wait.
+    t.mock.timers.tick(25_000);
+    assert.equal(runtime.nodeRelayState().trust[0]?.state, "pending");
+    assert.deepEqual(runtime.nodeRelayState().errors, []);
+    await runtime.revokeAccountNodeClaim("nrh_macmini");
+    const claimsAfterCancel = sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").length;
+    sockets[0].receive({ type: "event", event: { ...event, allocationId: "late_after_cancel" } });
+    t.mock.timers.tick(60_000);
+    await new Promise(setImmediate);
+    assert.deepEqual(runtime.nodeRelayState().trust, []);
+    assert.deepEqual(runtime.nodeRelayState().claims, []);
+    assert.equal(sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").length, claimsAfterCancel);
   } finally {
     await runtime.stop();
   }
@@ -303,7 +346,6 @@ test("a rejected node trust outcome stays terminal without automatic probing", a
     nodeRelay: true,
     handles: ["nrh_macmini"],
     connector,
-    trustProbeTimeoutMs: 30,
   });
   runtime.start();
   try {

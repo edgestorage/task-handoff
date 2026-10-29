@@ -14,6 +14,20 @@ export class CloudConnectivityLifecycle {
     this.options = options;
   }
 
+  /** Explicit local recovery; the old cloud's binding has not been revoked. */
+  async resetConflictingBinding() {
+    if (!this.options.state.snapshot().originConflict) {
+      throw Object.assign(new Error("Only a cloud origin conflict can be cleared locally."), { code: "BINDING_STATE_CONFLICT", statusCode: 409 });
+    }
+    await Promise.all([
+      this.options.connections.stop("cloud-origin-conflict"),
+      this.options.dataConnections?.closeByKind("access", "cloud-origin-conflict"),
+      this.options.dataConnections?.closeByKind("node", "cloud-origin-conflict"),
+    ]);
+    this.options.nodeChannels?.closeAll("cloud-origin-conflict");
+    return this.options.state.resetConflictingBinding();
+  }
+
   async disconnect() {
     const before = this.options.state.snapshot();
     if (!before.bindingId) return before;

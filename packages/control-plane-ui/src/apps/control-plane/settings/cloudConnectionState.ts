@@ -7,15 +7,18 @@ export type CloudConnectionStage =
   | "awaiting-binding"
   | "active"
   | "revoking"
-  | "conflict";
+  | "conflict"
+  | "origin-conflict";
 
 export type CloudLoginIntent = "sign-in" | "bind";
 
 export function resolveCloudConnectionStage(input: {
   status?: CloudConnectionStatus;
+  originConflict?: { configuredServiceOrigin: string };
   signedIn: boolean;
   pendingScope?: string;
 }): CloudConnectionStage {
+  if (input.originConflict) return "origin-conflict";
   if (input.status === "clone-conflict") return "conflict";
   if (input.status === "pending-revocation") return "revoking";
   if (input.status === "active") return "active";

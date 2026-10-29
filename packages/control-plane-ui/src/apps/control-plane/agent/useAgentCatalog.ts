@@ -21,23 +21,24 @@ export function useAgentCatalog(options: {
   const capableNodeIds = computed(() => nodes.value
     .filter((node) => controlPlaneAgentCapabilities(node.capabilities).definitions)
     .map((node) => node.id));
+  const connectionEnabled = (nodeId: string) => nodes.value.find((node) => node.id === nodeId)?.connectionEnabled !== false;
   const activeNodeIds = computed(() => (toValue(options.enabled ?? true) ? capableNodeIds.value : []));
-  const runsEnabled = computed(() => toValue(options.enabled ?? true) && nodes.value.some((node) => controlPlaneAgentCapabilities(node.capabilities).runs));
-  const agentQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => agentNodeQueryOptions(nodeId)) });
+  const runsEnabled = computed(() => toValue(options.enabled ?? true) && nodes.value.some((node) => node.connectionEnabled !== false && controlPlaneAgentCapabilities(node.capabilities).runs));
+  const agentQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => agentNodeQueryOptions(nodeId, connectionEnabled(nodeId))) });
   // 编排与定义同属 Agent 域：Run 必须绑定编排，因此编排读取失败只影响运行入口，不影响定义维护。
   const orchestrationQueries = useQueries({
     queries: () => activeNodeIds.value.map((nodeId) => agentOrchestrationsQueryOptions(
       nodeId,
-      controlPlaneAgentCapabilities(nodes.value.find((node) => node.id === nodeId)?.capabilities).orchestrations,
+      connectionEnabled(nodeId) && controlPlaneAgentCapabilities(nodes.value.find((node) => node.id === nodeId)?.capabilities).orchestrations,
     )),
   });
-  const folderQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => nodeLocalFoldersQueryOptions(nodeId)) });
+  const folderQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => nodeLocalFoldersQueryOptions(nodeId, connectionEnabled(nodeId))) });
   const board = useInstanceBoardQuery();
   const runsQuery = useAgentRunsQuery(runsEnabled);
   const stories = useStoryCatalog(options.enabled ?? true);
   const entryStories = computed(() => stories.stories.value.filter((story) => {
     const node = nodes.value.find((candidate) => candidate.id === story.ownerNodeId);
-    return activeNodeIds.value.includes(story.ownerNodeId)
+    return connectionEnabled(story.ownerNodeId) && activeNodeIds.value.includes(story.ownerNodeId)
       && controlPlaneAgentCapabilities(node?.capabilities).storyEntryAuthorization;
   }));
   const storyEntryQueries = useQueries({
@@ -46,7 +47,7 @@ export function useAgentCatalog(options: {
 
   function nodeLoadState(nodeId: string): NodeLoadState {
     const index = activeNodeIds.value.indexOf(nodeId);
-    return nodeQueryLoadState(nodeId, index < 0 ? undefined : agentQueries.value[index]);
+    return nodeQueryLoadState(nodeId, index < 0 ? undefined : agentQueries.value[index], connectionEnabled(nodeId));
   }
 
   const definitions = computed<AgentCatalogDefinition[]>(() => activeNodeIds.value.flatMap((nodeId, index) => (
@@ -78,7 +79,7 @@ export function useAgentCatalog(options: {
   const loadingNodeIds = computed(() => activeNodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "loading"));
   const unavailableNodeIds = computed(() => [...new Set([
     ...activeNodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "unavailable"),
-    ...(runsQuery.data.value?.unavailableNodeIds ?? []),
+    ...(runsQuery.data.value?.unavailableNodeIds ?? []).filter(connectionEnabled),
   ])]);
   // 列表的 pending 只由目录自身的读取决定，与 Story 目录同语义：Run、编排等其它域的
   // 读取不阻塞 Agent 列表进入就绪态，它们各自在消费位置表达加载状态。
@@ -90,9 +91,9 @@ export function useAgentCatalog(options: {
   async function refetch() {
     await Promise.all([
       nodesQuery.refetch(),
-      ...agentQueries.value.map((query) => query.refetch()),
-      ...orchestrationQueries.value.map((query) => query.refetch()),
-      ...folderQueries.value.map((query) => query.refetch()),
+      ...agentQueries.value.filter((_, index) => connectionEnabled(activeNodeIds.value[index])).map((query) => query.refetch()),
+      ...orchestrationQueries.value.filter((_, index) => connectionEnabled(activeNodeIds.value[index])).map((query) => query.refetch()),
+      ...folderQueries.value.filter((_, index) => connectionEnabled(activeNodeIds.value[index])).map((query) => query.refetch()),
       ...storyEntryQueries.value.map((query) => query.refetch()),
       ...(runsEnabled.value ? [runsQuery.refetch()] : []),
     ]);

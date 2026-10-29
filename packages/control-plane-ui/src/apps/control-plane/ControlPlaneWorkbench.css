@@ -713,6 +713,11 @@
   margin-top: 0;
 }
 
+:global(.control-plane-node-filter-menu-main .status-dot[data-state="paused"]) {
+  background: var(--text-subtle);
+  box-shadow: none;
+}
+
 :global(.control-plane-node-filter-menu-copy) {
   display: grid;
   min-width: 0;

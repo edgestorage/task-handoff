@@ -87,7 +87,8 @@ export function resetCloudNodeOnboarding() {
 export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined, queryError?: string) {
   if (!attempt.value || terminal(attempt.value.phase)) return attempt.value;
   if (queryError) {
-    failCloudNodeOnboarding(queryError);
+    if (attempt.value.trust?.state === "pending") update({ error: queryError });
+    else failCloudNodeOnboarding(queryError);
     return attempt.value;
   }
   if (!snapshot) return attempt.value;
@@ -109,22 +110,18 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
     ? candidates.find((item) => item.requestId === attempt.value?.trust?.requestId)
       || candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0]
     : candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
-  if (channelError && (!trust || channelError.at >= trust.observedAt)) {
+  if (channelError && !trust) {
     update({ phase: "failed", trust, error: channelError.message });
     return attempt.value;
   }
   if (trust) {
     if (trust.state === "rejected") update({ phase: "rejected", trust, error: undefined });
     else if (trust.state === "expired") update({ phase: "expired", trust, error: undefined });
-    else update({ phase: "waiting-node-trust", trust, error: undefined });
+    else update({ phase: "waiting-node-trust", trust, error: channelError?.message });
     return attempt.value;
   }
   if (attempt.value.phase === "waiting-node-trust" || attempt.value.phase === "approved-connecting") {
     update({ phase: "approved-connecting", trust: undefined, error: undefined });
-    return attempt.value;
-  }
-  if (channelError) {
-    update({ phase: "failed", trust: undefined, error: channelError.message });
     return attempt.value;
   }
   return attempt.value;

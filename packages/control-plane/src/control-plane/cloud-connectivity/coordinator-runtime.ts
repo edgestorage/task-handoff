@@ -14,7 +14,7 @@ import { CloudAuthorityEventConsumer } from "./authority-events.ts";
 import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "./connections.ts";
 import { CloudConnectivityLifecycle } from "./lifecycle.ts";
 import type { CloudAccountSessionService } from "./account-session.ts";
-import type { CloudConnectivityService } from "./service.ts";
+import { assertCloudOriginMatches, type CloudConnectivityService } from "./service.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import { CloudRelayConnector, verifyCoordinatorRelayAllocation, verifyCoordinatorRelaySessionGrant, type RelaySessionBridge } from "./relay-connector.ts";
 import { CloudNodeRelayConnector } from "./node-relay-connector.ts";
@@ -109,7 +109,8 @@ export class CloudConnectivityBackgroundRuntime {
   private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nodeRelayRecoveryAttempts = new Map<string, number>();
   private readonly nodeRelayRecoveryInFlight = new Set<string>();
-  private readonly nodeRelayTrustProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly revokedNodeRelayClaims = new Set<string>();
+  private readonly nodeRelayAttaches = new Map<string, Set<Promise<unknown>>>();
   private accessToken?: { value: string; expiresAt: number };
   private readonly nodeRelayChannels?: CloudNodeRelayChannels;
   private readonly onboardingHints = new Map<string, { tokenId?: string; at: string }>();
@@ -187,19 +188,17 @@ export class CloudConnectivityBackgroundRuntime {
       if ((event as any)?.type === "node-relay-allocation") {
         if (!this.nodeRelayChannels) return;
         const nodeHandle = (event as any)?.nodeHandle;
+        if (this.revokedNodeRelayClaims.has(nodeHandle)) return;
         this.relayLinks.observe((event as any)?.relayUrl);
-        void this.nodeRelayChannels.attach(event).then((result) => {
-          if (typeof nodeHandle !== "string") return;
+        const attach = this.nodeRelayChannels.attach(event).then((result) => {
+          if (typeof nodeHandle !== "string" || this.revokedNodeRelayClaims.has(nodeHandle)) return;
           if (result.status === "trust-required" && result.trust.state === "pending") {
-            this.armNodeRelayTrustProbeTimeout(nodeHandle);
             this.scheduleNodeRelayRecovery(nodeHandle);
           } else {
-            this.clearNodeRelayTrustProbeTimeout(nodeHandle);
             this.resetNodeRelayRecovery(nodeHandle);
           }
         }).catch((error) => {
-          if (typeof nodeHandle !== "string") return;
-          this.clearNodeRelayTrustProbeTimeout(nodeHandle);
+          if (typeof nodeHandle !== "string" || this.revokedNodeRelayClaims.has(nodeHandle)) return;
           const retryable = (error as { retryable?: unknown } | undefined)?.retryable !== false;
           this.nodeRelayChannels?.forgetClaim(nodeHandle);
           this.options.logger?.warn?.({
@@ -209,6 +208,13 @@ export class CloudConnectivityBackgroundRuntime {
             retryable,
           }, "node_relay_channel_attach_failed");
           if (retryable) this.scheduleNodeRelayRecovery(nodeHandle);
+        });
+        const attaches = this.nodeRelayAttaches.get(nodeHandle) ?? new Set<Promise<unknown>>();
+        attaches.add(attach);
+        this.nodeRelayAttaches.set(nodeHandle, attaches);
+        void attach.finally(() => {
+          attaches.delete(attach);
+          if (!attaches.size) this.nodeRelayAttaches.delete(nodeHandle);
         });
         return;
       }
@@ -236,7 +242,7 @@ export class CloudConnectivityBackgroundRuntime {
       serviceOrigin: () => options.cloudDiscovery?.activeOrigin ?? options.state.snapshot().serviceOrigin,
       // Hints only matter once the Control Plane is bound and reachable, and they
       // feed both channel kinds, so either scope keeps the probe running.
-      enabled: () => options.state.snapshot().status === "active",
+      enabled: () => options.state.snapshot().status === "active" && !options.state.snapshot().originConflict,
       report: (links) => this.request("report-relay-links", { links }),
       fetch: this.options.fetch,
       clock: this.clock,
@@ -286,7 +292,7 @@ export class CloudConnectivityBackgroundRuntime {
     void this.renewAccountCredential().catch(() => undefined);
     // A pending revocation also needs a connection: it is how the runtime
     // finishes the remote revoke after a restart or a previous network error.
-    void this.dataConnections.resumePersistedSessions().catch(() => undefined);
+    if (!this.options.state.snapshot().originConflict) void this.dataConnections.resumePersistedSessions().catch(() => undefined);
     this.schedule(0);
   }
   async stop() {
@@ -299,8 +305,6 @@ export class CloudConnectivityBackgroundRuntime {
     this.nodeRelayRecoveryTimers.clear();
     this.nodeRelayRecoveryAttempts.clear();
     this.nodeRelayRecoveryInFlight.clear();
-    for (const timer of this.nodeRelayTrustProbeTimers.values()) clearTimeout(timer);
-    this.nodeRelayTrustProbeTimers.clear();
     this.relayLinks.stop();
     this.relayTrace.close();
     this.nodeRelayChannels?.closeAll("runtime-stopped");
@@ -387,6 +391,14 @@ export class CloudConnectivityBackgroundRuntime {
    * as a pushed event once the node asks for it; nothing is created here.
    */
   async claimAccountNode(nodeHandle: string, options: { refreshAllocation?: boolean } = {}) {
+    if (this.options.nodeRelay?.nodes.resolve(nodeHandle)?.preserveLocalConnection) {
+      throw Object.assign(new Error("This node is already managed through its existing connection."), {
+        code: "CLOUD_NODE_ALREADY_MANAGED",
+        statusCode: 409,
+      });
+    }
+    if (options.refreshAllocation && this.revokedNodeRelayClaims.has(nodeHandle)) return { status: "revoked" as const };
+    if (!options.refreshAllocation) this.revokedNodeRelayClaims.delete(nodeHandle);
     if (this.nodeRelayClaimsInFlight.has(nodeHandle)) return { status: "pending" as const };
     this.nodeRelayClaimsInFlight.add(nodeHandle);
     try {
@@ -394,7 +406,7 @@ export class CloudConnectivityBackgroundRuntime {
         nodeHandle,
         ...(options.refreshAllocation === true ? { refreshAllocation: true } : {}),
       })) as { status?: string };
-      this.nodeRelayChannels?.noteClaim(nodeHandle);
+      if (!this.revokedNodeRelayClaims.has(nodeHandle)) this.nodeRelayChannels?.noteClaim(nodeHandle);
       return result;
     } finally {
       this.nodeRelayClaimsInFlight.delete(nodeHandle);
@@ -403,6 +415,9 @@ export class CloudConnectivityBackgroundRuntime {
 
   /** Removes this Control Plane's claim; other Control Planes keep their channels. */
   async revokeAccountNodeClaim(nodeHandle: string) {
+    this.revokedNodeRelayClaims.add(nodeHandle);
+    this.resetNodeRelayRecovery(nodeHandle);
+    this.nodeRelayChannels?.forgetNode(nodeHandle);
     try {
       return await this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle }));
     } finally {
@@ -411,6 +426,11 @@ export class CloudConnectivityBackgroundRuntime {
       // the node stays linked through its original local connection.
       this.nodeRelayChannels?.forgetNode(nodeHandle);
     }
+  }
+
+  /** Wait for pre-cancellation writes before removing an unfinished node record. */
+  async settleNodeRelayAttaches(nodeHandle: string) {
+    await Promise.allSettled([...(this.nodeRelayAttaches.get(nodeHandle) ?? [])]);
   }
 
   /**
@@ -459,6 +479,7 @@ export class CloudConnectivityBackgroundRuntime {
     if (!this.nodeRelayChannels) return { applied: false, reason: "node-relay-disabled" };
     const nodeHandle = typeof event?.nodeHandle === "string" ? event.nodeHandle : "";
     if (!nodeHandle) return { applied: false, reason: "invalid-hint" };
+    if (this.revokedNodeRelayClaims.has(nodeHandle)) return { applied: false, reason: "claim-revoked" };
     this.onboardingHints.set(nodeHandle, {
       ...(typeof event.tokenId === "string" ? { tokenId: event.tokenId } : {}),
       at: new Date(this.clock()).toISOString(),
@@ -558,6 +579,7 @@ export class CloudConnectivityBackgroundRuntime {
   }
 
   private async ensureConnected() {
+    assertCloudOriginMatches(this.options.state.snapshot());
     if (!this.connecting) this.connecting = this.control.connectOnce().finally(() => { this.connecting = undefined; });
     const result = await this.connecting as { status: string; reused?: boolean; revocationFallback?: boolean };
     if (result.status !== "connected") throw runtimeError("CLOUD_CONTROL_CONNECTION_DISABLED");
@@ -586,7 +608,7 @@ export class CloudConnectivityBackgroundRuntime {
         if (!this.running) return;
         const current = this.options.state.snapshot();
         if (current.status !== "active" || current.bindingId !== bindingId) return;
-        if (this.nodeRelayChannels?.hasClaimOrChannel(node.nodeHandle)) continue;
+        if (this.revokedNodeRelayClaims.has(node.nodeHandle) || this.nodeRelayChannels?.hasClaimOrChannel(node.nodeHandle)) continue;
         try {
           await this.claimAccountNode(node.nodeHandle);
         } catch (error) {
@@ -597,7 +619,7 @@ export class CloudConnectivityBackgroundRuntime {
   }
 
   private scheduleNodeRelayRecovery(nodeHandle: string) {
-    if (!this.running || !this.nodeRelayChannels || this.nodeRelayRecoveryTimers.has(nodeHandle) || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
+    if (!this.running || !this.nodeRelayChannels || this.revokedNodeRelayClaims.has(nodeHandle) || this.nodeRelayRecoveryTimers.has(nodeHandle) || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
     const attempt = (this.nodeRelayRecoveryAttempts.get(nodeHandle) ?? 0) + 1;
     this.nodeRelayRecoveryAttempts.set(nodeHandle, attempt);
     const delayMs = Math.min(30_000, 250 * (2 ** Math.min(7, attempt - 1)));
@@ -621,6 +643,7 @@ export class CloudConnectivityBackgroundRuntime {
       pending = (result as { status?: unknown } | undefined)?.status === "pending";
     } catch (error) {
       failure = error;
+      if (this.revokedNodeRelayClaims.has(nodeHandle)) return;
       this.nodeRelayChannels.recordClaimFailure(nodeHandle, error);
       this.options.logger?.warn?.({
         code: "NODE_RELAY_ALLOCATION_REFRESH_FAILED",
@@ -631,24 +654,6 @@ export class CloudConnectivityBackgroundRuntime {
       this.nodeRelayRecoveryInFlight.delete(nodeHandle);
     }
     if (failure !== undefined || pending) this.scheduleNodeRelayRecovery(nodeHandle);
-  }
-
-  private armNodeRelayTrustProbeTimeout(nodeHandle: string) {
-    this.clearNodeRelayTrustProbeTimeout(nodeHandle);
-    const timeoutMs = positiveDuration(this.options.nodeRelayTrustProbeTimeoutMs, 20_000);
-    const timer = setTimeout(() => {
-      this.nodeRelayTrustProbeTimers.delete(nodeHandle);
-      if (!this.running || this.nodeRelayChannels?.trustState(nodeHandle) !== "pending") return;
-      this.nodeRelayChannels.recordTrustProbeTimeout(nodeHandle);
-    }, timeoutMs);
-    timer.unref?.();
-    this.nodeRelayTrustProbeTimers.set(nodeHandle, timer);
-  }
-
-  private clearNodeRelayTrustProbeTimeout(nodeHandle: string) {
-    const timer = this.nodeRelayTrustProbeTimers.get(nodeHandle);
-    if (timer) clearTimeout(timer);
-    this.nodeRelayTrustProbeTimers.delete(nodeHandle);
   }
 
   private resetNodeRelayRecovery(nodeHandle: string) {
@@ -763,6 +768,7 @@ export class CloudConnectivityBackgroundRuntime {
   }
 
   private cloudFetch(path: string, init?: RequestInit) {
+    assertCloudOriginMatches(this.options.state.snapshot());
     if (this.options.cloudDiscovery) return this.options.cloudDiscovery.request(path, init);
     return this.options.fetch(`${this.options.accountSession.origin}${path}`, init);
   }
@@ -770,6 +776,7 @@ export class CloudConnectivityBackgroundRuntime {
   private schedule(delay = this.control.reconnectDelay()) {
     if (!this.running || this.timer) return;
     const state = this.options.state.snapshot();
+    if (state.originConflict) return;
     const active = state.status === "active";
     const revoking = state.status === "pending-revocation" && Boolean(state.bindingId) && Boolean(this.options.state.revocationCredential());
     if (!active && !revoking) return;
@@ -905,7 +912,6 @@ type CloudRuntimeOptions = {
   relayTrace?: RelayTraceRecorder;
   relayLinks?: RelayLinkProbeLoop;
   relayLinkProbeIntervalMs?: number;
-  nodeRelayTrustProbeTimeoutMs?: number;
   accountRenewalIntervalMs?: number;
   accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;

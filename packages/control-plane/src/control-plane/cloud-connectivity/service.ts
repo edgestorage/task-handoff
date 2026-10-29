@@ -62,7 +62,13 @@ export class CloudConnectivityService {
   init() {
     this.state.init();
     const raw = this.state.get();
-    if (raw.serviceOrigin !== this.serviceOrigin) throw cloudError("CLOUD_SERVICE_ORIGIN_CHANGED", "Cloud service origin does not match persisted binding authority.");
+    // Compatibility for v0.0.46: an unbound file also pinned an origin (and
+    // possibly a cloud-generated identity). None of it belongs to the new cloud.
+    if (raw.serviceOrigin !== this.serviceOrigin && !raw.bindingId && !raw.backgroundCredential
+      && (raw.status === "unbound" || raw.status === "pending-claim")) {
+      this.resetForConfiguredOrigin();
+      return;
+    }
     // Older state files had one remote-access switch; it becomes the
     // device-access scope. Compatibility for v0.0.46: node relay used to be a
     // separate switch, so migrate every persisted value to its permanent,
@@ -80,7 +86,22 @@ export class CloudConnectivityService {
 
   snapshot() {
     const { backgroundCredential: _secret, connectionEpoch: _internalEpoch, remoteAccessEnabled: _legacy, scopes, ...safe } = this.current();
-    return { ...safe, scopes, remoteAccessEnabled: scopes.deviceAccess, identity: this.identity.publicIdentity(), hasBackgroundCredential: Boolean(_secret) };
+    return { ...safe, scopes, remoteAccessEnabled: scopes.deviceAccess, identity: this.identity.publicIdentity(), hasBackgroundCredential: Boolean(_secret),
+      ...(safe.serviceOrigin !== this.serviceOrigin ? { originConflict: { configuredServiceOrigin: this.serviceOrigin } } : {}),
+    };
+  }
+
+  resetConflictingBinding() {
+    if (!this.snapshot().originConflict) throw cloudError("BINDING_STATE_CONFLICT", "Only a cloud origin conflict can be cleared locally.");
+    this.challenges.clear();
+    this.resetForConfiguredOrigin();
+    return this.snapshot();
+  }
+
+  private resetForConfiguredOrigin() {
+    this.state.put({ version: 2, serviceOrigin: this.serviceOrigin, status: "unbound",
+      scopes: { deviceAccess: false, nodeRelay: true }, updatedAt: new Date(this.clock()).toISOString(),
+      connectionEpoch: 0, catalogRevision: 1 });
   }
 
   catalogRevision() {
@@ -108,6 +129,7 @@ export class CloudConnectivityService {
 
   createChallenge() {
     const current = this.current();
+    assertCloudOriginMatches(this.snapshot());
     if (["active", "pending-revocation", "clone-conflict"].includes(current.status)) throw cloudError(current.status === "active" ? "CONTROL_PLANE_ALREADY_BOUND" : "BINDING_STATE_CONFLICT", "Existing cloud binding must be resolved first.");
     this.prune();
     const challengeId = createId("binding_challenge");
@@ -255,4 +277,9 @@ function safeEqual(left: Buffer, right: Buffer) {
 
 function cloudError(code: string, message: string) {
   return Object.assign(new Error(message), { code, statusCode: code.includes("CONFLICT") || code.includes("BOUND") ? 409 : 400 });
+}
+
+/** Runtime policy derived from binding authority and configuration, never persisted. */
+export function assertCloudOriginMatches(state: { originConflict?: { configuredServiceOrigin: string } }) {
+  if (state.originConflict) throw cloudError("CLOUD_SERVICE_ORIGIN_CHANGED", "Cloud service origin does not match persisted binding authority.");
 }

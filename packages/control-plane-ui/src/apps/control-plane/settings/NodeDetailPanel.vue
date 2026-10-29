@@ -529,7 +529,7 @@
                 :selected-node="selectedNode"
                 embedded
               />
-              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-relay-description node-relay-upgrade">
+              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-cloud-connection-note">
                 {{ t("settings.nodeDetail.cloudRelayTrustUnsupported") }}
               </p>
             </div>
@@ -606,7 +606,7 @@
                 :selected-node="selectedNode"
                 embedded
               />
-              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-relay-description node-relay-upgrade">
+              <p v-else-if="showCloudNodeTrustPanelPlaceholder" class="node-cloud-connection-note">
                 {{ t("settings.nodeDetail.cloudRelayTrustUnsupported") }}
               </p>
             </div>
@@ -1505,6 +1505,17 @@ watch(
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
+}
+
+.node-cloud-connection-note {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .node-detail-section > .control-plane-error,

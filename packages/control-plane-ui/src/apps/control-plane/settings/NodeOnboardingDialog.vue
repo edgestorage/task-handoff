@@ -813,7 +813,7 @@ function closeDialog() {
   width: 100%;
   min-height: 58px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: transparent;
   color: var(--text);
@@ -870,7 +870,7 @@ function closeDialog() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 3px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-inset);
 }
@@ -888,7 +888,7 @@ function closeDialog() {
 .node-onboarding-source-switch button.active {
   background: var(--surface);
   color: var(--text-strong);
-  box-shadow: 0 0 0 1px var(--border);
+  box-shadow: 0 0 0 1px var(--line);
 }
 
 .node-onboarding-command-head {
@@ -928,7 +928,7 @@ function closeDialog() {
 .node-onboarding-copy-field code {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-inset);
   padding: 8px 10px;
@@ -944,7 +944,7 @@ function closeDialog() {
   margin: 0;
   padding: 12px;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-inset);
   color: var(--text);

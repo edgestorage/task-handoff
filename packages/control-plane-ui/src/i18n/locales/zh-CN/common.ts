@@ -44,6 +44,7 @@ export const common = {
     update: "更新",
   },
   status: {
+    paused: "已暂停",
     enabled: "已启用",
     disabled: "已禁用",
     running: "运行中",

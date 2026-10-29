@@ -12,16 +12,18 @@ import {
 } from "@task-handoff/control-plane/node-agent";
 import {
   NodeAgentControlPlaneTrustSnapshotSchema,
-  type NodeAgentControlPlaneTrustRequest,
   type NodeAgentControlPlaneTrustSnapshot,
 } from "@task-handoff/protocol/node-agent-control-plane-trust";
 import {
+  NodeAgentControlPlanePairingSchema,
+  NodeAgentHealthSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
   type UpdateChannel,
   type UpdateCheckResult,
   type UpdateJob,
 } from "@task-handoff/protocol/control-plane";
+import { renderTrustSnapshot, type TrustDisplayNames } from "./node-agent-trust-output.ts";
 
 // The Linux service installer listens here explicitly. Keep the same default
 // for one-off CLI commands run through sudo, where the service's environment
@@ -176,6 +178,7 @@ type NodeAgentRequestOptions = {
   endpoint?: string;
   ipcPath?: string;
   token?: string;
+  signal?: AbortSignal;
 };
 
 class NodeAgentRequestError extends Error {
@@ -199,11 +202,13 @@ async function requestNodeAgent(options: NodeAgentRequestOptions, requestPath: s
     ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent${requestPath}`, {
       method,
       headers,
+      signal: options.signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     : await fetchNodeAgentIpc(options.ipcPath!, requestPath, {
       method,
       headers,
+      signal: options.signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   const payload = (await response.json().catch(() => ({}))) as {
@@ -274,31 +279,45 @@ function requireTrustPin(snapshot: NodeAgentControlPlaneTrustSnapshot, pinId: st
   return pin;
 }
 
-function accessLabel(access: NodeAgentControlPlaneTrustRequest["access"]) {
-  return access.accessMode === "shared"
-    ? `shared ${access.accountId} via ${access.shareGrantId || "grant"}${access.shareRevision ? ` r${access.shareRevision}` : ""}`
-    : `owner ${access.accountId}`;
-}
-
-function printTrustSnapshot(snapshot: NodeAgentControlPlaneTrustSnapshot) {
-  console.log(`Node Agent: ${snapshot.nodeId}${snapshot.nodeHandle ? ` · ${snapshot.nodeHandle}` : ""}`);
-  const pending = snapshot.requests.filter((request) => request.status === "pending");
-  console.log(`Pending Control Plane requests (not mobile devices): ${pending.length}`);
-  for (const request of pending) {
-    console.log(`- request ${request.requestId} · ${request.controlPlaneId} · ${request.reason}`);
-    console.log(`  fingerprint ${request.fingerprint}`);
-    console.log(`  compare ${request.comparisonCode}`);
-    console.log(`  node ${request.nodeHandle} · ${request.bindingId} r${request.bindingRevision} · ${accessLabel(request.access)}`);
-    console.log(`  requested ${request.requestedAt} · expires ${request.expiresAt} · revision ${request.revision}`);
+async function printTrustSnapshot(
+  snapshot: NodeAgentControlPlaneTrustSnapshot,
+  options: NodeAgentRequestOptions & { verbose?: boolean },
+) {
+  const names: TrustDisplayNames = { controlPlanes: new Map<string, string>() };
+  // Compatibility for v0.0.46: names already have authoritative endpoints.
+  // Compose them only for human output, leaving the strict trust wire model,
+  // old clients and --json unchanged. Cosmetic reads never block trust actions.
+  const reads = await Promise.allSettled([
+    requestNodeAgent({ ...options, signal: AbortSignal.timeout(1_500) }, "/health").then((data) => {
+      const health = NodeAgentHealthSchema.pick({ nodeId: true, hostname: true }).parse(data);
+      if (health.nodeId === snapshot.nodeId) names.nodeName = health.hostname;
+    }),
+    requestNodeAgent({ ...options, signal: AbortSignal.timeout(1_500) }, "/control-plane-pairings").then((data) => {
+      const pairings = NodeAgentControlPlanePairingSchema.array().parse(data);
+      const byLatestName = pairings.filter((pairing) => pairing.name).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const controlPlanes = new Map<string, string>();
+      for (const pairing of byLatestName) {
+        if (!controlPlanes.has(pairing.id)) controlPlanes.set(pairing.id, pairing.name!);
+      }
+      names.controlPlanes = controlPlanes;
+    }),
+  ]);
+  for (const [index, read] of reads.entries()) {
+    if (read.status === "rejected") {
+      console.error(`Could not load ${index === 0 ? "node" : "Control Plane"} names; showing identifiers where needed.`);
+    }
   }
-  const pins = snapshot.pins.filter((pin) => pin.status === "active");
-  console.log(`Active trusted Control Planes (not mobile devices): ${pins.length}`);
-  for (const pin of pins) {
-    console.log(`- pin ${pin.pinId} · ${pin.controlPlaneId}`);
-    console.log(`  fingerprint ${pin.fingerprint}`);
-    console.log(`  compare ${pin.comparisonCode}`);
-    console.log(`  node ${pin.nodeHandle} · ${pin.bindingId} r${pin.bindingRevision} · ${accessLabel(pin.access)}`);
-    console.log(`  approved ${pin.approvedAt} by ${pin.approvedByActorType}:${pin.approvedByActorId} · last seen ${pin.lastSeenAt} · revision ${pin.revision}`);
+  const transportArgs = options.endpoint ? ["--endpoint", options.endpoint]
+    : options.ipcPath ? ["--ipc-path", options.ipcPath] : [];
+  process.stdout.write(renderTrustSnapshot(snapshot, {
+    names,
+    verbose: options.verbose,
+    columns: process.stdout.columns || 80,
+    color: Boolean(process.stdout.isTTY && process.env.TERM !== "dumb" && process.env.NO_COLOR === undefined),
+    transportArgs,
+  }));
+  if (options.token && options.token !== process.env.TASK_HANDOFF_NODE_AGENT_TOKEN) {
+    console.log("Set TASK_HANDOFF_NODE_AGENT_TOKEN before running copied commands.");
   }
 }
 
@@ -621,6 +640,7 @@ async function main() {
   trust
     .command("list")
     .description("List pending Control Plane trust requests and active trusted Control Planes.")
+    .option("--verbose", "Show full identifiers, fingerprints and audit details")
     .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
     .option("--ipc-path <path>", "Local Node Agent IPC socket path")
     .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
@@ -633,12 +653,13 @@ async function main() {
         console.log(JSON.stringify(snapshot, null, 2));
         return;
       }
-      printTrustSnapshot(snapshot);
+      await printTrustSnapshot(snapshot, { ...transport, token: options.token, verbose: options.verbose });
     });
 
   trust
     .command("approve")
     .description("Approve a pending Control Plane. Compare its fingerprint or short code with the Control Plane UI first.")
+    .option("--verbose", "Show full identifiers, fingerprints and audit details")
     .argument("<requestId>", "Pending Control Plane trust request ID")
     .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
     .option("--comparison-code <code>", "Expected short comparison code")
@@ -665,12 +686,13 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      printTrustSnapshot(result);
+      await printTrustSnapshot(result, { ...transport, token: options.token, verbose: options.verbose });
     });
 
   trust
     .command("reject")
     .description("Reject a pending Control Plane trust request.")
+    .option("--verbose", "Show full identifiers, fingerprints and audit details")
     .argument("<requestId>", "Pending Control Plane trust request ID")
     .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
     .option("--comparison-code <code>", "Expected short comparison code")
@@ -695,12 +717,13 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      printTrustSnapshot(result);
+      await printTrustSnapshot(result, { ...transport, token: options.token, verbose: options.verbose });
     });
 
   trust
     .command("retry")
     .description("Explicitly reopen a rejected or expired request as a new pending request.")
+    .option("--verbose", "Show full identifiers, fingerprints and audit details")
     .argument("<requestId>", "Rejected or expired Control Plane trust request ID")
     .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
     .option("--comparison-code <code>", "Expected short comparison code")
@@ -721,12 +744,13 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      printTrustSnapshot(result);
+      await printTrustSnapshot(result, { ...transport, token: options.token, verbose: options.verbose });
     });
 
   trust
     .command("revoke")
     .description("Revoke one exact active Control Plane pin.")
+    .option("--verbose", "Show full identifiers, fingerprints and audit details")
     .argument("<pinId>", "Active Control Plane pin ID")
     .option("--fingerprint <fingerprint>", "Expected Control Plane public key fingerprint")
     .option("--comparison-code <code>", "Expected short comparison code")
@@ -751,7 +775,7 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      printTrustSnapshot(result);
+      await printTrustSnapshot(result, { ...transport, token: options.token, verbose: options.verbose });
     });
 
   program

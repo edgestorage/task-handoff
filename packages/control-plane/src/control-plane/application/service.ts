@@ -517,6 +517,11 @@ export class ControlPlaneService {
       : []);
   }
 
+  isCloudRelayNodeClaimEnabled(nodeHandle: string) {
+    const node = this.findCloudRelayNode(nodeHandle);
+    return !node || (node.connectionEnabled !== false && node.labels[CLOUD_RELAY_CLAIM_DISABLED_LABEL] !== "true");
+  }
+
   async setCloudRelayNodeClaimEnabled(nodeHandle: string, enabled: boolean) {
     const node = this.findCloudRelayNode(nodeHandle);
     if (!node) return false;
@@ -616,6 +621,13 @@ export class ControlPlaneService {
       updatedAt: now(),
     });
     return await this.nodes.put(updated);
+  }
+
+  /** Cancelling enrollment removes only a node that has never completed pairing. */
+  async deletePendingCloudRelayNode(nodeHandle: string) {
+    const node = this.findCloudRelayNode(nodeHandle);
+    if (!node || cloudRelayPairingOf(node)) return false;
+    return await this.deleteNode(node.id);
   }
 
   /** Channel connectivity projects onto the same node status the UI already renders. */

@@ -18,3 +18,12 @@ test("Story AI Session detail also requires an online instance connection", () =
   assert.equal(isStorySessionOnline(story, nodes("online"), { connectionStatus: "offline" }), false);
   assert.equal(isStorySessionOnline(story, nodes("offline"), { connectionStatus: "online" }), false);
 });
+
+test("pausing an online node blocks cached Story access until reconnection is enabled", () => {
+  const owner = { id: "node-1", status: "online", connectionEnabled: false };
+  assert.equal(isStoryOnline(story, [owner]), false);
+  assert.equal(isStorySessionOnline(story, [owner], { connectionStatus: "online" }), false);
+  owner.connectionEnabled = true;
+  assert.equal(isStoryOnline(story, [owner]), true);
+  assert.equal(isStorySessionOnline(story, [owner], { connectionStatus: "online" }), true);
+});
