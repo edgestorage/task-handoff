@@ -202,6 +202,15 @@ curl -fsSL https://raw.githubusercontent.com/edgestorage/task-handoff/main/scrip
 
 远程节点安装器使用相同的自动源选择逻辑，也可以在界面生成的命令末尾追加 `--install-source china`。选择的 npm registry 会写入 Node Agent 服务环境，供后续托管更新继续使用。
 
+独立安装的 Node Agent 可以直接在本机自升级，不依赖 `thctl` 或 Control Plane 命令行：
+
+```sh
+sudo task-handoff-node-agent update --check
+sudo task-handoff-node-agent update
+```
+
+默认使用 `stable` 通道，确认后提交更新并等待服务重启完成；检测到本地运行时包时也会同步升级同版本的 `@task-handoff/controlled-instance`。`--channel beta|alpha` 可选择预发布通道，`--yes` 跳过交互确认，`--no-wait` 只排队后返回，`--json` 输出机器可读结果。
+
 也可以直接在已安装 Node Agent 的机器上生成一次性邀请令牌：
 
 ```sh

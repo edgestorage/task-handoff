@@ -1,6 +1,7 @@
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import {
   defaultNodeAgentDataDir,
@@ -14,11 +15,21 @@ import {
   type NodeAgentControlPlaneTrustRequest,
   type NodeAgentControlPlaneTrustSnapshot,
 } from "@task-handoff/protocol/node-agent-control-plane-trust";
+import {
+  UpdateCheckResultSchema,
+  UpdateJobSchema,
+  type UpdateChannel,
+  type UpdateCheckResult,
+  type UpdateJob,
+} from "@task-handoff/protocol/control-plane";
 
 // The Linux service installer listens here explicitly. Keep the same default
 // for one-off CLI commands run through sudo, where the service's environment
 // file is not loaded and the invoking user's data directory is not the agent's.
 const INSTALLED_NODE_AGENT_IPC_PATH = "/run/task-handoff/node-agent.sock";
+const UPDATE_POLL_INTERVAL_MS = 1_000;
+const UPDATE_WAIT_TIMEOUT_SECONDS = 15 * 60;
+const TERMINAL_UPDATE_STATUSES = new Set<UpdateJob["status"]>(["succeeded", "degraded", "failed"]);
 
 function resolveNodeAgentIpcPath(explicitIpcPath?: string, dataDir?: string) {
   if (explicitIpcPath) return explicitIpcPath;
@@ -51,6 +62,21 @@ function parsePositiveInteger(value: string) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error("Expiry must be a positive integer.");
+  }
+  return parsed;
+}
+
+function parseUpdateChannel(value: string): UpdateChannel {
+  if (value !== "stable" && value !== "beta" && value !== "alpha") {
+    throw new InvalidArgumentError("must be stable, beta, or alpha");
+  }
+  return value;
+}
+
+function parsePositiveSeconds(value: string) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new InvalidArgumentError("must be a positive integer");
   }
   return parsed;
 }
@@ -146,34 +172,84 @@ async function bindCloudRelay(options: {
   return payload.data || {};
 }
 
-type NodeAgentTrustOptions = {
+type NodeAgentRequestOptions = {
   endpoint?: string;
   ipcPath?: string;
   token?: string;
 };
 
-async function fetchNodeAgentTrust(options: NodeAgentTrustOptions, path: string, method = "GET", body?: unknown) {
+class NodeAgentRequestError extends Error {
+  readonly statusCode?: number;
+  readonly code?: string;
+
+  constructor(message: string, statusCode?: number, code?: string) {
+    super(message);
+    this.name = "NodeAgentRequestError";
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
+
+async function requestNodeAgent(options: NodeAgentRequestOptions, requestPath: string, method = "GET", body?: unknown) {
   const headers = {
     ...(body === undefined ? {} : { "content-type": "application/json" }),
     ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
   };
   const response = options.endpoint
-    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent${path}`, {
+    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent${requestPath}`, {
       method,
       headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-    : await fetchNodeAgentIpc(options.ipcPath!, path, {
+    : await fetchNodeAgentIpc(options.ipcPath!, requestPath, {
       method,
       headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: { message?: string } };
-  if (!response.ok) throw new Error(payload.error?.message || `Node Agent trust request failed with HTTP ${response.status}`);
-  const parsed = NodeAgentControlPlaneTrustSnapshotSchema.safeParse(payload.data);
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: unknown;
+    error?: { message?: unknown; code?: unknown };
+  };
+  if (!response.ok) {
+    const code = typeof payload.error?.code === "string" ? payload.error.code : undefined;
+    const message = typeof payload.error?.message === "string"
+      ? payload.error.message
+      : code || `Node Agent request failed with HTTP ${response.status}`;
+    throw new NodeAgentRequestError(message, response.status, code);
+  }
+  return payload.data;
+}
+
+async function fetchNodeAgentTrust(options: NodeAgentRequestOptions, path: string, method = "GET", body?: unknown) {
+  const payload = await requestNodeAgent(options, path, method, body);
+  const parsed = NodeAgentControlPlaneTrustSnapshotSchema.safeParse(payload);
   if (!parsed.success) {
     throw new Error("Node Agent trust response did not include a trust snapshot.");
   }
+  return parsed.data;
+}
+
+async function checkNodeAgentUpdate(options: NodeAgentRequestOptions & { channel: UpdateChannel }) {
+  const payload = await requestNodeAgent(options, "/updates/check", "POST", { channel: options.channel });
+  const parsed = UpdateCheckResultSchema.safeParse(payload);
+  if (!parsed.success) throw new Error("Node Agent update check returned an invalid response.");
+  return parsed.data;
+}
+
+async function applyNodeAgentUpdate(
+  options: NodeAgentRequestOptions,
+  input: { channel: UpdateChannel; targetVersion: string; preflightToken: string },
+) {
+  const payload = await requestNodeAgent(options, "/updates/apply", "POST", input);
+  const parsed = UpdateJobSchema.safeParse(payload);
+  if (!parsed.success) throw new Error("Node Agent update apply returned an invalid response.");
+  return parsed.data;
+}
+
+async function listNodeAgentUpdateJobs(options: NodeAgentRequestOptions) {
+  const payload = await requestNodeAgent(options, "/updates/jobs");
+  const parsed = UpdateJobSchema.array().safeParse(payload);
+  if (!parsed.success) throw new Error("Node Agent update jobs returned an invalid response.");
   return parsed.data;
 }
 
@@ -226,7 +302,7 @@ function printTrustSnapshot(snapshot: NodeAgentControlPlaneTrustSnapshot) {
   }
 }
 
-function resolveTrustTransport(rootOptions: { ipcPath?: string; dataDir?: string }, options: {
+function resolveNodeAgentTransport(rootOptions: { ipcPath?: string; dataDir?: string }, options: {
   endpoint?: string;
   ipcPath?: string;
   dataDir?: string;
@@ -239,6 +315,70 @@ function resolveTrustTransport(rootOptions: { ipcPath?: string; dataDir?: string
     endpoint: options.endpoint,
     ipcPath: options.endpoint ? undefined : resolveNodeAgentIpcPath(explicitIpcPath, dataDir),
   };
+}
+
+function updateImpactLabel(check: UpdateCheckResult) {
+  const { runningInstanceCount, activeInstanceCount, stoppedInstanceCount } = check.impact;
+  return `${runningInstanceCount} running${activeInstanceCount ? ` (${activeInstanceCount} active)` : ""}, ${stoppedInstanceCount} stopped`;
+}
+
+function printUpdateCheck(check: UpdateCheckResult) {
+  const current = check.currentVersion || "unknown";
+  console.log(`Current: ${current}`);
+  console.log(`Available: ${check.availableVersion} (${check.channel})`);
+  console.log(`Impact: ${updateImpactLabel(check)}`);
+  if (!check.supported) {
+    console.log(`Managed updates are unavailable: ${check.reason || "the current installation does not support updates"}`);
+  } else if (check.updateAvailable) {
+    console.log(`Update available: ${current} -> ${check.availableVersion}`);
+  } else {
+    console.log(check.reason || "Node Agent is up to date.");
+  }
+}
+
+async function confirmNodeAgentUpdate(check: UpdateCheckResult, options: { yes?: boolean }) {
+  if (options.yes) return;
+  if (!process.stdin.isTTY) {
+    throw new Error("Use --yes to apply a Node Agent update when standard input is not interactive.");
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await prompt.question(
+      `Update Node Agent ${check.currentVersion || "unknown"} -> ${check.availableVersion}? `
+      + `${updateImpactLabel(check)}; the service will restart. [y/N] `,
+    );
+    if (!/^y(?:es)?$/i.test(answer.trim())) throw new Error("Node Agent update cancelled.");
+  } finally {
+    prompt.close();
+  }
+}
+
+async function waitForNodeAgentUpdate(
+  transport: NodeAgentRequestOptions,
+  job: UpdateJob,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  for (;;) {
+    if (TERMINAL_UPDATE_STATUSES.has(job.status)) return job;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+      throw new Error(`Timed out waiting for Node Agent update ${job.id}.${detail}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(UPDATE_POLL_INTERVAL_MS, remaining)));
+    try {
+      const jobs = await listNodeAgentUpdateJobs(transport);
+      const current = jobs.find((candidate) => candidate.id === job.id);
+      if (!current) throw new Error(`Node Agent update job ${job.id} disappeared.`);
+      job = current;
+      lastError = undefined;
+    } catch (error) {
+      if (error instanceof NodeAgentRequestError && error.statusCode && error.statusCode < 500) throw error;
+      lastError = error;
+    }
+  }
 }
 
 async function unbindCloudRelay(options: { endpoint?: string; ipcPath?: string; token?: string }) {
@@ -351,6 +491,69 @@ async function main() {
     });
 
   program
+    .command("update")
+    .alias("self-update")
+    .description("Check for and install a newer Node Agent release, then restart its service.")
+    .option("--check", "Check for an available update without installing it")
+    .option("--channel <channel>", "Release channel: stable, beta, or alpha", parseUpdateChannel, "stable")
+    .option("-y, --yes", "Apply the update without an interactive confirmation")
+    .option("--no-wait", "Return after queuing the update job without waiting for completion")
+    .option("--timeout <seconds>", "Maximum time to wait for completion", parsePositiveSeconds, UPDATE_WAIT_TIMEOUT_SECONDS)
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (options) => {
+      const transport = {
+        ...resolveNodeAgentTransport(program.opts(), options),
+        token: options.token,
+      };
+      const check = await checkNodeAgentUpdate({ ...transport, channel: options.channel });
+      if (options.check) {
+        if (options.json) console.log(JSON.stringify(check, null, 2));
+        else printUpdateCheck(check);
+        return;
+      }
+      if (!check.supported) {
+        throw new Error(check.reason || "Managed Node Agent updates are unavailable on this installation.");
+      }
+      if (!check.updateAvailable) {
+        if (options.json) console.log(JSON.stringify(check, null, 2));
+        else printUpdateCheck(check);
+        return;
+      }
+      if (!check.preflightToken) {
+        throw new Error("Node Agent update check did not return a preflight token.");
+      }
+
+      if (!options.json) printUpdateCheck(check);
+      await confirmNodeAgentUpdate(check, options);
+      const queued = await applyNodeAgentUpdate(transport, {
+        channel: check.channel,
+        targetVersion: check.availableVersion,
+        preflightToken: check.preflightToken,
+      });
+      if (!options.wait) {
+        if (options.json) console.log(JSON.stringify(queued, null, 2));
+        else console.log(`Update job ${queued.id} queued with status ${queued.status}.`);
+        return;
+      }
+
+      if (!options.json) console.log(`Update job ${queued.id} started; waiting for the Node Agent to restart...`);
+      const completed = await waitForNodeAgentUpdate(transport, queued, options.timeout * 1_000);
+      if (options.json) console.log(JSON.stringify(completed, null, 2));
+      else if (completed.status === "succeeded") {
+        console.log(`Node Agent updated to ${completed.toVersion}.`);
+      } else if (completed.status === "degraded") {
+        console.error(`Node Agent restarted at ${completed.toVersion}, but instance convergence is degraded.${completed.error?.message ? ` ${completed.error.message}` : ""}`);
+      } else {
+        console.error(`Node Agent update finished with status ${completed.status}.${completed.error?.message ? ` ${completed.error.message}` : ""}`);
+      }
+      if (completed.status === "failed") process.exitCode = 1;
+    });
+
+  program
     .command("cloud-bind")
     .description("Bind this Node Agent to a cloud platform account with a one-time binding token.")
     .option("--cloud-origin <url>", "Pin the cloud platform origin and bypass cloud discovery")
@@ -424,7 +627,7 @@ async function main() {
     .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
     .option("--json", "Print raw JSON output")
     .action(async (options) => {
-      const transport = resolveTrustTransport(program.opts(), options);
+      const transport = resolveNodeAgentTransport(program.opts(), options);
       const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
       if (options.json) {
         console.log(JSON.stringify(snapshot, null, 2));
@@ -448,7 +651,7 @@ async function main() {
     .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
     .option("--json", "Print raw JSON output")
     .action(async (requestId, options) => {
-      const transport = resolveTrustTransport(program.opts(), options);
+      const transport = resolveNodeAgentTransport(program.opts(), options);
       const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
       const request = requireTrustRequest(snapshot, requestId, options);
       const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/decision`, "POST", {
@@ -479,7 +682,7 @@ async function main() {
     .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
     .option("--json", "Print raw JSON output")
     .action(async (requestId, options) => {
-      const transport = resolveTrustTransport(program.opts(), options);
+      const transport = resolveNodeAgentTransport(program.opts(), options);
       const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
       const request = requireTrustRequest(snapshot, requestId, options);
       const result = await fetchNodeAgentTrust({ ...transport, token: options.token }, `/control-plane-trust/requests/${encodeURIComponent(requestId)}/decision`, "POST", {
@@ -507,7 +710,7 @@ async function main() {
     .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
     .option("--json", "Print raw JSON output")
     .action(async (requestId, options) => {
-      const transport = resolveTrustTransport(program.opts(), options);
+      const transport = resolveNodeAgentTransport(program.opts(), options);
       const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
       const request = requireTrustRequest(snapshot, requestId, options);
       if (request.status !== "rejected" && request.status !== "expired") {
@@ -535,7 +738,7 @@ async function main() {
     .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
     .option("--json", "Print raw JSON output")
     .action(async (pinId, options) => {
-      const transport = resolveTrustTransport(program.opts(), options);
+      const transport = resolveNodeAgentTransport(program.opts(), options);
       const snapshot = await fetchNodeAgentTrust({ ...transport, token: options.token }, "/control-plane-trust");
       const pin = requireTrustPin(snapshot, pinId, options);
       if (pin.status !== "active") throw new Error("The selected Control Plane pin is already revoked.");

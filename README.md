@@ -207,6 +207,15 @@ preserved in the Node Agent service environment for subsequent managed updates.
 
 Replace `RELEASE_VERSION` with the Control Plane's runtime package version so the Node Agent and controlled-instance runtime use the same release.
 
+A standalone Node Agent can update itself without `thctl` or a Control Plane CLI session:
+
+```sh
+sudo task-handoff-node-agent update --check
+sudo task-handoff-node-agent update
+```
+
+The command uses the `stable` channel by default, asks for confirmation, queues the update, and waits for the service restart to complete. When a local runtime package is installed, it also upgrades the matching `@task-handoff/controlled-instance` version. Use `--channel beta|alpha` for prereleases, `--yes` for non-interactive execution, `--no-wait` to return after queuing, or `--json` for machine-readable output.
+
 An installed Node Agent can also generate a one-time invitation directly on the node:
 
 ```sh

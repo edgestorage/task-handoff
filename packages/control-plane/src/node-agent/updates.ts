@@ -56,8 +56,9 @@ export function npmCommand() {
 }
 
 export type NodeUpdatePackageName = "@task-handoff/node-agent" | "@task-handoff/server";
+const CONTROLLED_INSTANCE_PACKAGE = "@task-handoff/controlled-instance";
 
-function installedPackageManifest(globalRoot: string, packageName: NodeUpdatePackageName) {
+function installedPackageManifest(globalRoot: string, packageName: NodeUpdatePackageName | typeof CONTROLLED_INSTANCE_PACKAGE) {
   const manifestPath = path.join(globalRoot, ...packageName.split("/"), "package.json");
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { name?: unknown; version?: unknown };
@@ -103,8 +104,30 @@ function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | un
     current = path.dirname(current);
   }
   return nodeAgentVersion
-    ? { packageName: "@task-handoff/node-agent", currentVersion: nodeAgentVersion, relatedCurrentVersions: [], installPrefix }
+    ? {
+        packageName: "@task-handoff/node-agent",
+        currentVersion: nodeAgentVersion,
+        relatedCurrentVersions: relatedControlledInstanceVersions(globalModuleRootFromModulePath(moduleDir)),
+        installPrefix,
+      }
     : undefined;
+}
+
+function globalModuleRootFromModulePath(modulePath: string) {
+  let current = path.resolve(modulePath);
+  while (current !== path.dirname(current)) {
+    if (path.basename(current) === "node_modules") return current;
+    current = path.dirname(current);
+  }
+  return undefined;
+}
+
+function relatedControlledInstanceVersions(globalRoot?: string) {
+  if (!globalRoot) return [];
+  // Standalone Node Agent and controlled-instance are one internal release
+  // domain, so either package being stale makes the node update actionable.
+  const controlledInstance = installedPackageManifest(globalRoot, CONTROLLED_INSTANCE_PACKAGE);
+  return controlledInstance ? [controlledInstance.version] : [];
 }
 
 export async function resolveNodeUpdatePackage(runCommand: CommandRunner, moduleDir?: string): Promise<NodeUpdatePackageSelection> {
@@ -132,7 +155,7 @@ export async function resolveNodeUpdatePackage(runCommand: CommandRunner, module
   return {
     packageName: "@task-handoff/node-agent",
     currentVersion: nodeAgent?.version,
-    relatedCurrentVersions: [],
+    relatedCurrentVersions: relatedControlledInstanceVersions(globalRoot),
     installPrefix,
   };
 }

@@ -49,7 +49,11 @@ function updateImpact(instances: ControlledInstance[]): UpdateCheckResult["impac
 }
 
 export class NodeUpdateController {
-  private readonly preflights = new Map<string, { result: UpdateCheckResult; expiresAt: number }>();
+  private readonly preflights = new Map<string, {
+    result: UpdateCheckResult;
+    relatedCurrentVersions: string[];
+    expiresAt: number;
+  }>();
   private readonly options: Options;
   private applying = false;
 
@@ -76,9 +80,7 @@ export class NodeUpdateController {
         checkedAt: new Date().toISOString(),
       });
     }
-    const relatedCurrentVersions = selection.packageName === "@task-handoff/server"
-      ? [...new Set([...selection.relatedCurrentVersions, currentRuntimeVersion])]
-      : selection.relatedCurrentVersions;
+    const relatedCurrentVersions = this.relatedCurrentVersions(selection, currentRuntimeVersion);
     const check = await checkNodeAgentUpdate({
       channel: parsed.channel,
       currentVersion: selection.currentVersion || currentRuntimeVersion,
@@ -98,6 +100,7 @@ export class NodeUpdateController {
     };
     this.preflights.set(result.preflightToken!, {
       result,
+      relatedCurrentVersions,
       expiresAt: Date.now() + UPDATE_PREFLIGHT_TTL_MS,
     });
     return result;
@@ -193,13 +196,21 @@ export class NodeUpdateController {
     }
     const check = preflight.result;
     const selection = await resolveNodeUpdatePackage(this.options.runCommand, this.options.moduleDir);
+    const relatedCurrentVersions = this.relatedCurrentVersions(selection, this.options.currentRuntimeVersion());
     const unchanged = check.channel === input.channel
       && check.availableVersion === input.targetVersion
       && check.currentVersion === (selection.currentVersion || this.options.currentRuntimeVersion())
       && check.artifactRef?.startsWith(`npm:${selection.packageName}@`) === true
+      && JSON.stringify(preflight.relatedCurrentVersions) === JSON.stringify(relatedCurrentVersions)
       && JSON.stringify(check.impact) === JSON.stringify(updateImpact(this.options.listInstances()));
     if (!unchanged) this.throwStale();
     return { check, selection };
+  }
+
+  private relatedCurrentVersions(selection: { packageName: string; relatedCurrentVersions: string[] }, currentRuntimeVersion: string) {
+    return selection.packageName === "@task-handoff/server"
+      ? [...new Set([...selection.relatedCurrentVersions, currentRuntimeVersion])]
+      : selection.relatedCurrentVersions;
   }
 
   private throwStale(): never {

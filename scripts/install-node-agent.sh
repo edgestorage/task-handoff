@@ -468,5 +468,6 @@ fi
 
 echo "TaskHandoff node-agent is installed and running."
 echo "Service: task-handoff-node-agent.service"
+echo "Update: sudo task-handoff-node-agent update"
 echo "Pairing token: sudo task-handoff-node-agent invite --ipc-path $IPC_PATH"
 echo "Uninstall: sudo task-handoff-node-agent uninstall"

@@ -4747,6 +4747,50 @@ test("node update preflight relies only on immutable npm metadata and reports st
   assert.equal(staleImpact.json().error.code, "UPDATE_PREFLIGHT_STALE");
 });
 
+test("node update preflight is stale when the controlled-instance companion changes", async (t) => {
+  const globalRoot = tempDataDir("node-agent-update-companion-preflight-root");
+  const nodeAgentRoot = path.join(globalRoot, "@task-handoff", "node-agent");
+  const controlledInstanceRoot = path.join(globalRoot, "@task-handoff", "controlled-instance");
+  fs.mkdirSync(path.join(nodeAgentRoot, "dist"), { recursive: true });
+  fs.mkdirSync(controlledInstanceRoot, { recursive: true });
+  fs.writeFileSync(path.join(nodeAgentRoot, "package.json"), JSON.stringify({ name: "@task-handoff/node-agent", version: "1.0.0" }));
+  fs.writeFileSync(path.join(controlledInstanceRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-update-companion-preflight"),
+    logger: false,
+    token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
+    updateCommandRunner: async (_command, args) => {
+      if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: path.dirname(path.dirname(globalRoot)), stderr: "" };
+      return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "1.1.0"), stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+
+  const check = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  assert.equal(check.statusCode, 200, check.body);
+  fs.writeFileSync(path.join(controlledInstanceRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.1" }));
+
+  const apply = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: check.json().data.availableVersion,
+      preflightToken: check.json().data.preflightToken,
+    },
+  });
+  assert.equal(apply.statusCode, 409, apply.body);
+  assert.equal(apply.json().error.code, "UPDATE_PREFLIGHT_STALE");
+});
+
 test("node agent update checks use the configured absolute npm command", async (t) => {
   const previous = process.env.TASK_HANDOFF_NPM_COMMAND;
   process.env.TASK_HANDOFF_NPM_COMMAND = "/opt/node/bin/npm";
@@ -4853,6 +4897,44 @@ test("node update package resolution prefers the running module over an unrelate
     relatedCurrentVersions: ["0.0.23"],
     installPrefix: prefix,
   });
+});
+
+test("standalone node-agent update checks include the controlled-instance companion version", async () => {
+  const prefix = tempDataDir("standalone-node-update-companions");
+  const globalRoot = path.join(prefix, "lib", "node_modules");
+  const nodeAgentRoot = path.join(globalRoot, "@task-handoff", "node-agent");
+  const controlledInstanceRoot = path.join(globalRoot, "@task-handoff", "controlled-instance");
+  fs.mkdirSync(path.join(nodeAgentRoot, "dist"), { recursive: true });
+  fs.mkdirSync(controlledInstanceRoot, { recursive: true });
+  fs.writeFileSync(path.join(nodeAgentRoot, "package.json"), JSON.stringify({ name: "@task-handoff/node-agent", version: "1.1.0" }));
+  fs.writeFileSync(path.join(controlledInstanceRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
+
+  const expected = {
+    packageName: "@task-handoff/node-agent",
+    currentVersion: "1.1.0",
+    relatedCurrentVersions: ["1.0.0"],
+    installPrefix: prefix,
+  };
+  assert.deepEqual(await resolveNodeUpdatePackage(async () => {
+    throw new Error("ambient npm root must not be consulted for a packaged runtime");
+  }, path.join(nodeAgentRoot, "dist")), expected);
+  assert.deepEqual(await resolveNodeUpdatePackage(async (_command, args) => ({
+    stdout: args[0] === "root" ? globalRoot : prefix,
+    stderr: "",
+  })), expected);
+
+  const nodeAgentOnly = await checkNodeAgentUpdate({
+    channel: "stable",
+    currentVersion: "1.1.0",
+    packageName: "@task-handoff/node-agent",
+    relatedCurrentVersions: ["1.0.0"],
+    runCommand: async (_command, args) => ({
+      stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "1.1.0"),
+      stderr: "",
+    }),
+  });
+  assert.equal(nodeAgentOnly.updateAvailable, true);
+  assert.equal(nodeAgentOnly.artifactRef, `npm:@task-handoff/node-agent@1.1.0#${npmIntegrityFixture}`);
 });
 
 test("node agent resolves update workers in source and bundled runtime layouts", () => {

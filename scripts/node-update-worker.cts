@@ -282,6 +282,12 @@ async function main() {
     if (packageName === "@task-handoff/server" && installedVersion("@task-handoff/node-agent", globalRoot) !== undefined) {
       packageNames.push("@task-handoff/node-agent");
     }
+    // A standalone Node Agent and its controlled-instance runtime always ship
+    // as one internal version domain; updating only one leaves local instances
+    // unable to converge to the new desired version.
+    if (packageName === "@task-handoff/node-agent" && installedVersion("@task-handoff/controlled-instance", globalRoot) !== undefined) {
+      packageNames.push("@task-handoff/controlled-instance");
+    }
     const previousVersions = new Map(packageNames.map((installedPackage) => [installedPackage, installedVersion(installedPackage, globalRoot)]));
     const serverConfiguration = packageName === "@task-handoff/server" ? snapshotFiles(serverConfigurationFiles()) : [];
     let serverConfigurationChanged = false;

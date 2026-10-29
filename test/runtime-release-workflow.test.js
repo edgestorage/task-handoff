@@ -149,9 +149,12 @@ test("detached node update worker does not overwrite rollout completion after se
     createdAt: timestamp,
     updatedAt: timestamp,
   }, null, 2)}\n`);
+  const controlledInstanceRoot = path.join(directory, "lib/node_modules/@task-handoff/controlled-instance");
+  fs.mkdirSync(controlledInstanceRoot, { recursive: true });
+  fs.writeFileSync(path.join(controlledInstanceRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "0.0.0" }));
   const npm = path.join(directory, "npm");
   const npmLog = path.join(directory, "npm.log");
-  fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then\n  echo '"sha512-d29ya2VyLXRlc3Q="'\nelif [ "$1" = "prefix" ]; then\n  echo "${directory}"\nelif [ "$1" = "root" ]; then\n  echo "${directory}/lib/node_modules"\nelif [ "$1" = "install" ]; then\n  mkdir -p "${directory}/lib/node_modules/@task-handoff/node-agent"\n  printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/node-agent/package.json"\nfi\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then\n  echo '"sha512-d29ya2VyLXRlc3Q="'\nelif [ "$1" = "prefix" ]; then\n  echo "${directory}"\nelif [ "$1" = "root" ]; then\n  echo "${directory}/lib/node_modules"\nelif [ "$1" = "install" ]; then\n  mkdir -p "${directory}/lib/node_modules/@task-handoff/node-agent"\n  mkdir -p "${directory}/lib/node_modules/@task-handoff/controlled-instance"\n  printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/node-agent/package.json"\n  printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/controlled-instance/package.json"\nfi\nexit 0\n`, { mode: 0o755 });
   const systemctl = path.join(directory, "systemctl");
   fs.writeFileSync(systemctl, `#!/bin/sh\n"${process.execPath}" -e 'const fs=require("fs");const p=process.env.JOB_FILE;const j=JSON.parse(fs.readFileSync(p,"utf8"));j.status="succeeded";j.rollout={...j.rollout,phase:"succeeded",nodeVersion:j.toVersion};j.completedAt=new Date().toISOString();fs.writeFileSync(p,JSON.stringify(j));'\n`, { mode: 0o755 });
 
@@ -174,7 +177,9 @@ test("detached node update worker does not overwrite rollout completion after se
   assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "succeeded");
   const npmCalls = fs.readFileSync(npmLog, "utf8");
   assert.match(npmCalls, new RegExp(`view @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")} dist\\.integrity --json`));
+  assert.match(npmCalls, new RegExp(`view @task-handoff/controlled-instance@${targetVersion.replaceAll(".", "\\.")} dist\\.integrity --json`));
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
+  assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/controlled-instance@${targetVersion.replaceAll(".", "\\.")}`));
 });
 
 test("detached node update worker installs into the prefix that owns the running worker", () => {
