@@ -45,6 +45,7 @@ export type RegisterControlPlaneManagementRoutesOptions = {
   agentAggregator: ControlPlaneAgentAggregator;
   errorPayload: ErrorPayload;
   onInstanceDeleted?: (instanceId: string) => Promise<void>;
+  releaseCloudRelayNode?: (nodeHandle: string) => Promise<void>;
 };
 
 export function registerControlPlaneManagementRoutes(options: RegisterControlPlaneManagementRoutesOptions) {
@@ -64,10 +65,11 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
     agentAggregator,
     errorPayload,
     onInstanceDeleted,
+    releaseCloudRelayNode,
   } = options;
 
   registerCatalogRoutes({ app, service, events });
-  registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload, operationApprovals, auth });
+  registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload, operationApprovals, auth, releaseCloudRelayNode });
   registerInstanceRoutes({ app, service, events, onInstanceDeleted, operationApprovals, auth });
   registerEnvironmentTemplateRoutes(app, service, events);
   registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionAttachments, aiSessionAttachmentCache });

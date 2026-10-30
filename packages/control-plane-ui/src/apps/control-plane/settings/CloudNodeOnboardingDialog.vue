@@ -111,6 +111,7 @@
               :display-name="attempt.displayName"
               :node-handle="attempt.nodeHandle"
               :error="cloudRelayError"
+              @reapply="reapplyOnboarding"
               @retry="retryOnboardingPoll"
               @cancel="cancelBindingToken"
             />
@@ -174,6 +175,7 @@
                 :display-name="attempt.displayName"
                 :node-handle="attempt.nodeHandle"
                 :error="cloudRelayError"
+                @reapply="reapplyOnboarding"
                 @retry="retryOnboardingPoll"
                 @cancel="cancelBindingToken"
               />
@@ -220,6 +222,7 @@ import {
   claimCloudAccountNode,
   controlPlaneQueryKeys,
   createCloudNodeBindingToken,
+  reapplyCloudAccountNodeClaim,
   releaseCloudAccountNodeClaim,
   useCloudAccountNodesQuery,
   useCloudAccountQuery,
@@ -238,8 +241,11 @@ import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue
 import {
   beginCloudNodeOnboarding,
   completeCloudNodeOnboarding,
+  expireCloudNodeReapplyWait,
   failCloudNodeOnboarding,
+  rejectCloudNodeOnboarding,
   resetCloudNodeOnboarding,
+  reapplyCloudNodeOnboarding,
   resumeCloudNodeOnboarding,
   setCloudNodeOnboardingNodeHandle,
   setCloudNodeOnboardingToken,
@@ -340,7 +346,11 @@ watch(() => props.open, (open) => {
   else resetView();
   void account.refetch();
   void connectivity.refetch();
-  clock = setInterval(() => { nowMs.value = Date.now(); }, 1_000);
+  clock = setInterval(() => {
+    const now = Date.now();
+    nowMs.value = now;
+    expireCloudNodeReapplyWait(now, t("settings.nodeRelay.nodeTrust.reapplyNoResponse"));
+  }, 1_000);
 });
 
 watch(() => accountNodes.data.value, (data) => {
@@ -485,6 +495,32 @@ function closeDialog() {
 function retryOnboardingPoll() {
   resumeCloudNodeOnboarding();
   void accountNodes.refetch();
+}
+
+async function reapplyOnboarding() {
+  const nodeHandle = attempt.value?.nodeHandle;
+  if (!nodeHandle || busy.value) return;
+  busy.value = true;
+  reapplyCloudNodeOnboarding();
+  try {
+    await reapplyCloudAccountNodeClaim(nodeHandle);
+  } catch (error) {
+    rejectCloudNodeOnboarding(translateApiError(error, t));
+    busy.value = false;
+    return;
+  }
+  try {
+    // The reapply acknowledgement is authoritative. A transient snapshot
+    // failure must not turn an accepted queue entry into a user-visible failure;
+    // polling recovers the snapshot and the bounded wait still ends in a retryable state.
+    await accountNodes.refetch();
+    syncCloudNodeOnboarding(accountNodes.data.value);
+    applyOnboardingState();
+  } catch {
+    // Keep waiting for the next polling cycle or the bounded timeout.
+  } finally {
+    busy.value = false;
+  }
 }
 </script>
 

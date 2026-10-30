@@ -1,5 +1,8 @@
 import {
   NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE,
+  NODE_RELAY_CAPABILITIES_HEADER,
+  NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER,
+  NODE_RELAY_TRUST_RETRY_CAPABILITY,
   NodeRelayAllocationResponseSchema,
   NodeRelayAllocationRequestV2Schema,
   NodeRelayBindingRedemptionRequestSchema,
@@ -77,12 +80,12 @@ export class NodeRelayCloudClient {
     return NodeRelayCredentialSchema.parse(data);
   }
 
-  async allocations(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[] }): Promise<NodeRelayNodeAllocation[]> {
+  async allocations(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[]; failedControlPlaneIds?: string[] }): Promise<NodeRelayNodeAllocation[]> {
     const data = await this.post("/api/v1/node-relay/v1/allocations", {
       nodeId: input.nodeId,
       ...(input.controlPlaneId ? { controlPlaneId: input.controlPlaneId } : {}),
       ...(input.refreshControlPlaneIds?.length ? { refreshControlPlaneIds: input.refreshControlPlaneIds } : {}),
-    }, { credential });
+    }, { credential, advertiseCapabilities: true, failedControlPlaneIds: input.failedControlPlaneIds });
     return NodeRelayAllocationResponseSchema.parse(data).allocations;
   }
 
@@ -91,18 +94,18 @@ export class NodeRelayCloudClient {
       nodeId: input.nodeId,
       ...(input.controlPlaneIds?.length ? { controlPlaneIds: input.controlPlaneIds } : {}),
     });
-    const data = await this.post("/api/v1/node-relay/v2/probe-targets", body, { credential });
+    const data = await this.post("/api/v1/node-relay/v2/probe-targets", body, { credential, advertiseCapabilities: true });
     return NodeRelayProbeTargetsResponseSchema.parse(data).targets;
   }
 
-  async allocationsV2(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[]; probeEvidence?: NodeRelayProbeEvidence }): Promise<NodeRelayNodeAllocation[]> {
+  async allocationsV2(credential: string, input: { nodeId: string; controlPlaneId?: string; refreshControlPlaneIds?: string[]; failedControlPlaneIds?: string[]; probeEvidence?: NodeRelayProbeEvidence }): Promise<NodeRelayNodeAllocation[]> {
     const body = NodeRelayAllocationRequestV2Schema.parse({
       nodeId: input.nodeId,
       ...(input.controlPlaneId ? { controlPlaneId: input.controlPlaneId } : {}),
       ...(input.refreshControlPlaneIds?.length ? { refreshControlPlaneIds: input.refreshControlPlaneIds } : {}),
       ...(input.probeEvidence ? { probeEvidence: input.probeEvidence } : {}),
     });
-    const data = await this.post("/api/v1/node-relay/v2/allocations", body, { credential });
+    const data = await this.post("/api/v1/node-relay/v2/allocations", body, { credential, advertiseCapabilities: true, failedControlPlaneIds: input.failedControlPlaneIds });
     return NodeRelayAllocationResponseSchema.parse(data).allocations;
   }
 
@@ -112,13 +115,15 @@ export class NodeRelayCloudClient {
     return Boolean((data as { unbound?: unknown })?.unbound);
   }
 
-  private async post(path: string, body: unknown, options: { credential?: string } = {}) {
+  private async post(path: string, body: unknown, options: { credential?: string; advertiseCapabilities?: boolean; failedControlPlaneIds?: string[] } = {}) {
     const origin = this.origin;
     const response = await this.fetchImpl(new URL(path, origin).toString(), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(options.credential ? { authorization: `Bearer ${options.credential}` } : {}),
+        ...(options.advertiseCapabilities ? { [NODE_RELAY_CAPABILITIES_HEADER]: NODE_RELAY_TRUST_RETRY_CAPABILITY } : {}),
+        ...(options.failedControlPlaneIds?.length ? { [NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER]: options.failedControlPlaneIds.join(",") } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -131,14 +136,25 @@ export class NodeRelayCloudClient {
       if (response.status >= 500) this.onOriginFailure?.(origin);
       const code = typeof payload.error?.code === "string" ? payload.error.code : `NODE_AGENT_CLOUD_RELAY_HTTP_${response.status}`;
       const message = typeof payload.error?.message === "string" ? payload.error.message : `Cloud relay request failed with HTTP ${response.status}.`;
+      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
       throw Object.assign(cloudRelayClientError(code, message), {
         statusCode: response.status,
         unsupported: isAdaptiveSelectionUnsupported(response.status, code, message),
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       });
     }
     this.onOriginSuccess?.(origin);
     return payload.data;
   }
+}
+
+/** Retry-After is either delta-seconds or an HTTP date; invalid values are ignored. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Math.max(0, Number(trimmed) * 1_000);
+  const at = Date.parse(trimmed);
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
 }
 
 /**

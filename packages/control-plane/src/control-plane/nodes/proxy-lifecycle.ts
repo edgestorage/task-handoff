@@ -283,8 +283,9 @@ export class ControlPlaneProxyLifecycle {
     }
   }
 
-  async deleteNode(node: Node, force = false) {
+  async deleteNode(node: Node, force = false, beforeLocalDelete?: (node: Node) => void | Promise<void>) {
     if (node.connectionMode !== "control-plane-proxy") {
+      await beforeLocalDelete?.(node);
       return { deleted: await this.options.deleteNode(node.id), revoke: { mode: "not-proxied" as const, orphanRisk: false } };
     }
     const credential = this.options.privateStore.nodeCredential(node.id);
@@ -299,14 +300,14 @@ export class ControlPlaneProxyLifecycle {
         });
         throw error;
       }
-      return this.forceDeleteNode(node.id);
+      return this.forceDeleteNode(node, beforeLocalDelete);
     }
 
     let response: Response;
     try {
       response = await this.revokeBinding(credential);
     } catch (cause) {
-      if (force) return this.forceDeleteNode(node.id);
+      if (force) return this.forceDeleteNode(node, beforeLocalDelete);
       const error = new Error("Trusted control-plane proxy is unavailable; the binding was not revoked.", { cause });
       Object.assign(error, {
         statusCode: 503,
@@ -322,7 +323,7 @@ export class ControlPlaneProxyLifecycle {
       if (payload?.error?.code === ControlPlaneProxyErrorCode.BindingRevoked
         || payload?.error?.code === ControlPlaneProxyErrorCode.BindingUnknown) {
         const bindingId = (payload.error.details as { bindingId?: unknown } | undefined)?.bindingId;
-        if (bindingId === credential.proxyBindingId) return this.finishRevokedNodeDelete(node.id);
+        if (bindingId === credential.proxyBindingId) return this.finishRevokedNodeDelete(node, beforeLocalDelete);
       }
       const error = new Error(payload?.error?.message || `Proxy binding revoke failed with HTTP ${response.status}.`);
       Object.assign(error, {
@@ -343,7 +344,7 @@ export class ControlPlaneProxyLifecycle {
       }
       throw cause;
     }
-    return this.finishRevokedNodeDelete(node.id);
+    return this.finishRevokedNodeDelete(node, beforeLocalDelete);
   }
 
   private async completeClaim(pending: PendingProxyClaim, inviteToken?: string) {
@@ -592,15 +593,17 @@ export class ControlPlaneProxyLifecycle {
     }
   }
 
-  private async finishRevokedNodeDelete(id: string) {
-    const deleted = await this.options.deleteNode(id);
-    this.options.privateStore.deleteNodeCredential(id);
+  private async finishRevokedNodeDelete(node: Node, beforeLocalDelete?: (node: Node) => void | Promise<void>) {
+    await beforeLocalDelete?.(node);
+    const deleted = await this.options.deleteNode(node.id);
+    this.options.privateStore.deleteNodeCredential(node.id);
     return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
   }
 
-  private async forceDeleteNode(id: string) {
-    const deleted = await this.options.deleteNode(id);
-    this.options.privateStore.deleteNodeCredential(id);
+  private async forceDeleteNode(node: Node, beforeLocalDelete?: (node: Node) => void | Promise<void>) {
+    await beforeLocalDelete?.(node);
+    const deleted = await this.options.deleteNode(node.id);
+    this.options.privateStore.deleteNodeCredential(node.id);
     return { deleted, revoke: { mode: "forced" as const, orphanRisk: true } };
   }
 }

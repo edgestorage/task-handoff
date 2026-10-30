@@ -5,6 +5,8 @@ import {
   CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY,
   CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
   ControlPlaneAccessSettingsViewSchema,
+  NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NODE_AGENT,
+  NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NOT_OBSERVED,
   OutboundConnectionRegistrationResponseSchema,
   RELAY_SESSION_RESUME_CAPABILITY,
   RESOURCE_SHARING_CAPABILITY_HEADER,
@@ -105,10 +107,11 @@ export class CloudConnectivityBackgroundRuntime {
   private catalogPublishLoop?: Promise<void>;
   private catalogPublishQueued = false;
   private nodeRelayRestore?: Promise<void>;
-  private readonly nodeRelayClaimsInFlight = new Set<string>();
+  private readonly nodeRelayClaimQueues = new Map<string, Promise<unknown>>();
   private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nodeRelayRecoveryAttempts = new Map<string, number>();
   private readonly nodeRelayRecoveryInFlight = new Set<string>();
+  private readonly nodeRelayRecoveryFailedRelayIds = new Map<string, string>();
   private readonly revokedNodeRelayClaims = new Set<string>();
   private readonly nodeRelayAttaches = new Map<string, Set<Promise<unknown>>>();
   private accessToken?: { value: string; expiresAt: number };
@@ -204,10 +207,17 @@ export class CloudConnectivityBackgroundRuntime {
           this.options.logger?.warn?.({
             code: "NODE_RELAY_CHANNEL_ATTACH_FAILED",
             nodeHandle,
+            relayId: boundedText((event as any)?.relayId, 64),
+            relayUrl: boundedText((event as any)?.relayUrl, 512),
+            allocationId: boundedText((event as any)?.allocationId, 64),
             errorCode: errorCode(error) ?? "NODE_RELAY_CHANNEL_FAILED",
             retryable,
           }, "node_relay_channel_attach_failed");
-          if (retryable) this.scheduleNodeRelayRecovery(nodeHandle);
+          const failedRelayId = (error as { relayConnectionFailed?: unknown } | undefined)?.relayConnectionFailed === true
+            && typeof (event as any)?.relayId === "string"
+            ? (event as any).relayId as string
+            : undefined;
+          if (retryable) this.scheduleNodeRelayRecovery(nodeHandle, failedRelayId);
         });
         const attaches = this.nodeRelayAttaches.get(nodeHandle) ?? new Set<Promise<unknown>>();
         attaches.add(attach);
@@ -267,14 +277,15 @@ export class CloudConnectivityBackgroundRuntime {
         nodes: options.nodeRelay.nodes,
         audit: options.nodeRelay.audit,
         onPreserveLocalConnection: async (nodeHandle) => { await this.revokeAccountNodeClaim(nodeHandle); },
-        onChannelClosed: ({ nodeHandle, nodeId, reason }) => {
+        onChannelClosed: ({ nodeHandle, nodeId, relayId, reason }) => {
           this.options.logger?.warn?.({
             code: "NODE_RELAY_CHANNEL_CLOSED",
             nodeHandle,
             nodeId,
+            relayId,
             reason: boundedText(reason, 240),
           }, "node_relay_channel_closed");
-          this.scheduleNodeRelayRecovery(nodeHandle);
+          this.scheduleNodeRelayRecovery(nodeHandle, relayId);
         },
       });
     }
@@ -390,27 +401,54 @@ export class CloudConnectivityBackgroundRuntime {
    * Claims an account node for this Control Plane. The Relay allocation arrives
    * as a pushed event once the node asks for it; nothing is created here.
    */
-  async claimAccountNode(nodeHandle: string, options: { refreshAllocation?: boolean } = {}) {
+  async claimAccountNode(nodeHandle: string, options: { refreshAllocation?: boolean; failedRelayId?: string; trustRetry?: boolean } = {}) {
     if (this.options.nodeRelay?.nodes.resolve(nodeHandle)?.preserveLocalConnection) {
       throw Object.assign(new Error("This node is already managed through its existing connection."), {
         code: "CLOUD_NODE_ALREADY_MANAGED",
         statusCode: 409,
       });
     }
-    if (options.refreshAllocation && this.revokedNodeRelayClaims.has(nodeHandle)) return { status: "revoked" as const };
     if (!options.refreshAllocation) this.revokedNodeRelayClaims.delete(nodeHandle);
-    if (this.nodeRelayClaimsInFlight.has(nodeHandle)) return { status: "pending" as const };
-    this.nodeRelayClaimsInFlight.add(nodeHandle);
-    try {
+    // Serialize per-node claims instead of collapsing a concurrent request to
+    // "pending". In particular an explicit trust reapply carries a one-shot
+    // directive; dropping it because a background restore happened to be in
+    // flight would make the UI report success while the node never reopens.
+    return this.enqueueNodeRelayOperation(nodeHandle, async () => {
+      if (options.refreshAllocation && this.revokedNodeRelayClaims.has(nodeHandle)) return { status: "revoked" as const };
       const result = await this.request("claim-node-relay-node", this.nodeRelayBindingPayload({
         nodeHandle,
         ...(options.refreshAllocation === true ? { refreshAllocation: true } : {}),
-      })) as { status?: string };
+        ...(options.failedRelayId ? { failedRelayId: options.failedRelayId } : {}),
+        ...(options.trustRetry === true ? { trustRetry: true } : {}),
+      })) as { status?: string; trustRetryQueued?: unknown; trustRetryUnsupportedReason?: unknown };
       if (!this.revokedNodeRelayClaims.has(nodeHandle)) this.nodeRelayChannels?.noteClaim(nodeHandle);
       return result;
-    } finally {
-      this.nodeRelayClaimsInFlight.delete(nodeHandle);
+    });
+  }
+
+  /** Explicitly reopen a rejected or expired local trust request; never approves it. */
+  async reapplyAccountNodeClaim(nodeHandle: string) {
+    const result = await this.claimAccountNode(nodeHandle, { trustRetry: true }) as {
+      trustRetryQueued?: unknown;
+      trustRetryUnsupportedReason?: unknown;
+    };
+    if (result?.trustRetryQueued === true) return result;
+    if (result?.trustRetryUnsupportedReason === NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NODE_AGENT) {
+      throw Object.assign(new Error("The Node Agent must be upgraded before it can reopen a rejected trust request."), {
+        code: "CLOUD_NODE_TRUST_RETRY_NODE_AGENT_UNSUPPORTED",
+        statusCode: 409,
+      });
     }
+    if (result?.trustRetryUnsupportedReason === NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NOT_OBSERVED) {
+      throw Object.assign(new Error("The Coordinator has not observed trust-retry support from this Node Agent. Upgrade the Node Agent, or wait for it to reconnect and try again."), {
+        code: "CLOUD_NODE_TRUST_RETRY_NODE_AGENT_NOT_OBSERVED",
+        statusCode: 409,
+      });
+    }
+    throw Object.assign(new Error("The Coordinator did not confirm the trust retry request. Upgrade the Coordinator before reapplying."), {
+      code: "CLOUD_NODE_TRUST_RETRY_COORDINATOR_UNSUPPORTED",
+      statusCode: 409,
+    });
   }
 
   /** Removes this Control Plane's claim; other Control Planes keep their channels. */
@@ -419,7 +457,11 @@ export class CloudConnectivityBackgroundRuntime {
     this.resetNodeRelayRecovery(nodeHandle);
     this.nodeRelayChannels?.forgetNode(nodeHandle);
     try {
-      return await this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle }));
+      // A claim RPC already in flight may land after the revoke. Queue the
+      // remote revoke behind it so the final Coordinator state is always
+      // revoked; local invalidation above happens immediately.
+      return await this.enqueueNodeRelayOperation(nodeHandle, () =>
+        this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle })));
     } finally {
       // Even if the remote revoke cannot be delivered now, stop using the
       // local relay channel. A later stale allocation is then ignored because
@@ -431,6 +473,15 @@ export class CloudConnectivityBackgroundRuntime {
   /** Wait for pre-cancellation writes before removing an unfinished node record. */
   async settleNodeRelayAttaches(nodeHandle: string) {
     await Promise.allSettled([...(this.nodeRelayAttaches.get(nodeHandle) ?? [])]);
+  }
+
+  private enqueueNodeRelayOperation<T>(nodeHandle: string, operation: () => Promise<T>) {
+    const previous = this.nodeRelayClaimQueues.get(nodeHandle) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.nodeRelayClaimQueues.set(nodeHandle, current);
+    return current.finally(() => {
+      if (this.nodeRelayClaimQueues.get(nodeHandle) === current) this.nodeRelayClaimQueues.delete(nodeHandle);
+    });
   }
 
   /**
@@ -618,7 +669,9 @@ export class CloudConnectivityBackgroundRuntime {
     })().catch(() => undefined).finally(() => { this.nodeRelayRestore = undefined; });
   }
 
-  private scheduleNodeRelayRecovery(nodeHandle: string) {
+  private scheduleNodeRelayRecovery(nodeHandle: string, failedRelayId?: string) {
+    if (failedRelayId) this.nodeRelayRecoveryFailedRelayIds.set(nodeHandle, failedRelayId);
+    else this.nodeRelayRecoveryFailedRelayIds.delete(nodeHandle);
     if (!this.running || !this.nodeRelayChannels || this.revokedNodeRelayClaims.has(nodeHandle) || this.nodeRelayRecoveryTimers.has(nodeHandle) || this.nodeRelayRecoveryInFlight.has(nodeHandle)) return;
     const attempt = (this.nodeRelayRecoveryAttempts.get(nodeHandle) ?? 0) + 1;
     this.nodeRelayRecoveryAttempts.set(nodeHandle, attempt);
@@ -639,7 +692,12 @@ export class CloudConnectivityBackgroundRuntime {
     let failure: unknown;
     let pending = false;
     try {
-      const result = await this.claimAccountNode(nodeHandle, { refreshAllocation: true });
+      const failedRelayId = this.nodeRelayRecoveryFailedRelayIds.get(nodeHandle);
+      const result = await this.claimAccountNode(nodeHandle, {
+        refreshAllocation: true,
+        ...(failedRelayId ? { failedRelayId } : {}),
+      });
+      this.nodeRelayRecoveryFailedRelayIds.delete(nodeHandle);
       pending = (result as { status?: unknown } | undefined)?.status === "pending";
     } catch (error) {
       failure = error;
@@ -661,6 +719,7 @@ export class CloudConnectivityBackgroundRuntime {
     if (timer) clearTimeout(timer);
     this.nodeRelayRecoveryTimers.delete(nodeHandle);
     this.nodeRelayRecoveryAttempts.delete(nodeHandle);
+    this.nodeRelayRecoveryFailedRelayIds.delete(nodeHandle);
   }
 
   /**

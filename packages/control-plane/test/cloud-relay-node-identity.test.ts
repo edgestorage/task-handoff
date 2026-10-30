@@ -114,6 +114,69 @@ test("an explicit cloud-relay unbind survives restart and disables automatic rec
   }
 });
 
+test("a stale relay channel close is ignored after its local node was deleted", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-deleted-node-"));
+  const paths = controlPlaneStorePaths(root);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const service = new ControlPlaneService(paths, { database, secrets });
+  try {
+    await service.init();
+    const created = await service.ensureCloudRelayNode({ nodeHandle: NODE_HANDLE, nodeId: MACHINE_NODE_ID });
+    await service.deleteNode(created.nodeId);
+
+    assert.equal(await service.setCloudRelayNodeConnection(created.nodeId, false, "channel-closed"), undefined);
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an undeletable built-in node never runs the cloud claim release hook", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-builtin-delete-"));
+  const paths = controlPlaneStorePaths(root);
+  const database = await createControlPlaneDatabase(paths);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const service = new ControlPlaneService(paths, { database, secrets });
+  const timestamp = "2026-10-18T00:00:00.000Z";
+  const builtinId = "node_builtin_cloud_relay_delete";
+  try {
+    await service.init();
+    await service.nodes.put(NodeSchema.parse({
+      id: builtinId,
+      name: "Built-in node",
+      connectionMode: "local-ipc",
+      connectionPath: { kind: "direct" },
+      connectionEnabled: true,
+      auth: { mode: "paired-hmac", keyId: "key_local", secret: "local-secret", pairing: { status: "paired" } },
+      status: "online",
+      health: "ok",
+      capabilities: {},
+      labels: {
+        "task-handoff.control-plane.builtin": "true",
+        [CLOUD_ACCOUNT_NODE_HANDLE_LABEL]: NODE_HANDLE,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+    let released = false;
+
+    await assert.rejects(
+      service.deleteNodeWithProxyLifecycle(builtinId, false, () => { released = true; }),
+      { code: "LOCAL_NODE_CANNOT_BE_DELETED" },
+    );
+    assert.equal(released, false);
+    assert.ok(service.nodes.get(builtinId));
+  } finally {
+    service.dispose();
+    await database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a cloud-relay node rejects a health document with a different node identity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-cloud-relay-identity-mismatch-"));
   const paths = controlPlaneStorePaths(root);

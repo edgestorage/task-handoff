@@ -24,8 +24,9 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"] }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"]; deferClaimResponses?: boolean; claimResponse?: (payload: any) => any }) {
   const sockets: FakeSocket[] = [];
+  const deferredClaimResponses: Array<() => void> = [];
   class FakeSocket {
     static OPEN = 1;
     readyState = FakeSocket.OPEN;
@@ -53,7 +54,13 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
         queueMicrotask(() => this.receive({ type: "response", requestId: message.requestId, data: { status: "revoked" } }));
       }
       if (message.type === "request" && message.operation === "claim-node-relay-node") {
-        queueMicrotask(() => this.receive({ type: "response", requestId: message.requestId, data: { status: "pending" } }));
+        const data = input.claimResponse?.(message.payload) ?? {
+          status: "pending",
+          ...(message.payload?.trustRetry === true ? { trustRetryQueued: true } : {}),
+        };
+        const respond = () => this.receive({ type: "response", requestId: message.requestId, data });
+        if (input.deferClaimResponses) deferredClaimResponses.push(respond);
+        else queueMicrotask(respond);
       }
     }
     close() {
@@ -95,7 +102,13 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
       ...(input.connector ? { connector: input.connector } : {}),
     },
   });
-  return { runtime, sockets };
+  return {
+    runtime,
+    sockets,
+    releaseClaimResponses: () => {
+      for (const respond of deferredClaimResponses.splice(0)) respond();
+    },
+  };
 }
 
 test("a node with an existing original connection cannot be claimed again over the cloud relay", async () => {
@@ -122,6 +135,87 @@ test("a node with an existing original connection cannot be claimed again over t
     await runtime.claimAccountNode("nrh_new");
     assert.deepEqual(sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").map((message) => message.payload.nodeHandle), ["nrh_new"]);
     assert.deepEqual(runtime.nodeRelayState().claims.map((claim) => claim.nodeHandle), ["nrh_new"]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("an explicit reapply queued behind another claim still carries its trust retry directive", async () => {
+  const { runtime, sockets } = runtimeFixture({ nodeRelay: true, handles: [] });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    await Promise.all([
+      runtime.claimAccountNode("nrh_reapply"),
+      runtime.reapplyAccountNodeClaim("nrh_reapply"),
+    ]);
+    const claims = sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node");
+    assert.equal(claims.length, 2, "a concurrent reapply must not be collapsed into a no-op pending result");
+    assert.equal(claims[0].payload.trustRetry, undefined);
+    assert.equal(claims[1].payload.trustRetry, true);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a legacy Coordinator cannot turn a trust retry into a false success", async () => {
+  const { runtime, sockets } = runtimeFixture({
+    nodeRelay: true,
+    handles: [],
+    claimResponse: () => ({ claimed: true, status: "pending" }),
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    await assert.rejects(runtime.reapplyAccountNodeClaim("nrh_reapply_legacy"), {
+      code: "CLOUD_NODE_TRUST_RETRY_COORDINATOR_UNSUPPORTED",
+      statusCode: 409,
+    });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a Coordinator identifies a Node Agent that cannot consume a trust retry", async () => {
+  const { runtime, sockets } = runtimeFixture({
+    nodeRelay: true,
+    handles: [],
+    claimResponse: (payload) => payload?.trustRetry === true
+      ? { claimed: true, status: "pending", trustRetryQueued: false, trustRetryUnsupportedReason: "node-agent-upgrade-required" }
+      : { claimed: true, status: "pending" },
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    await assert.rejects(runtime.reapplyAccountNodeClaim("nrh_reapply_old_agent"), {
+      code: "CLOUD_NODE_TRUST_RETRY_NODE_AGENT_UNSUPPORTED",
+      statusCode: 409,
+    });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("a revoke waits for an in-flight claim before reaching the Coordinator", async () => {
+  const { runtime, sockets, releaseClaimResponses } = runtimeFixture({ nodeRelay: true, handles: [], deferClaimResponses: true });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) await wait(5);
+    const claim = runtime.claimAccountNode("nrh_race");
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.operation === "claim-node-relay-node"); attempt += 1) await wait(5);
+
+    const revoke = runtime.revokeAccountNodeClaim("nrh_race");
+    await new Promise(setImmediate);
+    assert.equal(sockets[0].sent.some((message) => message.operation === "revoke-node-relay-claim"), false);
+
+    releaseClaimResponses();
+    await claim;
+    await revoke;
+    assert.deepEqual(
+      sockets[0].sent.filter((message) => ["claim-node-relay-node", "revoke-node-relay-claim"].includes(message.operation)).map((message) => message.operation),
+      ["claim-node-relay-node", "revoke-node-relay-claim"],
+    );
+    assert.deepEqual(runtime.nodeRelayState().claims, []);
   } finally {
     await runtime.stop();
   }
@@ -186,6 +280,7 @@ test("an attach failure refreshes the Coordinator claim instead of waiting for a
     }
     assert.ok(refresh, "the Control Plane must ask the Coordinator to retire the consumed attach capability");
     assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
+    assert.equal(refresh.payload.failedRelayId, event.relayId, "a real attach failure must identify the failed Relay");
     const error = runtime.nodeRelayState().errors.find((entry: any) => entry.nodeHandle === "nrh_macmini");
     assert.equal(error?.code, "RELAY_ATTACH_REPLAYED");
   } finally {
@@ -249,6 +344,7 @@ test("a live node channel closing refreshes the Coordinator claim", async () => 
     }
     assert.ok(refresh, "a closed live channel must request a fresh allocation");
     assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
+    assert.equal(refresh.payload.failedRelayId, event.relayId, "a lost live socket must identify the failed Relay");
     assert.equal(runtime.nodeRelayState().channels.length, 0);
   } finally {
     await runtime.stop();
@@ -304,6 +400,7 @@ test("pending node trust keeps probing without timing out human approval", async
       await new Promise(setImmediate);
     }
     assert.ok(refresh, "pending trust must keep requesting fresh allocations");
+    assert.equal(refresh.payload.failedRelayId, undefined, "pending approval must not cool down a healthy Relay");
 
     // Advance beyond the former 20-second transport timeout. The node has
     // answered; only its signed trust outcome may end the approval wait.

@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { ApplyUpdateRequestSchema, NodeJoinInviteStatusSchema, UpdateCheckRequestSchema, UpdateNodeAgentExternalListenerSchema } from "@task-handoff/protocol/control-plane";
+import {
+  ApplyUpdateRequestSchema,
+  CLOUD_ACCOUNT_NODE_HANDLE_LABEL,
+  NodeJoinInviteStatusSchema,
+  UpdateCheckRequestSchema,
+  UpdateNodeAgentExternalListenerSchema,
+} from "@task-handoff/protocol/control-plane";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import type { OperationApprovals } from "../approvals/operation-approvals.ts";
 import type { ControlPlaneAuth } from "../auth/service.ts";
@@ -51,6 +57,7 @@ export type RegisterNodeRoutesOptions = {
   nodeAgentTunnel: ControlPlaneNodeAgentTunnelTransport;
   nodeEventSubscriber: ControlPlaneNodeEventSubscriber;
   errorPayload: ErrorPayload;
+  releaseCloudRelayNode?: (nodeHandle: string) => Promise<void>;
 };
 
 export function registerNodeRoutes({
@@ -62,6 +69,7 @@ export function registerNodeRoutes({
   nodeAgentTunnel,
   nodeEventSubscriber,
   errorPayload,
+  releaseCloudRelayNode,
 }: RegisterNodeRoutesOptions) {
   const rejectRetiredInstanceUpdate = (body: unknown) => {
     if (!body || typeof body !== "object" || Array.isArray(body) || !("target" in body)) return;
@@ -283,7 +291,15 @@ export function registerNodeRoutes({
     const id = IdParamsSchema.parse(request.params).id;
     const query = DeleteNodeQuerySchema.parse(request.query);
     return executeApprovedOperation(request, reply, auth, operationApprovals, "node.remove", id, { force: query.force === "true" }, undefined, async () => {
-      const result = await service.deleteNodeWithProxyLifecycle(id, query.force === "true");
+      const node = service.requireNode(id);
+      const cloudNodeHandle = node.connectionPath.kind === "cloud-relay"
+        ? node.connectionPath.nodeHandle
+        : node.labels?.[CLOUD_ACCOUNT_NODE_HANDLE_LABEL];
+      const result = await service.deleteNodeWithProxyLifecycle(
+        id,
+        query.force === "true",
+        cloudNodeHandle && releaseCloudRelayNode ? async () => { await releaseCloudRelayNode(cloudNodeHandle); } : undefined,
+      );
       nodeEventSubscriber.syncNow();
       events.publish("node.deleted", { nodeId: id, deleted: result.deleted, revoke: result.revoke });
       return result;

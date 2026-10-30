@@ -711,8 +711,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       linkNode: async (nodeId: string, nodeHandle: string) => { await service.linkNodeToCloudAccount(nodeId, nodeHandle); },
       ensure: (input: { nodeHandle: string; nodeId: string; displayName?: string }) => service.ensureCloudRelayNode(input),
       savePairing: async (nodeId: string, pairing: { keyId: string; secret: string }) => { await service.saveCloudRelayNodePairing(nodeId, pairing); },
-      connected: async (nodeId: string) => { await service.setCloudRelayNodeConnection(nodeId, true); publishCloudRelayNodeState(nodeId); },
-      disconnected: async (nodeId: string, input: { reason: string }) => { await service.setCloudRelayNodeConnection(nodeId, false, input.reason); publishCloudRelayNodeState(nodeId); },
+      connected: async (nodeId: string) => {
+        if (await service.setCloudRelayNodeConnection(nodeId, true)) publishCloudRelayNodeState(nodeId);
+      },
+      disconnected: async (nodeId: string, input: { reason: string }) => {
+        if (await service.setCloudRelayNodeConnection(nodeId, false, input.reason)) publishCloudRelayNodeState(nodeId);
+      },
     },
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
@@ -1242,6 +1246,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return { data };
   });
 
+  app.post("/api/cloud-connectivity/account-nodes/:nodeHandle/reapply", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const nodeHandle = String((request.params as { nodeHandle?: unknown }).nodeHandle ?? "");
+    await service.setCloudRelayNodeClaimEnabled(nodeHandle, true);
+    const data = await cloudConnectivityRuntime.reapplyAccountNodeClaim(nodeHandle);
+    return { data };
+  });
+
   // Revoking one claim leaves every other Control Plane's channel untouched.
   app.delete("/api/cloud-connectivity/account-nodes/:nodeHandle/claim", async (request) => {
     await requireCloudConnectivityAdmin(request);
@@ -1693,6 +1705,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     nodeEventSubscriber,
     agentAggregator,
     errorPayload: controlPlaneErrorPayload,
+    releaseCloudRelayNode: async (nodeHandle) => {
+      await service.setCloudRelayNodeClaimEnabled(nodeHandle, false);
+      await cloudConnectivityRuntime.revokeAccountNodeClaim(nodeHandle);
+      await cloudConnectivityRuntime.settleNodeRelayAttaches(nodeHandle);
+    },
     onInstanceDeleted: async (instanceId) => {
       if (!auth.enabled()) return;
       const affectedUserIds = await auth.users.removeInstanceFromAccessScopes(instanceId);

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DateTimeSchema, IdSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
-import { NodeAccessFieldsSchema, NodeRelayHandleSchema, NodeResourceAccessSchema, TrafficClassSchema, validateNodeAccessFields } from "./relay.ts";
+import { NodeAccessFieldsSchema, NodeRelayHandleSchema, NodeResourceAccessSchema, RESOURCE_SHARING_CAPABILITY_HEADER, TrafficClassSchema, validateNodeAccessFields } from "./relay.ts";
 import { OfficialAudience, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION } from "./versions.ts";
 
 /** Ed25519 public keys are 32-byte base64url strings, same shape as every other cloud key. */
@@ -147,6 +147,12 @@ export const NodeRelayClaimGrantPayloadSchema = z.strictObject({
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
   /**
+   * One-shot explicit retry inside this signed, allocation-bound grant. Present
+   * only for a node that advertised trust-retry support; it can reopen a
+   * rejected or expired request as pending, never approve it.
+   */
+  trustRetry: z.literal(true).optional(),
+  /**
    * The claiming Control Plane's cloud identity key. The node verifies the
    * Control Plane's end-to-end handshake signature with it, so a Relay (or
    * anyone else) cannot impersonate the Control Plane. A node that needs to
@@ -156,6 +162,40 @@ export const NodeRelayClaimGrantPayloadSchema = z.strictObject({
   ...NodeAccessFieldsSchema.shape,
 }).superRefine((value, context) => validateNodeAccessFields(value, context));
 export const NodeRelayClaimGrantSchema = NodeRelayClaimGrantPayloadSchema.safeExtend({ signature: OpaqueSecretSchema });
+
+/**
+ * Capabilities advertised on allocation polls share the package-wide header.
+ * Older Coordinators ignore the header; current consumers parse it with the
+ * same token helper as every other capability boundary.
+ */
+export const NODE_RELAY_TRUST_RETRY_CAPABILITY = "node-relay-trust-retry-v1";
+export const NODE_RELAY_CAPABILITIES_HEADER = RESOURCE_SHARING_CAPABILITY_HEADER;
+
+/**
+ * Explicit Relay failures reported alongside a refresh request. This is a
+ * separate signal from `refreshControlPlaneIds`: pending trust also needs a
+ * fresh allocation, but it must not cool down a healthy Relay. Headers keep the
+ * signal compatible with older strict allocation-request schemas.
+ */
+export const NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER = "x-task-handoff-node-relay-failed-control-plane-ids";
+
+export const NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NODE_AGENT = "node-agent-upgrade-required";
+export const NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NOT_OBSERVED = "node-agent-capability-not-observed";
+export const NodeRelayTrustRetryUnsupportedReasonSchema = z.enum([
+  NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NODE_AGENT,
+  NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NOT_OBSERVED,
+]);
+
+export function parseNodeRelayFailedControlPlaneIds(value: string | undefined) {
+  const ids = new Set<string>();
+  for (const token of (value ?? "").split(",")) {
+    const parsed = IdSchema.safeParse(token.trim());
+    if (!parsed.success) continue;
+    ids.add(parsed.data);
+    if (ids.size === 8) break;
+  }
+  return [...ids];
+}
 
 /** The allocation the node fetches for itself (credential-authenticated node API). */
 export const NodeRelayNodeAllocationSchema = z.strictObject({

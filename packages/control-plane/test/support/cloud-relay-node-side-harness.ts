@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import {
   NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE,
+  NODE_RELAY_CAPABILITIES_HEADER,
+  NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER,
   NodeRelayAllocationResponseSchema,
   NodeRelayClaimGrantSchema,
   NodeRelayBindingRedemptionSchema,
@@ -70,6 +72,8 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     unbinds: 0,
     redemptions: [] as Array<{ nodeId?: string; displayName?: string }>,
     allocationRequests: [] as Array<{ controlPlaneId?: string; refreshControlPlaneIds?: string[] }>,
+    allocationCapabilities: [] as Array<string | undefined>,
+    allocationFailedControlPlaneIds: [] as string[][],
     ignoreRefresh: false,
     adaptiveSelection: false,
     failAdaptiveAllocations: false,
@@ -79,6 +83,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     probeTargets: undefined as Array<{ relayId: string; relayUrl: string }> | undefined,
     relayByControlPlane: new Map<string, { relayId: string; relayUrl: string }>(),
     claims: new Map<string, CloudClaim>(),
+    trustRetryDirectives: new Set<string>(),
     issued: new Map<string, any>(),
     transformAllocation: undefined as ((allocation: any) => any) | undefined,
     relayUrl: "wss://relay.cloud.example.com/relay",
@@ -138,6 +143,7 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
           expiresAt,
           ...shared,
           controlPlanePublicKey: claim.controlPlanePublicKey,
+          ...(state.trustRetryDirectives.has(claim.controlPlaneId) ? { trustRetry: true as const } : {}),
         };
         const claimGrant = NodeRelayClaimGrantSchema.parse({ ...grantPayload, signature: signingKey.sign("node-relay-claim-grant", grantPayload) });
         const allocation = NodeRelayNodeAllocationSchema.parse({
@@ -191,6 +197,11 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
       }
       if (path === "/api/v1/node-relay/v1/allocations") {
         authenticate();
+        const headers = init?.headers as Record<string, string> | undefined;
+        state.allocationCapabilities.push(headers?.[NODE_RELAY_CAPABILITIES_HEADER]);
+        state.allocationFailedControlPlaneIds.push(
+          headers?.[NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER]?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
+        );
         state.allocationRequests.push(body);
         const allocations = issueAllocations(body);
         return json(200, { data: NodeRelayAllocationResponseSchema.parse({ allocations }) });
@@ -208,6 +219,11 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
       }
       if (path === "/api/v1/node-relay/v2/allocations") {
         authenticate();
+        const headers = init?.headers as Record<string, string> | undefined;
+        state.allocationCapabilities.push(headers?.[NODE_RELAY_CAPABILITIES_HEADER]);
+        state.allocationFailedControlPlaneIds.push(
+          headers?.[NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER]?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
+        );
         state.allocationV2Requests.push(body);
         if (!state.adaptiveSelection) return failure(404, NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE);
         if (state.failAdaptiveAllocations) return failure(503, "NODE_RELAY_ALLOCATION_UNAVAILABLE");
@@ -268,6 +284,11 @@ export function cloudRelayCloudStub(options: { serviceOrigin: string; token?: st
     },
     setIgnoreRefresh(ignoreRefresh: boolean) {
       state.ignoreRefresh = ignoreRefresh;
+    },
+    setTrustRetryDirective(controlPlaneId: string, enabled: boolean) {
+      if (enabled) state.trustRetryDirectives.add(controlPlaneId);
+      else state.trustRetryDirectives.delete(controlPlaneId);
+      state.issued.delete(controlPlaneId);
     },
   };
 }
@@ -431,7 +452,10 @@ export async function startCloudRelayControlPlanePeer(input: {
     ...(input.pairing ? { pairing: input.pairing } : {}),
     createPairing: input.createPairing ?? (() => ({ keyId: `key_${input.controlPlaneId}`, secret: crypto.randomBytes(32).toString("base64url") })),
   });
-  if (accepted.status === "trust-required") return { status: "trust-required" as const, outcome: accepted.outcome };
+  if (accepted.status === "trust-required") {
+    input.socket.close(4403, "node-agent-control-plane-trust-required");
+    return { status: "trust-required" as const, outcome: accepted.outcome };
+  }
   const messages: any[] = [];
   const pendingResponses = new Map<string, (value: any) => void>();
   const pendingAux = new Map<string, AuxState>();

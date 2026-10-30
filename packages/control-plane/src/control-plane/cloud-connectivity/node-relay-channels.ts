@@ -39,13 +39,14 @@ export type CloudNodeRelayChannelsOptions = {
   };
   onPreserveLocalConnection?(nodeHandle: string): void | Promise<void>;
   /** An unexpectedly closed live channel; the runtime must claim a fresh allocation. */
-  onChannelClosed?(input: { nodeHandle: string; nodeId: string; reason: string }): void;
+  onChannelClosed?(input: { nodeHandle: string; nodeId: string; relayId: string; reason: string }): void;
   now?: () => number;
   audit?(event: { type: string; outcome: "allowed" | "denied"; nodeHandle?: string; reason: string }): void;
 };
 
 type ActiveNodeRelayChannel = {
   allocationId: string;
+  relayId: string;
   nodeId: string;
   channelId?: string;
   connectedAt: string;
@@ -181,7 +182,10 @@ export class CloudNodeRelayChannels {
     }).catch((error: unknown) => {
       assertCurrentClaim();
       this.recordError(verified.nodeHandle, error);
-      throw error;
+      // Only the Relay dialer can prove that the allocated Relay was actually
+      // unreachable. Errors before this point (invalid allocation, missing local
+      // transport) must not cool down the Relay.
+      throw markRelayConnectionFailure(error);
     });
     try {
       assertCurrentClaim();
@@ -258,6 +262,7 @@ export class CloudNodeRelayChannels {
     if (connection.issuedPairing) await this.options.nodes.savePairing(identity.nodeId, connection.issuedPairing);
     const activeChannel: ActiveNodeRelayChannel = {
       allocationId: verified.allocationId,
+      relayId: verified.event.relayId,
       nodeId: identity.nodeId,
       ...(connection.channelId ? { channelId: connection.channelId } : {}),
       connectedAt: new Date(this.now()).toISOString(),
@@ -320,7 +325,7 @@ export class CloudNodeRelayChannels {
     this.channels.delete(nodeHandle);
     void this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason });
     this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
-    this.options.onChannelClosed?.({ nodeHandle, nodeId: channel.nodeId, reason });
+    this.options.onChannelClosed?.({ nodeHandle, nodeId: channel.nodeId, relayId: channel.relayId, reason });
   }
 
   /** Drops only the Relay channel; a preserved direct node keeps its own status and health. */
@@ -350,6 +355,20 @@ function closeConnection(socket: NodeRelayFrameSocket, reason: string) {
     socket.close(4409, reason);
   } catch {
     // The peer may already have closed after completing the handshake.
+  }
+}
+
+function markRelayConnectionFailure(error: unknown) {
+  const marked = error && typeof error === "object" ? error : Object.assign(new Error(String(error)), { code: "NODE_RELAY_CHANNEL_FAILED", retryable: true });
+  try {
+    return Object.assign(marked as Record<string, unknown>, { relayConnectionFailed: true });
+  } catch {
+    return Object.assign(new Error((marked as Error).message ?? "Cloud relay connection failed."), {
+      code: (marked as { code?: unknown }).code ?? "NODE_RELAY_CHANNEL_FAILED",
+      retryable: (marked as { retryable?: unknown }).retryable ?? true,
+      cause: marked,
+      relayConnectionFailed: true,
+    });
   }
 }
 

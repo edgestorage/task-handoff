@@ -15,7 +15,11 @@ import {
   NodeRelayAllocationRequestSchema,
   NodeRelayAllocationRequestV2Schema,
   NodeRelayClaimGrantPayloadSchema,
+  NODE_RELAY_CAPABILITIES_HEADER,
+  NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER,
+  NODE_RELAY_TRUST_RETRY_CAPABILITY,
   NodeRelayProbeTargetsResponseSchema,
+  parseNodeRelayFailedControlPlaneIds,
   OfficialAudience,
   OutboundConnectionRegistrationSchema,
   OFFICIAL_ACCOUNT_API_PROTOCOL_VERSION,
@@ -196,6 +200,12 @@ test("node grants and revocations carry complete shared node authority", () => {
   const claimGrant = { protocolVersion: RELAY_FRAMING_PROTOCOL_VERSION, audience: OfficialAudience.RelayNodeClaimGrant, grantId: "grant_a", allocationId: "allocation_node", nodeHandle: "node_alpha", controlPlaneId: "control_plane_a", accountId: "account_grantee", bindingId: "binding_a", bindingRevision: 2, relayId: "relay_a", relayRegion: "test", relayUrl: "https://relay.example.test", nonce: "n".repeat(16), issuedAt: at, expiresAt: at, controlPlanePublicKey: "p".repeat(43), ...shared };
   assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse(claimGrant).success, true);
   assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse({ ...claimGrant, shareRevision: undefined }).success, false);
+  assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse({ ...claimGrant, trustRetry: true }).success, true);
+  assert.equal(NodeRelayClaimGrantPayloadSchema.safeParse({ ...claimGrant, trustRetry: false }).success, false);
+  assert.equal(NODE_RELAY_TRUST_RETRY_CAPABILITY, "node-relay-trust-retry-v1");
+  assert.equal(NODE_RELAY_CAPABILITIES_HEADER, "x-task-handoff-capabilities");
+  assert.equal(NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER, "x-task-handoff-node-relay-failed-control-plane-ids");
+  assert.deepEqual(parseNodeRelayFailedControlPlaneIds("control_plane_a, bad id,control_plane_a,control_plane_b"), ["control_plane_a", "control_plane_b"]);
 
   const allocationEvent = { type: "node-relay-allocation", protocolVersion: OUTBOUND_CONNECTION_PROTOCOL_VERSION, allocationId: "allocation_node", relayId: "relay_a", relayRegion: "test", relayUrl: "https://relay.example.test", nodeHandle: "node_alpha", accountId: "account_grantee", controlPlaneId: "control_plane_a", bindingId: "binding_a", bindingRevision: 2, controlPlaneAttach: nodeAttach, expiresAt: at, ...shared };
   assert.equal(NodeRelayAllocationEventSchema.safeParse(allocationEvent).success, true);

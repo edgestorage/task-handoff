@@ -139,11 +139,11 @@ export const settings = {
       showDetails: "连接详情", hideDetails: "收起详情",
       cliTitle: "本机 CLI：", cliDescription: "在目标机器上核对指纹或短码后执行：",
       connectedTitle: "已连接的管理 Control Plane：", connectedDescription: "也可在已管理此节点的控制面板中，进入审批中心批准。",
-      checkAgain: "重新检查", cancelAdd: "取消加入",
+      retryConnection: "重试连接", reapply: "重新申请", reapplying: "重新申请中…", reapplySubmitted: "Coordinator 已接收重新申请，正在等待 Node Agent 响应。若长时间无变化，请检查 Node Agent 版本后再次申请。", reapplyNoResponse: "已经等待 30 秒仍未收到新的信任请求。请检查 Node Agent 是否在线、是否需要升级，然后重新申请。", cancelAdd: "取消加入",
       phase: {
         submitting: "正在发起连接", "waiting-node-trust": "等待节点批准连接", "approved-connecting": "已批准，正在连接", complete: "节点已连接", rejected: "节点已拒绝连接", expired: "连接请求已过期", failed: "连接失败",
         "approved-connectingDescription": "Control Plane 信任请求已获批准，正在等待 Node Agent 完成 Relay 握手并建立管理通道。",
-        rejectedDescription: "请求已被拒绝。复查目标机器后，可由本机 CLI 显式重新发起，或取消本次添加。", expiredDescription: "请求已超过绝对 24 小时有效期。显式重新发起后会生成新的请求 ID。", failedDescription: "未能收到有效的 Node Agent 信任结果。请检查节点是否在线、Network/Relay 连接和本机 CLI 状态。",
+        rejectedDescription: "节点已拒绝本次连接。确认目标机器后，可在此重新申请；重新申请只会生成新的待审核请求，不会自动批准。", expiredDescription: "连接请求已过期。可在此重新申请，生成新的待审核请求。", failedDescription: "未能收到有效的 Node Agent 信任结果。请检查节点是否在线、Network/Relay 连接和本机 CLI 状态。",
       },
       reasons: { "first-seen": "首次连接", "key-changed": "Control Plane 公钥已变化", "access-context-changed": "访问上下文已变化", rejected: "管理员已拒绝", expired: "请求已过期" },
     },

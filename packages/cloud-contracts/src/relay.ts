@@ -16,6 +16,11 @@ export const RESOURCE_SHARING_CAPABILITY_HEADER = "x-task-handoff-capabilities";
 export const RESOURCE_SHARING_CLIENT_CAPABILITY = "resource-sharing-v1";
 export const CONTROL_PLANE_SHARED_ACCESS_CAPABILITY = "shared-access-v1";
 
+/** Capability lists are comma-separated wire tokens; unknown tokens stay inert. */
+export function capabilityHeaderIncludes(value: string | undefined, capability: string) {
+  return (value ?? "").split(",").some((token) => token.trim() === capability);
+}
+
 export const ResourceTypeSchema = z.enum(["control-plane", "node"]);
 export const ResourceShareStatusSchema = z.enum(["active", "revoked", "expired"]);
 export const AccessRoleIdSchema = z.string().trim().min(3).max(80).regex(/^role_[a-z0-9][a-z0-9_-]*$/);

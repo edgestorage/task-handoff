@@ -66,8 +66,11 @@
     <p v-if="copyError" class="cloud-node-trust-diagnostic" role="alert">{{ t("settings.nodeRelay.nodeTrust.copyFailed") }}</p>
 
     <div v-if="!hideActions && (retryable || terminal)" class="cloud-node-trust-actions">
+      <Button v-if="canReapply" type="button" size="sm" variant="outline" @click="emit('reapply')">
+        <RefreshCw :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.reapply") }}</span>
+      </Button>
       <Button v-if="retryable" type="button" size="sm" variant="outline" @click="emit('retry')">
-        <RefreshCw :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.checkAgain") }}</span>
+        <RefreshCw :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.retryConnection") }}</span>
       </Button>
       <Button v-if="terminal" type="button" size="sm" variant="outline" @click="emit('cancel')">{{ t("settings.nodeRelay.nodeTrust.cancelAdd") }}</Button>
     </div>
@@ -94,7 +97,7 @@ const props = defineProps<{
   hideActions?: boolean;
   hideNodeLabel?: boolean;
 }>();
-const emit = defineEmits<{ cancel: []; retry: [] }>();
+const emit = defineEmits<{ cancel: []; retry: []; reapply: [] }>();
 const { t, locale } = useI18n();
 type CopyTarget = "fingerprint" | "code" | "command";
 const copied = ref<CopyTarget>();
@@ -104,11 +107,18 @@ const formatTrustDate = (value?: string) => value ? formatDateTime(new Date(valu
 
 const visible = computed(() => Boolean(props.trust) || ["waiting-node-trust", "approved-connecting", "rejected", "expired", "failed"].includes(props.phase || ""));
 const terminal = computed(() => ["rejected", "expired", "failed"].includes(props.phase || ""));
-const retryable = computed(() => ["rejected", "expired", "failed"].includes(props.phase || ""));
+const retryable = computed(() => props.phase === "failed");
+const canReapply = computed(() => props.phase === "rejected" || props.phase === "expired");
 const nodeLabel = computed(() => props.displayName || t("settings.nodeRelay.nodeTrust.currentNode"));
 const title = computed(() => t(`settings.nodeRelay.nodeTrust.phase.${props.phase || "waiting-node-trust"}`));
 const reasonLabel = computed(() => t(`settings.nodeRelay.nodeTrust.reasons.${props.trust?.reason || "first-seen"}`));
-const diagnostic = computed(() => props.error || t(`settings.nodeRelay.nodeTrust.phase.${props.phase || "failed"}Description`));
+const diagnostic = computed(() => {
+  const description = t(`settings.nodeRelay.nodeTrust.phase.${props.phase || "failed"}Description`);
+  // A rejected request with no current trust projection can carry the reason
+  // the retry itself was refused. Ordinary authoritative rejections have no
+  // error and still show their phase description.
+  return props.error || description;
+});
 const approveCommand = computed(() => props.trust?.requestId
   ? `task-handoff-node-agent trust approve ${props.trust.requestId} --fingerprint ${props.trust.controlPlaneFingerprint}`
   : "task-handoff-node-agent trust list");

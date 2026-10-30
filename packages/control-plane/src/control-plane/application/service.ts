@@ -632,7 +632,11 @@ export class ControlPlaneService {
 
   /** Channel connectivity projects onto the same node status the UI already renders. */
   async setCloudRelayNodeConnection(nodeId: string, connected: boolean, reason?: string) {
-    const current = this.requireNode(nodeId);
+    const current = this.nodes.get(nodeId);
+    // A channel can close after the operator removed its local node. There is
+    // no state left to project in that case, and treating the stale callback
+    // as an error would crash the Control Plane.
+    if (!current) return undefined;
     const timestamp = now();
     const updated = NodeSchema.parse({
       ...current,
@@ -1453,16 +1457,21 @@ export class ControlPlaneService {
   }
 
   async deleteNode(id: string) {
+    this.requireDeletableNode(id);
+    this.nodeAgentGateway.forgetNode(id);
+    const deleted = await this.nodes.delete(id);
+    if (deleted) await this.modelService.deletePendingNodeEditsForNode(id);
+    return deleted;
+  }
+
+  private requireDeletableNode(id: string) {
     const current = this.requireNode(id);
     if (isControlPlaneBuiltinNode(current)) {
       const error = new Error("The built-in local node connection cannot be deleted.");
       Object.assign(error, { statusCode: 400, code: "LOCAL_NODE_CANNOT_BE_DELETED" });
       throw error;
     }
-    this.nodeAgentGateway.forgetNode(id);
-    const deleted = await this.nodes.delete(id);
-    if (deleted) await this.modelService.deletePendingNodeEditsForNode(id);
-    return deleted;
+    return current;
   }
 
   private observeNode(node: Node) {
@@ -1478,8 +1487,12 @@ export class ControlPlaneService {
     this.nodeAgentGateway.dispose();
   }
 
-  async deleteNodeWithProxyLifecycle(id: string, force = false) {
-    return this.proxyLifecycle.deleteNode(this.requireNode(id), force);
+  async deleteNodeWithProxyLifecycle(id: string, force = false, beforeLocalDelete?: (node: Node) => void | Promise<void>) {
+    // Preflight everything that can reject the delete before the caller releases
+    // cloud-side state. The proxy lifecycle invokes the hook only after its own
+    // potentially failing remote revocation has completed.
+    const current = this.requireDeletableNode(id);
+    return this.proxyLifecycle.deleteNode(current, force, beforeLocalDelete);
   }
 
   async listNodeRuntimes(nodeId?: string, signal?: AbortSignal) {

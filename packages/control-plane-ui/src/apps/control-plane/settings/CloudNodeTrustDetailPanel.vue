@@ -18,9 +18,13 @@
           @cancel="cancelJoin"
         />
         <p v-if="actionError" role="alert">{{ actionError }}</p>
+        <p v-if="actionMessage" class="cloud-node-pending-message" role="status">{{ actionMessage }}</p>
       </div>
     </ScrollArea>
     <footer>
+      <Button v-if="canReapply" variant="outline" size="sm" :disabled="busy" @click="reapply">
+        <RefreshCw :size="14" />{{ busy ? t("settings.nodeRelay.nodeTrust.reapplying") : t("settings.nodeRelay.nodeTrust.reapply") }}
+      </Button>
       <Button variant="outline" size="sm" :disabled="busy" @click="emit('refresh')"><RefreshCw :size="14" />{{ t("common.actions.refresh") }}</Button>
       <Button variant="outline" size="sm" :disabled="busy" @click="cancelJoin">{{ t("settings.nodeRelay.nodeTrust.cancelAdd") }}</Button>
     </footer>
@@ -34,7 +38,7 @@ import { RefreshCw } from "@lucide/vue";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import { releaseCloudAccountNodeClaim } from "../../../api/queries";
+import { reapplyCloudAccountNodeClaim, releaseCloudAccountNodeClaim } from "../../../api/queries";
 import type { CloudNodeRelayTrust } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
@@ -45,13 +49,32 @@ const emit = defineEmits<{ refresh: []; cancelled: [nodeHandle: string] }>();
 const { t } = useI18n();
 const busy = ref(false);
 const actionError = ref("");
+const actionMessage = ref("");
 const displayName = computed(() => props.displayName || props.trust.displayName || props.trust.nodeHandle);
+const canReapply = computed(() => props.trust.state === "rejected" || props.trust.state === "expired");
+
+async function reapply() {
+  if (busy.value) return;
+  busy.value = true;
+  actionError.value = "";
+  actionMessage.value = "";
+  try {
+    await reapplyCloudAccountNodeClaim(props.trust.nodeHandle);
+    actionMessage.value = t("settings.nodeRelay.nodeTrust.reapplySubmitted");
+    emit("refresh");
+  } catch (error) {
+    actionError.value = translateApiError(error, t);
+  } finally {
+    busy.value = false;
+  }
+}
 
 async function cancelJoin() {
   if (busy.value) return;
   const nodeHandle = props.trust.nodeHandle;
   busy.value = true;
   actionError.value = "";
+  actionMessage.value = "";
   try {
     await releaseCloudAccountNodeClaim(nodeHandle);
     emit("cancelled", nodeHandle);
@@ -70,5 +93,6 @@ async function cancelJoin() {
 .cloud-node-pending-scroll { min-height: 0; }
 .cloud-node-pending-content { display: grid; gap: 12px; padding: 16px; }
 .cloud-node-pending-content > p { margin: 0; color: var(--status-danger); font-size: 12px; }
+.cloud-node-pending-content > p.cloud-node-pending-message { color: var(--text-muted); }
 .cloud-node-pending-detail > footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
 </style>

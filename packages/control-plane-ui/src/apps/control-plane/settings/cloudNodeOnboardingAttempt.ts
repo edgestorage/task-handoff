@@ -21,6 +21,8 @@ export type CloudNodeOnboardingAttempt = {
   token?: CloudNodeBindingToken;
   trust?: CloudNodeRelayTrust;
   error?: string;
+  ignoredTrustRequestId?: string;
+  reapplyDeadlineAt?: string;
   startedAt: string;
   updatedAt: string;
 };
@@ -65,15 +67,50 @@ export function setCloudNodeOnboardingNodeHandle(nodeHandle: string) {
 }
 
 export function completeCloudNodeOnboarding(node: { id: string; name?: string }) {
-  update({ phase: "complete", nodeId: node.id, displayName: node.name || attempt.value?.displayName || "", error: undefined });
+  update({ phase: "complete", nodeId: node.id, displayName: node.name || attempt.value?.displayName || "", error: undefined, reapplyDeadlineAt: undefined });
 }
 
 export function failCloudNodeOnboarding(error: string) {
-  update({ phase: "failed", error });
+  update({ phase: "failed", error, reapplyDeadlineAt: undefined });
 }
 
 export function resumeCloudNodeOnboarding() {
-  update({ phase: "submitting", trust: undefined, error: undefined });
+  update({ phase: "submitting", trust: undefined, error: undefined, ignoredTrustRequestId: undefined, reapplyDeadlineAt: undefined });
+}
+
+export function reapplyCloudNodeOnboarding(now = Date.now(), timeoutMs = 30_000) {
+  update({
+    phase: "submitting",
+    trust: undefined,
+    error: undefined,
+    ignoredTrustRequestId: attempt.value?.trust?.requestId ?? attempt.value?.ignoredTrustRequestId,
+    reapplyDeadlineAt: new Date(now + timeoutMs).toISOString(),
+  });
+}
+
+/** Preserve the retry entry point when a reapply request itself is refused. */
+export function rejectCloudNodeOnboarding(error: string) {
+  update({
+    phase: "rejected",
+    error,
+    reapplyDeadlineAt: undefined,
+    trust: undefined,
+    ignoredTrustRequestId: attempt.value?.ignoredTrustRequestId ?? attempt.value?.trust?.requestId,
+  });
+}
+
+/** A queued instruction is not a delivered one; never leave the UI submitting forever. */
+export function expireCloudNodeReapplyWait(now: number, error: string) {
+  if (!attempt.value || attempt.value.phase !== "submitting" || !attempt.value.reapplyDeadlineAt) return false;
+  if (Date.parse(attempt.value.reapplyDeadlineAt) > now) return false;
+  update({
+    phase: "rejected",
+    error,
+    reapplyDeadlineAt: undefined,
+    trust: undefined,
+    ignoredTrustRequestId: attempt.value.ignoredTrustRequestId ?? attempt.value.trust?.requestId,
+  });
+  return true;
 }
 
 export function resetCloudNodeOnboarding() {
@@ -101,7 +138,7 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
   if (!nodeHandle) return attempt.value;
   const channel = relay.channels.find((item) => item.nodeHandle === nodeHandle && item.connected);
   if (channel) {
-    update({ phase: "complete", nodeId: channel.nodeId, error: undefined, trust: undefined });
+    update({ phase: "complete", nodeId: channel.nodeId, error: undefined, trust: undefined, reapplyDeadlineAt: undefined });
     return attempt.value;
   }
   const candidates = relay.trust.filter((item) => item.nodeHandle === nodeHandle);
@@ -115,13 +152,19 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
     return attempt.value;
   }
   if (trust) {
+    // Reapply always creates a new request ID. Ignore only the exact terminal
+    // request that was replaced; wall-clock comparison is unsafe across hosts.
+    if (attempt.value.ignoredTrustRequestId === trust.requestId && (trust.state === "rejected" || trust.state === "expired")) {
+      return attempt.value;
+    }
+    if (attempt.value.ignoredTrustRequestId) update({ ignoredTrustRequestId: undefined });
     if (trust.state === "rejected") update({ phase: "rejected", trust, error: undefined });
     else if (trust.state === "expired") update({ phase: "expired", trust, error: undefined });
-    else update({ phase: "waiting-node-trust", trust, error: channelError?.message });
+    else update({ phase: "waiting-node-trust", trust, error: channelError?.message, reapplyDeadlineAt: undefined });
     return attempt.value;
   }
   if (attempt.value.phase === "waiting-node-trust" || attempt.value.phase === "approved-connecting") {
-    update({ phase: "approved-connecting", trust: undefined, error: undefined });
+    update({ phase: "approved-connecting", trust: undefined, error: undefined, reapplyDeadlineAt: undefined });
     return attempt.value;
   }
   return attempt.value;

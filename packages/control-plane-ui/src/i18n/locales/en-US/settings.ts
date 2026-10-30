@@ -136,11 +136,11 @@ export const settings = {
       showDetails: "Connection details", hideDetails: "Hide details",
       cliTitle: "Local CLI:", cliDescription: "On the target machine, compare the fingerprint or short code, then run:",
       connectedTitle: "Connected admin Control Plane:", connectedDescription: "You can also approve in the approval center of a Control Plane already managing this node.",
-      checkAgain: "Check again", cancelAdd: "Cancel adding node",
+      retryConnection: "Retry connection", reapply: "Request again", reapplying: "Requesting again…", reapplySubmitted: "The Coordinator accepted the request. Waiting for the Node Agent to respond. If nothing changes, check its version and request again.", reapplyNoResponse: "No new trust request arrived within 30 seconds. Check whether the Node Agent is online or needs an upgrade, then request again.", cancelAdd: "Cancel adding node",
       phase: {
         submitting: "Starting connection", "waiting-node-trust": "Waiting for node approval", "approved-connecting": "Approved; connecting", complete: "Node connected", rejected: "The node rejected the connection", expired: "Connection request expired", failed: "Connection failed",
         "approved-connectingDescription": "The Control Plane trust request was approved. Waiting for the Node Agent to finish the relay handshake and open the management channel.",
-        rejectedDescription: "The request was rejected. After checking the target machine, explicitly retry from its local CLI or cancel this add operation.", expiredDescription: "The request exceeded its absolute 24-hour lifetime. An explicit retry creates a new request ID.", failedDescription: "A valid Node Agent trust result was not received. Check whether the node is online, whether the relay/network link is healthy, and the local CLI state.",
+        rejectedDescription: "The node rejected this connection. After checking the target machine, request it again here. This creates a new pending request; it never approves automatically.", expiredDescription: "The connection request expired. Request it again here to create a new pending request.", failedDescription: "A valid Node Agent trust result was not received. Check whether the node is online, whether the relay/network link is healthy, and the local CLI state.",
       },
       reasons: { "first-seen": "First connection", "key-changed": "The Control Plane public key changed", "access-context-changed": "The access context changed", rejected: "Rejected by an administrator", expired: "Request expired" },
     },

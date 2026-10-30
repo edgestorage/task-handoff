@@ -7,7 +7,8 @@ import type { FastifyInstance } from "fastify";
 import { createNodeAgentApp } from "../src/node-agent/app.ts";
 import { createNodeAgentHmacHeaders } from "../src/shared/security/node-agent-auth.ts";
 import type { NodeAgentIdentityService } from "../src/node-agent/identity/service.ts";
-import { NodeAgentCloudRelayClient } from "../src/node-agent/cloud-relay/client.ts";
+import { NodeAgentCloudRelayClient, cloudRelayPollRetryDelayMs } from "../src/node-agent/cloud-relay/client.ts";
+import { NodeRelayCloudClient } from "../src/node-agent/cloud-relay/cloud-client.ts";
 import type { CloudDiscovery } from "../../../shared/cloud-environments.cjs";
 import {
   cloudRelayCloudStub,
@@ -544,6 +545,7 @@ test("a stalled relay attach times out and reconnects with a fresh allocation", 
   assert.notEqual(connections[connections.length - 1].allocationId, connections[0].allocationId);
   assert.ok(stub.state.allocationRequests.some((request) =>
     request.refreshControlPlaneIds?.includes(controlPlaneId)), "the timeout must request a fresh attach capability");
+  assert.equal(stub.state.allocationFailedControlPlaneIds.flat().includes(controlPlaneId), true, "a dial/attach timeout must identify the failed Relay");
 });
 
 test("a stale allocation returned after refresh is never attached a second time", async (t) => {
@@ -601,6 +603,7 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
   assert.deepEqual(identityService.listControlPlanePairings(), []);
   const beforeApproval = await status(app);
   assert.equal(beforeApproval.channels.some((channel: any) => channel.status === "connected"), false);
+  assert.equal(stub.state.allocationFailedControlPlaneIds.flat().includes(controlPlaneId), false, "pending trust is not a Relay failure");
 
   const listed = await app.inject({ method: "GET", url: "/api/node-agent/control-plane-trust", headers: authorizationHeaders() });
   assert.equal(listed.statusCode, 200, listed.body);
@@ -635,6 +638,72 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
   assert.equal(stub.state.redemptions.length, 1, "approval must not redeem or rotate the cloud binding token");
   const connected = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
   assert.equal(connected.channels.find((channel: any) => channel.controlPlaneId === controlPlaneId)?.status, "connected");
+});
+
+test("a rejected Control Plane is reopened only by a signed retry directive and remains pending", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, identityService, planeFor, connect } = await cloudRelayFixture(t, stub);
+  const controlPlaneId = "control_plane_reapply";
+  const plane = planeFor(controlPlaneId);
+  await bind(app, stub, undefined, authorizationHeaders(), false);
+
+  relay.pollNow();
+  const first = await connect(controlPlaneId) as any;
+  assert.equal(first.status, "trust-required");
+  assert.equal(first.outcome.state, "pending");
+  assert.match(stub.state.allocationCapabilities.at(-1) ?? "", /node-relay-trust-retry-v1/);
+
+  const listPath = "/api/node-agent/control-plane-trust";
+  const listed = await app.inject({ method: "GET", url: listPath, headers: authorizationHeaders() });
+  const request = listed.json().data.requests.find((item: any) => item.requestId === first.outcome.requestId);
+  assert.ok(request);
+  const decisionPath = `/api/node-agent/control-plane-trust/requests/${encodeURIComponent(request.requestId)}/decision`;
+  const rejected = await app.inject({
+    method: "POST",
+    url: decisionPath,
+    headers: authorizationHeaders(),
+    payload: { action: "reject", expectedFingerprint: request.fingerprint, expectedRevision: request.revision },
+  });
+  assert.equal(rejected.statusCode, 200, rejected.body);
+  assert.equal(rejected.json().data.requests.find((item: any) => item.requestId === request.requestId)?.status, "rejected");
+
+  // Deliver the authoritative rejection first. The early-frame race used to
+  // turn this into a handshake timeout, so prove the Control Plane observes
+  // `rejected` before an explicit retry is allowed to reopen it.
+  stub.invalidateAllocation(controlPlaneId);
+  relay.pollNow();
+  const denied = await waitFor(async () => {
+    for (let index = plane.peers.length - 1; index >= 0; index -= 1) {
+      const peer = await plane.peers[index] as any;
+      if (peer?.status === "trust-required"
+        && peer.outcome?.state === "rejected"
+        && peer.outcome?.requestId === first.outcome.requestId) return peer;
+    }
+    return undefined;
+  }, "the Node Agent rejection outcome to reach the Control Plane");
+  assert.equal(denied.outcome.state, "rejected");
+
+  stub.setTrustRetryDirective(controlPlaneId, true);
+  relay.pollNow();
+
+  const reopened = await waitFor(async () => {
+    for (let index = plane.peers.length - 1; index >= 0; index -= 1) {
+      const peer = await plane.peers[index] as any;
+      if (peer?.status === "trust-required"
+        && peer.outcome?.state === "pending"
+        && peer.outcome?.requestId !== first.outcome.requestId) return peer;
+    }
+    return undefined;
+  }, "the signed retry directive to reopen the trust request");
+  assert.equal(reopened.outcome.state, "pending");
+  assert.notEqual(reopened.outcome.requestId, first.outcome.requestId);
+
+  const afterReapply = await app.inject({ method: "GET", url: listPath, headers: authorizationHeaders() });
+  const trust = afterReapply.json().data;
+  assert.equal(trust.requests.find((item: any) => item.requestId === first.outcome.requestId)?.status, "rejected");
+  assert.equal(trust.requests.find((item: any) => item.requestId === reopened.outcome.requestId)?.status, "pending");
+  assert.deepEqual(trust.pins, [], "a retry instruction never approves trust");
+  assert.equal(identityService.cloudRelayPairing(controlPlaneId), undefined);
 });
 
 test("revoking one Control Plane pin closes only that channel and clears only its relay pairing", async (t) => {
@@ -1141,4 +1210,24 @@ test("a v2 allocation failure falls back to v1 while an all-failure probe still 
     : undefined, "v1 fallback after a failed v2 allocation");
   assert.ok(second);
   assert.equal((await second!.request("/health")).status, 200);
+});
+
+test("a rate-limited allocation response supplies the poll backoff delay", async () => {
+  const client = new NodeRelayCloudClient({
+    cloudOrigin: SERVICE_ORIGIN,
+    fetchImpl: (async () => new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message: "slow down" } }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "7" },
+    })) as typeof fetch,
+  });
+  let failure: any;
+  try {
+    await client.allocations("credential", { nodeId: "node_cloud_relay" });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure.code, "RATE_LIMITED");
+  assert.equal(failure.retryAfterMs, 7_000);
+  assert.equal(cloudRelayPollRetryDelayMs(1, failure, () => 0.5), 7_000);
+  assert.ok(cloudRelayPollRetryDelayMs(6, {}) >= 22_500, "repeated failures use bounded exponential backoff");
 });

@@ -127,6 +127,8 @@ const CloudNodeClaimSchema = z.object({
   controlPlaneId: z.string(),
   status: z.string(),
   revision: z.number().int().nonnegative(),
+  trustRetryQueued: z.boolean().optional(),
+  trustRetryUnsupportedReason: z.string().optional(),
 }).passthrough();
 
 const CloudNodeClaimRevocationSchema = z.object({
@@ -259,6 +261,9 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     },
     claimCloudAccountNode(nodeHandle: string) {
       return requestData(`/api/cloud-connectivity/account-nodes/${encodeURIComponent(nodeHandle)}/claim`, CloudNodeClaimSchema, jsonRequest("POST", {}));
+    },
+    reapplyCloudAccountNodeClaim(nodeHandle: string) {
+      return requestData(`/api/cloud-connectivity/account-nodes/${encodeURIComponent(nodeHandle)}/reapply`, CloudNodeClaimSchema, jsonRequest("POST", {}));
     },
     releaseCloudAccountNodeClaim(nodeHandle: string) {
       return requestData(`/api/cloud-connectivity/account-nodes/${encodeURIComponent(nodeHandle)}/claim`, CloudNodeClaimRevocationSchema, jsonRequest("DELETE"));

@@ -9,6 +9,8 @@ import {
 import { cloudNodeTrustForNode, cloudNodeTrustPhase } from "../src/apps/control-plane/settings/cloudNodeTrust.ts";
 import {
   beginCloudNodeOnboarding,
+  expireCloudNodeReapplyWait,
+  reapplyCloudNodeOnboarding,
   resetCloudNodeOnboarding,
   resumeCloudNodeOnboarding,
   setCloudNodeOnboardingNodeHandle,
@@ -159,6 +161,50 @@ test("a resumed attempt selects the newest trust request instead of an old rejec
   resetCloudNodeOnboarding();
 });
 
+test("an explicit reapply ignores only the replaced request ID", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle("node_handle_a");
+  syncCloudNodeOnboarding(snapshot([trust({ state: "rejected", reason: "rejected" })]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "rejected");
+
+  reapplyCloudNodeOnboarding();
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "submitting");
+  syncCloudNodeOnboarding(snapshot([trust({ state: "rejected", reason: "rejected" })]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "submitting");
+
+  // The new request must be recognized even if the server clock is behind the
+  // browser that initiated the reapply.
+  syncCloudNodeOnboarding(snapshot([trust({ requestId: "cptreq_reapplied", requestedAt: "2026-10-31T08:00:00.000Z", observedAt: "2020-01-01T00:00:00.000Z" })]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.trust?.requestId, "cptreq_reapplied");
+  resetCloudNodeOnboarding();
+});
+
+test("an unconfirmed reapply leaves submitting after a bounded wait and stays retryable", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle("node_handle_a");
+  syncCloudNodeOnboarding(snapshot([trust({ state: "rejected", reason: "rejected" })]));
+  reapplyCloudNodeOnboarding(1_000, 30_000);
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "submitting");
+
+  assert.equal(expireCloudNodeReapplyWait(30_999, "No response"), false);
+  assert.equal(expireCloudNodeReapplyWait(31_000, "No response"), true);
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "rejected");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.error, "No response");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.reapplyDeadlineAt, undefined);
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.ignoredTrustRequestId, "cptreq_a");
+
+  // A second attempt must keep ignoring the same old terminal outcome until a
+  // newly generated request ID appears.
+  reapplyCloudNodeOnboarding(31_000, 30_000);
+  syncCloudNodeOnboarding(snapshot([trust({ state: "rejected", reason: "rejected" })]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "submitting");
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.ignoredTrustRequestId, "cptreq_a");
+  resetCloudNodeOnboarding();
+});
+
 test("transport diagnostics do not replace a signed pending approval outcome", () => {
   resetCloudNodeOnboarding();
   beginCloudNodeOnboarding("existing");
@@ -188,9 +234,10 @@ test("dialog close and back only hide the view while explicit cancel owns token 
   assert.match(dialog, /onboarding\.active\.value/);
 });
 
-test("node trust UI exposes both approval entry points and never calls the device trust API", () => {
+test("node trust UI exposes approval, reapply and connection retry entry points without the device trust API", () => {
   const status = read("settings/CloudNodeTrustStatus.vue");
   const dialog = read("settings/CloudNodeOnboardingDialog.vue");
+  const detail = read("settings/CloudNodeTrustDetailPanel.vue");
   const inbox = read("action-inbox/ActionInbox.vue");
   assert.match(status, /task-handoff-node-agent trust approve/);
   assert.match(status, /settings\.nodeRelay\.nodeTrust\.connectedDescription/);
@@ -199,7 +246,12 @@ test("node trust UI exposes both approval entry points and never calls the devic
   assert.match(inbox, /decide-node-control-plane/);
   assert.doesNotMatch(dialog, /api\/device-trust|deviceTrustStore/);
   assert.match(status, /v-if="retryable"/);
-  assert.match(status, /const retryable = computed\(\(\) => \["rejected", "expired", "failed"\]/);
+  assert.match(status, /const canReapply = computed\(\(\) => props\.phase === "rejected" \|\| props\.phase === "expired"\)/);
+  assert.match(status, /@click="emit\('reapply'\)"/);
+  assert.match(dialog, /async function reapplyOnboarding\(\)[\s\S]*?reapplyCloudAccountNodeClaim/);
+  assert.match(dialog, /expireCloudNodeReapplyWait\(now, t\("settings\.nodeRelay\.nodeTrust\.reapplyNoResponse"\)\)/);
+  assert.match(dialog, /@reapply="reapplyOnboarding"/);
+  assert.match(detail, /async function reapply\(\)[\s\S]*?reapplyCloudAccountNodeClaim/);
   assert.match(dialog, /refetchIntervalMs: \(\) => onboarding\.active\.value \? 2_000 : false/);
 });
 

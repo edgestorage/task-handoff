@@ -281,6 +281,10 @@ export function claimCloudAccountNode(nodeHandle: string) {
   return sharedControlPlaneClient.admin.claimCloudAccountNode(nodeHandle);
 }
 
+export function reapplyCloudAccountNodeClaim(nodeHandle: string) {
+  return sharedControlPlaneClient.admin.reapplyCloudAccountNodeClaim(nodeHandle);
+}
+
 export function releaseCloudAccountNodeClaim(nodeHandle: string) {
   return sharedControlPlaneClient.admin.releaseCloudAccountNodeClaim(nodeHandle);
 }

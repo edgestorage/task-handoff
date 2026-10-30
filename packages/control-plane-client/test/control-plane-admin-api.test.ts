@@ -174,6 +174,7 @@ test("control-plane admin node relay account routes", async () => {
   const { api, requests } = fixture((path, init) => {
     if (path === "/api/cloud-connectivity/account-nodes") return { data: { signedIn: true, futureDirectoryField: true, nodeRelay: { ...relayState, channels: [], onboarding: [], futureRelayField: true }, items: [node] } };
     if (path.endsWith("/claim") && init?.method === "POST") return { data: { claimed: true, nodeHandle: "nrh_node_alpha", controlPlaneId: "cp_1", status: "active", revision: 1 } };
+    if (path.endsWith("/reapply") && init?.method === "POST") return { data: { claimed: true, nodeHandle: "nrh_node_alpha", controlPlaneId: "cp_1", status: "active", revision: 3, trustRetryQueued: true } };
     if (path.endsWith("/claim") && init?.method === "DELETE") return { data: { nodeHandle: "nrh_node_alpha", status: "revoked", revision: 2 } };
     if (path === "/api/cloud-connectivity/node-binding-tokens") return { data: { tokenId: "nrb_1", expiresAt: TS, command: "sudo task-handoff-node-agent cloud-bind", installCommand: "curl -fsSL https://cp.example.com/install-node-agent.sh | sudo sh -s --", futureTokenField: true } };
     if (path.endsWith("/node-binding-tokens/nrb_1")) return { data: { tokenId: "nrb_1", cancelled: true, futureCancellationField: true } };
@@ -190,6 +191,9 @@ test("control-plane admin node relay account routes", async () => {
   assert.equal("futureAccessField" in (directory.items[0]?.access ?? {}), false);
   assert.equal("futureRelayField" in directory.nodeRelay, false);
   assert.equal((await api.claimCloudAccountNode("nrh_node_alpha")).claimed, true);
+  const reapplied = await api.reapplyCloudAccountNodeClaim("nrh_node_alpha");
+  assert.equal(reapplied.revision, 3);
+  assert.equal(reapplied.trustRetryQueued, true);
   assert.equal((await api.releaseCloudAccountNodeClaim("nrh_node_alpha")).status, "revoked");
   const token = await api.createCloudNodeBindingToken({ displayName: "Alpha box" });
   assert.equal(token.tokenId, "nrb_1");
@@ -208,6 +212,7 @@ test("control-plane admin node relay account routes", async () => {
   assert.deepEqual(requests.map((entry) => [entry.path, entry.init?.method]), [
     ["/api/cloud-connectivity/account-nodes", undefined],
     ["/api/cloud-connectivity/account-nodes/nrh_node_alpha/claim", "POST"],
+    ["/api/cloud-connectivity/account-nodes/nrh_node_alpha/reapply", "POST"],
     ["/api/cloud-connectivity/account-nodes/nrh_node_alpha/claim", "DELETE"],
     ["/api/cloud-connectivity/node-binding-tokens", "POST"],
     ["/api/cloud-connectivity/node-binding-tokens/nrb_1", "DELETE"],

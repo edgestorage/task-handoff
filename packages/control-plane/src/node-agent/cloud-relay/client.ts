@@ -20,7 +20,11 @@ const DEFAULT_IDLE_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_LEASE_RENEWAL_RATIO = 0.15;
 const DEFAULT_CREDENTIAL_RENEW_BEFORE_MS = 5 * 24 * 60 * 60 * 1000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 10_000;
+const DEFAULT_TRUST_OUTCOME_SETTLE_MS = 1_500;
 const CREDENTIAL_GRACE_MS = 5 * 60 * 1000;
+const POLL_RETRY_BASE_MS = 1_000;
+const POLL_RETRY_MAX_MS = 30_000;
+const POLL_RETRY_AFTER_MAX_MS = 5 * 60_000;
 
 type VerifiedAllocation = { allocation: NodeRelayNodeAllocation; grant: NodeRelayClaimGrant };
 
@@ -65,6 +69,7 @@ export type NodeAgentCloudRelayClientOptions = {
   pollIntervalMs?: number;
   idlePollIntervalMs?: number;
   attachTimeoutMs?: number;
+  trustOutcomeSettleMs?: number;
   leaseRenewalRatio?: number;
   credentialRenewBeforeMs?: number;
   now?: () => number;
@@ -250,8 +255,47 @@ function socketMessage(socket: WebSocket, predicate: (value: any) => boolean, op
   });
 }
 
+/**
+ * The Relay clears frames queued before the Control Plane attaches as soon as
+ * the node detaches. Give the peer a bounded moment to read the signed trust
+ * outcome and close first, then close locally if it never arrives.
+ */
+function waitForPeerSettlement(socket: WebSocket, signal: AbortSignal, timeoutMs: number) {
+  return new Promise<void>((resolve) => {
+    if (socket.readyState >= WebSocket.CLOSING) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off("close", finish);
+      socket.off("error", finish);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref?.();
+    socket.once("close", finish);
+    socket.once("error", finish);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 function relayError(code: string, message = "Cloud relay channel is unavailable.") {
   return Object.assign(new Error(message), { code, retryable: true });
+}
+
+/** Poll failures back off aggressively; a Coordinator or proxy 429 is never retried at channel cadence. */
+export function cloudRelayPollRetryDelayMs(attempt: number, error: unknown, random: () => number = Math.random) {
+  const normalizedAttempt = Math.max(1, Math.floor(attempt));
+  const exponential = Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * (2 ** Math.min(5, normalizedAttempt - 1)));
+  const jittered = Math.round(exponential * (0.75 + random() * 0.5));
+  const retryAfter = Number((error as { retryAfterMs?: unknown } | null)?.retryAfterMs);
+  const serverDelay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(POLL_RETRY_AFTER_MAX_MS, retryAfter) : 0;
+  return Math.max(jittered, serverDelay);
 }
 
 function credentialRejected(error: unknown) {
@@ -273,10 +317,12 @@ export class NodeAgentCloudRelayClient {
   private readonly channels = new Map<string, ChannelEntry>();
   private readonly discoveryResolvers = new Map<string, Promise<CloudEndpointResolver | undefined>>();
   private readonly refreshControlPlaneIds = new Set<string>();
+  private readonly failedControlPlaneIds = new Set<string>();
   private pollTimer?: ReturnType<typeof setTimeout>;
   private pollDueAt?: number;
   private polling = false;
   private pollAgain = false;
+  private pollRetryAttempt = 0;
   private stopped = true;
   private attemptSequence = 0;
   private readonly adaptiveSelectionUnsupported = new Set<string>();
@@ -532,9 +578,12 @@ export class NodeAgentCloudRelayClient {
       const current = this.binding();
       if (!current || current.status !== "active") return;
       const refreshControlPlaneIds = [...this.refreshControlPlaneIds];
-      const allocations = await this.reconnectAllocations(current, refreshControlPlaneIds);
+      const failedControlPlaneIds = [...this.failedControlPlaneIds];
+      const allocations = await this.reconnectAllocations(current, refreshControlPlaneIds, failedControlPlaneIds);
       if (this.stopped) return;
+      for (const controlPlaneId of failedControlPlaneIds) this.failedControlPlaneIds.delete(controlPlaneId);
       if (this.applyAllocations(current, allocations)) this.lastError = undefined;
+      this.pollRetryAttempt = 0;
       this.schedulePoll(allocations.length || this.channels.size ? this.pollIntervalMs() : this.idlePollIntervalMs());
     } catch (error) {
       if (this.stopped) return;
@@ -549,7 +598,10 @@ export class NodeAgentCloudRelayClient {
         at: new Date(this.now()).toISOString(),
         retryable: true,
       };
-      if (failed?.status === "active") this.schedulePoll(this.pollRetryDelayMs());
+      if (failed?.status === "active") {
+        this.pollRetryAttempt += 1;
+        this.schedulePoll(cloudRelayPollRetryDelayMs(this.pollRetryAttempt, error, this.options.random));
+      }
     } finally {
       this.polling = false;
       if (this.pollAgain) {
@@ -563,18 +615,18 @@ export class NodeAgentCloudRelayClient {
     return this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
-  private async reconnectAllocations(binding: NodeAgentCloudRelayBinding, refreshControlPlaneIds: string[]) {
+  private async reconnectAllocations(binding: NodeAgentCloudRelayBinding, refreshControlPlaneIds: string[], failedControlPlaneIds: string[] = []) {
     const cloud = await this.boundCloudClient(binding);
     const request = {
       nodeId: this.options.nodeId,
       ...(refreshControlPlaneIds.length ? { refreshControlPlaneIds } : {}),
     };
     if (!refreshControlPlaneIds.length || this.adaptiveSelectionUnsupported.has(binding.serviceOrigin)) {
-      return cloud.allocations(binding.credential, request);
+      return cloud.allocations(binding.credential, { ...request, failedControlPlaneIds });
     }
     try {
       const targets = await cloud.probeTargets(binding.credential, { nodeId: this.options.nodeId, controlPlaneIds: refreshControlPlaneIds });
-      if (!targets.length) return cloud.allocations(binding.credential, request);
+      if (!targets.length) return cloud.allocations(binding.credential, { ...request, failedControlPlaneIds });
       const probe = await probeNodeRelayTargets({
         targets,
         serviceOrigin: binding.serviceOrigin,
@@ -583,6 +635,7 @@ export class NodeAgentCloudRelayClient {
       });
       return await cloud.allocationsV2(binding.credential, {
         ...request,
+        failedControlPlaneIds,
         probeEvidence: { measurements: probe.measurements },
       });
     } catch (error) {
@@ -592,17 +645,12 @@ export class NodeAgentCloudRelayClient {
         code: (error as { code?: unknown })?.code ?? "NODE_AGENT_CLOUD_RELAY_ADAPTIVE_FALLBACK",
         reason: this.adaptiveSelectionUnsupported.has(binding.serviceOrigin) ? "unsupported" : "request-failed",
       }, "node agent cloud relay adaptive selection fell back to v1");
-      return cloud.allocations(binding.credential, request);
+      return cloud.allocations(binding.credential, { ...request, failedControlPlaneIds });
     }
   }
 
   private idlePollIntervalMs() {
     return this.options.idlePollIntervalMs ?? DEFAULT_IDLE_POLL_INTERVAL_MS;
-  }
-
-  private pollRetryDelayMs() {
-    const delay = this.options.random ? Math.round(250 * (0.75 + this.options.random() * 0.5)) : 250;
-    return delay;
   }
 
   private async renewCredentialIfDue(binding: NodeAgentCloudRelayBinding) {
@@ -650,7 +698,8 @@ export class NodeAgentCloudRelayClient {
       const entry = this.ensureEntry(verified.grant.controlPlaneId);
       entry.missingPolls = 0;
       const trustContextKey = controlPlaneTrustContextKey(controlPlaneTrustContext(binding, verified.grant, this.options.nodeId));
-      if (entry.suppressedContextKey === trustContextKey) {
+      const trustRetry = verified.grant.trustRetry === true;
+      if (entry.suppressedContextKey === trustContextKey && !trustRetry) {
         entry.expiresAt = allocation.expiresAt;
         continue;
       }
@@ -811,10 +860,41 @@ export class NodeAgentCloudRelayClient {
       const grant = verified.grant;
       const trustContext = controlPlaneTrustContext(binding, grant, this.options.nodeId);
       const trustContextKey = controlPlaneTrustContextKey(trustContext);
-      const trustObservation = this.options.identity.observeCloudControlPlaneTrust(trustContext);
+      let trustObservation = this.options.identity.observeCloudControlPlaneTrust(trustContext);
+      const trustRetry = grant.trustRetry === true;
+      if (trustRetry) {
+        if (trustObservation.kind === "rejected" || trustObservation.kind === "expired") {
+          try {
+            this.options.identity.retryCloudControlPlaneTrustRequest(trustObservation.request.id, {
+              type: "control-plane",
+              id: grant.controlPlaneId,
+              connectionType: "cloud-relay",
+            }, { now: new Date(this.now()).toISOString() });
+            trustObservation = this.options.identity.observeCloudControlPlaneTrust(trustContext);
+            this.log("info", {
+              nodeId: this.options.nodeId,
+              controlPlaneId: grant.controlPlaneId,
+              allocationId: grant.allocationId,
+              requestId: trustObservation.kind === "active" ? undefined : trustObservation.request.id,
+            }, "node agent cloud relay trust request reopened");
+          } catch (error) {
+            this.log("warn", {
+              nodeId: this.options.nodeId,
+              controlPlaneId: grant.controlPlaneId,
+              allocationId: grant.allocationId,
+              code: relayErrorCode(error),
+            }, "node agent cloud relay trust retry failed");
+          }
+        }
+      }
       if (trustObservation.kind !== "active") {
         const request = trustObservation.request;
         const issuedAt = new Date(this.now()).toISOString();
+        const peerSettled = waitForPeerSettlement(
+          socket,
+          attempt.controller.signal,
+          this.options.trustOutcomeSettleMs ?? DEFAULT_TRUST_OUTCOME_SETTLE_MS,
+        );
         writeNodeAgentControlPlaneTrustOutcome({
           socket: socket as unknown as NodeRelayFrameSocket,
           node: relayKeySigner(binding),
@@ -849,6 +929,9 @@ export class NodeAgentCloudRelayClient {
           },
         });
         if (trustObservation.kind === "rejected") entry.suppressedContextKey = trustContextKey;
+        // The outcome is already written. Let the Control Plane close after it
+        // reads the frame; only close ourselves after that bounded wait.
+        await peerSettled;
         try {
           if (socket.readyState < WebSocket.CLOSING) socket.close(4403, `node-agent-control-plane-trust-${trustObservation.kind}`);
         } catch {
@@ -947,8 +1030,12 @@ export class NodeAgentCloudRelayClient {
       }, "node agent cloud relay connect failed");
       entry.activePinId = undefined;
       entry.activeContextKey = undefined;
+      if (attempt.phase === "dialing" || attempt.phase === "attaching") this.failedControlPlaneIds.add(entry.controlPlaneId);
       if ((error as { retryable?: unknown })?.retryable === false) entry.retry.cancel();
-      else this.scheduleEntryRetry(entry);
+      else {
+        if (relayErrorCode(error) === "RELAY_ATTACH_REPLAYED") this.schedulePoll(0);
+        this.scheduleEntryRetry(entry);
+      }
     } finally {
       if (entry.attempt === attempt) entry.attempt = undefined;
     }
@@ -970,13 +1057,15 @@ export class NodeAgentCloudRelayClient {
     entry.status = "reconnecting";
     entry.lastDisconnectedAt = new Date(this.now()).toISOString();
     entry.error = reason;
+    this.failedControlPlaneIds.add(entry.controlPlaneId);
     this.scheduleEntryRetry(entry);
   }
 
   private scheduleEntryRetry(entry: ChannelEntry) {
     if (this.stopped) return;
-    // Relay attach capabilities are single-use. Once an attempt may have sent
-    // its attach frame, only a fresh allocation can recover the channel.
+    // Relay attach capabilities are single-use, so every retry requests a fresh
+    // allocation. A Relay failure is reported separately and only by paths that
+    // actually failed to dial, attach or lost a live socket.
     this.refreshControlPlaneIds.add(entry.controlPlaneId);
     const scheduled = entry.retry.schedule(() => {
       if (this.stopped) return;
@@ -1049,6 +1138,7 @@ export class NodeAgentCloudRelayClient {
     for (const entry of this.channels.values()) this.releaseChannel(entry, reason);
     this.channels.clear();
     this.refreshControlPlaneIds.clear();
+    this.failedControlPlaneIds.clear();
   }
 }
 
