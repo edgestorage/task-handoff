@@ -36,7 +36,7 @@
     "picomatch": "^4.0.5",
     "tar": "^7.5.20",
     "ws": "^8.21.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.3"
