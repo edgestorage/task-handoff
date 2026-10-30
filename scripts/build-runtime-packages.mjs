@@ -43,7 +43,10 @@ function requiredExecutablePaths(name, definition) {
     ...(name === "node-agent" ? [
       "docker/entrypoint.sh",
       "docker/instance-launcher.sh",
+      "docker/instance-launcher.mjs",
+      "docker/js-runtime.sh",
       "docker/node-agent-unix-proxy.mjs",
+      "docker/private-config.mjs",
       "docker/runtime-installer.mjs",
       "docker/git-provision.sh",
       ...(definition.standaloneInputs || []).map((entry) => `docker/${entry.entryFile}`),

@@ -7,7 +7,10 @@ import {
   WSL_GIT_PROVISION_SCRIPT,
   WSL_GIT_PROVISION_STAGE_PREFIX,
   WslGitWorkspaceProvisioner,
+  buildWslGitCredentialHelperScript,
+  buildWslGitProvisionScript,
 } from "../src/node-agent/runtimes/wsl-git-provisioning.ts";
+import { WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME } from "../src/node-agent/runtimes/wsl-bootstrap.ts";
 
 function context(credentials: unknown[] = []) {
   return {
@@ -51,6 +54,16 @@ test("provision bridges scripts and credentials then reports stages and commit",
   assert.equal(completed, true);
   assert.ok(executor.copied.some((entry) => entry.destination === WSL_GIT_PROVISION_SCRIPT));
   assert.ok(executor.copied.some((entry) => entry.destination === WSL_GIT_CREDENTIAL_HELPER));
+  assert.ok(executor.copied.some((entry) => entry.destination === WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME));
+});
+
+test("Git helpers run through the shared JavaScript runtime instead of a hardcoded Node binary", () => {
+  for (const script of [buildWslGitProvisionScript(), buildWslGitCredentialHelperScript()]) {
+    assert.doesNotMatch(script, /^#!\/usr\/bin\/env node/m);
+  }
+  const provision = buildWslGitProvisionScript();
+  assert.match(provision, new RegExp(`credential\\.helper="!${WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME} `));
+  assert.doesNotMatch(provision, /!node /);
 });
 
 test("a failed provisioning surfaces the script error marker and cleans the auth bridge", async () => {

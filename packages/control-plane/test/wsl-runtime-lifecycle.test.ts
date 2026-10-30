@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExecutorContext } from "../src/node-agent/runtimes/docker.ts";
 import {
+  WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME,
   WSL_BOOTSTRAP_ROOT,
   WSL_NODE_AGENT_PROBE_SCRIPT,
   WSL_PRIVATE_CONFIG_PATH,
@@ -12,6 +13,7 @@ import {
   systemdEnvironmentValue,
   windowsPathToDrvfs,
 } from "../src/node-agent/runtimes/wsl-lifecycle.ts";
+import { wslJavaScriptRuntimeCommand } from "../src/node-agent/runtimes/wsl-bootstrap.ts";
 import type { WslSessionHandle } from "../src/node-agent/runtimes/wsl-executor.ts";
 
 type Call = { kind: string; name?: string; args?: string[]; source?: string; destination?: string };
@@ -195,12 +197,28 @@ test("the default probe runs the identity-checked HTTP probe inside the distro",
   const executor = fakeExecutor();
   const lifecycle = makeLifecycle(executor, { probeAttempts: 1 });
   assert.equal(await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a"), "http://127.0.0.1:8091");
-  const probeCall = executor.calls.find((call) => call.kind === "exec" && call.args?.[0] === "node" && call.args?.[2] === WSL_NODE_AGENT_PROBE_SCRIPT);
-  assert.ok(probeCall, "expected the in-distro node probe to run");
-  assert.equal(probeCall.args?.[3], "http://127.0.0.1:8091");
+  const probeCall = executor.calls.find((call) => call.kind === "exec" && call.args?.[0] === "sh" && call.args?.[2]?.includes(WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME));
+  assert.ok(probeCall, "expected the in-distro JavaScript runtime probe to run");
+  assert.deepEqual(probeCall.args, wslJavaScriptRuntimeCommand(["-e", WSL_NODE_AGENT_PROBE_SCRIPT, "http://127.0.0.1:8091"]));
+  assert.doesNotMatch(probeCall.args?.[2] ?? "", /TASK_HANDOFF_JS_RUNTIME=/);
   assert.match(WSL_NODE_AGENT_PROBE_SCRIPT, /data\.role === 'node-agent'/);
   // 外部监听在节点已配对时要求 HMAC：401 `NODE_AGENT_*` 也必须算命中，否则探测会误报不可达。
   assert.match(WSL_NODE_AGENT_PROBE_SCRIPT, /startsWith\('NODE_AGENT_'\)/);
+});
+
+test("WSL helper commands forward an explicit runtime selection", async () => {
+  const previous = process.env.TASK_HANDOFF_JS_RUNTIME;
+  process.env.TASK_HANDOFF_JS_RUNTIME = "bun";
+  try {
+    const executor = fakeExecutor();
+    const lifecycle = makeLifecycle(executor, { probeAttempts: 1 });
+    await lifecycle.nodeAgentUrl(gitContext(), "th-wsl-inst_a");
+    const probeCall = executor.calls.find((call) => call.kind === "exec" && call.args?.[0] === "sh");
+    assert.match(probeCall?.args?.[2] ?? "", /export TASK_HANDOFF_JS_RUNTIME='bun'/);
+  } finally {
+    if (previous === undefined) delete process.env.TASK_HANDOFF_JS_RUNTIME;
+    else process.env.TASK_HANDOFF_JS_RUNTIME = previous;
+  }
 });
 
 test("an unreachable node agent fails fast with the bind address and remediation", async () => {
@@ -264,8 +282,21 @@ test("runtime environment declares WSL identity, private config bridge and git c
   assert.equal(env.TASK_HANDOFF_RUNTIME_KIND, "wsl");
   assert.equal(env.TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH, WSL_PRIVATE_CONFIG_PATH);
   assert.equal(env.TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP, "true");
+  assert.ok(!("TASK_HANDOFF_JS_RUNTIME" in env));
   assert.ok("TASK_HANDOFF_WORKSPACE_GIT_URL" in env);
   assert.ok(Object.keys(env).every((key) => !/secret|token|password/i.test(key)));
+});
+
+test("runtime environment forwards the Node Agent JavaScript runtime selection", () => {
+  const previous = process.env.TASK_HANDOFF_JS_RUNTIME;
+  process.env.TASK_HANDOFF_JS_RUNTIME = "bun";
+  try {
+    const env = buildWslRuntimeEnvironment(gitContext(), { nodeAgentUrl: "http://172.20.0.1:8091", workspace: "/workspace", port: 19001 });
+    assert.equal(env.TASK_HANDOFF_JS_RUNTIME, "bun");
+  } finally {
+    if (previous === undefined) delete process.env.TASK_HANDOFF_JS_RUNTIME;
+    else process.env.TASK_HANDOFF_JS_RUNTIME = previous;
+  }
 });
 
 test("the instance is told to listen on the node-owned port, not the image default", () => {

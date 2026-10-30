@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
+import { javascriptRuntimeEnvironment } from "@task-handoff/core/core/javascript-runtime";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { terminalRunnerFromCommandRunner, type TerminalCommandRunner } from "../../shared/process/terminal-command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
@@ -81,6 +82,7 @@ const DOCKER_BOOTSTRAP_EXECUTABLE = "/bin/bash";
 export const DOCKER_PRIVATE_CONFIG_CONTAINER_DIR = "/run/task-handoff/private";
 export const DOCKER_PRIVATE_CONFIG_CONTAINER_PATH = `${DOCKER_PRIVATE_CONFIG_CONTAINER_DIR}/${INSTANCE_PRIVATE_CONFIG_FILE_NAME}`;
 const DOCKER_RUNTIME_INSTALLER = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/runtime-installer.mjs`;
+const DOCKER_JS_RUNTIME = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/js-runtime.sh`;
 const DOCKER_RUNTIME_ROOT = "/opt/task-handoff/instance-runtime";
 export const DOCKER_AGENT_RUN_ROOT = "/run/task-handoff/agent-runs";
 export const DOCKER_AGENT_RUN_OVERLAY_ROOT = `${DOCKER_AGENT_RUN_ROOT}/overlay`;
@@ -885,7 +887,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         "--user",
         "0",
         before,
-        "node",
+        DOCKER_JS_RUNTIME,
         DOCKER_RUNTIME_INSTALLER,
         "install",
         "--artifact",
@@ -921,7 +923,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       "--user",
       "agent",
       containerName,
-      "node",
+      DOCKER_JS_RUNTIME,
       DOCKER_RUNTIME_INSTALLER,
       "verify-active",
     ]).catch(() => undefined);
@@ -1003,11 +1005,14 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     const installScript = [
       `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}`,
       `test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh`,
+      `test -x ${DOCKER_JS_RUNTIME}`,
+      `test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.mjs`,
+      `test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/private-config.mjs`,
       `test -r ${DOCKER_RUNTIME_INSTALLER}`,
       `install -d -o root -g root -m 0755 ${DOCKER_RUNTIME_ROOT} ${DOCKER_RUNTIME_ROOT}/releases ${DOCKER_RUNTIME_ROOT}/staging ${DOCKER_RUNTIME_ROOT}/incoming`,
       `chown -R root:root ${DOCKER_RUNTIME_ROOT}`,
       `chmod -R go-w ${DOCKER_RUNTIME_ROOT}`,
-      `node ${DOCKER_RUNTIME_INSTALLER} install --artifact "$1" --version "$2" --sha256 "$3" --platform "$4" --arch "$5" --launcher-abi "$6"`,
+      `${DOCKER_JS_RUNTIME} ${DOCKER_RUNTIME_INSTALLER} install --artifact "$1" --version "$2" --sha256 "$3" --platform "$4" --arch "$5" --launcher-abi "$6"`,
     ].join("; ");
     try {
       await this.runCommand("docker", [
@@ -1015,6 +1020,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         "--rm",
         "--user",
         "0:0",
+        ...Object.entries(javascriptRuntimeEnvironment()).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
         "--volumes-from",
         before.id,
         "--mount",
@@ -1059,7 +1065,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         containerId,
         "bash",
         "-ceu",
-        `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh; test -r ${DOCKER_RUNTIME_INSTALLER}; install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime`,
+        `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh; test -x ${DOCKER_JS_RUNTIME}; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.mjs; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/private-config.mjs; test -r ${DOCKER_RUNTIME_INSTALLER}; install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime`,
       ]);
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not install the runtime launcher in ${containerName}.`, cause);
@@ -1408,6 +1414,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     TASK_HANDOFF_RUNTIME_ID: runtimeId,
     TASK_HANDOFF_IMAGE_ID: context.image.id,
     TASK_HANDOFF_INSTANCE_LAUNCHER: `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh`,
+    ...javascriptRuntimeEnvironment(),
     ...(context.image.tag ? { TASK_HANDOFF_IMAGE_TAG: context.image.tag } : {}),
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
@@ -1491,6 +1498,7 @@ export function dockerGitProvisionArgs(
   if (input.credentials.length) args.push("--mount", `type=bind,src=${path.resolve(authDirectory)},dst=/run/task-handoff/git-auth,readonly`);
   const append = (key: string, value: string) => args.push("-e", `${key}=${value}`);
   append("TASK_HANDOFF_INSTANCE_ID", context.instance.id);
+  for (const [key, value] of Object.entries(javascriptRuntimeEnvironment())) append(key, value);
   // The provisioning helper ships with this node agent and reads the workspace
   // Git keys only, so image build metadata can never impersonate a requested ref.
   for (const [key, value] of workspaceGitEnvironmentEntries({

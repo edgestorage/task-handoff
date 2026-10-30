@@ -1,5 +1,10 @@
 import type { RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import type { ResolvedRuntimeArtifact } from "../runtime-artifacts.ts";
+import {
+  WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME,
+  wslJavaScriptRuntimeCommand,
+  wslJavaScriptRuntimeShellPrefix,
+} from "./wsl-bootstrap.ts";
 
 /**
  * WSL 受管 runtime artifact（openspec change add-wsl-runtime，Phase 7，7.1/7.2）。
@@ -51,8 +56,8 @@ export async function installWslRuntime(
   await executor.execOrThrow(distroName, [
     "sh",
     "-c",
-    `install -d -m 0755 ${WSL_RUNTIME_ROOT} ${WSL_RUNTIME_ROOT}/releases ${WSL_RUNTIME_ROOT}/staging ${WSL_RUNTIME_ROOT}/incoming`
-      + ` && node ${WSL_RUNTIME_INSTALLER} install`
+    `${wslJavaScriptRuntimeShellPrefix()}install -d -m 0755 ${WSL_RUNTIME_ROOT} ${WSL_RUNTIME_ROOT}/releases ${WSL_RUNTIME_ROOT}/staging ${WSL_RUNTIME_ROOT}/incoming`
+      + ` && ${shellQuote(WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME)} ${shellQuote(WSL_RUNTIME_INSTALLER)} install`
       + ` --artifact ${WSL_RUNTIME_ARTIFACT_STAGING}`
       + ` --version ${shellQuote(artifact.identity.version)}`
       + ` --sha256 ${shellQuote(artifact.identity.sha256)}`
@@ -68,7 +73,7 @@ export async function inspectWslRuntime(
   distroName: string,
   expected: RuntimeArtifactIdentity,
 ) {
-  const result = await executor.exec(distroName, ["node", WSL_RUNTIME_INSTALLER, "verify-active"]);
+  const result = await executor.exec(distroName, wslJavaScriptRuntimeCommand([WSL_RUNTIME_INSTALLER, "verify-active"]));
   if (result.exitCode !== 0) return false;
   let parsed: Partial<RuntimeArtifactIdentity>;
   try {

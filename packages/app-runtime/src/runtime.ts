@@ -3,12 +3,11 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Writable } from "node:stream";
-import type { IPty } from "node-pty";
-import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { commandInvocation, resolveCommandExecutable, type CommandInvocation } from "@task-handoff/core/core/command-invocation";
+import { spawnPty, type PtyProcess } from "@task-handoff/core/core/pty";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import type { AppProfile } from "@task-handoff/protocol/app-profiles";
 import { AppCatalogRepository } from "./catalog";
@@ -30,7 +29,7 @@ type RuntimeSession = {
   metadata: AppSession;
   processes: ChildProcessWithoutNullStreams[];
   appLifecycle?: ManagedAppPreparedTtyLaunch;
-  pty?: IPty;
+  pty?: PtyProcess;
   ttyDimensions?: { cols: number; rows: number };
   ttyLogStream?: Writable;
   ttyLogClosed?: boolean;
@@ -61,7 +60,7 @@ type SharedDisplayRuntimeSession = {
 type ManagedProcessTree = {
   pid: number;
   child?: ChildProcessWithoutNullStreams;
-  pty?: IPty;
+  pty?: PtyProcess;
   rootExited: boolean;
   stopPromise?: Promise<void>;
 };
@@ -503,7 +502,7 @@ export class AppRuntimeManager extends EventEmitter {
       runtimeSession.terminalScreen?.dispose();
       runtimeSession.terminalScreen = undefined;
     };
-    let pty: IPty;
+    let pty: PtyProcess;
     try {
       pty = this.spawnTerminalPty(shell, args, cwd, env);
     } catch (error) {
@@ -2150,7 +2149,7 @@ export class AppRuntimeManager extends EventEmitter {
     pid: number | undefined,
     signal: NodeJS.Signals,
     child?: ChildProcessWithoutNullStreams,
-    pty?: IPty,
+    pty?: PtyProcess,
   ) {
     if (!pid) return;
     const ownedProcessTree = this.managedProcessTrees.get(pid);
@@ -2162,6 +2161,10 @@ export class AppRuntimeManager extends EventEmitter {
       if (result.status === 0) return;
     }
     if (ownedProcessTree && process.platform !== "win32") {
+      if (pty && !pty.processGroupLeader) {
+        pty.kill(signal);
+        return;
+      }
       try {
         process.kill(-pid, signal);
         return;
@@ -2187,7 +2190,7 @@ export class AppRuntimeManager extends EventEmitter {
     pid: number | undefined,
     signal: NodeJS.Signals,
     child?: ChildProcessWithoutNullStreams,
-    pty?: IPty,
+    pty?: PtyProcess,
   ) {
     if (!pid) return;
     const processTree = this.managedProcessTrees.get(pid);

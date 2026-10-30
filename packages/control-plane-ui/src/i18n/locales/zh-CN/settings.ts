@@ -538,7 +538,7 @@ export const settings = {
   },
   nodeDialogs: {
     installTitle: "安装远程节点", installDescription: "在远程主机上运行生成的命令。node-agent 将作为 systemd 服务安装并连接回此控制面板。",
-    checkHost: "检查远程主机", requirements: "需要带 systemd 的 Linux、包含 npm 的 Node.js 24 和 curl。只有 Docker 运行环境需要 Docker。",
+    checkHost: "检查远程主机", requirements: "需要带 systemd 的 Linux、包含 npm 的 Node.js 24.15 或更高版本和 curl。可使用 Bun 1.4.4 或更高版本代替 Node 运行服务，运行时会自动检测；安装和更新仍需要 npm。只有 Docker 运行环境需要 Docker。",
     publicUrl: "控制面板公开 URL", reachableUrl: "远程主机必须能够访问此 URL。", runCommand: "运行安装命令",
     installerSource: "安装源", installerSourceGitHub: "GitHub", installerSourceControlPlane: "当前控制面",
     copied: "已复制", copyCommand: "复制命令", enterUrl: "输入公开 URL 以生成命令。", expiresHint: "此一次性 token 将于 {time} 过期。过期后请生成新命令。", close: "关闭",

@@ -536,7 +536,7 @@ export const settings = {
   },
   nodeDialogs: {
     installTitle: "Install a remote node", installDescription: "Run the generated command on the remote host. The node-agent will install as a systemd service and connect back to this control plane.",
-    checkHost: "Check the remote host", requirements: "Requires Linux with systemd, Node.js 24 with npm, and curl. Docker is only required for Docker runtimes.",
+    checkHost: "Check the remote host", requirements: "Requires Linux with systemd, Node.js 24.15 or newer with npm, and curl. Bun 1.4.4 or newer can run the services instead of Node and is detected automatically; npm is still required for installation and updates. Docker is only required for Docker runtimes.",
     publicUrl: "Control-plane public URL", reachableUrl: "The remote host must be able to reach this URL.", runCommand: "Run the install command",
     installerSource: "Installer source", installerSourceGitHub: "GitHub", installerSourceControlPlane: "This Control Plane",
     copied: "Copied", copyCommand: "Copy command", enterUrl: "Enter the public URL to generate the command.", expiresHint: "This one-time token expires {time}. Generate a new command if it expires.", close: "Close",

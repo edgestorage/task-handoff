@@ -1491,7 +1491,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   };
 
   const wslGitProvisioning = wslExecutor
-    ? new WslGitWorkspaceProvisioner({ executor: wslExecutor, logger: (message, data) => app.log.debug(data, message) })
+    ? new WslGitWorkspaceProvisioner({ executor: wslExecutor, bootstrapDir: dockerBootstrapDir, logger: (message, data) => app.log.debug(data, message) })
     : undefined;
   const gitProvisioning = new InstanceGitWorkspaceProvisioningController(state.controlledInstances, {
     context: (instance) => state.context(instance),

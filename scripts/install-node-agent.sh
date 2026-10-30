@@ -2,6 +2,7 @@
 set -eu
 
 MIN_NODE_VERSION="24.15.0"
+MIN_BUN_VERSION="1.4.4"
 CONTROL_PLANE_URL=""
 JOIN_TOKEN=""
 CLOUD_RELAY_ORIGIN=""
@@ -23,6 +24,8 @@ NODE_DIST_URL="${TASK_HANDOFF_NODE_DIST_URL:-}"
 NPM_REGISTRY="${TASK_HANDOFF_NPM_REGISTRY:-}"
 EFFECTIVE_INSTALL_SOURCE=""
 APT_SOURCE_FILE=""
+JS_RUNTIME="${TASK_HANDOFF_JS_RUNTIME:-}"
+JS_RUNTIME_COMMAND=""
 
 usage() {
   cat <<'USAGE'
@@ -42,13 +45,14 @@ Options:
   --install-source <source>   Source profile: auto, official, or china; default auto
   --node-dist-url <url>       Override the Node.js distribution base URL
   --npm-registry <url>        npm registry used for installation and managed updates
+  --js-runtime <runtime>      Override the JavaScript runtime: node or bun; auto-detected by default
   --data-dir <path>           Node-agent data directory
   --service-user <user>       systemd service user
   --host <host>               Node-agent HTTP bind host, default 127.0.0.1
   --port <port>               Node-agent HTTP port, default 8091
 
 On Debian, Ubuntu, RHEL 8/9, and compatible dnf-based hosts, the installer
-can also install a compatible Node.js 24 and npm. Existing compatible Node.js
+can also install Node.js 24.15.0 or newer and npm. Existing compatible Node.js
 and npm installations are used without invoking a system package manager.
 USAGE
 }
@@ -166,14 +170,12 @@ node_is_compatible() {
 }
 
 node_version_is_compatible() {
-  case "$1" in
-    24.*) version_is_at_least "$1" "$MIN_NODE_VERSION" ;;
-    *) return 1 ;;
-  esac
+  version_is_at_least "$1" "$MIN_NODE_VERSION"
 }
 
 version_is_at_least() {
   awk -v current="$1" -v minimum="$2" 'BEGIN {
+    if (current !~ /^[0-9]+\.[0-9]+([.][0-9]+)?([-+][0-9A-Za-z.-]+)?$/) exit 1;
     split(current, left, "."); split(minimum, right, ".");
     for (i = 1; i <= 3; i++) {
       if ((left[i] + 0) > (right[i] + 0)) exit 0;
@@ -232,7 +234,7 @@ ensure_node_environment() {
   node_archive_version="${node_archive#node-v}"
   node_archive_version="${node_archive_version%-linux-*}"
   node_version_is_compatible "$node_archive_version" \
-    || die "$NODE_DIST_URL provides Node.js $node_archive_version; Node.js $MIN_NODE_VERSION or newer within the Node.js 24 release line is required. Choose another mirror with --node-dist-url."
+    || die "$NODE_DIST_URL provides Node.js $node_archive_version; Node.js $MIN_NODE_VERSION or newer is required. Choose another mirror with --node-dist-url."
   curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
     "$NODE_DIST_URL/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
   expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
@@ -242,7 +244,7 @@ ensure_node_environment() {
   rm -rf "$node_tmp"
   trap - EXIT HUP INT TERM
 
-  node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer within the Node.js 24 release line is required; found $(node --version 2>/dev/null || echo none)"
+  node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer is required; found $(node --version 2>/dev/null || echo none)"
   command -v npm >/dev/null 2>&1 || die "npm was not installed with Node.js"
 }
 
@@ -335,6 +337,7 @@ while [ "$#" -gt 0 ]; do
     --install-source) INSTALL_SOURCE="${2:-}"; shift 2 ;;
     --node-dist-url) NODE_DIST_URL="${2:-}"; shift 2 ;;
     --npm-registry) NPM_REGISTRY="${2:-}"; shift 2 ;;
+    --js-runtime) JS_RUNTIME="${2:-}"; shift 2 ;;
     --data-dir) DATA_DIR="${2:-}"; shift 2 ;;
     --service-user) SERVICE_USER="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
@@ -348,6 +351,11 @@ done
   || die "--install-source must be auto, official, or china"
 NODE_DIST_URL_OVERRIDE="$NODE_DIST_URL"
 NPM_REGISTRY_OVERRIDE="$NPM_REGISTRY"
+case "$JS_RUNTIME" in
+  ""|auto) JS_RUNTIME="" ;;
+  node|bun) ;;
+  *) die "--js-runtime must be auto, node, or bun" ;;
+esac
 
 need_root
 
@@ -375,6 +383,25 @@ ensure_node_environment
 ensure_npm_runtime
 rm -f "$APT_SOURCE_FILE"
 require_command curl
+
+resolve_js_runtime() {
+  selected=""
+  case "$JS_RUNTIME" in
+    "")
+      selected="$(command -v node 2>/dev/null || command -v bun 2>/dev/null || true)"
+      ;;
+    node) selected="$(command -v node 2>/dev/null || true)" ;;
+    bun) selected="$(command -v bun 2>/dev/null || true)" ;;
+  esac
+  [ -n "$selected" ] || die "${JS_RUNTIME:-node or bun} JavaScript runtime is not available"
+  if [ "$(basename "$selected")" = "bun" ]; then
+    bun_version="$("$selected" --version 2>/dev/null || true)"
+    version_is_at_least "$bun_version" "$MIN_BUN_VERSION" \
+      || die "Bun.js $MIN_BUN_VERSION or newer is required; found ${bun_version:-unknown}"
+  fi
+  printf '%s\n' "$selected"
+}
+JS_RUNTIME_COMMAND="$(resolve_js_runtime)"
 
 if [ "$SERVICE_USER" != "root" ] && ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /var/lib/task-handoff --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -428,9 +455,9 @@ else
   exit 1
 fi
 
-NODE_AGENT_COMMAND="$TASK_HANDOFF_BIN"
+NODE_AGENT_COMMAND="$JS_RUNTIME_COMMAND $TASK_HANDOFF_BIN"
 case "$(basename "$TASK_HANDOFF_BIN")" in
-  task-handoff|task-handoff.js) NODE_AGENT_COMMAND="$TASK_HANDOFF_BIN node-agent" ;;
+  task-handoff|task-handoff.js) NODE_AGENT_COMMAND="$JS_RUNTIME_COMMAND $TASK_HANDOFF_BIN node-agent" ;;
 esac
 
 if [ -n "$CONTROLLED_INSTANCE_PACKAGE_URL" ]; then
@@ -447,7 +474,7 @@ fi
 
 CONTROLLED_INSTANCE_COMMAND=""
 if command -v task-handoff-controlled-instance >/dev/null 2>&1; then
-  CONTROLLED_INSTANCE_COMMAND="$(command -v task-handoff-controlled-instance) web"
+  CONTROLLED_INSTANCE_COMMAND="$JS_RUNTIME_COMMAND $(command -v task-handoff-controlled-instance) web"
 fi
 require_command npm
 NPM_COMMAND="$(command -v npm)"
@@ -460,6 +487,7 @@ TASK_HANDOFF_NODE_AGENT_DATA_DIR=$DATA_DIR
 TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc
 TASK_HANDOFF_NODE_AGENT_IPC_PATH=$IPC_PATH
 TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND=$CONTROLLED_INSTANCE_COMMAND
+${JS_RUNTIME:+TASK_HANDOFF_JS_RUNTIME=$JS_RUNTIME}
 TASK_HANDOFF_NPM_COMMAND=$NPM_COMMAND
 ${NPM_REGISTRY:+NPM_CONFIG_REGISTRY=$NPM_REGISTRY}
 EOF

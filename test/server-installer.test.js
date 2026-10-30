@@ -28,6 +28,7 @@ test("server update installation arguments preserve the authoritative service co
     "TASK_HANDOFF_NODE_AGENT_HOST=10.0.0.5",
     "TASK_HANDOFF_NODE_AGENT_PORT=9555",
     "TASK_HANDOFF_NODE_AGENT_IPC_PATH=/srv/run/node-agent.sock",
+    "TASK_HANDOFF_JS_RUNTIME=bun",
     "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
   ].join("\n"));
   fs.writeFileSync(nodeAgentUnitFile, "[Service]\nUser=task-handoff\n");
@@ -42,10 +43,31 @@ test("server update installation arguments preserve the authoritative service co
     "--node-agent-port", "9555",
     "--node-agent-ipc-path", "/srv/run/node-agent.sock",
     "--auth-mode", "disabled",
+    "--js-runtime", "bun",
     "--npm-registry", "https://registry.npmmirror.com",
     "--static-dir", "/srv/task-handoff/ui",
   ]);
+
+  fs.writeFileSync(nodeAgentEnvFile, fs.readFileSync(nodeAgentEnvFile, "utf8").replace(
+    "TASK_HANDOFF_JS_RUNTIME=bun",
+    "TASK_HANDOFF_JS_RUNTIME=auto",
+  ));
+  assert.equal(currentServerInstallArgs({ controlPlaneEnvFile, nodeAgentEnvFile, nodeAgentUnitFile }).includes("--js-runtime"), false);
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("runtime detection is not persisted as default installer configuration", () => {
+  for (const filename of ["install-node-agent.sh", "install-server-services.sh", "install-server.sh"]) {
+    const source = fs.readFileSync(path.join(root, "scripts", filename), "utf8");
+    assert.match(source, /JS_RUNTIME="\$\{TASK_HANDOFF_JS_RUNTIME:-\}"/, filename);
+    assert.doesNotMatch(source, /JS_RUNTIME="\$\{TASK_HANDOFF_JS_RUNTIME:-auto\}"/, filename);
+  }
+  for (const filename of ["install-node-agent.sh", "install-server-services.sh"]) {
+    const source = fs.readFileSync(path.join(root, "scripts", filename), "utf8");
+    assert.match(source, /\$\{JS_RUNTIME:\+TASK_HANDOFF_JS_RUNTIME=\$JS_RUNTIME\}/, filename);
+    assert.doesNotMatch(source, /^TASK_HANDOFF_JS_RUNTIME=\$JS_RUNTIME$/m, filename);
+  }
+  assert.match(fs.readFileSync(path.join(root, "scripts", "install-server.sh"), "utf8"), /if \[ -n "\$JS_RUNTIME" \]; then set -- "\$@" --js-runtime "\$JS_RUNTIME"; fi/);
 });
 
 function typescriptSources(directory) {
@@ -80,7 +102,7 @@ test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths witho
   assert.match(bootstrap, /npm install -g/);
   assert.match(bootstrap, /@task-handoff\/server@\$PACKAGE_TARGET/);
   assert.match(bootstrap, /task-handoff-server-\$VERSION\.tgz/);
-  assert.match(bootstrap, /task-handoff install/);
+  assert.match(bootstrap, /command -v task-handoff\)" install/);
   assert.match(bootstrap, /--artifacts-dir/);
 });
 
@@ -98,7 +120,7 @@ test("remote node-agent bootstrap installs Node.js portably without a native bui
   assert.match(installer, /Node\.js archive checksum verification failed/);
   assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
   assert.doesNotMatch(installer, /dpkg --compare-versions/);
-  assert.match(installer, /case "\$1" in[\s\S]*24\.\*/);
+  assert.match(installer, /node_version_is_compatible\(\) \{\n\s+version_is_at_least "\$1" "\$MIN_NODE_VERSION"\n\}/);
 });
 
 test("the repository installer is the same script served by the Control Plane", async () => {
@@ -129,13 +151,13 @@ for (const filename of ["install-node-agent.sh", "install-server.sh"]) {
     }
   });
 
-  test(`${filename} rejects stale or wrong-major manifests before downloading or replacing Node.js`, () => {
+  test(`${filename} rejects stale manifests before downloading or replacing Node.js`, () => {
     const start = source.indexOf('  node_tmp="$(mktemp -d)"');
     const end = source.indexOf("  trap - EXIT HUP INT TERM", start);
     assert.ok(start >= 0 && end > start);
     const download = source.slice(start, end);
     for (const arch of ["x64", "arm64"]) {
-      for (const version of ["24.9.0", "24.14.9", "24.15.0", "24.22.2", "25.0.0"]) {
+      for (const version of ["24.9.0", "24.14.9", "24.15.0", "24.22.2", "25.0.0", "26.3.0"]) {
         // Run the actual download block with an in-memory manifest. Stop at the archive
         // request so this regression test cannot install anything on the host.
         const result = spawnSync("/bin/sh", ["-s", "--", version, arch], {
@@ -159,7 +181,8 @@ ${download}
 `,
           encoding: "utf8",
         });
-        const supported = version === "24.15.0" || version === "24.22.2";
+        const [major, minor] = version.split(".").map(Number);
+        const supported = major > 24 || (major === 24 && minor >= 15);
         assert.equal(result.status, supported ? 77 : 1, `${filename} ${arch} ${version}: ${result.stderr}`);
         if (supported) {
           assert.match(result.stdout, /archive-requested/);
@@ -285,7 +308,39 @@ printf '%s\\n' '{"name":"npm","clean":true}' > "$target/npm/package.json"
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test(`${filename} rejects missing or malformed runtime versions`, () => {
+    const result = spawnSync("/bin/sh", ["-s"], {
+      input: `set -eu
+${functions}
+if version_is_at_least "" "1.4.4"; then exit 40; fi
+if version_is_at_least "bun-1.4.4" "1.4.4"; then exit 41; fi
+version_is_at_least "1.4.4" "1.4.4"
+version_is_at_least "2.28" "2.28"
+version_is_at_least "26.3.0" "24.15.0"
+`,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
 }
+
+test("service installer rejects missing or malformed runtime versions", () => {
+  const source = fs.readFileSync(path.join(root, "scripts/install-server-services.sh"), "utf8");
+  const functions = source.match(/^[a-z_]+\(\) \{\n[\s\S]*?^\}/gm).join("\n");
+  const result = spawnSync("/bin/sh", ["-s"], {
+    input: `set -eu
+${functions}
+if version_is_at_least "" "1.4.4"; then exit 40; fi
+if version_is_at_least "bun-1.4.4" "1.4.4"; then exit 41; fi
+version_is_at_least "1.4.4" "1.4.4"
+version_is_at_least "2.28" "2.28"
+version_is_at_least "26.3.0" "24.15.0"
+`,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("remote node-agent bootstrap accepts a compatible preinstalled Node without a distro package manager", async () => {
   const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
@@ -503,8 +558,11 @@ test("runtime package archives verify every directly executed helper", () => {
     "bin/task-handoff-install-server-services",
     "bin/task-handoff-node-update-worker",
     "docker/entrypoint.sh",
+    "docker/instance-launcher.mjs",
     "docker/node-agent-unix-proxy.mjs",
     "docker/instance-launcher.sh",
+    "docker/js-runtime.sh",
+    "docker/private-config.mjs",
     "docker/runtime-installer.mjs",
   ]) {
     assert.ok(builder.includes(executable), `missing archive executable assertion for ${executable}`);

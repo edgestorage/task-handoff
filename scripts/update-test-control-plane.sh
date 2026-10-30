@@ -56,7 +56,7 @@ fi
 
 node -e '
   const [major, minor] = process.versions.node.split(".").map(Number);
-  if (major !== 24 || minor < 15) throw new Error(`Node.js 24.15.0 or newer Node.js 24 is required; received ${process.version}.`);
+  if (major < 24 || (major === 24 && minor < 15)) throw new Error(`Node.js 24.15.0 or newer is required; received ${process.version}.`);
 '
 
 log "Preflight $HOST"

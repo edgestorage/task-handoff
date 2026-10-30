@@ -6,6 +6,7 @@ import {
   type ControlledInstance,
   type UpdateCheckResult,
 } from "@task-handoff/protocol/control-plane";
+import { isBunRuntime } from "@task-handoff/core/core/javascript-runtime";
 import { createSecret } from "../shared/persistence/store.ts";
 import type { CommandRunner } from "./runtimes/docker.ts";
 import {
@@ -151,7 +152,7 @@ export class NodeUpdateController {
           "--unit", `task-handoff-update-${job.id}`,
           "--collect",
           "--property=Type=exec",
-          ...(packaged ? [worker] : [process.execPath, worker]),
+          ...(packaged && !isBunRuntime() ? [worker] : [process.execPath, worker]),
           "--job-file", this.options.jobs.records.filePath(job.id),
           "--target-version", job.toVersion,
           "--npm-command", npmCommand(),

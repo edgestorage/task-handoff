@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly script_dir="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+
 # Compatibility for v0.0.34: the private config moved to a per-instance
 # directory mount, but the retired single-file path stays readable so
 # containers created by older node agents keep starting until they are rebuilt.
@@ -22,20 +24,7 @@ resolve_private_config_path() {
 # and Codex settings are an optional startup snapshot that the node agent pushes
 # over the authenticated internal API once the instance is registered.
 decode_private_config() {
-  node -e '
-    const fs = require("node:fs");
-    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if (value.version !== 1 || typeof value.instanceId !== "string" || !value.instanceId || typeof value.instanceCredential !== "string" || !value.instanceCredential) process.exit(78);
-    const configured = value.environment === undefined ? {} : value.environment;
-    if (!configured || typeof configured !== "object" || Array.isArray(configured)) process.exit(78);
-    const environment = { ...configured, TASK_HANDOFF_REGISTRATION_TOKEN: value.instanceCredential, TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1", TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: process.argv[1] };
-    if (value.modelCatalog !== undefined) environment.TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON = JSON.stringify(value.modelCatalog);
-    if (value.codexSettings !== undefined) environment.TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON.stringify(value.codexSettings);
-    for (const [key, item] of Object.entries(environment)) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof item !== "string") process.exit(78);
-      process.stdout.write(`${key}\t${Buffer.from(item).toString("base64")}\n`);
-    }
-  ' "$1"
+  "${script_dir}/js-runtime.sh" "${script_dir}/private-config.mjs" "$1"
 }
 
 load_private_config() {
@@ -76,7 +65,7 @@ start_node_agent_unix_proxy() {
   if [ -z "${TASK_HANDOFF_NODE_AGENT_SOCKET_PATH:-}" ]; then
     return
   fi
-  node /run/task-handoff/bootstrap/node-agent-unix-proxy.mjs \
+  "${script_dir}/js-runtime.sh" "${script_dir}/node-agent-unix-proxy.mjs" \
     "${TASK_HANDOFF_NODE_AGENT_SOCKET_PATH}" \
     "${TASK_HANDOFF_NODE_AGENT_PROXY_PORT:-19001}" &
 }

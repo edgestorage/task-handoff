@@ -3,7 +3,7 @@
   <h1>TaskHandoff</h1>
   <p><strong>面向本地与远程 AI 工作空间的统一运行、管理与协作控制面板</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/Node.js-24-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24">
+    <img src="https://img.shields.io/badge/Node.js-24.15%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24.15+">
     <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
     <img src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 6">
     <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready">
@@ -93,7 +93,7 @@ Docker 是主要的隔离运行时，支持一个节点运行多个实例。Wind
 
 ### 环境要求
 
-- Node.js `>= 24.15.0 < 25`
+- Node.js `>= 24.15.0`，或使用 Bun `>= 1.4.4` 运行服务
 - pnpm `9.15.3`
 - Docker（使用 Docker Runtime、构建容器镜像或运行 standalone Compose 配置时需要）
 
@@ -151,6 +151,8 @@ curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/
 ```
 
 脚本会检查运行环境，按需安装 Node.js 24 和 Docker，通过 npm 安装最新稳定版 `@task-handoff/server`，然后创建并启动 Control Plane 与 Node Agent 两个 systemd 服务。安装源默认为 `auto`：中国时区或中文环境直接使用清华 APT 镜像和 npmmirror；其他环境短时探测官方 Node.js 源，无法连接时自动切换中国镜像。APT 镜像只用于本次安装，不会覆盖系统源配置。默认控制平面监听 `8081` 端口并启用密码认证；可通过安装参数修改端口、认证模式、发布渠道等设置。
+
+Node Agent 和 controlled instance 共用同一个包，可直接运行在 Node.js 或 Bun 上。进程会自动检测实际运行时，不需要额外配置；只有需要强制覆盖时才传 `--js-runtime bun`（或为受管容器设置 `TASK_HANDOFF_JS_RUNTIME=bun`）。当前安装、自更新和节点更新链路仍需要 Node.js 与 npm。
 
 需要明确指定来源时，可传入 `--install-source china` 或 `--install-source official`：
 

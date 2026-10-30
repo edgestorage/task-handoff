@@ -9,6 +9,7 @@ import {
   installWslRuntime,
   wslArtifactTarget,
 } from "../src/node-agent/runtimes/wsl-artifacts.ts";
+import { WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME } from "../src/node-agent/runtimes/wsl-bootstrap.ts";
 
 const identity: RuntimeArtifactIdentity = {
   packageName: "@task-handoff/controlled-instance",
@@ -42,6 +43,7 @@ test("installWslRuntime bridges the artifact and runs the shared runtime install
   await installWslRuntime(executor, "th-wsl-inst_a", { identity, archivePath: "C:\\artifacts\\runtime.tar.gz", cacheHit: false });
   assert.deepEqual(executor.copied, [{ source: "C:\\artifacts\\runtime.tar.gz", destination: WSL_RUNTIME_ARTIFACT_STAGING }]);
   const install = executor.calls.find((argv) => argv[0] === "sh")!;
+  assert.ok(install[2].includes(WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME));
   assert.ok(install[2].includes(WSL_RUNTIME_INSTALLER));
   assert.ok(install[2].includes("--version '0.0.40'"));
   assert.ok(install[2].includes("--launcher-abi 1"));
@@ -50,6 +52,7 @@ test("installWslRuntime bridges the artifact and runs the shared runtime install
 test("inspectWslRuntime matches the active release identity", async () => {
   const executor = fakeExecutor(JSON.stringify(identity));
   assert.equal(await inspectWslRuntime(executor, "th-wsl-inst_a", identity), true);
+  assert.ok(executor.calls.find((argv) => argv[0] === "sh")?.[2].includes(WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME));
   const mismatch = fakeExecutor(JSON.stringify({ ...identity, version: "0.0.39" }));
   assert.equal(await inspectWslRuntime(mismatch, "th-wsl-inst_a", identity), false);
   const broken = fakeExecutor("not json", 0);

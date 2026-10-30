@@ -119,7 +119,7 @@ for (const [name, definition] of selected) {
   if (name === "node-agent") {
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
-    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "node-agent-unix-proxy.mjs", "runtime-installer.mjs", "git-provision.sh"]) {
+    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs", "git-provision.sh"]) {
       copyLinuxExecutable(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
     }
     for (const standalone of definition.standaloneInputs || []) {

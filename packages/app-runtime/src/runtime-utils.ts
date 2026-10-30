@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { localIpcEndpoint } from "@task-handoff/core/core/local-ipc-endpoint";
+import { isBunRuntime } from "@task-handoff/core/core/javascript-runtime";
 
 export type GuiVncBackend = "novnc" | "kasmvnc";
 
@@ -90,6 +91,7 @@ export function createCodexAppServerToken() {
 }
 
 export function ensureNodePtySpawnHelperExecutable() {
+  if (isBunRuntime()) return;
   if (process.platform !== "darwin" && process.platform !== "linux") {
     return;
   }

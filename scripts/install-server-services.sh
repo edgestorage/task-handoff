@@ -24,6 +24,9 @@ AUTH_MODE="password"
 NPM_REGISTRY=""
 STATIC_DIR=""
 MATERIALIZE_ONLY="0"
+JS_RUNTIME="${TASK_HANDOFF_JS_RUNTIME:-}"
+JS_RUNTIME_COMMAND=""
+MIN_BUN_VERSION="1.4.4"
 
 usage() {
   cat <<'USAGE'
@@ -48,6 +51,7 @@ Options:
   --node-agent-port <port>          Local node-agent port, default 8091
   --node-agent-ipc-path <path>      Local control socket, default /run/task-handoff/node-agent.sock
   --auth-mode <mode>                Control-plane auth mode: password or disabled
+  --js-runtime <runtime>            Override the JavaScript runtime: node or bun; auto-detected by default
   --npm-registry <url>              npm registry inherited by managed updates
   --static-dir <path>               Built control-plane UI directory
   --materialize-only                Rewrite env and systemd units without starting services
@@ -77,6 +81,7 @@ while [ "$#" -gt 0 ]; do
     --node-agent-port) NODE_AGENT_PORT="${2:-}"; shift 2 ;;
     --node-agent-ipc-path) NODE_AGENT_IPC_PATH="${2:-}"; shift 2 ;;
     --auth-mode) AUTH_MODE="${2:-}"; shift 2 ;;
+    --js-runtime) JS_RUNTIME="${2:-}"; shift 2 ;;
     --npm-registry) NPM_REGISTRY="${2:-}"; shift 2 ;;
     --static-dir) STATIC_DIR="${2:-}"; shift 2 ;;
     --materialize-only) MATERIALIZE_ONLY="1"; shift ;;
@@ -91,6 +96,11 @@ if [ "$AUTH_MODE" != "password" ] && [ "$AUTH_MODE" != "disabled" ]; then
   echo "--auth-mode must be password or disabled." >&2
   exit 1
 fi
+case "$JS_RUNTIME" in
+  ""|auto) JS_RUNTIME="" ;;
+  node|bun) ;;
+  *) echo "--js-runtime must be auto, node, or bun." >&2; exit 1 ;;
+esac
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd is required for this installer." >&2
@@ -106,20 +116,59 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 NPM_COMMAND="$(command -v npm)"
 
+version_is_at_least() {
+  awk -v current="$1" -v minimum="$2" 'BEGIN {
+    if (current !~ /^[0-9]+\.[0-9]+([.][0-9]+)?([-+][0-9A-Za-z.-]+)?$/) exit 1;
+    split(current, left, "."); split(minimum, right, ".");
+    for (i = 1; i <= 3; i++) {
+      if ((left[i] + 0) > (right[i] + 0)) exit 0;
+      if ((left[i] + 0) < (right[i] + 0)) exit 1;
+    }
+    exit 0;
+  }'
+}
+
+resolve_js_runtime() {
+  selected=""
+  case "$JS_RUNTIME" in
+    "")
+      if command -v node >/dev/null 2>&1; then selected="$(command -v node)"
+      elif command -v bun >/dev/null 2>&1; then selected="$(command -v bun)"
+      else echo "node or bun is required to run TaskHandoff." >&2; exit 1
+      fi
+      ;;
+    node)
+      selected="$(command -v node 2>/dev/null || true)"
+      ;;
+    bun)
+      selected="$(command -v bun 2>/dev/null || true)"
+      ;;
+  esac
+  if [ -z "$selected" ]; then
+    echo "${JS_RUNTIME:-node or bun} is required to run TaskHandoff." >&2
+    exit 1
+  fi
+  if [ "$(basename "$selected")" = "bun" ]; then
+    bun_version="$("$selected" --version 2>/dev/null || true)"
+    version_is_at_least "$bun_version" "$MIN_BUN_VERSION" || {
+      echo "Bun.js $MIN_BUN_VERSION or newer is required; found ${bun_version:-unknown}." >&2
+      exit 1
+    }
+  fi
+  printf '%s\n' "$selected"
+}
+JS_RUNTIME_COMMAND="$(resolve_js_runtime)"
+
 resolve_command() {
   candidate="$1"
   if [ -f "$candidate" ]; then
-    if [ -x "$candidate" ]; then
-      printf '%s\n' "$candidate"
-    else
-      if ! command -v node >/dev/null 2>&1; then
-        echo "node is required to run $candidate." >&2
-        exit 1
-      fi
-      printf '%s %s\n' "$(command -v node)" "$candidate"
+    if [ ! -r "$candidate" ]; then
+      echo "TaskHandoff executable is not readable: $candidate" >&2
+      exit 1
     fi
+    printf '%s %s\n' "$JS_RUNTIME_COMMAND" "$candidate"
   elif command -v "$candidate" >/dev/null 2>&1; then
-    command -v "$candidate"
+    printf '%s %s\n' "$JS_RUNTIME_COMMAND" "$(command -v "$candidate")"
   else
     echo "TaskHandoff executable was not found: $candidate" >&2
     exit 1
@@ -159,7 +208,7 @@ if [ -n "$STATIC_DIR" ]; then
   CONTROL_PLANE_STATIC_OPTION="--static-dir $STATIC_DIR"
 fi
 
-NODE_AGENT_IPC_ENDPOINT="$(node -e 'process.stdout.write(`ipc://${encodeURIComponent(process.argv[1])}`)' "$NODE_AGENT_IPC_PATH")"
+NODE_AGENT_IPC_ENDPOINT="$("$JS_RUNTIME_COMMAND" -e 'process.stdout.write(`ipc://${encodeURIComponent(process.argv[1])}`)' "$NODE_AGENT_IPC_PATH")"
 
 if [ "$SERVICE_USER" != "root" ] && ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /var/lib/task-handoff --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -208,8 +257,8 @@ if [ "$AUTH_MODE" = "password" ]; then
   # The auth store is the sole authority: file existence cannot distinguish a
   # valid administrator from a corrupt record that sanitation will isolate.
   systemctl stop task-handoff-control-plane.service 2>/dev/null || true
-  ADMIN_USERNAME="$(node -e 'process.stdout.write(`admin-${require("node:crypto").randomBytes(6).toString("hex")}`)')"
-  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+  ADMIN_USERNAME="$("$JS_RUNTIME_COMMAND" -e 'process.stdout.write(`admin-${require("node:crypto").randomBytes(6).toString("hex")}`)')"
+  ADMIN_PASSWORD="$("$JS_RUNTIME_COMMAND" -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
   ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | initialize_control_plane_admin "$ADMIN_USERNAME")"
   if [ "$ADMIN_INITIALIZATION_RESULT" != "created" ]; then
     ADMIN_USERNAME=""
@@ -225,6 +274,7 @@ TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc
 TASK_HANDOFF_NODE_AGENT_IPC_PATH=$NODE_AGENT_IPC_PATH
 TASK_HANDOFF_NODE_AGENT_CONTAINER_URL=http://host.docker.internal:$NODE_AGENT_PORT
 TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND=$CONTROLLED_INSTANCE_COMMAND
+${JS_RUNTIME:+TASK_HANDOFF_JS_RUNTIME=$JS_RUNTIME}
 TASK_HANDOFF_NPM_COMMAND=$NPM_COMMAND
 ${NPM_REGISTRY:+NPM_CONFIG_REGISTRY=$NPM_REGISTRY}
 TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL=http://127.0.0.1:$CONTROL_PLANE_PORT/api/health

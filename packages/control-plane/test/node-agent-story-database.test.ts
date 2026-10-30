@@ -7,10 +7,28 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
 import { StoryAutomationStore } from "../src/node-agent/stories/automation-store.ts";
-import { openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
+import { isSupportedBunVersion, isSupportedNodeVersion, openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
 import { NodeStoryStore } from "../src/node-agent/stories/store.ts";
 import { createStoryDatabaseFixture, seedStoryAction } from "./story-database-fixture.ts";
 import { nodeAgentMigrations } from "../src/node-agent/persistence/migrations.ts";
+
+test("Node Agent accepts every Node.js version with the required SQLite baseline", () => {
+  for (const version of ["23.99.0", "24.14.9", "not-a-version"]) {
+    assert.equal(isSupportedNodeVersion(version), false, version);
+  }
+  for (const version of ["24.15.0", "24.15.1", "24.19.0", "25.0.0", "26.3.0", "30.0.0"]) {
+    assert.equal(isSupportedNodeVersion(version), true, version);
+  }
+});
+
+test("Node Agent accepts Bun versions with the node:sqlite baseline", () => {
+  for (const version of ["1.4.3", "1.3.99", "not-a-version"]) {
+    assert.equal(isSupportedBunVersion(version), false, version);
+  }
+  for (const version of ["1.4.4", "1.4.5", "1.5.0", "2.0.0"]) {
+    assert.equal(isSupportedBunVersion(version), true, version);
+  }
+});
 
 test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private permissions", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-database-");

@@ -7,7 +7,8 @@ import { nodeAgentMigrations, type NodeAgentMigration } from "./migrations.ts";
 import { migrateLegacyP0State } from "./legacy-migration.ts";
 
 const NODE_AGENT_APPLICATION_ID = 0x54484e41;
-const MINIMUM_NODE_VERSION = { major: 24, minor: 15 } as const;
+const MINIMUM_NODE_VERSION = [24, 15, 0] as const;
+const MINIMUM_BUN_VERSION = [1, 4, 4] as const;
 
 export type NodeAgentDatabase = {
   db: NodeSQLiteDatabase;
@@ -29,11 +30,52 @@ function scalar(client: DatabaseSync, pragma: string) {
   return row ? Object.values(row)[0] : undefined;
 }
 
-function assertSupportedNodeVersion(version = process.versions.node) {
-  const [major, minor] = version.split(".").map(Number);
-  if (major !== MINIMUM_NODE_VERSION.major || minor < MINIMUM_NODE_VERSION.minor) {
-    throw new Error(`Node.js 24.15 or newer within the Node.js 24 release line is required; received ${version}.`);
+export function isSupportedNodeVersion(version = process.versions.node) {
+  return isMinimumVersion(version, MINIMUM_NODE_VERSION);
+}
+
+export function isSupportedBunVersion(version: string) {
+  return isMinimumVersion(version, MINIMUM_BUN_VERSION);
+}
+
+function isMinimumVersion(version: string, minimum: readonly number[]) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!match) return false;
+  const actual = match.slice(1, 4).map(Number);
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] > minimum[index]) return true;
+    if (actual[index] < minimum[index]) return false;
   }
+  return true;
+}
+
+function assertSupportedRuntimeVersion(versions = process.versions) {
+  const bunVersion = (versions as NodeJS.ProcessVersions & { bun?: unknown }).bun;
+  if (typeof bunVersion === "string" && bunVersion) {
+    if (!isSupportedBunVersion(bunVersion)) {
+      throw new Error(`Bun.js ${MINIMUM_BUN_VERSION.join(".")} or newer is required; received ${bunVersion}.`);
+    }
+    return;
+  }
+  if (!isSupportedNodeVersion(versions.node)) {
+    throw new Error(`Node.js ${MINIMUM_NODE_VERSION.join(".")} or newer is required; received ${versions.node}.`);
+  }
+}
+
+function assertNodeSqliteCapabilities(client: DatabaseSync) {
+  for (const method of ["exec", "prepare", "close"] as const) {
+    if (typeof client[method] !== "function") {
+      throw new Error(`node:sqlite is missing required DatabaseSync.${method}().`);
+    }
+  }
+  const statement = client.prepare("SELECT 1 AS value");
+  for (const method of ["run", "get", "all"] as const) {
+    if (typeof statement[method] !== "function") {
+      throw new Error(`node:sqlite is missing required StatementSync.${method}().`);
+    }
+  }
+  const row = statement.get() as { value?: unknown } | undefined;
+  if (Number(row?.value) !== 1) throw new Error("node:sqlite capability probe returned an invalid result.");
 }
 
 function chmodDatabaseFiles(paths: NodeAgentStorePaths) {
@@ -127,7 +169,7 @@ export function openNodeAgentDatabaseSync(
   options: { legacyMigration?: { rename?: (source: string, target: string) => void } } = {},
 ): NodeAgentDatabase {
   try {
-    assertSupportedNodeVersion();
+    assertSupportedRuntimeVersion();
   } catch (error) {
     throw startupError("runtime", error);
   }
@@ -136,6 +178,7 @@ export function openNodeAgentDatabaseSync(
   let client: DatabaseSync | undefined;
   try {
     client = new DatabaseSync(paths.databasePath);
+    assertNodeSqliteCapabilities(client);
     configure(client, paths);
     migrate(client);
     migrateLegacyP0State(client, paths, options.legacyMigration);

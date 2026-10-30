@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { javascriptRuntimeEnvironment } from "@task-handoff/core/core/javascript-runtime";
 import { InstanceDeleteResultSchema } from "@task-handoff/protocol/control-plane";
 import type { InstanceDeleteInput, InstanceDeleteResult } from "./contracts.ts";
 import type { ExecutorContext, ExecutorStartResult, RuntimeLiveness } from "./contracts.ts";
@@ -20,6 +21,11 @@ import {
 import type { WslSessionHandle } from "./wsl-executor.ts";
 import type { ResolvedRuntimeArtifact } from "../runtime-artifacts.ts";
 import type { RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
+import {
+  WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME,
+  WSL_BOOTSTRAP_ROOT,
+  wslJavaScriptRuntimeCommand,
+} from "./wsl-bootstrap.ts";
 
 /**
  * WSL 实例生命周期（openspec change add-wsl-runtime，Phase 5）。
@@ -29,7 +35,6 @@ import type { RuntimeArtifactIdentity } from "@task-handoff/protocol/control-pla
  * 不新增平行 API。distro 生命周期由「活跃 `wsl.exe` 会话」决定，因此运行中的实例 MUST 持有常驻会话。
  */
 
-export const WSL_BOOTSTRAP_ROOT = "/opt/task-handoff/bootstrap";
 export const WSL_BOOTSTRAP_ENTRYPOINT = `${WSL_BOOTSTRAP_ROOT}/entrypoint.sh`;
 export const WSL_PRIVATE_CONFIG_DIR = "/run/task-handoff/private";
 export const WSL_PRIVATE_CONFIG_PATH = `${WSL_PRIVATE_CONFIG_DIR}/${INSTANCE_PRIVATE_CONFIG_FILE_NAME}`;
@@ -177,6 +182,7 @@ export function buildWslRuntimeEnvironment(
     TASK_HANDOFF_RUNTIME_KIND: "wsl",
     ...(imageSelection ? { TASK_HANDOFF_IMAGE_ID: imageSelection.imageId } : {}),
     TASK_HANDOFF_INSTANCE_LAUNCHER: `${WSL_BOOTSTRAP_ROOT}/instance-launcher.sh`,
+    ...javascriptRuntimeEnvironment(),
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     // WSL 没有 Docker 那样的端口发布：Node Agent 代理写死 `127.0.0.1:<runtime.port>`，而 WSL2
     // localhost forwarding 按端口号 1:1 映射，所以实例 MUST 监听 Node Agent 分配的端口（10.5 实机
@@ -276,6 +282,9 @@ export class WslInstanceLifecycle {
    * 里等注册超时；错误详情带每个候选的失败原因、宿主监听地址与可操作的处理建议（10.5）。
    */
   async nodeAgentUrl(context: ExecutorContext, distroName: string) {
+    // Endpoint refresh can run for an already-started distro after a node-agent
+    // upgrade, before the next start/install pass would otherwise sync assets.
+    await this.syncBootstrapAssets(distroName);
     const candidates = await this.nodeAgentUrlCandidates(context, distroName);
     const probe = this.options.probeNodeAgent
       ?? ((name: string, url: string) => this.probeNodeAgentUrl(name, url));
@@ -322,13 +331,13 @@ export class WslInstanceLifecycle {
   private async probeNodeAgentUrl(distroName: string, url: string) {
     const result = await this.executor.exec(
       distroName,
-      ["node", "-e", WSL_NODE_AGENT_PROBE_SCRIPT, url],
+      wslJavaScriptRuntimeCommand(["-e", WSL_NODE_AGENT_PROBE_SCRIPT, url]),
       { timeoutMs: WSL_NODE_AGENT_PROBE_TIMEOUT_MS + 3_000 },
     );
     if (result.exitCode === 0) return { reachable: true };
     const stderr = result.stderr.trim();
     if (result.exitCode === 127) {
-      return { reachable: false, detail: `the distro could not run node for the reachability probe: ${stderr || "command not found"}` };
+      return { reachable: false, detail: `the distro could not run the selected JavaScript runtime for the reachability probe: ${stderr || "command not found"}` };
     }
     // wsl.exe 会在 stderr 前置自己的噪声（例如 systemd user session 警告），真正的探测错误在最后一行。
     const lastLine = stderr.split("\n").map((line) => line.trim()).filter(Boolean).pop();
@@ -361,10 +370,12 @@ export class WslInstanceLifecycle {
   }
 
   async installRuntime(distroName: string, artifact: ResolvedRuntimeArtifact) {
+    await this.syncBootstrapAssets(distroName);
     await installWslRuntime(this.executor, distroName, artifact);
   }
 
   async inspectRuntime(distroName: string, expected: RuntimeArtifactIdentity) {
+    await this.syncBootstrapAssets(distroName);
     return inspectWslRuntime(this.executor, distroName, expected);
   }
 
@@ -606,4 +617,4 @@ function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export { WSL_RUNTIME_ROOT, WSL_RUNTIME_INSTALLER, WSL_RUNTIME_ARTIFACT_STAGING };
+export { WSL_BOOTSTRAP_JAVASCRIPT_RUNTIME, WSL_BOOTSTRAP_ROOT, WSL_RUNTIME_ROOT, WSL_RUNTIME_INSTALLER, WSL_RUNTIME_ARTIFACT_STAGING };

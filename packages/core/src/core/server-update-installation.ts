@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { configuredJavaScriptRuntime } from "./javascript-runtime.ts";
 import { acquireProcessSingletonLock } from "./process-singleton-lock.ts";
 
 export const SERVER_UPDATE_LOCK_PATH = "/run/task-handoff-server-update.lock";
@@ -63,6 +64,7 @@ export function currentServerInstallArgs(options: {
 } = {}) {
   const controlPlane = parseEnvFile(options.controlPlaneEnvFile || "/etc/task-handoff/control-plane.env");
   const nodeAgent = parseEnvFile(options.nodeAgentEnvFile || "/etc/task-handoff/node-agent.env");
+  const jsRuntime = configuredJavaScriptRuntime(nodeAgent);
   return [
     "--service-user", serviceUser(options.nodeAgentUnitFile || "/etc/systemd/system/task-handoff-node-agent.service"),
     "--control-plane-data-dir", controlPlane.TASK_HANDOFF_CONTROL_PLANE_DATA_DIR || "/var/lib/task-handoff/control-plane",
@@ -73,6 +75,9 @@ export function currentServerInstallArgs(options: {
     "--node-agent-port", nodeAgent.TASK_HANDOFF_NODE_AGENT_PORT || "8091",
     "--node-agent-ipc-path", nodeAgent.TASK_HANDOFF_NODE_AGENT_IPC_PATH || "/run/task-handoff/node-agent.sock",
     "--auth-mode", controlPlane.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "password",
+    ...(jsRuntime
+      ? ["--js-runtime", jsRuntime]
+      : []),
     ...(nodeAgent.NPM_CONFIG_REGISTRY
       ? ["--npm-registry", nodeAgent.NPM_CONFIG_REGISTRY]
       : []),

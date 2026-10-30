@@ -142,6 +142,7 @@ function installArgs(options: Record<string, string | undefined>) {
     ["--auth-mode", options.authMode],
     ["--static-dir", options.staticDir],
     ["--npm-registry", options.npmRegistry],
+    ["--js-runtime", options.jsRuntime],
   ].flatMap(([flag, value]) => value === undefined ? [] : [flag, value]);
 }
 
@@ -175,6 +176,7 @@ async function main() {
     .option("--auth-mode <mode>")
     .option("--static-dir <path>")
     .option("--npm-registry <url>")
+    .option("--js-runtime <runtime>", "Override the JavaScript runtime: node or bun (auto-detected by default)")
     .option("--preserve-current", "Reuse the installed service configuration")
     .option("--materialize-only", "Rewrite service configuration without starting services")
     .action((options) => {

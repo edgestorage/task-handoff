@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn as spawnPty } from "node-pty";
+import { spawnPty } from "@task-handoff/core/core/pty";
 import type { CommandResult } from "./command-runner.ts";
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.ts";
 

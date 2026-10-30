@@ -70,7 +70,8 @@
     "test:node": "node --import ./test/setup-isolated-runtime.mjs --test --test-timeout=30000 test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
   },
   "engines": {
-    "node": ">=24.15.0 <25"
+    "node": ">=24.15.0",
+    "bun": ">=1.4.4"
   },
   "license": "Apache-2.0",
   "homepage": "https://docs.thandoff.com",
@@ -93,7 +94,10 @@
       "docker/entrypoint.sh",
       "docker/git-provision.sh",
       "docker/instance-launcher.sh",
+      "docker/instance-launcher.mjs",
+      "docker/js-runtime.sh",
       "docker/node-agent-unix-proxy.mjs",
+      "docker/private-config.mjs",
       "docker/runtime-installer.mjs",
       "builtin-projects/**/*",
       "dist/**/*",
@@ -128,7 +132,10 @@
       "docker/entrypoint.sh",
       "docker/git-provision.sh",
       "docker/instance-launcher.sh",
+      "docker/instance-launcher.mjs",
+      "docker/js-runtime.sh",
       "docker/node-agent-unix-proxy.mjs",
+      "docker/private-config.mjs",
       "docker/runtime-installer.mjs",
       "builtin-projects/**/*",
       "dist/**/*",
@@ -213,7 +220,7 @@
     "vue": "^3.5.25",
     "vue-router": "^4.6.4",
     "vue-virtual-scroller": "^2.0.0-beta.8",
-    "write-file-atomic": "^8.0.0",
+    "write-file-atomic": "^7.0.1",
     "ws": "^8.21.0",
     "zod": "^4.6.7"
   },

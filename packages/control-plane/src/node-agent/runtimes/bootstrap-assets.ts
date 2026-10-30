@@ -10,7 +10,10 @@ export const REQUIRED_BOOTSTRAP_ASSETS = new Set([
   "entrypoint.sh",
   "git-provision.sh",
   "instance-launcher.sh",
+  "instance-launcher.mjs",
+  "js-runtime.sh",
   "node-agent-unix-proxy.mjs",
+  "private-config.mjs",
   "runtime-installer.mjs",
 ]);
 

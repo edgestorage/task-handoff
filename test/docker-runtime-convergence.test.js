@@ -27,7 +27,7 @@ test("Docker bootstrap assets update in place without replacing the mounted dire
   const source = path.join(root, "source");
   const target = path.join(root, "target");
   fs.mkdirSync(source);
-  for (const name of ["entrypoint.sh", "git-provision.sh", "git-provisioning-helper.js", "instance-launcher.sh", "node-agent-unix-proxy.mjs", "runtime-installer.mjs"]) {
+  for (const name of ["entrypoint.sh", "git-provision.sh", "git-provisioning-helper.js", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs"]) {
     fs.writeFileSync(path.join(source, name), `old:${name}\n`, { mode: 0o755 });
   }
   fs.mkdirSync(target);
@@ -76,6 +76,7 @@ test("Docker runtime install copies, installs through the root-owned updater, ve
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[2].includes(":/opt/task-handoff/instance-runtime/incoming/")));
   const install = calls.find(([, args]) => args[0] === "exec" && args.some((arg) => arg.endsWith("/runtime-installer.mjs")) && args.includes("install"));
   assert.deepEqual(install[1].slice(0, 4), ["exec", "--user", "0", "container-abc"]);
+  assert.ok(install[1].includes("/run/task-handoff/bootstrap/js-runtime.sh"));
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[2].startsWith("container-abc:")));
   assert.ok(calls.some(([, args]) => args[0] === "restart" && args[1] === "container-abc"));
   assert.equal(calls.some(([, args]) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
@@ -187,7 +188,43 @@ test("Docker runtime install recovery uses a disposable helper when the managed 
   assert.deepEqual(rescue.slice(rescue.indexOf("--volumes-from"), rescue.indexOf("--volumes-from") + 2), ["--volumes-from", "authoritative-container"]);
   assert.ok(rescue.includes("sha256:managed-image"));
   assert.ok(rescue.some((arg) => arg.includes("source=/cache/runtime.tar.gz")));
+  assert.match(rescue[rescue.indexOf("-ceu") + 1], /js-runtime\.sh.*runtime-installer\.mjs/);
   assert.equal(calls.some((args) => ["start", "exec", "cp", "restart"].includes(args[0])), false);
+});
+
+test("Docker runtime recovery forwards an explicit JavaScript runtime into the disposable helper", async () => {
+  const previous = process.env.TASK_HANDOFF_JS_RUNTIME;
+  process.env.TASK_HANDOFF_JS_RUNTIME = "bun";
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "authoritative-container",
+        Image: "sha256:managed-image",
+        State: { Running: false },
+        Config: { Entrypoint: [], Cmd: [], Labels: { "task-handoff.instance-id": "instance-1" } },
+        Mounts: [],
+      }), stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  });
+  try {
+    await executor.installRuntimeReleaseWithRecovery({
+      containerName: "instance-1",
+      expectedContainerId: "authoritative-container",
+      artifactPath: "/cache/runtime.tar.gz",
+      identity,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.TASK_HANDOFF_JS_RUNTIME;
+    else process.env.TASK_HANDOFF_JS_RUNTIME = previous;
+  }
+  const rescue = calls.find((args) => args[0] === "run");
+  assert.ok(rescue);
+  const envIndex = rescue.indexOf("TASK_HANDOFF_JS_RUNTIME=bun");
+  assert.ok(envIndex > 0);
+  assert.equal(rescue[envIndex - 1], "-e");
 });
 
 test("Docker runtime install recovery never starts a replacement container", async () => {
@@ -246,6 +283,9 @@ test("runtime launcher installation verifies mounted node-agent assets with one 
   assert.equal(rootExec.length, 1);
   assert.equal(rootExec[0][3], "container-abc");
   assert.match(rootExec[0].at(-1), /install -d -o root/);
+  assert.match(rootExec[0].at(-1), /test -x .*\/js-runtime\.sh/);
+  assert.match(rootExec[0].at(-1), /instance-launcher\.mjs/);
+  assert.match(rootExec[0].at(-1), /private-config\.mjs/);
   assert.equal(calls.some((args) => args[0] === "cp"), false);
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
@@ -257,7 +297,7 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   }
   const preparation = fs.readFileSync(path.resolve(__dirname, "../scripts/prepare-runtime-packages.mjs"), "utf8");
   assert.match(preparation, /replace\(\/\\r\\n\?\/g, "\\n"\)/);
-  for (const file of ["entrypoint.sh", "instance-launcher.sh", "node-agent-unix-proxy.mjs", "runtime-installer.mjs"]) {
+  for (const file of ["entrypoint.sh", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs"]) {
     const contents = fs.readFileSync(path.resolve(__dirname, "../docker", file));
     assert.equal(contents.includes(Buffer.from("\r\n")), false, `${file} must use LF line endings`);
   }
@@ -266,7 +306,7 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   assert.match(entrypoint, /sudo --preserve-env --set-home -u agent -- bash "\$0"/);
   assert.match(entrypoint, /exec bash "\$\{TASK_HANDOFF_INSTANCE_LAUNCHER\}"/);
   assert.doesNotMatch(launcher, /task-handoff-controlled-instance/);
-  assert.match(launcher, /cd -- "\$\{runtime_root\}"[\s\S]*exec node/);
+  assert.match(launcher, /cd -- "\$\{runtime_root\}"[\s\S]*js-runtime\.sh[\s\S]*instance-launcher\.mjs/);
 });
 
 test("runtime launcher moves child processes off the previous release directory", (t) => {
@@ -277,11 +317,13 @@ test("runtime launcher moves child processes off the previous release directory"
   const previousRelease = path.join(runtimeRoot, "releases", "previous-release");
   const fakeBin = path.join(root, "bin");
   const observedCwd = path.join(root, "observed-cwd");
+  const observedBunCwd = path.join(root, "observed-bun-cwd");
   fs.mkdirSync(release, { recursive: true });
   fs.mkdirSync(previousRelease);
   fs.mkdirSync(fakeBin);
   fs.symlinkSync(path.relative(runtimeRoot, release), path.join(runtimeRoot, "current"));
   fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash\npwd > "${observedCwd}"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(fakeBin, "bun"), `#!/usr/bin/env bash\npwd > "${observedBunCwd}"\n`, { mode: 0o755 });
 
   execFileSync("bash", [path.resolve(__dirname, "../docker/instance-launcher.sh")], {
     cwd: previousRelease,
@@ -293,6 +335,18 @@ test("runtime launcher moves child processes off the previous release directory"
   });
 
   assert.equal(fs.readFileSync(observedCwd, "utf8").trim(), runtimeRoot);
+
+  execFileSync("bash", [path.resolve(__dirname, "../docker/instance-launcher.sh")], {
+    cwd: previousRelease,
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      TASK_HANDOFF_INSTANCE_RUNTIME_ROOT: runtimeRoot,
+      TASK_HANDOFF_JS_RUNTIME: "bun",
+    },
+  });
+
+  assert.equal(fs.readFileSync(observedBunCwd, "utf8").trim(), runtimeRoot);
 });
 
 test("runtime launcher installation preserves the root command stderr", async () => {

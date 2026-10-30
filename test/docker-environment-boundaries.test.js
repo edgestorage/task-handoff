@@ -247,7 +247,9 @@ test("private instance config preserves managed Codex settings for restart recov
 
 test("Docker entrypoints project managed Codex settings before dropping privileges", () => {
   const source = fs.readFileSync(path.join(__dirname, "../docker/entrypoint.sh"), "utf8");
-  assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
+  const decoder = fs.readFileSync(path.join(__dirname, "../docker/private-config.mjs"), "utf8");
+  assert.match(source, /js-runtime\.sh" "\$\{script_dir\}\/private-config\.mjs"/);
+  assert.match(decoder, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
   // The container reads the private config from the directory mount, the
   // explicit env override, or the retired single-file mount that containers
   // created by older node agents still bind.
@@ -264,6 +266,7 @@ test("entrypoint private config loading tolerates deferred files and keeps only 
   const definitions = source.slice(0, markerIndex);
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-entrypoint-private-config-"));
+  const entrypointPath = path.join(__dirname, "../docker/entrypoint.sh");
   const load = (configPath, env = {}) => {
     const script = [
       definitions,
@@ -275,7 +278,7 @@ test("entrypoint private config loading tolerates deferred files and keeps only 
       'printf "CATALOG=%s\\n" "${TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON:-}"',
       'printf "SETTINGS=%s\\n" "${TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON:-}"',
     ].join("\n");
-    return spawnSync("bash", ["-c", script], {
+    return spawnSync("bash", ["-c", script, entrypointPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -324,7 +327,7 @@ test("entrypoint private config loading tolerates deferred files and keeps only 
       definitions,
       "load_private_config",
       'printf "TOKEN=%s\\n" "${TASK_HANDOFF_REGISTRATION_TOKEN:-}"',
-    ].join("\n")], {
+    ].join("\n"), entrypointPath], {
       env: {
         ...process.env,
         TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: deferredPath,

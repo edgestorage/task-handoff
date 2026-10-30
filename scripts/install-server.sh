@@ -2,6 +2,7 @@
 set -eu
 
 MIN_NODE_VERSION="24.15.0"
+MIN_BUN_VERSION="1.4.4"
 VERSION=""
 CHANNEL="stable"
 ARTIFACTS_DIR=""
@@ -18,6 +19,7 @@ NODE_AGENT_HOST="127.0.0.1"
 NODE_AGENT_PORT="8091"
 NODE_AGENT_IPC_PATH="/run/task-handoff/node-agent.sock"
 AUTH_MODE="password"
+JS_RUNTIME="${TASK_HANDOFF_JS_RUNTIME:-}"
 
 usage() {
   cat <<'USAGE'
@@ -25,7 +27,7 @@ Usage: install-server.sh [options]
 
 Installs everything needed by a local TaskHandoff server on Debian, Ubuntu,
 RHEL 8/9, or CentOS Stream 9:
-  - Node.js 24.15.0 or newer within the Node.js 24 release line
+  - Node.js 24.15.0 or newer
   - Docker (unless --skip-docker is used)
   - control-plane, node-agent, and controlled-instance runtime packages
   - task-handoff-control-plane.service and task-handoff-node-agent.service
@@ -37,6 +39,7 @@ Package options:
   --install-source <source>         Source profile: auto, official, or china; default auto
   --node-dist-url <url>             Override the Node.js distribution base URL
   --npm-registry <url>              npm registry used for published runtime packages
+  --js-runtime <runtime>            Override the JavaScript runtime: node or bun; auto-detected by default
   --skip-docker                     Do not install or start Docker
 
 Service options:
@@ -67,6 +70,7 @@ while [ "$#" -gt 0 ]; do
     --install-source) INSTALL_SOURCE="${2:-}"; shift 2 ;;
     --node-dist-url) NODE_DIST_URL="${2:-}"; shift 2 ;;
     --npm-registry) NPM_REGISTRY="${2:-}"; shift 2 ;;
+    --js-runtime) JS_RUNTIME="${2:-}"; shift 2 ;;
     --skip-docker) INSTALL_DOCKER="0"; shift ;;
     --service-user) SERVICE_USER="${2:-}"; shift 2 ;;
     --control-plane-host) CONTROL_PLANE_HOST="${2:-}"; shift 2 ;;
@@ -84,6 +88,11 @@ done
 [ "$AUTH_MODE" = "password" ] || [ "$AUTH_MODE" = "disabled" ] || die "--auth-mode must be password or disabled"
 [ "$INSTALL_SOURCE" = "auto" ] || [ "$INSTALL_SOURCE" = "official" ] || [ "$INSTALL_SOURCE" = "china" ] \
   || die "--install-source must be auto, official, or china"
+case "$JS_RUNTIME" in
+  ""|auto) JS_RUNTIME="" ;;
+  node|bun) ;;
+  *) die "--js-runtime must be auto, node, or bun" ;;
+esac
 NODE_DIST_URL_OVERRIDE="$NODE_DIST_URL"
 NPM_REGISTRY_OVERRIDE="$NPM_REGISTRY"
 
@@ -184,6 +193,7 @@ if command -v apt-get >/dev/null 2>&1; then prepare_apt_source || true; fi
 
 version_is_at_least() {
   awk -v current="$1" -v minimum="$2" 'BEGIN {
+    if (current !~ /^[0-9]+\.[0-9]+([.][0-9]+)?([-+][0-9A-Za-z.-]+)?$/) exit 1;
     split(current, left, "."); split(minimum, right, ".");
     for (i = 1; i <= 3; i++) {
       if ((left[i] + 0) > (right[i] + 0)) exit 0;
@@ -200,10 +210,7 @@ node_is_compatible() {
 }
 
 node_version_is_compatible() {
-  case "$1" in
-    24.*) version_is_at_least "$1" "$MIN_NODE_VERSION" ;;
-    *) return 1 ;;
-  esac
+  version_is_at_least "$1" "$MIN_NODE_VERSION"
 }
 
 install_node_prerequisites() {
@@ -258,7 +265,7 @@ else
   node_archive_version="${node_archive#node-v}"
   node_archive_version="${node_archive_version%-linux-*}"
   node_version_is_compatible "$node_archive_version" \
-    || die "$NODE_DIST_URL provides Node.js $node_archive_version; Node.js $MIN_NODE_VERSION or newer within the Node.js 24 release line is required. Choose another mirror with --node-dist-url."
+    || die "$NODE_DIST_URL provides Node.js $node_archive_version; Node.js $MIN_NODE_VERSION or newer is required. Choose another mirror with --node-dist-url."
   curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
     "$NODE_DIST_URL/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
   expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
@@ -408,9 +415,23 @@ else
 fi
 
 command -v task-handoff >/dev/null 2>&1 || die "runtime packages did not install task-handoff"
+case "$JS_RUNTIME" in
+  "")
+    if command -v node >/dev/null 2>&1; then JS_RUNTIME_COMMAND="$(command -v node)"
+    elif command -v bun >/dev/null 2>&1; then JS_RUNTIME_COMMAND="$(command -v bun)"
+    else die "node or bun is required to run TaskHandoff"; fi
+    ;;
+  node) JS_RUNTIME_COMMAND="$(command -v node)" ;;
+  bun) JS_RUNTIME_COMMAND="$(command -v bun)" || die "bun is required by --js-runtime bun" ;;
+esac
+if [ "$(basename "$JS_RUNTIME_COMMAND")" = "bun" ]; then
+  bun_version="$("$JS_RUNTIME_COMMAND" --version 2>/dev/null || true)"
+  version_is_at_least "$bun_version" "$MIN_BUN_VERSION" \
+    || die "Bun.js $MIN_BUN_VERSION or newer is required; found ${bun_version:-unknown}"
+fi
 
 echo "[5/5] Installing and starting TaskHandoff systemd services"
-task-handoff install \
+set -- "$JS_RUNTIME_COMMAND" "$(command -v task-handoff)" install \
   --service-user "$SERVICE_USER" \
   --control-plane-host "$CONTROL_PLANE_HOST" \
   --control-plane-port "$CONTROL_PLANE_PORT" \
@@ -419,6 +440,8 @@ task-handoff install \
   --node-agent-ipc-path "$NODE_AGENT_IPC_PATH" \
   --npm-registry "$NPM_REGISTRY" \
   --auth-mode "$AUTH_MODE"
+if [ -n "$JS_RUNTIME" ]; then set -- "$@" --js-runtime "$JS_RUNTIME"; fi
+"$@"
 
 echo "TaskHandoff installation completed."
 echo "Open: http://$(hostname -I 2>/dev/null | awk '{ print $1 }'):$CONTROL_PLANE_PORT"

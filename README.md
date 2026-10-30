@@ -3,7 +3,7 @@
   <h1>TaskHandoff</h1>
   <p><strong>A unified control plane for running, managing, and collaborating with AI workspaces across local and remote machines</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/Node.js-24-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24">
+    <img src="https://img.shields.io/badge/Node.js-24.15%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24.15+">
     <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
     <img src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 6">
     <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready">
@@ -95,7 +95,7 @@ The source node owns both the template record and its Docker image, so a templat
 
 ### Requirements
 
-- Node.js `>= 24.15.0 < 25`
+- Node.js `>= 24.15.0`, or Bun `>= 1.4.4` for running the services
 - pnpm `9.15.3`
 - Docker, when using Docker Runtime, building container images, or running the standalone Compose profile
 
@@ -153,6 +153,8 @@ curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/
 ```
 
 The script checks the host, installs Node.js 24 and Docker when needed, installs the latest stable `@task-handoff/server` package from npm, and then creates and starts the Control Plane and Node Agent systemd services. The default `auto` source profile uses Tsinghua APT mirrors and npmmirror for Chinese locale or timezone environments, and also falls back to those mirrors when the official Node.js source is unreachable. Its temporary APT source list does not overwrite the host's source configuration. By default, the control plane listens on port `8081` with password authentication enabled. Installer options can change the port, authentication mode, release channel, and other service settings.
+
+The Node Agent and controlled-instance runtime use the same package on either Node.js or Bun. Each process detects its runtime automatically, so no selector is required. Pass `--js-runtime bun` (or set `TASK_HANDOFF_JS_RUNTIME=bun` for a managed container) only when you want to override that detection. Node.js and npm remain required by the current installation, self-update, and node-update paths.
 
 Use `--install-source china` or `--install-source official` to select a source profile explicitly:
 
