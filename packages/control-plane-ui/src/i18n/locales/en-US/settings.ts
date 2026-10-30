@@ -432,6 +432,7 @@ export const settings = {
     protocol: "Protocol", build: "Build", package: "Package", image: "Image", built: "Built", empty: "No nodes yet", rename: "Rename node",
     renameDescription: "Change the display name used across the control plane. The node ID and connection settings will not change.",
     remoteDialogDescription: "Connect a node-agent that is running on another machine.", joinToken: "Join token", creating: "Creating", create: "Create node",
+    pendingCloudConnections: "Incomplete connections", pendingCloudConnectionsHint: "These relay connections have not completed approval and pairing. They do not appear in the instance list.",
   },
   nodeOnboarding: {
     title: "Add node wizard", description: "Check network reachability, then follow the shortest supported connection path.", progress: "Node connection progress",

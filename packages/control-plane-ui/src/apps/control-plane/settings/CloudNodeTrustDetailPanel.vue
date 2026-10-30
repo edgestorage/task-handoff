@@ -1,7 +1,7 @@
 <template>
   <section class="modal-section settings-panel-surface cloud-node-pending-detail">
     <header>
-      <h3>{{ node.name }}</h3>
+      <h3>{{ displayName }}</h3>
       <Badge variant="secondary">{{ t(`settings.nodeRelay.nodeTrust.status.${trust.state}`) }}</Badge>
     </header>
     <ScrollArea class="cloud-node-pending-scroll" :horizontal="false">
@@ -9,7 +9,7 @@
         <CloudNodeTrustStatus
           :phase="cloudNodeTrustPhase(trust)"
           :trust="trust"
-          :display-name="node.name"
+          :display-name="displayName"
           :node-handle="trust.nodeHandle"
           :error="error"
           hide-actions
@@ -28,23 +28,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { RefreshCw } from "@lucide/vue";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { releaseCloudAccountNodeClaim } from "../../../api/queries";
-import type { CloudNodeRelayTrust, Node } from "../../../api/types";
+import type { CloudNodeRelayTrust } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
 import { cloudNodeTrustPhase } from "./cloudNodeTrust";
 
-const props = defineProps<{ node: Node; trust: CloudNodeRelayTrust; error?: string }>();
+const props = defineProps<{ trust: CloudNodeRelayTrust; displayName?: string; error?: string }>();
 const emit = defineEmits<{ refresh: []; cancelled: [nodeHandle: string] }>();
 const { t } = useI18n();
 const busy = ref(false);
 const actionError = ref("");
+const displayName = computed(() => props.displayName || props.trust.displayName || props.trust.nodeHandle);
 
 async function cancelJoin() {
   if (busy.value) return;

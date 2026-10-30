@@ -190,20 +190,9 @@ export class CloudNodeRelayChannels {
       throw error;
     }
     if (connection.status === "trust-required") {
-      // The signed outcome proves the node identity, but grants no management
-      // access. Persist only the existing pending-pairing node model so claim
-      // recovery and the registry work before a human approves the request.
       if (verified.nodeId && verified.nodeId !== connection.outcome.nodeId) {
         const error = nodeIdentityMismatch(verified.nodeHandle, verified.nodeId, connection.outcome.nodeId);
         this.recordError(verified.nodeHandle, error);
-        throw error;
-      }
-      try {
-        const node = resolved ?? await this.options.nodes.ensure({ nodeHandle: verified.nodeHandle, nodeId: connection.outcome.nodeId, displayName: verified.displayName });
-        assertCurrentClaim();
-        if (node.nodeId !== connection.outcome.nodeId) throw nodeIdentityMismatch(verified.nodeHandle, node.nodeId, connection.outcome.nodeId);
-      } catch (error) {
-        if ((error as { code?: string }).code !== "NODE_RELAY_CLAIM_REVOKED") this.recordError(verified.nodeHandle, error);
         throw error;
       }
       const identity = this.options.state.snapshot().identity;

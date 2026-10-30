@@ -72,19 +72,43 @@ diff --git a/ios/gamma/split/RNSSplitHostComponentView.mm b/ios/gamma/split/RNSS
 index 3c1b9d5..c241517 100644
 --- a/ios/gamma/split/RNSSplitHostComponentView.mm
 +++ b/ios/gamma/split/RNSSplitHostComponentView.mm
-@@ -130,6 +130,12 @@ - (void)didMoveToWindow
-                        toViewControllerManaging:self.reactSuperview
-                               withContainerView:self];
+@@ -130,5 +130,27 @@ - (void)didMoveToWindow
+                       toViewControllerManaging:self.reactSuperview
+                              withContainerView:self];
    }
 +
-+  if (self.window != nil && _controller.viewControllers.count == 0 && [self getNumberOfColumns] >= 2) {
-+    // React Native can attach the host after the first mounting transaction, leaving the native split empty.
-+    [_controller setNeedsUpdateOfChildViewControllers];
-+    [_controller reactMountingTransactionDidMount];
++  [self recoverEmptySplitControllerIfNeeded];
++}
++
++- (void)recoverEmptySplitControllerIfNeeded
++{
++  if (self.window == nil || _controller == nil || _controller.viewControllers.count != 0 ||
++      [self getNumberOfColumns] < 2) {
++    return;
 +  }
++
++  // React Native can attach the host after the first mounting transaction, leaving the native split empty.
++  [_controller setNeedsUpdateOfChildViewControllers];
++  [_controller reactMountingTransactionDidMount];
++}
++
++- (void)scheduleSplitControllerRecovery
++{
++  __weak RNSSplitHostComponentView *weakSelf = self;
++  dispatch_async(dispatch_get_main_queue(), ^{
++    [weakSelf recoverEmptySplitControllerIfNeeded];
++  });
  }
- 
  RNS_IGNORE_SUPER_CALL_BEGIN
+@@ -164,5 +186,8 @@ - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponen
+   childScreen.splitHost = self;
+   [_reactSubviews insertObject:childScreen atIndex:index];
+   _hasModifiedReactSubviewsInCurrentTransaction = true;
++
++  // A host attached before its columns mount has no controller update in the first transaction.
++  [self scheduleSplitControllerRecovery];
+ }
+ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
 diff --git a/ios/gamma/split/RNSSplitNavigationController.swift b/ios/gamma/split/RNSSplitNavigationController.swift
 index 6fb3c84..6192e0e 100644
 --- a/ios/gamma/split/RNSSplitNavigationController.swift

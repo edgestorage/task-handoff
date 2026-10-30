@@ -203,6 +203,23 @@ test("node trust UI exposes both approval entry points and never calls the devic
   assert.match(dialog, /refetchIntervalMs: \(\) => onboarding\.active\.value \? 2_000 : false/);
 });
 
+test("settings registry shows incomplete trust enrollments separately from managed nodes", () => {
+  const modal = read("settings/SettingsModal.vue");
+  const detail = read("settings/CloudNodeTrustDetailPanel.vue");
+  const entry = read("settings/CloudNodeTrustEntry.vue");
+  const dialog = read("settings/CloudNodeOnboardingDialog.vue");
+
+  assert.match(modal, /pendingCloudNodeEnrollments = computed\(\(\) => \[\.\.\.\(cloudNodeRelay\.data\.value\?\.trust \?\? \[\]\)\]/);
+  assert.match(modal, /class="node-list-section node-list-incomplete"[\s\S]*v-for="trust in pendingCloudNodeEnrollments"[\s\S]*CloudNodeTrustEntry/);
+  assert.match(modal, /v-for="target in orderedNodes"[\s\S]*nodeStatusLabel\(target\.id\)/);
+  assert.doesNotMatch(modal, /cloudNodeTrustForNode|selectedNodeTrust|nodeTrust\(/);
+
+  assert.match(detail, /defineProps<\{ trust: CloudNodeRelayTrust; displayName\?: string; error\?: string \}>/);
+  assert.doesNotMatch(detail, /import type \{ CloudNodeRelayTrust, Node \}/);
+  assert.match(entry, /emit\('select', trust\.nodeHandle\)/);
+  assert.match(dialog, /"show-trust": \[nodeHandle: string\]/);
+});
+
 test("node trust status has localized copy for every visible phase description", () => {
   for (const locale of ["en-US", "zh-CN"]) {
     const messages = fs.readFileSync(new URL(`../../i18n/locales/${locale}/settings.ts`, root), "utf8");

@@ -46,6 +46,7 @@ const authorizationCode = 'c'.repeat(48);
 const accessToken = 'a'.repeat(48);
 const refreshCredential = 'r'.repeat(48);
 const expiresAt = '2026-08-10T00:05:00.000Z';
+const refreshToken = (round: number) => `tf_test.${String(round).padStart(43, '0')}`;
 
 test('cloud mobile login uses one-time PKCE state and stores only the refresh credential', async () => {
   const storage = store();
@@ -98,10 +99,10 @@ test('TOTP login continuation keeps password only in memory and retries through 
 
 test('restored account refresh is single-flight and explicit logout removes the secure credential', async () => {
   const key = 'cloud.account.device_a';
-  const storage = store({ [key]: JSON.stringify({ refreshCredential: 'refresh-old', deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: refreshToken(0), deviceSessionId: 'device_a', accountId: 'account_a' }) });
   let refreshCalls = 0;
   const request = jest.fn(async (url: string | URL | Request) => {
-    if (String(url).endsWith('/refresh')) {
+    if (String(url).endsWith('/refresh-recovery') || String(url).endsWith('/refresh')) {
       refreshCalls += 1;
       await Promise.resolve();
       return response({ data: { tokenType: 'Bearer', accessToken, accessExpiresAt: new Date(Date.now() + 300_000).toISOString(), refreshCredential, deviceSessionId: 'device_a', accountId: 'account_a' } });
@@ -119,12 +120,12 @@ test('restored account refresh is single-flight and explicit logout removes the 
 
 test('a session refreshing after another session rotated presents the persisted credential', async () => {
   const key = 'cloud.account.device_a';
-  const credential = (round: number) => String(round).repeat(48);
+  const credential = refreshToken;
   const storage = store({ [key]: JSON.stringify({ refreshCredential: credential(1), deviceSessionId: 'device_a', accountId: 'account_a' }) });
   const presented: string[] = [];
   let currentCredential = credential(1);
   const request = jest.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    if (!String(url).endsWith('/refresh')) return response({ data: {} });
+    if (!String(url).endsWith('/refresh-recovery') && !String(url).endsWith('/refresh')) return response({ data: {} });
     const body = JSON.parse(String(init?.body)) as { refreshCredential: string };
     presented.push(body.refreshCredential);
     if (body.refreshCredential !== currentCredential) return response({ error: { code: 'REFRESH_REPLAYED', message: 'Refresh credential replay revoked this device session.' } }, 401);
@@ -141,10 +142,135 @@ test('a session refreshing after another session rotated presents the persisted 
   expect(storage.values.get(key)).toContain(credential(3));
 });
 
+test('a delayed credential read cannot replay a rotation owned by another session', async () => {
+  const key = 'cloud.account.device_a';
+  const credential = refreshToken;
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: credential(1), deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  const presented: string[] = [];
+  let currentCredential = credential(1);
+  const request = jest.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    if (!String(url).endsWith('/refresh-recovery') && !String(url).endsWith('/refresh')) return response({ data: {} });
+    const body = JSON.parse(String(init?.body)) as { refreshCredential: string };
+    presented.push(body.refreshCredential);
+    if (body.refreshCredential !== currentCredential) return response({ error: { code: 'REFRESH_REPLAYED', message: 'Refresh credential replay revoked this device session.' } }, 401);
+    currentCredential = credential(presented.length + 1);
+    return response({ data: { tokenType: 'Bearer', accessToken, accessExpiresAt: new Date(Date.now() + 300_000).toISOString(), refreshCredential: currentCredential, deviceSessionId: 'device_a', accountId: 'account_a' } });
+  }) as unknown as typeof fetch;
+  const options = { request };
+  const first = new MobileCloudAccountSession(storage.value, options);
+  const second = new MobileCloudAccountSession(storage.value, options);
+  const reference = { id: 'device_a', secureCredentialKey: key };
+  await first.restore(reference);
+  await second.restore(reference);
+
+  let delayNextRead = true;
+  let releaseDelayedRead: (() => void) | undefined;
+  let delayedReadStarted: (() => void) | undefined;
+  const delayedRead = new Promise<void>((resolve) => { delayedReadStarted = resolve; });
+  storage.value.get = async (name) => {
+    const snapshot = storage.values.get(name);
+    if (!delayNextRead) return snapshot;
+    delayNextRead = false;
+    delayedReadStarted?.();
+    await new Promise<void>((resolve) => { releaseDelayedRead = resolve; });
+    return snapshot;
+  };
+
+  const secondRefresh = second.accessToken();
+  await delayedRead;
+  const firstRefresh = first.accessToken();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  releaseDelayedRead?.();
+
+  await expect(Promise.all([firstRefresh, secondRefresh])).resolves.toEqual([accessToken, accessToken]);
+  expect(presented).toEqual([credential(1)]);
+  expect(storage.values.get(key)).toContain(credential(2));
+});
+
+test('a transient shared refresh failure stays retryable instead of requiring reauthentication', async () => {
+  clearCloudAccountReauthenticationRequired();
+  const key = 'cloud.account.device_a';
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: refreshToken(0), deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  let failRequest: ((error: Error) => void) | undefined;
+  const request = jest.fn(() => new Promise<Response>((_resolve, reject) => { failRequest = reject; })) as unknown as typeof fetch;
+  const reference = { id: 'device_a', secureCredentialKey: key };
+  const first = new MobileCloudAccountSession(storage.value, { request, reference });
+  const second = new MobileCloudAccountSession(storage.value, { request, reference });
+  await Promise.all([first.restore(reference), second.restore(reference)]);
+
+  const refreshes = [first.accessToken(), second.accessToken()];
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  failRequest?.(new Error('network unavailable'));
+  const results = await Promise.allSettled(refreshes);
+
+  expect(results.every((result) => result.status === 'rejected')).toBe(true);
+  expect(storage.values.has(key)).toBe(true);
+  expect(cloudAccountReauthenticationRequired()).toBe(false);
+});
+
+test('a committed rotation whose response is lost recovers after an app restart', async () => {
+  const key = 'cloud.account.device_a';
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: refreshToken(0), deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  let serverCurrent = refreshToken(0);
+  let committed: { previous: string; next: string; rotationId: string } | undefined;
+  let replayRevoked = false;
+  let persistedBeforeRequest: any;
+  const request = jest.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    expect(String(url)).toContain('/refresh-recovery');
+    const body = JSON.parse(String(init?.body)) as { refreshCredential: string; nextRefreshCredential: string; rotationId: string };
+    persistedBeforeRequest = JSON.parse(storage.values.get(key)!);
+    if (committed && body.refreshCredential === committed.previous && body.nextRefreshCredential === committed.next && body.rotationId === committed.rotationId) {
+      return response({ data: { tokenType: 'Bearer', accessToken, accessExpiresAt: new Date(Date.now() + 300_000).toISOString(), refreshCredential: body.nextRefreshCredential, deviceSessionId: 'device_a', accountId: 'account_a' } });
+    }
+    if (body.refreshCredential !== serverCurrent) {
+      replayRevoked = true;
+      return response({ error: { code: 'REFRESH_REPLAYED', message: 'revoked' } }, 401);
+    }
+    committed = { previous: body.refreshCredential, next: body.nextRefreshCredential, rotationId: body.rotationId };
+    serverCurrent = body.nextRefreshCredential;
+    throw new Error('response lost while app was suspended');
+  }) as unknown as typeof fetch;
+  const reference = { id: 'device_a', secureCredentialKey: key };
+
+  const first = new MobileCloudAccountSession(storage.value, { request, reference });
+  await expect(first.accessToken()).rejects.toThrow('response lost while app was suspended');
+  expect(persistedBeforeRequest.pendingRefresh).toMatchObject({
+    previousRefreshCredential: refreshToken(0),
+    nextRefreshCredential: committed!.next,
+    rotationId: committed!.rotationId,
+  });
+
+  const resumed = new MobileCloudAccountSession(storage.value, { request, reference });
+  await expect(resumed.accessToken()).resolves.toBe(accessToken);
+  expect(replayRevoked).toBe(false);
+  const persisted = JSON.parse(storage.values.get(key)!);
+  expect(persisted.refreshCredential).toBe(committed!.next);
+  expect(persisted).not.toHaveProperty('pendingRefresh');
+});
+
+test('a client safely falls back when the Coordinator predates refresh recovery', async () => {
+  const key = 'cloud.account.device_a';
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: refreshToken(0), deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  const urls: string[] = [];
+  const request = jest.fn(async (url: string | URL | Request) => {
+    urls.push(String(url));
+    if (String(url).endsWith('/refresh-recovery')) return response({ error: { code: 'NOT_FOUND', message: 'not found' } }, 404);
+    return response({ data: { tokenType: 'Bearer', accessToken, accessExpiresAt: new Date(Date.now() + 300_000).toISOString(), refreshCredential: refreshToken(1), deviceSessionId: 'device_a', accountId: 'account_a' } });
+  }) as unknown as typeof fetch;
+  const session = new MobileCloudAccountSession(storage.value, { request, reference: { id: 'device_a', secureCredentialKey: key } });
+
+  await expect(session.accessToken()).resolves.toBe(accessToken);
+  expect(urls).toEqual([
+    'https://cloud.example.test/api/v1/auth/refresh-recovery',
+    'https://cloud.example.test/api/v1/auth/refresh',
+  ]);
+  expect(JSON.parse(storage.values.get(key)!)).not.toHaveProperty('pendingRefresh');
+});
+
 test('refresh replay or unauthorized rotation clears device credentials and requires reauthentication', async () => {
   clearCloudAccountReauthenticationRequired();
   const key = 'cloud.account.device_a';
-  const storage = store({ [key]: JSON.stringify({ refreshCredential: 'replayed', deviceSessionId: 'device_a', accountId: 'account_a' }) });
+  const storage = store({ [key]: JSON.stringify({ refreshCredential: refreshToken(0), deviceSessionId: 'device_a', accountId: 'account_a' }) });
   const request = jest.fn(async () => response({ error: { code: 'REFRESH_TOKEN_REPLAYED', message: 'revoked' } }, 401)) as unknown as typeof fetch;
   const session = new MobileCloudAccountSession(storage.value, { request, reference: { id: 'device_a', secureCredentialKey: key } });
 

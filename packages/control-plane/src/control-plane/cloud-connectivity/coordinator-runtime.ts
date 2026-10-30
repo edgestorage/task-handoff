@@ -888,7 +888,20 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
     socket.on("close", (code, reason) => {
       clearRegistrationTimer();
       if (heartbeat) clearInterval(heartbeat);
-      fail(runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED"));
+      const closeReason = boundedText(reason.toString("utf8"), 120);
+      // Compatibility for v0.0.46: the Coordinator reports a live remote
+      // binding by closing registration with this reason instead of an RPC
+      // error. Preserve it as a recoverable business error for the HTTP/UI
+      // boundary rather than exposing a generic 500 connection failure.
+      const registrationError = closeReason === "BACKGROUND_CREDENTIAL_REQUIRED"
+        ? Object.assign(new Error("The cloud platform still has a binding for this Control Plane. Disconnect or unbind this Control Plane in the cloud platform, then sign in again."), {
+            code: "CLOUD_REMOTE_BINDING_EXISTS",
+            statusCode: 409,
+            retryable: false,
+          })
+        : runtimeError("CLOUD_CONTROL_CONNECTION_CLOSED");
+      if (closeReason) lastErrorCode = closeReason;
+      fail(registrationError);
       if (!intentional) options.onDisconnected({ closeCode: code, closeReason: boundedText(reason.toString("utf8"), 120), ...(lastErrorCode ? { errorCode: lastErrorCode } : {}) });
     });
   });

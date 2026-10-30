@@ -257,7 +257,7 @@ const props = defineProps<{
   nodes: Node[];
   controlPlaneUrl: string;
 }>();
-const emit = defineEmits<{ close: []; created: [node: Node]; "show-trust": [nodeId: string]; "open-cloud-settings": [] }>();
+const emit = defineEmits<{ close: []; created: [node: Node]; "show-trust": [nodeHandle: string]; "open-cloud-settings": [] }>();
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const queryClient = useQueryClient();

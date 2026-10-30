@@ -3,7 +3,7 @@ import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-na
 import { Redirect, router, Stack } from 'expo-router';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
-import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
+import { CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
 import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
@@ -77,7 +77,6 @@ function CloudAccountTotpContent() {
         <NativeActionButton disabled={busy || !valid || !challengeAvailable} label={busy ? t('cloudAccount.totpChecking') : t('cloudAccount.totpContinue')} onPress={() => void submit()}/>
       </View>
       <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setMode((value) => value === 'totp' ? 'recovery' : 'totp'); setCode(''); setRecoveryCode(''); setError(undefined); }}><Text style={[styles.modeSwitch, { color: colors.primary }]}>{t(mode === 'totp' ? 'cloudAccount.useRecovery' : 'cloudAccount.useAuthenticator')}</Text></Pressable>
-      <CloudAuthHint>{t('cloudAccount.securityNote')}</CloudAuthHint>
     </CloudAuthScaffold>
   </>;
 }

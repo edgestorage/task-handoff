@@ -336,7 +336,7 @@ test("a node that cannot prove the registered key never reaches the transport", 
   assert.equal(channel.channels.state().errors[0]?.code, "NODE_RELAY_NODE_KEY_MISMATCH");
 });
 
-test("a trust-required outcome projects pending state without a pairing, channel, or connected node", async () => {
+test("a trust-required outcome stays outside the managed node store", async () => {
   const node = ed25519Identity();
   const cp = ed25519Identity();
   const store = nodeStore();
@@ -434,12 +434,11 @@ test("a trust-required outcome projects pending state without a pairing, channel
   assert.equal(channels.state().trust[0]?.requestId, "cptreq_pending");
   assert.equal(channels.state().trust[0]?.nodeId, node.nodeId);
   assert.equal(channels.state().trust[0]?.displayName, "Alpha box");
-  assert.equal(store.records.get("nrh_node_alpha")?.nodeId, node.nodeId);
-  assert.equal(store.records.get("nrh_node_alpha")?.pairing, undefined);
+  assert.equal(store.records.size, 0, "pending trust is not a managed node");
 
   approved = true;
   await channels.attach({ ...event, allocationId: "allocation_after_approval" });
-  assert.equal(store.records.size, 1, "approval reuses the registered pending node");
+  assert.equal(store.records.size, 1, "approval creates the managed node");
   assert.equal(store.calls.saved.length, 1);
   assert.deepEqual(store.calls.connected, [node.nodeId]);
   assert.equal(attachCalls, 1);

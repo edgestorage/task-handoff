@@ -1,11 +1,12 @@
-import { OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
+import { MOBILE_REFRESH_RECOVERY_PROTOCOL_VERSION, OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
 import * as Crypto from 'expo-crypto';
 import type { SecureValueStore } from '../platform/secure-storage';
 import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, mobileCloudEnvironment } from '../platform/build-variant';
 import { markCloudAccountReauthenticationRequired } from './account-reauthentication';
 import type { CloudEndpointResolver } from '../cloud-discovery/resolver';
 
-type TokenSet = Omit<MobileTokenResponse, 'tokenType'>;
+type PendingRefresh = Readonly<{ previousRefreshCredential: string; nextRefreshCredential: string; rotationId: string }>;
+type TokenSet = Omit<MobileTokenResponse, 'tokenType'> & { pendingRefresh?: PendingRefresh };
 type PendingEmailSecondFactor = { createdAt: number; email: string; password: string; redirectUri: string };
 type LoginResult = { authorizationUrl?: string; code?: string; state?: string };
 
@@ -103,7 +104,8 @@ export class MobileCloudAccountSession {
   async restore(reference: { id: string; secureCredentialKey: string }) {
     const raw = await this.secureStore.get(reference.secureCredentialKey);
     if (!raw) throw cloudError('CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED');
-    const stored = JSON.parse(raw) as Omit<TokenSet, 'accessToken' | 'accessExpiresAt'>;
+    const stored = parseStoredCredential(raw);
+    if (!stored || stored.deviceSessionId !== reference.id) throw cloudError('CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED');
     this.tokenSet = { ...stored, accessToken: '', accessExpiresAt: new Date(0).toISOString() };
     return this.reference();
   }
@@ -129,7 +131,12 @@ export class MobileCloudAccountSession {
   private async install(tokens: TokenSet) {
     if (!tokens.refreshCredential || !tokens.deviceSessionId || !tokens.accountId) throw cloudError('CLOUD_TOKEN_RESPONSE_INVALID');
     this.tokenSet = tokens;
-    await this.secureStore.set(credentialKey(tokens.deviceSessionId), JSON.stringify({ refreshCredential: tokens.refreshCredential, deviceSessionId: tokens.deviceSessionId, accountId: tokens.accountId }));
+    await this.secureStore.set(credentialKey(tokens.deviceSessionId), JSON.stringify({
+      refreshCredential: tokens.refreshCredential,
+      deviceSessionId: tokens.deviceSessionId,
+      accountId: tokens.accountId,
+      ...(validPendingRefresh(tokens.pendingRefresh) ? { pendingRefresh: tokens.pendingRefresh } : {}),
+    }));
   }
 
   private async refreshAccessToken() {
@@ -139,18 +146,19 @@ export class MobileCloudAccountSession {
     // one per relay transport), but rotation is global: only the persisted credential is still
     // current. Refresh from whatever the last rotation wrote to the store, because presenting a
     // previously rotated credential revokes the whole device session.
-    const current = await this.freshestCredential(cached);
     const flights = refreshFlights.get(this.secureStore) ?? new Map<string, Promise<TokenSet>>();
     refreshFlights.set(this.secureStore, flights);
-    const inFlight = flights.get(current.deviceSessionId);
+    const inFlight = flights.get(cached.deviceSessionId);
     if (inFlight) {
-      const rotated = await inFlight.catch(() => undefined);
-      if (!rotated) throw cloudError('CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED');
-      await this.install({ ...current, ...rotated });
+      const rotated = await inFlight;
+      await this.install({ ...cached, ...rotated, pendingRefresh: undefined });
       return this.tokenSet!.accessToken;
     }
-    const flight = this.rotate(current);
-    flights.set(current.deviceSessionId, flight);
+    // Register the shared flight before the first asynchronous read. A session that starts with
+    // an older cached token must join this flight even if its Keychain read returns after another
+    // rotation has completed; otherwise it can present the stale credential as a replay.
+    const flight = this.rotateFreshest(cached);
+    flights.set(cached.deviceSessionId, flight);
     try {
       await flight;
       return this.tokenSet!.accessToken;
@@ -158,31 +166,67 @@ export class MobileCloudAccountSession {
       const status = Number((error as any)?.status);
       const code = String((error as any)?.code ?? '');
       if (status === 401 || status === 403 || /REPLAY|REFRESH_INVALID|DEVICE_SESSION_REVOKED|SESSION_REVOKED/.test(code)) {
-        await this.secureStore.remove(credentialKey(current.deviceSessionId));
+        await this.secureStore.remove(credentialKey(cached.deviceSessionId));
         this.tokenSet = undefined;
         markCloudAccountReauthenticationRequired();
         throw cloudError('CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED');
       }
       throw error;
-    } finally { flights.delete(current.deviceSessionId); }
+    } finally { flights.delete(cached.deviceSessionId); }
+  }
+
+  private async rotateFreshest(cached: TokenSet) {
+    const current = await this.freshestCredential(cached);
+    return current.pendingRefresh ? this.completePendingRefresh(current) : this.rotate(current);
   }
 
   private async rotate(current: TokenSet) {
-    const refreshed = await this.client.refresh({ refreshCredential: current.refreshCredential, deviceSessionId: current.deviceSessionId }) as TokenSet;
-    await this.install({ ...current, ...refreshed });
-    return refreshed;
+    const pendingRefresh: PendingRefresh = {
+      previousRefreshCredential: current.refreshCredential,
+      nextRefreshCredential: nextRefreshCredential(current.refreshCredential),
+      rotationId: randomUrlSafe(32),
+    };
+    return this.completeRotation(current, pendingRefresh);
+  }
+
+  private completePendingRefresh(current: TokenSet) {
+    return this.completeRotation(current, current.pendingRefresh!);
+  }
+
+  private async completeRotation(current: TokenSet, pendingRefresh: PendingRefresh) {
+    // Persist the intent before the request. If iOS suspends the app after the Coordinator
+    // commits but before the response reaches Keychain, the next launch retries this exact
+    // rotation instead of presenting the already-rotated credential as a replay.
+    await this.install({ ...current, pendingRefresh });
+    let refreshed: TokenSet;
+    try {
+      refreshed = await this.client.refreshWithRecovery({
+        protocolVersion: MOBILE_REFRESH_RECOVERY_PROTOCOL_VERSION,
+        refreshCredential: pendingRefresh.previousRefreshCredential,
+        nextRefreshCredential: pendingRefresh.nextRefreshCredential,
+        rotationId: pendingRefresh.rotationId,
+        deviceSessionId: current.deviceSessionId,
+      }) as TokenSet;
+    } catch (error) {
+      // A Coordinator from before this protocol has no recovery route. The 404 happens before
+      // any mutation, so falling back to the legacy endpoint is safe during a rolling upgrade.
+      if (Number((error as any)?.status) !== 404) throw error;
+      refreshed = await this.client.refresh({
+        refreshCredential: pendingRefresh.previousRefreshCredential,
+        deviceSessionId: current.deviceSessionId,
+      }) as TokenSet;
+    }
+    const completed: TokenSet = { ...current, ...refreshed, pendingRefresh: undefined };
+    await this.install(completed);
+    return completed;
   }
 
   private async freshestCredential(cached: TokenSet) {
     const raw = await this.secureStore.get(credentialKey(cached.deviceSessionId));
     if (!raw) return cached;
-    try {
-      const stored = JSON.parse(raw) as { refreshCredential?: unknown };
-      if (typeof stored.refreshCredential !== 'string' || !stored.refreshCredential) return cached;
-      return { ...cached, refreshCredential: stored.refreshCredential };
-    } catch {
-      return cached;
-    }
+    const stored = parseStoredCredential(raw);
+    if (!stored || stored.deviceSessionId !== cached.deviceSessionId) return cached;
+    return { ...cached, refreshCredential: stored.refreshCredential, pendingRefresh: stored.pendingRefresh };
   }
 
   private prunePending() { for (const [state, entry] of this.pending) if (entry.createdAt + 5 * 60_000 <= Date.now()) this.pending.delete(state); }
@@ -196,6 +240,34 @@ export class MobileCloudAccountSession {
 }
 
 function credentialKey(deviceSessionId: string) { return `cloud.account.${deviceSessionId}`; }
+function nextRefreshCredential(current: string) {
+  const separator = current.indexOf('.');
+  if (separator <= 0 || separator === current.length - 1) throw cloudError('CLOUD_TOKEN_RESPONSE_INVALID');
+  return `${current.slice(0, separator)}.${randomUrlSafe(32)}`;
+}
+function validPendingRefresh(value: unknown): value is PendingRefresh {
+  if (!value || typeof value !== 'object') return false;
+  const pending = value as Partial<PendingRefresh>;
+  return typeof pending.previousRefreshCredential === 'string' && Boolean(pending.previousRefreshCredential)
+    && typeof pending.nextRefreshCredential === 'string' && Boolean(pending.nextRefreshCredential)
+    && typeof pending.rotationId === 'string' && /^[A-Za-z0-9_-]{43}$/.test(pending.rotationId);
+}
+function parseStoredCredential(raw: string): Omit<TokenSet, 'accessToken' | 'accessExpiresAt'> | undefined {
+  try {
+    const value = JSON.parse(raw) as { refreshCredential?: unknown; deviceSessionId?: unknown; accountId?: unknown; pendingRefresh?: unknown };
+    if (typeof value.refreshCredential !== 'string' || !value.refreshCredential
+      || typeof value.deviceSessionId !== 'string' || !value.deviceSessionId
+      || typeof value.accountId !== 'string' || !value.accountId) return undefined;
+    return {
+      refreshCredential: value.refreshCredential,
+      deviceSessionId: value.deviceSessionId,
+      accountId: value.accountId,
+      ...(validPendingRefresh(value.pendingRefresh) ? { pendingRefresh: value.pendingRefresh } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
 function randomUrlSafe(bytes: number) { const value = Crypto.getRandomValues(new Uint8Array(bytes)); return btoa(String.fromCharCode(...value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
 function cloudError(code: string) { return Object.assign(new Error('Thandoff account session is unavailable.'), { code }); }
 function cloudErrorCode(error: unknown) { return typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''; }

@@ -596,7 +596,7 @@ function coordinatorConnectRetryable(error: unknown) {
     ?? (error as { statusCode?: unknown } | null)?.statusCode);
   if (Number.isFinite(status)) return status >= 500 || status === 408 || status === 425 || status === 429;
   const code = String((error as { code?: unknown } | null)?.code ?? "");
-  return !["REGISTRATION_REJECTED", "BINDING_NOT_FOUND", "BACKGROUND_CREDENTIAL_INVALID"].includes(code);
+  return !["REGISTRATION_REJECTED", "BINDING_NOT_FOUND", "BACKGROUND_CREDENTIAL_INVALID", "CLOUD_REMOTE_BINDING_EXISTS"].includes(code);
 }
 
 function errorCode(error: unknown) {

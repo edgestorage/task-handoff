@@ -3,6 +3,7 @@ import {
   AccountPublicProfileSchema,
   DeviceSessionSchema,
   MobileAuthorizationResponseSchema,
+  MobileRefreshRecoveryRequestSchema,
   MobileTokenResponseSchema,
   TotpEnrollmentResponseSchema,
   type AccountPublicProfile,
@@ -35,6 +36,9 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   login(input: OfficialApiInput): Promise<MobileAuthorizationResponse> { return this.publicCall("/api/v1/auth/authorize", input, MobileAuthorizationResponseSchema); }
   exchangeAuthorizationCode(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/token", input, MobileTokenResponseSchema); }
   refresh(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/refresh", input, MobileTokenResponseSchema); }
+  refreshWithRecovery(input: OfficialApiInput): Promise<MobileTokenResponse> {
+    return this.publicCall("/api/v1/auth/refresh-recovery", MobileRefreshRecoveryRequestSchema.parse(input), MobileTokenResponseSchema);
+  }
   verifyEmail(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/verify-email", input, z.unknown()); }
   async publicProviders(): Promise<OfficialProviderSummary[]> {
     const response = await this.request(`${this.origin}${MOBILE_PUBLIC_PROVIDERS_PATH}`, { method: "GET", credentials: "omit", redirect: "error" });

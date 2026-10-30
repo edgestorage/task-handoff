@@ -13,6 +13,18 @@ test("known ApiError codes use localized messages instead of the server message"
   assert.equal(translateApiError(error, chinese), "用户名或密码不正确。");
 });
 
+test("a cloud binding recovery error tells the user where to unblock sign-in", () => {
+  const error = new ApiError("internal close reason", "CLOUD_REMOTE_BINDING_EXISTS", 409);
+  assert.equal(
+    translateApiError(error, english),
+    "This Control Plane is still bound in the cloud. Disconnect or unbind it in the cloud platform, then sign in again.",
+  );
+  assert.equal(
+    translateApiError(error, chinese),
+    "此控制面板在云平台仍有绑定。请前往云平台断开或解绑该控制面板，然后重新登录。",
+  );
+});
+
 test("stable instance, node, and model errors have localized messages", () => {
   const cases = [
     ["LOCAL_FOLDER_REQUIRES_INSTANCE_NODE", "Select a local folder owned by the instance node.", "请选择实例所属节点上的本地文件夹。"],

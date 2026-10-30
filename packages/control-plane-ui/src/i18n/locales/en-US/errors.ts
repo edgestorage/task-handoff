@@ -16,6 +16,7 @@ export const errors = {
   CONTROL_PLANE_FORBIDDEN: "Your account does not have permission to perform this action.",
   CONTROL_PLANE_INTERNAL_ERROR: "The Control Plane could not complete the request.",
   CONTROL_PLANE_INTERNAL_ERROR_WITH_REQUEST_ID: "The Control Plane could not complete the request. Reference: {requestId}.",
+  CLOUD_REMOTE_BINDING_EXISTS: "This Control Plane is still bound in the cloud. Disconnect or unbind it in the cloud platform, then sign in again.",
   CONTROL_PLANE_USERNAME_CONFLICT: "That sign-in username is already used by another user.",
   CONTROL_PLANE_LOCAL_IDENTITY_IMMUTABLE: "Local password identities cannot be unbound.",
   CONTROL_PLANE_IDENTITY_PROVIDER_NAMESPACE_IMMUTABLE: "This provider's type and issuer cannot change while it has linked identities or pending approvals.",

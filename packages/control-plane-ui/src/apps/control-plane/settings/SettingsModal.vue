@@ -220,45 +220,58 @@
             </div>
             <ScrollArea class="node-list">
               <div class="settings-scroll-content">
-              <button v-for="target in orderedNodes" :key="target.id" type="button" class="node-list-item" :class="{ active: selectedNodeId === target.id }" @click="selectNode(target.id)">
-                <span class="node-status-dot" :class="nodeStatusClass(target.id)" />
-                <span>
-                  <strong>{{ target.name }}</strong>
-                  <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
-                </span>
-                <span class="node-list-meta">
-                  <Badge v-if="nodeTrust(target.id)" variant="secondary">{{ t(`settings.nodeRelay.nodeTrust.status.${nodeTrust(target.id)!.state}`) }}</Badge>
-                  <Tooltip v-else @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
-                    <TooltipTrigger as-child>
-                      <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
-                        <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent class="node-diagnostic-tooltip" align="end" side="bottom">
-                      <div class="node-diagnostic-tooltip-grid">
-                        <span><b>{{ t("settings.nodeRegistry.protocol") }}</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
-                        <span><b>{{ t("settings.nodeRegistry.build") }}</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
-                        <span><b>{{ t("settings.nodeRegistry.package") }}</b><em>{{ nodePackageLabel(target.id) }}</em></span>
-                        <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
-                        <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
-                      </div>
-                      <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
-                    </TooltipContent>
-                  </Tooltip>
-                  <small v-if="!nodeTrust(target.id)">{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
-                </span>
-              </button>
-              <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
+                <section v-if="pendingCloudNodeEnrollments.length" class="node-list-section node-list-incomplete" :aria-label="t('settings.nodeRegistry.pendingCloudConnections')">
+                  <header class="node-list-section-head">
+                    <span>{{ t("settings.nodeRegistry.pendingCloudConnections") }}</span>
+                    <small>{{ t("settings.nodeRegistry.count", { count: pendingCloudNodeEnrollments.length }) }}</small>
+                  </header>
+                  <p>{{ t("settings.nodeRegistry.pendingCloudConnectionsHint") }}</p>
+                  <CloudNodeTrustEntry
+                    v-for="trust in pendingCloudNodeEnrollments"
+                    :key="trust.nodeHandle"
+                    :active="selectedPendingCloudNodeHandle === trust.nodeHandle"
+                    :trust="trust"
+                    @select="selectPendingCloudNodeEnrollment"
+                  />
+                </section>
+                <button v-for="target in orderedNodes" :key="target.id" type="button" class="node-list-item" :class="{ active: !selectedPendingCloudNodeHandle && selectedNodeId === target.id }" @click="selectRegistryNode(target.id)">
+                  <span class="node-status-dot" :class="nodeStatusClass(target.id)" />
+                  <span>
+                    <strong>{{ target.name }}</strong>
+                    <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
+                  </span>
+                  <span class="node-list-meta">
+                    <Tooltip @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
+                      <TooltipTrigger as-child>
+                        <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
+                          <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent class="node-diagnostic-tooltip" align="end" side="bottom">
+                        <div class="node-diagnostic-tooltip-grid">
+                          <span><b>{{ t("settings.nodeRegistry.protocol") }}</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
+                          <span><b>{{ t("settings.nodeRegistry.build") }}</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
+                          <span><b>{{ t("settings.nodeRegistry.package") }}</b><em>{{ nodePackageLabel(target.id) }}</em></span>
+                          <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
+                          <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
+                        </div>
+                        <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
+                      </TooltipContent>
+                    </Tooltip>
+                    <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
+                  </span>
+                </button>
+                <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
               </div>
             </ScrollArea>
           </section>
 
           <CloudNodeTrustDetailPanel
-            v-if="selectedNode && selectedNodeTrust"
-            :key="selectedNode.id"
-            :node="selectedNode"
-            :trust="selectedNodeTrust"
-            :error="cloudNodeRelay.data.value?.errors.find((item) => item.nodeHandle === selectedNodeTrust?.nodeHandle)?.message"
+            v-if="selectedPendingCloudNodeEnrollment"
+            :key="selectedPendingCloudNodeEnrollment.nodeHandle"
+            :display-name="selectedPendingCloudNodeEnrollment.displayName"
+            :trust="selectedPendingCloudNodeEnrollment"
+            :error="cloudNodeRelay.data.value?.errors.find((item) => item.nodeHandle === selectedPendingCloudNodeEnrollment?.nodeHandle)?.message"
             @refresh="refreshCloudNodeTrust"
             @cancelled="handleCloudNodeJoinCancelled"
           />
@@ -507,7 +520,7 @@ import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
 import NodeDetailPanel from "./NodeDetailPanel.vue";
 import CloudNodeTrustDetailPanel from "./CloudNodeTrustDetailPanel.vue";
-import { cloudNodeTrustForNode } from "./cloudNodeTrust";
+import CloudNodeTrustEntry from "./CloudNodeTrustEntry.vue";
 import { resetCloudNodeOnboarding, useCloudNodeOnboardingAttempt } from "./cloudNodeOnboardingAttempt";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeOnboardingDialog from "./NodeOnboardingDialog.vue";
@@ -650,34 +663,45 @@ const cloudNodeRelay = useCloudNodeRelayQuery({
   enabled: () => isFeatureEnabled("officialAccount") && canManageSettings.value,
   refetchIntervalMs: () => settingsSection.value === "nodes" ? 2_000 : false,
 });
-function nodeTrust(nodeId: string) {
-  return cloudNodeTrustForNode(nodes.data.value?.find((node) => node.id === nodeId), cloudNodeRelay.data.value);
-}
-const selectedNodeTrust = computed(() => cloudNodeTrustForNode(selectedNode.value, cloudNodeRelay.data.value));
-watch(() => cloudNodeRelay.data.value, (relay) => {
-  if (relay && [...relay.trust, ...relay.channels].some((item) => !nodes.data.value?.some((node) => node.id === item.nodeId))) {
-    void nodes.refetch();
+const selectedPendingCloudNodeHandle = ref("");
+const pendingCloudNodeEnrollments = computed(() => [...(cloudNodeRelay.data.value?.trust ?? [])]
+  .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt)));
+const selectedPendingCloudNodeEnrollment = computed(() => pendingCloudNodeEnrollments.value
+  .find((trust) => trust.nodeHandle === selectedPendingCloudNodeHandle.value));
+watch(pendingCloudNodeEnrollments, (entries) => {
+  if (selectedPendingCloudNodeHandle.value && !entries.some((entry) => entry.nodeHandle === selectedPendingCloudNodeHandle.value)) {
+    selectedPendingCloudNodeHandle.value = "";
   }
+});
+watch(() => cloudNodeRelay.data.value?.channels.map((channel) => `${channel.nodeHandle}:${channel.nodeId}`).join("\0"), () => {
+  const hasMissingNode = cloudNodeRelay.data.value?.channels.some((channel) => !nodes.data.value?.some((node) => node.id === channel.nodeId));
+  if (hasMissingNode) void nodes.refetch();
 });
 function refreshCloudNodeTrust() {
   void cloudNodeRelay.refetch();
   void nodes.refetch();
 }
-async function openCloudNodeTrustDetails(nodeId: string) {
-  if (!nodes.data.value?.some((node) => node.id === nodeId) || !nodeTrust(nodeId)) {
-    const [nodeResult, relayResult] = await Promise.all([nodes.refetch(), cloudNodeRelay.refetch()]);
-    const error = nodeResult.error || relayResult.error;
-    if (error || !nodes.data.value?.some((node) => node.id === nodeId)) {
-      showControlPlaneToast(error ? translateApiError(error, t) : t("settings.nodeRelay.directoryFailed"), "error");
-      return;
-    }
-  }
+function selectRegistryNode(nodeId: string) {
+  selectedPendingCloudNodeHandle.value = "";
   selectNode(nodeId);
+}
+function selectPendingCloudNodeEnrollment(nodeHandle: string) {
+  selectedPendingCloudNodeHandle.value = nodeHandle;
+}
+async function openCloudNodeTrustDetails(nodeHandle: string) {
+  const result = await cloudNodeRelay.refetch();
+  const trust = result.data?.trust.find((item) => item.nodeHandle === nodeHandle);
+  if (result.error || !trust) {
+    showControlPlaneToast(result.error ? translateApiError(result.error, t) : t("settings.nodeRelay.directoryFailed"), "error");
+    return;
+  }
+  selectPendingCloudNodeEnrollment(trust.nodeHandle);
   cloudNodeOnboardingOpen.value = false;
   refreshCloudNodeTrust();
 }
 function handleCloudNodeJoinCancelled(nodeHandle: string) {
   if (cloudNodeOnboarding.attempt.value?.nodeHandle === nodeHandle) resetCloudNodeOnboarding();
+  if (selectedPendingCloudNodeHandle.value === nodeHandle) selectedPendingCloudNodeHandle.value = "";
   refreshCloudNodeTrust();
 }
 const remoteNodeMode = ref<"direct" | "control-plane-proxy">("direct");
@@ -1465,11 +1489,10 @@ const nodeDetailStatus = {
 };
 
 watch(
-  () => [selectedNode.value?.id, selectedNodeTrust.value] as const,
-  ([nodeId, trust], previous) => {
-    const previousNodeId = previous?.[0];
+  () => selectedNode.value?.id,
+  (nodeId, previousNodeId) => {
     if (previousNodeId && nodeId !== previousNodeId) resetNodeRename();
-    if (nodeId && !trust) {
+    if (nodeId) {
       void loadControlPlaneAccess(nodeId);
       void loadManagedUpdateJobs(nodeId);
     }
@@ -1625,15 +1648,11 @@ function nodeInstanceSummary(nodeId: string) {
 function nodeStatusValue(nodeId: string) {
   const node = (nodes.data.value || []).find((item) => item.id === nodeId);
   if (node?.connectionEnabled === false) return "disconnected";
-  const trust = nodeTrust(nodeId);
-  if (trust) return trust.state === "pending" ? "pending-approval" : trust.state;
   if (nodeEventTransport(nodeId)?.status === "congested") return "degraded";
   return nodeStatusById[nodeId]?.status || node?.status || "unknown";
 }
 
 function nodeStatusLabel(nodeId: string) {
-  const trust = nodeTrust(nodeId);
-  if (trust) return t(`settings.nodeRelay.nodeTrust.status.${trust.state}`);
   if (nodeStatusValue(nodeId) === "disconnected") return t("instances.list.nodeDisconnected");
   return translateStatus(connectionStatusKeys, nodeStatusValue(nodeId), t);
 }
@@ -1648,7 +1667,6 @@ function nodeStatusClass(nodeId: string) {
 
 function refreshNodeConnectionDiagnostics(open: boolean, nodeId?: string) {
   if (!open) return;
-  if (nodeId && nodeTrust(nodeId)) return;
   if (nodeId) void checkSettingsNode(nodeId);
   else void nodes.refetch();
 }
@@ -1858,6 +1876,53 @@ function errorText(error: unknown) {
   min-height: 100%;
 }
 
+.node-list-section {
+  min-width: 0;
+}
+
+.node-list-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--text-strong);
+  padding: 9px 12px;
+}
+
+.node-list-section-head > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.node-list-section-head > small {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.node-list-incomplete {
+  border-bottom: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--status-warning-bg) 28%, var(--surface-raised));
+}
+
+.node-list-incomplete > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 9px 12px 3px;
+}
+
+.node-list-incomplete .cloud-node-trust-entry + .cloud-node-trust-entry {
+  border-top: 1px solid var(--line);
+}
+
 .node-list-item {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
@@ -1932,10 +1997,6 @@ function errorText(error: unknown) {
   background: var(--status-danger);
   box-shadow: 0 0 0 3px var(--status-danger-bg);
 }
-
-.node-status-dot.status-pending-approval,
-.node-status-dot.status-rejected,
-.node-status-dot.status-expired { background: var(--status-warning); }
 
 .node-status-dot.status-disconnected {
   background: var(--text-muted);

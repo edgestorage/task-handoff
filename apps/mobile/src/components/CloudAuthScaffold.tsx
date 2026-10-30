@@ -36,11 +36,6 @@ export function CloudAuthLabel({ children }: { children: ReactNode }) {
   return <Text style={[styles.label, { color: colors.textMuted }]}>{children}</Text>;
 }
 
-export function CloudAuthHint({ children }: { children: ReactNode }) {
-  const { colors } = useMobileTheme();
-  return <Text style={[styles.hint, { color: colors.textMuted }]}>{children}</Text>;
-}
-
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   screen: { justifyContent: 'center', paddingVertical: 24 },
@@ -51,7 +46,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '700', letterSpacing: -0.7, lineHeight: 34, textAlign: 'center' },
   description: { fontSize: 14, lineHeight: 20, maxWidth: 360, textAlign: 'center' },
   label: { fontSize: 12, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
-  hint: { fontSize: 13, lineHeight: 19, textAlign: 'center' },
   error: { alignItems: 'flex-start', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, paddingHorizontal: 12, paddingVertical: 11 },
   errorText: { flex: 1, fontSize: 13, lineHeight: 19 },
 });

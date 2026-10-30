@@ -434,6 +434,7 @@ export const settings = {
     protocol: "协议", build: "构建", package: "软件包", image: "镜像", built: "构建时间", empty: "尚无节点", rename: "重命名节点",
     renameDescription: "修改控制面板各处使用的显示名称。节点 ID 和连接设置不会改变。",
     remoteDialogDescription: "连接运行在另一台机器上的 node-agent。", joinToken: "加入 Token", creating: "正在创建", create: "创建节点",
+    pendingCloudConnections: "未完成连接", pendingCloudConnectionsHint: "这些中继连接尚未完成审批和配对，不会出现在首页实例列表。",
   },
   nodeOnboarding: {
     title: "添加节点向导", description: "检查网络可达性，然后按当前环境中最短的受支持路径完成连接。", progress: "节点连接进度",

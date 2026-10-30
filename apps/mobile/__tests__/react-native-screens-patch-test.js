@@ -14,9 +14,11 @@ test('native screens resolves the top content scroll view through nested layout 
   }
 });
 
-test('native split host retries the first mounting transaction after attaching to a window', () => {
+test('native split host recovers when columns mount after the host attaches to a window', () => {
   for (const source of [patch, splitHost]) {
-    expect(source).toContain('if (self.window != nil && _controller.viewControllers.count == 0 && [self getNumberOfColumns] >= 2)');
+    expect(source).toContain('if (self.window == nil || _controller == nil || _controller.viewControllers.count != 0 ||');
+    expect(source).toContain('dispatch_async(dispatch_get_main_queue(), ^{');
+    expect(source).toContain('[self scheduleSplitControllerRecovery];');
     expect(source).toContain('[_controller setNeedsUpdateOfChildViewControllers];');
     expect(source).toContain('[_controller reactMountingTransactionDidMount];');
   }

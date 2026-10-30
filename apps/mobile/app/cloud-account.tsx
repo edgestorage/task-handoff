@@ -4,7 +4,7 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { OfficialProviderSummary } from '@task-handoff/cloud-contracts/mobile';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
-import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
+import { CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
 import { Icon } from '../src/components/Icon';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
 import { useMobileTheme } from '../src/components/theme';
@@ -154,7 +154,6 @@ function CloudAccountContent() {
         <Text style={[styles.switchPrompt, { color: colors.textMuted }]}>{t(mode === 'login' ? 'cloudAccount.noAccount' : 'cloudAccount.haveAccount')}</Text>
         <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(undefined); setNotice(undefined); }}><Text style={[styles.switchAction, { color: colors.primary }]}>{t(mode === 'login' ? 'cloudAccount.createAccount' : 'cloudAccount.signInEmail')}</Text></Pressable>
       </View>
-      <CloudAuthHint>{t('cloudAccount.securityNote')}</CloudAuthHint>
     </CloudAuthScaffold>
   </>;
 }
