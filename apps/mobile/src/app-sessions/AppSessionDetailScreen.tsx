@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { TerminalView, type TerminalViewRef } from 'expo-libghostty';
 import { WebView } from 'react-native-webview';
 import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
@@ -20,7 +21,7 @@ import { subscribeToNetworkState } from '../platform/network';
 import { AppSessionAccessLeaseController, shouldRenewAppSessionAccessAfterHttpStatus } from './access-lease';
 import { canCloseAppSession } from './status';
 import { AppSessionTerminalInputNormalizer } from './terminal-input';
-import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from './terminal-layout';
+import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionPaneTopInset, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from './terminal-layout';
 import { useActiveAppSessions } from './use-active-app-sessions';
 
 type ActiveAppSessionAccess = AppSessionAccessLease & { instanceId: string; sessionId: string };
@@ -46,6 +47,8 @@ export function AppSessionDetailScreen({
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const toast = useMobileToast();
+  const headerHeight = useHeaderHeight();
+  const paneTopInset = appSessionPaneTopInset(Platform.OS, embeddedHeader, headerHeight);
   const terminal = useRef<TerminalViewRef>(null);
   const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
   const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
@@ -224,7 +227,7 @@ export function AppSessionDetailScreen({
     </>;
 
   if (!session || (accessMode !== 'tty' && accessMode !== 'vnc')) {
-    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.background }]}><Text style={[styles.unavailableText, { color: colors.text }]}>{t('appSessions.viewUnavailable')}</Text></View></>;
+    return <>{header}<View style={[styles.screen, { backgroundColor: colors.background, paddingTop: paneTopInset }]}><View style={styles.unavailable}><Text style={[styles.unavailableText, { color: colors.text }]}>{t('appSessions.viewUnavailable')}</Text></View></View></>;
   }
 
   const statusText = error || (status === 'connecting' ? t('appSessions.terminalConnecting') : status === 'connected' ? t('appSessions.terminalConnected') : status === 'exited' ? t('appSessions.terminalExited') : t('appSessions.terminalClosed'));
@@ -277,14 +280,14 @@ export function AppSessionDetailScreen({
   /> : null;
   const sessionContent = <>{content}
     {status !== 'connected' ? <View pointerEvents="none" style={[styles.status, { backgroundColor: colors.surface }]}><Text numberOfLines={2} style={[styles.statusText, { color: status === 'error' ? colors.error : colors.textMuted }]}>{statusText}</Text></View> : null}</>;
-  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, { backgroundColor: colors.background }]} testID="app-session-terminal-keyboard-background">
+  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: paneTopInset }]} testID="app-session-terminal-keyboard-background">
     <KeyboardAvoidingView
       behavior={appSessionTerminalKeyboardBehavior(Platform.OS)}
       keyboardVerticalOffset={appSessionTerminalKeyboardOffset(Platform.OS, Platform.Version)}
       style={[styles.screen, { backgroundColor: colors.background }]}
       testID="app-session-terminal-keyboard-area"
     >{sessionContent}</KeyboardAvoidingView>
-  </View> : <View style={[styles.screen, { backgroundColor: colors.background }]}>{sessionContent}</View>}
+  </View> : <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: paneTopInset }]}>{sessionContent}</View>}
   <SessionRenameModal
     busy={renaming}
     error={renameError}
