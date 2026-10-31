@@ -19,6 +19,7 @@ import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, Trigger
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 import { GitCredentialRetentionSchema } from "./managed-git-credentials.ts";
 import { NodeAgentCapabilitiesSchema } from "./node-agent-capabilities.ts";
+import { InstanceShellCapabilitiesSchema, INSTANCE_SHELL_PROTOCOL_VERSION, unsupportedInstanceShellCapabilities, type InstanceShellCapabilities } from "./instance-shell.ts";
 import { base64Decode, base64Encode, randomBytes, sha256Bytes, sha256Hex } from "./crypto.ts";
 export * from "./node-agent-capabilities.ts";
 import { ModelProtocolSchema, type ModelProtocol } from "./model-protocol.ts";
@@ -162,6 +163,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
+    instanceShell: unsupportedInstanceShellCapabilities(),
   };
 }
 
@@ -254,6 +256,9 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   modelRelay: ControlledInstanceModelRelayCapabilitiesSchema.optional(),
   // Additive capability: absent on v0.0.35 controlled instances.
   managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.46: absence or an invalid value disables only the
+  // instance-shell feature domain and must not invalidate the capability document.
+  instanceShell: InstanceShellCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -295,6 +300,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     nodeAgentConnectionUpdate: boolean;
     modelRelay: ControlledInstanceModelRelayCapabilities;
     managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilities;
+    instanceShell: InstanceShellCapabilities;
   };
 };
 
@@ -344,10 +350,23 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (modelRelay.success) normalizedFeatures.modelRelay = modelRelay.data;
   const managedModelEnvironment = ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.safeParse(features.managedModelEnvironment);
   if (managedModelEnvironment.success) normalizedFeatures.managedModelEnvironment = managedModelEnvironment.data;
+  const instanceShell = InstanceShellCapabilitiesSchema.safeParse(features.instanceShell);
+  if (instanceShell.success) normalizedFeatures.instanceShell = instanceShell.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
   }) as NormalizedControlledInstanceCapabilities;
+}
+
+/** Single query for the instance-shell capability declared by this boundary. */
+export function controlledInstanceShellCapabilities(capabilities: unknown): InstanceShellCapabilities {
+  return normalizeControlledInstanceCapabilities(capabilities).features.instanceShell;
+}
+
+export function supportsControlledInstanceShell(capabilities: unknown) {
+  const shell = controlledInstanceShellCapabilities(capabilities);
+  return shell.protocolVersion === INSTANCE_SHELL_PROTOCOL_VERSION
+    && (shell.interactive || shell.exec || shell.execTty);
 }
 
 export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {

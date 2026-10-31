@@ -18,6 +18,7 @@ export * from "./browser-tunnel.ts";
 export * from "./control-plane-access.ts";
 export * from "./control-plane-directory.ts";
 export * from "./control-plane.ts";
+export * from "./instance-shell.ts";
 export * from "./device-trust.ts";
 export * from "./node-relay-channel.ts";
 export * from "./node-agent-control-plane-trust.ts";

@@ -177,6 +177,63 @@ test("high-frequency heartbeat only changes observation-owned state", async (t) 
   verify.close();
 });
 
+test("instance shell capability survives register, heartbeat, and node-agent restart", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-instance-shell-persistence-"));
+  const nodeId = "node_instance_shell_persistence";
+  let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId });
+  t.after(async () => {
+    await app.close().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  const instance = app.nodeAgentState.createInstance(instanceInput("inst_shell_persistence"));
+  const appInventory = { items: [], observedAt: new Date().toISOString(), issues: [] };
+  app.nodeAgentState.registerInstance(instance.id, {
+    instanceId: instance.id,
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    appInventory,
+    workspace: { status: "ready" },
+    capabilities: {
+      features: {
+        tty: true,
+        instanceShell: {
+          protocolVersion: "2026-10-31",
+          interactive: true,
+          exec: true,
+          execTty: false,
+        },
+      },
+    },
+  }, instance.registrationToken);
+  app.nodeAgentState.heartbeatInstance(instance.id, {
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    appInventory,
+    status: "running",
+    health: "ok",
+    capabilities: {
+      features: {
+        tty: true,
+        instanceShell: {
+          protocolVersion: "2026-10-31",
+          interactive: true,
+          exec: true,
+          execTty: true,
+        },
+      },
+    },
+  }, instance.registrationToken);
+
+  await app.close();
+  app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId });
+  const restored = app.nodeAgentState.requireInstance(instance.id);
+  assert.deepEqual(restored.capabilities.features.instanceShell, {
+    protocolVersion: "2026-10-31",
+    interactive: true,
+    exec: true,
+    execTty: true,
+  });
+  assert.equal(restored.capabilities.features.tty, true);
+});
+
 test("runtime references are restricted while local folder deletion preserves the source snapshot", async (t) => {
   const { state, databasePath } = await fixture(t, "topology_relations");
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-p0-workspace-"));

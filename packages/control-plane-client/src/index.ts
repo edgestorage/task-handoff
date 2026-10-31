@@ -5,6 +5,7 @@ export * from "./app-sessions.ts";
 export * from "./app-profiles.ts";
 export * from "./browser.ts";
 export * from "./app-inventory.ts";
+export * from "./instance-shell.ts";
 export * from "./ai-session-state.ts";
 export * from "./approval-center.ts";
 export * from "./ai-session-conversation-cache.ts";

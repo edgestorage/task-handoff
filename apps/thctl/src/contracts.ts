@@ -117,6 +117,7 @@ import { appSessionAccess, appSessionList, appSessionLogs, appSessionRename, app
 import { appProfileCreate, appProfileList, appProfileRemove, appProfileRename, appProfileSetDefault } from "./commands/app-profile.ts";
 import { eventsCommand } from "./commands/events.ts";
 import { instanceAppCatalog, instanceAppCatalogCustom, instanceAppCatalogCustomUpdate, instanceAppCheckUpdate, instanceAppInstall, instanceAppJob, instanceAppList, instanceAppUninstall, instanceAppUpdate, instanceCreate, instanceDelete, instanceList, instanceRename, instanceRestart, instanceShow, instanceStart, instanceStop, instanceUpdate } from "./commands/instance.ts";
+import { instanceExec, instanceShell } from "./commands/instance-shell.ts";
 import { modelList, modelShow } from "./commands/model.ts";
 import { nodeList, nodeRename, nodeShow } from "./commands/node.ts";
 import { profileAdd, profileList, profileRemove, profileShow, profileTrust, profileUse } from "./commands/profile.ts";
@@ -254,6 +255,30 @@ const instanceGroup = group("instance", "Inspect and control instances", [
     input: inputOf({ instanceId: z.string() }),
     output: ControlPlaneInstanceDirectoryEntrySchema,
     handler: instanceShow,
+  },
+  {
+    id: "instance shell", group: "instance", name: "shell", stage: "A",
+    summary: "Open an interactive shell inside a controlled instance",
+    args: [instanceIdArg],
+    input: inputOf({ instanceId: z.string() }),
+    output: z.object({}).strict(),
+    ownsProcessSignals: true,
+    examples: ["thctl instance shell <instanceId>"],
+    handler: instanceShell,
+  },
+  {
+    id: "instance exec", group: "instance", name: "exec", stage: "A",
+    summary: "Execute one command inside a controlled instance with raw argv and streams",
+    args: [
+      instanceIdArg,
+      { name: "command", description: "Remote argv after --", required: true, variadic: true },
+    ],
+    options: [{ flags: "--tty", description: "Allocate a PTY for the one-shot command" }],
+    input: inputOf({ instanceId: z.string(), command: z.array(z.string()).min(1), tty: z.boolean().optional() }),
+    output: z.object({}).strict(),
+    ownsProcessSignals: true,
+    examples: ["thctl instance exec <instanceId> -- whoami", "thctl instance exec <instanceId> --tty -- sh -lc 'printf hello'"],
+    handler: instanceExec,
   },
   {
     id: "instance create", group: "instance", name: "create", stage: "B", write: true,

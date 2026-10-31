@@ -17,7 +17,15 @@ function snapshot() {
     },
     controlMode: "controlled",
     capabilities: {
-      features: { tty: true },
+      features: {
+        tty: true,
+        instanceShell: {
+          protocolVersion: "2026-10-31",
+          interactive: true,
+          exec: true,
+          execTty: false,
+        },
+      },
     },
     appInventory: {
       observedAt: "2026-07-15T00:00:00.000Z",
@@ -85,6 +93,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[0].body.build.buildId, "build-test");
   assert.equal(requests[0].body.build.imageRef, "task-handoff-web:test");
   assert.deepEqual(requests[0].body.appInventory, snapshot().appInventory);
+  assert.deepEqual(requests[0].body.capabilities.features.instanceShell, snapshot().capabilities.features.instanceShell);
   assert.equal(requests[0].body.endpoints, undefined);
   assert.equal(requests[0].body.target, undefined);
 
@@ -96,6 +105,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[1].body.target, undefined);
   assert.equal(requests[1].body.receiver, undefined);
   assert.equal(requests[1].body.apps.runningCount, 1);
+  assert.deepEqual(requests[1].body.capabilities.features.instanceShell, snapshot().capabilities.features.instanceShell);
   assert.equal(requests[2].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");
 });
 

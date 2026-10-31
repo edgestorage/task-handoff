@@ -24,6 +24,7 @@ const {
   supportsAiSessionQueuePause,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   supportsControlledInstanceModelRelay,
+  supportsControlledInstanceShell,
   supportsControlledInstanceOpenCodeEnvironment,
   supportsRepositoryPathSearch,
   supportsRepositoryWorktreeMoveToMain,
@@ -31,6 +32,7 @@ const {
   supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
 } = require("../packages/protocol/src/control-plane.ts");
+const { INSTANCE_SHELL_PROTOCOL_VERSION } = require("../packages/protocol/src/instance-shell.ts");
 
 function storagePaths(root) {
   const paths = {
@@ -121,6 +123,13 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
   assert.equal(capabilities.features.aiSessionQueuePause, true);
   assert.equal(supportsAiSessionQueuePause(capabilities), true);
+  assert.deepEqual(capabilities.features.instanceShell, {
+    protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,
+    interactive: true,
+    exec: true,
+    execTty: true,
+  });
+  assert.equal(supportsControlledInstanceShell(capabilities), true);
   // Compatibility for v0.0.35: capabilities without the additive flag stay unsupported.
   assert.equal(supportsAiSessionQueuePause({ features: { aiSessionWorkspaceSelection: true } }), false);
   assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);

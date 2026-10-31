@@ -14,6 +14,7 @@ import {
   type ControlledInstanceCapabilities,
 } from "@task-handoff/protocol/control-plane";
 import { workspaceGitEnvironmentValue } from "@task-handoff/protocol/workspace-git";
+import { INSTANCE_SHELL_PROTOCOL_VERSION } from "@task-handoff/protocol/instance-shell";
 import { TriggerStore } from "../triggers/store";
 
 // The controlled-instance artifact is hot-swapped inside an older base image.
@@ -230,6 +231,12 @@ export function controlledInstanceCapabilities(
       aiSessionQueuePause: true,
       aiSessionTimeline,
       aiSessionProviders: availableProviders,
+      instanceShell: {
+        protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,
+        interactive: true,
+        exec: true,
+        execTty: true,
+      },
       aiSessionConversationAttachments: {
         metadataAgents: availableProviders.filter((provider) => provider.actions.send).map((provider) => provider.agent),
         contentAgents: availableProviders.filter((provider) => provider.actions.send).map((provider) => provider.agent),

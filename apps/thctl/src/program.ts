@@ -1,6 +1,6 @@
 import { Command, CommanderError } from "commander";
 import { CliProfileStore, resolveCliConfigDir } from "./config.ts";
-import type { CliEventSocketFactory } from "./event-socket.ts";
+import type { CliEventSocketFactory, CliWebSocketFactory } from "./event-socket.ts";
 import { CLI_GROUPS, type CliLeaf } from "./contracts.ts";
 import { CLI_EXIT_CODES, ThctlError, notImplementedError, toThctlError, usageError } from "./errors.ts";
 import { THCTL_VERSION } from "./client-info.ts";
@@ -8,7 +8,7 @@ import { openInBrowser } from "./login.ts";
 import { CLI_GLOBAL_OPTIONS } from "./global-options.ts";
 import { CliOutput, defaultStreams, type CliStreams } from "./output.ts";
 import type { CliResult } from "./runtime.ts";
-import { promptConfirm, type CliContext } from "./runtime.ts";
+import { promptConfirm, type CliContext, type CliTerminal } from "./runtime.ts";
 import {
   UPDATE_CHECK_CHILD_ARG,
   maybeScheduleUpdateCheck,
@@ -83,12 +83,10 @@ async function executeLeaf(leaf: CliLeaf, context: CliContext, command: Command)
   if (options.table === true && options.json === true) {
     throw usageError("CLI_OUTPUT_FORMAT_CONFLICT", "`--json` and `--table` cannot be used together.");
   }
-  const invocationContext: CliContext = {
-    ...context,
-    profile: typeof options.profile === "string" ? options.profile : context.profile,
-    yes: options.yes === true,
-    dryRun: options["dry-run"] === true,
-  };
+  context.profile = typeof options.profile === "string" ? options.profile : context.profile;
+  context.yes = options.yes === true;
+  context.dryRun = options["dry-run"] === true;
+  const invocationContext = context;
   if (!leaf.handler) throw notImplementedError(leaf.id, leaf.stage);
   let result: CliResult | void;
   try {
@@ -108,6 +106,7 @@ async function executeLeaf(leaf: CliLeaf, context: CliContext, command: Command)
   if (!result) return;
   if (result.data !== undefined) invocationContext.output.data(result.data, result.columns);
   if (result.message) invocationContext.output.message(result.message);
+  if (result.exitCode !== undefined) context.terminalExitCode = result.exitCode;
 }
 
 export function buildProgram(context: CliContext) {
@@ -160,6 +159,9 @@ export type RunCliOptions = {
   signal?: AbortSignal;
   now?: () => Date;
   createEventSocket?: CliEventSocketFactory;
+  createWebSocket?: CliWebSocketFactory;
+  /** 测试或嵌入式调用可替换真实终端；默认使用进程 stdin/stdout。 */
+  terminal?: CliTerminal;
   /**
    * 后台更新检查：打包后的 CLI 入口（bin.ts）显式开启；库调用和测试默认关闭。
    * spawnDetached/now 供测试注入派生进程与时钟。
@@ -174,6 +176,7 @@ export type RunCliOptions = {
 export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
   const env = options.env ?? process.env;
   const streams = options.streams ?? defaultStreams();
+  const terminal = options.terminal ?? { stdin: process.stdin, stdout: process.stdout };
   return {
     store: options.store ?? new CliProfileStore(resolveCliConfigDir(env)),
     output: new CliOutput(streams, true),
@@ -181,17 +184,21 @@ export function createRuntimeContext(options: RunCliOptions = {}): CliContext {
     env,
     yes: false,
     dryRun: false,
-    isTty: options.isTty ?? Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    isTty: options.isTty ?? Boolean(terminal.stdin.isTTY && terminal.stdout.isTTY),
     confirm: options.confirm ?? promptConfirm,
     openUrl: options.openUrl ?? openInBrowser,
     sleep: options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
     signal: options.signal ?? new AbortController().signal,
+    commandLine: [],
+    terminal,
     ...(options.createEventSocket ? { createEventSocket: options.createEventSocket } : {}),
+    ...(options.createWebSocket ? { createWebSocket: options.createWebSocket } : {}),
   };
 }
 
 export async function runCli(argv: string[], options: RunCliOptions = {}) {
   const context = createRuntimeContext(options);
+  context.commandLine = argv.slice(2);
   context.output.json = !requestedTableOutput(argv);
   // 隐藏子进程入口：只刷新更新检查状态，不解析命令、不产生输出。
   if (argv[2] === UPDATE_CHECK_CHILD_ARG) {
@@ -201,10 +208,13 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
   const updateCheck = options.updateCheck ?? {};
   const updateCheckEnabled = updateCheck.enabled === true;
   const controller = new AbortController();
-  const onSignal = () => {
+  const handleProcessSignal = (signal: "SIGINT" | "SIGTERM") => {
+    if (context.handleProcessSignal?.(signal)) return;
     controller.abort();
     context.output.warn("Cancelling…");
   };
+  const onInterrupt = () => handleProcessSignal("SIGINT");
+  const onTerminate = () => handleProcessSignal("SIGTERM");
   // 注入的 signal 同时驱动命令（如 events 的流式订阅），进程信号仍走内部 controller。
   const externalSignal = options.signal;
   const onExternalAbort = () => controller.abort();
@@ -212,8 +222,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
     if (externalSignal.aborted) controller.abort();
     else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
   }
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onInterrupt);
+  process.on("SIGTERM", onTerminate);
   try {
     // 先派生后台检查（结果落盘），本次运行只用上一次的缓存状态提示。
     if (updateCheckEnabled) {
@@ -223,9 +233,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
         ...(updateCheck.now ? { now: updateCheck.now() } : {}),
       });
     }
-    const program = buildProgram({ ...context, signal: controller.signal });
+    context.signal = controller.signal;
+    const program = buildProgram(context);
     await program.parseAsync(argv);
-    return CLI_EXIT_CODES.ok;
+    return context.terminalExitCode ?? CLI_EXIT_CODES.ok;
   } catch (error) {
     if (error instanceof CommanderError) {
       if (error.code === "commander.helpDisplayed" || error.code === "commander.help" || error.code === "commander.version") return CLI_EXIT_CODES.ok;
@@ -237,8 +248,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}) {
     context.output.error(mapped);
     return mapped.exitCode;
   } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
     externalSignal?.removeEventListener("abort", onExternalAbort);
     if (updateCheckEnabled) {
       const notice = pendingUpdateNotice(context, {

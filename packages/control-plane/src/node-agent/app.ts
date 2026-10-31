@@ -2138,6 +2138,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     metrics: instanceProxyMetrics,
     instanceBase: (id) => resolveInstanceWeb(state.requireInstance(id)),
     syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb),
+    webSocketUpstreamHeaders: (id, proxyPath) => {
+      if (proxyPath !== "/api/internal/instance-shell") return {};
+      const token = state.requireInstance(id).registrationToken;
+      if (!token) throw Object.assign(new Error("Instance registration token is unavailable."), { code: "INSTANCE_REGISTRATION_TOKEN_MISSING" });
+      return { authorization: `Bearer ${token}` };
+    },
     diagnostic: logDiagnostic,
   });
 

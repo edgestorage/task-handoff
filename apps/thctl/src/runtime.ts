@@ -2,10 +2,33 @@ import readline from "node:readline/promises";
 import { CLI_PROFILE_ENV, CliProfileStore, type CliProfile } from "./config.ts";
 import { connectToControlPlane, type ThctlConnection } from "./control-plane.ts";
 import { ThctlError, CLI_EXIT_CODES } from "./errors.ts";
-import type { CliEventSocketFactory } from "./event-socket.ts";
+import type { CliEventSocketFactory, CliWebSocketFactory } from "./event-socket.ts";
 import { discoverLocalControlPlane, ensureLocalProfile, localControlPlaneLockPath } from "./local-control-plane.ts";
 import type { CliOutput } from "./output.ts";
 import { redactSecrets, registerSecretsFromValue } from "./redact.ts";
+
+export type CliTerminalInput = NodeJS.ReadableStream & {
+  readonly isTTY?: boolean;
+  readonly columns?: number;
+  readonly rows?: number;
+  readonly readableEnded?: boolean;
+  setRawMode?: (mode: boolean) => void;
+  resume?: () => void;
+  pause?: () => void;
+};
+
+export type CliTerminalOutput = NodeJS.WritableStream & {
+  readonly isTTY?: boolean;
+  readonly columns?: number;
+  readonly rows?: number;
+};
+
+export type CliTerminal = {
+  stdin: CliTerminalInput;
+  stdout: CliTerminalOutput;
+  /** 测试和非 Node TTY 包装可注入窗口变化；默认监听进程 SIGWINCH。 */
+  onResize?: (listener: () => void) => () => void;
+};
 
 export type CliContext = {
   store: CliProfileStore;
@@ -20,8 +43,17 @@ export type CliContext = {
   openUrl: (url: string) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   signal: AbortSignal;
+  /** runCli 收到的原始命令参数（不含 node 与脚本路径），用于区分 `--` 两侧。 */
+  commandLine: readonly string[];
+  terminal: CliTerminal;
+  /** Shell/exec 在运行期间声明接管本机进程信号；通用 runtime 不再打印取消提示。 */
+  handleProcessSignal?: (signal: "SIGINT" | "SIGTERM") => boolean;
+  /** 命令成功完成后的内部状态；不能经过 JSON/table/error 渲染。 */
+  terminalExitCode?: number;
   /** 事件流命令的 WebSocket 工厂；未注入时使用 `ws` 默认实现。 */
   createEventSocket?: CliEventSocketFactory;
+  /** 原始流命令的通用 WebSocket 工厂；未注入时使用同一个 `ws` 实现。 */
+  createWebSocket?: CliWebSocketFactory;
 };
 
 export type CliInvocation = {
@@ -35,6 +67,8 @@ export type CliResult = {
   data?: unknown;
   columns?: readonly { key: string; header: string; width?: number }[];
   message?: string;
+  /** 原始流命令的业务退出状态；不生成任何成功包装输出。 */
+  exitCode?: number;
 };
 
 export type CliHandler = (context: CliContext, invocation: CliInvocation) => Promise<CliResult | void>;

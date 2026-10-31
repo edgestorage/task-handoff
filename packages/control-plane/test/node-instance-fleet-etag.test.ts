@@ -8,6 +8,13 @@ import { ControlPlaneNodeAgentGateway } from "../src/control-plane/nodes/gateway
 import { registerInstanceManagementRoutes } from "../src/node-agent/instances/routes.ts";
 import { INSTANCE_DIRECTORY_PROJECTION, INSTANCE_PROJECTION_HEADER } from "../src/shared/instances/fleet-projection.ts";
 
+const shellCapability = {
+  protocolVersion: "2026-10-31",
+  interactive: true,
+  exec: true,
+  execTty: false,
+};
+
 function instance(overrides: Record<string, unknown> = {}): ControlledInstance {
   return ControlledInstanceSchema.parse({
     id: "inst_fleet_etag",
@@ -29,7 +36,7 @@ function instance(overrides: Record<string, unknown> = {}): ControlledInstance {
 test("node instance fleet responses expose a heartbeat-insensitive ETag without hiding Session changes", async (t) => {
   const app = Fastify();
   t.after(() => app.close());
-  let instances = [instance()];
+  let instances = [instance({ capabilities: { features: { instanceShell: shellCapability } } })];
   const unused = () => { throw new Error("not used"); };
   const operations = {
     list: () => instances,
@@ -53,12 +60,14 @@ test("node instance fleet responses expose a heartbeat-insensitive ETag without 
   const etag = first.headers.etag;
   assert.equal(typeof etag, "string");
   assert.ok(etag);
+  assert.deepEqual(first.json().data[0].capabilities.features.instanceShell, shellCapability);
 
   const unchanged = await app.inject({ method: "GET", url: "/api/node-agent/instances", headers: { "if-none-match": etag } });
   assert.equal(unchanged.statusCode, 304);
   assert.equal(unchanged.body, "");
 
   instances = [instance({
+    capabilities: { features: { instanceShell: shellCapability } },
     stateRevision: 2,
     updatedAt: "2026-10-24T00:00:10.000Z",
     lastHeartbeatAt: "2026-10-24T00:00:10.000Z",
@@ -117,6 +126,7 @@ test("directory projections omit Session detail and ignore Session-only ETag cha
     ...overrides,
   });
   let instances = [instance({
+    capabilities: { features: { instanceShell: shellCapability } },
     aiSessions: {
       runningCount: 1,
       waitingCount: 0,
@@ -152,10 +162,12 @@ test("directory projections omit Session detail and ignore Session-only ETag cha
   const compactInstance = compact.json().data[0];
   assert.equal(compactInstance.aiSessions.runningCount, 1);
   assert.deepEqual(compactInstance.aiSessions.sessions, []);
+  assert.deepEqual(compactInstance.capabilities.features.instanceShell, shellCapability);
   const etag = compact.headers.etag;
   assert.equal(typeof etag, "string");
 
   instances = [instance({
+    capabilities: { features: { instanceShell: shellCapability } },
     aiSessions: {
       runningCount: 1,
       waitingCount: 0,
@@ -172,6 +184,7 @@ test("directory projections omit Session detail and ignore Session-only ETag cha
   assert.equal(sessionOnlyChange.statusCode, 304);
 
   instances = [instance({
+    capabilities: { features: { instanceShell: shellCapability } },
     aiSessions: {
       runningCount: 2,
       waitingCount: 0,

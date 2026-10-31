@@ -122,6 +122,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       aiSessionProviders: item.capabilities.features.aiSessionProviders,
       browserTunnel: item.capabilities.features.browserTunnel,
       aiSessionQueuePause: item.capabilities.features.aiSessionQueuePause,
+      instanceShell: item.capabilities.features.instanceShell,
     },
     config: {
       defaultCodexPermissionMode: item.config.defaultCodexPermissionMode,

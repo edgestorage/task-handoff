@@ -61,6 +61,7 @@ import { StoryAgentToolBridge } from "./story-agent-tool-bridge";
 import { AgentRunMemberBindingStore } from "./agent-run-member-bindings";
 import { projectAgentRunMemberStatus } from "./agent-run-member-status";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
+import { InstanceShellRuntime, registerInstanceShellRoute } from "./instance-shell";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
 import {
@@ -798,6 +799,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
+  const instanceShellRuntime = new InstanceShellRuntime();
+  registerInstanceShellRoute(app, instanceShellRuntime);
   app.addHook("preHandler", async (request, reply) => {
     if (request.method === "GET") return;
     const match = /^\/api\/ai-sessions\/([^/]+)(?:\/|$)/.exec(request.url.split("?")[0]!);
@@ -820,6 +823,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.addHook("onClose", async () => {
+    await instanceShellRuntime.shutdown(1001, "Controlled instance is shutting down.");
     clearInterval(aiSessionAttachmentGcTimer);
     attachmentDraftStreams.dispose();
     nodeAgentClient.stop();
@@ -1895,6 +1899,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.post("/api/internal/node-agent/drain", nodeAgentProcessRoute, async () => {
+    await instanceShellRuntime.shutdown(1001, "Controlled instance is draining.");
     appRuntime.beginDrain();
     triggerExecutor.beginDrain();
     triggerManager.stop();

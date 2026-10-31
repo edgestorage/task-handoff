@@ -7,15 +7,17 @@ export type CliColumn = {
   width?: number;
 };
 
+export type CliStreamChunk = string | Uint8Array;
+
 export type CliStreams = {
-  stdout: (text: string) => void;
-  stderr: (text: string) => void;
+  stdout: (chunk: CliStreamChunk) => void;
+  stderr: (chunk: CliStreamChunk) => void;
 };
 
 export function defaultStreams(): CliStreams {
   return {
-    stdout: (text) => process.stdout.write(text),
-    stderr: (text) => process.stderr.write(text),
+    stdout: (chunk) => process.stdout.write(chunk),
+    stderr: (chunk) => process.stderr.write(chunk),
   };
 }
 

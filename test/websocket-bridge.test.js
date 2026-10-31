@@ -143,6 +143,28 @@ test("bridgeWebSockets converts destination send exceptions into symmetric closu
   assert.deepEqual(upstream.closes.at(-1), { code: 1011, reason: "WebSocket bridge send failed." });
 });
 
+test("bridgeWebSockets replays bounded client frames captured before upstream open", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  upstream.readyState = 0;
+
+  bridgeWebSockets(client, upstream, {
+    initialClientFrames: [
+      { data: "early-start", isBinary: false },
+      { data: Uint8Array.from([1, 2]), isBinary: true },
+    ],
+  });
+
+  assert.equal(upstream.sent.length, 0);
+  upstream.readyState = upstream.OPEN;
+  upstream.emit("open");
+
+  assert.equal(String(upstream.sent[0].data), "early-start");
+  assert.deepEqual(upstream.sent[0].options, { binary: false, compress: false });
+  assert.deepEqual(upstream.sent[1].data, Uint8Array.from([1, 2]));
+  assert.deepEqual(upstream.sent[1].options, { binary: true, compress: false });
+});
+
 test("structured websocket compression uses a bounded low-cost policy", () => {
   assert.deepEqual(TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS, {
     perMessageDeflate: {

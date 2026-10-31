@@ -731,6 +731,13 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],
+    // Compatibility for v0.0.46: stored instances without the additive Instance Shell capability normalize it to unsupported.
+    instanceShell: {
+      protocolVersion: "2026-10-31",
+      interactive: false,
+      exec: false,
+      execTty: false,
+    },
   } });
   assert.deepEqual(warnings, [{ instanceId: "inst_legacy_apps", field: "capabilities.apps" }]);
 });
@@ -2815,6 +2822,7 @@ test("control plane mutation route policies never degrade privileged operations 
   const viewer = actor("viewer", CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read")));
   const operator = actor("operator", CONTROL_PLANE_PERMISSION_IDS.filter((id) => !["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"].some((prefix) => id.startsWith(prefix))));
   const operatorRoutes = [
+    ["GET", "/api/controlled-instances/:id/shell", "interactive-access", "instance"],
     ["POST", "/api/ai-session-attachments", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/messages", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/actions", "send-message", "ai-session"],

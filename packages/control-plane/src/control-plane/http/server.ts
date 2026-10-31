@@ -49,6 +49,7 @@ import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
 import { registerInstanceProxyRoutes } from "./instance-proxy-routes.ts";
+import { registerInstanceShellRoutes } from "./instance-shell-routes.ts";
 import { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
 import { StorySessionIndex } from "../sessions/story-session-index.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
@@ -1802,6 +1803,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   registerInstanceProxyRoutes({ app, service, auth, authorizationConnections });
+  registerInstanceShellRoutes({ app, service, authorizationConnections, events });
   registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>

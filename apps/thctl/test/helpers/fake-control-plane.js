@@ -7,6 +7,7 @@ import {
   ControlPlanePublicIdentityDocumentSchema,
   controlPlaneIdentitySigningInput,
 } from "@task-handoff/protocol/control-plane-access";
+import { INSTANCE_SHELL_PROTOCOL_VERSION } from "@task-handoff/protocol/instance-shell";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -133,6 +134,16 @@ export function createFakeControlPlane(options = {}) {
     runtime: { id: "runtime_fake01", type: "docker" },
     workspace: { status: "ready", path: "/workspace" },
     protocol: { version: "2026-10-01", compatible: true },
+    capabilities: {
+      instanceShell: "instanceShellCapabilities" in options
+        ? options.instanceShellCapabilities
+        : {
+          protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,
+          interactive: true,
+          exec: true,
+          execTty: true,
+        },
+    },
     aiSessions: { runningCount: 1, waitingCount: 0, staleCount: 0, idleCount: 0, problemCount: 0, updatedAt: now },
     availableAgents: [],
   };

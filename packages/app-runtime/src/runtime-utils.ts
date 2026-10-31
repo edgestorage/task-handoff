@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { localIpcEndpoint } from "@task-handoff/core/core/local-ipc-endpoint";
-import { isBunRuntime } from "@task-handoff/core/core/javascript-runtime";
 
 export type GuiVncBackend = "novnc" | "kasmvnc";
 
@@ -88,23 +87,6 @@ export function codexAppServerTokenFile(runtimeDir: string) {
 
 export function createCodexAppServerToken() {
   return crypto.randomBytes(32).toString("base64url");
-}
-
-export function ensureNodePtySpawnHelperExecutable() {
-  if (isBunRuntime()) return;
-  if (process.platform !== "darwin" && process.platform !== "linux") {
-    return;
-  }
-  try {
-    const packageRoot = path.resolve(path.dirname(require.resolve("node-pty")), "..");
-    const helperPath = path.join(packageRoot, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
-    const stat = fs.statSync(helperPath);
-    if ((stat.mode & 0o111) === 0) {
-      fs.chmodSync(helperPath, stat.mode | 0o755);
-    }
-  } catch {
-    // node-pty will surface the original launch error if the helper is unavailable.
-  }
 }
 
 export function claudeShortFromOutput(output: string) {

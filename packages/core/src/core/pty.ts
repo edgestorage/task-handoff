@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { IPty } from "node-pty";
@@ -193,7 +194,20 @@ function spawnBunPty(executable: string, args: string[], options: PtySpawnOption
   };
 }
 
+export function ensureNodePtySpawnHelperExecutable() {
+  if (isBunRuntime() || (process.platform !== "darwin" && process.platform !== "linux")) return;
+  try {
+    const packageRoot = path.resolve(path.dirname(requireFromHere.resolve("node-pty")), "..");
+    const helperPath = path.join(packageRoot, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+    const stat = fs.statSync(helperPath);
+    if ((stat.mode & 0o111) === 0) fs.chmodSync(helperPath, stat.mode | 0o755);
+  } catch {
+    // node-pty surfaces the original launch error if its helper is unavailable.
+  }
+}
+
 export function spawnPty(executable: string, args: string[], options: PtySpawnOptions = {}): PtyProcess {
+  ensureNodePtySpawnHelperExecutable();
   if (isBunRuntime()) return spawnBunPty(executable, args, options);
   return spawnNodePty(executable, args, options);
 }

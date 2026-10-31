@@ -8,13 +8,14 @@ import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { commandInvocation, resolveCommandExecutable, type CommandInvocation } from "@task-handoff/core/core/command-invocation";
 import { spawnPty, type PtyProcess } from "@task-handoff/core/core/pty";
+import { ManagedProcessTreeRegistry, type ManagedProcessTree } from "@task-handoff/core/core/process-tree";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import type { AppProfile } from "@task-handoff/protocol/app-profiles";
 import { AppCatalogRepository } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { ManagedAppPreparedTtyLaunch, ManagedAppProfileRecord, ManagedAppProfilesRuntime, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
-import { ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
+import { formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
 import { enforceInstanceLogBudget, RotatingLogWriter } from "./log-retention";
 import { TerminalScreenState } from "./terminal-screen-state";
@@ -55,14 +56,6 @@ type SharedDisplayRuntimeSession = {
   logDir: string;
   processes: ChildProcessWithoutNullStreams[];
   appSessionIds: Set<string>;
-};
-
-type ManagedProcessTree = {
-  pid: number;
-  child?: ChildProcessWithoutNullStreams;
-  pty?: PtyProcess;
-  rootExited: boolean;
-  stopPromise?: Promise<void>;
 };
 
 function sessionId() {
@@ -125,7 +118,7 @@ export class AppRuntimeManager extends EventEmitter {
   private nextCdpPort = CDP_PORT_START;
   private readonly sharedDisplays = new Map<string, SharedDisplayRuntimeSession>();
   private readonly appRuntimeExtensions = new Map<string, ManagedAppRuntimeExtension>();
-  private readonly managedProcessTrees = new Map<number, ManagedProcessTree>();
+  private readonly managedProcessTrees = new ManagedProcessTreeRegistry({ stopTimeoutMs: APP_PROCESS_STOP_TIMEOUT_MS, killTimeoutMs: APP_PROCESS_KILL_TIMEOUT_MS });
   private readonly catalogRepository: AppCatalogRepository;
   private readonly persistSessionMetadata: boolean;
   private managedEnvironment: NodeJS.ProcessEnv = {};
@@ -142,7 +135,7 @@ export class AppRuntimeManager extends EventEmitter {
       allocatePort: (kind) => this.allocatePort(kind),
       hasCommand: (command, env, cwd) => this.hasCommand(command, env, cwd),
       spawnLogged: (command, args, env, logDir, logName, cwd, logHeader) => this.spawnLogged(command, args, env, logDir, logName, cwd, logHeader),
-      stopProcessTree: (child, signal) => this.requestManagedProcessTreeStop(child.pid, signal || "SIGTERM", child),
+      stopProcessTree: (child, signal) => this.managedProcessTrees.requestStop(child.pid, signal || "SIGTERM", child),
       waitForUnixSocket: (socketPath, timeoutMs, getError) => this.waitForUnixSocket(socketPath, timeoutMs, getError),
       waitForHttp: (url, headers, timeoutMs, getError) => this.waitForHttp(url, headers, timeoutMs, getError),
       patchSession: (sessionId, patch) => this.patchSessionMetadata(sessionId, patch),
@@ -705,7 +698,7 @@ export class AppRuntimeManager extends EventEmitter {
     } catch (error) {
       for (const process of displayProcesses) {
         if (!process.killed) {
-          this.requestManagedProcessTreeStop(process.pid, "SIGTERM", process);
+          this.managedProcessTrees.requestStop(process.pid, "SIGTERM", process);
         }
       }
       throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "APP_DISPLAY_START_FAILED" });
@@ -837,7 +830,7 @@ export class AppRuntimeManager extends EventEmitter {
     } catch (error) {
       for (const process of displayProcesses) {
         if (!process.killed) {
-          this.requestManagedProcessTreeStop(process.pid, "SIGTERM", process);
+          this.managedProcessTrees.requestStop(process.pid, "SIGTERM", process);
         }
       }
       throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "APP_DISPLAY_START_FAILED" });
@@ -910,7 +903,7 @@ export class AppRuntimeManager extends EventEmitter {
     this.sharedDisplays.delete(displayId);
     for (const process of displaySession.processes) {
       if (!process.killed) {
-        this.requestManagedProcessTreeStop(process.pid, "SIGTERM", process);
+        this.managedProcessTrees.requestStop(process.pid, "SIGTERM", process);
       }
     }
   }
@@ -1176,7 +1169,7 @@ export class AppRuntimeManager extends EventEmitter {
     session.metadata.updatedAt = now();
     session.stopping = true;
     this.persist(session.metadata);
-    if (session.pty) this.requestManagedProcessTreeStop(session.pty.pid, "SIGTERM", undefined, session.pty);
+    if (session.pty) this.managedProcessTrees.requestStop(session.pty.pid, "SIGTERM", undefined, session.pty);
     this.closeTtyLog(session);
     for (const client of session.clients) {
       client.send(JSON.stringify({ type: "exit", code: null, signal: "SIGHUP" }));
@@ -1185,7 +1178,7 @@ export class AppRuntimeManager extends EventEmitter {
     session.clients.clear();
     for (const process of session.processes) {
       if (!process.killed) {
-        this.requestManagedProcessTreeStop(process.pid, "SIGTERM", process);
+        this.managedProcessTrees.requestStop(process.pid, "SIGTERM", process);
       }
     }
     session.appLifecycle?.lifecycle?.stop?.();
@@ -1249,7 +1242,7 @@ export class AppRuntimeManager extends EventEmitter {
       this.stop(id);
       const [gracefulResults, gracefulTreeResults] = await Promise.all([
         Promise.all(gracefulExit),
-        this.waitForManagedProcessTrees(processTrees, APP_PROCESS_STOP_TIMEOUT_MS),
+        this.managedProcessTrees.wait(processTrees, APP_PROCESS_STOP_TIMEOUT_MS),
       ]);
       let remainingProcesses = untrackedProcesses.filter((_, index) => !gracefulResults[index]);
       let remainingTrees = gracefulTreeResults;
@@ -1257,15 +1250,15 @@ export class AppRuntimeManager extends EventEmitter {
         const forcedExit = remainingProcesses.map((process) => this.waitForProcessClose(process, APP_PROCESS_KILL_TIMEOUT_MS));
         for (const process of remainingProcesses) {
           if (process.exitCode === null && process.signalCode === null) {
-            this.signalManagedProcessTree(process.pid, "SIGKILL", process);
+            this.managedProcessTrees.signal(process.pid, "SIGKILL", process);
           }
         }
         for (const processTree of remainingTrees) {
-          this.signalManagedProcessTree(processTree.pid, "SIGKILL", processTree.child, processTree.pty);
+          this.managedProcessTrees.signal(processTree.pid, "SIGKILL", processTree.child, processTree.pty);
         }
         const [forcedResults, forcedTreeResults] = await Promise.all([
           Promise.all(forcedExit),
-          this.waitForManagedProcessTrees(remainingTrees, APP_PROCESS_KILL_TIMEOUT_MS),
+          this.managedProcessTrees.wait(remainingTrees, APP_PROCESS_KILL_TIMEOUT_MS),
         ]);
         remainingProcesses = remainingProcesses.filter((_, index) => !forcedResults[index]);
         remainingTrees = forcedTreeResults;
@@ -1432,12 +1425,12 @@ export class AppRuntimeManager extends EventEmitter {
       session.metadata.updatedAt = now();
       this.persist(session.metadata);
       session.appLifecycle?.lifecycle?.stop?.();
-      if (session.pty) this.signalManagedProcessTree(session.pty.pid, "SIGTERM", undefined, session.pty);
+      if (session.pty) this.managedProcessTrees.signal(session.pty.pid, "SIGTERM", undefined, session.pty);
       this.closeTtyLog(session);
       session.terminalScreen?.dispose();
       session.terminalScreen = undefined;
       for (const process of session.processes) {
-        this.signalManagedProcessTree(process.pid, "SIGTERM", process);
+        this.managedProcessTrees.signal(process.pid, "SIGTERM", process);
       }
     }
     for (const displayId of Array.from(this.sharedDisplays.keys())) {
@@ -1446,12 +1439,12 @@ export class AppRuntimeManager extends EventEmitter {
     for (const extension of this.appRuntimeExtensions.values()) extension.stopAll?.();
     this.sessions.clear();
     const processTrees = Array.from(this.managedProcessTrees.values());
-    for (const processTree of processTrees) this.signalManagedProcessTree(processTree.pid, "SIGTERM", processTree.child, processTree.pty);
-    let remaining = await this.waitForManagedProcessTrees(processTrees, APP_PROCESS_STOP_TIMEOUT_MS);
-    for (const processTree of remaining) this.signalManagedProcessTree(processTree.pid, "SIGKILL", processTree.child, processTree.pty);
-    remaining = await this.waitForManagedProcessTrees(remaining, APP_PROCESS_KILL_TIMEOUT_MS);
+    for (const processTree of processTrees) this.managedProcessTrees.signal(processTree.pid, "SIGTERM", processTree.child, processTree.pty);
+    let remaining = await this.managedProcessTrees.wait(processTrees, APP_PROCESS_STOP_TIMEOUT_MS);
+    for (const processTree of remaining) this.managedProcessTrees.signal(processTree.pid, "SIGKILL", processTree.child, processTree.pty);
+    remaining = await this.managedProcessTrees.wait(remaining, APP_PROCESS_KILL_TIMEOUT_MS);
     for (const processTree of processTrees) {
-      if (!remaining.includes(processTree)) this.forgetManagedProcessTree(processTree.pid);
+      if (!remaining.includes(processTree)) this.managedProcessTrees.forget(processTree.pid);
     }
   }
 
@@ -2063,7 +2056,6 @@ export class AppRuntimeManager extends EventEmitter {
 
   private spawnTerminalPty(shell: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
     try {
-      ensureNodePtySpawnHelperExecutable();
       const invocation = commandInvocation(shell, args, { env, cwd });
       const pty = spawnPty(invocation.executable, invocation.args, {
         name: "xterm-256color",
@@ -2072,8 +2064,8 @@ export class AppRuntimeManager extends EventEmitter {
         cwd,
         env: invocation.env,
       });
-      this.trackManagedProcessTree({ pid: pty.pid, pty, rootExited: false });
-      pty.onExit(() => this.markManagedProcessRootExited(pty.pid));
+      this.managedProcessTrees.track({ pid: pty.pid, pty, rootExited: false });
+      pty.onExit(() => this.managedProcessTrees.markRootExited(pty.pid));
       return pty;
     } catch (error: unknown) {
       throw Object.assign(new Error(`PTY unavailable: ${error instanceof Error ? error.message : String(error)}`), { code: "PTY_UNAVAILABLE" });
@@ -2093,8 +2085,8 @@ export class AppRuntimeManager extends EventEmitter {
       detached: process.platform !== "win32",
     });
     if (child.pid) {
-      this.trackManagedProcessTree({ pid: child.pid, child, rootExited: false });
-      child.once("exit", () => this.markManagedProcessRootExited(child.pid!));
+      this.managedProcessTrees.track({ pid: child.pid, child, rootExited: false });
+      child.once("exit", () => this.managedProcessTrees.markRootExited(child.pid!));
     }
     let openOutputs = 2;
     const closeLog = () => {
@@ -2113,112 +2105,4 @@ export class AppRuntimeManager extends EventEmitter {
     return child;
   }
 
-  private trackManagedProcessTree(processTree: ManagedProcessTree) {
-    this.managedProcessTrees.set(processTree.pid, processTree);
-  }
-
-  private markManagedProcessRootExited(pid: number) {
-    const processTree = this.managedProcessTrees.get(pid);
-    if (!processTree) return;
-    processTree.rootExited = true;
-    if (!this.managedProcessTreeExists(processTree)) {
-      this.forgetManagedProcessTree(pid);
-      return;
-    }
-    // A launcher that exits before its descendants has abandoned those
-    // descendants. Reap that tree immediately instead of retaining it until
-    // the controlled instance itself shuts down.
-    this.requestManagedProcessTreeStop(pid, "SIGTERM", processTree.child, processTree.pty);
-  }
-
-  private forgetManagedProcessTree(pid: number) {
-    this.managedProcessTrees.delete(pid);
-  }
-
-  private managedProcessTreeExists(processTree: ManagedProcessTree) {
-    if (process.platform === "win32") return !processTree.rootExited;
-    try {
-      process.kill(-processTree.pid, 0);
-      return true;
-    } catch (error: unknown) {
-      return (error as NodeJS.ErrnoException).code === "EPERM";
-    }
-  }
-
-  private signalManagedProcessTree(
-    pid: number | undefined,
-    signal: NodeJS.Signals,
-    child?: ChildProcessWithoutNullStreams,
-    pty?: PtyProcess,
-  ) {
-    if (!pid) return;
-    const ownedProcessTree = this.managedProcessTrees.get(pid);
-    if (ownedProcessTree && process.platform === "win32") {
-      const result = spawnSync("taskkill", ["/pid", String(pid), "/t", ...(signal === "SIGKILL" ? ["/f"] : [])], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      if (result.status === 0) return;
-    }
-    if (ownedProcessTree && process.platform !== "win32") {
-      if (pty && !pty.processGroupLeader) {
-        pty.kill(signal);
-        return;
-      }
-      try {
-        process.kill(-pid, signal);
-        return;
-      } catch (error: unknown) {
-        const code = (error as NodeJS.ErrnoException).code;
-        // The root exit callback can race with an earlier whole-group signal.
-        // Once the owned group is gone (ESRCH) or no longer signalable by this
-        // process (EPERM), never fall back to the positive pid because it may
-        // already identify a replacement process.
-        if (code === "ESRCH" || code === "EPERM") return;
-        throw error;
-      }
-    }
-    try {
-      if (pty) pty.kill(signal);
-      else if (child && child.exitCode == null && child.signalCode == null) child.kill(signal);
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-  }
-
-  private requestManagedProcessTreeStop(
-    pid: number | undefined,
-    signal: NodeJS.Signals,
-    child?: ChildProcessWithoutNullStreams,
-    pty?: PtyProcess,
-  ) {
-    if (!pid) return;
-    const processTree = this.managedProcessTrees.get(pid);
-    this.signalManagedProcessTree(pid, signal, child, pty);
-    if (!processTree || processTree.stopPromise) return;
-    processTree.stopPromise = (async () => {
-      let remaining = signal === "SIGKILL"
-        ? [processTree]
-        : await this.waitForManagedProcessTrees([processTree], APP_PROCESS_STOP_TIMEOUT_MS);
-      if (remaining.length > 0 && signal !== "SIGKILL") {
-        this.signalManagedProcessTree(pid, "SIGKILL", child, pty);
-      }
-      if (remaining.length > 0) {
-        remaining = await this.waitForManagedProcessTrees(remaining, APP_PROCESS_KILL_TIMEOUT_MS);
-      }
-      if (remaining.length === 0) this.forgetManagedProcessTree(pid);
-    })();
-    void processTree.stopPromise.catch(() => {});
-  }
-
-  private async waitForManagedProcessTrees(processTrees: ManagedProcessTree[], timeoutMs: number) {
-    if (processTrees.length === 0) return [];
-    const deadline = Date.now() + timeoutMs;
-    let remaining = processTrees.filter((processTree) => this.managedProcessTreeExists(processTree));
-    while (remaining.length > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      remaining = remaining.filter((processTree) => this.managedProcessTreeExists(processTree));
-    }
-    return remaining;
-  }
 }

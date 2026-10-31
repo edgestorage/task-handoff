@@ -33,6 +33,8 @@ export type CliLeaf = {
   outputMode?: "document" | "json-lines";
   examples?: readonly string[];
   write?: boolean;
+  /** Shell/exec 自行把本机 SIGINT/SIGTERM 转成终端输入或远端信号。 */
+  ownsProcessSignals?: boolean;
   handler?: CliHandler;
 };
 

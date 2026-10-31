@@ -10,7 +10,7 @@ import { runCli } from "../src/program.ts";
 
 const DECLARED_COMMANDS = [
   "profile add", "profile list", "profile use", "profile show", "profile remove", "profile trust", "login", "logout",
-  "whoami", "instance list", "instance show", "instance create", "instance delete", "instance start",
+  "whoami", "instance list", "instance show", "instance shell", "instance exec", "instance create", "instance delete", "instance start",
   "instance stop", "instance restart", "instance logs", "instance rename", "instance update",
   "instance app list", "instance app install", "instance app uninstall", "instance app update", "instance app check-update", "instance app job",
   "instance app catalog", "instance app catalog custom", "instance app catalog custom update",
@@ -96,7 +96,7 @@ test("declared command surface matches the fixed contract", () => {
 test("stage A, B and C commands are implemented except the explicitly planned instance logs", () => {
   const stageA = CLI_LEAVES.filter((leaf) => leaf.stage === "A").map((leaf) => leaf.id).sort();
   assert.deepEqual(stageA, [
-    "ai-session list", "ai-session show", "instance list", "instance restart", "instance show",
+    "ai-session list", "ai-session show", "instance exec", "instance list", "instance restart", "instance shell", "instance show",
     "instance start", "instance stop", "login", "logout", "profile add", "profile list",
     "profile remove", "profile show", "profile trust", "profile use", "schema", "skill install",
     "skill status", "skill update", "whoami",

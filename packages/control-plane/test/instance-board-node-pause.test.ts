@@ -6,6 +6,8 @@ import {
   type ControlledInstance,
   type Node,
 } from "@task-handoff/protocol/control-plane";
+import { INSTANCE_SHELL_PROTOCOL_VERSION } from "@task-handoff/protocol/instance-shell";
+import { supportsDirectoryInstanceShell } from "@task-handoff/protocol/control-plane-directory";
 import { InstanceBoardReader } from "../src/control-plane/instances/board-reader.ts";
 import { publicInstanceDirectory } from "../src/control-plane/public-records.ts";
 
@@ -86,4 +88,20 @@ test("reconnecting a node restores the instance connection projection and action
   assert.equal(item.ready, true);
   assert.equal(item.access.status, "reachable");
   assert.deepEqual(publicInstanceDirectory(item).availableActions, ["stop", "restart"]);
+});
+
+test("public instance directory preserves the additive instance-shell capability", () => {
+  const shell = {
+    protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,
+    interactive: true,
+    exec: true,
+    execTty: false,
+  };
+  const directory = publicInstanceDirectory(board(node(), instance({
+    capabilities: { features: { instanceShell: shell } },
+  })));
+
+  assert.deepEqual(directory.capabilities.instanceShell, shell);
+  assert.equal(supportsDirectoryInstanceShell(directory.capabilities), true);
+  assert.equal(publicInstanceDirectory(board(node(), instance({ capabilities: { features: {} } }))).capabilities.instanceShell, undefined);
 });

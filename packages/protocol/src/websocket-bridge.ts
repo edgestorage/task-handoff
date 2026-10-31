@@ -37,6 +37,8 @@ export type WebSocketBridgeOptions = {
   onUpstreamClose?: (code?: unknown, reason?: unknown) => void;
   onUpstreamError?: (error: unknown) => void;
   onFrame?: (direction: "client-to-upstream" | "upstream-to-client", bytes: number) => void;
+  /** Frames captured after the client opened but before the caller could install the bridge. */
+  initialClientFrames?: readonly { data: unknown; isBinary: boolean }[];
 };
 
 function isOpen(socket: WebSocketLike) {
@@ -179,7 +181,7 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
     options.onUpstreamOpen?.();
     flush(upstream, pendingToUpstream, (frame) => forward(upstream, frame), (frame) => { pendingToUpstreamBytes -= frame.bytes; });
   });
-  client.on("message", (message, isBinary = false) => {
+  const receiveClientFrame = (message: unknown, isBinary = false) => {
     if (!acceptFrame("client-to-upstream", message)) return;
     const frame = { data: message, isBinary: Boolean(isBinary), bytes: frameBytes(message) };
     if (isOpen(upstream)) {
@@ -187,7 +189,11 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
       return;
     }
     queue("upstream", pendingToUpstream, frame);
-  });
+  };
+  client.on("message", receiveClientFrame);
+  for (const frame of options.initialClientFrames ?? []) {
+    receiveClientFrame(frame.data, frame.isBinary);
+  }
   upstream.on("message", (message, isBinary = false) => {
     if (!acceptFrame("upstream-to-client", message)) return;
     const frame = { data: message, isBinary: Boolean(isBinary), bytes: frameBytes(message) };

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
 import { AiSessionProviderCapabilitiesSchema } from "./ai-session-provider-capabilities.ts";
+import { InstanceShellCapabilitiesSchema, INSTANCE_SHELL_PROTOCOL_VERSION, type InstanceShellCapabilities } from "./instance-shell.ts";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -36,7 +37,24 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   // Compatibility for v0.0.35: older directory producers omit this additive
   // projection, so the AI Session queue pause control normalizes to unsupported.
   aiSessionQueuePause: z.boolean().optional(),
+  // Compatibility for v0.0.46: normalize a malformed additive sub-capability
+  // to absent so it cannot disable unrelated directory feature queries.
+  instanceShell: z.preprocess((value) => {
+    const parsed = InstanceShellCapabilitiesSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  }, InstanceShellCapabilitiesSchema.optional()),
 }).passthrough();
+
+export function directoryInstanceShellCapabilities(capabilities: unknown): InstanceShellCapabilities | undefined {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success ? parsed.data.instanceShell : undefined;
+}
+
+export function supportsDirectoryInstanceShell(capabilities: unknown) {
+  const shell = directoryInstanceShellCapabilities(capabilities);
+  return shell?.protocolVersion === INSTANCE_SHELL_PROTOCOL_VERSION
+    && (shell.interactive || shell.exec || shell.execTty);
+}
 
 export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);

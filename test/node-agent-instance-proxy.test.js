@@ -7,7 +7,9 @@ const {
   proxyWebSocketProtocols,
   readResponseBodyWithLimit,
 } = require("../packages/control-plane/src/node-agent/instance-proxy-codec.ts");
+const { EventEmitter } = require("node:events");
 const Fastify = require("fastify");
+const websocket = require("@fastify/websocket");
 const {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
@@ -142,4 +144,121 @@ test("instance proxy reports an unreachable controlled-instance endpoint as a re
   assert.equal(response.json().code, "INSTANCE_PROXY_UPSTREAM_UNREACHABLE");
   assert.equal(response.json().message, "Instance inst_unreachable web endpoint is not reachable.");
   assert.ok(diagnostics.some((entry) => entry.action === "proxy.upstream.failed"));
+});
+
+class CapturingUpstreamWebSocket extends EventEmitter {
+  constructor() {
+    super();
+    this.OPEN = 1;
+    this.readyState = 0;
+    this.bufferedAmount = 0;
+    this.sent = [];
+    this.closes = [];
+  }
+
+  send(data) {
+    this.sent.push(data);
+  }
+
+  close(code, reason) {
+    this.closes.push({ code, reason });
+    this.readyState = 3;
+  }
+}
+
+test("instance shell upstream uses the registration credential and rejects a missing subprotocol", async (t) => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  const constructed = [];
+  registerInstanceProxyRoutes(app, {
+    fetchImpl: fetch,
+    metrics: createInstanceProxyMetrics(),
+    instanceBase: () => "http://instance.internal",
+    syncModelEnvironment: async () => undefined,
+    webSocketUpstreamHeaders: async (id, path) => {
+      assert.equal(id, "inst_shell");
+      assert.equal(path, "/api/internal/instance-shell");
+      return { authorization: "Bearer registration-secret" };
+    },
+    webSocketFactory: (url, protocols, options) => {
+      const upstream = new CapturingUpstreamWebSocket();
+      constructed.push({ url: url.toString(), protocols, options });
+      queueMicrotask(() => {
+        upstream.readyState = upstream.OPEN;
+        upstream.emit("open");
+      });
+      return upstream;
+    },
+    diagnostic: () => undefined,
+  });
+  await app.ready();
+  t.after(async () => {
+    for (const socket of app.websocketServer.clients) socket.terminate();
+    await app.close();
+  });
+
+  const missingProtocol = await app.injectWS("/api/node-agent/instances/inst_shell/proxy/ws/api/internal/instance-shell");
+  const [missingCode, missingReason] = await Promise.all([
+    new Promise((resolve) => missingProtocol.once("close", resolve)),
+    new Promise((resolve) => missingProtocol.once("close", (_code, reason) => resolve(String(reason)))),
+  ]);
+  assert.equal(missingCode, 1002);
+  assert.match(missingReason, /subprotocol is required/);
+  assert.equal(constructed.length, 0);
+
+  const client = await app.injectWS("/api/node-agent/instances/inst_shell/proxy/ws/api/internal/instance-shell", {
+    headers: {
+      authorization: "Bearer user-cli-secret",
+      cookie: "session=browser-secret",
+      "sec-websocket-protocol": "task-handoff.instance-shell.2026-10-31",
+    },
+  });
+  client.terminate();
+  assert.equal(constructed.length, 1);
+  assert.equal(constructed[0].url, "ws://instance.internal/api/internal/instance-shell");
+  assert.deepEqual(constructed[0].protocols, ["task-handoff.instance-shell.2026-10-31"]);
+  assert.deepEqual(constructed[0].options, {
+    perMessageDeflate: false,
+    headers: { authorization: "Bearer registration-secret" },
+  });
+});
+
+test("instance shell replays a start frame received while the proxy resolves its upstream", async (t) => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  let resolveBase;
+  const base = new Promise((resolve) => { resolveBase = resolve; });
+  let upstream;
+  registerInstanceProxyRoutes(app, {
+    fetchImpl: fetch,
+    metrics: createInstanceProxyMetrics(),
+    instanceBase: () => base,
+    syncModelEnvironment: async () => undefined,
+    webSocketUpstreamHeaders: () => ({ authorization: "Bearer registration-secret" }),
+    webSocketFactory: () => {
+      upstream = new CapturingUpstreamWebSocket();
+      queueMicrotask(() => {
+        upstream.readyState = upstream.OPEN;
+        upstream.emit("open");
+      });
+      return upstream;
+    },
+    diagnostic: () => undefined,
+  });
+  await app.ready();
+  t.after(async () => {
+    for (const socket of app.websocketServer.clients) socket.terminate();
+    await app.close();
+  });
+
+  const client = await app.injectWS("/api/node-agent/instances/inst_shell/proxy/ws/api/internal/instance-shell", {
+    headers: { "sec-websocket-protocol": "task-handoff.instance-shell.2026-10-31" },
+  });
+  client.send("early-start");
+  resolveBase("http://instance.internal");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(upstream);
+  assert.equal(String(upstream.sent[0]), "early-start");
+  client.terminate();
 });
