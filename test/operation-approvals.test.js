@@ -100,7 +100,7 @@ test("concurrent decisions accept exactly one terminal transition and process re
   assert.throws(() => restarted.gate(owner, "node.remove", "node-1", { force: false }, pending.id), { code: "OPERATION_APPROVAL_INVALID" });
 });
 
-test("personal events never reach unbound sockets, another user's sockets, or public listeners", () => {
+test("personal events reach only authenticated owner connections, never another user, anonymous sockets, or public listeners", () => {
   const events = new ControlPlaneEventBus();
   const ownerSocket = socket();
   const otherSocket = socket();
@@ -116,7 +116,7 @@ test("personal events never reach unbound sockets, another user's sockets, or pu
   const entry = approvals.gate({ userId: "user-a", sessionId: "session-a" }, "node.remove", "node-1", { force: true });
   assert.equal(ownerSocket.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
   assert.equal(otherSocket.frames.length, 0);
-  assert.equal(cliSocket.frames.length, 0);
+  assert.equal(cliSocket.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
   assert.equal(anonymousSocket.frames.length, 0);
   assert.equal(listenerCalled, false);
   assert.equal(JSON.stringify(ownerSocket.frames).includes("session-a"), false);
