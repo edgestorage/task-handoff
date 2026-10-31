@@ -132,6 +132,7 @@ export class CloudConnectivityBackgroundRuntime {
           trustedSessions: options.trustedDeviceSessions,
           webSocket: options.webSocket,
           trace: this.relayTrace,
+          resolveCloudOwner: options.resolveCloudOwner,
           onHandshakeError: (error, context) => {
             const code = errorCode(error);
             this.options.logger?.warn?.({
@@ -327,9 +328,9 @@ export class CloudConnectivityBackgroundRuntime {
    * locally, so the Control Plane UI can show "waiting for approval" without ever seeing a
    * code the user would have to copy.
    */
-  async beginAccountRequest(input: { scope: CloudAccountScope; challengeCode?: string }) {
+  async beginAccountRequest(input: { scope: CloudAccountScope; challengeCode?: string; ownerUserId?: string }) {
     const result = await this.request("create-control-plane-request", { scope: input.scope, ...(input.challengeCode ? { challengeCode: input.challengeCode } : {}) }) as CreateRequestResult;
-    this.options.accountSession.beginRequest({ requestId: result.requestId, authorizationUrl: result.authorizationUrl, scope: result.scope, expiresAt: result.expiresAt });
+    this.options.accountSession.beginRequest({ requestId: result.requestId, authorizationUrl: result.authorizationUrl, scope: result.scope, expiresAt: result.expiresAt, ...(input.ownerUserId ? { ownerUserId: input.ownerUserId } : {}) });
     this.scheduleAccountPoll();
     return result;
   }
@@ -776,6 +777,7 @@ export class CloudConnectivityBackgroundRuntime {
     const requestId = String(payload?.requestId ?? "");
     if (!payload?.accountId || !payload?.deviceSessionId || !payload?.refreshCredential) throw runtimeError("CLOUD_ACCOUNT_CREDENTIAL_INVALID");
     const snapshot = this.options.accountSession.complete({
+      requestId,
       accountId: payload.accountId, email: typeof payload.email === "string" ? payload.email : undefined,
       deviceSessionId: payload.deviceSessionId, refreshCredential: payload.refreshCredential,
       sessionExpiresAt: typeof payload.expiresAt === "string" ? payload.expiresAt : undefined,
@@ -979,6 +981,7 @@ type CloudRuntimeOptions = {
   relayBridge?: RelaySessionBridge;
   deviceTrust?: CloudDeviceTrustService;
   trustedDeviceSessions?: TrustedDeviceSessionRegistry;
+  resolveCloudOwner?: (input: { accountId: string; ownerAccountId: string; accessMode: "owner" | "shared" }) => Promise<{ userId: string; authorizationRevision: number } | undefined> | { userId: string; authorizationRevision: number } | undefined;
   roleCatalog?: () => Promise<Array<{ roleId: string; name: string; description?: string; system: boolean; status: "active" | "archived" }>>;
   relayConnector?: { connect(input: Record<string, unknown>): Promise<{ close(reason?: string): Promise<void> | void }> };
   relayTrace?: RelayTraceRecorder;

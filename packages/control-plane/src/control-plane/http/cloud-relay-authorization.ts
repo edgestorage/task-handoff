@@ -29,7 +29,13 @@ const CLOUD_RELAY_ROUTES_WITHOUT_RBAC = new Set([
 
 export function cloudRelayRouteReachable(method: string, url: string) {
   if (routeAuthorization(method, url)) return true;
-  return CLOUD_RELAY_ROUTES_WITHOUT_RBAC.has(url.split("?")[0] || "/");
+  const path = url.split("?")[0] || "/";
+  return CLOUD_RELAY_ROUTES_WITHOUT_RBAC.has(path) || cloudOperationApprovalRoute(method, path);
+}
+
+function cloudOperationApprovalRoute(method: string, path: string) {
+  if (method === "GET" && path === "/api/operation-approvals") return true;
+  return method === "POST" && /^\/api\/operation-approvals\/(?:[^/]+|:id)\/decision$/.test(path);
 }
 
 /** Binding, credential and Cloud-sharing lifecycle stays with the owner identity. */
@@ -69,7 +75,11 @@ export function cloudEventPermission(event: Pick<EventEnvelope, "type">): Contro
   return EVENT_PERMISSION_PREFIXES.find(([prefix]) => type.startsWith(prefix))?.[1];
 }
 
-export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds">, event: Pick<EventEnvelope, "type" | "topic">) {
+export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds" | "ownerUserId">, event: Pick<EventEnvelope, "type" | "topic">) {
+  // Operation approvals are personal, not an RBAC directory read. The Cloud
+  // actor must have a server-resolved local owner mapping; the event bus still
+  // applies the request's audience user as a second fence.
+  if (event.type === "operation-approval.changed") return Boolean(actor.ownerUserId);
   const permission = cloudEventPermission(event);
   return Boolean(permission && actor.permissionIds.includes(permission));
 }

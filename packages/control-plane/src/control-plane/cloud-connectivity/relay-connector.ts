@@ -204,6 +204,7 @@ type CloudRelayConnectorOptions = {
   attachTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   trustOutcomeCloseTimeoutMs?: number;
+  resolveCloudOwner?: (input: { accountId: string; ownerAccountId: string; accessMode: "owner" | "shared" }) => Promise<{ userId: string; authorizationRevision: number } | undefined> | { userId: string; authorizationRevision: number } | undefined;
   onHandshakeError?: (error: unknown, context: { allocationId: string; controlPlaneId: string; bindingId: string; deviceSessionId: string }) => void;
 };
 
@@ -381,6 +382,13 @@ async function establishEncryptedSession(
     clientEphemeralPublicKey: ClientHelloSchema.parse(rawHello).clientEphemeralPublicKey,
   });
   const response = { ...accepted.response, controlPlanePublicKey: options.identity.publicIdentity().publicKey };
+  const ownerUserId = auth.ticket.accessMode === "owner"
+    ? await options.resolveCloudOwner?.({
+        accountId: auth.ticket.accountId,
+        ownerAccountId: auth.ticket.ownerAccountId,
+        accessMode: auth.ticket.accessMode,
+      })
+    : undefined;
   const actor: ControlPlaneActor = {
     type: "cloud-account",
     accountId: auth.ticket.accountId,
@@ -394,6 +402,10 @@ async function establishEncryptedSession(
     permissionIds: observation.role.permissionIds,
     authorizationRevision: observation.role.authorizationRevision,
     deviceTrustPinId: observation.pin.id,
+    ...(ownerUserId ? {
+      ownerUserId: ownerUserId.userId,
+      ownerAuthorizationRevision: ownerUserId.authorizationRevision,
+    } : {}),
     nodeScope: { kind: "all" },
     instanceScope: { kind: "inherit-node-scope" },
     ...(auth.ticket.accessMode === "shared" ? {

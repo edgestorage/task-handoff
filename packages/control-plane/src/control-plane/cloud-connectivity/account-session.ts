@@ -17,6 +17,11 @@ const CloudAccountSessionStateSchema = z.object({
   pendingAuthorizationUrl: z.string().url().optional(),
   pendingScope: z.string().optional(),
   pendingExpiresAt: z.string().datetime().optional(),
+  // The local administrator who initiated the current Cloud sign-in/binding.
+  // local, private ownership hint for personal Control Plane state; it is not
+  // part of Cloud identity or authorization and is never exposed in snapshots.
+  ownerUserId: z.string().trim().min(1).optional(),
+  pendingOwnerUserId: z.string().trim().min(1).optional(),
   lastSignOutReason: z.enum(["user", "credential-rejected"]).optional(),
   lastRequestFailure: z.object({
     requestId: z.string(),
@@ -54,7 +59,7 @@ export class CloudAccountSessionService {
       return;
     }
     if (current.status !== "signed-out" && current.pendingExpiresAt && Date.parse(current.pendingExpiresAt) <= this.clock()) {
-      this.state.put({ ...current, status: current.refreshCredential ? "signed-in" : "signed-out", pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined, updatedAt: new Date(this.clock()).toISOString() });
+      this.state.put({ ...current, status: current.refreshCredential ? "signed-in" : "signed-out", pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined, pendingOwnerUserId: undefined, updatedAt: new Date(this.clock()).toISOString() });
     }
   }
 
@@ -92,33 +97,52 @@ export class CloudAccountSessionService {
 
   get origin() { return this.serviceOrigin; }
 
+  boundOwnerUserId(accountId: string | undefined) {
+    const current = this.state.get();
+    if (!current.refreshCredential || !current.accountId || current.accountId !== accountId) return undefined;
+    return current.ownerUserId;
+  }
+
+  /** Binding ownership remains private and survives ordinary account sign-out. */
+  bindingOwner() {
+    const current = this.state.get();
+    if (!current.accountId || !current.ownerUserId) return undefined;
+    return { accountId: current.accountId, ownerUserId: current.ownerUserId };
+  }
+
   pendingRequest() {
     return this.snapshot().pendingRequest;
   }
 
-  beginRequest(input: { requestId: string; authorizationUrl: string; scope: string; expiresAt: string }) {
+  beginRequest(input: { requestId: string; authorizationUrl: string; scope: string; expiresAt: string; ownerUserId?: string }) {
     const current = this.state.get();
     this.state.put({
       ...current, status: "pending", pendingRequestId: input.requestId, pendingAuthorizationUrl: input.authorizationUrl,
-      pendingScope: input.scope, pendingExpiresAt: input.expiresAt, lastRequestFailure: undefined,
+      pendingScope: input.scope, pendingExpiresAt: input.expiresAt, pendingOwnerUserId: input.ownerUserId, lastRequestFailure: undefined,
       updatedAt: new Date(this.clock()).toISOString(),
     });
     return this.snapshot();
   }
 
-  complete(input: { accountId: string; email?: string; deviceSessionId: string; refreshCredential: string; sessionExpiresAt?: string }, options: { preservePending?: boolean } = {}) {
+  complete(input: { requestId?: string; accountId: string; email?: string; deviceSessionId: string; refreshCredential: string; sessionExpiresAt?: string }, options: { preservePending?: boolean } = {}) {
     const current = this.state.get();
+    const deliveredOwnerUserId = !options.preservePending && input.requestId && current.pendingRequestId === input.requestId
+      ? current.pendingOwnerUserId
+      : undefined;
+    const ownerUserId = deliveredOwnerUserId ?? (current.accountId === input.accountId ? current.ownerUserId : undefined);
     this.state.put({
       version: 1, serviceOrigin: current.serviceOrigin, status: "signed-in",
       accountId: input.accountId, email: input.email ?? current.email, deviceSessionId: input.deviceSessionId,
       refreshCredential: input.refreshCredential, sessionExpiresAt: input.sessionExpiresAt,
+      ...(ownerUserId ? { ownerUserId } : {}),
       lastSignOutReason: undefined,
       // Credential rotation must not cancel an unrelated in-flight request (a binding
       // approval waiting while the refresh credential rotates); a delivered credential
       // always resolves the request it answers, so it clears by default.
       ...(options.preservePending ? {
         status: current.status, pendingRequestId: current.pendingRequestId, pendingAuthorizationUrl: current.pendingAuthorizationUrl,
-        pendingScope: current.pendingScope, pendingExpiresAt: current.pendingExpiresAt, lastRequestFailure: current.lastRequestFailure,
+        pendingScope: current.pendingScope, pendingExpiresAt: current.pendingExpiresAt,
+        pendingOwnerUserId: current.pendingOwnerUserId, lastRequestFailure: current.lastRequestFailure,
       } : { lastRequestFailure: undefined }),
       updatedAt: new Date(this.clock()).toISOString(),
     });
@@ -133,6 +157,7 @@ export class CloudAccountSessionService {
     this.state.put({
       ...current, status: signedIn ? "signed-in" : "signed-out",
       pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined,
+      pendingOwnerUserId: undefined,
       lastRequestFailure: input.status === "delivery-failed" ? {
         requestId: input.requestId,
         ...(current.pendingScope ? { scope: current.pendingScope } : {}),
@@ -145,7 +170,24 @@ export class CloudAccountSessionService {
 
   signOut(reason: "user" | "credential-rejected" = "user") {
     const current = this.state.get();
-    this.state.put({ version: 1, serviceOrigin: current.serviceOrigin, status: "signed-out", lastSignOutReason: reason, lastRequestFailure: undefined, updatedAt: new Date(this.clock()).toISOString() });
+    // Signing out ends the account credential session but does not unbind the
+    // relay. Retain the private binding owner so the same administrator can
+    // sign in again; an explicit unbind is the only ownership transfer point.
+    this.state.put({
+      ...current,
+      status: "signed-out",
+      deviceSessionId: undefined,
+      refreshCredential: undefined,
+      sessionExpiresAt: undefined,
+      pendingRequestId: undefined,
+      pendingAuthorizationUrl: undefined,
+      pendingScope: undefined,
+      pendingExpiresAt: undefined,
+      pendingOwnerUserId: undefined,
+      lastSignOutReason: reason,
+      lastRequestFailure: undefined,
+      updatedAt: new Date(this.clock()).toISOString(),
+    });
     return this.snapshot();
   }
 

@@ -30,8 +30,10 @@ async function cliOwner(request: FastifyRequest, auth: ControlPlaneAuth) {
 
 function webOwner(request: FastifyRequest, auth: ControlPlaneAuth) {
   const actor = controlPlaneRequestActor(request);
-  if (!auth.enabled() || cliToken(request) || actor?.type !== "user") throw forbidden("A signed-in Web session is required.");
-  return actor.userId;
+  if (!auth.enabled() || cliToken(request)) throw forbidden("A signed-in Control Plane session is required.");
+  if (actor?.type === "user") return actor.userId;
+  if (actor?.type === "cloud-account" && actor.ownerUserId) return actor.ownerUserId;
+  throw forbidden("A signed-in Control Plane session is required.");
 }
 
 async function gateOperation(

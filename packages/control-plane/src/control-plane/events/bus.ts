@@ -35,6 +35,9 @@ type EventSocket = {
 
 export type EventAuthorizationBinding = {
   userId: string;
+  /** Local administrator who created the current Cloud binding. */
+  ownerUserId?: string;
+  ownerAuthorizationRevision?: number;
   webSession?: true;
   authorizationRevision: number;
   permissionIds: ControlPlanePermissionId[];
@@ -58,7 +61,7 @@ function eventId() {
 
 export class ControlPlaneEventBus {
   private readonly clients = new Set<EventSocket>();
-  private readonly listeners = new Set<(event: EventEnvelope) => void>();
+  private readonly listeners = new Map<(event: EventEnvelope) => void, { audienceUserId?: string; authorizationRevision?: number }>();
   private readonly transientDemandListeners = new Set<(demand: ControlPlaneAiSessionTransientDemand) => void>();
   private readonly resourceMetricDemandListeners = new Set<(demand: ControlPlaneResourceMetricDemand) => void>();
   private readonly externalTransientDemands = new Map<symbol, AiSessionTransientSubscription | undefined>();
@@ -117,7 +120,7 @@ export class ControlPlaneEventBus {
     });
   }
 
-  publish<T>(type: string, payload: T, options: { scope?: EventScope; topic?: string; sourceEvent?: Pick<EventEnvelope, "id" | "createdAt" | "replay">; audienceWebUserId?: string } = {}): ControlPlaneEvent<T> {
+  publish<T>(type: string, payload: T, options: { scope?: EventScope; topic?: string; sourceEvent?: Pick<EventEnvelope, "id" | "createdAt" | "replay">; audienceUserId?: string } = {}): ControlPlaneEvent<T> {
     const event = this.createEvent(type, payload, options);
     if (NODE_DERIVED_EVENT_TOPICS.has(event.topic) && !event.scope?.nodeId && !event.scope?.instanceId) {
       this.droppedUnscopedNodeEvents += 1;
@@ -127,7 +130,8 @@ export class ControlPlaneEventBus {
     const encoded = JSON.stringify(event);
     const encodedBytes = Buffer.byteLength(encoded, "utf8");
     let compactFrame: { encoded: string; bytes: number } | undefined;
-    for (const listener of options.audienceWebUserId ? [] : this.listeners) {
+    for (const [listener, audience] of this.listeners) {
+      if (options.audienceUserId && audience.audienceUserId !== options.audienceUserId) continue;
       try {
         listener(event);
       } catch {
@@ -135,7 +139,10 @@ export class ControlPlaneEventBus {
       }
     }
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN && (!options.audienceWebUserId || (client.authorization?.userId === options.audienceWebUserId && client.authorization.webSession === true)) && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
+      const audienceMatches = !options.audienceUserId
+        || client.authorization?.userId === options.audienceUserId
+        || client.authorization?.ownerUserId === options.audienceUserId;
+      if (client.readyState === client.OPEN && audienceMatches && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
         const projected = projectAuthorityEvent(event, client.aiSessionHierarchy);
         const frame = projected === event
           ? client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? compactFrame ??= encodedCompactPublicEvent(event) : { encoded, bytes: encodedBytes }
@@ -167,15 +174,27 @@ export class ControlPlaneEventBus {
   invalidateUserAuthorization(userId: string, authorizationRevision: number) {
     for (const client of this.clients) {
       const binding = client.authorization;
-      if (!binding || binding.userId !== userId || binding.authorizationRevision === authorizationRevision) continue;
+      if (!binding) continue;
+      const isPrimaryUser = binding.userId === userId;
+      if (!isPrimaryUser && binding.ownerUserId !== userId) continue;
+      const boundRevision = isPrimaryUser ? binding.authorizationRevision : binding.ownerAuthorizationRevision;
+      if (boundRevision === authorizationRevision) continue;
       this.clients.delete(client);
       try { client.close?.(4001, "Authorization changed. Reconnect for a current snapshot."); } catch { /* Connection is already invalidated. */ }
+    }
+    for (const [listener, audience] of this.listeners) {
+      if (audience.audienceUserId === userId && audience.authorizationRevision !== authorizationRevision) this.listeners.delete(listener);
     }
     this.publishDemand();
   }
 
-  on(listener: (event: EventEnvelope) => void) {
-    this.listeners.add(listener);
+  /**
+   * `audienceUserId` additionally receives events targeted to that local user,
+   * while still receiving normal broadcast events. Without it a listener sees
+   * the same public stream as before and never receives personal approvals.
+   */
+  on(listener: (event: EventEnvelope) => void, options: { audienceUserId?: string; authorizationRevision?: number } = {}) {
+    this.listeners.set(listener, options);
     return () => {
       this.listeners.delete(listener);
     };

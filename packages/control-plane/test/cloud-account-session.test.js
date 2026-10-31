@@ -62,6 +62,88 @@ test("a binding request while signed in keeps the session and resolves back to s
   assert.equal(resolved.pendingRequest, undefined);
 });
 
+test("Cloud binding ownership follows the delivered account link", () => {
+  const dir = tempDir();
+  const statePath = path.join(dir, "session.json");
+  const now = Date.parse("2026-08-10T00:00:00Z");
+  const service = new CloudAccountSessionService({ statePath, serviceOrigin: "https://cloud.example.test", clock: () => now });
+  service.init();
+  service.beginRequest({
+    requestId: "bind_owner",
+    authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=bind_owner",
+    scope: "control-plane:bind",
+    expiresAt: ISO(now + 60_000),
+    ownerUserId: "user_owner",
+  });
+  service.complete({ requestId: "bind_owner", accountId: "account_a", email: "owner@example.test", deviceSessionId: "session_a", refreshCredential: "a".repeat(40) });
+
+  assert.equal(service.boundOwnerUserId("account_a"), "user_owner");
+  assert.equal(service.boundOwnerUserId("account_other"), undefined);
+
+  const reopened = new CloudAccountSessionService({ statePath, serviceOrigin: "https://cloud.example.test", clock: () => now });
+  reopened.init();
+  assert.equal(reopened.boundOwnerUserId("account_a"), "user_owner");
+
+  reopened.signOut();
+  assert.equal(reopened.boundOwnerUserId("account_a"), undefined);
+  assert.deepEqual(reopened.bindingOwner(), { accountId: "account_a", ownerUserId: "user_owner" });
+
+  const afterSignOut = new CloudAccountSessionService({ statePath, serviceOrigin: "https://cloud.example.test", clock: () => now });
+  afterSignOut.init();
+  assert.deepEqual(afterSignOut.bindingOwner(), { accountId: "account_a", ownerUserId: "user_owner" });
+});
+
+test("Cloud binding ownership transfers only through a newly delivered binding request", () => {
+  const dir = tempDir();
+  const now = Date.parse("2026-08-10T00:00:00Z");
+  const service = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test", clock: () => now });
+  service.init();
+  service.beginRequest({
+    requestId: "bind_a",
+    authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=bind_a",
+    scope: "control-plane:bind",
+    expiresAt: ISO(now + 60_000),
+    ownerUserId: "user_admin_a",
+  });
+  service.complete({ requestId: "bind_a", accountId: "account_a", deviceSessionId: "session_a", refreshCredential: "a".repeat(40) });
+
+  service.complete({ accountId: "account_a", deviceSessionId: "session_a", refreshCredential: "b".repeat(40) });
+  assert.deepEqual(service.bindingOwner(), { accountId: "account_a", ownerUserId: "user_admin_a" });
+
+  // The explicit unbind is owned by the binding state machine. Once unbound,
+  // administrator B's newly delivered request becomes the transfer point.
+  service.signOut();
+  service.beginRequest({
+    requestId: "bind_b",
+    authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=bind_b",
+    scope: "control-plane:bind",
+    expiresAt: ISO(now + 60_000),
+    ownerUserId: "user_admin_b",
+  });
+  assert.deepEqual(service.bindingOwner(), { accountId: "account_a", ownerUserId: "user_admin_a" });
+  service.complete({ requestId: "bind_b", accountId: "account_a", deviceSessionId: "session_b", refreshCredential: "b".repeat(40) });
+  assert.deepEqual(service.bindingOwner(), { accountId: "account_a", ownerUserId: "user_admin_b" });
+});
+
+test("Cloud binding ownership never transfers to a different Cloud account", () => {
+  const dir = tempDir();
+  const now = Date.parse("2026-08-10T00:00:00Z");
+  const service = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test", clock: () => now });
+  service.init();
+  service.beginRequest({
+    requestId: "bind_owner",
+    authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=bind_owner",
+    scope: "control-plane:bind",
+    expiresAt: ISO(now + 60_000),
+    ownerUserId: "user_owner",
+  });
+  service.complete({ requestId: "bind_owner", accountId: "account_a", deviceSessionId: "session_a", refreshCredential: "a".repeat(40) });
+
+  service.complete({ accountId: "account_b", deviceSessionId: "session_b", refreshCredential: "b".repeat(40) });
+  assert.equal(service.boundOwnerUserId("account_a"), undefined);
+  assert.equal(service.boundOwnerUserId("account_b"), undefined);
+});
+
 test("a delivery-failed request clears pending and exposes a retryable failure", () => {
   const dir = tempDir();
   const now = Date.parse("2026-08-10T00:00:00Z");

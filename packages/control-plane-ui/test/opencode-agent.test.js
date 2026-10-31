@@ -16,9 +16,11 @@ test("OpenCode presentation consumes provider capability and exposes no skip spe
   const panel = read("src/apps/control-plane/instance-detail/AiSessionPanel.vue");
   assert.match(read("src/components/AiAgentIcon.vue"), /opencodeIcon/);
   const sharedApprovals = read("src/apps/control-plane/action-inbox/aiSessionApprovals.ts");
+  const sharedApprovalClient = fs.readFileSync(new URL("../../../packages/control-plane-client/src/approval-center.ts", import.meta.url), "utf8");
   assert.match(panel, /aiSessionApprovalDecisions\(session, props\.instance\.capabilities\?\.features\)/);
-  assert.match(sharedApprovals, /directoryAiSessionProviderCapability\(capabilities, session\.agent\)/);
-  assert.match(sharedApprovals, /provider\.actions\.approvalDecisions/);
+  assert.match(sharedApprovals, /sharedAiSessionApprovalDecisions/);
+  assert.match(sharedApprovalClient, /directoryAiSessionProviderCapability\(capabilities, session\.agent\)/);
+  assert.match(sharedApprovalClient, /provider\.actions\.approvalDecisions/);
   assert.doesNotMatch(panel, /session\.agent === ["']opencode["'].*skip/);
   const mobile = fs.readFileSync(new URL("../../../apps/mobile/src/ai-sessions/SessionWorkspace.tsx", import.meta.url), "utf8");
   assert.match(mobile, /directoryAiSessionProviderCapability\(instanceCapabilities, session\.agent\)/);

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { can } from "../src/control-plane/auth/authorization.ts";
-import { cloudEventAllowed, cloudEventPermission, cloudOwnerOnlyRoute, routeAuthorization } from "../src/control-plane/http/cloud-relay-authorization.ts";
+import { cloudEventAllowed, cloudEventPermission, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "../src/control-plane/http/cloud-relay-authorization.ts";
 
-function sharedActor(roleId, permissionIds) {
+function sharedActor(roleId, permissionIds, extra = {}) {
   return {
     type: "cloud-account",
     accountId: "account_grantee",
@@ -18,6 +18,7 @@ function sharedActor(roleId, permissionIds) {
     shareGrantId: "share_a",
     shareRevision: 3,
     nodeScope: { kind: "all" },
+    ...extra,
   };
 }
 
@@ -50,6 +51,41 @@ test("shared custom roles receive exactly their resolved permissions", () => {
   assert.equal(can(customOperator, "update", { type: "role", id: "role_custom_ops" }), false);
 });
 
+test("only the local administrator bound to a Cloud owner receives management authority", () => {
+  const managementPermissions = [
+    "users:manage", "roles:manage", "identity-providers:manage",
+    "chat-bridges:manage", "settings:manage", "secrets:manage",
+  ];
+  const sharedAdmin = sharedActor("role_admin", managementPermissions);
+  for (const [action, resource] of [
+    ["manage-settings", { type: "control-plane-settings" }],
+    ["manage-members", { type: "user", id: "user_a" }],
+    ["manage-secrets", { type: "secret", id: "secret_a" }],
+    ["manage-node-auth", { type: "node", id: "node_a" }],
+  ]) assert.equal(can(sharedAdmin, action, resource), false, `shared Cloud accounts must not ${action}`);
+
+  const unmappedOwner = sharedActor("role_admin", managementPermissions, {
+    accessMode: "owner",
+    accountId: "account_owner",
+    ownerAccountId: "account_owner",
+    shareGrantId: undefined,
+  });
+  assert.equal(can(unmappedOwner, "manage-settings", { type: "control-plane-settings" }), false);
+
+  const boundOwner = sharedActor("role_admin", managementPermissions, {
+    accessMode: "owner",
+    accountId: "account_owner",
+    ownerAccountId: "account_owner",
+    shareGrantId: undefined,
+    ownerUserId: "user_admin_a",
+  });
+  assert.equal(can(boundOwner, "manage-settings", { type: "control-plane-settings" }), true);
+  assert.equal(can(boundOwner, "manage-members", { type: "user", id: "user_a" }), true);
+
+  const sharedOperations = sharedActor("role_operator", ["instances:manage", "instances:interactive"]);
+  assert.equal(can(sharedOperations, "start", { type: "instance", id: "instance_a" }), true);
+});
+
 test("shared event streams follow resolved permissions and unknown families fail closed", () => {
   const actor = sharedActor("role_custom", ["instances:read", "ai-sessions:read"]);
   for (const event of [
@@ -64,7 +100,6 @@ test("shared event streams follow resolved permissions and unknown families fail
     assert.equal(cloudEventAllowed(actor, event), true, `${event.type} should remain visible`);
   }
   for (const event of [
-    { type: "operation-approval.changed", topic: "system" },
     { type: "control-plane-proxy.binding.updated", topic: "control-plane-proxy" },
     { type: "node.pairing-invite.created", topic: "nodes" },
     { type: "settings.changed", topic: "system" },
@@ -73,6 +108,24 @@ test("shared event streams follow resolved permissions and unknown families fail
     { type: "future.unknown", topic: "system" },
   ]) assert.equal(cloudEventAllowed(actor, event), false, `${event.type} must stay denied`);
   assert.equal(cloudEventPermission({ type: "future.unknown" }), undefined);
+  assert.equal(cloudEventAllowed(actor, { type: "operation-approval.changed", topic: "operation.approvals" }), false);
+  const ownerActor = sharedActor("role_admin", ["settings:manage"], { accessMode: "owner", accountId: "account_owner", ownerUserId: "usr_owner" });
+  assert.equal(cloudEventAllowed(ownerActor, { type: "operation-approval.changed", topic: "operation.approvals" }), true);
+});
+
+test("only the personal operation approval snapshot and decision routes are relay reachable", () => {
+  for (const [method, path] of [
+    ["GET", "/api/operation-approvals"],
+    ["POST", "/api/operation-approvals/approval_a/decision"],
+    ["POST", "/api/operation-approvals/:id/decision"],
+  ]) assert.equal(cloudRelayRouteReachable(method, path), true, `${method} ${path}`);
+
+  for (const [method, path] of [
+    ["GET", "/api/operation-approvals/approval_a/status"],
+    ["DELETE", "/api/operation-approvals/approval_a"],
+    ["GET", "/api/operation-approvals/support"],
+    ["POST", "/api/operation-approvals/approval_a/decide"],
+  ]) assert.equal(cloudRelayRouteReachable(method, path), false, `${method} ${path}`);
 });
 
 test("shared users cannot reach owner-only binding routes even with broad permissions", () => {

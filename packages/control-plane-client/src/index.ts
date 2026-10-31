@@ -6,6 +6,7 @@ export * from "./app-profiles.ts";
 export * from "./browser.ts";
 export * from "./app-inventory.ts";
 export * from "./ai-session-state.ts";
+export * from "./approval-center.ts";
 export * from "./ai-session-conversation-cache.ts";
 export * from "./ai-session-paste.ts";
 export * from "./ai-session-model-catalog.ts";

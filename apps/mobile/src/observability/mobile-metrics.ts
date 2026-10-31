@@ -5,7 +5,10 @@ export type MobileMetricName =
   | 'message.first-delta'
   | 'action.error'
   | 'profile.warning'
-  | 'render.duration';
+  | 'render.duration'
+  | 'mobile-approval-center.render'
+  | 'mobile-approval-center.source'
+  | 'mobile-approval-center.decision';
 
 export type MobileMetric = {
   name: MobileMetricName;

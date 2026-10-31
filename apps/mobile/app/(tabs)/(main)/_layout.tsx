@@ -10,6 +10,8 @@ import { MobileDeviceTrustGate } from '../../../src/control-plane/MobileDeviceTr
 import { MobileControlPlaneStatusBanner } from '../../../src/control-plane/MobileControlPlaneStatusBanner';
 import { useMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../src/i18n';
+import { MobileApprovalCenterOverlay } from '../../../src/approval-center/MobileApprovalCenterOverlay';
+import { MobileApprovalCenterProvider } from '../../../src/approval-center/use-mobile-approval-center';
 
 const TAB_ICON_SIZE = 25;
 
@@ -66,6 +68,7 @@ export default function PrimaryTabsLayout() {
   return (
     // Native headers and the native tab bar own their own insets; adding a top inset here duplicated
     // the status-bar padding on Android edge-to-edge builds.
+    <MobileApprovalCenterProvider>
     <View style={{ flex: 1 }} testID="primary-tabs-root">
       {/* Material 3 hides the unselected labels and tints the active pill with a muted grey that
           reads oddly next to the brand blue, so every Android destination stays labeled and the
@@ -109,7 +112,9 @@ export default function PrimaryTabsLayout() {
         </NativeTabs.Trigger>
       </NativeTabs>
       {runtime.phase === 'control-plane-closed' ? <MobileControlPlaneStatusBanner /> : null}
+      <MobileApprovalCenterOverlay />
       <MobileDeviceTrustGate onOpenSettings={() => { router.push('/profiles'); }} />
     </View>
+    </MobileApprovalCenterProvider>
   );
 }

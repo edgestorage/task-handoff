@@ -17,7 +17,10 @@ type I18nContextValue = {
 function formatMessage(message: string, params?: MessageParams) {
   if (!params) return message;
   return message
-    .replace(/\{(\w+), plural, one \{([^{}]*)\} other \{([^{}]*)\}\}/g, (_match, name: string, one: string, other: string) => Number(params[name]) === 1 ? one : other)
+    .replace(/\{(\w+), plural, one \{([^{}]*)\} other \{([^{}]*)\}\}/g, (_match, name: string, one: string, other: string) => {
+      const count = Number(params[name]);
+      return (count === 1 ? one : other).replaceAll('#', String(params[name]));
+    })
     .replace(/\{(\w+)\}/g, (_match, name: string) => String(params[name] ?? `{${name}}`));
 }
 

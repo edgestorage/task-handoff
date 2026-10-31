@@ -1,11 +1,14 @@
-import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  storyDecisionApprovalItems as sharedStoryDecisionApprovalItems,
+  storyDecisionNodes as sharedStoryDecisionNodes,
+} from "@task-handoff/control-plane-client";
 import type { Story, StoryDecision } from "@task-handoff/protocol/stories";
 
 export type StoryDecisionEntry = { story: Story; decisions: readonly StoryDecision[] };
 
 /** 只有声明 decisions 能力的节点会产生 Story 决策；能力缺失即该节点不参与入箱。 */
 export function storyDecisionNodes<T extends { id: string; capabilities: unknown }>(nodes: readonly T[]): T[] {
-  return nodes.filter((node) => nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(node.capabilities)).decisions);
+  return sharedStoryDecisionNodes(nodes);
 }
 
 export type StoryDecisionInboxItem = {
@@ -19,15 +22,11 @@ export type StoryDecisionList = { decisions: StoryDecision[] };
 
 /** 审批中心只收纳仍可回答的决策：已决策、已取消、已失效和已归档 Story 都不入箱。 */
 export function storyDecisionInboxItems(entries: readonly StoryDecisionEntry[]): StoryDecisionInboxItem[] {
-  return entries.flatMap(({ story, decisions }) => story.archivedAt ? [] : decisions
-    .filter((decision) => decision.status === "pending")
-    .map((decision) => ({
-      type: "story-decision" as const,
-      key: `story-decision:${story.ownerNodeId}:${story.id}:${decision.id}`,
-      story,
-      decision,
-    })))
-    .sort((left, right) => right.decision.createdAt.localeCompare(left.decision.createdAt) || left.key.localeCompare(right.key));
+  return sharedStoryDecisionApprovalItems("", entries).map(({ controlPlaneId: _controlPlaneId, story, decision, ...item }) => ({
+    ...item,
+    story,
+    decision,
+  }));
 }
 
 /** 兼容 v0.0.33 及更早的受管实例：处于 resuming 的决策必须由调用方显式确认后才能重发。 */

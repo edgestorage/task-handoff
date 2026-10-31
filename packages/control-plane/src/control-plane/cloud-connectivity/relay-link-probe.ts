@@ -1,4 +1,7 @@
 import { cloudEnvironmentForServiceOrigin } from "../../../../../shared/cloud-environments.cjs";
+import { relayEndpointProbeUrl } from "../../shared/relay-probe-url.ts";
+
+export { relayEndpointProbeUrl };
 
 export interface RelayLinkMeasurement {
   relayId: string;
@@ -39,21 +42,6 @@ export function relayProbeUrl(serviceOrigin: string, host: string): URL {
   // has to survive; probing the bare hostname would drop it.
   if (host === service.hostname) return new URL("/probe", service);
   return new URL("/probe", `${environment.allowInsecureRelay ? "http:" : "https:"}//${host}`);
-}
-
-/**
- * The same probe, derived from a Relay the Control Plane was actually allocated. An
- * environment only declares Relay *suffixes*, and the fleet is reached through hosts
- * under them; the bare suffix does not necessarily resolve. A host the Coordinator
- * just handed out does.
- */
-export function relayEndpointProbeUrl(relayUrl: string): URL {
-  const url = new URL(relayUrl);
-  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-  url.pathname = "/probe";
-  url.search = "";
-  url.hash = "";
-  return url;
 }
 
 /**

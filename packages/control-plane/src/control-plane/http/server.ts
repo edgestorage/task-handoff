@@ -73,6 +73,7 @@ import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from 
 import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
+import { assertCloudOwnerChangeAllowed } from "../cloud-connectivity/owner-binding.ts";
 import { relayTraceFromEnvironment } from "../cloud-connectivity/relay-trace.ts";
 import { nodeRelayTraceFromEnvironment } from "../cloud-connectivity/node-relay-trace.ts";
 import { CloudAccountSessionService } from "../cloud-connectivity/account-session.ts";
@@ -431,6 +432,18 @@ function controlPlanePublicOrigin(service: ControlPlaneService, request: Fastify
 
 function cliAuthorizationDecisionGuard(service: ControlPlaneService) {
   return async (request: FastifyRequest) => {
+    const actor = controlPlaneRequestActor(request);
+    const cloudOperationApprovalDecision = actor?.type === "cloud-account"
+      && Boolean(actor.ownerUserId)
+      && request.method.toUpperCase() === "POST"
+      && /^\/api\/operation-approvals\/[^/]+\/decision$/.test(request.routeOptions.url || request.url.split("?")[0] || "");
+    if (cloudOperationApprovalDecision) {
+      const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
+      if (contentType !== "application/json") {
+        throw Object.assign(new Error("Operation approval decisions require a JSON request body."), { code: "OPERATION_APPROVAL_ORIGIN_INVALID", statusCode: 415 });
+      }
+      return;
+    }
     if (request.headers.authorization !== undefined || !request.cookies[CONTROL_PLANE_SESSION_COOKIE]) {
       throw Object.assign(new Error("CLI authorization decisions require a Control Plane web session."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
     }
@@ -641,7 +654,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         if (!acceptsResourceMetricInstance(metricScope, event)) return;
         if (!cloudEventAllowed(actor, event)) return;
         if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
-      });
+      }, actor.ownerUserId ? {
+        audienceUserId: actor.ownerUserId,
+        authorizationRevision: actor.ownerAuthorizationRevision,
+      } : {});
       // Install delivery before publishing upstream demand so a synchronous
       // source replay cannot overtake this relay consumer.
       const stopTransientDemand = aiSessionTransient
@@ -721,6 +737,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
     state: cloudConnectivity, accountSession: cloudAccountSession, identity, relayBridge: cloudRelayBridge,
+    resolveCloudOwner: async ({ accountId, ownerAccountId, accessMode }) => {
+      if (accessMode !== "owner" || accountId !== ownerAccountId) return undefined;
+      const userId = cloudAccountSession.boundOwnerUserId(accountId);
+      if (!userId) return undefined;
+      const authorization = await auth.users.authorization(userId).catch(() => undefined);
+      if (!authorization?.permissionIds.includes("settings:manage")) return undefined;
+      return { userId, authorizationRevision: authorization.authorizationRevision };
+    },
     deviceTrust: cloudDeviceTrust,
     trustedDeviceSessions,
     roleCatalog: () => auth.users.roleCatalog(),
@@ -1096,6 +1120,29 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // choose an owner role from this set, but only a local Control Plane operator
   // can make roles available. A cloud-account actor reaching this route through
   // the relay must not be able to widen or narrow its own authority.
+  const requireLocalCloudOwnerAdmin = async (request: FastifyRequest) => {
+    const actor = await requireCloudConnectivityAdmin(request);
+    const ownerUserId = actor.type === "user"
+      ? actor.userId
+      : actor.type === "system" && actor.reason === "auth-disabled"
+        ? (await auth.users.ensureLocalTrustOperator()).userId
+        : undefined;
+    if (!ownerUserId) {
+      throw Object.assign(new Error("Cloud sign-in and binding must be initiated by a local administrator."), {
+        code: "CLOUD_LOCAL_ADMIN_REQUIRED",
+        statusCode: 403,
+      });
+    }
+    const binding = cloudConnectivity.snapshot();
+    const bindingOwner = cloudAccountSession.bindingOwner();
+    assertCloudOwnerChangeAllowed({
+      bindingStatus: binding.status,
+      currentOwnerUserId: bindingOwner?.ownerUserId,
+      nextOwnerUserId: ownerUserId,
+    });
+    return ownerUserId;
+  };
+
   const requireLocalCloudAccessSettingsAdmin = async (request: FastifyRequest) => {
     const actor = await requireCloudConnectivityAdmin(request);
     if (actor.type !== "user" && actor.type !== "system") {
@@ -1176,9 +1223,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.post("/api/cloud-account/sign-in-requests", async (request, reply) => {
-    await requireCloudConnectivityAdmin(request);
+    const ownerUserId = await requireLocalCloudOwnerAdmin(request);
     reply.header("cache-control", "no-store");
-    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "account:sign-in" }) };
+    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "account:sign-in", ownerUserId }) };
   });
 
   app.post("/api/cloud-account/sign-out", async (request) => {
@@ -1189,11 +1236,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // The binding challenge is created and registered internally; the browser only ever sees
   // the approval URL, and the Cloud Coordinator consumes the challenge server-side.
   app.post("/api/cloud-connectivity/binding-requests", async (request, reply) => {
-    await requireCloudConnectivityAdmin(request);
+    const ownerUserId = await requireLocalCloudOwnerAdmin(request);
     reply.header("cache-control", "no-store");
     const challenge = cloudConnectivity.createChallenge();
     await publishCloudBindingChallenge(challenge);
-    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "control-plane:bind", challengeCode: challenge.challengeCode }) };
+    return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "control-plane:bind", challengeCode: challenge.challengeCode, ownerUserId }) };
   });
 
   app.post("/api/cloud-connectivity/remote-access", async (request) => {
@@ -1441,6 +1488,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       ...(actor?.type === "user" || actor?.type === "cloud-account" ? {
         authorization: {
           userId: actor.type === "user" ? actor.userId : `cloud-account:${actor.accountId}`,
+          ...(actor.type === "cloud-account" && actor.ownerUserId ? {
+            ownerUserId: actor.ownerUserId,
+            ownerAuthorizationRevision: actor.ownerAuthorizationRevision,
+          } : {}),
           ...(requestSessionCredential(request).source === "cookie" ? { webSession: true as const } : {}),
           authorizationRevision: actor.authorizationRevision,
           permissionIds: actor.permissionIds,

@@ -33,6 +33,9 @@ export type ControlPlaneActor =
     shareGrantId?: string;
     shareRevision?: number;
     deviceTrustPinId?: string;
+    /** Local owner of the Cloud account, resolved by the Control Plane after device trust. */
+    ownerUserId?: string;
+    ownerAuthorizationRevision?: number;
     nodeScope: ControlPlaneUserNodeScope;
     instanceScope?: ControlPlaneUserInstanceScope;
     authorizationRevision: number;
@@ -131,8 +134,24 @@ function userCan(actor: PermissionBearingActor, action: ControlPlaneAction, reso
   return Boolean(permission && actor.permissionIds.includes(permission));
 }
 
+const CLOUD_ACCOUNT_MANAGEMENT_PERMISSIONS = new Set<ControlPlanePermissionId>([
+  "users:manage",
+  "roles:manage",
+  "identity-providers:manage",
+  "chat-bridges:manage",
+  "settings:manage",
+  "secrets:manage",
+]);
+
 function canCloudAccount(actor: ControlPlaneCloudAccountActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
-  return userCan(actor, action, resource);
+  const permission = permissionForControlPlaneOperation(action, resource.type);
+  if (!permission || !actor.permissionIds.includes(permission)) return false;
+  if (CLOUD_ACCOUNT_MANAGEMENT_PERMISSIONS.has(permission)) {
+    // Management follows the local administrator who created the current
+    // Cloud binding. A broad shared role cannot turn another account into an admin.
+    return actor.accessMode === "owner" && Boolean(actor.ownerUserId);
+  }
+  return true;
 }
 
 export type ControlPlaneCloudAccountActor = Extract<ControlPlaneActor, { type: "cloud-account" }>;

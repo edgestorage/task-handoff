@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react-native';
+import { render, within } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import PrimaryTabsLayout from '../app/(tabs)/(main)/_layout';
@@ -7,6 +7,25 @@ import { ScreenFlatList } from '../src/components/ScreenFlatList';
 let mockRuntimePhase = 'connected';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+
+jest.mock('../src/approval-center/use-mobile-approval-center', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  return {
+    MobileApprovalCenterProvider: ({ children }: React.PropsWithChildren) => React.createElement(View, {
+      testID: 'mobile-approval-provider',
+    }, children),
+    useApprovalCenterOcclusion: () => undefined,
+  };
+});
+
+jest.mock('../src/approval-center/MobileApprovalCenterOverlay', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  return {
+    MobileApprovalCenterOverlay: () => React.createElement(View, { testID: 'mobile-approval-overlay' }),
+  };
+});
 
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({
   useMobileControlPlaneRuntime: () => ({ phase: mockRuntimePhase }),
@@ -53,6 +72,16 @@ describe('<PrimaryTabsLayout />', () => {
     expect(screen.getByText('App Sessions')).toBeTruthy();
     expect(screen.getByText('Instances')).toBeTruthy();
     expect(screen.getByTestId('primary-tabs-root')).toHaveStyle({ flex: 1 });
+  });
+
+  test('mounts one approval provider and overlay around all four primary tabs', async () => {
+    const screen = await render(<PrimaryTabsLayout />);
+    const provider = screen.getByTestId('mobile-approval-provider');
+
+    expect(screen.getAllByTestId('mobile-approval-provider')).toHaveLength(1);
+    expect(screen.getAllByTestId('mobile-approval-overlay')).toHaveLength(1);
+    expect(within(provider).getByTestId('native-tabs')).toBeTruthy();
+    expect(within(provider).getAllByTestId(/^native-tab-/u, { includeHiddenElements: true })).toHaveLength(4);
   });
 
   test('leaves native sidebar adaptation to the platform', async () => {

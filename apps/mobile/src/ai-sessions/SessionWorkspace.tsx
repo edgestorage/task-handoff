@@ -25,6 +25,7 @@ import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
 import { useMobileToast } from '../components/MobileToast';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
+import { useApprovalCenterOcclusion } from '../approval-center/use-mobile-approval-center';
 import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { StoryDecisionAnswer } from '../stories/StoryDecisionAnswer';
 import { useStoryEvents } from '../stories/use-story-events';
@@ -115,6 +116,7 @@ export function SessionWorkspace({
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(
     () => SESSION_COMPOSER_COLLAPSED_HEIGHT + 16 + composerBottomInset,
   );
+  useApprovalCenterOcclusion('composer', true, composerOverlayHeight);
   const [, rerender] = useState(0);
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
   const attachmentsRef = useRef(attachments);

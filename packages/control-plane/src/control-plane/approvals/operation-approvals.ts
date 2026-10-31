@@ -79,7 +79,7 @@ export class OperationApprovals {
     const revision = (this.revisions.get(entry.userId) ?? 0) + 1;
     this.revisions.set(entry.userId, revision);
     this.events.publish("operation-approval.changed", { request: summary(entry), status, revision }, {
-      topic: "operation.approvals", audienceWebUserId: entry.userId,
+      topic: "operation.approvals", audienceUserId: entry.userId,
     });
   }
 

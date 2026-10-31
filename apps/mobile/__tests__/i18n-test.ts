@@ -19,6 +19,9 @@ describe('mobile i18n', () => {
     expect(translate('zh-CN', 'sessions.filterAccessibility', { scope: '全部会话' })).toBe('筛选会话，当前范围：全部会话');
     expect(translate('en-US', 'directories.instanceCount', { count: 1 })).toBe('1 Instance');
     expect(translate('en-US', 'directories.instanceCount', { count: 3 })).toBe('3 Instances');
+    expect(translate('en-US', 'approvalCenter.pendingCount', { count: 1 })).toBe('1 approval pending');
+    expect(translate('en-US', 'approvalCenter.pendingCount', { count: 3 })).toBe('3 approvals pending');
+    expect(translate('en-US', 'approvalCenter.fabLabel', { count: 3 })).toBe('Open approvals. 3 pending');
     expect(translate('en-US', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small and 2 models');
     expect(translate('zh-CN', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small 等 2 个模型');
     expect(translate('en-US', 'composer.placeholder')).toBe('Message');

@@ -646,12 +646,14 @@ const defaultDependencies: MobileControlPlaneRuntimeDependencies = {
 };
 
 export type MobileControlPlaneRuntimeValue = {
+  aiSessionsCapability: boolean;
   api?: ControlPlaneClient;
   carPlayConnected: boolean;
   controlPlaneId?: string;
   controlPlaneOrigin?: string;
   coordinator?: MobileControlPlaneConnectionCoordinator;
   deviceTrust?: CloudClientTrustOutcome;
+  nodeCapability: boolean;
   phase: MobileControlPlaneRuntimePhase;
   profile?: MobileControlPlaneProfile;
   retryDeviceTrust(): boolean;
@@ -730,12 +732,14 @@ export function MobileControlPlaneRuntimeProvider({
   const activePhase = activeSnapshot?.phase ?? 'idle';
   const activeDeviceTrust = activeSnapshot?.deviceTrust;
   const value = useMemo<MobileControlPlaneRuntimeValue>(() => ({
+    aiSessionsCapability: (active?.coordinator.currentCapabilities.aiSessions ?? active?.direct.transport.currentCapabilities?.aiSessions ?? active?.profile.capabilities.aiSessions) === true,
     api: active?.direct.api,
     carPlayConnected: activeCarPlayConnected,
     controlPlaneId: active?.profile.identity.controlPlaneId,
     controlPlaneOrigin: active?.profile.access.kind === 'direct' ? active.profile.access.origin : undefined,
     coordinator: active?.coordinator,
     deviceTrust: activeDeviceTrust,
+    nodeCapability: (active?.coordinator.currentCapabilities.nodes ?? active?.direct.transport.currentCapabilities?.nodes ?? active?.profile.capabilities.nodes) === true,
     phase: activePhase,
     profile: active?.profile,
     retryDeviceTrust: () => active?.coordinator.retryDeviceTrust() ?? false,

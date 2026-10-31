@@ -1,6 +1,7 @@
 import type { ApprovalRequest } from "@task-handoff/protocol/operation-approvals";
 import type { CloudDeviceTrustRequest, CloudDeviceTrustRoleOption, CloudDeviceTrustSnapshot } from "@task-handoff/protocol/device-trust";
 import type { NodeAgentControlPlaneTrustRequest } from "@task-handoff/protocol/node-agent-control-plane-trust";
+import { deviceTrustApprovalItems, operationApprovalItems } from "@task-handoff/control-plane-client";
 import type { CloudNodeRelayTrust } from "../../../api/types";
 import type { aiSessionApprovalItems } from "./aiSessionApprovals";
 import type { storyDecisionInboxItems } from "./storyDecisionItems";
@@ -39,7 +40,7 @@ export function mergeActionInboxItems(
   return [
     ...aiItems,
     ...storyItems,
-    ...requests.map((request) => ({ type: "operation-approval" as const, key: `operation-approval:${request.id}`, request })),
+    ...operationApprovalItems("", requests),
     ...deviceTrustInboxItems(deviceTrust),
     ...nodeControlPlaneTrustInboxItems(nodeControlPlaneTrust),
   ].sort((left, right) => itemTimestamp(right).localeCompare(itemTimestamp(left)) || left.key.localeCompare(right.key));
@@ -47,14 +48,13 @@ export function mergeActionInboxItems(
 
 export function deviceTrustInboxItems(snapshot: CloudDeviceTrustSnapshot | undefined): Array<Extract<ActionInboxItem, { type: "device-trust" }>> {
   if (!snapshot) return [];
-  return snapshot.requests
-    .filter((request) => request.status === "pending")
-    .map((request) => ({
-      type: "device-trust" as const,
-      key: `device-trust:${request.requestId}`,
-      request,
-      roles: snapshot.roles,
-    }));
+  return deviceTrustApprovalItems("", snapshot).map(({ controlPlaneId: _controlPlaneId, ...item }) => ({
+    ...item,
+    // Web keeps its existing local DOM key; the richer scoped key is for the
+    // cross-domain mobile projection and does not alter the wire identity.
+    key: `device-trust:${item.request.requestId}`,
+    roles: snapshot.roles,
+  }));
 }
 
 export function nodeControlPlaneTrustInboxItems(trust: readonly CloudNodeRelayTrust[]): Array<Extract<ActionInboxItem, { type: "node-control-plane-trust" }>> {

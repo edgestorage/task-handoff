@@ -5,7 +5,7 @@ import {
   type NodeRelayProbeMeasurement,
   type NodeRelayProbeTarget,
 } from "@task-handoff/cloud-contracts";
-import { relayEndpointProbeUrl } from "../../control-plane/cloud-connectivity/relay-link-probe.ts";
+import { relayEndpointProbeUrl } from "../../shared/relay-probe-url.ts";
 import { trustedNodeRelayUrl } from "./trust.ts";
 
 export const NODE_RELAY_PROBE_TOTAL_BUDGET_MS = NODE_RELAY_PROBE_BUDGET_MS;
