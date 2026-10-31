@@ -52,6 +52,7 @@ const {
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
 const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode, mainWindowChromeMetrics } = require("./window-chrome.cjs");
 const { appendRotatingLog } = require("./rotating-log.cjs");
+const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
 
 let mainWindow;
@@ -126,38 +127,12 @@ function resolveDesktopLogFile() {
   return path.resolve(resolveDataDir(), "log", "desktop.log");
 }
 
-function isBrokenLogPipe(error) {
-  return Boolean(error && typeof error === "object" && (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED"));
-}
-
-function reportLogWriteError(error) {
-  if (isBrokenLogPipe(error)) {
-    return;
-  }
-  throw error;
-}
-
-function writeLog(stream, message) {
-  if (!stream || stream.destroyed || !stream.writable) {
-    return;
-  }
-  try {
-    stream.write(`${message}\n`, (error) => {
-      if (error) {
-        reportLogWriteError(error);
-      }
-    });
-  } catch (error) {
-    reportLogWriteError(error);
-  }
-}
-
 function writeDesktopFileLog(message) {
   if (!desktopFileLoggingEnabled()) return;
   try {
     appendRotatingLog(resolveDesktopLogFile(), `${message}\n`);
-  } catch (error) {
-    reportLogWriteError(error);
+  } catch {
+    // Logging is best-effort and must not affect the application lifecycle.
   }
 }
 
@@ -177,26 +152,26 @@ function closeDesktopFileLog() {
   // File writes are opened per append so disabling logging has no stream to close.
 }
 
-process.stdout?.on?.("error", reportLogWriteError);
-process.stderr?.on?.("error", reportLogWriteError);
+process.stdout?.on?.("error", () => markLogStreamUnavailable(process.stdout));
+process.stderr?.on?.("error", () => markLogStreamUnavailable(process.stderr));
 
 function logInfo(message) {
-  writeLog(process.stdout, message);
+  writeLogLine(process.stdout, message);
   writeDesktopFileLog(message);
 }
 
 function logError(message) {
-  writeLog(process.stderr, message);
+  writeLogLine(process.stderr, message);
   writeDesktopFileLog(message);
 }
 
 function logStartupDiagnostic(message) {
-  writeLog(process.stderr, message);
+  writeLogLine(process.stderr, message);
   writeDesktopFileLogAlways(message);
 }
 
 function logStartupProgress(message) {
-  writeLog(process.stdout, message);
+  writeLogLine(process.stdout, message);
   if (!desktopFileLoggingEnabled()) {
     writeDesktopFileLogAlways(message);
   }
