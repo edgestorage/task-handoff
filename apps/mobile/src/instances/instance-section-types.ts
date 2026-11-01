@@ -12,6 +12,7 @@ export type InstanceOverviewProps = {
   onCreateSession(): void;
   onShowHistory(): void;
   onShowSessions(): void;
+  onShowWorktrees(): void;
 };
 
 export type InstanceHistoryProps = {

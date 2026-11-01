@@ -111,7 +111,7 @@ export const settings = {
   },
   nodeRelay: {
     onboardingTitle: "Add cloud node", onboardingDescription: "Connect an existing node from your Thandoff account, or install and bind a new Node Agent.", onboardingProgress: "Add cloud node progress",
-    onboardingSteps: { source: "Source", connect: "Connect", complete: "Complete" },
+    onboardingSteps: { source: "Source", connect: "Connect", approval: "Approve", complete: "Complete" },
     chooseSourceTitle: "Choose a node source", chooseSourceHint: "Existing nodes connect through the relay immediately. New nodes receive a one-time binding command.", onboardingUnavailableHint: "Finish cloud sign-in and binding before adding a node here.",
     sourceExisting: "Existing account node", sourceExistingHint: "Choose and connect a Node Agent already bound to your Thandoff account.", sourceNew: "Add a new Node Agent", sourceNewHint: "Generate a command for a machine that is not installed or bound yet.",
     commandMode: "Node state", installMode: "New machine, install and bind", bindMode: "Installed, bind only", installModeHint: "The command installs a matching Node Agent version and binds it to this Thandoff account.", bindModeHint: "Nothing is reinstalled. The existing Node Agent on the target machine is bound to this Thandoff account.",
@@ -125,6 +125,7 @@ export const settings = {
     displayName: "Node name (optional)", generate: "Generate install command", regenerate: "Generate a new command", cancelToken: "Cancel command", cancelled: "The command was cancelled.",
     commandOnce: "This command is shown only once. Copy it now.", installCommand: "Install command (new machine)", bindCommand: "Bind command (existing node agent)",
     expiresIn: "Command expires in {time}", expired: "The command expired. Generate a new one to continue.", waitingForInstall: "Waiting for the new node to finish installing and binding…",
+    approvalBackgroundHint: "You can close this window or go back to add other nodes without cancelling; the node connects automatically after approval.",
     copy: "Copy", copied: "Copied.", clipboardFailed: "The command could not be copied.",
     nodeTrust: {
       status: { pending: "Pending approval", rejected: "Rejected", expired: "Expired" },

@@ -114,7 +114,7 @@ export const settings = {
   },
   nodeRelay: {
     onboardingTitle: "添加云平台节点", onboardingDescription: "从云平台账号连接已有节点，或安装并绑定新的 Node Agent。", onboardingProgress: "添加云平台节点进度",
-    onboardingSteps: { source: "来源", connect: "连接", complete: "完成" },
+    onboardingSteps: { source: "来源", connect: "连接", approval: "批准", complete: "完成" },
     chooseSourceTitle: "选择节点来源", chooseSourceHint: "已有节点会直接建立中转连接；新节点会生成一条一次性绑定命令。", onboardingUnavailableHint: "完成云平台登录和绑定后，即可在这里添加节点。",
     sourceExisting: "账号中的已有节点", sourceExistingHint: "从已绑定到云平台账号的 Node Agent 中选择并连接。", sourceNew: "添加新的 Node Agent", sourceNewHint: "为尚未安装或尚未绑定账号的机器生成命令。",
     commandMode: "节点状态", installMode: "新机器，安装并绑定", bindMode: "已安装，仅绑定", installModeHint: "命令会安装匹配版本的 Node Agent，并将它绑定到当前云平台账号。", bindModeHint: "不会重复安装，只把目标机器上现有的 Node Agent 绑定到当前云平台账号。",
@@ -128,6 +128,7 @@ export const settings = {
     displayName: "节点名称（可选）", generate: "生成安装命令", regenerate: "重新生成命令", cancelToken: "取消命令", cancelled: "命令已取消。",
     commandOnce: "该命令只显示一次，请先复制。", installCommand: "安装命令（新机器）", bindCommand: "绑定命令（已装 node agent）",
     expiresIn: "命令将在 {time} 后过期", expired: "命令已过期，请重新生成。", waitingForInstall: "等待新节点完成安装与绑定…",
+    approvalBackgroundHint: "可以关闭此窗口或返回上一步继续添加其他节点；加入不会取消，节点批准后会自动连接。",
     copy: "复制", copied: "已复制。", clipboardFailed: "无法复制该命令。",
     nodeTrust: {
       status: { pending: "等待审核", rejected: "已拒绝", expired: "已过期" },

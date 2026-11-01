@@ -32,6 +32,16 @@ export function InstanceOverview(props: InstanceOverviewProps) {
           </HStack>
         </Button>
         <Button label={t('nav.history')} systemImage="clock.arrow.circlepath" onPress={props.onShowHistory} />
+        <Button onPress={props.onShowWorktrees}>
+          <HStack spacing={10}>
+            <Image color={colors.primary} size={19} systemName="square.stack.3d.up" />
+            <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
+              <Text modifiers={[font({ weight: 'semibold' })]}>{t('repository.worktrees.sectionTitle')}</Text>
+              <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary'), lineLimit(2)]}>{t('repository.worktrees.sectionDescription')}</Text>
+            </VStack>
+            <Image color={colors.textMuted} size={12} systemName="chevron.right" />
+          </HStack>
+        </Button>
       </Section>
     </Form>
   </Host>;

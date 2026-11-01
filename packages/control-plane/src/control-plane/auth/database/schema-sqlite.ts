@@ -145,6 +145,7 @@ export const models = sqliteTable("cp_models", {
   id: text("id").primaryKey(), name: text("name").notNull(), endpoint: text("endpoint").notNull(), keyCiphertext: text("key_ciphertext").notNull(),
   model: text("model").notNull(), modelNames: text("model_names", { mode: "json" }).$type<Array<{ name: string; upstreamName?: string; order: number }>>().notNull(),
   mappings: text("mappings", { mode: "json" }).$type<Array<{ name: string; upstreamName: string; order: number }>>().notNull(),
+  capabilities: text("capabilities", { mode: "json" }).$type<{ image: boolean }>().notNull().default({ image: false }),
   protocols: text("protocols", { mode: "json" }).$type<string[]>().notNull(), app: text("app").notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull(), order: integer("display_order").notNull(),
   labels: text("labels", { mode: "json" }).$type<Record<string, string>>().notNull(), ...timestamps,

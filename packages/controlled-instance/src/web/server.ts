@@ -75,6 +75,7 @@ import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
 import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
+import { requestControlledAiSessionTitle } from "./session-title-model";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
@@ -597,9 +598,7 @@ function projectConversationAttachmentTurns<T extends {
       ...turn,
       userMessages: turn.userMessages?.map((message) => ({
         ...message,
-        attachments: message.attachments.map((attachment) => (
-          store.attachmentMetadata(sessionId, message.id, attachment.id) || { ...attachment, contentState: "missing" as const }
-        )),
+        attachments: store.resolveMessageAttachments(sessionId, message.id, message.attachments),
       })),
     }));
 }
@@ -945,6 +944,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         ? { modelEntityId: matches[0].id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) }
         : undefined;
     },
+    generateTitle: (input) => requestControlledAiSessionTitle({
+      catalog: privateModelCatalog,
+      ...input,
+    }),
     connection: () => {
       appRuntime.ensureSharedResource("opencode");
       const connection = appRuntime.sharedResourcePrivateConnection("opencode");

@@ -644,8 +644,8 @@ test('Node trust refresh debounce accumulates every changed online Node', async 
   });
   const twoNodes = {
     nodes: [
-      { id: 'nod_a', name: 'Node A', status: 'online', health: 'ok', observedAt: now },
-      { id: 'nod_b', name: 'Node B', status: 'online', health: 'ok', observedAt: now },
+      { id: 'nod_a', name: 'Node A', status: 'online' as const, health: 'ok' as const, connectionMode: 'direct-http' as const, capabilities: [], observedAt: now },
+      { id: 'nod_b', name: 'Node B', status: 'online' as const, health: 'ok' as const, connectionMode: 'direct-http' as const, capabilities: [], observedAt: now },
     ],
     instances: [],
   };

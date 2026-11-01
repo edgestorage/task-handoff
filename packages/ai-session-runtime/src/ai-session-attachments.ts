@@ -152,7 +152,7 @@ export function prepareCodexAiSessionAttachments(
   return { message: appendAttachmentPaths(message, files), inputs };
 }
 
-function appendAttachmentPaths(
+export function appendAttachmentPaths(
   message: string,
   files: ReturnType<typeof materializeAiSessionAttachments>,
 ) {

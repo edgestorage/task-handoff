@@ -334,10 +334,17 @@ export class ControlPlaneModelService {
     // Reading the registry is the natural retry point for replicas that were
     // offline during an edit; the flush is best-effort and never blocks the read.
     void this.flushPendingModelSyncs();
+    const groupsSorted = [...groups.values()].sort((a, b) => a.model.order - b.model.order || a.model.name.localeCompare(b.model.name));
+    // Keep the registry timestamp content-derived. A read clock here makes
+    // otherwise identical snapshots byte-different and defeats client caching.
+    const registryUpdatedAt = groupsSorted.reduce(
+      (latest, group) => group.model.updatedAt > latest ? group.model.updatedAt : latest,
+      new Date(0).toISOString(),
+    );
     return FederatedModelRegistrySchema.parse({
-      models: [...groups.values()].sort((a, b) => a.model.order - b.model.order || a.model.name.localeCompare(b.model.name)),
+      models: groupsSorted,
       nodeDiagnostics: fleet.nodeErrors.map((error) => ({ nodeId: error.nodeId, code: error.code, message: error.message })),
-      updatedAt: now(),
+      updatedAt: registryUpdatedAt,
     });
   }
 

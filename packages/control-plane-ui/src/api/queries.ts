@@ -376,6 +376,8 @@ export function useModelsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
     queryFn: ({ signal }) => fetchModelRegistry(signal),
     select: modelConfigsFromRegistry,
     enabled: computed(() => toValue(enabled)),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
     retry: false,
   });
 }

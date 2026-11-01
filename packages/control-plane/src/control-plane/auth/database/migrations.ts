@@ -377,6 +377,7 @@ CREATE TABLE cp_model_pending_node_edits (
 CREATE UNIQUE INDEX cp_model_pending_node_edits_identity_uq ON cp_model_pending_node_edits(model_id, node_id);
 CREATE INDEX cp_model_pending_node_edits_node_idx ON cp_model_pending_node_edits(node_id);
 `),
+  migration("0014_model_provider_capabilities", `ALTER TABLE cp_models ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{"image":false}';`),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -474,4 +475,5 @@ CREATE TABLE cp_model_pending_node_edits (
 CREATE UNIQUE INDEX cp_model_pending_node_edits_identity_uq ON cp_model_pending_node_edits(model_id, node_id);
 CREATE INDEX cp_model_pending_node_edits_node_idx ON cp_model_pending_node_edits(node_id);
 `),
+  migration("0014_model_provider_capabilities", `ALTER TABLE cp_models ADD COLUMN capabilities JSONB NOT NULL DEFAULT '{"image":false}'::jsonb;`),
 ];

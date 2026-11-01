@@ -494,10 +494,7 @@ export class AiSessionRegistry {
         ...turn,
         userMessages: turn.userMessages?.map((message) => ({
           ...message,
-          attachments: message.attachments.map((attachment) => (
-            this.conversationAttachments!.attachmentMetadata(session.id, message.id, attachment.id)
-              || { ...attachment, contentState: "missing" as const }
-          )),
+          attachments: this.conversationAttachments!.resolveMessageAttachments(session.id, message.id, message.attachments),
         })),
       })),
     };

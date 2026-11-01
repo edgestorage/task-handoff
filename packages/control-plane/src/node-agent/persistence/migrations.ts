@@ -522,6 +522,12 @@ ALTER TABLE na_cloud_relay_bindings
   CHECK(cloud_origin_mode IN ('discovered','pinned'));
 `;
 
+// Provider-level model capabilities ({ image }). Existing rows stay text-only,
+// matching the control-plane default for records written before this field.
+const modelProviderCapabilities = `
+ALTER TABLE na_models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{"image":false}';
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -545,4 +551,5 @@ export const nodeAgentMigrations = [
   migration("0018_cloud_control_plane_trust", cloudControlPlaneTrust),
   migration("0019_initialization_markers", initializationMarkers),
   migration("0020_cloud_relay_origin_mode", cloudRelayOriginMode),
+  migration("0021_model_provider_capabilities", modelProviderCapabilities),
 ] as const;

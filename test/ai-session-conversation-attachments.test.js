@@ -41,6 +41,27 @@ test("controlled-instance attachment store deduplicates immutable content and ex
   assert.throws(() => store.content("session-a", "message-a", first.attachments[0].id), { code: "AI_SESSION_ATTACHMENT_EXPIRED", statusCode: 410 });
 });
 
+test("legacy provider-part attachment ids resolve to the message's durable manifest", () => {
+  const dataDir = tempDir();
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const staged = store.stageMessage({
+    sessionId: "session-a",
+    messageId: "message-a",
+    attachments: [inlineAttachment("input-a", "image bytes")],
+  });
+  store.commitMessage("session-a", "message-a", "turn-a");
+
+  const resolved = store.resolveMessageAttachments("session-a", "message-a", [{
+    id: "prt_provider_part",
+    kind: "image",
+    name: "input-a.png",
+    mime: "image/png",
+    size: 0,
+    contentState: "available",
+  }]);
+  assert.deepEqual(resolved, staged.attachments);
+});
+
 test("runtime-path content is snapshotted inside the session workspace and survives source removal", () => {
   const dataDir = tempDir();
   const workspace = path.join(dataDir, "workspace");

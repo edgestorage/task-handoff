@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import {
   AccessibilityInfo,
   ActivityIndicator,
-  Alert,
   Animated,
   PanResponder,
   Platform,
@@ -10,7 +9,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -28,7 +26,17 @@ import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon, type IconName } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
-import type { MessageKey } from '../i18n/messages';
+import { ApprovalDetailBody } from './ApprovalDetailBody';
+import { ApprovalInlineActions } from './ApprovalInlineActions';
+import {
+  actionErrorMessage,
+  deviceRoleAvailable,
+  itemContextLines,
+  itemSource,
+  itemSourceDetail,
+  itemTitle,
+  sourceLabel,
+} from './approval-detail-model';
 import {
   APPROVAL_CENTER_EDGE_VISIBLE_SIZE,
   APPROVAL_CENTER_FAB_SIZE,
@@ -54,15 +62,7 @@ const SOURCE_ORDER: readonly ApprovalCenterSource[] = [
 
 const PRESS_SUPPRESSION_AFTER_DRAG_MS = 120;
 
-function sourceLabel(source: ApprovalCenterSource, t: ReturnType<typeof useI18n>['t']) {
-  switch (source) {
-    case 'ai-session-approval': return t('approvalCenter.source.aiSession');
-    case 'story-decision': return t('approvalCenter.source.storyDecision');
-    case 'operation-approval': return t('approvalCenter.source.operation');
-    case 'device-trust': return t('approvalCenter.source.deviceTrust');
-    case 'node-control-plane-trust': return t('approvalCenter.source.nodeTrust');
-  }
-}
+type ApprovalItem = ApprovalCenterItem;
 
 export function sourceIcon(source: ApprovalCenterSource): IconName {
   switch (source) {
@@ -72,108 +72,6 @@ export function sourceIcon(source: ApprovalCenterSource): IconName {
     case 'device-trust': return 'shield-checkmark-outline';
     case 'node-control-plane-trust': return 'shield-checkmark-outline';
   }
-}
-
-function itemSource(item: ApprovalCenterItem) {
-  return item.type;
-}
-
-type ApprovalItem = ApprovalCenterItem;
-type Translate = ReturnType<typeof useI18n>['t'];
-type Operation = Extract<ApprovalItem, { type: 'operation-approval' }>['request']['operation'];
-
-const OPERATION_LABEL_KEYS: Record<Operation, MessageKey> = {
-  'instance.delete': 'approvalCenter.operation.instanceDelete',
-  'node.remove': 'approvalCenter.operation.nodeRemove',
-  'node.update.apply': 'approvalCenter.operation.nodeUpdate',
-  'node.external-listener.set': 'approvalCenter.operation.nodeExternalListener',
-  'user.access.set': 'approvalCenter.operation.userAccess',
-  'user.role.update': 'approvalCenter.operation.roleUpdate',
-  'user.role.remove': 'approvalCenter.operation.roleRemove',
-  'identity-provider.update': 'approvalCenter.operation.identityProviderUpdate',
-  'identity-provider.remove': 'approvalCenter.operation.identityProviderRemove',
-  'git-credential.assign': 'approvalCenter.operation.gitCredentialAssign',
-};
-
-const DETAIL_LABEL_KEYS: Record<string, MessageKey> = {
-  roleIds: 'approvalCenter.detail.roleIds',
-  nodeScope: 'approvalCenter.detail.nodeScope',
-  instanceScope: 'approvalCenter.detail.instanceScope',
-  changedFields: 'approvalCenter.detail.changedFields',
-  permissionIds: 'approvalCenter.detail.permissionIds',
-  status: 'approvalCenter.detail.status',
-  loginPolicy: 'approvalCenter.detail.loginPolicy',
-  credentialId: 'approvalCenter.detail.credentialId',
-  bindScope: 'approvalCenter.detail.bindScope',
-  port: 'approvalCenter.detail.port',
-  targetVersion: 'approvalCenter.detail.targetVersion',
-  channel: 'approvalCenter.detail.channel',
-};
-
-function itemTitle(item: ApprovalItem, t: Translate) {
-  switch (item.type) {
-    case 'ai-session-approval': return item.session.title || item.session.userPrompt || item.session.id;
-    case 'story-decision': return item.decision.question;
-    case 'operation-approval': return t(OPERATION_LABEL_KEYS[item.request.operation]);
-    case 'device-trust': return t((`deviceTrust.reason.${item.request.reason}`) as MessageKey);
-    case 'node-control-plane-trust': return nodeTrustTitle(item.request.reason, t);
-  }
-}
-
-function itemSourceDetail(item: ApprovalItem) {
-  switch (item.type) {
-    case 'ai-session-approval': return `${item.instanceName} · ${item.session.agent}`;
-    case 'story-decision': return item.story.title;
-    case 'operation-approval': return item.targetName || item.request.targetId;
-    case 'device-trust': return item.request.device.name;
-    case 'node-control-plane-trust': return item.nodeName || item.request.nodeHandle || item.nodeId;
-  }
-}
-
-function itemContextLines(item: ApprovalItem, t: Translate) {
-  switch (item.type) {
-    case 'ai-session-approval': return [];
-    case 'story-decision': return item.decision.context ? [`${t('approvalCenter.field.context')}: ${item.decision.context}`] : [];
-    case 'operation-approval': return (item.request.details ?? []).map((detail) => {
-      const key = DETAIL_LABEL_KEYS[detail.field];
-      return `${key ? t(key) : detail.field}: ${detail.value}`;
-    });
-    case 'device-trust': {
-      const role = item.roles.find((candidate) => candidate.roleId === item.request.cloudAccessRoleId);
-      return [
-        `${t('approvalCenter.field.comparisonCode')}: ${item.request.comparisonCode}`,
-        formatExpiryRelative(item.request.expiresAt, t),
-        `${t('approvalCenter.field.role')}: ${role?.name || item.request.cloudAccessRoleId}`,
-      ].filter(Boolean);
-    }
-    case 'node-control-plane-trust': return [
-      `${t('approvalCenter.field.comparisonCode')}: ${item.request.comparisonCode}`,
-      formatExpiryRelative(item.request.expiresAt, t),
-    ].filter(Boolean);
-  }
-}
-
-function nodeTrustTitle(reason: string | undefined, t: Translate) {
-  if (reason === 'key-changed') return t('approvalCenter.nodeTrust.keyChanged');
-  if (reason === 'access-context-changed') return t('approvalCenter.nodeTrust.accessContextChanged');
-  return t('approvalCenter.nodeTrust.firstSeen');
-}
-
-function formatExpiryRelative(value: string | undefined, t: Translate) {
-  if (!value) return '';
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value;
-  const remaining = timestamp - Date.now();
-  if (remaining <= 0) return t('deviceTrust.expiredAlready');
-  const minutes = Math.ceil(remaining / 60_000);
-  if (minutes < 60) return t('deviceTrust.expiresInMinutes', { count: minutes });
-  const hours = Math.ceil(minutes / 60);
-  if (hours < 24) return t('deviceTrust.expiresInHours', { count: hours });
-  return t('deviceTrust.expiresInDays', { count: Math.ceil(hours / 24) });
-}
-
-function deviceRoleAvailable(item: Extract<ApprovalItem, { type: 'device-trust' }>) {
-  return item.roles.some((role) => role.roleId === item.request.cloudAccessRoleId && role.status === 'active');
 }
 
 export function approvalFabIcon(expanded: boolean): IconName {
@@ -452,14 +350,6 @@ function MobileApprovalCenterOverlayContent() {
   </View>;
 }
 
-function actionErrorMessage(error: string | undefined, t: ReturnType<typeof useI18n>['t']) {
-  if (error === 'OFFLINE') return t('approvalCenter.offline');
-  if (error === 'SOURCE_UNAVAILABLE') return t('approvalCenter.sourceUnavailable');
-  if (error === 'STORY_RETRY_REQUIRED') return t('approvalCenter.storyRetryRequired');
-  if (error === 'REQUEST_RESULT_UNKNOWN') return t('approvalCenter.resultUnknown');
-  return t('approvalCenter.requestFailed');
-}
-
 function ApprovalItemCard({ center, item }: {
   center: ReturnType<typeof useMobileApprovalCenter>;
   item: ApprovalItem;
@@ -504,7 +394,7 @@ function ApprovalItemCard({ center, item }: {
       {itemContextLines(item, t).map((line) => <Text key={line} numberOfLines={2} style={[styles.itemSummary, { color: colors.textMuted }]}>{line}</Text>)}
       {roleUnavailable ? <Text style={[styles.itemSummary, { color: colors.error }]}>{t('approvalCenter.roleUnavailable')}</Text> : null}
     </Pressable>
-    <InlineActions
+    <ApprovalInlineActions
       disabled={busy || sourceUnavailable}
       item={item}
       onDecision={(decision) => center.decide(item, { decision })}
@@ -517,60 +407,18 @@ function ApprovalItemCard({ center, item }: {
   </View>;
 }
 
-function InlineActions({ disabled, item, onDecision, onOpen, roleUnavailable = false, testID }: {
-  disabled: boolean;
-  item: ApprovalItem;
-  onDecision(decision: string): void;
-  onOpen(): void;
-  roleUnavailable?: boolean;
-  testID?: string;
-}) {
-  const { colors } = useMobileTheme();
-  const { t } = useI18n();
-  const actions: { decision?: string; label: string; danger?: boolean; open?: boolean }[] = (() => {
-    switch (item.type) {
-      case 'ai-session-approval': return item.decisions.map((decision) => ({ decision, label: t(decision === 'allow' ? 'approvalCenter.allow' : decision === 'deny' ? 'approvalCenter.deny' : 'approvalCenter.skip') }));
-      case 'story-decision': return [{ label: t('approvalCenter.answer'), open: true }];
-      case 'operation-approval': return [{ decision: 'approve', label: t('approvalCenter.approve') }, { decision: 'deny', label: t('approvalCenter.deny'), danger: true }];
-      case 'device-trust': return [{ decision: 'approve', label: t('approvalCenter.approve') }, { decision: 'reject', label: t('approvalCenter.reject'), danger: true }];
-      case 'node-control-plane-trust': return [{ decision: 'approve', label: t('approvalCenter.approve') }, { decision: 'reject', label: t('approvalCenter.reject'), danger: true }];
-    }
-  })();
-  return <View style={styles.inlineActions} testID={testID}>
-    {actions.slice(0, 3).map((action) => {
-      const actionDisabled = disabled || (roleUnavailable && action.decision === 'approve');
-      return <Pressable
-      accessibilityLabel={action.open ? `${t('approvalCenter.answer')} ${itemTitle(item, t)}` : action.label}
-      accessibilityRole="button"
-      disabled={actionDisabled}
-      key={action.label}
-      testID={`approval-action-${item.key}-${action.decision ?? 'open'}`}
-      onPress={() => {
-        if (action.open) onOpen();
-        else if (action.decision) {
-          if (action.danger) confirmDanger(action.label, t('common.cancel'), () => onDecision(action.decision!));
-          else onDecision(action.decision);
-        }
-      }}
-      style={({ pressed }) => [styles.inlineButton, {
-        backgroundColor: pressed ? colors.workbenchSelectionBackground : 'transparent',
-        borderColor: action.danger ? colors.error : colors.border,
-        opacity: actionDisabled ? 0.45 : 1,
-      }]}
-    >
-      <Text style={[styles.inlineButtonText, { color: action.danger ? colors.error : colors.primary }]}>{action.label}</Text>
-    </Pressable>;
-    })}
-  </View>;
-}
-
 function ApprovalDetailPresentation() {
   const center = useMobileApprovalCenter();
   const item = center.detailItem;
   useApprovalCenterOcclusion('modal', Boolean(item));
 
   if (!item) return null;
-  return <ApprovalDetailSheet item={item} onDismiss={() => center.setDetailItem(undefined)} />;
+  return <ApprovalDetailSheet item={item} onDismiss={() => {
+    // The row highlight only marks the item while its sheet is open; leaving it
+    // behind would make the list row look like a permanently selected block.
+    center.selectItem(undefined);
+    center.setDetailItem(undefined);
+  }} />;
 }
 
 function ApprovalDetailSheet({ item, onDismiss }: { item: ApprovalCenterItem; onDismiss(): void }) {
@@ -584,7 +432,7 @@ function ApprovalDetailSheet({ item, onDismiss }: { item: ApprovalCenterItem; on
   return <BottomSheet
     backgroundStyle={{ backgroundColor: colors.background }}
     enablePanDownToClose
-    index={0}
+    index={1}
     onClose={onDismiss}
     ref={sheetRef}
     snapPoints={['50%', '100%']}
@@ -599,146 +447,52 @@ function ApprovalDetailContent({ item, onClose }: { item: ApprovalCenterItem; on
   const center = useMobileApprovalCenter();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const insets = useSafeAreaInsets();
   const [optionId, setOptionId] = useState<string>();
   const [response, setResponse] = useState('');
   const action = center.actions[item.key];
   const busy = action?.phase === 'busy';
   const failed = action?.phase === 'failed' || action?.phase === 'result-unknown';
   const sourceUnavailable = center.sourceHealth[itemSource(item)]?.health.phase !== 'ready';
+  const roleUnavailable = item.type === 'device-trust' && !deviceRoleAvailable(item);
   return <View accessibilityViewIsModal style={[styles.detailRoot, { backgroundColor: colors.background }]} testID="mobile-approval-detail">
-    <View style={[styles.detailHeader, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-      <Pressable accessibilityLabel={t('approvalCenter.close')} accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.iconButton}>
-        <Icon color={colors.primary} name="close" size={22} />
-      </Pressable>
+    <View style={[styles.detailHeader, { backgroundColor: colors.background }]} testID="mobile-approval-detail-header">
+      <View style={[styles.detailHeaderBadge, { backgroundColor: colors.primarySoft }]}>
+        <Icon color={colors.primary} name={sourceIcon(itemSource(item))} size={18} testID="mobile-approval-detail-source-icon" />
+      </View>
       <View style={styles.headerCopy}>
         <Text accessibilityRole="header" numberOfLines={2} style={[styles.panelTitle, { color: colors.text }]}>{itemTitle(item, t)}</Text>
-        <Text style={[styles.panelSubtitle, { color: colors.textMuted }]}>{sourceLabel(itemSource(item), t)}</Text>
+        <Text numberOfLines={1} style={[styles.panelSubtitle, { color: colors.textMuted }]}>{sourceLabel(itemSource(item), t)}</Text>
       </View>
+      <Pressable
+        accessibilityLabel={t('approvalCenter.close')}
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={onClose}
+        style={({ pressed }) => [styles.iconButton, { backgroundColor: pressed ? colors.workbenchSelectionBackground : colors.surface }]}
+      >
+        <Icon color={colors.textMuted} name="close" size={18} />
+      </Pressable>
     </View>
-    <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]} keyboardShouldPersistTaps="handled">
-      <DetailFields item={item} />
-      {item.type === 'story-decision' ? <StoryDecisionAnswer
-        decision={item.decision}
-        onOption={setOptionId}
-        onResponse={setResponse}
-        optionId={optionId}
-        response={response}
-      /> : null}
-      {failed ? <Text accessibilityLiveRegion="polite" style={[styles.detailError, { color: colors.error }]}>{actionErrorMessage(action?.error, t)}</Text> : null}
-      {busy ? <View style={styles.busyRow}><ActivityIndicator color={colors.primary} size="small" /><Text accessibilityLiveRegion="polite" style={[styles.itemMeta, { color: colors.textMuted }]}>{t('approvalCenter.submitting')}</Text></View> : null}
-      <View style={styles.detailActions}>
-        {item.type === 'story-decision' ? <Pressable
-          accessibilityRole="button"
-          disabled={busy || sourceUnavailable || (!optionId && !response.trim())}
-          onPress={() => center.decide(item, { optionId, response: response.trim() || undefined, retry: action?.error === 'STORY_RETRY_REQUIRED' })}
-          style={[styles.primaryAction, { backgroundColor: colors.primary, opacity: busy || sourceUnavailable || (!optionId && !response.trim()) ? 0.45 : 1 }]}
-        >
-          <Text style={styles.primaryActionText}>{t(action?.error === 'STORY_RETRY_REQUIRED' ? 'approvalCenter.retryDecision' : 'approvalCenter.submit')}</Text>
-        </Pressable> : <InlineActions
-          disabled={busy || sourceUnavailable}
-          item={item}
-          onDecision={(decision) => center.decide(item, { decision })}
-          onOpen={() => undefined}
-        />}
-      </View>
-    </ScrollView>
+    <ApprovalDetailBody
+      busy={busy}
+      errorText={failed ? actionErrorMessage(action?.error, t) : undefined}
+      failed={failed}
+      item={item}
+      onDecision={(decision) => center.decide(item, { decision })}
+      onOption={setOptionId}
+      onResponse={setResponse}
+      onSubmitStory={() => center.decide(item, { optionId, response: response.trim() || undefined, retry: action?.error === 'STORY_RETRY_REQUIRED' })}
+      optionId={optionId}
+      response={response}
+      retryStory={action?.error === 'STORY_RETRY_REQUIRED'}
+      roleUnavailable={roleUnavailable}
+      sourceUnavailable={sourceUnavailable}
+    />
   </View>;
-}
-
-function DetailFields({ item }: { item: ApprovalCenterItem }) {
-  const { colors } = useMobileTheme();
-  const { t } = useI18n();
-  const fields: [string, string | undefined][] = item.type === 'ai-session-approval' ? [
-    [t('approvalCenter.field.instance'), item.instanceName],
-    [t('approvalCenter.field.agent'), item.session.agent],
-    [t('approvalCenter.field.session'), item.session.id],
-    [t('approvalCenter.field.workspace'), item.session.cwd],
-    [t('approvalCenter.field.context'), item.session.lastMessage || item.session.summary || item.session.userPrompt],
-  ] : item.type === 'story-decision' ? [
-    [t('approvalCenter.field.node'), item.story.ownerNodeId],
-    [t('approvalCenter.field.story'), item.story.id],
-    [t('approvalCenter.field.decision'), item.decision.id],
-    [t('approvalCenter.field.question'), item.decision.question],
-    [t('approvalCenter.field.context'), item.decision.context],
-    [t('approvalCenter.field.revision'), String(item.decision.revision)],
-  ] : item.type === 'operation-approval' ? [
-    [t('approvalCenter.field.request'), item.request.id],
-    [t('approvalCenter.field.operation'), t(OPERATION_LABEL_KEYS[item.request.operation])],
-    [t('approvalCenter.field.target'), item.targetName ? `${item.targetName} (${item.request.targetId})` : item.request.targetId],
-    [t('approvalCenter.field.expires'), item.request.expiresAt],
-    ...(item.request.details ?? []).map((detail): [string, string] => {
-      const key = DETAIL_LABEL_KEYS[detail.field];
-      return [key ? t(key) : detail.field, detail.value];
-    }),
-  ] : item.type === 'device-trust' ? [
-    [t('approvalCenter.field.request'), item.request.requestId],
-    [t('approvalCenter.field.device'), `${item.request.device.name} (${item.request.device.platform})`],
-    [t('approvalCenter.field.comparisonCode'), item.request.comparisonCode],
-    [t('approvalCenter.field.fingerprint'), item.request.fingerprint],
-    [t('approvalCenter.field.revision'), String(item.request.revision)],
-    [t('approvalCenter.field.expires'), item.request.expiresAt],
-  ] : [
-    [t('approvalCenter.field.node'), item.nodeName ? `${item.nodeName} (${item.nodeId})` : item.nodeId],
-    [t('approvalCenter.field.request'), item.request.requestId],
-    [t('approvalCenter.field.controlPlane'), item.request.controlPlaneId],
-    [t('approvalCenter.field.comparisonCode'), item.request.comparisonCode],
-    [t('approvalCenter.field.fingerprint'), item.request.fingerprint],
-    [t('approvalCenter.field.revision'), String(item.request.revision)],
-    [t('approvalCenter.field.expires'), item.request.expiresAt],
-  ];
-  return <View style={styles.fields}>
-    {fields.filter((field): field is [string, string] => Boolean(field[1])).map(([label, value]) => <View key={`${label}:${value}`} style={styles.field}>
-      <Text style={[styles.fieldLabel, { color: colors.textMuted }]}>{label}</Text>
-      <Text selectable style={[styles.fieldValue, { color: colors.text }]}>{value}</Text>
-    </View>)}
-  </View>;
-}
-
-function StoryDecisionAnswer({ decision, onOption, onResponse, optionId, response }: {
-  decision: Extract<ApprovalCenterItem, { type: 'story-decision' }>['decision'];
-  onOption(value?: string): void;
-  onResponse(value: string): void;
-  optionId?: string;
-  response: string;
-}) {
-  const { colors } = useMobileTheme();
-  const { t } = useI18n();
-  return <View style={styles.answer}>
-    {decision.options?.map((option) => <Pressable
-      accessibilityLabel={`${option.label}${option.description ? `, ${option.description}` : ''}`}
-      accessibilityRole="radio"
-      accessibilityState={{ checked: optionId === option.id }}
-      key={option.id}
-      onPress={() => { onOption(option.id); onResponse(''); }}
-      style={[styles.option, { backgroundColor: optionId === option.id ? colors.primarySoft : colors.surface, borderColor: optionId === option.id ? colors.primary : colors.border }]}
-    >
-      <View style={[styles.radio, { borderColor: optionId === option.id ? colors.primary : colors.textMuted }]}>{optionId === option.id ? <View style={[styles.radioDot, { backgroundColor: colors.primary }]} /> : null}</View>
-      <View style={styles.headerCopy}><Text style={[styles.optionTitle, { color: colors.text }]}>{option.label}</Text>{option.description ? <Text style={[styles.optionDescription, { color: colors.textMuted }]}>{option.description}</Text> : null}</View>
-    </Pressable>)}
-    {decision.allowFreeText ? <TextInput
-      accessibilityLabel={t('stories.decisionFreeTextPlaceholder')}
-      multiline
-      onChangeText={(value) => { onResponse(value); onOption(undefined); }}
-      placeholder={t('stories.decisionFreeTextPlaceholder')}
-      placeholderTextColor={colors.textPlaceholder}
-      style={[styles.freeText, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
-      textAlignVertical="top"
-      value={response}
-    /> : null}
-  </View>;
-}
-
-function confirmDanger(label: string, cancelLabel: string, action: () => void) {
-  Alert.alert(label, undefined, [
-    { style: 'cancel', text: cancelLabel },
-    { onPress: action, style: 'destructive', text: label },
-  ]);
 }
 
 const styles = StyleSheet.create({
   actionError: { fontSize: 12, lineHeight: 17, paddingHorizontal: 12, paddingBottom: 10 },
-  answer: { gap: 10 },
   backdrop: {
     backgroundColor: 'rgba(0, 0, 0, 0.48)',
     bottom: 0,
@@ -754,10 +508,8 @@ const styles = StyleSheet.create({
   badgeHiddenRight: { left: -4 },
   badgeText: { color: '#ffffff', fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '700', lineHeight: 16 },
   busyRow: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingBottom: 10, paddingHorizontal: 12 },
-  detailActions: { gap: 10, marginTop: 8 },
-  detailContent: { gap: 18, paddingHorizontal: 18, paddingTop: 18 },
-  detailError: { fontSize: 13, lineHeight: 19 },
-  detailHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 64, paddingHorizontal: 12, paddingVertical: 10 },
+  detailHeader: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 60, paddingHorizontal: 14, paddingVertical: 8 },
+  detailHeaderBadge: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
   detailRoot: { flex: 1 },
   detailSheetSurface: { flex: 1, minHeight: 0 },
   diagnostics: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 9 },
@@ -765,16 +517,8 @@ const styles = StyleSheet.create({
   diagnosticTitle: { fontSize: 13, lineHeight: 17 },
   fab: { height: APPROVAL_CENTER_FAB_SIZE, position: 'absolute', width: APPROVAL_CENTER_FAB_SIZE, zIndex: 950 },
   fabSurface: { alignItems: 'center', borderRadius: APPROVAL_CENTER_FAB_SIZE / 2, elevation: 10, height: APPROVAL_CENTER_FAB_SIZE, justifyContent: 'center', shadowColor: '#000', shadowOffset: { height: 4, width: 0 }, shadowOpacity: 0.24, shadowRadius: 9, width: APPROVAL_CENTER_FAB_SIZE },
-  field: { gap: 4 },
-  fieldLabel: { fontSize: 12, lineHeight: 17 },
-  fieldValue: { fontSize: 14, lineHeight: 20 },
-  fields: { gap: 14 },
-  freeText: { borderRadius: 12, borderWidth: 1, fontSize: 15, lineHeight: 21, minHeight: 110, padding: 12 },
   headerCopy: { flex: 1, gap: 2 },
   iconButton: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
-  inlineActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 12, paddingHorizontal: 14, paddingTop: 12 },
-  inlineButton: { alignItems: 'center', borderRadius: 9, borderWidth: 1, flexBasis: 78, flexGrow: 1, justifyContent: 'center', minHeight: 38, paddingHorizontal: 14 },
-  inlineButtonText: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
   item: { borderBottomWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   itemHead: { alignItems: 'center', flexDirection: 'row', gap: 8, minWidth: 0 },
   itemMeta: { fontSize: 12, lineHeight: 17 },
@@ -785,17 +529,10 @@ const styles = StyleSheet.create({
   kindText: { fontSize: 12, lineHeight: 16 },
   list: { flexShrink: 1 },
   listContent: { padding: 0 },
-  option: { alignItems: 'flex-start', borderRadius: 12, borderWidth: 1, flexDirection: 'row', gap: 10, minHeight: 52, padding: 12 },
-  optionDescription: { fontSize: 13, lineHeight: 18 },
-  optionTitle: { fontSize: 14, lineHeight: 19 },
   panel: { borderRadius: 14, borderWidth: 1, elevation: 14, overflow: 'hidden', position: 'absolute', shadowColor: '#000', shadowOffset: { height: 7, width: 0 }, shadowOpacity: 0.24, shadowRadius: 18, zIndex: 940 },
   panelHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 56, paddingHorizontal: 14, paddingVertical: 8 },
   panelSubtitle: { fontSize: 12, lineHeight: 17 },
   panelTitle: { fontSize: 17, fontWeight: '600', lineHeight: 22 },
-  primaryAction: { alignItems: 'center', borderRadius: 12, justifyContent: 'center', minHeight: 48, paddingHorizontal: 16 },
-  primaryActionText: { color: '#ffffff', fontSize: 15, fontWeight: '600', lineHeight: 20 },
-  radio: { alignItems: 'center', borderRadius: 9, borderWidth: 1.5, height: 18, justifyContent: 'center', marginTop: 1, width: 18 },
-  radioDot: { borderRadius: 5, height: 10, width: 10 },
   smallAction: { alignItems: 'center', borderRadius: 8, borderWidth: 1, justifyContent: 'center', minHeight: 36, paddingHorizontal: 9 },
   smallActionText: { fontSize: 12, lineHeight: 17 },
   sourceText: { flex: 1, fontSize: 12, lineHeight: 17 },

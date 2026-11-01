@@ -1348,6 +1348,28 @@ export const ModelProviderCapabilitiesSchema = z
   })
   .strict();
 
+/**
+ * Read-side sanitize for stored or remote provider capabilities. Unknown keys
+ * are dropped (optionally reported) and a missing or invalid `image` flag
+ * degrades to text-only instead of failing the whole model record.
+ */
+export function sanitizeModelProviderCapabilities(
+  input: unknown,
+  onWarning?: (warning: { field: string }) => void,
+): { image: boolean } | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input !== "object" || Array.isArray(input)) {
+    onWarning?.({ field: "capabilities" });
+    return { image: false };
+  }
+  const document = input as Record<string, unknown>;
+  for (const key of Object.keys(document)) {
+    if (key !== "image") onWarning?.({ field: `capabilities.${key}` });
+  }
+  if (typeof document.image !== "boolean") onWarning?.({ field: "capabilities.image" });
+  return { image: document.image === true };
+}
+
 export const ModelConfigSchema = z
   .object({
     id: IdSchema,

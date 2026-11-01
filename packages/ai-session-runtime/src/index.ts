@@ -12,6 +12,7 @@ export * from "./ai-session-provider-registry.ts";
 export * from "./ai-session-history-store.ts";
 export * from "./ai-session-registry.ts";
 export * from "./ai-session-resume.ts";
+export * from "./ai-session-title.ts";
 export * from "./ai-session-open-app.ts";
 export * from "./ai-session-turns.ts";
 export * from "./claude-control-sock.ts";

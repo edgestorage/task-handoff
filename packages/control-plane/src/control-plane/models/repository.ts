@@ -105,6 +105,7 @@ export class ControlPlaneModelRepository {
     const { key, ...metadata } = model;
     return {
       ...metadata,
+      capabilities: model.capabilities ?? { image: false },
       modelNames: projectModelNameEntries(model.modelNames),
       mappings: normalizeModelRequestMappings(model.mappings),
       keyCiphertext: this.secrets.seal(key, secretContext(model.id)),

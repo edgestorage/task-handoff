@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import * as Crypto from 'expo-crypto';
-import { router, Stack, useFocusEffect } from 'expo-router';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { router, Stack } from 'expo-router';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionStore } from '../ai-sessions/store';
@@ -16,12 +16,11 @@ import { useMobileTheme } from '../components/theme';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n } from '../i18n';
 import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
-import { InstanceOverview } from './InstanceNativeSections';
-import { InstanceWorktreesSection } from './InstanceWorktreesSection';
+import { InstanceDetailContent } from './InstanceDetailContent';
+import { instanceLifecycleActionLabel } from './instance-lifecycle';
 import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from './resource-name';
 
 type RenameTarget = 'instance' | 'node';
-const PRIMARY_LIFECYCLE_ACTIONS = ['start', 'stop', 'restart'] as const;
 
 export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane = false }: { embeddedHeader?: boolean; instanceId: string; pane?: boolean }) {
   const { colors } = useMobileTheme();
@@ -35,17 +34,14 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
   const [renaming, setRenaming] = useState(false);
   const [lifecycleAction, setLifecycleAction] = useState<ControlPlaneInstanceAction>();
   const [closingAllSessions, setClosingAllSessions] = useState(false);
-  const [worktreeRefreshToken, setWorktreeRefreshToken] = useState(0);
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
-  useFocusEffect(useCallback(() => { setWorktreeRefreshToken((current) => current + 1); }, []));
   if (!instance) {
     return <Screen contentContainerStyle={styles.emptyScreen}><EmptyState icon="layers-outline" message={t('instance.notFound')} /></Screen>;
   }
 
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
   const instanceSessions = aiSessionState.snapshot?.instances.find((entry) => entry.instanceId === instance.id)?.aiSessions.sessions.filter((session) => session.actions?.close !== false) ?? [];
-  const statusColor = instance.ready && instance.connectionStatus === 'online' ? '#34c759' : instance.status === 'failed' || instance.status === 'unhealthy' ? colors.error : colors.textMuted;
   const currentName = renameTarget === 'node' ? node?.name : instance.name;
   const canRename = state.phase === 'ready' && !renaming && !lifecycleAction;
   const openRename = (target: RenameTarget) => {
@@ -86,9 +82,7 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
       setRenaming(false);
     }
   };
-  const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => t(
-    action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : action === 'retry-git' ? 'instance.retryGit' : 'instance.retryImage',
-  );
+  const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => instanceLifecycleActionLabel(action, t);
   const lifecycleMenuActions: MenuAction[] = instance.availableActions.map((action) => ({
     id: action,
     image: action === 'start' ? 'play.circle' : action === 'stop' ? 'stop.circle' : 'arrow.clockwise.circle',
@@ -114,11 +108,6 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
       } },
     ]);
   };
-  // Image and Git preparation are sequential, so a failed instance offers a
-  // single retry for whichever step failed.
-  const retryAction: ControlPlaneInstanceAction | undefined = instance.availableActions.includes('retry-git')
-    ? 'retry-git'
-    : instance.availableActions.includes('retry-image') ? 'retry-image' : undefined;
   const executeLifecycleAction = async (action: ControlPlaneInstanceAction) => {
     if (lifecycleAction || state.phase !== 'ready' || !instance.availableActions.includes(action)) return;
     setLifecycleAction(action);
@@ -164,71 +153,31 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
     {embeddedHeader
       ? <EmbeddedPaneHeaderOptions enabled headerRight={menu} title={instance.name} />
       : <><Stack.Screen options={pane ? { headerRight: () => menu } : { title: instance.name, headerRight: () => menu }} /><PaneHeaderRestore pane={pane} /></>}
-    <Screen>
-      <View style={[styles.statusSummary, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-        {lifecycleAction ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: statusColor }]} />}
-        <Text style={[styles.statusText, { color: colors.textMuted }]}>{instance.status} · {instance.connectionStatus} · {instance.health}</Text>
-      </View>
-
-      <View accessibilityRole="toolbar" style={[styles.lifecycleToolbar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-        {PRIMARY_LIFECYCLE_ACTIONS.map((action) => {
-          const enabled = state.phase === 'ready' && !lifecycleAction && instance.availableActions.includes(action);
-          const destructive = action === 'stop';
-          return <Pressable
-            accessibilityLabel={lifecycleActionLabel(action)}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !enabled, busy: lifecycleAction === action }}
-            disabled={!enabled}
-            key={action}
-            onPress={() => requestLifecycleAction(action)}
-            style={({ pressed }) => [styles.lifecycleButton, !enabled && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
-          >
-            {lifecycleAction === action
-              ? <ActivityIndicator color={colors.primary} size="small" />
-              : <Icon
-                color={enabled ? destructive ? colors.error : colors.primary : colors.textMuted}
-                name={action === 'start' ? 'play-circle' : action === 'stop' ? 'stop-circle' : 'refresh'}
-                size={22}
-              />}
-            <Text style={[styles.lifecycleButtonText, { color: enabled ? destructive ? colors.error : colors.primary : colors.textMuted }]}>{lifecycleActionLabel(action)}</Text>
-          </Pressable>;
-        })}
-        {retryAction ? <Pressable
-          accessibilityLabel={lifecycleActionLabel(retryAction)}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: Boolean(lifecycleAction) || state.phase !== 'ready', busy: lifecycleAction === retryAction }}
-          disabled={Boolean(lifecycleAction) || state.phase !== 'ready'}
-          onPress={() => requestLifecycleAction(retryAction)}
-          style={({ pressed }) => [styles.lifecycleButton, (Boolean(lifecycleAction) || state.phase !== 'ready') && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
-        >
-          {lifecycleAction === retryAction ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="refresh" size={22} />}
-          <Text style={[styles.lifecycleButtonText, { color: colors.primary }]}>{lifecycleActionLabel(retryAction)}</Text>
-        </Pressable> : null}
-      </View>
-
-      <InstanceOverview
-        activeSessionCount={activeSessionCount}
-        heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString(locale) : t('instance.notObserved')}
-        nodeName={node?.name || instance.nodeId}
-        onCreateSession={() => router.push({ pathname: '/sessions/new', params: { instanceId } })}
-        onShowHistory={() => router.push({ pathname: '/history/[instanceId]', params: { instanceId } })}
-        onShowSessions={() => {
-          if (controlPlaneId) mobileAiSessionStore.setScope(controlPlaneId, { kind: 'instance', instanceId });
-          router.push({ pathname: '/(tabs)/(main)/inbox', params: { instanceId } });
-        }}
-        problemSessionCount={instance.aiSessions.problemCount}
-        protocol={instance.protocol.version || t('instance.notReported')}
-        protocolCompatible={instance.protocol.compatible}
-        runtime={`${instance.runtime.name || instance.runtime.id}${instance.runtime.type ? ` · ${instance.runtime.type}` : ''}`}
-        workspace={instance.workspace.path || instance.workspace.status}
-      />
-
-      <InstanceWorktreesSection instanceId={instance.id} nodeId={instance.nodeId} refreshToken={worktreeRefreshToken} workspacePath={instance.workspace.path || undefined} />
-
-      {instance.protocol.warning ? <Notice text={instance.protocol.warning} /> : null}
-      {instance.error ? <Notice error text={`${instance.error.code}: ${instance.error.message}`} /> : null}
-
-    </Screen>
+    <InstanceDetailContent
+      actions={instance.availableActions}
+      actionsEnabled={state.phase === 'ready' && !lifecycleAction}
+      activeSessionCount={activeSessionCount}
+      error={instance.error}
+      heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString(locale) : t('instance.notObserved')}
+      lifecycleAction={lifecycleAction}
+      nodeName={node?.name || instance.nodeId}
+      onCreateSession={() => router.push({ pathname: '/sessions/new', params: { instanceId } })}
+      onLifecycleAction={requestLifecycleAction}
+      onShowHistory={() => router.push({ pathname: '/history/[instanceId]', params: { instanceId } })}
+      onShowSessions={() => {
+        if (controlPlaneId) mobileAiSessionStore.setScope(controlPlaneId, { kind: 'instance', instanceId });
+        router.push({ pathname: '/(tabs)/(main)/inbox', params: { instanceId } });
+      }}
+      onShowWorktrees={() => router.push({ pathname: '/instances/[instanceId]/worktrees' as never, params: { instanceId } })}
+      problemSessionCount={instance.aiSessions.problemCount}
+      protocol={instance.protocol.version || t('instance.notReported')}
+      protocolCompatible={instance.protocol.compatible}
+      protocolWarning={instance.protocol.warning}
+      runtime={`${instance.runtime.name || instance.runtime.id}${instance.runtime.type ? ` · ${instance.runtime.type}` : ''}`}
+      status={`${instance.status} · ${instance.connectionStatus} · ${instance.health}`}
+      statusTone={instance.ready && instance.connectionStatus === 'online' ? 'healthy' : instance.status === 'failed' || instance.status === 'unhealthy' ? 'error' : 'muted'}
+      workspace={instance.workspace.path || instance.workspace.status}
+    />
     <Modal animationType="fade" onRequestClose={closeRename} transparent visible={Boolean(renameTarget)}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.renameOverlay}>
         <Pressable disabled={renaming} onPress={closeRename} style={styles.renameBackdrop} />
@@ -259,25 +208,8 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
   </>;
 }
 
-function Notice({ error, text }: { error?: boolean; text: string }) {
-  const { colors } = useMobileTheme();
-  return <View style={[styles.notice, { backgroundColor: error ? colors.errorSoft : colors.notice }]}>
-    <Icon color={error ? colors.error : colors.noticeText} name={error ? 'alert-circle' : 'warning'} size={17} />
-    <Text style={[styles.noticeText, { color: error ? colors.error : colors.noticeText }]}>{text}</Text>
-  </View>;
-}
-
 const styles = StyleSheet.create({
   emptyScreen: { flexGrow: 1, justifyContent: 'center' },
-  statusSummary: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 12 },
-  statusDot: { borderRadius: 999, height: 8, width: 8 },
-  statusText: { fontSize: 13, textTransform: 'capitalize' },
-  lifecycleToolbar: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 62, overflow: 'hidden' },
-  lifecycleButton: { alignItems: 'center', flex: 1, gap: 4, justifyContent: 'center', minHeight: 62, minWidth: 0, paddingHorizontal: 4, paddingVertical: 8 },
-  lifecycleButtonDisabled: { opacity: 0.42 },
-  lifecycleButtonText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  notice: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, padding: 12 },
-  noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   pressed: { opacity: 0.65 },
   disabled: { opacity: 0.45 },

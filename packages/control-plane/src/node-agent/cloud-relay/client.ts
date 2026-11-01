@@ -796,7 +796,8 @@ export class NodeAgentCloudRelayClient {
       if (request.status !== "pending" || request.nodeHandle !== binding.nodeHandle || active.has(request.controlPlaneId) || withdrawn.has(request.controlPlaneId)) continue;
       withdrawn.add(request.controlPlaneId);
       try {
-        this.options.identity.withdrawCloudControlPlaneTrustRequests(request.controlPlaneId, "claim-withdrawn");
+        const expired = this.options.identity.withdrawCloudControlPlaneTrustRequests(request.controlPlaneId, "claim-withdrawn");
+        for (const withdrawnRequest of expired) this.publishTrustRequestChanged(withdrawnRequest);
       } catch {
         // A failed local trust cleanup must not block the relay snapshot.
       }
@@ -1119,6 +1120,10 @@ export class NodeAgentCloudRelayClient {
     const signature = `${request.id}:${request.revision}`;
     if (entry.pendingTrustSignature === signature) return;
     entry.pendingTrustSignature = signature;
+    this.publishTrustRequestChanged(request);
+  }
+
+  private publishTrustRequestChanged(request: NodeAgentCloudControlPlaneTrustRequest) {
     this.options.host.nodeAgentEventForwarder?.publish?.(
       NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE,
       {

@@ -233,24 +233,38 @@ test('opens the native sheet for complete approval context', async () => {
 
   expect(screen.getByTestId('mobile-approval-detail-sheet')).toBeTruthy();
   expect(screen.getByTestId('mobile-approval-detail')).toBeTruthy();
-  expect(screen.getByText('Role A')).toBeTruthy();
+  // iOS renders the detail fields through the same native inset-grouped rows
+  // as the instance detail screen, so assert on the native Text/Button props.
+  expect(screen.root!.queryAll((node) => node.props.text === 'Role A')).toHaveLength(1);
+  expect(screen.root!.queryAll((node) => node.props.title === 'Roles')).toHaveLength(1);
   expect(screen.getByLabelText('Close')).toBeTruthy();
 });
 
-test.each(['ios', 'android'] as const)('uses the same half-height sheet on %s and closes back to the floating list', async (platform) => {
+test('detail header leads with the approval source and keeps close visually neutral', async () => {
+  setPlatform('ios');
+  const screen = await render(tree(center({ detailItem: item })));
+
+  expect(screen.getByTestId('mobile-approval-detail-header')).toBeTruthy();
+  expect(screen.getByText('Operation approval')).toBeTruthy();
+  expect(screen.getByLabelText('Close')).toHaveStyle({ height: 44, width: 44 });
+});
+
+test.each(['ios', 'android'] as const)('opens the same sheet fully expanded on %s and closes back to the floating list', async (platform) => {
   setPlatform(platform);
   const setDetailItem = jest.fn();
-  await render(tree(center({ detailItem: item, setDetailItem })));
+  const selectItem = jest.fn();
+  await render(tree(center({ detailItem: item, selectItem, setDetailItem })));
 
   expect(mockBottomSheetProps.current).toEqual(expect.objectContaining({
     enablePanDownToClose: true,
-    index: 0,
+    index: 1,
     snapPoints: ['50%', '100%'],
   }));
 
   await act(async () => { mockBottomSheetProps.current?.onClose?.(); });
 
   expect(setDetailItem).toHaveBeenCalledWith(undefined);
+  expect(selectItem).toHaveBeenCalledWith(undefined);
 });
 
 test('uses desktop-style business titles, source identity and localized operation fields', async () => {

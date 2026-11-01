@@ -421,6 +421,44 @@ export class AiSessionConversationAttachmentStore {
     return this.messageManifests(sessionId, messageId).map((manifest) => this.publicAttachment(manifest));
   }
 
+  resolveMessageAttachments(
+    sessionId: string,
+    messageId: string,
+    attachments: readonly AiSessionConversationAttachment[],
+  ): AiSessionConversationAttachment[] {
+    this.gc();
+    const manifests = this.messageManifests(sessionId, messageId);
+    if (!manifests.length) {
+      return attachments.map((attachment) => ({ ...attachment, contentState: "missing" as const }));
+    }
+    const publishedById = new Map(manifests.map((manifest) => [manifest.id, this.publicAttachment(manifest)]));
+    const used = new Set<string>();
+    return attachments.map((attachment, index) => {
+      const exact = publishedById.get(attachment.id);
+      if (exact) {
+        used.add(exact.id);
+        return exact;
+      }
+      // Compatibility for v0.0.46: OpenCode projections could persist provider
+      // part ids instead of the controlled attachment ids. Resolve those legacy
+      // ids to this message's durable manifests without inventing new content.
+      const matching = manifests.filter((manifest) =>
+        !used.has(manifest.id)
+        && manifest.kind === attachment.kind
+        && manifest.name === attachment.name
+        && manifest.mime === attachment.mime
+      );
+      const fallback = matching.length === 1
+        ? matching[0]
+        : manifests.length === attachments.length && !used.has(manifests[index].id)
+          ? manifests[index]
+          : undefined;
+      if (!fallback) return { ...attachment, contentState: "missing" as const };
+      used.add(fallback.id);
+      return this.publicAttachment(fallback);
+    });
+  }
+
   attachmentMetadata(sessionId: string, messageId: string, attachmentId: string) {
     this.gc();
     const manifest = this.manifests.get(attachmentId);

@@ -42,6 +42,14 @@ export function InstanceOverview(props: InstanceOverviewProps) {
       <Text style={[styles.createLinkText, { color: colors.primary }]}>{t('nav.history')}</Text>
       <Icon color={colors.textMuted} name="chevron-forward" size={14} />
     </Pressable>
+    <Pressable accessibilityRole="button" onPress={props.onShowWorktrees} style={({ pressed }) => [styles.sessionLink, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
+      <View style={[styles.linkIcon, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="git-branch-outline" size={21} /></View>
+      <View style={styles.linkText}>
+        <Text style={[styles.linkTitle, { color: colors.text }]}>{t('repository.worktrees.sectionTitle')}</Text>
+        <Text numberOfLines={2} style={[styles.meta, { color: colors.textMuted }]}>{t('repository.worktrees.sectionDescription')}</Text>
+      </View>
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
+    </Pressable>
   </>;
 }
 

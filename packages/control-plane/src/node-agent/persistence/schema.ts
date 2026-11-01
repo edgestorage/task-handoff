@@ -81,6 +81,10 @@ export const models = sqliteTable("na_models", {
   // Node-private relay request name mappings ({ name, upstreamName, order }).
   // Both names are always explicit, so the stored list is the normalized one.
   mappings: text("mappings_json", { mode: "json" }).$type<unknown[]>().notNull(),
+  // Provider-level capabilities projected into every model name served by this
+  // entity. Persisted here because the instance environment is materialized
+  // from the node-side record, not from the control-plane replica.
+  capabilities: text("capabilities_json", { mode: "json" }).$type<{ image: boolean }>().notNull(),
   protocols: text("protocols_json", { mode: "json" }).$type<string[]>().notNull(),
   labels: text("labels_json", { mode: "json" }).$type<Record<string, string>>().notNull(),
   createdAt: text("created_at").notNull(),

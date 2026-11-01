@@ -17,6 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { AiSessionConversationAttachmentStore } = require("../packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
 const { AiSessionProviderRegistry } = require("../packages/ai-session-runtime/src/ai-session-provider-registry.ts");
 const { AiSessionHistoryListSchema } = require("../packages/protocol/src/ai-sessions.ts");
@@ -452,7 +453,7 @@ test("OpenCode realtime parts separate reasoning activity deltas from assistant 
   bridge.close();
 });
 
-test("OpenCode realtime retry warnings recover and terminal session errors fail the active turn", async () => {
+test("OpenCode realtime warnings recover, aborts stay non-errors, and terminal errors fail the active turn", async () => {
   const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-errors-")) });
   const providerSession = {
     id: "ses_errors",
@@ -485,6 +486,14 @@ test("OpenCode realtime retry warnings recover and terminal session errors fail 
   bridge.subscribeTimelineItems((event) => items.push(event.item));
 
   const event = (type, properties) => bridge.onGlobalEvent({ directory: "/workspace", payload: { type, properties } });
+  await event("session.error", {
+    sessionID: providerSession.id,
+    error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+  });
+  assert.equal(registry.get(session.id).status, "running");
+  assert.equal(registry.get(session.id).error, undefined);
+  assert.equal(registry.get(session.id).turns.at(-1).status, "running");
+
   await event("session.status", {
     sessionID: providerSession.id,
     status: { type: "retry", attempt: 1, message: "Provider connection failed", next: 1700000006000 },
@@ -907,6 +916,7 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
       { id: "inline", kind: "file", name: "inline.txt", mime: "text/plain", size: 5, source: { type: "inline", encoding: "base64", data: "aGVsbG8=" } },
       { id: "runtime", kind: "file", name: "input.txt", mime: "text/plain", size: 18, source: { type: "runtime-path", path: runtimeFile } },
       { id: "uploaded", kind: "image", name: "pasted.png", mime: "image/png", size: 5, source: { type: "runtime-path", path: retainedImage }, retainedPath: retainedImage },
+      { id: "binary", kind: "file", name: "download.devtools", mime: "application/octet-stream", size: 5, source: { type: "inline", encoding: "base64", data: "aGVsbG8=" } },
     ],
   });
   assert.deepEqual(calls.find((call) => call[0] === "set-permission"), [
@@ -925,6 +935,9 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
   assert.equal(promptCall[4][1].url, "data:text/plain;base64,aGVsbG8=");
   assert.equal(promptCall[4][2].url, "file:///workspace/project/input.txt");
   assert.equal(promptCall[4][3].url, pathToFileURL(fs.realpathSync(retainedImage)).href);
+  assert.match(promptCall[4][0].text, /文件路径：.*download\.devtools/);
+  assert.equal(promptCall[4].length, 4);
+  assert.ok(promptCall[4].every((part) => part.mime !== "application/octet-stream"));
   const steerResult = await bridge.steerMessage(registry.getByProviderSessionId("opencode", "ses_created"), {
     message: "Change direction",
     messageId: "msg_steer",
@@ -979,6 +992,66 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
   assert.deepEqual(calls.find((call) => call[0] === "archive"), ["archive", "ses_created", "/workspace/project"]);
   await bridge.deleteSession("ses_fork");
   assert.deepEqual(calls.find((call) => call[0] === "delete"), ["delete", "ses_fork", "/workspace/project"]);
+  bridge.close();
+});
+
+test("OpenCode snapshots keep controlled attachment identities in Turn bodies and timelines", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-attachment-identity-"));
+  const attachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions"), conversationAttachments: attachments });
+  const providerSession = {
+    id: "ses_image",
+    directory: "/workspace/project",
+    title: "Image session",
+    version: "1.19.4",
+    time: { created: 1, updated: 2 },
+  };
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: providerSession.id,
+    cwd: providerSession.directory,
+    status: "idle",
+  });
+  const staged = registry.stageMessageAttachments({
+    sessionId: session.id,
+    messageId: "msg_image",
+    attachments: [{
+      id: "upload-image",
+      kind: "image",
+      name: "image.png",
+      mime: "image/png",
+      size: 3,
+      source: { type: "inline", encoding: "base64", data: "cG5n" },
+    }],
+  });
+  registry.commitMessageAttachments(session.id, "msg_image", "msg_image");
+
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    getSession: async () => providerSession,
+    status: async () => ({}),
+    messages: async () => [{
+      info: { id: "msg_image", sessionID: providerSession.id, role: "user", time: { created: 1 } },
+      parts: [
+        { id: "prt_text", sessionID: providerSession.id, messageID: "msg_image", type: "text", text: "Inspect the image" },
+        { id: "prt_image", sessionID: providerSession.id, messageID: "msg_image", type: "file", mime: "image/png", filename: "image.png", url: "data:image/png;base64,cG5n" },
+      ],
+    }],
+    permissions: async () => [],
+  };
+
+  await bridge.reconcile(providerSession.id, providerSession.directory);
+  const turn = registry.get(session.id).turns.find((candidate) => candidate.id === "msg_image");
+  assert.deepEqual(turn.userMessages[0].attachments, staged.attachments);
+  assert.equal(registry.conversation(session.id).turns[0].userMessages[0].attachments[0].contentState, "available");
+
+  const timeline = await bridge.timeline(registry.get(session.id));
+  const userMessage = timeline.items.find((item) => item.type === "user-message");
+  assert.deepEqual(userMessage.attachments, staged.attachments);
   bridge.close();
 });
 

@@ -104,17 +104,6 @@
               <Button type="button" size="sm" variant="outline" @click="accountNodes.refetch()">{{ t("settings.nodeRelay.directoryRetry") }}</Button>
             </div>
             <p v-if="relayAccountError" class="cloud-node-onboarding-error" role="alert">{{ t("settings.nodeRelay.statusError", { message: relayAccountError }) }}</p>
-            <CloudNodeTrustStatus
-              v-if="attempt?.source === 'existing' && attempt.nodeHandle"
-              :phase="attempt.phase"
-              :trust="trust"
-              :display-name="attempt.displayName"
-              :node-handle="attempt.nodeHandle"
-              :error="cloudRelayError"
-              @reapply="reapplyOnboarding"
-              @retry="retryOnboardingPoll"
-              @cancel="cancelBindingToken"
-            />
           </section>
 
           <section v-else-if="step === 'connect' && source === 'new'" class="cloud-node-onboarding-section">
@@ -168,18 +157,23 @@
                 <LoaderCircle class="spin" :size="15" />
                 <span>{{ t("settings.nodeRelay.waitingForInstall") }}</span>
               </div>
-              <CloudNodeTrustStatus
-                v-if="attempt"
-                :phase="attempt.phase"
-                :trust="trust"
-                :display-name="attempt.displayName"
-                :node-handle="attempt.nodeHandle"
-                :error="cloudRelayError"
-                @reapply="reapplyOnboarding"
-                @retry="retryOnboardingPoll"
-                @cancel="cancelBindingToken"
-              />
             </template>
+          </section>
+
+          <section v-else-if="step === 'approval' && attempt" class="cloud-node-onboarding-section">
+            <CloudNodeTrustStatus
+              :phase="attempt.phase"
+              :trust="trust"
+              :display-name="attempt.displayName"
+              :node-handle="attempt.nodeHandle"
+              :error="cloudRelayError"
+              @reapply="reapplyOnboarding"
+              @retry="retryOnboardingPoll"
+              @cancel="cancelBindingToken"
+            />
+            <p v-if="attemptCanContinueInBackground" class="cloud-node-onboarding-approval-hint">
+              {{ t("settings.nodeRelay.approvalBackgroundHint") }}
+            </p>
           </section>
 
           <section v-else-if="step === 'complete'" class="cloud-node-onboarding-complete" role="status">
@@ -200,6 +194,12 @@
           <LoaderCircle v-if="busy" class="spin" :size="14" /><Download v-else :size="14" />
           <span>{{ bindingToken ? t("settings.nodeRelay.regenerate") : t("settings.nodeRelay.generate") }}</span>
         </Button>
+        <template v-else-if="step === 'approval'">
+          <Button type="button" variant="outline" @click="goBackFromApproval">
+            <ArrowLeft :size="14" /><span>{{ t("common.actions.back") }}</span>
+          </Button>
+          <Button type="button" variant="outline" @click="closeDialog">{{ t("common.actions.close") }}</Button>
+        </template>
         <Button v-else-if="step === 'complete'" type="button" @click="closeDialog">{{ t("common.actions.done") }}</Button>
       </DialogFooter>
     </DialogContent>
@@ -255,7 +255,7 @@ import {
 } from "./cloudNodeOnboardingAttempt";
 import { DEFAULT_NODE_AGENT_INSTALLER_SOURCE, type NodeAgentInstallerSource } from "@task-handoff/protocol/control-plane";
 
-type Step = "source" | "connect" | "complete";
+type Step = "source" | "connect" | "approval" | "complete";
 type NodeSource = "existing" | "new";
 type CommandMode = "install" | "bind";
 
@@ -290,6 +290,8 @@ const bindingToken = computed(() => attempt.value?.token);
 const completedNode = computed(() => attempt.value?.nodeId ? props.nodes.find((node) => node.id === attempt.value?.nodeId) : undefined);
 const cloudRelayError = computed(() => attempt.value?.error || "");
 const trust = computed(() => attempt.value?.trust);
+const attemptCanContinueInBackground = computed(() => Boolean(attempt.value
+  && ["submitting", "waiting-node-trust", "approved-connecting"].includes(attempt.value.phase)));
 const account = useCloudAccountQuery();
 const connectivity = useCloudConnectivityQuery();
 const cloudRelaySignedIn = computed(() => Boolean(account.data.value?.signedIn));
@@ -303,6 +305,7 @@ let clock: ReturnType<typeof setInterval> | undefined;
 const steps = computed(() => [
   { id: "source" as const, label: t("settings.nodeRelay.onboardingSteps.source") },
   { id: "connect" as const, label: t("settings.nodeRelay.onboardingSteps.connect") },
+  { id: "approval" as const, label: t("settings.nodeRelay.onboardingSteps.approval") },
   { id: "complete" as const, label: t("settings.nodeRelay.onboardingSteps.complete") },
 ]);
 const stepIndex = computed(() => steps.value.findIndex((item) => item.id === step.value));
@@ -391,7 +394,11 @@ function restoreAttemptView() {
   if (!attempt.value) return;
   source.value = attempt.value.source;
   displayNameDraft.value = attempt.value.displayName;
-  step.value = attempt.value.phase === "complete" ? "complete" : "connect";
+  const provisioningNewNode = attempt.value.source === "new"
+    && attempt.value.phase === "submitting"
+    && !attempt.value.nodeHandle
+    && Boolean(attempt.value.token);
+  step.value = attempt.value.phase === "complete" ? "complete" : provisioningNewNode ? "connect" : "approval";
   if (attempt.value.phase === "complete") applyOnboardingState();
 }
 
@@ -415,6 +422,7 @@ async function connectAccountNode(nodeHandle: string) {
     applyOnboardingState();
   } catch (error) {
     failCloudNodeOnboarding(translateApiError(error, t));
+    applyOnboardingState();
   } finally {
     relayBusyHandle.value = "";
   }
@@ -471,7 +479,10 @@ async function copyCommand() {
 let completedAttemptId = 0;
 
 function applyOnboardingState() {
-  if (!attempt.value) return;
+  if (!attempt.value) {
+    if (step.value === "approval") step.value = "connect";
+    return;
+  }
   if (attempt.value.phase === "waiting-node-trust" && attempt.value.trust) {
     const node = props.nodes.find((item) => item.id === attempt.value?.trust?.nodeId);
     if (!node) {
@@ -488,6 +499,10 @@ function applyOnboardingState() {
       copied.value = false;
       emit("created", node);
     }
+    return;
+  }
+  if (step.value === "connect" && attempt.value.phase !== "submitting") {
+    step.value = "approval";
   }
 }
 
@@ -495,14 +510,17 @@ function goBack() {
   step.value = "source";
 }
 
-async function closeDialog() {
+/** Returning to the previous step keeps the join in the cloud queue; only cancel removes it. */
+function goBackFromApproval() {
+  if (attempt.value) displayNameDraft.value = attempt.value.displayName || displayNameDraft.value;
+  resetCloudNodeOnboarding();
+  copied.value = false;
+  step.value = "connect";
+}
+
+function closeDialog() {
   stopClock();
-  if (attempt.value && attempt.value.phase !== "complete") {
-    const cancelled = await cancelBindingToken();
-    if (!cancelled) return;
-  } else if (attempt.value?.phase === "complete") {
-    resetCloudNodeOnboarding();
-  }
+  if (attempt.value?.phase === "complete") resetCloudNodeOnboarding();
   emit("close");
 }
 
@@ -551,7 +569,7 @@ async function reapplyOnboarding() {
 
 .cloud-node-onboarding-progress {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 2px 0 4px;
   padding: 0 24px;
   list-style: none;
@@ -867,6 +885,13 @@ async function reapplyOnboarding() {
 
 .cloud-node-onboarding-status.expired {
   color: var(--status-warning);
+}
+
+.cloud-node-onboarding-approval-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .cloud-node-onboarding-command-head {

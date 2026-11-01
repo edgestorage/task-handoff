@@ -1121,18 +1121,28 @@ test("a failed allocation verification clears maintenance expiry, retries with b
   }, "automatic retry to recover the channel");
 });
 
-test("withdrawing a claim expires the pending node-side trust request", async (t) => {
+test("withdrawing a claim expires the pending node-side trust request and publishes the change", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const { app, relay, identityService, planeFor } = await cloudRelayFixture(t, stub);
   planeFor("control_plane_one");
   await bind(app, stub, undefined, undefined, false);
-  relay.pollNow();
+  const forwarded = captureForwardedEvents(app);
+  try {
+    relay.pollNow();
 
-  await waitFor(() => identityService.listCloudControlPlaneTrust().requests.some((request) => request.controlPlaneId === "control_plane_one" && request.status === "pending") ? true : undefined, "pending trust request");
+    const pending = await waitFor(() => identityService.listCloudControlPlaneTrust().requests.find((request) => request.controlPlaneId === "control_plane_one" && request.status === "pending"), "pending trust request");
 
-  stub.dropClaim("control_plane_one");
-  relay.pollNow();
-  await waitFor(() => identityService.listCloudControlPlaneTrust().requests.some((request) => request.controlPlaneId === "control_plane_one" && request.status === "expired") ? true : undefined, "withdrawn trust request");
+    stub.dropClaim("control_plane_one");
+    relay.pollNow();
+    await waitFor(() => identityService.listCloudControlPlaneTrust().requests.some((request) => request.controlPlaneId === "control_plane_one" && request.status === "expired") ? true : undefined, "withdrawn trust request");
+    const event = await waitFor(() => forwarded.messages.find((message) => message.type === "node-agent.event.forwarded"
+      && message.event?.type === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE
+      && message.event.payload?.requestId === pending.id
+      && message.event.payload?.state === "expired"), "withdrawn trust event");
+    assert.equal(event.event.payload.controlPlaneId, "control_plane_one");
+  } finally {
+    forwarded.dispose();
+  }
 });
 
 test("a refused credential stops the channels and requires rebinding", async (t) => {

@@ -763,7 +763,7 @@
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                  <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="selectNewSessionApp(app.id)">
+                  <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="chooseNewSessionApp(app.id)">
                     <AiAgentIcon :agent="agentIcon(app.id)" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
@@ -1419,7 +1419,7 @@ import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPick
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { nextDetailHeadActionsOverflow, type DetailHeadActionsOverflow } from "./sessionDetailHeadActions";
-import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
+import { loadAiSessionCreationPreferences, persistAiSessionCreationAgent, persistAiSessionCreationPreferences, preferredAiSessionCreationAgent } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, aiSessionStoryCreationDraftKey, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { useAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
 import {
@@ -1543,6 +1543,7 @@ const props = defineProps<{
   activeSession: SessionTab;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
+  creationInitialAgent?: string;
   creationInitialCwd?: string;
   creationInitialCwdFolderId?: string;
   creationInitialWorktreeSessionId?: string;
@@ -3290,6 +3291,9 @@ async function openNewSessionForGroup(group: AiSessionPathGroup | AiSessionHisto
       ? latest.cwdFolderId
       : latest?.cwd ? newSessionFolderIdForPath(latest.cwd) : undefined;
     if (folderId) newSessionFolderId.value = folderId;
+    if (latest?.agent && aiSessionLaunchableApps.value.some((app) => app.id === latest.agent)) {
+      selectNewSessionApp(latest.agent);
+    }
     return;
   }
   if (group.cwdFolderId && newSessionFolders.value.some((folder) => folder.id === group.cwdFolderId)) {
@@ -3308,10 +3312,17 @@ function creationInitialFolderId() {
   return props.creationInitialCwd ? newSessionFolderIdForPath(props.creationInitialCwd) : undefined;
 }
 
+function initialNewSessionApp() {
+  return preferredAiSessionCreationAgent(
+    props.creationInitialAgent || "",
+    aiSessionLaunchableApps.value.map((app) => app.id),
+  );
+}
+
 function initializeNewSessionDefaults() {
   if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
     if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && newSessionApp.value === props.creationInitialPreset?.agent) return;
-    selectNewSessionApp(aiSessionLaunchableApps.value[0]?.id || "");
+    selectNewSessionApp(props.creationMode === "preset" ? aiSessionLaunchableApps.value[0]?.id || "" : initialNewSessionApp());
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
     const initialFolderId = creationInitialFolderId();
@@ -3332,9 +3343,13 @@ function initializeNewSessionDefaults() {
 }
 
 watch(
-  [() => props.instance.id, () => props.creationInitialCwd, () => props.creationInitialCwdFolderId],
+  [() => props.instance.id, () => props.creationInitialCwd, () => props.creationInitialCwdFolderId, () => props.creationInitialAgent],
   ([instanceId], [previousInstanceId]) => {
     if (!props.creationOnly) return;
+    if (props.creationMode !== "preset" && props.creationInitialAgent && props.creationInitialAgent !== newSessionApp.value
+      && aiSessionLaunchableApps.value.some((app) => app.id === props.creationInitialAgent)) {
+      selectNewSessionApp(props.creationInitialAgent);
+    }
     const previousFolderPath = previousInstanceId && previousInstanceId !== instanceId
       ? newSessionFolderPathsByInstance.get(previousInstanceId) || ""
       : "";
@@ -3524,6 +3539,11 @@ async function confirmNewSessionWorktree(selection: NewWorktreeSelection) {
   } finally {
     newSessionWorktreeCreating.value = false;
   }
+}
+
+function chooseNewSessionApp(agent: string) {
+  selectNewSessionApp(agent);
+  if (props.creationMode !== "preset") persistAiSessionCreationAgent(agent);
 }
 
 function selectNewSessionApp(agent: string) {

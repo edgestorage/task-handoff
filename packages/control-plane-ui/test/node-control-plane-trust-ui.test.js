@@ -144,6 +144,20 @@ test("a cancelled join clears the attempt once the snapshot drops its claim and 
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value, undefined);
 });
 
+test("cancelling the join from another entry point ends the attempt instead of reporting approval", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle("node_handle_a");
+  syncCloudNodeOnboarding(snapshot([trust()], { claims: [{ nodeHandle: "node_handle_a", requestedAt: "2026-10-26T08:00:00.000Z" }] }));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
+
+  // The other entry point releases the claim and drops the trust request in one
+  // snapshot. Without a surviving claim there is no approval to report, so the
+  // attempt must end rather than enter "approved-connecting".
+  syncCloudNodeOnboarding(snapshot([]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value, undefined);
+});
+
 test("an explicitly retried rejected attempt can resume and observe a new pending request", () => {
   resetCloudNodeOnboarding();
   beginCloudNodeOnboarding("existing");
@@ -239,10 +253,14 @@ test("transport diagnostics do not replace a signed pending approval outcome", (
   resetCloudNodeOnboarding();
 });
 
-test("dialog close and back only hide the view while explicit cancel owns token cancellation", () => {
+test("dialog close and back only hide the view while explicit cancel owns join cancellation", () => {
   const dialog = read("settings/CloudNodeOnboardingDialog.vue");
   assert.match(dialog, /function goBack\(\) \{\s*step\.value = "source";\s*\}/);
-  assert.match(dialog, /function closeDialog\(\) \{\s*stopClock\(\);/);
+  assert.match(dialog, /function goBackFromApproval\(\) \{\n\s*if \(attempt\.value\) displayNameDraft\.value = attempt\.value\.displayName \|\| displayNameDraft\.value;\n\s*resetCloudNodeOnboarding\(\);\n\s*copied\.value = false;\n\s*step\.value = "connect";\n\s*\}/);
+  assert.doesNotMatch(dialog, /function goBackFromApproval\(\) \{[\s\S]*?cancelBindingToken/);
+  assert.doesNotMatch(dialog, /function goBackFromApproval\(\) \{[\s\S]*?cancelCloudNodeBindingToken/);
+  assert.match(dialog, /function closeDialog\(\) \{\s*stopClock\(\);\s*if \(attempt\.value\?\.phase === "complete"\) resetCloudNodeOnboarding\(\);\s*emit\("close"\);\s*\}/);
+  assert.doesNotMatch(dialog, /function closeDialog\(\) \{[\s\S]*?cancelBindingToken/);
   assert.doesNotMatch(dialog, /function closeDialog\(\) \{[\s\S]*?cancelCloudNodeBindingToken/);
   assert.match(dialog, /async function cancelBindingToken\(\)[\s\S]*?cancelCloudNodeBindingToken/);
   assert.match(dialog, /onboarding\.active\.value/);
@@ -295,9 +313,10 @@ test("cloud node join cancel is shared and available before terminal states", ()
   assert.match(status, /v-if="canCancel"/);
   assert.match(dialog, /const accountNodeClaimed = \(nodeHandle: string\) => Boolean\(accountNodes\.data\.value\?\.nodeRelay\.claims/);
   assert.match(dialog, /step === 'connect' && !attempt/);
-  assert.match(dialog, /async function closeDialog\(\)[\s\S]*?cancelBindingToken\(\)/);
+  assert.doesNotMatch(dialog, /function closeDialog\(\) \{[\s\S]*?cancelBindingToken/);
   assert.match(dialog, /cancelCloudNodeJoin\(\{ nodeHandle: attempt\.value\.nodeHandle, nodeId \}\)/);
-  assert.match(dialog, /v-if="attempt\?\.source === 'existing' && attempt\.nodeHandle"/);
+  assert.match(dialog, /<section v-else-if="step === 'approval' && attempt" class="cloud-node-onboarding-section">/);
+  assert.match(dialog, /settings\.nodeRelay\.approvalBackgroundHint/);
 });
 
 test("settings registry shows incomplete trust enrollments separately from managed nodes", () => {

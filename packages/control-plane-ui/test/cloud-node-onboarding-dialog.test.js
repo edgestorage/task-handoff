@@ -9,7 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 test("cloud node onboarding is a standalone source and connection flow", () => {
   const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
-  assert.match(dialog, /"source" \| "connect" \| "complete"/);
+  assert.match(dialog, /"source" \| "connect" \| "approval" \| "complete"/);
   assert.match(dialog, /settings\.nodeRelay\.sourceExisting/);
   assert.match(dialog, /settings\.nodeRelay\.sourceNew/);
   assert.match(dialog, /cloudRelayUsable/);
@@ -24,6 +24,17 @@ test("cloud node onboarding is a standalone source and connection flow", () => {
   assert.match(dialog, /accountNodeAccess/);
   assert.match(dialog, /item\.access\?\.kind === 'shared'/);
   assert.match(dialog, /connectAccountNode\(item\.nodeHandle\)/);
+});
+
+test("cloud node approval is displayed as the step after connecting", () => {
+  const dialog = read("src/apps/control-plane/settings/CloudNodeOnboardingDialog.vue");
+  assert.equal((dialog.match(/<CloudNodeTrustStatus/g) || []).length, 1);
+  assert.match(dialog, /<section v-else-if="step === 'approval' && attempt" class="cloud-node-onboarding-section">/);
+  assert.match(dialog, /settings\.nodeRelay\.onboardingSteps\.approval/);
+  assert.match(dialog, /<template v-else-if="step === 'approval'">\n\s*<Button type="button" variant="outline" @click="goBackFromApproval">\n\s*<ArrowLeft :size="14" \/><span>\{\{ t\("common\.actions\.back"\) \}\}<\/span>\n\s*<\/Button>\n\s*<Button type="button" variant="outline" @click="closeDialog">\{\{ t\("common\.actions\.close"\) \}\}<\/Button>/);
+  assert.match(dialog, /\.cloud-node-onboarding-progress \{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+  assert.match(dialog, /if \(step\.value === "connect" && attempt\.value\.phase !== "submitting"\) \{\n    step\.value = "approval";/);
+  assert.match(dialog, /attempt\.value\.phase === "complete" \? "complete" : provisioningNewNode \? "connect" : "approval"/);
 });
 
 test("cloud node onboarding derives query readiness before creating the query", () => {

@@ -45,6 +45,10 @@ export function projectOpenCodeSession(input: {
   permissions: OpenCodePermission[];
   messages: OpenCodeMessage[];
   projectModelSelection?: (providerID: string, modelID: string) => AiSessionModelSelection | undefined;
+  resolveConversationAttachments?: (
+    messageId: string,
+    projected: AiSessionConversationAttachment[],
+  ) => AiSessionConversationAttachment[];
 }): OpenCodeProjection {
   const messages = [...input.messages].sort((left, right) => left.info.time.created - right.info.time.created);
   const permissions = input.permissions.filter((permission) => permission.sessionID === input.session.id);
@@ -73,9 +77,14 @@ export function projectOpenCodeSession(input: {
       for (const part of assistant.parts) partById.set(part.id, { turnId, messageId: assistant.info.id, role: "assistant", type: part.type });
     }
     const userText = textParts(message.parts).join("\n").trim();
-    const attachments = conversationAttachments(message.parts);
+    const projectedAttachments = conversationAttachments(message.parts);
+    const attachments = input.resolveConversationAttachments?.(message.info.id, projectedAttachments) || projectedAttachments;
     const assistantTextParts = assistants.flatMap((assistant) => assistant.parts.filter(isTextPart));
-    const assistantText = assistantTextParts.map((part) => String(part.text)).join("").trim();
+    // Text parts are separate messages in the OpenCode transcript. The turn's
+    // final response must be the last part only; joining every part would
+    // repeat narration that the timeline already renders as its own item.
+    const lastAssistantTextPart = assistantTextParts.at(-1);
+    const assistantText = lastAssistantTextPart ? String(lastAssistantTextPart.text).trim() : "";
     const assistantError = assistants.map((assistant) => assistant.info.role === "assistant" ? openCodeErrorText(assistant.info.error) : undefined).find(Boolean);
     const completedAtMs = assistants.map((assistant) => assistant.info.role === "assistant" ? assistant.info.time.completed : undefined).filter(isNumber).at(-1);
     const isActive = input.status?.type !== "idle" && message === userMessages.at(-1);
@@ -89,7 +98,7 @@ export function projectOpenCodeSession(input: {
       status: assistantError ? "failed" : isWaiting ? "waiting" : isActive ? "running" : "completed",
       phase: isWaiting ? "approval" : isActive ? activePhase(assistants) : "unknown",
       lastMessage: assistantText || undefined,
-      lastMessageItemId: assistantTextParts.at(-1)?.id,
+      lastMessageItemId: lastAssistantTextPart?.id,
       revision: 0,
       observedAt: iso(input.session.time.updated),
       startedAt: iso(message.info.time.created),
@@ -456,6 +465,10 @@ export function openCodeErrorText(value: unknown): string | undefined {
   if (!value) return undefined;
   if (typeof value === "string") return value.slice(0, 4000);
   const record = asRecord(value);
+  // OpenCode records a user-requested stop as MessageAbortedError. Its own UI
+  // treats that as an interruption rather than a failure, so it must not leak
+  // into the session error channel consumed by TaskHandoff.
+  if (record.name === "MessageAbortedError") return undefined;
   const data = asRecord(record.data);
   const message = typeof data.message === "string" ? data.message : typeof record.message === "string" ? record.message : undefined;
   return (message || safeJson(value))?.slice(0, 4000);

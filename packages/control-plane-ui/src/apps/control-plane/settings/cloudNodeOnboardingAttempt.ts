@@ -148,14 +148,19 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
     ? candidates.find((item) => item.requestId === attempt.value?.trust?.requestId)
       || candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0]
     : candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
-  if (!trust && !claim && attempt.value.phase === "approved-connecting") {
-    // A revoked or cancelled join no longer has a trust request, a claim or a
-    // channel. Keeping the attempt alive would keep the node marked as claimed.
-    resetCloudNodeOnboarding();
-    return undefined;
-  }
-  if (channelError && !trust) {
-    update({ phase: "failed", trust, error: channelError.message });
+  if (!trust && !claim) {
+    if (channelError) {
+      update({ phase: "failed", trust, error: channelError.message });
+      return attempt.value;
+    }
+    if (attempt.value.phase === "waiting-node-trust" || attempt.value.phase === "approved-connecting") {
+      // A revoked or cancelled join drops the trust request and the claim in the
+      // same snapshot. Without the claim there is no evidence that the node
+      // approved anything, so the attempt must end instead of claiming it is
+      // connecting.
+      resetCloudNodeOnboarding();
+      return undefined;
+    }
     return attempt.value;
   }
   if (trust) {
@@ -170,7 +175,9 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
     else update({ phase: "waiting-node-trust", trust, error: channelError?.message, reapplyDeadlineAt: undefined });
     return attempt.value;
   }
-  if (attempt.value.phase === "waiting-node-trust" || attempt.value.phase === "approved-connecting") {
+  if (claim && (attempt.value.phase === "waiting-node-trust" || attempt.value.phase === "approved-connecting")) {
+    // A surviving claim is the authoritative signal that the Control Plane has
+    // requested the channel; the trust entry disappears only once it is used.
     update({ phase: "approved-connecting", trust: undefined, error: undefined, reapplyDeadlineAt: undefined });
     return attempt.value;
   }

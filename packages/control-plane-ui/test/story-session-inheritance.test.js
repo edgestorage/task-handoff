@@ -15,9 +15,18 @@ test("a new Story session inherits the newest session through the shared Story s
 test("the Story composer passes the inherited session so its worktree can be inherited too", () => {
   assert.match(storyView, /const newSessionInitialWorktreeSessionId = ref\(""\);/);
   assert.match(storyView, /newSessionInitialWorktreeSessionId\.value = latest\?\.session\.id \|\| "";/);
-  assert.match(storyView, /function selectCreationInstance\(instanceId: string\) \{ newSessionInstanceId\.value = instanceId; newSessionInitialCwd\.value = ""; newSessionInitialCwdFolderId\.value = ""; newSessionInitialWorktreeSessionId\.value = ""; \}/);
+  assert.match(storyView, /function selectCreationInstance\(instanceId: string\) \{ newSessionInstanceId\.value = instanceId; newSessionInitialAgent\.value = ""; newSessionInitialCwd\.value = ""; newSessionInitialCwdFolderId\.value = ""; newSessionInitialWorktreeSessionId\.value = ""; \}/);
   assert.match(storyView, /:creation-initial-worktree-session-id="newSessionInitialWorktreeSessionId"/);
   assert.match(aiSessionPanel, /creationInitialWorktreeSessionId\?: string;/);
+});
+
+test("a new Story session inherits the newest session agent", () => {
+  assert.match(storyView, /const newSessionInitialAgent = ref\(""\);/);
+  assert.match(storyView, /newSessionInitialAgent\.value = latest\?\.session\.agent \|\| "";/);
+  assert.match(storyView, /:creation-initial-agent="newSessionInitialAgent"/);
+  assert.match(aiSessionPanel, /creationInitialAgent\?: string;/);
+  assert.match(aiSessionPanel, /preferredAiSessionCreationAgent\(\s*props\.creationInitialAgent \|\| "",\s*aiSessionLaunchableApps\.value\.map\(\(app\) => app\.id\),\s*\)/);
+  assert.match(aiSessionPanel, /if \(latest\?\.agent && aiSessionLaunchableApps\.value\.some\(\(app\) => app\.id === latest\.agent\)\) \{\s*selectNewSessionApp\(latest\.agent\);\s*\}/);
 });
 
 test("the inherited worktree comes from the session repository context and is applied once", () => {

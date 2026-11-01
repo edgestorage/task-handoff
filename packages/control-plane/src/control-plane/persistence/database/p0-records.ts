@@ -72,6 +72,7 @@ export const ModelRecordSchema = z.object({
     upstreamName: z.string().trim().min(1).max(240),
     order: z.number().int().nonnegative(),
   }).strict()).max(64).default([]),
+  capabilities: z.object({ image: z.boolean().default(false) }).default({ image: false }),
   protocols: z.array(z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"])).max(3),
   app: z.enum(["codex", "claude", "opencode"]),
   enabled: z.boolean(),

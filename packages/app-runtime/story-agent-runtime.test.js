@@ -34,13 +34,31 @@ test("OpenCode merges the managed file plugin with its model configuration", () 
   fs.writeFileSync(pluginPath, "export default {};");
   try {
     const config = openCodeServerConfig({
-      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "provider/model", plugin: ["existing-plugin"] }),
+      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        model: "provider/model",
+        plugin: ["existing-plugin"],
+        agent: { build: { temperature: 0.2 }, title: { model: "legacy/title-model" } },
+      }),
       TASK_HANDOFF_OPENCODE_STORY_PLUGIN: pluginPath,
     });
     assert.equal(config.model, "provider/model");
     assert.deepEqual(config.plugin, ["existing-plugin", new URL(`file://${pluginPath}`).href]);
+    assert.deepEqual(config.agent, {
+      build: { temperature: 0.2 },
+      title: { model: "legacy/title-model", disable: true },
+    });
     assert.equal(JSON.stringify(config).includes("TOKEN"), false);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("OpenCode always disables native title generation, even without the story plugin", () => {
+  const config = openCodeServerConfig({
+    TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({ agent: { title: { disable: false }, build: { temperature: 0.1 } } }),
+  });
+  assert.deepEqual(config.agent, {
+    title: { disable: true },
+    build: { temperature: 0.1 },
+  });
 });

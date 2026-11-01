@@ -106,6 +106,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="cloud-control-planes" options={{ title: t('nav.controlPlanes'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="instances/[instanceId]/worktrees" options={{ title: t('repository.worktrees.sectionTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosSessionHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]" options={{ title: t('nav.stories'), ...iosTransparentHeaderOptions(dark) }} />

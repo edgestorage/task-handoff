@@ -373,8 +373,9 @@ export function useRepositoryContextQuery(
       && resolvedTarget.value.instanceId
       && resolvedTarget.value.sessionId
     )),
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
     retry: false,
-    refetchOnWindowFocus: true,
   });
 }
 

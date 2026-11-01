@@ -16,7 +16,8 @@ import { sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions"
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
-import { isRetainedAiSessionAttachment, materializeAiSessionAttachments } from "./ai-session-attachments";
+import { appendAttachmentPaths, isRetainedAiSessionAttachment, materializeAiSessionAttachments } from "./ai-session-attachments";
+import { AI_SESSION_TITLE_OUTPUT_SCHEMA, aiSessionTitlePrompt, parseAiSessionTitle } from "./ai-session-title";
 import { OpenCodeClient, type OpenCodeConnection, type OpenCodePermissionRule, type OpenCodePromptPart } from "./opencode/client";
 import { openCodeSessionPermissionRules } from "./opencode/story-tool-permissions.ts";
 import {
@@ -55,6 +56,12 @@ export type OpenCodeSessionBridgeOptions = {
   closedProviderSessionIds?: () => ReadonlySet<string>;
   resolveModelSelection?: (selection: AiSessionModelSelection) => { providerID: string; modelID: string } | undefined;
   projectModelSelection?: (providerID: string, modelID: string) => AiSessionModelSelection | undefined;
+  generateTitle?: (input: {
+    prompt: string;
+    outputSchema: Record<string, unknown>;
+    modelSelection: AiSessionModelSelection;
+    reasoningEffort?: AiSessionReasoningEffort;
+  }) => Promise<string | undefined>;
 };
 
 export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessionDiscoveryProvider {
@@ -70,6 +77,9 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
   private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; delta: string }>>();
   private readonly retryWarningsBySession = new Map<string, { turnId: string; message: string }>();
+  private readonly armedTitleSessions = new Set<string>();
+  private readonly attemptedTitleSessions = new Set<string>();
+  private readonly titleGenerationBySession = new Map<string, number>();
   private readonly timelineListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
@@ -133,6 +143,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const model = input.modelSelection ? this.modelRef(input.modelSelection, input.reasoningEffort) : undefined;
     if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
     const created = await this.client.createSession(input.cwd, model, openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools));
+    this.armTitleGeneration(created.id);
     await this.reconcile(created.id, created.directory, created, "ai-session");
     return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const, modelSelection: input.modelSelection, reasoningEffort: input.reasoningEffort };
   }
@@ -152,8 +163,10 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (current.time.archived) {
       throw aiSessionControlError("AI_SESSION_RESUME_UNAVAILABLE", "OpenCode cannot restore an archived session.", 409);
     }
-    if (storyAgentTools === undefined) return;
-    await this.client.setPermission(providerSessionId, directory, openCodeSessionPermissionRules(undefined, storyAgentTools, current.permission)!);
+    if (storyAgentTools !== undefined) {
+      await this.client.setPermission(providerSessionId, directory, openCodeSessionPermissionRules(undefined, storyAgentTools, current.permission)!);
+    }
+    if (!current.parentID && isDefaultOpenCodeSessionTitle(current.title)) this.armTitleGeneration(providerSessionId);
   }
 
   async updateModelSelection(session: AiSessionStatus, selection: AiSessionModelSelection) {
@@ -195,6 +208,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (!session.providerSessionId || !session.cwd) {
       throw aiSessionControlError("AI_SESSION_RENAME_UNSUPPORTED", "OpenCode session identity is incomplete.", 409);
     }
+    this.cancelTitleGeneration(session.providerSessionId);
     const updated = await this.client.renameSession(session.providerSessionId, session.cwd, title);
     await this.reconcile(updated.id, updated.directory, updated, "ai-session");
     const actual = this.registry.getByProviderSessionId(this.agent, session.providerSessionId)?.title;
@@ -248,6 +262,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     }
     const lineage = { kind: "fork" as const, parentProviderSessionId: providerSessionId, throughTurnId: input.throughTurnId };
     this.lineageBySession.set(forked.id, lineage);
+    this.armTitleGeneration(forked.id);
     await this.reconcile(forked.id, forked.directory, forked, "ai-session");
     return {
       providerSessionId: forked.id,
@@ -389,12 +404,23 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     }
     const projection = await this.refreshProjection(providerSessionId, directory, supplied);
     const existing = this.registry.getByProviderSessionId(this.agent, providerSessionId);
-    return this.registry.applyAdapterSnapshot({
+    const session = this.registry.applyAdapterSnapshot({
       ...projection.snapshot,
       lineage: this.lineageBySession.get(providerSessionId) || projection.snapshot.lineage,
       creationSource: existing?.creationSource || creationSource || "ai-session",
       source: "adapter-snapshot",
     });
+    const userPrompt = projection.snapshot.turns?.find((turn) => turn.userPrompt?.trim())?.userPrompt;
+    if (session && userPrompt && this.armedTitleSessions.has(providerSessionId)) {
+      void this.maybeGenerateTitle(providerSessionId, directory, userPrompt).catch((error) => {
+        this.options.onDiagnostic?.({
+          code: "OPENCODE_SESSION_TITLE_GENERATION_FAILED",
+          providerSessionId,
+          error: errorText(error),
+        });
+      });
+    }
+    return session;
   }
 
   private async refreshProjection(providerSessionId: string, directory: string, supplied?: OpenCodeSession) {
@@ -405,7 +431,21 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       this.client.permissions(directory),
     ]);
     this.directoryBySession.set(providerSessionId, session.directory);
-    const observedProjection = projectOpenCodeSession({ session, status: statuses[providerSessionId], messages, permissions, projectModelSelection: this.options.projectModelSelection });
+    const attachedSessionId = this.registry.getByProviderSessionId(this.agent, providerSessionId)?.id;
+    const attachmentStore = attachedSessionId ? this.registry.conversationAttachmentStore() : undefined;
+    const observedProjection = projectOpenCodeSession({
+      session,
+      status: statuses[providerSessionId],
+      messages,
+      permissions,
+      projectModelSelection: this.options.projectModelSelection,
+      resolveConversationAttachments: attachmentStore && attachedSessionId
+        ? (messageId, projected) => {
+            const stored = attachmentStore.attachmentsForMessage(attachedSessionId, messageId);
+            return stored.length ? stored : projected;
+          }
+        : undefined,
+    });
     const pending = this.pendingSettingsBySession.get(providerSessionId);
     let projection = observedProjection;
     if (pending) {
@@ -495,6 +535,10 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (event.payload.type === "session.updated" && sessionInfoArchived(properties)) {
       await this.discardSession(sessionID, "closed");
       return;
+    }
+    if (event.payload.type === "session.updated") {
+      const title = stringValue(info.title);
+      if (title && !isDefaultOpenCodeSessionTitle(title)) this.cancelTitleGeneration(sessionID);
     }
     const directory = event.directory || this.directoryBySession.get(sessionID);
     if (!directory) return;
@@ -642,6 +686,9 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     this.pendingSettingsBySession.delete(providerSessionId);
     this.pendingPartDeltas.delete(providerSessionId);
     this.retryWarningsBySession.delete(providerSessionId);
+    this.armedTitleSessions.delete(providerSessionId);
+    this.attemptedTitleSessions.delete(providerSessionId);
+    this.titleGenerationBySession.set(providerSessionId, (this.titleGenerationBySession.get(providerSessionId) || 0) + 1);
     const timer = this.reconcileTimers.get(providerSessionId);
     if (timer) clearTimeout(timer);
     this.reconcileTimers.delete(providerSessionId);
@@ -674,11 +721,77 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       }
     }
   }
+
+  private armTitleGeneration(providerSessionId: string) {
+    if (this.attemptedTitleSessions.has(providerSessionId)) return;
+    this.armedTitleSessions.add(providerSessionId);
+    if (!this.titleGenerationBySession.has(providerSessionId)) this.titleGenerationBySession.set(providerSessionId, 0);
+  }
+
+  private cancelTitleGeneration(providerSessionId: string) {
+    this.armedTitleSessions.delete(providerSessionId);
+    this.attemptedTitleSessions.add(providerSessionId);
+    this.titleGenerationBySession.set(providerSessionId, (this.titleGenerationBySession.get(providerSessionId) || 0) + 1);
+  }
+
+  private async maybeGenerateTitle(providerSessionId: string, directory: string, userPrompt: string) {
+    if (!this.armedTitleSessions.delete(providerSessionId) || this.attemptedTitleSessions.has(providerSessionId)) return;
+    this.attemptedTitleSessions.add(providerSessionId);
+    const generation = this.titleGenerationBySession.get(providerSessionId) || 0;
+    const session = this.registry.getByProviderSessionId(this.agent, providerSessionId);
+    if (!session?.modelSelection) {
+      this.options.onDiagnostic?.({ code: "OPENCODE_SESSION_TITLE_MODEL_UNRESOLVED", providerSessionId });
+      return;
+    }
+    if (!this.options.generateTitle) {
+      this.options.onDiagnostic?.({ code: "OPENCODE_SESSION_TITLE_GENERATION_UNSUPPORTED", providerSessionId });
+      return;
+    }
+    const providerSession = await this.client.getSession(providerSessionId, directory);
+    if (providerSession.parentID || !isDefaultOpenCodeSessionTitle(providerSession.title)) return;
+
+    const response = await this.options.generateTitle({
+      prompt: aiSessionTitlePrompt(userPrompt),
+      outputSchema: AI_SESSION_TITLE_OUTPUT_SCHEMA,
+      modelSelection: session.modelSelection,
+      ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
+    });
+    const title = response ? parseAiSessionTitle(response) : undefined;
+    if (!title) throw new Error("OpenCode title model returned an invalid structured title.");
+    if (!this.isTitleGenerationCurrent(providerSessionId, generation)) return;
+
+    const latest = await this.client.getSession(providerSessionId, directory);
+    if (!this.isTitleGenerationCurrent(providerSessionId, generation) || !isDefaultOpenCodeSessionTitle(latest.title)) return;
+    await this.client.renameSession(providerSessionId, directory, title);
+    await this.reconcile(providerSessionId, directory);
+  }
+
+  private isTitleGenerationCurrent(providerSessionId: string, generation: number) {
+    return !this.closed
+      && this.titleGenerationBySession.get(providerSessionId) === generation
+      && Boolean(this.registry.getByProviderSessionId(this.agent, providerSessionId));
+  }
+}
+
+// OpenCode forwards file parts to the provider unchanged, and provider adapters
+// only accept image, audio, PDF, and text media types. Anything else, such as
+// browser uploads typed application/octet-stream, must be delivered as a
+// workspace path reference instead of a binary part. This mirrors the Codex
+// runtime, which only inlines images and appends every other attachment path.
+const OPEN_CODE_FILE_PART_MIME = /^(?:audio|image|text)\//;
+
+function supportsOpenCodeFilePart(mime: string) {
+  return OPEN_CODE_FILE_PART_MIME.test(mime) || mime === "application/pdf";
 }
 
 async function promptParts(cwd: string, input: AiSessionSendInput): Promise<OpenCodePromptPart[]> {
-  const parts: OpenCodePromptPart[] = [{ type: "text", text: input.message }];
+  const parts: OpenCodePromptPart[] = [];
+  const pathReferences: ReturnType<typeof materializeAiSessionAttachments> = [];
   for (const attachment of input.attachments || []) {
+    if (!supportsOpenCodeFilePart(attachment.mime)) {
+      pathReferences.push(materializeAiSessionAttachments([attachment], cwd)[0]);
+      continue;
+    }
     if (attachment.source.type === "inline") {
       parts.push({ type: "file", mime: attachment.mime, filename: attachment.name, url: `data:${attachment.mime};base64,${attachment.source.data}` });
       continue;
@@ -697,7 +810,8 @@ async function promptParts(cwd: string, input: AiSessionSendInput): Promise<Open
     }
     parts.push({ type: "file", mime: attachment.mime, filename: attachment.name, url: pathToFileURL(attachment.source.path).href });
   }
-  return parts;
+  const text = pathReferences.length ? appendAttachmentPaths(input.message, pathReferences) : input.message;
+  return [{ type: "text", text }, ...parts];
 }
 
 function nextUserMessageId(messages: OpenCodeMessage[], throughUserMessageId: string) {
@@ -725,6 +839,10 @@ function sessionInfoArchived(properties: Record<string, unknown>) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value ? value : undefined;
+}
+
+function isDefaultOpenCodeSessionTitle(title: string) {
+  return /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title);
 }
 
 function isNotFound(error: unknown) {

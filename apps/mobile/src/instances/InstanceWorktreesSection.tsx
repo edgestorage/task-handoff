@@ -18,7 +18,7 @@ import type { MobileNewWorktreeSelection } from '../repository/worktree-selectio
 
 type LoadStatus = 'loading' | 'ready' | 'unsupported' | 'error';
 
-export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, workspacePath }: { instanceId: string; nodeId: string; refreshToken?: number; workspacePath?: string }) {
+export function InstanceWorktreesSection({ instanceId, nodeId, standalone = false, workspacePath }: { instanceId: string; nodeId: string; standalone?: boolean; workspacePath?: string }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const toast = useMobileToast();
@@ -97,7 +97,7 @@ export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, wor
       (cause) => { if (live) applyWorktreeError(cause); },
     );
     return () => { live = false; };
-  }, [applyWorktreeData, applyWorktreeError, loadWorktrees, refreshToken]);
+  }, [applyWorktreeData, applyWorktreeError, loadWorktrees]);
   useEffect(() => subscribeToWorktreeForeground(() => { void refresh(); }), [refresh]);
 
   const reportError = useCallback((cause: unknown, fallback: string) => {
@@ -212,8 +212,8 @@ export function InstanceWorktreesSection({ instanceId, nodeId, refreshToken, wor
   return <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
     <View style={styles.header}>
       <View style={styles.headerCopy}>
-        <Text style={[styles.title, { color: colors.text }]}>{t('repository.worktrees.sectionTitle')}</Text>
-        <Text style={[styles.description, { color: colors.textMuted }]}>{worktrees ? t('repository.worktrees.count', { count: worktrees.items.length }) : t('repository.worktrees.sectionDescription')}</Text>
+        <Text style={[styles.title, { color: colors.text }]}>{standalone && worktrees ? t('repository.worktrees.count', { count: worktrees.items.length }) : t('repository.worktrees.sectionTitle')}</Text>
+        <Text style={[styles.description, { color: colors.textMuted }]}>{!standalone && worktrees ? t('repository.worktrees.count', { count: worktrees.items.length }) : t('repository.worktrees.sectionDescription')}</Text>
       </View>
       <Pressable accessibilityLabel={t('repository.worktrees.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void refresh(); }} style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
         <Icon color={colors.textMuted} name="refresh" size={16} />
