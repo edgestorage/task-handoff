@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DateTimeSchema, IdSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
 import { NodeAccessFieldsSchema, NodeRelayHandleSchema, NodeResourceAccessSchema, RESOURCE_SHARING_CAPABILITY_HEADER, TrafficClassSchema, validateNodeAccessFields } from "./relay.ts";
-import { OfficialAudience, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION } from "./versions.ts";
+import { NODE_RELAY_CONTROL_PROTOCOL_VERSION, OfficialAudience, OUTBOUND_CONNECTION_PROTOCOL_VERSION, RELAY_FRAMING_PROTOCOL_VERSION } from "./versions.ts";
 
 /** Ed25519 public keys are 32-byte base64url strings, same shape as every other cloud key. */
 export const PublicKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -311,6 +311,60 @@ export const NodeRelayAllocationErrorSchema = z.strictObject({
   }),
 });
 
+/**
+ * The node control connection only wakes the Node Agent. Allocation bodies stay
+ * on the HTTPS snapshot endpoint, so an event can be lost or duplicated without
+ * corrupting relay state.
+ */
+export const NodeRelayControlRegisterSchema = z.strictObject({
+  type: z.literal("register"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+  nodeId: IdSchema.optional(),
+});
+
+export const NodeRelayControlRegisteredSchema = z.strictObject({
+  type: z.literal("registered"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+  nodeHandle: NodeRelayHandleSchema,
+  leaseExpiresAt: DateTimeSchema,
+});
+
+export const NodeRelayControlHeartbeatSchema = z.strictObject({
+  type: z.literal("heartbeat"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+});
+
+export const NodeRelayControlHeartbeatAckSchema = z.strictObject({
+  type: z.literal("heartbeat-ack"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+  leaseExpiresAt: DateTimeSchema,
+});
+
+export const NodeRelayControlChangedSchema = z.strictObject({
+  type: z.literal("node-relay-changed"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+  reason: z.string().trim().min(1).max(80),
+});
+
+export const NodeRelayControlErrorSchema = z.strictObject({
+  type: z.literal("error"),
+  protocolVersion: z.literal(NODE_RELAY_CONTROL_PROTOCOL_VERSION),
+  code: z.string().trim().min(1).max(80),
+  message: z.string().trim().min(1).max(512),
+});
+
+export const NodeRelayControlClientMessageSchema = z.discriminatedUnion("type", [
+  NodeRelayControlRegisterSchema,
+  NodeRelayControlHeartbeatSchema,
+]);
+
+export const NodeRelayControlServerMessageSchema = z.discriminatedUnion("type", [
+  NodeRelayControlRegisteredSchema,
+  NodeRelayControlHeartbeatAckSchema,
+  NodeRelayControlChangedSchema,
+  NodeRelayControlErrorSchema,
+]);
+
 export type NodeRelayRegistryProjection = z.infer<typeof NodeRelayRegistryProjectionSchema>;
 export type RelayNodeChannelAttachCapability = z.infer<typeof RelayNodeChannelAttachCapabilitySchema>;
 export type NodeRelayClaimGrant = z.infer<typeof NodeRelayClaimGrantSchema>;
@@ -324,3 +378,6 @@ export type NodeRelayProbeMeasurement = z.infer<typeof NodeRelayProbeMeasurement
 export type NodeRelayProbeEvidence = z.infer<typeof NodeRelayProbeEvidenceSchema>;
 export type NodeRelayAllocationRequestV2 = z.infer<typeof NodeRelayAllocationRequestV2Schema>;
 export type NodeRelayAllocationError = z.infer<typeof NodeRelayAllocationErrorSchema>;
+export type NodeRelayControlRegister = z.infer<typeof NodeRelayControlRegisterSchema>;
+export type NodeRelayControlRegistered = z.infer<typeof NodeRelayControlRegisteredSchema>;
+export type NodeRelayControlChanged = z.infer<typeof NodeRelayControlChangedSchema>;

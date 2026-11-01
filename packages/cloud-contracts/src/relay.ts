@@ -15,6 +15,8 @@ export const RelayChannelKindSchema = z.enum(["access", "node"]);
 export const RESOURCE_SHARING_CAPABILITY_HEADER = "x-task-handoff-capabilities";
 export const RESOURCE_SHARING_CLIENT_CAPABILITY = "resource-sharing-v1";
 export const CONTROL_PLANE_SHARED_ACCESS_CAPABILITY = "shared-access-v1";
+/** The client follows the Coordinator-issued lease and accepts heartbeat acknowledgements. */
+export const CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY = "control-plane-lease-renewal-v1";
 
 /** Capability lists are comma-separated wire tokens; unknown tokens stay inert. */
 export function capabilityHeaderIncludes(value: string | undefined, capability: string) {
@@ -208,7 +210,7 @@ export const OutboundConnectionRegistrationPayloadSchema = z.strictObject({
   // so the cloud never has to guess which channel kinds a live connection may use.
   scopes: CloudRelayScopesSchema.optional(),
   epoch: z.number().int().nonnegative(),
-  capabilities: z.array(z.enum(["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, RELAY_SESSION_RESUME_CAPABILITY])).min(1),
+  capabilities: z.array(z.enum(["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, RELAY_SESSION_RESUME_CAPABILITY])).min(1),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
 }).superRefine((value, context) => {

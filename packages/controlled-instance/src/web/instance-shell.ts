@@ -392,11 +392,13 @@ export class InstanceShellRuntime {
 
   handleProtocols(protocols: Set<string>, request: IncomingMessage): string | false | undefined {
     const pathname = request.url ? new URL(request.url, "http://localhost").pathname : "";
-    if (pathname !== "/api/internal/instance-shell") return undefined;
     const values = Array.from(protocols);
-    return values.length === 1 && values[0] === INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL
-      ? INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL
-      : false;
+    if (pathname === "/api/internal/instance-shell") {
+      return values.length === 1 && values[0] === INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL
+        ? INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL
+        : false;
+    }
+    return values[0];
   }
 
   private trackPty(pty: PtyProcess) {

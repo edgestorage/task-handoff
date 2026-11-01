@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import {
   CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION,
   CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY,
+  CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY,
   CONTROL_PLANE_SHARED_ACCESS_CAPABILITY,
   ControlPlaneAccessSettingsViewSchema,
   NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NODE_AGENT,
@@ -31,13 +32,20 @@ import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-devic
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
 type CloudAccountScope = "account:sign-in" | "control-plane:bind";
 type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
-const ACCOUNT_REQUEST_POLL_MS = 3_000;
 const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
 const DEFAULT_CONTROL_REGISTRATION_TIMEOUT_MS = 15_000;
 const DEFAULT_CONTROL_REQUEST_TIMEOUT_MS = 30_000;
+const CONTROL_HEARTBEAT_MAX_INTERVAL_MS = 30_000;
 // Check often, but refresh only after the cached access token enters its expiry window. A remote
 // revocation therefore surfaces within one access-token lifetime instead of waiting half a day.
 const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
+
+/** Keep the heartbeat safely inside the lease the Coordinator granted. */
+export function controlPlaneHeartbeatIntervalMs(leaseExpiresAt: unknown, now = Date.now()) {
+  const remaining = typeof leaseExpiresAt === "string" ? Date.parse(leaseExpiresAt) - now : Number.NaN;
+  if (!Number.isFinite(remaining) || remaining <= 0) return CONTROL_HEARTBEAT_MAX_INTERVAL_MS;
+  return Math.min(CONTROL_HEARTBEAT_MAX_INTERVAL_MS, Math.max(1_000, Math.floor(remaining / 3)));
+}
 
 export class CloudCoordinatorConnector {
   private current?: RpcConnection;
@@ -58,7 +66,7 @@ export class CloudCoordinatorConnector {
       publicKey: identity.publicKey, publicKeyFingerprint: identity.fingerprint,
       ...(input.bindingId ? { bindingId: input.bindingId, bindingRevision: input.bindingRevision } : {}),
       scopes: input.scopes,
-      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
+      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     const socketUrl = new URL("/api/v1/control-plane/connect", input.serviceOrigin);
@@ -97,7 +105,6 @@ export class CloudConnectivityBackgroundRuntime {
   private readonly control: CloudControlConnectionManager;
   private readonly events: CloudAuthorityEventConsumer;
   private timer?: ReturnType<typeof setTimeout>;
-  private accountTimer?: ReturnType<typeof setTimeout>;
   private accountRenewalTimer?: ReturnType<typeof setInterval>;
   private running = false;
   private connecting?: Promise<unknown>;
@@ -312,7 +319,6 @@ export class CloudConnectivityBackgroundRuntime {
   async stop() {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
-    if (this.accountTimer) clearTimeout(this.accountTimer);
     if (this.accountRenewalTimer) clearInterval(this.accountRenewalTimer);
     this.accountRenewalTimer = undefined;
     for (const timer of this.nodeRelayRecoveryTimers.values()) clearTimeout(timer);
@@ -333,7 +339,6 @@ export class CloudConnectivityBackgroundRuntime {
   async beginAccountRequest(input: { scope: CloudAccountScope; challengeCode?: string; ownerUserId?: string }) {
     const result = await this.request("create-control-plane-request", { scope: input.scope, ...(input.challengeCode ? { challengeCode: input.challengeCode } : {}) }) as CreateRequestResult;
     this.options.accountSession.beginRequest({ requestId: result.requestId, authorizationUrl: result.authorizationUrl, scope: result.scope, expiresAt: result.expiresAt, ...(input.ownerUserId ? { ownerUserId: input.ownerUserId } : {}) });
-    this.scheduleAccountPoll();
     return result;
   }
 
@@ -751,8 +756,8 @@ export class CloudConnectivityBackgroundRuntime {
 
   /**
    * Runs on every fresh connection: picks up a decision the Control Plane missed while it was
-   * offline and keeps the account credential rotated. Consumers degrade to polling, so a lost
-   * push never leaves the UI stuck on "waiting for approval".
+   * offline and keeps the account credential rotated. While the connection is healthy the
+   * Coordinator pushes resolution; this snapshot is only needed on reconnect.
    */
   private async reconcileAccount() {
     const pending = this.options.accountSession.pendingRequest();
@@ -763,7 +768,6 @@ export class CloudConnectivityBackgroundRuntime {
       } catch { /* the request keeps its own TTL and the UI can retry */ }
     }
     if (this.options.accountSession.refreshCredential() && !this.hasFreshAccessToken()) await this.refreshAccountCredential();
-    this.scheduleAccountPoll();
   }
 
   private applyAccountRequestResolution(requestId: string, result: { status?: unknown; errorCode?: unknown } | undefined) {
@@ -787,7 +791,6 @@ export class CloudConnectivityBackgroundRuntime {
     });
     if (typeof payload.accessToken === "string") this.accessToken = { value: payload.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(payload.accessExpiresIn) * 1_000 };
     if (requestId) this.options.accountSession.resolveRequest({ requestId, status: "delivered" });
-    this.scheduleAccountPoll();
     return snapshot;
   }
 
@@ -824,13 +827,6 @@ export class CloudConnectivityBackgroundRuntime {
     await this.refreshAccountCredential();
   }
 
-  private scheduleAccountPoll(delay = this.options.accountRequestPollMs ?? ACCOUNT_REQUEST_POLL_MS) {
-    if (!this.running || this.accountTimer) return;
-    if (!this.options.accountSession.hasPendingRequest()) return;
-    this.accountTimer = setTimeout(() => { this.accountTimer = undefined; void this.reconcileAccount().catch(() => undefined).finally(() => this.scheduleAccountPoll()); }, delay);
-    this.accountTimer.unref();
-  }
-
   private cloudFetch(path: string, init?: RequestInit) {
     assertCloudOriginMatches(this.options.state.snapshot());
     if (this.options.cloudDiscovery) return this.options.cloudDiscovery.request(path, init);
@@ -856,6 +852,7 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
     let intentional = false;
     let lastErrorCode: string | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let heartbeatIntervalMs: number | undefined;
     const requestTimeoutMs = positiveDuration(options.requestTimeoutMs, DEFAULT_CONTROL_REQUEST_TIMEOUT_MS);
     let registrationTimer: ReturnType<typeof setTimeout> | undefined;
     const clearRegistrationTimer = () => {
@@ -864,6 +861,14 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
       registrationTimer = undefined;
     };
     const fail = (error: Error) => { for (const item of pending.values()) item.reject(error); pending.clear(); if (!registered) reject(error); };
+    const startHeartbeat = (leaseExpiresAt: unknown) => {
+      const nextIntervalMs = controlPlaneHeartbeatIntervalMs(leaseExpiresAt, Date.now());
+      if (heartbeat && heartbeatIntervalMs === nextIntervalMs) return;
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeatIntervalMs = nextIntervalMs;
+      heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), nextIntervalMs);
+      heartbeat.unref();
+    };
     registrationTimer = setTimeout(() => {
       registrationTimer = undefined;
       if (registered) return;
@@ -894,12 +899,20 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
           }
         });
       },
-      async close(reason = "normal") { intentional = true; if (heartbeat) clearInterval(heartbeat); socket.close(1000, reason.slice(0, 120)); },
+      async close(reason = "normal") { intentional = true; if (heartbeat) clearInterval(heartbeat); heartbeat = undefined; heartbeatIntervalMs = undefined; socket.close(1000, reason.slice(0, 120)); },
     };
     socket.on("open", () => socket.send(JSON.stringify(options.register)));
     const handleMessage = async (raw: WebSocket.RawData) => {
       let message: any; try { message = JSON.parse(raw.toString()); } catch { return socket.close(1002, "invalid-json"); }
-      if (message.type === "registered") { const registration = OutboundConnectionRegistrationResponseSchema.parse(message); options.onRegistered?.(registration); registered = true; clearRegistrationTimer(); heartbeat = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000); heartbeat.unref(); return resolve(connection); }
+      if (message.type === "registered") {
+        const registration = OutboundConnectionRegistrationResponseSchema.parse(message);
+        options.onRegistered?.(registration);
+        registered = true;
+        clearRegistrationTimer();
+        startHeartbeat(registration.leaseExpiresAt);
+        return resolve(connection);
+      }
+      if (message.type === "heartbeat-ack") { startHeartbeat(message.leaseExpiresAt); return; }
       if (message.type === "event") return await options.onEvent(message.event);
       if (message.type === "response") {
         const item = pending.get(message.requestId);
@@ -952,6 +965,8 @@ function openRpcConnection(socket: WebSocket, options: { register: unknown; onEv
     socket.on("close", (code, reason) => {
       clearRegistrationTimer();
       if (heartbeat) clearInterval(heartbeat);
+      heartbeat = undefined;
+      heartbeatIntervalMs = undefined;
       const closeReason = boundedText(reason.toString("utf8"), 120);
       // Compatibility for v0.0.46: the Coordinator reports a live remote
       // binding by closing registration with this reason instead of an RPC
@@ -991,7 +1006,6 @@ type CloudRuntimeOptions = {
   relayLinks?: RelayLinkProbeLoop;
   relayLinkProbeIntervalMs?: number;
   accountRenewalIntervalMs?: number;
-  accountRequestPollMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
   verifyRelaySessionGrant?: (grant: unknown) => any;
   cloudRelaySessionsPath?: string;

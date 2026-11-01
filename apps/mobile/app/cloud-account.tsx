@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import type { OfficialProviderSummary } from '@task-handoff/cloud-contracts/mobile';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
@@ -51,10 +52,6 @@ function CloudAccountContent() {
     } finally { setBusy(false); }
   }, [locale]);
 
-  useEffect(() => {
-    const subscription = Linking.addEventListener('url', ({ url }) => { void complete(url); });
-    return () => subscription.remove();
-  }, [complete]);
   useEffect(() => { void hasActiveCloudAccount().then((active) => { if (active) router.replace('/cloud-control-planes' as never); }); }, []);
 
   useEffect(() => {
@@ -74,8 +71,10 @@ function CloudAccountContent() {
         email: providerId === 'email' ? email.trim() : undefined,
         password: providerId === 'email' ? password : undefined,
       }) as { authorizationUrl?: string; code?: string; state?: string };
-      if (result.authorizationUrl) await Linking.openURL(result.authorizationUrl);
-      else if (result.code && result.state) await complete(`${REDIRECT_URI}?code=${encodeURIComponent(result.code)}&state=${encodeURIComponent(result.state)}`);
+      if (result.authorizationUrl) {
+        const session = await WebBrowser.openAuthSessionAsync(result.authorizationUrl, REDIRECT_URI);
+        if (session.type === 'success') await complete(session.url);
+      } else if (result.code && result.state) await complete(`${REDIRECT_URI}?code=${encodeURIComponent(result.code)}&state=${encodeURIComponent(result.state)}`);
     } catch (cause) {
       if (cloudErrorCode(cause) === 'TOTP_REQUIRED') {
         router.push('/cloud-account-totp' as never);

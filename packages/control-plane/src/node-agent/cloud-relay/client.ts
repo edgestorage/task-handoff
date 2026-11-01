@@ -10,6 +10,7 @@ import type { NodeAgentIdentityService } from "../identity/service.ts";
 import { NodeRelayCloudClient } from "./cloud-client.ts";
 import { verifyNodeRelayClaimGrant } from "./claim-grant.ts";
 import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
+import { NodeRelayControlConnection } from "./control-connection.ts";
 import { probeNodeRelayTargets } from "./probe.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
 import type {
@@ -21,8 +22,6 @@ import type {
 import { cloudOriginError, resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
 import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
 
-const DEFAULT_POLL_INTERVAL_MS = 15_000;
-const DEFAULT_IDLE_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_LEASE_RENEWAL_RATIO = 0.15;
 const DEFAULT_CREDENTIAL_RENEW_BEFORE_MS = 5 * 24 * 60 * 60 * 1000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 10_000;
@@ -31,6 +30,9 @@ const CREDENTIAL_GRACE_MS = 5 * 60 * 1000;
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 const POLL_RETRY_AFTER_MAX_MS = 5 * 60_000;
+const ALLOCATION_REFRESH_LEAD_RATIO = 0.1;
+const MIN_MAINTENANCE_DELAY_MS = 1_000;
+const MAX_MAINTENANCE_DELAY_MS = 2_147_000_000;
 
 type VerifiedAllocation = { allocation: NodeRelayNodeAllocation; grant: NodeRelayClaimGrant };
 
@@ -53,7 +55,6 @@ type ChannelEntry = {
   supervisor?: WebSocketConnectionSupervisor;
   retry: EventConnectionRetryTimer;
   attempt?: ChannelAttempt;
-  missingPolls: number;
   connectedAt?: string;
   lastDisconnectedAt?: string;
   nextRetryAt?: string;
@@ -73,8 +74,8 @@ export type NodeAgentCloudRelayClientOptions = {
   cloudDiscovery?: CloudDiscoveryConfig;
   discoveryCachePath?: string;
   webSocket?: typeof WebSocket;
-  pollIntervalMs?: number;
-  idlePollIntervalMs?: number;
+  /** Test-only control socket injection; false disables the wake channel. */
+  controlWebSocket?: typeof WebSocket | false;
   attachTimeoutMs?: number;
   trustOutcomeSettleMs?: number;
   leaseRenewalRatio?: number;
@@ -315,9 +316,9 @@ function credentialRejected(error: unknown) {
 
 /**
  * Owns the node end of the account relay: redemption and credential lifecycle,
- * allocation polling, one independent channel per claiming Control Plane, and
- * the pairing each first claim pins. Nothing here touches local instances or
- * the existing direct/reverse connections.
+ * authoritative allocation snapshots, one independent channel per claiming
+ * Control Plane, and the pairing each first claim pins. Nothing here touches
+ * local instances or the existing direct/reverse connections.
  */
 export class NodeAgentCloudRelayClient {
   private readonly options: NodeAgentCloudRelayClientOptions;
@@ -325,6 +326,7 @@ export class NodeAgentCloudRelayClient {
   private readonly discoveryResolvers = new Map<string, Promise<CloudEndpointResolver | undefined>>();
   private readonly refreshControlPlaneIds = new Set<string>();
   private readonly failedControlPlaneIds = new Set<string>();
+  private readonly control: NodeRelayControlConnection;
   private pollTimer?: ReturnType<typeof setTimeout>;
   private pollDueAt?: number;
   private polling = false;
@@ -337,18 +339,31 @@ export class NodeAgentCloudRelayClient {
 
   constructor(options: NodeAgentCloudRelayClientOptions) {
     this.options = options;
+    this.control = new NodeRelayControlConnection({
+      resolveTarget: async () => {
+        const binding = this.binding();
+        if (!binding || binding.status !== "active") return undefined;
+        const cloud = await this.boundCloudClient(binding);
+        return { origin: cloud.origin, credential: binding.credential, nodeId: this.options.nodeId };
+      },
+      onSnapshotRequired: () => this.schedulePoll(0),
+      onCredentialRejected: (error) => this.markRebindRequired(error),
+      ...(options.controlWebSocket === undefined ? {} : { webSocket: options.controlWebSocket }),
+      now: () => this.now(),
+      ...(options.random ? { random: options.random } : {}),
+      log: options.host.log,
+    });
   }
 
   start() {
     this.stopped = false;
-    if (this.binding()?.status === "active") this.schedulePoll(0);
+    if (this.binding()?.status === "active") this.control.start();
   }
 
   stop() {
     this.stopped = true;
-    if (this.pollTimer) clearTimeout(this.pollTimer);
-    this.pollTimer = undefined;
-    this.pollDueAt = undefined;
+    this.clearPoll();
+    this.control.stop();
     this.closeAllChannels("node-agent-stopped");
   }
 
@@ -424,7 +439,7 @@ export class NodeAgentCloudRelayClient {
     });
     this.lastError = undefined;
     this.stopped = false;
-    this.schedulePoll(0);
+    this.control.restart();
     return this.status();
   }
 
@@ -442,9 +457,8 @@ export class NodeAgentCloudRelayClient {
       }, "node agent cloud relay unbind could not be confirmed with the cloud");
     }
     this.closeAllChannels("unbound");
-    if (this.pollTimer) clearTimeout(this.pollTimer);
-    this.pollTimer = undefined;
-    this.pollDueAt = undefined;
+    this.control.stop();
+    this.clearPoll();
     this.options.identity.clearCloudRelayPairings();
     this.options.identity.clearCloudRelayBinding();
     this.lastError = undefined;
@@ -551,6 +565,12 @@ export class NodeAgentCloudRelayClient {
     return this.options.now ? this.options.now() : Date.now();
   }
 
+  private clearPoll() {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = undefined;
+    this.pollDueAt = undefined;
+  }
+
   private schedulePoll(delayMs: number) {
     if (this.stopped) return;
     const due = this.now() + Math.max(0, delayMs);
@@ -589,9 +609,11 @@ export class NodeAgentCloudRelayClient {
       const allocations = await this.reconnectAllocations(current, refreshControlPlaneIds, failedControlPlaneIds);
       if (this.stopped) return;
       for (const controlPlaneId of failedControlPlaneIds) this.failedControlPlaneIds.delete(controlPlaneId);
-      if (this.applyAllocations(current, allocations)) this.lastError = undefined;
-      this.pollRetryAttempt = 0;
-      this.schedulePoll(allocations.length || this.channels.size ? this.pollIntervalMs() : this.idlePollIntervalMs());
+      if (this.applyAllocations(current, allocations)) {
+        this.lastError = undefined;
+        this.pollRetryAttempt = 0;
+      }
+      this.scheduleMaintenance(current);
     } catch (error) {
       if (this.stopped) return;
       const failed = this.binding();
@@ -616,10 +638,6 @@ export class NodeAgentCloudRelayClient {
         this.schedulePoll(0);
       }
     }
-  }
-
-  private pollIntervalMs() {
-    return this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
   private async reconnectAllocations(binding: NodeAgentCloudRelayBinding, refreshControlPlaneIds: string[], failedControlPlaneIds: string[] = []) {
@@ -656,8 +674,24 @@ export class NodeAgentCloudRelayClient {
     }
   }
 
-  private idlePollIntervalMs() {
-    return this.options.idlePollIntervalMs ?? DEFAULT_IDLE_POLL_INTERVAL_MS;
+  /** Lease renewal is a deadline, not a state-sync poll. */
+  private scheduleMaintenance(binding: NodeAgentCloudRelayBinding) {
+    if (this.stopped) return;
+    const now = this.now();
+    const delays: number[] = [];
+    for (const entry of this.channels.values()) {
+      if (entry.status === "failed") continue;
+      const expiresAt = entry.expiresAt ? Date.parse(entry.expiresAt) : Number.NaN;
+      if (!Number.isFinite(expiresAt)) continue;
+      const lead = Math.max(60_000, Math.floor((expiresAt - now) * ALLOCATION_REFRESH_LEAD_RATIO));
+      delays.push(Math.max(MIN_MAINTENANCE_DELAY_MS, expiresAt - now - lead));
+    }
+    const credentialExpiresAt = Date.parse(binding.credentialExpiresAt);
+    if (Number.isFinite(credentialExpiresAt)) {
+      const renewBefore = this.options.credentialRenewBeforeMs ?? DEFAULT_CREDENTIAL_RENEW_BEFORE_MS;
+      delays.push(Math.max(MIN_MAINTENANCE_DELAY_MS, credentialExpiresAt - now - renewBefore));
+    }
+    if (delays.length) this.schedulePoll(Math.min(MAX_MAINTENANCE_DELAY_MS, ...delays));
   }
 
   private async renewCredentialIfDue(binding: NodeAgentCloudRelayBinding) {
@@ -669,6 +703,7 @@ export class NodeAgentCloudRelayClient {
       credential: renewed.credential,
       credentialExpiresAt: renewed.expiresAt,
     }));
+    this.control.restart();
   }
 
   private markRebindRequired(error: unknown) {
@@ -680,6 +715,8 @@ export class NodeAgentCloudRelayClient {
       at,
       retryable: false,
     };
+    this.clearPoll();
+    this.control.stop();
     this.closeAllChannels("credential-refused");
     this.options.identity.markCloudRelayRebindRequired(stored);
     this.lastError = stored;
@@ -695,6 +732,10 @@ export class NodeAgentCloudRelayClient {
       let controlPlaneId: string;
       try {
         controlPlaneId = String(allocation.claimGrant?.controlPlaneId ?? "");
+        // An allocation that fails verification still proves the Coordinator
+        // continues to list this claim. Keep its diagnostic entry visible until
+        // a later authoritative snapshot actually withdraws it.
+        if (controlPlaneId) seen.add(controlPlaneId);
         verified = this.verifyAllocation(binding, allocation);
       } catch (error) {
         complete = false;
@@ -703,7 +744,6 @@ export class NodeAgentCloudRelayClient {
       }
       seen.add(verified.grant.controlPlaneId);
       const entry = this.ensureEntry(verified.grant.controlPlaneId);
-      entry.missingPolls = 0;
       const trustContextKey = controlPlaneTrustContextKey(controlPlaneTrustContext(binding, verified.grant, this.options.nodeId));
       const trustRetry = verified.grant.trustRetry === true;
       if (entry.suppressedContextKey === trustContextKey && !trustRetry) {
@@ -734,15 +774,11 @@ export class NodeAgentCloudRelayClient {
     }
     for (const [controlPlaneId, entry] of [...this.channels]) {
       if (seen.has(controlPlaneId)) continue;
-      entry.missingPolls += 1;
       // The allocation list is authoritative: once the Coordinator withdraws a
       // claim the live channel must go too, not just the reconnect attempt.
-      if (entry.missingPolls >= 2) {
-        complete = false;
-        entry.error ??= "The cloud withdrew this Control Plane's allocation.";
-        this.releaseChannel(entry, "allocation-withdrawn");
-        this.channels.delete(controlPlaneId);
-      }
+      entry.error ??= "The cloud withdrew this Control Plane's allocation.";
+      this.releaseChannel(entry, "allocation-withdrawn");
+      this.channels.delete(controlPlaneId);
     }
     return complete;
   }
@@ -776,7 +812,7 @@ export class NodeAgentCloudRelayClient {
   private ensureEntry(controlPlaneId: string) {
     const existing = this.channels.get(controlPlaneId);
     if (existing) return existing;
-    const entry: ChannelEntry = { controlPlaneId, status: "connecting", retry: new EventConnectionRetryTimer(this.options.random), missingPolls: 0 };
+    const entry: ChannelEntry = { controlPlaneId, status: "connecting", retry: new EventConnectionRetryTimer(this.options.random) };
     this.channels.set(controlPlaneId, entry);
     return entry;
   }
@@ -786,12 +822,16 @@ export class NodeAgentCloudRelayClient {
     const code = (error as { code?: unknown })?.code !== undefined ? String((error as { code?: unknown }).code) : "NODE_AGENT_CLOUD_RELAY_ALLOCATION_INVALID";
     if (!controlPlaneId) {
       this.lastError = { code, message, at: new Date(this.now()).toISOString(), retryable: true };
+      this.pollRetryAttempt += 1;
+      this.schedulePoll(cloudRelayPollRetryDelayMs(this.pollRetryAttempt, error, this.options.random));
       return;
     }
     const entry = this.ensureEntry(controlPlaneId);
     entry.status = "failed";
+    entry.expiresAt = undefined;
     entry.error = message;
     this.lastError = { code, message, at: new Date(this.now()).toISOString(), retryable: true };
+    this.scheduleEntryRetry(entry);
   }
 
   private async openEntry(entry: ChannelEntry, verified: VerifiedAllocation) {
@@ -1102,7 +1142,6 @@ export class NodeAgentCloudRelayClient {
     });
     if (scheduled) {
       entry.nextRetryAt = new Date(this.now() + scheduled.delay).toISOString();
-      this.schedulePoll(Math.min(scheduled.delay, this.pollIntervalMs()));
     }
   }
 

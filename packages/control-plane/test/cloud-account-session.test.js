@@ -160,7 +160,7 @@ test("a delivery-failed request clears pending and exposes a retryable failure",
   assert.equal(service.snapshot().requestFailure, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPollMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1, runtimeOptions = {} } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1, runtimeOptions = {} } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
@@ -219,7 +219,7 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, accountRequestPol
     },
   };
   const runtime = new CloudConnectivityBackgroundRuntime({
-    state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs, accountRequestPollMs,
+    state, accountSession, identity, webSocket: FakeSocket, accountRenewalIntervalMs,
     roleCatalog,
     cloudRelaySessionsPath: path.join(dir, "cloud-relay-sessions.json"),
     relayConnector: { async connect() { throw new Error("unexpected relay connection"); }, async resume() { throw new Error("unexpected relay resume"); } },
@@ -559,23 +559,19 @@ test("the runtime records a created request and completes the local session from
 });
 
 test("the runtime makes a delivery-failed authorization retryable", async () => {
-  const { runtime, accountSession, sockets } = runtimeHarness({ accountRequestPollMs: 5 });
-  void runtime.beginAccountRequest({ scope: "account:sign-in" }).catch(() => undefined);
+  const { runtime, accountSession, sockets } = runtimeHarness();
+  const created = runtime.beginAccountRequest({ scope: "account:sign-in" });
   await new Promise((resolve) => setImmediate(resolve));
   const create = sockets[0].sent.find((message) => message.type === "request" && message.operation === "create-control-plane-request");
   sockets[0].respond(create.requestId, { requestId: "request_a", scope: "account:sign-in", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_a" });
+  await created;
 
-  let poll;
-  for (let attempt = 0; attempt < 100 && !poll; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    poll = sockets[0].sent.find((message) => message.type === "request" && message.operation === "poll-control-plane-request");
-  }
-  assert.ok(poll, "missing delivery-failed poll");
-  sockets[0].respond(poll.requestId, { requestId: "request_a", scope: "account:sign-in", status: "delivery-failed", errorCode: "CONTROL_PLANE_DELIVERY_FAILED" });
+  sockets[0].receive({ type: "request", requestId: "resolved_1", operation: "control-plane-request-resolved", payload: { requestId: "request_a", scope: "account:sign-in", status: "delivery-failed", errorCode: "CONTROL_PLANE_DELIVERY_FAILED" } });
   for (let attempt = 0; attempt < 100 && !accountSession.snapshot().requestFailure; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
 
   assert.equal(accountSession.pendingRequest(), undefined);
   assert.deepEqual(accountSession.snapshot().requestFailure, { requestId: "request_a", scope: "account:sign-in", code: "CONTROL_PLANE_DELIVERY_FAILED" });
+  assert.equal(sockets[0].sent.some((message) => message.operation === "poll-control-plane-request"), false, "a live connection must consume the pushed resolution without polling");
 });
 
 test("concurrent credential refreshes share one rotation and read the official response envelope", async () => {

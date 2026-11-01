@@ -225,7 +225,6 @@
                     <span>{{ t("settings.nodeRegistry.pendingCloudConnections") }}</span>
                     <small>{{ t("settings.nodeRegistry.count", { count: pendingCloudNodeEnrollments.length }) }}</small>
                   </header>
-                  <p>{{ t("settings.nodeRegistry.pendingCloudConnectionsHint") }}</p>
                   <CloudNodeTrustEntry
                     v-for="trust in pendingCloudNodeEnrollments"
                     :key="trust.nodeHandle"
@@ -1914,14 +1913,6 @@ function errorText(error: unknown) {
 }
 
 .node-list-registered > .settings-empty { padding: 12px; }
-
-.node-list-incomplete > p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-  padding: 9px 12px 3px;
-}
 
 .node-list-incomplete .cloud-node-trust-entry + .cloud-node-trust-entry {
   border-top: 1px solid var(--line);

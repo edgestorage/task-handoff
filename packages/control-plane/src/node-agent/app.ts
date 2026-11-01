@@ -236,6 +236,8 @@ export type CreateNodeAgentAppOptions = {
   discoveryCachePath?: string;
   /** Test-only Relay socket injection for the cloud relay client. */
   webSocket?: typeof import("ws").default;
+  /** Test-only Node Relay control socket injection; false disables wake events. */
+  cloudRelayControlWebSocket?: typeof import("ws").default | false;
   /** Test-only override for the lifecycle liveness coalescing window. */
   instanceLifecycleHeartbeatIntervalMs?: number;
   /** Test-only override for the Relay attach acknowledgement timeout. */
@@ -1229,6 +1231,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     ...(cloudDiscovery ? { cloudDiscovery } : {}),
     discoveryCachePath,
     ...(options.webSocket ? { webSocket: options.webSocket } : {}),
+    ...(options.cloudRelayControlWebSocket === undefined ? {} : { controlWebSocket: options.cloudRelayControlWebSocket }),
     ...(options.cloudRelayAttachTimeoutMs ? { attachTimeoutMs: options.cloudRelayAttachTimeoutMs } : {}),
   });
   app.decorate("nodeAgentCloudRelay", cloudRelay);

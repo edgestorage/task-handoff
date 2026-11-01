@@ -515,12 +515,13 @@ async function reapplyOnboarding() {
   try {
     // The reapply acknowledgement is authoritative. A transient snapshot
     // failure must not turn an accepted queue entry into a user-visible failure;
-    // polling recovers the snapshot and the bounded wait still ends in a retryable state.
+    // the WebSocket revision will refresh the snapshot, and the bounded wait
+    // still ends in a retryable state if the node never responds.
     await accountNodes.refetch();
     syncCloudNodeOnboarding(accountNodes.data.value);
     applyOnboardingState();
   } catch {
-    // Keep waiting for the next polling cycle or the bounded timeout.
+    // Keep waiting for the authoritative snapshot or the bounded timeout.
   } finally {
     busy.value = false;
   }

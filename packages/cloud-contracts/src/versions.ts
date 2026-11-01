@@ -5,6 +5,7 @@ export const CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION = "2026-10-25";
 export const OUTBOUND_CONNECTION_PROTOCOL_VERSION = "2026-10-25";
 export const RELAY_FRAMING_PROTOCOL_VERSION = "2026-10-25";
 export const RELAY_SESSION_PROTOCOL_VERSION = "2026-10-25";
+export const NODE_RELAY_CONTROL_PROTOCOL_VERSION = "2026-11-01";
 
 // Relay allocation leases are the one contractual value that spans both services:
 // the Coordinator stamps it onto every attach capability, and the Relay refuses an

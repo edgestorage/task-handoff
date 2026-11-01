@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
+import { NODE_RELAY_CONTROL_PROTOCOL_VERSION } from "@task-handoff/cloud-contracts";
 import { NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/node-agent-control-plane-trust";
 import { createNodeAgentApp } from "../src/node-agent/app.ts";
 import { createNodeAgentHmacHeaders } from "../src/shared/security/node-agent-auth.ts";
@@ -21,6 +23,41 @@ import {
 
 const AUTH_TOKEN = "cloud-relay-node-test-token";
 const SERVICE_ORIGIN = "https://cloud.example.com";
+
+class TestNodeRelayControlSocket extends EventEmitter {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static readonly instances: TestNodeRelayControlSocket[] = [];
+  readyState = TestNodeRelayControlSocket.OPEN;
+  readonly sent: any[] = [];
+  readonly url: string;
+  readonly options?: unknown;
+  constructor(url: string, options?: unknown) {
+    super();
+    this.url = url;
+    this.options = options;
+    TestNodeRelayControlSocket.instances.push(this);
+    queueMicrotask(() => this.emit("open"));
+  }
+  send(raw: string) {
+    const message = JSON.parse(raw);
+    this.sent.push(message);
+    if (message.type === "register") queueMicrotask(() => this.push({
+      type: "registered",
+      protocolVersion: NODE_RELAY_CONTROL_PROTOCOL_VERSION,
+      nodeHandle: "nrh_test_node_handle",
+      leaseExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+    }));
+  }
+  close(code = 1000, reason = "closed") {
+    if (this.readyState === TestNodeRelayControlSocket.CLOSED) return;
+    this.readyState = TestNodeRelayControlSocket.CLOSED;
+    queueMicrotask(() => this.emit("close", code, Buffer.from(reason)));
+  }
+  push(value: unknown) { this.emit("message", { toString: () => JSON.stringify(value) }); }
+}
 
 type CloudStub = ReturnType<typeof cloudRelayCloudStub>;
 type ControlPlanePeer = Awaited<ReturnType<typeof startCloudRelayControlPlanePeer>>;
@@ -75,6 +112,7 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
   cloudRelayAttachTimeoutMs?: number;
   relaySocketCloseDelayMs?: number;
   relayAttach?: (input: { controlPlaneId: string; allocationId: string; attempt: number }) => boolean;
+  controlWebSocket?: typeof import("ws").default;
 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-cloud-relay-"));
   const planes = new Map<string, PlaneState>();
@@ -141,6 +179,7 @@ async function cloudRelayFixture(t: test.TestContext, stub: CloudStub, options: 
         peer.on("message", capture);
       },
     }),
+    cloudRelayControlWebSocket: options.controlWebSocket ?? false,
   });
   // HTTP response streams and proxied WebSockets dial the node agent over
   // loopback, so the fixture needs a real listener rather than inject-only.
@@ -303,6 +342,25 @@ test("binding redeems the token, persists the account binding and never exposes 
   assert.equal(relay.binding()?.nodeHandle, "nrh_test_node_handle");
 });
 
+test("a node relay change event wakes one authoritative allocation snapshot", async (t) => {
+  TestNodeRelayControlSocket.instances.length = 0;
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app } = await cloudRelayFixture(t, stub, { controlWebSocket: TestNodeRelayControlSocket as any });
+  const controlPlaneId = "control_plane_wake";
+  stub.claimNode({ controlPlaneId, controlPlanePublicKey: ed25519Identity().publicKey });
+  await bind(app, stub);
+
+  await waitFor(() => TestNodeRelayControlSocket.instances.length === 1 ? true : undefined, "node control registration");
+  await waitFor(() => stub.state.allocationRequests.length === 1 ? true : undefined, "initial snapshot after registration");
+  assert.equal(TestNodeRelayControlSocket.instances[0].url, "wss://cloud.example.com/api/v1/node-relay/v1/connect");
+  assert.equal((TestNodeRelayControlSocket.instances[0].options as any).headers.authorization, `Bearer ${stub.state.credential}`);
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(stub.state.allocationRequests.length, 1, "a healthy control connection must not poll");
+  TestNodeRelayControlSocket.instances[0].push({ type: "node-relay-changed", protocolVersion: NODE_RELAY_CONTROL_PROTOCOL_VERSION, reason: "claim-changed" });
+  await waitFor(() => stub.state.allocationRequests.length === 2 ? true : undefined, "snapshot after wake");
+});
+
 test("node agent discovers the cloud origin from TXT before binding", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const calls: string[] = [];
@@ -424,11 +482,10 @@ test("an explicit cloud origin stays pinned after the relay client restarts", as
     },
     fetchImpl,
     cloudDiscovery,
-    pollIntervalMs: 50,
-    idlePollIntervalMs: 50,
   });
   t.after(() => restarted.stop());
   restarted.start();
+  restarted.pollNow();
 
   await waitFor(() => calls.includes(`${explicitOrigin}/api/v1/node-relay/v1/allocations`), "the restarted client to poll the pinned origin");
   assert.equal(calls.some((url) => url.startsWith("https://dns.alidns.com/")), false, "a pinned binding must not consult discovery after restart");
@@ -912,13 +969,11 @@ test("two Control Planes claim one node and run independent channels", async (t)
 
   // Losing one claim only reaps that channel; the other keeps working.
   stub.dropClaim("control_plane_one");
-  // The withdrawal must be observed on two consecutive polls before the node
-  // tears the channel down, so keep polling until the state converges.
+  relay.pollNow();
   await waitFor(async () => {
-    relay.pollNow();
     const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
     return snapshot.channels.every((channel: any) => channel.controlPlaneId !== "control_plane_one") ? snapshot : undefined;
-  }, "first channel released");
+  }, "first channel released from the authoritative snapshot");
   const remaining = await peerTwo.request("/health");
   assert.equal(remaining.status, 200);
   const final = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
@@ -1034,6 +1089,38 @@ test("an allocation whose claim grant fails verification is recorded and never d
   assert.equal(failed.channels[0].status, "failed");
 });
 
+test("a failed allocation verification clears maintenance expiry, retries with backoff and recovers", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
+  planeFor("control_plane_one");
+  await bind(app, stub);
+  relay.pollNow();
+  await connect("control_plane_one");
+
+  stub.setAllocationTransform((allocation) => ({
+    ...allocation,
+    claimGrant: { ...allocation.claimGrant, nodeHandle: "nrh_forged_node" },
+  }));
+  stub.invalidateAllocation("control_plane_one");
+  relay.pollNow();
+
+  await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    return snapshot.lastError?.code === "NODE_RELAY_CLAIM_GRANT_SIGNATURE_INVALID" ? snapshot : undefined;
+  }, "tampered refresh to be rejected");
+
+  const entry = (relay as any).channels.get("control_plane_one");
+  assert.equal(entry.expiresAt, undefined, "a failed entry must not keep a stale maintenance deadline");
+  assert.ok(entry.retry.attempts > 0, "a failed entry must keep retrying with backoff");
+
+  stub.setAllocationTransform(undefined);
+  stub.invalidateAllocation("control_plane_one");
+  await waitFor(async () => {
+    const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));
+    return snapshot.channels.some((channel: any) => channel.controlPlaneId === "control_plane_one" && channel.status === "connected") ? true : undefined;
+  }, "automatic retry to recover the channel");
+});
+
 test("a refused credential stops the channels and requires rebinding", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const { app, relay, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
@@ -1052,6 +1139,32 @@ test("a refused credential stops the channels and requires rebinding", async (t)
   assert.deepEqual(revoked.channels, []);
   assert.equal(revoked.lastError.code, "NODE_RELAY_CREDENTIAL_INVALID");
   assert.equal(relay.binding()?.status, "rebind-required");
+});
+
+test("a credential rejected over HTTPS closes the control socket and rebind uses the new credential", async (t) => {
+  TestNodeRelayControlSocket.instances.length = 0;
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay } = await cloudRelayFixture(t, stub, { controlWebSocket: TestNodeRelayControlSocket as any });
+  stub.claimNode({ controlPlaneId: "control_plane_rebind", controlPlanePublicKey: ed25519Identity().publicKey });
+
+  await bind(app, stub);
+  await waitFor(() => TestNodeRelayControlSocket.instances.length === 1 ? true : undefined, "initial control registration");
+  const first = TestNodeRelayControlSocket.instances[0];
+  assert.equal((first.options as any).headers.authorization, `Bearer ${stub.state.credential}`);
+
+  stub.revokeCredential();
+  relay.pollNow();
+  await waitFor(async () => (await status(app)).rebindRequired === true ? true : undefined, "credential rejection to require rebinding");
+  await waitFor(() => first.readyState === TestNodeRelayControlSocket.CLOSED ? true : undefined, "control socket to close on credential rejection");
+
+  stub.state.credentialRejected = false;
+  stub.state.redeemed = false;
+  stub.state.bindingToken = "thnb_test_binding_token_rebound_000000000000";
+  stub.state.credential = "thnc_test_credential_rebound_000000";
+  await bind(app, stub);
+
+  await waitFor(() => TestNodeRelayControlSocket.instances.length === 2 ? true : undefined, "replacement control registration");
+  assert.equal((TestNodeRelayControlSocket.instances[1].options as any).headers.authorization, `Bearer ${stub.state.credential}`);
 });
 
 test("revoking a credential while a bridged websocket is open does not crash the node agent", async (t) => {

@@ -1,5 +1,5 @@
-import { fireEvent, render } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { Alert, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { approvalFabIcon, MobileApprovalCenterOverlay, sourceIcon } from '../src/approval-center/MobileApprovalCenterOverlay';
@@ -8,6 +8,43 @@ import { MobileThemeProvider } from '../src/components/theme';
 import { MobileI18nProvider } from '../src/i18n';
 
 let mockCenter: MobileApprovalCenterContextValue;
+type MockBottomSheetProps = {
+  enablePanDownToClose?: boolean;
+  index?: number;
+  onClose?: () => void;
+  snapPoints?: readonly (string | number)[];
+};
+const mockBottomSheetProps: { current?: MockBottomSheetProps } = {};
+const mockSheetClose = jest.fn();
+const originalPlatform = Platform.OS;
+
+function setPlatform(os: 'android' | 'ios') {
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: os, writable: true });
+}
+
+jest.mock('@expo/ui/community/bottom-sheet', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  function BottomSheet(props: MockBottomSheetProps & {
+    children?: React.ReactNode;
+    ref?: React.Ref<{ close(): void }>;
+  }) {
+    const { children, onClose, ref, ...rest } = props;
+    mockBottomSheetProps.current = { onClose, ...rest };
+    const close = React.useCallback(() => {
+      mockSheetClose();
+      onClose?.();
+    }, [onClose]);
+    React.useImperativeHandle(ref, () => ({ close }), [close]);
+    return React.createElement(View, { testID: 'mobile-approval-detail-sheet' }, children);
+  }
+  return {
+    __esModule: true,
+    default: BottomSheet,
+    BottomSheet,
+    BottomSheetView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(View, props, children),
+  };
+});
 
 jest.mock('../src/approval-center/use-mobile-approval-center', () => ({
   useApprovalCenterOcclusion: jest.fn(),
@@ -89,7 +126,7 @@ function center(overrides: Partial<MobileApprovalCenterContextValue> = {}): Mobi
     edgeHidden: false,
     expandOrCollapse: jest.fn(),
     expanded: false,
-    fullScreenItem: undefined,
+    detailItem: undefined,
     headerInset: 143,
     items,
     obstructionHeight: 0,
@@ -103,7 +140,7 @@ function center(overrides: Partial<MobileApprovalCenterContextValue> = {}): Mobi
     selectedKey: undefined,
     selectItem: jest.fn(),
     setFabPlacement: jest.fn(),
-    setFullScreenItem: jest.fn(),
+    setDetailItem: jest.fn(),
     setScrollOffset: jest.fn(),
     sourceHealth: {
       'ai-session-approval': { items: [], health: { source: 'ai-session-approval', phase: 'ready', pendingCount: 0, retryable: true } },
@@ -126,6 +163,15 @@ function tree(value: MobileApprovalCenterContextValue) {
     <MobileThemeProvider><MobileI18nProvider><MobileApprovalCenterOverlay /></MobileI18nProvider></MobileThemeProvider>
   </SafeAreaProvider>;
 }
+
+beforeEach(() => {
+  mockBottomSheetProps.current = undefined;
+  mockSheetClose.mockClear();
+});
+
+afterEach(() => {
+  setPlatform(originalPlatform as 'android' | 'ios');
+});
 
 test('renders no approval surface at all when pending count is zero', async () => {
   const screen = await render(tree(center({ items: [], pendingCount: 0 })));
@@ -181,12 +227,30 @@ test('keeps loaded approvals visible while showing sanitized partial-source diag
   expect(screen.getByTestId('mobile-approval-item-cp_a:operation-approval:apr_a')).toBeTruthy();
 });
 
-test('opens the native full-screen modal for complete approval context', async () => {
-  const screen = await render(tree(center({ fullScreenItem: item })));
+test('opens the native sheet for complete approval context', async () => {
+  setPlatform('ios');
+  const screen = await render(tree(center({ detailItem: item })));
 
+  expect(screen.getByTestId('mobile-approval-detail-sheet')).toBeTruthy();
   expect(screen.getByTestId('mobile-approval-detail')).toBeTruthy();
   expect(screen.getByText('Role A')).toBeTruthy();
   expect(screen.getByLabelText('Close')).toBeTruthy();
+});
+
+test.each(['ios', 'android'] as const)('uses the same half-height sheet on %s and closes back to the floating list', async (platform) => {
+  setPlatform(platform);
+  const setDetailItem = jest.fn();
+  await render(tree(center({ detailItem: item, setDetailItem })));
+
+  expect(mockBottomSheetProps.current).toEqual(expect.objectContaining({
+    enablePanDownToClose: true,
+    index: 0,
+    snapPoints: ['50%', '100%'],
+  }));
+
+  await act(async () => { mockBottomSheetProps.current?.onClose?.(); });
+
+  expect(setDetailItem).toHaveBeenCalledWith(undefined);
 });
 
 test('uses desktop-style business titles, source identity and localized operation fields', async () => {
@@ -200,13 +264,13 @@ test('uses desktop-style business titles, source identity and localized operatio
 
 test('opens full detail from the shared approval row', async () => {
   const selectItem = jest.fn();
-  const setFullScreenItem = jest.fn();
-  const screen = await render(tree(center({ expanded: true, selectItem, setFullScreenItem })));
+  const setDetailItem = jest.fn();
+  const screen = await render(tree(center({ expanded: true, selectItem, setDetailItem })));
 
   await fireEvent.press(screen.getByLabelText('Operation approval. Delete instance. ins_a'));
 
   expect(selectItem).toHaveBeenCalledWith(item.key);
-  expect(setFullScreenItem).toHaveBeenCalledWith(item);
+  expect(setDetailItem).toHaveBeenCalledWith(item);
 });
 
 test('disables approval when the requested device role is unavailable', async () => {
@@ -279,13 +343,15 @@ test('maps node trust handles to the authoritative directory name', async () => 
   expect(screen.queryByText('nrh_05v1q51sea67s')).toBeNull();
 });
 
-test('closing full-screen details returns to the shared approval surface', async () => {
-  const setFullScreenItem = jest.fn();
-  const screen = await render(tree(center({ fullScreenItem: item, setFullScreenItem })));
+test('closing the detail sheet returns to the shared approval surface', async () => {
+  setPlatform('ios');
+  const setDetailItem = jest.fn();
+  const screen = await render(tree(center({ detailItem: item, setDetailItem })));
 
   await fireEvent.press(screen.getByLabelText('Close'));
 
-  expect(setFullScreenItem).toHaveBeenCalledWith(undefined);
+  expect(mockSheetClose).toHaveBeenCalledTimes(1);
+  expect(setDetailItem).toHaveBeenCalledWith(undefined);
 });
 
 test('retries all sources when more than one loaded source is unavailable', async () => {

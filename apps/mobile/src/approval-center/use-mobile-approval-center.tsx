@@ -37,7 +37,7 @@ export type MobileApprovalCenterContextValue = {
   edgeHidden: boolean;
   expandOrCollapse(): void;
   expanded: boolean;
-  fullScreenItem?: ApprovalCenterItem;
+  detailItem?: ApprovalCenterItem;
   headerInset: number;
   items: readonly ApprovalCenterItem[];
   obstructionHeight: number;
@@ -51,7 +51,7 @@ export type MobileApprovalCenterContextValue = {
   selectedKey?: string;
   selectItem(key?: string): void;
   setFabPlacement(placement: ApprovalCenterFabPlacement): void;
-  setFullScreenItem(item?: ApprovalCenterItem): void;
+  setDetailItem(item?: ApprovalCenterItem): void;
   setScrollOffset(offset: number): void;
   sourceHealth: ReturnType<MobileApprovalCenterController['snapshot']>['sources'];
   verticalRatio: number;
@@ -77,7 +77,7 @@ const EMPTY_VALUE: MobileApprovalCenterContextValue = {
   scrollOffset: 0,
   selectItem: () => undefined,
   setFabPlacement: () => undefined,
-  setFullScreenItem: () => undefined,
+  setDetailItem: () => undefined,
   setScrollOffset: () => undefined,
   sourceHealth: {} as MobileApprovalCenterContextValue['sourceHealth'],
   verticalRatio: DEFAULT_APPROVAL_CENTER_PLACEMENT.verticalRatio,
@@ -105,7 +105,7 @@ function MobileApprovalCenterStateProvider({
   const [preferredExpanded, setPreferredExpanded] = useState(false);
   const [scrollOffset, setScrollOffsetState] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string>();
-  const [fullScreenKey, setFullScreenKey] = useState<string>();
+  const [detailKey, setDetailKey] = useState<string>();
   const [fabPlacement, setFabPlacement] = useState<ApprovalCenterFabPlacement>(DEFAULT_APPROVAL_CENTER_PLACEMENT);
   const [headerInsets, setHeaderInsets] = useState<readonly { height: number; id: symbol }[]>([]);
   const [occlusions, setOcclusions] = useState<readonly OcclusionRegistration[]>([]);
@@ -150,9 +150,9 @@ function MobileApprovalCenterStateProvider({
     setPreferredExpanded(false);
     setScrollOffsetState(0);
     setSelectedKey(undefined);
-    setFullScreenKey(undefined);
+    setDetailKey(undefined);
     setFabPlacement((current) => current.visibility === 'docked' ? current : { ...current, visibility: 'docked' });
-  }, [setFabPlacement, setFullScreenKey, setPreferredExpanded, setScrollOffsetState, setSelectedKey]);
+  }, [setDetailKey, setFabPlacement, setPreferredExpanded, setScrollOffsetState, setSelectedKey]);
   const subscribe = useCallback((listener: () => void) => {
     if (!controller) return () => undefined;
     return controller.subscribe(() => {
@@ -162,11 +162,11 @@ function MobileApprovalCenterStateProvider({
       } else {
         const currentKeys = new Set(next.items.map((item) => item.key));
         setSelectedKey((current) => current && currentKeys.has(current) ? current : undefined);
-        setFullScreenKey((current) => current && currentKeys.has(current) ? current : undefined);
+        setDetailKey((current) => current && currentKeys.has(current) ? current : undefined);
       }
       listener();
     });
-  }, [controller, resetInteraction, setFullScreenKey, setSelectedKey]);
+  }, [controller, resetInteraction, setDetailKey, setSelectedKey]);
   const snapshot = useCallback(
     () => controller?.snapshot() ?? emptyState,
     [controller, emptyState],
@@ -259,10 +259,10 @@ function MobileApprovalCenterStateProvider({
   }, []);
   const expandOrCollapse = useCallback(() => setPreferredExpanded((current) => !current), [setPreferredExpanded]);
   const selectItem = useCallback((key?: string) => setSelectedKey(key), [setSelectedKey]);
-  const setFullScreenItem = useCallback((item?: ApprovalCenterItem) => setFullScreenKey(item?.key), [setFullScreenKey]);
+  const setDetailItem = useCallback((item?: ApprovalCenterItem) => setDetailKey(item?.key), [setDetailKey]);
   const setScrollOffset = useCallback((offset: number) => setScrollOffsetState(offset), [setScrollOffsetState]);
-  const fullScreenItem = fullScreenKey
-    ? state.items.find((item) => item.key === fullScreenKey)
+  const detailItem = detailKey
+    ? state.items.find((item) => item.key === detailKey)
     : undefined;
 
   const value = useMemo<MobileApprovalCenterContextValue>(() => ({
@@ -273,7 +273,7 @@ function MobileApprovalCenterStateProvider({
     edgeHidden: fabPlacement.visibility === 'edge-hidden',
     expandOrCollapse,
     expanded,
-    fullScreenItem,
+    detailItem,
     headerInset,
     items: state.items,
     obstructionHeight,
@@ -287,7 +287,7 @@ function MobileApprovalCenterStateProvider({
     selectedKey,
     selectItem,
     setFabPlacement,
-    setFullScreenItem,
+    setDetailItem,
     setScrollOffset,
     sourceHealth: state.sources,
     verticalRatio: fabPlacement.verticalRatio,
@@ -297,7 +297,7 @@ function MobileApprovalCenterStateProvider({
     fabPlacement,
     expandOrCollapse,
     expanded,
-    fullScreenItem,
+    detailItem,
     headerInset,
     obstructionHeight,
     pendingCount,
@@ -310,7 +310,7 @@ function MobileApprovalCenterStateProvider({
     selectedKey,
     selectItem,
     setFabPlacement,
-    setFullScreenItem,
+    setDetailItem,
     setScrollOffset,
     state.actions,
     state.items,

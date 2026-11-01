@@ -242,6 +242,10 @@ test("node trust UI exposes approval, reapply and connection retry entry points 
   assert.match(status, /task-handoff-node-agent trust approve/);
   assert.match(status, /settings\.nodeRelay\.nodeTrust\.connectedDescription/);
   assert.match(status, /font-size: 12px/);
+  assert.match(status, /class="cloud-node-trust-cli"[\s\S]*?<pre><code>\{\{ approveCommand \}\}<\/code><\/pre>[\s\S]*?<Collapsible/);
+  assert.match(status, /showControlPlaneToast\(t\("settings\.nodeRelay\.nodeTrust\.copyFailed"\), "error"\)/);
+  assert.doesNotMatch(status, /copyError/);
+  assert.match(status, /\.cloud-node-trust-cli-head \{[^}]*align-items: center;/);
   assert.match(dialog, /CloudNodeTrustStatus/);
   assert.match(inbox, /decide-node-control-plane/);
   assert.doesNotMatch(dialog, /api\/device-trust|deviceTrustStore/);
@@ -255,6 +259,13 @@ test("node trust UI exposes approval, reapply and connection retry entry points 
   assert.match(detail, /const canReapply = computed\(\(\) => props\.trust\.state === "rejected" \|\| props\.trust\.state === "expired"\)/);
   assert.match(detail, /v-if="canReapply"[\s\S]*?@click="reapply"/);
   assert.match(detail, /reapplySubmitted/);
+  assert.match(detail, /const waitingForReapply = ref\(false\)/);
+  assert.match(detail, /LoaderCircle v-if="reapplyLoading"/);
+  assert.match(detail, /setTimeout\([\s\S]*?REAPPLY_RESPONSE_TIMEOUT_MS/);
+  assert.match(detail, /reapplyNoResponse/);
+  assert.match(detail, /\.cloud-node-pending-detail \{[^}]*gap: 0;/);
+  assert.match(detail, /\.cloud-node-pending-detail > header \{[^}]*padding: 0 0 8px;/);
+  assert.match(detail, /\.cloud-node-pending-content \{[^}]*padding: 8px 0 20px;/);
   assert.doesNotMatch(dialog, /refetchIntervalMs|refetchInterval/);
 });
 
@@ -266,6 +277,7 @@ test("settings registry shows incomplete trust enrollments separately from manag
 
   assert.match(modal, /pendingCloudNodeEnrollments = computed\(\(\) => \[\.\.\.\(cloudNodeRelay\.data\.value\?\.trust \?\? \[\]\)\]/);
   assert.match(modal, /class="node-list-section node-list-incomplete"[\s\S]*v-for="trust in pendingCloudNodeEnrollments"[\s\S]*CloudNodeTrustEntry/);
+  assert.doesNotMatch(modal, /pendingCloudConnectionsHint/);
   assert.match(modal, /v-for="target in orderedNodes"[\s\S]*nodeStatusLabel\(target\.id\)/);
   assert.doesNotMatch(modal, /cloudNodeTrustForNode|selectedNodeTrust|nodeTrust\(/);
 

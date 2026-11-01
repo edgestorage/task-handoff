@@ -1,7 +1,8 @@
 <template>
   <section v-if="visible" class="cloud-node-trust" :data-state="trust?.state || phase">
     <header class="cloud-node-trust-head" role="status">
-      <ShieldCheck :size="18" aria-hidden="true" />
+      <LoaderCircle v-if="phase === 'submitting'" class="cloud-node-trust-spinner" :size="18" aria-hidden="true" />
+      <ShieldCheck v-else :size="18" aria-hidden="true" />
       <div>
         <strong>{{ title }}</strong>
         <small v-if="!hideNodeLabel">{{ nodeLabel }}</small>
@@ -22,6 +23,15 @@
         </div>
         <p>{{ t("settings.nodeRelay.nodeTrust.expiresAt", { time: formatTrustDate(trust.expiresAt) }) }}</p>
       </div>
+      <div class="cloud-node-trust-cli">
+        <div class="cloud-node-trust-cli-head">
+          <p>{{ t("settings.nodeRelay.nodeTrust.cliDescription") }}</p>
+          <Button type="button" size="sm" variant="outline" @click="copy(approveCommand, 'command')">
+            <Copy :size="14" aria-hidden="true" /><span aria-live="polite">{{ copied === "command" ? t("settings.nodeRelay.nodeTrust.copyDone") : t("settings.nodeRelay.nodeTrust.copyCommand") }}</span>
+          </Button>
+        </div>
+        <pre><code>{{ approveCommand }}</code></pre>
+      </div>
       <p>{{ t("settings.nodeRelay.nodeTrust.connectedDescription") }}</p>
       <p v-if="trust.reason !== 'first-seen'" class="cloud-node-trust-diagnostic">{{ reasonLabel }}</p>
       <p v-if="error" class="cloud-node-trust-diagnostic">{{ error }}</p>
@@ -30,9 +40,6 @@
 
     <Collapsible v-if="trust" v-model:open="detailsOpen" class="cloud-node-trust-disclosure">
       <div class="cloud-node-trust-tools">
-        <Button v-if="phase === 'waiting-node-trust'" type="button" size="sm" variant="outline" @click="copy(approveCommand, 'command')">
-          <Copy :size="14" aria-hidden="true" /><span aria-live="polite">{{ copied === "command" ? t("settings.nodeRelay.nodeTrust.copyDone") : t("settings.nodeRelay.nodeTrust.copyCommand") }}</span>
-        </Button>
         <CollapsibleTrigger as-child>
           <Button type="button" size="sm" variant="ghost">
             <span>{{ t(detailsOpen ? "settings.nodeRelay.nodeTrust.hideDetails" : "settings.nodeRelay.nodeTrust.showDetails") }}</span>
@@ -55,15 +62,10 @@
               <Copy :size="14" aria-hidden="true" /><span aria-live="polite">{{ copied === "fingerprint" ? t("settings.nodeRelay.nodeTrust.copyDone") : t("settings.nodeRelay.nodeTrust.copyFingerprint") }}</span>
             </Button>
           </div>
-          <template v-if="phase === 'waiting-node-trust'">
-            <p>{{ t("settings.nodeRelay.nodeTrust.cliDescription") }}</p>
-            <pre><code>{{ approveCommand }}</code></pre>
-          </template>
-          <pre v-else-if="recoveryCommand"><code>{{ recoveryCommand }}</code></pre>
+          <pre v-if="phase !== 'waiting-node-trust' && recoveryCommand"><code>{{ recoveryCommand }}</code></pre>
         </div>
       </CollapsibleContent>
     </Collapsible>
-    <p v-if="copyError" class="cloud-node-trust-diagnostic" role="alert">{{ t("settings.nodeRelay.nodeTrust.copyFailed") }}</p>
 
     <div v-if="!hideActions && (retryable || terminal)" class="cloud-node-trust-actions">
       <Button v-if="canReapply" type="button" size="sm" variant="outline" @click="emit('reapply')">
@@ -80,12 +82,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, Copy, RefreshCw, ShieldCheck } from "@lucide/vue";
+import { ChevronDown, Copy, LoaderCircle, RefreshCw, ShieldCheck } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
 import { formatDateTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import type { CloudNodeRelayTrust } from "../../../api/types";
+import { showControlPlaneToast } from "../useControlPlaneToasts";
 import type { CloudNodeOnboardingPhase } from "./cloudNodeOnboardingAttempt";
 
 const props = defineProps<{
@@ -101,11 +104,10 @@ const emit = defineEmits<{ cancel: []; retry: []; reapply: [] }>();
 const { t, locale } = useI18n();
 type CopyTarget = "fingerprint" | "code" | "command";
 const copied = ref<CopyTarget>();
-const copyError = ref(false);
 const detailsOpen = ref(false);
 const formatTrustDate = (value?: string) => value ? formatDateTime(new Date(value), locale.value as SupportedLocale) : "—";
 
-const visible = computed(() => Boolean(props.trust) || ["waiting-node-trust", "approved-connecting", "rejected", "expired", "failed"].includes(props.phase || ""));
+const visible = computed(() => Boolean(props.trust) || ["submitting", "waiting-node-trust", "approved-connecting", "rejected", "expired", "failed"].includes(props.phase || ""));
 const terminal = computed(() => ["rejected", "expired", "failed"].includes(props.phase || ""));
 const retryable = computed(() => props.phase === "failed");
 const canReapply = computed(() => props.phase === "rejected" || props.phase === "expired");
@@ -126,18 +128,20 @@ const recoveryCommand = computed(() => props.trust?.requestId ? "task-handoff-no
 
 watch(() => [props.trust?.requestId, props.trust?.controlPlaneFingerprint, props.nodeHandle, props.phase], () => {
   copied.value = undefined;
-  copyError.value = false;
   detailsOpen.value = false;
 });
 
 async function copy(value: string, target: CopyTarget) {
   copied.value = undefined;
-  copyError.value = false;
+  if (!navigator.clipboard?.writeText) {
+    showControlPlaneToast(t("settings.nodeRelay.nodeTrust.copyFailed"), "error");
+    return;
+  }
   try {
     await navigator.clipboard.writeText(value);
     copied.value = target;
   } catch {
-    copyError.value = true;
+    showControlPlaneToast(t("settings.nodeRelay.nodeTrust.copyFailed"), "error");
   }
 }
 </script>
@@ -147,6 +151,9 @@ async function copy(value: string, target: CopyTarget) {
 .cloud-node-trust[data-state="rejected"], .cloud-node-trust[data-state="expired"], .cloud-node-trust[data-state="failed"] { border-color: var(--status-warning); }
 .cloud-node-trust-head { display: flex; align-items: flex-start; gap: 9px; color: var(--text-strong); }
 .cloud-node-trust-head > svg { flex: 0 0 auto; margin-top: 1px; }
+.cloud-node-trust-spinner { animation: cloud-node-trust-spin 0.8s linear infinite; }
+@keyframes cloud-node-trust-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cloud-node-trust-spinner { animation: none; } }
 .cloud-node-trust-head > div { display: grid; gap: 3px; min-width: 0; }
 .cloud-node-trust-head strong { font-size: 14px; font-weight: 500; line-height: 1.4; }
 .cloud-node-trust-head small, .cloud-node-trust p, .cloud-node-trust dt, .cloud-node-trust dd { font-size: 12px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
@@ -157,6 +164,9 @@ async function copy(value: string, target: CopyTarget) {
 .cloud-node-trust-code-row > div { display: grid; gap: 5px; min-width: 0; }
 .cloud-node-trust-code-row span, .cloud-node-trust-identity-item > span { color: var(--text-muted); font-size: 12px; }
 .cloud-node-trust-comparison { color: var(--text-strong); font-size: 16px; font-weight: 500; line-height: 1.5; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.cloud-node-trust-cli { display: grid; gap: 8px; min-width: 0; }
+.cloud-node-trust-cli-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.cloud-node-trust-cli-head :deep(svg) { flex: 0 0 auto; }
 .cloud-node-trust-disclosure, .cloud-node-trust-details { min-width: 0; }
 .cloud-node-trust-tools, .cloud-node-trust-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .cloud-node-trust-tools :deep(svg) { flex: 0 0 auto; }

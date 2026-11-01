@@ -135,11 +135,11 @@ export const settings = {
       waitingDescription: "请在目标机器核对下方比较码，再批准连接。批准后将自动连接。",
       controlPlane: "Control Plane", reason: "等待原因", request: "请求 ID", expires: "请求过期时间",
       fingerprint: "公钥指纹", comparisonCode: "比较码", copyFingerprint: "复制指纹", copyCode: "复制比较码",
-      expiresAt: "有效期至 {time}", nodeHandle: "节点标识", copyCommand: "复制批准命令", copyDone: "已复制", copyFailed: "复制失败，请展开连接详情手动复制。",
+      expiresAt: "有效期至 {time}", nodeHandle: "节点标识", copyCommand: "复制批准命令", copyDone: "已复制", copyFailed: "复制失败，请手动复制。",
       showDetails: "连接详情", hideDetails: "收起详情",
       cliTitle: "本机 CLI：", cliDescription: "在目标机器上核对指纹或短码后执行：",
       connectedTitle: "已连接的管理 Control Plane：", connectedDescription: "也可在已管理此节点的控制面板中，进入审批中心批准。",
-      retryConnection: "重试连接", reapply: "重新申请", reapplying: "重新申请中…", reapplySubmitted: "Coordinator 已接收重新申请，正在等待 Node Agent 响应。若长时间无变化，请检查 Node Agent 版本后再次申请。", reapplyNoResponse: "已经等待 30 秒仍未收到新的信任请求。请检查 Node Agent 是否在线、是否需要升级，然后重新申请。", cancelAdd: "取消加入",
+      retryConnection: "重试连接", reapply: "重新申请", reapplying: "重新申请中…", reapplyWaiting: "等待节点响应…", reapplySubmitted: "已提交重新申请，正在等待目标节点响应。", reapplyNoResponse: "已等待 30 秒仍未收到新的信任请求。请确认目标节点在线且版本支持重新申请，然后重试。", cancelAdd: "取消加入",
       phase: {
         submitting: "正在发起连接", "waiting-node-trust": "等待节点批准连接", "approved-connecting": "已批准，正在连接", complete: "节点已连接", rejected: "节点已拒绝连接", expired: "连接请求已过期", failed: "连接失败",
         "approved-connectingDescription": "Control Plane 信任请求已获批准，正在等待 Node Agent 完成 Relay 握手并建立管理通道。",
@@ -436,7 +436,7 @@ export const settings = {
     protocol: "协议", build: "构建", package: "软件包", image: "镜像", built: "构建时间", empty: "尚无节点", rename: "重命名节点",
     renameDescription: "修改控制面板各处使用的显示名称。节点 ID 和连接设置不会改变。",
     remoteDialogDescription: "连接运行在另一台机器上的 node-agent。", joinToken: "加入 Token", creating: "正在创建", create: "创建节点",
-    pendingCloudConnections: "未完成连接", pendingCloudConnectionsHint: "这些中继连接尚未完成审批和配对，不会出现在首页实例列表。",
+    pendingCloudConnections: "未完成连接",
   },
   nodeOnboarding: {
     title: "添加节点向导", description: "检查网络可达性，然后按当前环境中最短的受支持路径完成连接。", progress: "节点连接进度",

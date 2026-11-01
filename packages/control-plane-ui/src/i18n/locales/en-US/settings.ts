@@ -132,11 +132,11 @@ export const settings = {
       waitingDescription: "Compare the code below on the target machine, then approve the request. The node will connect automatically.",
       controlPlane: "Control Plane", reason: "Waiting reason", request: "Request ID", expires: "Request expires",
       fingerprint: "Public key fingerprint", comparisonCode: "Comparison code", copyFingerprint: "Copy fingerprint", copyCode: "Copy code",
-      expiresAt: "Valid until {time}", nodeHandle: "Node handle", copyCommand: "Copy approval command", copyDone: "Copied", copyFailed: "Copy failed. Open connection details to copy manually.",
+      expiresAt: "Valid until {time}", nodeHandle: "Node handle", copyCommand: "Copy approval command", copyDone: "Copied", copyFailed: "Copy failed. Copy the value manually.",
       showDetails: "Connection details", hideDetails: "Hide details",
       cliTitle: "Local CLI:", cliDescription: "On the target machine, compare the fingerprint or short code, then run:",
       connectedTitle: "Connected admin Control Plane:", connectedDescription: "You can also approve in the approval center of a Control Plane already managing this node.",
-      retryConnection: "Retry connection", reapply: "Request again", reapplying: "Requesting again…", reapplySubmitted: "The Coordinator accepted the request. Waiting for the Node Agent to respond. If nothing changes, check its version and request again.", reapplyNoResponse: "No new trust request arrived within 30 seconds. Check whether the Node Agent is online or needs an upgrade, then request again.", cancelAdd: "Cancel adding node",
+      retryConnection: "Retry connection", reapply: "Request again", reapplying: "Requesting again…", reapplyWaiting: "Waiting for node…", reapplySubmitted: "Request submitted. Waiting for the target node to respond.", reapplyNoResponse: "No new trust request arrived within 30 seconds. Confirm that the target node is online and its version supports requesting again, then retry.", cancelAdd: "Cancel adding node",
       phase: {
         submitting: "Starting connection", "waiting-node-trust": "Waiting for node approval", "approved-connecting": "Approved; connecting", complete: "Node connected", rejected: "The node rejected the connection", expired: "Connection request expired", failed: "Connection failed",
         "approved-connectingDescription": "The Control Plane trust request was approved. Waiting for the Node Agent to finish the relay handshake and open the management channel.",
@@ -434,7 +434,7 @@ export const settings = {
     protocol: "Protocol", build: "Build", package: "Package", image: "Image", built: "Built", empty: "No nodes yet", rename: "Rename node",
     renameDescription: "Change the display name used across the control plane. The node ID and connection settings will not change.",
     remoteDialogDescription: "Connect a node-agent that is running on another machine.", joinToken: "Join token", creating: "Creating", create: "Create node",
-    pendingCloudConnections: "Incomplete connections", pendingCloudConnectionsHint: "These relay connections have not completed approval and pairing. They do not appear in the instance list.",
+    pendingCloudConnections: "Incomplete connections",
   },
   nodeOnboarding: {
     title: "Add node wizard", description: "Check network reachability, then follow the shortest supported connection path.", progress: "Node connection progress",

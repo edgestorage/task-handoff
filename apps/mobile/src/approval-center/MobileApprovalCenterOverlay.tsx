@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -16,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BottomSheet, BottomSheetView, type BottomSheetMethods } from '@expo/ui/community/bottom-sheet';
 
 import {
   approvalCenterBadgeText,
@@ -447,7 +447,7 @@ function MobileApprovalCenterOverlayContent() {
       </Pressable>
     </Animated.View>
 
-    <ApprovalDetailModal reduceMotion={reduceMotion} />
+    <ApprovalDetailPresentation />
 
   </View>;
 }
@@ -474,7 +474,7 @@ function ApprovalItemCard({ center, item }: {
   const roleUnavailable = item.type === 'device-trust' && !deviceRoleAvailable(item);
   const open = () => {
     center.selectItem(item.key);
-    center.setFullScreenItem(item);
+    center.setDetailItem(item);
   };
 
   return <View
@@ -564,23 +564,38 @@ function InlineActions({ disabled, item, onDecision, onOpen, roleUnavailable = f
   </View>;
 }
 
-function ApprovalDetailModal({ reduceMotion }: { reduceMotion: boolean }) {
+function ApprovalDetailPresentation() {
   const center = useMobileApprovalCenter();
-  const item = center.fullScreenItem;
+  const item = center.detailItem;
   useApprovalCenterOcclusion('modal', Boolean(item));
 
   if (!item) return null;
-  return <Modal
-    animationType={reduceMotion ? 'none' : 'slide'}
-    onRequestClose={() => center.setFullScreenItem(undefined)}
-    presentationStyle="fullScreen"
-    visible
-  >
-    <ApprovalDetailContent item={item} key={item.key} />
-  </Modal>;
+  return <ApprovalDetailSheet item={item} onDismiss={() => center.setDetailItem(undefined)} />;
 }
 
-function ApprovalDetailContent({ item }: { item: ApprovalCenterItem }) {
+function ApprovalDetailSheet({ item, onDismiss }: { item: ApprovalCenterItem; onDismiss(): void }) {
+  const { colors } = useMobileTheme();
+  const sheetRef = useRef<BottomSheetMethods>(null);
+  const dismiss = () => {
+    const sheet = sheetRef.current;
+    if (sheet) sheet.close();
+    else onDismiss();
+  };
+  return <BottomSheet
+    backgroundStyle={{ backgroundColor: colors.background }}
+    enablePanDownToClose
+    index={0}
+    onClose={onDismiss}
+    ref={sheetRef}
+    snapPoints={['50%', '100%']}
+  >
+    <BottomSheetView style={[styles.detailSheetSurface, { backgroundColor: colors.background }]}>
+      <ApprovalDetailContent item={item} key={item.key} onClose={dismiss} />
+    </BottomSheetView>
+  </BottomSheet>;
+}
+
+function ApprovalDetailContent({ item, onClose }: { item: ApprovalCenterItem; onClose(): void }) {
   const center = useMobileApprovalCenter();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -591,17 +606,17 @@ function ApprovalDetailContent({ item }: { item: ApprovalCenterItem }) {
   const busy = action?.phase === 'busy';
   const failed = action?.phase === 'failed' || action?.phase === 'result-unknown';
   const sourceUnavailable = center.sourceHealth[itemSource(item)]?.health.phase !== 'ready';
-  return <View style={[styles.detailRoot, { backgroundColor: colors.background, paddingTop: insets.top }]} testID="mobile-approval-detail">
+  return <View accessibilityViewIsModal style={[styles.detailRoot, { backgroundColor: colors.background }]} testID="mobile-approval-detail">
     <View style={[styles.detailHeader, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-      <Pressable accessibilityLabel={t('approvalCenter.close')} accessibilityRole="button" hitSlop={8} onPress={() => center.setFullScreenItem(undefined)} style={styles.iconButton}>
-        <Icon color={colors.primary} name="chevron-back" size={24} />
+      <Pressable accessibilityLabel={t('approvalCenter.close')} accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.iconButton}>
+        <Icon color={colors.primary} name="close" size={22} />
       </Pressable>
       <View style={styles.headerCopy}>
         <Text accessibilityRole="header" numberOfLines={2} style={[styles.panelTitle, { color: colors.text }]}>{itemTitle(item, t)}</Text>
         <Text style={[styles.panelSubtitle, { color: colors.textMuted }]}>{sourceLabel(itemSource(item), t)}</Text>
       </View>
     </View>
-    <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]} keyboardShouldPersistTaps="handled">
+    <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]} keyboardShouldPersistTaps="handled">
       <DetailFields item={item} />
       {item.type === 'story-decision' ? <StoryDecisionAnswer
         decision={item.decision}
@@ -744,6 +759,7 @@ const styles = StyleSheet.create({
   detailError: { fontSize: 13, lineHeight: 19 },
   detailHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 64, paddingHorizontal: 12, paddingVertical: 10 },
   detailRoot: { flex: 1 },
+  detailSheetSurface: { flex: 1, minHeight: 0 },
   diagnostics: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 9 },
   diagnosticText: { fontSize: 12, lineHeight: 16 },
   diagnosticTitle: { fontSize: 13, lineHeight: 17 },

@@ -34,7 +34,7 @@ function normalizedOrigin(value: string) {
 
 /**
  * The node-facing Coordinator API: redemption, credential renewal, allocation
- * polling and unbind. Every request is a plain outbound HTTPS call; nothing
+ * snapshots and unbind. Every request is a plain outbound HTTPS call; nothing
  * here ever exposes a node endpoint, an instance or a local path.
  */
 export class NodeRelayCloudClient {

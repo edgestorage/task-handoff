@@ -69,7 +69,7 @@ export class CloudConnectivityLifecycle {
     this.options.state.setScopes({ deviceAccess: scopes.deviceAccess });
     // Device access only narrows access channels. Node relay is implied by an
     // active binding, and the outbound control connection must stay live so the
-    // node agent can continue polling allocations.
+    // node agent can keep receiving claim changes and Relay allocations.
     if (!scopes.deviceAccess) await this.options.dataConnections?.closeByKind("access", "device-access-disabled");
     let remoteResult: "confirmed" | "unknown" = "confirmed";
     if (before.bindingId) {

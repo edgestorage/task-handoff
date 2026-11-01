@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { CloudCoordinatorConnector } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
+import { CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY } from "@task-handoff/cloud-contracts";
+import { CloudCoordinatorConnector, controlPlaneHeartbeatIntervalMs } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
 import { CloudNodeRelayConnector } from "../src/control-plane/cloud-connectivity/node-relay-connector.ts";
 
 class FakeControlSocket extends EventEmitter {
@@ -91,6 +92,32 @@ function connectInput() {
     onEvent: () => undefined,
   };
 }
+
+test("the Control Plane heartbeat follows the Coordinator lease and caps at 30 seconds", () => {
+  const now = Date.parse("2026-08-10T00:00:00Z");
+  const lease = (seconds: number) => new Date(now + seconds * 1_000).toISOString();
+  assert.equal(controlPlaneHeartbeatIntervalMs(lease(90), now), 30_000);
+  assert.equal(controlPlaneHeartbeatIntervalMs(lease(60), now), 20_000);
+  assert.equal(controlPlaneHeartbeatIntervalMs(lease(600), now), 30_000);
+  assert.equal(controlPlaneHeartbeatIntervalMs("invalid", now), 30_000);
+  assert.equal(controlPlaneHeartbeatIntervalMs(new Date(now).toISOString(), now), 30_000);
+});
+
+test("the Control Plane advertises that it follows the Coordinator-issued lease", async () => {
+  let socket: FakeControlSocket | undefined;
+  class CapturingSocket extends FakeControlSocket {
+    constructor(url: string, options?: unknown) {
+      super(url, options, true);
+      socket = this;
+    }
+  }
+  const connector = controlConnector(CapturingSocket, { registrationTimeoutMs: 100 });
+  const connection = await connector.connect(connectInput());
+  const registration = socket?.sent.find((message) => message.type === "register");
+  assert.ok(registration);
+  assert.ok(registration.registration.capabilities.includes(CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY));
+  await connection.close("test-complete");
+});
 
 test("a Coordinator socket that never registers is closed and fails instead of hanging forever", async () => {
   const connector = controlConnector(FakeControlSocket, { registrationTimeoutMs: 25 });

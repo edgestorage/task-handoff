@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
+import WebSocket from "ws";
 import {
   INSTANCE_SHELL_PROTOCOL_VERSION,
   INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL,
@@ -212,12 +213,24 @@ test("the private websocket route rejects standalone, invalid tokens, and missin
   await app.register(websocket);
   const runtime = new InstanceShellRuntime({ workspace: () => process.cwd() });
   registerInstanceShellRoute(app, runtime);
-  await app.ready();
+  app.get("/api/apps/sessions/:id/web/websockify", { websocket: true }, (socket) => {
+    socket.send("binary-ok");
+  });
+  const address = await app.listen({ host: "127.0.0.1", port: 0 });
   try {
     assert.equal(runtime.handleProtocols(new Set([INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL]), { url: "/api/internal/instance-shell" } as never), INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL);
     assert.equal(runtime.handleProtocols(new Set(), { url: "/api/internal/instance-shell" } as never), false);
     assert.equal(runtime.handleProtocols(new Set(["other", INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL]), { url: "/api/internal/instance-shell" } as never), false);
-    assert.equal(runtime.handleProtocols(new Set([INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL]), { url: "/api/events" } as never), undefined);
+    assert.equal(runtime.handleProtocols(new Set(["binary"]), { url: "/api/apps/sessions/app_test/web/websockify" } as never), "binary");
+    const websocketUrl = new URL("/api/apps/sessions/app_test/web/websockify", address);
+    websocketUrl.protocol = "ws:";
+    const websocketClient = new WebSocket(websocketUrl, ["binary"]);
+    const messagePromise = once(websocketClient, "message");
+    await once(websocketClient, "open");
+    assert.equal(websocketClient.protocol, "binary");
+    const [message] = await messagePromise;
+    assert.equal(String(message), "binary-ok");
+    websocketClient.terminate();
     const rejected = (headers: Record<string, string>) => app.inject({ method: "GET", url: "/api/internal/instance-shell", headers });
     assert.equal((await rejected({ authorization: "Bearer wrong", "sec-websocket-protocol": INSTANCE_SHELL_WEBSOCKET_SUBPROTOCOL })).statusCode, 403);
     assert.equal((await rejected({ authorization: "Bearer registration-token" })).statusCode, 400);
