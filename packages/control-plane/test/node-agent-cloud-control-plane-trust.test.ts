@@ -165,6 +165,9 @@ test("node-agent Control Plane expiry writes a system audit record", (t) => {
   assert.equal(pending.kind, "pending");
   if (pending.kind !== "pending") return;
   const afterExpiry = new Date(Date.parse(pending.request.expiresAt) + 1).toISOString();
+  const expired = repository.expireCloudControlPlaneTrustRequests(afterExpiry);
+  assert.deepEqual(expired.map((request) => [request.id, request.status]), [[pending.request.id, "expired"]]);
+  assert.deepEqual(repository.expireCloudControlPlaneTrustRequests(afterExpiry), [], "expiry emits only the transition");
   const snapshot = repository.listCloudControlPlaneTrust(afterExpiry);
   assert.equal(snapshot.requests.find((request) => request.id === pending.request.id)?.status, "expired");
 

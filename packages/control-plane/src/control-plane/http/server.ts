@@ -378,6 +378,7 @@ type RequestSessionCredential = {
   token: string | undefined;
   source: "cookie" | "bearer";
   clientTypes: readonly ControlPlaneSessionClientType[];
+  presented: boolean;
 };
 
 /**
@@ -391,22 +392,38 @@ function requestSessionCredential(
   const authorization = request.headers.authorization;
   if (authorization !== undefined) {
     const match = /^Bearer ([^\s]+)$/.exec(authorization);
-    return { token: match?.[1], source: "bearer", clientTypes: options.bearerClientTypes ?? ["mobile", "cli"] };
+    return {
+      token: match?.[1],
+      source: "bearer",
+      clientTypes: options.bearerClientTypes ?? ["mobile", "cli"],
+      presented: true,
+    };
   }
+  const token = request.cookies[CONTROL_PLANE_SESSION_COOKIE];
   return {
-    token: request.cookies[CONTROL_PLANE_SESSION_COOKIE],
+    token,
     source: "cookie",
     clientTypes: options.allowCookie === false ? [] : ["web"],
+    presented: Boolean(token),
   };
 }
 
-async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessionCredential): Promise<ControlPlaneActor | undefined> {
+function requestRemoteAddress(request: FastifyRequest) {
+  return request.socket?.remoteAddress ?? request.ip;
+}
+
+async function actorForRequest(
+  auth: ControlPlaneAuth,
+  credential: RequestSessionCredential,
+  options: { remoteAddress?: string } = {},
+): Promise<ControlPlaneActor | undefined> {
   if (!auth.enabled()) {
-    // disabled 模式下只有 bearer 形式的本地信任 CLI 会话按真实用户归属；
-    // cookie 与匿名请求保持既有全权 system actor 语义，避免旧 Web 会话意外收窄权限。
-    return credential.source === "bearer"
+    if (credential.presented) return credential.token
       ? auth.disabledModeAuthorization(credential.token, credential.clientTypes)
       : undefined;
+    // Explicit credentials never fall back to the local operator. Only a
+    // credential-free loopback desktop request shares its local trust identity.
+    return auth.localOperatorActor(options.remoteAddress);
   }
   return auth.authorizationForSessionToken(credential.token, credential.clientTypes);
 }
@@ -433,18 +450,6 @@ function controlPlanePublicOrigin(service: ControlPlaneService, request: Fastify
 
 function cliAuthorizationDecisionGuard(service: ControlPlaneService) {
   return async (request: FastifyRequest) => {
-    const actor = controlPlaneRequestActor(request);
-    const cloudOperationApprovalDecision = actor?.type === "cloud-account"
-      && Boolean(actor.ownerUserId)
-      && request.method.toUpperCase() === "POST"
-      && /^\/api\/operation-approvals\/[^/]+\/decision$/.test(request.routeOptions.url || request.url.split("?")[0] || "");
-    if (cloudOperationApprovalDecision) {
-      const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
-      if (contentType !== "application/json") {
-        throw Object.assign(new Error("Operation approval decisions require a JSON request body."), { code: "OPERATION_APPROVAL_ORIGIN_INVALID", statusCode: 415 });
-      }
-      return;
-    }
     if (request.headers.authorization !== undefined || !request.cookies[CONTROL_PLANE_SESSION_COOKIE]) {
       throw Object.assign(new Error("CLI authorization decisions require a Control Plane web session."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
     }
@@ -459,6 +464,25 @@ function cliAuthorizationDecisionGuard(service: ControlPlaneService) {
     }
     if (request.headers.origin !== controlPlanePublicOrigin(service, request)) {
       throw Object.assign(new Error("CLI authorization decisions must originate from the Control Plane web UI."), { code: "CLI_AUTHORIZATION_ORIGIN_INVALID", statusCode: 403 });
+    }
+  };
+}
+
+function operationApprovalDecisionGuard(service: ControlPlaneService) {
+  return async (request: FastifyRequest) => {
+    const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
+    if (contentType !== "application/json") {
+      throw Object.assign(new Error("Operation approval decisions require a JSON request body."), { code: "OPERATION_APPROVAL_ORIGIN_INVALID", statusCode: 415 });
+    }
+    // Cookie sessions need explicit same-origin protection. Cloud and disabled-mode
+    // local-trust principals have no browser cookie and are protected by JSON-only.
+    if (!request.cookies[CONTROL_PLANE_SESSION_COOKIE]) return;
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (typeof fetchSite === "string" && fetchSite !== "same-origin") {
+      throw Object.assign(new Error("Operation approval decisions must originate from the Control Plane web UI."), { code: "OPERATION_APPROVAL_ORIGIN_INVALID", statusCode: 403 });
+    }
+    if (request.headers.origin !== controlPlanePublicOrigin(service, request)) {
+      throw Object.assign(new Error("Operation approval decisions must originate from the Control Plane web UI."), { code: "OPERATION_APPROVAL_ORIGIN_INVALID", statusCode: 403 });
     }
   };
 }
@@ -734,6 +758,17 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       disconnected: async (nodeId: string, input: { reason: string }) => {
         if (await service.setCloudRelayNodeConnection(nodeId, false, input.reason)) publishCloudRelayNodeState(nodeId);
       },
+    },
+    onChanged: (change) => {
+      events.publish("cloud-node-relay.changed", change, { topic: "cloud-node-relay" });
+    },
+    onTrustChanged: ({ nodeHandle, nodeId, requestId, state }) => {
+      events.publish("node.control-plane-trust.changed", {
+        nodeId,
+        nodeHandle,
+        ...(requestId ? { requestId } : {}),
+        ...(state ? { state } : {}),
+      }, { scope: { nodeId } });
     },
   };
   const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({
@@ -1034,16 +1069,29 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       return;
     }
     const isPublicRoute = authBoundary === "public" || (authBoundary === "public-ui" && isPublicUiPath(request.url));
-    if (!auth.enabled() || isPublicRoute) {
-      const actor = await actorForRequest(auth, requestSessionCredential(request));
-      setControlPlaneRequestActor(request, actor || disabledAuthActor());
-      const authorization = routeAuthorization(request.method, securityUrl);
-      if (authorization) {
-        assertCan(actor || disabledAuthActor(), authorization.action, authorization.resource);
-      }
+    const credential = requestSessionCredential(request);
+    const actor = await actorForRequest(auth, credential, { remoteAddress: requestRemoteAddress(request) });
+    if (isPublicRoute) {
+      if (actor) setControlPlaneRequestActor(request, actor);
       return;
     }
-    const actor = await actorForRequest(auth, requestSessionCredential(request));
+    if (!auth.enabled()) {
+      // Disabled authentication is a loopback-only local trust boundary. A
+      // missing credential from another host and any explicit invalid
+      // credential are authentication failures, not anonymous system access.
+      if (!actor) {
+        return reply.code(401).send({
+          error: {
+            code: "CONTROL_PLANE_AUTH_REQUIRED",
+            message: "Sign in to access the Control Plane.",
+          },
+        });
+      }
+      setControlPlaneRequestActor(request, actor);
+      const authorization = routeAuthorization(request.method, securityUrl);
+      if (authorization) assertCan(actor, authorization.action, authorization.resource);
+      return;
+    }
     if (!actor) {
       return reply.code(401).send({
         error: {
@@ -1112,7 +1160,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   const requireCloudConnectivityAdmin = async (request: FastifyRequest) => {
     if (!cloudConnectivityEnabled) throw Object.assign(new Error("Cloud connectivity is disabled by feature flag."), { code: "CLOUD_CONNECTIVITY_DISABLED", statusCode: 503 });
-    const actor = (controlPlaneRequestActor(request) ?? await actorForRequest(auth, requestSessionCredential(request))) || disabledAuthActor();
+    const actor = (controlPlaneRequestActor(request)
+      ?? await actorForRequest(auth, requestSessionCredential(request), { remoteAddress: requestRemoteAddress(request) }))
+      || disabledAuthActor();
     assertCan(actor, "manage-settings", { type: "control-plane-settings" });
     return actor;
   };
@@ -1123,17 +1173,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // the relay must not be able to widen or narrow its own authority.
   const requireLocalCloudOwnerAdmin = async (request: FastifyRequest) => {
     const actor = await requireCloudConnectivityAdmin(request);
-    const ownerUserId = actor.type === "user"
-      ? actor.userId
-      : actor.type === "system" && actor.reason === "auth-disabled"
-        ? (await auth.users.ensureLocalTrustOperator()).userId
-        : undefined;
-    if (!ownerUserId) {
+    if (actor.type !== "user") {
       throw Object.assign(new Error("Cloud sign-in and binding must be initiated by a local administrator."), {
         code: "CLOUD_LOCAL_ADMIN_REQUIRED",
         statusCode: 403,
       });
     }
+    const ownerUserId = actor.userId;
     const binding = cloudConnectivity.snapshot();
     const bindingOwner = cloudAccountSession.bindingOwner();
     assertCloudOwnerChangeAllowed({
@@ -1546,7 +1592,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       return { data: { ...await auth.state(), authenticated: true, authorization: cloudAccountAuthorization(actor) } };
     }
     const credential = requestSessionCredential(request);
-    return { data: await auth.currentSession(credential.token, credential.clientTypes) };
+    return { data: await auth.currentSession(credential.token, credential.clientTypes, { remoteAddress: requestRemoteAddress(request) }) };
   });
   app.post("/api/auth/bootstrap-admin", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const user = await auth.bootstrapAdmin(request.body);
@@ -1624,7 +1670,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // 本地信任会话：仅 authentication disabled 的桌面控制面板、且来源为 loopback 时可用。
   app.post("/api/auth/cli/local", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
     data: await auth.createLocalCliSession(request.body, {
-      remoteAddress: request.socket.remoteAddress,
+      remoteAddress: requestRemoteAddress(request),
       sourceId: request.ip,
     }),
   }));
@@ -1670,7 +1716,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     // The web UI manages the signed-in user's own CLI clients through its web session;
     // thctl continues to use its dedicated CLI bearer token.
     const credential = requestSessionCredential(request, { bearerClientTypes: ["cli"] });
-    const sessions = await auth.cliSessions(credential.token, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
+    const sessions = await auth.cliSessions(credential.token, credential.clientTypes, { remoteAddress: requestRemoteAddress(request) });
     return sessions ? { data: sessions } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access CLI sessions." },
     });
@@ -1678,7 +1724,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.delete("/api/auth/cli/sessions/:id", async (request, reply) => {
     const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
     const credential = requestSessionCredential(request, { bearerClientTypes: ["cli"] });
-    const revoked = await auth.revokeCliSession(credential.token, params.id, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
+    const revoked = await auth.revokeCliSession(credential.token, params.id, credential.clientTypes, { remoteAddress: requestRemoteAddress(request) });
     return revoked === undefined ? reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke CLI sessions." },
     }) : { data: { revoked } };
@@ -1688,7 +1734,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const actor = controlPlaneRequestActor(request);
     if (actor?.type === "cloud-account") return { data: cloudAccountAuthorization(actor) };
     const credential = requestSessionCredential(request);
-    const access = await auth.currentAccess(credential.token, credential.clientTypes, { remoteAddress: request.socket.remoteAddress });
+    const access = await auth.currentAccess(credential.token, credential.clientTypes, { remoteAddress: requestRemoteAddress(request) });
     return access ? { data: access } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to read Control Plane access." },
     });
@@ -1768,7 +1814,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       for (const userId of affectedUserIds) await auth.notifyAuthorizationChanged(userId);
     },
   });
-  registerOperationApprovalRoutes(app, auth, operationApprovals, cliAuthorizationDecisionGuard(service));
+  registerOperationApprovalRoutes(app, auth, operationApprovals, operationApprovalDecisionGuard(service));
 
   registerNodeProxyRoutes({
     app,
@@ -1793,7 +1839,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     events,
     syncNodeEvents: () => nodeEventSubscriber.syncNow(),
     actorId: async (request) => {
-      const actor = await actorForRequest(auth, requestSessionCredential(request));
+      const actor = await actorForRequest(auth, requestSessionCredential(request), { remoteAddress: requestRemoteAddress(request) });
       if (!actor) return "system:unknown";
       if (actor.type === "user") return `user:${actor.userId}`;
       if (actor.type === "system") return `system:${actor.reason}`;

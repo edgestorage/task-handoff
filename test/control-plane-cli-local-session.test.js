@@ -76,7 +76,8 @@ test("disabled control plane issues an auditable local cli session to loopback",
   assert.equal(access.json().data.userId, session.user.id);
 
   const anonymous = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: "Bearer not-a-session.token" } });
-  assert.equal(anonymous.statusCode, 200, anonymous.body);
+  assert.equal(anonymous.statusCode, 401, anonymous.body);
+  assert.equal(anonymous.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED");
   const authorized = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${sessionToken}` } });
   assert.equal(authorized.statusCode, 200, authorized.body);
 
@@ -110,7 +111,7 @@ test("disabled control plane issues an auditable local cli session to loopback",
   const logout = await app.inject({ method: "POST", url: "/api/auth/cli/logout", headers: { authorization: `Bearer ${sessionToken}` } });
   assert.equal(logout.statusCode, 200, logout.body);
   const afterLogout = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${sessionToken}` } });
-  assert.equal(afterLogout.json().data.authenticated, true);
+  assert.equal(afterLogout.json().data.authenticated, false);
   assert.equal(afterLogout.json().data.user, undefined);
 });
 

@@ -37,7 +37,7 @@ test("mobile releases use the production variant and official thandoff cloud ide
   const discovery = resolveCloudDiscovery(production, environment);
   assert.equal(isTrustedCloudServiceOrigin(production, production.serviceOrigin), true);
   assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.thandoff.com/connect"), true);
-  assert.equal(isTrustedCloudRelayUrl(production, "wss://sz1.relay.aaasu.com/connect"), true);
+  assert.equal(isTrustedCloudRelayUrl(production, "wss://edge.relay.aaasu.com/connect"), true);
   assert.equal(isTrustedCloudRelayUrl(production, "wss://relay.outside.test/connect"), false);
   assert.equal(discovery.record, "_cloud.thandoff.com");
   assert.equal(discovery.fallbackOrigin, "https://cloud.thandoff.com");

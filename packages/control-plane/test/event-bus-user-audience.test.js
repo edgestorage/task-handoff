@@ -21,56 +21,56 @@ function socket() {
   };
 }
 
-function subscribe(target) {
-  target.emit("message", JSON.stringify({ v: 1, type: "subscribe", topics: ["operation.approvals"] }));
+function subscribe(target, topics = ["operation.approvals"]) {
+  target.emit("message", JSON.stringify({ v: 1, type: "subscribe", topics }));
 }
 
-test("user-targeted operation events reach authenticated mobile and Web sessions only for that user", () => {
+test("operation events reach every authenticated administrator and exclude non-admins", () => {
   const bus = new ControlPlaneEventBus();
   const web = socket();
   const mobile = socket();
-  const secondMobile = socket();
-  const otherUser = socket();
+  const otherAdmin = socket();
+  const nonAdmin = socket();
   const unauthenticated = socket();
   bus.connect(web, { authorization: {
-    userId: "usr_owner",
+    userId: "usr_admin_a",
     webSession: true,
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   bus.connect(mobile, { authorization: {
-    userId: "usr_owner",
+    userId: "usr_admin_a",
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
-  bus.connect(secondMobile, { authorization: {
-    userId: "usr_owner",
-    authorizationRevision: 1,
-    permissionIds: [],
-  } });
-  bus.connect(otherUser, { authorization: {
-    userId: "usr_other",
+  bus.connect(otherAdmin, { authorization: {
+    userId: "usr_admin_b",
     webSession: true,
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
+  } });
+  bus.connect(nonAdmin, { authorization: {
+    userId: "usr_viewer",
+    webSession: true,
+    authorizationRevision: 1,
+    permissionIds: ["instances:read"],
   } });
   bus.connect(unauthenticated);
-  for (const target of [web, mobile, secondMobile, otherUser, unauthenticated]) subscribe(target);
+  for (const target of [web, mobile, otherAdmin, nonAdmin, unauthenticated]) subscribe(target);
 
   bus.publish("operation-approval.changed", { request: { id: "apr_1" }, status: "pending", revision: 1 }, {
     topic: "operation.approvals",
-    audienceUserId: "usr_owner",
   });
 
   assert.equal(web.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
   assert.equal(mobile.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
-  assert.equal(secondMobile.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
-  assert.equal(otherUser.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
+  assert.equal(otherAdmin.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
+  assert.equal(nonAdmin.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
   assert.equal(unauthenticated.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
 });
 
 
-test("authorization invalidation removes stale owner sockets before later operation events", () => {
+test("authorization invalidation removes stale administrator sockets before later operation events", () => {
   const bus = new ControlPlaneEventBus();
   const staleMobile = socket();
   const currentWeb = socket();
@@ -78,33 +78,32 @@ test("authorization invalidation removes stale owner sockets before later operat
   bus.connect(staleMobile, { authorization: {
     userId: "usr_owner",
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   bus.connect(currentWeb, { authorization: {
     userId: "usr_owner",
     webSession: true,
     authorizationRevision: 2,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   bus.connect(otherUser, { authorization: {
     userId: "usr_other",
     authorizationRevision: 2,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   for (const target of [staleMobile, currentWeb, otherUser]) subscribe(target);
 
   bus.invalidateUserAuthorization("usr_owner", 2);
   bus.publish("operation-approval.changed", { request: { id: "apr_2" }, status: "pending", revision: 2 }, {
     topic: "operation.approvals",
-    audienceUserId: "usr_owner",
   });
 
   assert.equal(staleMobile.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
   assert.equal(currentWeb.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
-  assert.equal(otherUser.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
+  assert.equal(otherUser.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
 });
 
-test("an owner Cloud session can receive only its mapped user's operation approvals", () => {
+test("operation events require administrator permission on a Cloud event binding", () => {
   const bus = new ControlPlaneEventBus();
   const mapped = socket();
   const unmapped = socket();
@@ -113,29 +112,92 @@ test("an owner Cloud session can receive only its mapped user's operation approv
     userId: "cloud-account:acct_owner",
     ownerUserId: "usr_owner",
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   bus.connect(unmapped, { authorization: {
     userId: "cloud-account:acct_unmapped",
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["settings:manage"],
   } });
   bus.connect(otherOwner, { authorization: {
     userId: "cloud-account:acct_other",
     ownerUserId: "usr_other",
     authorizationRevision: 1,
-    permissionIds: [],
+    permissionIds: ["instances:read"],
   } });
   for (const target of [mapped, unmapped, otherOwner]) subscribe(target);
 
   bus.publish("operation-approval.changed", { request: { id: "apr_cloud" }, status: "pending", revision: 1 }, {
     topic: "operation.approvals",
-    audienceUserId: "usr_owner",
   });
 
   assert.equal(mapped.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
-  assert.equal(unmapped.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
+  assert.equal(unmapped.frames.filter((frame) => frame.type === "operation-approval.changed").length, 1);
   assert.equal(otherOwner.frames.filter((frame) => frame.type === "operation-approval.changed").length, 0);
+});
+
+test("cloud node relay events require settings management permission", () => {
+  const bus = new ControlPlaneEventBus();
+  const admin = socket();
+  const viewer = socket();
+  const unauthenticated = socket();
+  bus.connect(admin, { authorization: {
+    userId: "usr_admin",
+    webSession: true,
+    authorizationRevision: 1,
+    permissionIds: ["settings:manage"],
+  } });
+  bus.connect(viewer, { authorization: {
+    userId: "usr_viewer",
+    webSession: true,
+    authorizationRevision: 1,
+    permissionIds: ["nodes:read"],
+  } });
+  bus.connect(unauthenticated);
+  for (const target of [admin, viewer, unauthenticated]) subscribe(target, ["cloud-node-relay"]);
+
+  bus.publish("cloud-node-relay.changed", { revision: 1, reason: "channel-attached" }, {
+    topic: "cloud-node-relay",
+  });
+
+  assert.equal(admin.frames.filter((frame) => frame.type === "cloud-node-relay.changed").length, 1);
+  assert.equal(viewer.frames.filter((frame) => frame.type === "cloud-node-relay.changed").length, 0);
+  assert.equal(unauthenticated.frames.filter((frame) => frame.type === "cloud-node-relay.changed").length, 0);
+});
+
+test("node Control Plane trust events require settings management permission", () => {
+  const bus = new ControlPlaneEventBus();
+  const admin = socket();
+  const viewer = socket();
+  const unauthenticated = socket();
+  bus.connect(admin, { authorization: {
+    userId: "usr_admin",
+    webSession: true,
+    authorizationRevision: 1,
+    permissionIds: ["settings:manage"],
+  } });
+  bus.connect(viewer, { authorization: {
+    userId: "usr_viewer",
+    webSession: true,
+    authorizationRevision: 1,
+    permissionIds: ["nodes:read"],
+  } });
+  bus.connect(unauthenticated);
+  for (const target of [admin, viewer, unauthenticated]) subscribe(target, ["nodes"]);
+
+  bus.publish("node.control-plane-trust.changed", {
+    nodeId: "node_a",
+    controlPlaneId: "control_plane_a",
+    requestId: "cptreq_a",
+    state: "pending",
+  }, {
+    topic: "nodes",
+    scope: { nodeId: "node_a" },
+  });
+
+  assert.equal(admin.frames.filter((frame) => frame.type === "node.control-plane-trust.changed").length, 1);
+  assert.equal(viewer.frames.filter((frame) => frame.type === "node.control-plane-trust.changed").length, 0);
+  assert.equal(unauthenticated.frames.filter((frame) => frame.type === "node.control-plane-trust.changed").length, 0);
 });
 
 test("an audience-scoped bridge listener receives public and matching personal events", () => {

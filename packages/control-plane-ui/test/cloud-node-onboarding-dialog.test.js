@@ -17,6 +17,8 @@ test("cloud node onboarding is a standalone source and connection flow", () => {
   assert.match(dialog, /settings\.nodeRelay\.unavailableSignedIn/);
   assert.match(dialog, /emit\('open-cloud-settings'\)/);
   assert.match(dialog, /claimCloudAccountNode/);
+  assert.match(dialog, /connectCloudAccountNodeWithTrustRetry\(\{/);
+  assert.match(dialog, /reapply: \(\) => reapplyCloudAccountNodeClaim\(nodeHandle\)/);
   assert.match(dialog, /createCloudNodeBindingToken/);
   assert.match(dialog, /cancelCloudNodeBindingToken/);
   assert.match(dialog, /accountNodeAccess/);
@@ -31,6 +33,7 @@ test("cloud node onboarding derives query readiness before creating the query", 
   assert.ok(readiness >= 0, "cloudRelayUsable is declared");
   assert.ok(query >= 0, "accountNodes query is declared");
   assert.ok(readiness < query, "cloudRelayUsable must be initialized before the query reads it");
+  assert.doesNotMatch(dialog, /useCloudAccountNodesQuery\(\{[\s\S]*?refetchIntervalMs/);
 });
 
 test("cloud node onboarding shows one generated command for the selected node state", () => {

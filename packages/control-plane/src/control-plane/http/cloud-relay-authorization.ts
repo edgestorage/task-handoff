@@ -1,5 +1,6 @@
 import type { EventEnvelope } from "@task-handoff/protocol/events";
 import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
+import { OPERATION_APPROVAL_PERMISSION } from "@task-handoff/protocol/operation-approvals";
 import type { ControlPlaneAction, ControlPlaneCloudAccountActor, ControlPlaneResource } from "../auth/authorization.ts";
 
 const ROUTES_WITHOUT_RBAC = new Set([
@@ -67,19 +68,22 @@ const EVENT_PERMISSION_PREFIXES: ReadonlyArray<readonly [string, ControlPlanePer
   ["agent", "ai-sessions:read"],
   ["git.", "instances:read"],
   ["device-trust", "settings:manage"],
+  ["cloud-node-relay", "settings:manage"],
 ];
 
 /** Events are a read surface. Unknown families fail closed instead of inheriting a broad allow. */
 export function cloudEventPermission(event: Pick<EventEnvelope, "type">): ControlPlanePermissionId | undefined {
   const type = String(event.type);
+  if (type === "device-trust.changed" || type === "node.control-plane-trust.changed") return "settings:manage";
   return EVENT_PERMISSION_PREFIXES.find(([prefix]) => type.startsWith(prefix))?.[1];
 }
 
 export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds" | "ownerUserId">, event: Pick<EventEnvelope, "type" | "topic">) {
-  // Operation approvals are personal, not an RBAC directory read. The Cloud
-  // actor must have a server-resolved local owner mapping; the event bus still
-  // applies the request's audience user as a second fence.
-  if (event.type === "operation-approval.changed") return Boolean(actor.ownerUserId);
+  // Operation approvals are a shared administrator queue. A Cloud actor must
+  // still have a server-resolved local owner mapping for audit attribution.
+  if (event.type === "operation-approval.changed") {
+    return Boolean(actor.ownerUserId) && actor.permissionIds.includes(OPERATION_APPROVAL_PERMISSION);
+  }
   const permission = cloudEventPermission(event);
   return Boolean(permission && actor.permissionIds.includes(permission));
 }

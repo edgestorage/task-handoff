@@ -49,7 +49,7 @@ const props = defineProps<{ selectedNode: Node; embedded?: boolean }>();
 const { t } = useI18n();
 const queryClient = useQueryClient();
 const busy = ref(false);
-const relay = useCloudNodeRelayQuery({ refetchIntervalMs: () => 3_000 });
+const relay = useCloudNodeRelayQuery();
 const channelNodeHandle = computed(() => props.selectedNode.connectionPath?.kind === "cloud-relay" ? props.selectedNode.connectionPath.nodeHandle : "");
 const channel = computed(() => relay.data.value?.channels.find((item) => item.nodeHandle === channelNodeHandle.value));
 const lastError = computed(() => relay.data.value?.errors.find((item) => item.nodeHandle === channelNodeHandle.value)?.message

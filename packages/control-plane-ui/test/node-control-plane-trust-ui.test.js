@@ -252,7 +252,10 @@ test("node trust UI exposes approval, reapply and connection retry entry points 
   assert.match(dialog, /expireCloudNodeReapplyWait\(now, t\("settings\.nodeRelay\.nodeTrust\.reapplyNoResponse"\)\)/);
   assert.match(dialog, /@reapply="reapplyOnboarding"/);
   assert.match(detail, /async function reapply\(\)[\s\S]*?reapplyCloudAccountNodeClaim/);
-  assert.match(dialog, /refetchIntervalMs: \(\) => onboarding\.active\.value \? 2_000 : false/);
+  assert.match(detail, /const canReapply = computed\(\(\) => props\.trust\.state === "rejected" \|\| props\.trust\.state === "expired"\)/);
+  assert.match(detail, /v-if="canReapply"[\s\S]*?@click="reapply"/);
+  assert.match(detail, /reapplySubmitted/);
+  assert.doesNotMatch(dialog, /refetchIntervalMs|refetchInterval/);
 });
 
 test("settings registry shows incomplete trust enrollments separately from managed nodes", () => {

@@ -164,8 +164,10 @@ export const settings = {
   userAccess: {
     navigation: "Users & access",
     context: "Administrator tools",
+    readOnlyContext: "Local identity",
     title: "Users & access",
     description: "Manage Control Plane accounts and assign each user a role and access to nodes and instances.",
+    readOnlyDescription: "Desktop local mode only displays the signed-in local operator. Enable user management to create users and assign roles or access.",
     displayName: "Display name",
     username: "Username",
     password: "Initial password",

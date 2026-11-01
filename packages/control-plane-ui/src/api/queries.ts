@@ -257,23 +257,21 @@ export function updateCloudAvailableRoles(input: { expectedSettingsRevision: num
   return sharedControlPlaneClient.admin.updateCloudAccessSettings(input);
 }
 
-export function useCloudAccountNodesQuery(options: { enabled?: () => boolean; refetchIntervalMs?: () => number | false } = {}) {
+export function useCloudAccountNodesQuery(options: { enabled?: () => boolean } = {}) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.cloudAccountNodes,
     queryFn: () => sharedControlPlaneClient.admin.cloudAccountNodes(),
     retry: false,
     ...(options.enabled ? { enabled: options.enabled } : {}),
-    ...(options.refetchIntervalMs ? { refetchInterval: options.refetchIntervalMs } : {}),
   });
 }
 
-export function useCloudNodeRelayQuery(options: { enabled?: () => boolean; refetchIntervalMs?: () => number | false } = {}) {
+export function useCloudNodeRelayQuery(options: { enabled?: () => boolean } = {}) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.cloudNodeRelay,
     queryFn: () => sharedControlPlaneClient.admin.cloudNodeRelayState(),
     retry: false,
     ...(options.enabled ? { enabled: options.enabled } : {}),
-    ...(options.refetchIntervalMs ? { refetchInterval: options.refetchIntervalMs } : {}),
   });
 }
 
@@ -599,7 +597,6 @@ export function nodeControlPlaneTrustQueryOptions(nodeId: string, enabled: Maybe
     queryKey: controlPlaneQueryKeys.nodeControlPlaneTrust(nodeId),
     queryFn: ({ signal }) => listNodeControlPlaneTrust(nodeId, signal),
     enabled: Boolean(nodeId) && toValue(enabled),
-    refetchInterval: 4_000,
     retry: false,
   });
 }

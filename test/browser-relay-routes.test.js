@@ -81,6 +81,7 @@ test("browser access is additive and rejected for an N-1 controlled instance", a
 test("browser access works for the local auth-disabled Control Plane", async (t) => {
   const app = Fastify({ logger: false });
   await app.register(websocket);
+  app.addHook("onRequest", (request, _reply, done) => { setControlPlaneRequestActor(request, actor); done(); });
   const browserAccess = new BrowserAccessService();
   registerBrowserRelayRoutes({
     app,
@@ -97,4 +98,24 @@ test("browser access works for the local auth-disabled Control Plane", async (t)
   t.after(() => app.close());
   const response = await app.inject({ method: "POST", url: `/api/controlled-instances/${instance.id}/browser-access`, payload: {} });
   assert.equal(response.statusCode, 200);
+});
+
+test("browser access never falls back to a system actor without local trust", async (t) => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  registerBrowserRelayRoutes({
+    app,
+    authorizationConnections: new AuthorizationConnectionRegistry(),
+    events: new ControlPlaneEventBus(),
+    auth: { enabled: () => false, async assertAppAccessAuthorization() { throw new Error("must not assert user auth"); } },
+    service: {
+      async requireControlledInstance() { return instance; },
+      async proxyInstanceWebSocket() {},
+    },
+  });
+  await app.ready();
+  t.after(() => app.close());
+  const response = await app.inject({ method: "POST", url: `/api/controlled-instances/${instance.id}/browser-access`, payload: {} });
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().code, "BROWSER_ACCESS_USER_REQUIRED");
 });

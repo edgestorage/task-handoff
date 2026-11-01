@@ -18,15 +18,7 @@ packages/controlled-instance-ui/dist/
 /builtin-projects/*/content/
 /builtin-projects/*/manifest.json
 openspec
-docs
-!docs/
-docs/*
-!docs/control-plane-cli.md
-!docs/mobile-control-plane-client-baseline.md
-!docs/mobile-control-plane-future-changes.md
-!docs/mobile-control-plane-operations.md
-!docs/mobile-control-plane-security.md
-!docs/wsl-runtime.md
+/docs/
 knowledge
 AGENTS.md
 AGENTS.local.md

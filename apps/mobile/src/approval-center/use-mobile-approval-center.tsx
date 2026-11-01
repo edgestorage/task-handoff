@@ -21,46 +21,66 @@ import {
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useI18n } from '../i18n';
 import { MobileApprovalCenterController } from './controller';
+import {
+  DEFAULT_APPROVAL_CENTER_PLACEMENT,
+  type ApprovalCenterFabPlacement,
+} from './geometry';
 
 type OcclusionKind = 'composer' | 'detail' | 'modal';
 type OcclusionRegistration = { id: symbol; kind: OcclusionKind; height: number };
 
 export type MobileApprovalCenterContextValue = {
   actions: MobileApprovalCenterState['actions'];
+  collapse(): void;
   decide(item: ApprovalCenterItem, input: { decision?: string; optionId?: string; response?: string; retry?: boolean }): void;
+  dockSide: ApprovalCenterFabPlacement['dockSide'];
+  edgeHidden: boolean;
   expandOrCollapse(): void;
   expanded: boolean;
   fullScreenItem?: ApprovalCenterItem;
+  headerInset: number;
   items: readonly ApprovalCenterItem[];
   obstructionHeight: number;
   pendingCount: number;
   preferredExpanded: boolean;
+  registerHeaderInset(height: number): () => void;
   registerOcclusion(kind: OcclusionKind, height?: number): () => void;
+  revealAndExpand(): void;
   retry(source?: Parameters<MobileApprovalCenterController['retry']>[0]): void;
   scrollOffset: number;
   selectedKey?: string;
   selectItem(key?: string): void;
+  setFabPlacement(placement: ApprovalCenterFabPlacement): void;
   setFullScreenItem(item?: ApprovalCenterItem): void;
   setScrollOffset(offset: number): void;
   sourceHealth: ReturnType<MobileApprovalCenterController['snapshot']>['sources'];
+  verticalRatio: number;
 };
 
 const EMPTY_VALUE: MobileApprovalCenterContextValue = {
   actions: {},
+  collapse: () => undefined,
   decide: () => undefined,
+  dockSide: DEFAULT_APPROVAL_CENTER_PLACEMENT.dockSide,
+  edgeHidden: false,
   expandOrCollapse: () => undefined,
   expanded: false,
+  headerInset: 0,
   items: [],
   obstructionHeight: 0,
   pendingCount: 0,
   preferredExpanded: false,
+  registerHeaderInset: () => () => undefined,
   registerOcclusion: () => () => undefined,
+  revealAndExpand: () => undefined,
   retry: () => undefined,
   scrollOffset: 0,
   selectItem: () => undefined,
+  setFabPlacement: () => undefined,
   setFullScreenItem: () => undefined,
   setScrollOffset: () => undefined,
   sourceHealth: {} as MobileApprovalCenterContextValue['sourceHealth'],
+  verticalRatio: DEFAULT_APPROVAL_CENTER_PLACEMENT.verticalRatio,
 };
 
 const Context = createContext<MobileApprovalCenterContextValue>(EMPTY_VALUE);
@@ -86,6 +106,8 @@ function MobileApprovalCenterStateProvider({
   const [scrollOffset, setScrollOffsetState] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string>();
   const [fullScreenKey, setFullScreenKey] = useState<string>();
+  const [fabPlacement, setFabPlacement] = useState<ApprovalCenterFabPlacement>(DEFAULT_APPROVAL_CENTER_PLACEMENT);
+  const [headerInsets, setHeaderInsets] = useState<readonly { height: number; id: symbol }[]>([]);
   const [occlusions, setOcclusions] = useState<readonly OcclusionRegistration[]>([]);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -129,7 +151,8 @@ function MobileApprovalCenterStateProvider({
     setScrollOffsetState(0);
     setSelectedKey(undefined);
     setFullScreenKey(undefined);
-  }, [setFullScreenKey, setPreferredExpanded, setScrollOffsetState, setSelectedKey]);
+    setFabPlacement((current) => current.visibility === 'docked' ? current : { ...current, visibility: 'docked' });
+  }, [setFabPlacement, setFullScreenKey, setPreferredExpanded, setScrollOffsetState, setSelectedKey]);
   const subscribe = useCallback((listener: () => void) => {
     if (!controller) return () => undefined;
     return controller.subscribe(() => {
@@ -208,6 +231,12 @@ function MobileApprovalCenterStateProvider({
     setOcclusions((current) => [...current, registration]);
     return () => setOcclusions((current) => current.filter((entry) => entry.id !== registration.id));
   }, [setOcclusions]);
+  const registerHeaderInset = useCallback((height: number) => {
+    const registration = { height: Math.max(0, height), id: Symbol('approval-center-header') };
+    setHeaderInsets((current) => [...current, registration]);
+    return () => setHeaderInsets((current) => current.filter((entry) => entry.id !== registration.id));
+  }, []);
+  const headerInset = Math.max(0, ...headerInsets.map((entry) => entry.height));
 
   const obstructionHeight = Math.max(
     0,
@@ -215,7 +244,7 @@ function MobileApprovalCenterStateProvider({
     ...occlusions.filter((entry) => entry.kind === 'composer' || entry.kind === 'detail').map((entry) => entry.height),
   );
   const obstructed = keyboardHeight > 0 || occlusions.some((entry) => entry.kind === 'detail' || entry.kind === 'modal' || entry.kind === 'composer');
-  const expanded = preferredExpanded && pendingCount > 0 && !obstructed;
+  const expanded = preferredExpanded && pendingCount > 0 && !obstructed && fabPlacement.visibility === 'docked';
 
   const decide = useCallback((item: ApprovalCenterItem, input: { decision?: string; optionId?: string; response?: string; retry?: boolean }) => {
     void controller?.decide(item, input);
@@ -223,6 +252,11 @@ function MobileApprovalCenterStateProvider({
   const retry = useCallback((source?: Parameters<MobileApprovalCenterController['retry']>[0]) => {
     void controller?.retry(source);
   }, [controller]);
+  const collapse = useCallback(() => setPreferredExpanded(false), []);
+  const revealAndExpand = useCallback(() => {
+    setFabPlacement((current) => current.visibility === 'docked' ? current : { ...current, visibility: 'docked' });
+    setPreferredExpanded(true);
+  }, []);
   const expandOrCollapse = useCallback(() => setPreferredExpanded((current) => !current), [setPreferredExpanded]);
   const selectItem = useCallback((key?: string) => setSelectedKey(key), [setSelectedKey]);
   const setFullScreenItem = useCallback((item?: ApprovalCenterItem) => setFullScreenKey(item?.key), [setFullScreenKey]);
@@ -233,35 +267,49 @@ function MobileApprovalCenterStateProvider({
 
   const value = useMemo<MobileApprovalCenterContextValue>(() => ({
     actions: state.actions,
+    collapse,
     decide,
+    dockSide: fabPlacement.dockSide,
+    edgeHidden: fabPlacement.visibility === 'edge-hidden',
     expandOrCollapse,
     expanded,
     fullScreenItem,
+    headerInset,
     items: state.items,
     obstructionHeight,
     pendingCount,
     preferredExpanded,
+    registerHeaderInset,
     registerOcclusion,
+    revealAndExpand,
     retry,
     scrollOffset,
     selectedKey,
     selectItem,
+    setFabPlacement,
     setFullScreenItem,
     setScrollOffset,
     sourceHealth: state.sources,
+    verticalRatio: fabPlacement.verticalRatio,
   }), [
+    collapse,
     decide,
+    fabPlacement,
     expandOrCollapse,
     expanded,
     fullScreenItem,
+    headerInset,
     obstructionHeight,
     pendingCount,
     preferredExpanded,
+    registerHeaderInset,
     registerOcclusion,
+    revealAndExpand,
     retry,
     scrollOffset,
     selectedKey,
     selectItem,
+    setFabPlacement,
     setFullScreenItem,
     setScrollOffset,
     state.actions,

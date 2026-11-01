@@ -22,6 +22,23 @@ test("access management capability is advertised only when authentication is ena
   t.after(() => disabled.close());
   const disabledIdentity = await disabled.inject({ method: "GET", url: "/api/control-plane/identity" });
   assert.equal(disabledIdentity.json().data.payload.capabilities.accessManagement, undefined);
+  const disabledUsers = await disabled.inject({ method: "GET", url: "/api/users" });
+  assert.equal(disabledUsers.statusCode, 200, disabledUsers.body);
+  assert.deepEqual(disabledUsers.json().data.map((user: { displayName: string }) => user.displayName), ["Local Operator"]);
+  const disabledCreate = await disabled.inject({
+    method: "POST",
+    url: "/api/users",
+    payload: { username: "alice", password: "password456", displayName: "Alice", roleIds: ["role_operator"], nodeScope: { kind: "all" } },
+  });
+  assert.equal(disabledCreate.statusCode, 403, disabledCreate.body);
+  assert.equal(disabledCreate.json().error.code, "CONTROL_PLANE_USER_MANAGEMENT_DISABLED");
+  const encodedCreate = await disabled.inject({
+    method: "POST",
+    url: "/%61pi/users",
+    payload: { username: "bob", password: "password456", displayName: "Bob", roleIds: ["role_operator"], nodeScope: { kind: "all" } },
+  });
+  assert.equal(encodedCreate.statusCode, 403, encodedCreate.body);
+  assert.equal(encodedCreate.json().error.code, "CONTROL_PLANE_USER_MANAGEMENT_DISABLED");
 
   const { app } = await passwordApp(t);
   const identity = await app.inject({ method: "GET", url: "/api/control-plane/identity" });

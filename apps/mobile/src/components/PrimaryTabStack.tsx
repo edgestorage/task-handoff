@@ -6,6 +6,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { Icon } from './Icon';
 import { iosTransparentHeaderOptions } from './navigation-header';
 import { useMobileTheme } from './theme';
+import { useApprovalCenterHeaderInset } from '../approval-center/use-approval-center-header';
 import { InstanceScopeHeaderButton } from '../instance-scope/InstanceScopeHeaderButton';
 
 type PrimaryTabHeaderDefaults = {
@@ -37,6 +38,7 @@ export function PrimaryTabStack({
   headerRightItems?: () => NativeStackHeaderItem[];
   scopeControl?: ReactNode;
 }) {
+  useApprovalCenterHeaderInset();
   const { colors, dark } = useMobileTheme();
   const scopeButton = scopeControl ?? <InstanceScopeHeaderButton />;
   const addItem = addAccessibilityLabel && onAdd ? {

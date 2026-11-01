@@ -186,3 +186,54 @@ test("Node tunnel treats capability changes as invalidation signals", async () =
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(refreshed, ["node_one"]);
 });
+
+test("Node tunnel translates Node Agent trust changes into the public Control Plane event", () => {
+  const events = new ControlPlaneEventBus();
+  const published: any[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({ events });
+
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: "node-agent.control-plane-trust.changed",
+      payload: {
+        controlPlaneId: "control_plane_one",
+        requestId: "cptreq_one",
+        state: "pending",
+      },
+    },
+  });
+
+  assert.equal(published[0]?.type, "node.control-plane-trust.changed");
+  assert.deepEqual(published[0]?.payload, {
+    nodeId: "node_one",
+    controlPlaneId: "control_plane_one",
+    requestId: "cptreq_one",
+    state: "pending",
+  });
+  assert.deepEqual(published[0]?.scope, { nodeId: "node_one" });
+});
+
+test("Node tunnel forwards pin-only trust invalidations", () => {
+  const events = new ControlPlaneEventBus();
+  const published: any[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({ events });
+
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: "node-agent.control-plane-trust.changed",
+      payload: { controlPlaneId: "control_plane_one", pinId: "cptpin_one" },
+    },
+  });
+
+  assert.equal(published[0]?.type, "node.control-plane-trust.changed");
+  assert.deepEqual(published[0]?.payload, {
+    nodeId: "node_one",
+    controlPlaneId: "control_plane_one",
+    pinId: "cptpin_one",
+  });
+  assert.deepEqual(published[0]?.scope, { nodeId: "node_one" });
+});

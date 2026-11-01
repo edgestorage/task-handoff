@@ -336,8 +336,10 @@
           :active-action-label="activeActionLabel"
           :app-launch-button-title="appLaunchButtonTitle"
           :can-launch-app="canLaunchApp"
+          :can-export-config="canExportConfig"
           :choose-project-folder="chooseProjectFolder"
           :instance="instance"
+          :is-closing-all-sessions="isClosingAllSessions"
           :is-instance-action-busy="isInstanceActionBusy"
           :launchable-apps="launchableApps"
           :launching-app="launchingApp"
@@ -346,6 +348,7 @@
           :selected-ai-session="selectedAiSession"
           :session="pane.session"
           :session-key="pane.sessionKey"
+          @instance-context-menu-command="$emit('instanceContextMenuCommand', $event)"
           @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
@@ -434,6 +437,7 @@ import ResourceTabStrip from "../shared/ResourceTabStrip.vue";
 import ResourceTabViewport from "../shared/ResourceTabViewport.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { pruneTerminalPreviewCache } from "../useTerminalPreview";
+import type { InstanceContextMenuCommandEvent } from "../shared/instanceContextMenu";
 import {
   appDisplayName,
   canRenameAppSession,
@@ -470,11 +474,13 @@ const props = defineProps<{
   appLaunchButtonLabel: string;
   appLaunchButtonTitle: string;
   appLaunchMenuOpen: boolean;
+  canExportConfig?: (instance: InstanceBoardItem) => boolean;
   canLaunchApp: boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   copiedText: string;
   instance: InstanceWithAiSessions;
   instanceSidebarVisible?: boolean;
+  isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
@@ -504,6 +510,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
+  instanceContextMenuCommand: [event: InstanceContextMenuCommandEvent];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];

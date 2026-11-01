@@ -89,15 +89,17 @@
         </div>
       </template>
     </div>
-    <AiSessionPanel
+    <InstanceSessionPanel
       v-else-if="session?.kind === 'ai'"
       :active-session="session"
       :choose-project-folder="chooseProjectFolder"
       :instance="instance"
+      :instance-action-menu="instanceActionMenuBindings"
       :launchable-apps="launchableApps"
       :launching-app="launchingApp"
       :node-local-folders="nodeLocalFolders"
       :selected-ai-session="selectedAiSession"
+      @instance-context-menu-command="$emit('instanceContextMenuCommand', $event)"
       @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
       @open-ai-session-app="(target, aiSession) => $emit('openAiSessionApp', target, aiSession)"
       @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
@@ -143,7 +145,7 @@ import type { InstanceAction } from "../useInstanceActions";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl } from "../useInstanceSessions";
 import { canShowInstanceAction, gitProvisioningLabel, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending, showGitPreparation as showGitPreparationState } from "../useInstanceStatus";
-import AiSessionPanel from "./AiSessionPanel.vue";
+import InstanceSessionPanel from "../shared/InstanceSessionPanel.vue";
 import AppSessionViewer from "../shared/AppSessionViewer.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
@@ -152,6 +154,7 @@ import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
 import GitProvisioningStatus from "./GitProvisioningStatus.vue";
 import type { NativeNodeFolderPicker } from "../nodePath";
+import type { InstanceActionMenuBindings, InstanceContextMenuCommandEvent } from "../shared/instanceContextMenu";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 
 const { locale, t } = useI18n();
@@ -160,8 +163,10 @@ const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   appLaunchButtonTitle: string;
   canLaunchApp: boolean;
+  canExportConfig?: (instance: InstanceBoardItem) => boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
+  isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
@@ -173,6 +178,7 @@ const props = defineProps<{
 }>();
 
 defineEmits<{
+  instanceContextMenuCommand: [event: InstanceContextMenuCommandEvent];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
@@ -184,6 +190,12 @@ defineEmits<{
 
 const activeFrameUrl = computed(() => props.session ? sessionFrameUrl(props.instance, props.session) : "");
 const activeTerminalSocketUrl = computed(() => props.session ? sessionTerminalSocketUrl(props.instance, props.session) : "");
+const instanceActionMenuBindings = computed<InstanceActionMenuBindings>(() => ({
+  activeActionLabel: props.activeActionLabel,
+  canExportConfig: props.canExportConfig,
+  isClosingAllSessions: props.isClosingAllSessions,
+  isInstanceActionBusy: props.isInstanceActionBusy,
+}));
 const hasStatusActions = computed(() => (["start", "stop", "restart", "retry-image", "retry-git"] as const)
   .some((action) => canShowInstanceAction(props.instance, action)));
 const imagePreparationSteps = computed(() => [

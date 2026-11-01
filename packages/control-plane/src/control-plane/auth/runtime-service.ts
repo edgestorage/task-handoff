@@ -5,6 +5,7 @@ import {
   ControlPlaneCurrentAuthorizationSchema,
   type ControlPlaneMobileDevice,
 } from "@task-handoff/protocol/control-plane-access";
+import type { ControlPlaneCurrentAuthorization } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
@@ -118,19 +119,43 @@ export class ControlPlaneAuth {
     return this.sessions.requireRecent(token);
   }
 
-  async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
+  async currentSession(
+    token: string | undefined,
+    clientTypes: readonly ControlPlaneSessionClientType[] = ["web"],
+    options: { remoteAddress?: string } = {},
+  ) {
     if (!this.enabled()) {
-      // disabled 模式保持"匿名即已认证"的既有语义；但携带有效 CLI 会话时返回真实身份，
-      // 让 thctl 的 whoami 与请求审计归属本地操作员。
+      // 桌面 disabled 模式的 loopback Web 与 CLI 使用同一个本地操作员身份。
+      // 非 loopback 请求只有在携带可验证凭据时才是已认证请求。
       const local = token ? await this.resolveDisabledCredential(token, clientTypes) : undefined;
-      return {
-        ...await this.state(),
-        ...(local ? {
+      if (local) {
+        return {
+          ...await this.state(),
           authenticated: true,
           user: local.user,
           authorization: local.authorization,
           requiresPasswordChange: local.requiresPasswordChange,
-        } : { authenticated: true }),
+        };
+      }
+      // An explicit but invalid credential stays anonymous instead of falling
+      // back to the loopback Web operator identity.
+      if (token) return { ...await this.state(), authenticated: false };
+      const operator = await this.localOperator(options.remoteAddress);
+      if (operator) {
+        const authorization = await this.localOperatorAccess(options.remoteAddress);
+        if (authorization) {
+          return {
+            ...await this.state(),
+            authenticated: true,
+            user: await this.users.summary(operator.userId),
+            authorization,
+            requiresPasswordChange: false,
+          };
+        }
+      }
+      return {
+        ...await this.state(),
+        authenticated: false,
       };
     }
     return { ...await this.state(), ...await this.sessions.currentSession(token, clientTypes) };
@@ -172,11 +197,30 @@ export class ControlPlaneAuth {
     options: { remoteAddress?: string } = {},
   ) {
     if (!this.enabled()) {
-      const current = token ? await this.resolveDisabledCredential(token, clientTypes) : undefined;
-      if (current) return current.authorization;
-      return this.localOperatorAuthorization(options.remoteAddress);
+      if (token) {
+        const current = await this.resolveDisabledCredential(token, clientTypes);
+        return current?.authorization;
+      }
+      return this.localOperatorAccess(options.remoteAddress);
     }
     return (await this.sessions.resolve(token, clientTypes))?.authorization;
+  }
+
+  async localOperatorActor(remoteAddress: string | undefined): Promise<ControlPlaneUserAuthorizationContext | undefined> {
+    const authorization = await this.localOperatorAccess(remoteAddress);
+    return authorization ? {
+      type: "user",
+      ...authorization,
+      nodeScope: authorization.nodeScope ?? { kind: "all" },
+      requiresPasswordChange: false,
+    } : undefined;
+  }
+
+  private async localOperatorAccess(remoteAddress: string | undefined) {
+    const operator = await this.localOperator(remoteAddress);
+    if (!operator) return undefined;
+    const authorization = await this.users.authorization(operator.userId);
+    return ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId: operator.identityId }) as ControlPlaneCurrentAuthorization;
   }
 
   async authorizationForSessionToken(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]): Promise<ControlPlaneUserAuthorizationContext | undefined> {
@@ -341,13 +385,6 @@ export class ControlPlaneAuth {
   private async localOperator(remoteAddress: string | undefined) {
     if (this.enabled() || !isLoopbackRemoteAddress(remoteAddress)) return undefined;
     return this.users.ensureLocalTrustOperator();
-  }
-
-  private async localOperatorAuthorization(remoteAddress: string | undefined) {
-    const operator = await this.localOperator(remoteAddress);
-    if (!operator) return undefined;
-    const authorization = await this.users.authorization(operator.userId);
-    return ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId: operator.identityId });
   }
 
   private async clientSessions(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[], clientType: "mobile" | "cli") {

@@ -179,16 +179,18 @@
           <div v-else class="story-content-state">{{ t("stories.noAvailableInstance") }}</div>
         </template>
         <template v-else-if="selectedResource?.kind === 'session'">
-          <AiSessionPanel
+          <InstanceSessionPanel
             class="story-session-creator"
             :active-session="storySessionTab"
             :choose-project-folder="projectFolderChooserFor(selectedSessionInstance)"
             detail-only
             :instance="selectedSessionInstance"
+            :instance-action-menu="storyInstanceActionMenu"
             :launchable-apps="launchableAppsForInstance(selectedSessionInstance, t)"
             :launching-app="launchingApp"
             :node-local-folders="nodeLocalFoldersByNodeId[selectedSessionInstance?.nodeId || ''] || []"
             :selected-ai-session="selectedStorySession"
+            @instance-context-menu-command="$emit('instanceContextMenuCommand', $event)"
             @select-ai-session="handleSelectAiSession"
             @launch-app="(target, appId, cwdFolderId, options) => emit('launch-app', target, appId, cwdFolderId, options)"
             @open-ai-session-app="(target, session) => openStoryAiSessionApp(target, session)"
@@ -569,6 +571,9 @@ import {
   type AiSessionTreeNode,
 } from "@task-handoff/protocol/ai-session-hierarchy";
 import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
+import InstanceSessionPanel from "../shared/InstanceSessionPanel.vue";
+import type { InstanceActionMenuBindings, InstanceContextMenuCommandEvent } from "../shared/instanceContextMenu";
+import type { InstanceAction } from "../useInstanceActions";
 import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "../nodePath";
 import { aiSessionLaunchableAppsForInstance, launchableAppsForInstance, sessionStatusLabel, terminalAppIdForLaunchableApps, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
@@ -584,9 +589,13 @@ import { storyDecisionSessionInstance } from "./storyDecisionSession";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
 const props = withDefaults(defineProps<{
+  activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
+  canExportConfig?: (instance: InstanceBoardItem) => boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   headerDensity?: HeaderDensity;
   instances: InstanceWithAiSessions[];
+  isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
+  isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchingApp?: boolean;
   nodes: Node[];
   nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>;
@@ -605,6 +614,7 @@ const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) =
 );
 const emit = defineEmits<{
   "update:selection": [selection: StorySelection | undefined];
+  instanceContextMenuCommand: [event: InstanceContextMenuCommandEvent];
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget & { instanceId: string }];
@@ -1268,6 +1278,12 @@ const selectedSessionInstance = computed<InstanceWithAiSessions | undefined>(() 
 const storySessionTab = computed<SessionTab>(() => {
   return { key: "ai", label: t("navigation.ai"), status: "running", kind: "ai", aiSessions: selectedSessionInstance.value?.aiSessions.sessions || [] };
 });
+const storyInstanceActionMenu = computed<InstanceActionMenuBindings>(() => ({
+  activeActionLabel: props.activeActionLabel,
+  canExportConfig: props.canExportConfig,
+  isClosingAllSessions: props.isClosingAllSessions,
+  isInstanceActionBusy: props.isInstanceActionBusy,
+}));
 const noSelectedAiSession = () => undefined as AiSessionSummary | undefined;
 const selectedStorySession = (_instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => {
   const resource = selectedResource.value;

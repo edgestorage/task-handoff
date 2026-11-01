@@ -44,8 +44,8 @@ const { createControlPlaneWindowRegistry } = require("./control-plane-window-reg
 const {
   DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
+  ensureDesktopControlPlaneAvailable,
   ensureDesktopNodeAgent,
-  inspectExistingDesktopControlPlane,
   inspectStartedDesktopControlPlane,
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
@@ -1066,17 +1066,35 @@ desktopQuitCoordinator = createDesktopQuitCoordinator({
   onStopped: () => desktopServiceSupervisor.markStopped(),
 });
 
+async function confirmStopExistingControlPlane(owner) {
+  const dataDirDetail = owner.dataDir ? `\n\nData directory: ${owner.dataDir}` : "";
+  const result = await dialog.showMessageBox({
+    type: "warning",
+    title: "Control Plane already running",
+    message: `A Control Plane is already running (pid=${owner.pid}). Quit it and continue starting TaskHandoff?`,
+    detail: `The existing process must exit before Desktop can start. Active sessions in the existing Control Plane will be interrupted. If it does not exit gracefully, TaskHandoff will force it to stop.${dataDirDetail}`,
+    buttons: ["Cancel", "Quit and Continue"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  return result.response === 1;
+}
+
 async function boot() {
   desktopServiceSupervisor.markStarting();
   if (desktopFileLoggingEnabled()) {
     logInfo(`[desktop-shell] writing desktop logs to ${resolveDesktopLogFile()}`);
   }
-  const existingControlPlane = inspectExistingDesktopControlPlane();
-  if (existingControlPlane.status === "running") {
-    throw new Error(`A Control Plane is already running pid=${existingControlPlane.owner.pid}. Close it before starting Desktop.`);
-  }
-  if (existingControlPlane.status === "unverified") {
-    throw new Error(`The existing Control Plane pid=${existingControlPlane.owner.pid} could not be verified.`);
+  const controlPlaneAvailability = await ensureDesktopControlPlaneAvailable({
+    confirmStop: (owner) => confirmStopExistingControlPlane(owner),
+    logInfo,
+    logError,
+  });
+  if (controlPlaneAvailability.action === "cancelled") {
+    logInfo("[desktop-shell] startup cancelled because the existing Control Plane was left running");
+    app.quit();
+    return;
   }
   const nodeAgentDataDir = resolveNodeAgentDataDir();
   const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();

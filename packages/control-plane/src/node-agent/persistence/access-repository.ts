@@ -114,7 +114,7 @@ export class AccessRepository {
 
   listCloudControlPlaneTrust(now = new Date().toISOString()) {
     return this.transaction(() => {
-      this.expireCloudControlPlaneTrustRequests(now, { type: "system", id: "node-agent" });
+      this.expireCloudControlPlaneTrustRequestsInTransaction(now, { type: "system", id: "node-agent" });
       return {
         pins: (this.client.prepare("SELECT * FROM na_cloud_control_plane_pins ORDER BY created_at DESC, id DESC").all() as Row[])
           .map(controlPlanePinFromRow),
@@ -131,7 +131,7 @@ export class AccessRepository {
     ttlMs: number;
   }): NodeAgentCloudControlPlaneTrustObservation {
     return this.transaction(() => {
-      this.expireCloudControlPlaneTrustRequests(input.now, { type: "system", id: "node-agent" });
+      this.expireCloudControlPlaneTrustRequestsInTransaction(input.now, { type: "system", id: "node-agent" });
       const context = input.context;
       const pin = this.findActiveCloudControlPlanePin(context);
       if (pin) {
@@ -197,7 +197,7 @@ export class AccessRepository {
     now: string;
   }): NodeAgentCloudControlPlaneTrustDecisionResult {
     return this.transaction(() => {
-      this.expireCloudControlPlaneTrustRequests(inputContext.now, { type: "system", id: "node-agent" });
+      this.expireCloudControlPlaneTrustRequestsInTransaction(inputContext.now, { type: "system", id: "node-agent" });
       const request = this.requireCloudControlPlaneTrustRequest(input.requestId);
       const fingerprint = this.controlPlaneFingerprint(request.controlPlanePublicKey);
       if (fingerprint !== input.expectedFingerprint) {
@@ -341,7 +341,7 @@ export class AccessRepository {
     actor: NodeAgentControlPlaneTrustActor;
   }) {
     return this.transaction(() => {
-      this.expireCloudControlPlaneTrustRequests(input.now, { type: "system", id: "node-agent" });
+      this.expireCloudControlPlaneTrustRequestsInTransaction(input.now, { type: "system", id: "node-agent" });
       const request = this.requireCloudControlPlaneTrustRequest(input.requestId);
       if (request.status === "pending") return request;
       if (request.status === "approved") {
@@ -592,8 +592,13 @@ export class AccessRepository {
     });
   }
 
-  private expireCloudControlPlaneTrustRequests(now: string, actor: NodeAgentControlPlaneTrustActor) {
+  expireCloudControlPlaneTrustRequests(now = new Date().toISOString()) {
+    return this.transaction(() => this.expireCloudControlPlaneTrustRequestsInTransaction(now, { type: "system", id: "node-agent" }));
+  }
+
+  private expireCloudControlPlaneTrustRequestsInTransaction(now: string, actor: NodeAgentControlPlaneTrustActor) {
     const rows = this.client.prepare("SELECT * FROM na_cloud_control_plane_trust_requests WHERE status = 'pending' AND expires_at <= ?").all(now) as Row[];
+    const expiredRequests: NodeAgentCloudControlPlaneTrustRequest[] = [];
     for (const row of rows) {
       const request = controlPlaneTrustRequestFromRow(row);
       const expired: NodeAgentCloudControlPlaneTrustRequest = {
@@ -606,6 +611,7 @@ export class AccessRepository {
         updatedAt: now,
       };
       this.writeCloudControlPlaneTrustRequest(expired);
+      expiredRequests.push(expired);
       this.appendCloudControlPlaneTrustAudit({
         action: "expire",
         actor,
@@ -618,7 +624,7 @@ export class AccessRepository {
         now,
       });
     }
-    return rows.length;
+    return expiredRequests;
   }
 
   private appendCloudControlPlaneTrustAudit(input: {

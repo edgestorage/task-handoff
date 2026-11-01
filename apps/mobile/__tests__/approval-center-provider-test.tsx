@@ -98,7 +98,16 @@ function Harness() {
     <Text testID="expanded">{String(center.expanded)}</Text>
     <Text testID="preferred">{String(center.preferredExpanded)}</Text>
     <Text testID="obstruction">{center.obstructionHeight}</Text>
+    <Text testID="fab-side">{center.dockSide}</Text>
+    <Text testID="fab-ratio">{center.verticalRatio}</Text>
+    <Text testID="edge-hidden">{String(center.edgeHidden)}</Text>
+    <Text testID="header-inset">{center.headerInset}</Text>
     <Pressable testID="toggle" onPress={center.expandOrCollapse}><Text>Toggle</Text></Pressable>
+    <Pressable testID="collapse" onPress={center.collapse}><Text>Collapse</Text></Pressable>
+    <Pressable testID="hide-left" onPress={() => center.setFabPlacement({ dockSide: 'left', verticalRatio: 0.75, visibility: 'edge-hidden' })}><Text>Hide left</Text></Pressable>
+    <Pressable testID="hide-right" onPress={() => center.setFabPlacement({ dockSide: 'right', verticalRatio: 0.25, visibility: 'edge-hidden' })}><Text>Hide right</Text></Pressable>
+    <Pressable testID="reveal" onPress={center.revealAndExpand}><Text>Reveal</Text></Pressable>
+    <Pressable testID="register-header" onPress={() => center.registerHeaderInset(132)}><Text>Register header</Text></Pressable>
   </>;
 }
 
@@ -132,9 +141,12 @@ function TabSurfaceHarness() {
       <Text testID="preferred">{String(center.preferredExpanded)}</Text>
       <Text testID="scroll">{center.scrollOffset}</Text>
       <Text testID="selected">{center.selectedKey ?? ''}</Text>
+      <Text testID="fab-side">{center.dockSide}</Text>
+      <Text testID="fab-ratio">{center.verticalRatio}</Text>
       <Pressable testID="toggle" onPress={center.expandOrCollapse}><Text>Toggle</Text></Pressable>
       <Pressable testID="scroll-forward" onPress={() => center.setScrollOffset(144)}><Text>Scroll</Text></Pressable>
       <Pressable testID="select-item" onPress={() => center.selectItem(item.key)}><Text>Select</Text></Pressable>
+      <Pressable testID="dock-left" onPress={() => center.setFabPlacement({ dockSide: 'left', verticalRatio: 0.4, visibility: 'docked' })}><Text>Dock left</Text></Pressable>
     </View>
   </>;
 }
@@ -178,6 +190,7 @@ test('switching Control Plane cancels the prior interaction state and starts the
   const screen = await render(tree());
   await fireEvent.press(screen.getByTestId('toggle'));
   await waitFor(() => expect(screen.getByTestId('preferred')).toHaveTextContent('true'));
+  await fireEvent.press(screen.getByTestId('hide-left'));
 
   mockControlPlaneId = 'cp_b';
   mockInitialItems = [{
@@ -191,6 +204,9 @@ test('switching Control Plane cancels the prior interaction state and starts the
   expect(screen.getByTestId('pending')).toHaveTextContent('1');
   expect(screen.getByTestId('expanded')).toHaveTextContent('false');
   expect(screen.getByTestId('preferred')).toHaveTextContent('false');
+  expect(screen.getByTestId('edge-hidden')).toHaveTextContent('false');
+  expect(screen.getByTestId('fab-side')).toHaveTextContent('right');
+  expect(screen.getByTestId('fab-ratio')).toHaveTextContent('1');
 });
 
 test('switching all four primary tab surfaces preserves one provider interaction state', async () => {
@@ -198,6 +214,7 @@ test('switching all four primary tab surfaces preserves one provider interaction
   await fireEvent.press(screen.getByTestId('toggle'));
   await fireEvent.press(screen.getByTestId('scroll-forward'));
   await fireEvent.press(screen.getByTestId('select-item'));
+  await fireEvent.press(screen.getByTestId('dock-left'));
   expect(mockControllers).toHaveLength(1);
 
   for (const tab of PRIMARY_TABS) {
@@ -208,8 +225,48 @@ test('switching all four primary tab surfaces preserves one provider interaction
     expect(screen.getByTestId('preferred')).toHaveTextContent('true');
     expect(screen.getByTestId('scroll')).toHaveTextContent('144');
     expect(screen.getByTestId('selected')).toHaveTextContent(item.key);
+    expect(screen.getByTestId('fab-side')).toHaveTextContent('left');
+    expect(screen.getByTestId('fab-ratio')).toHaveTextContent('0.4');
     expect(mockControllers).toHaveLength(1);
   }
+});
+
+test('edge hiding collapses the panel and revealing it restores the expanded surface', async () => {
+  const screen = await render(tree());
+  await fireEvent.press(screen.getByTestId('toggle'));
+  expect(screen.getByTestId('expanded')).toHaveTextContent('true');
+
+  await fireEvent.press(screen.getByTestId('hide-right'));
+  expect(screen.getByTestId('edge-hidden')).toHaveTextContent('true');
+  expect(screen.getByTestId('fab-side')).toHaveTextContent('right');
+  expect(screen.getByTestId('fab-ratio')).toHaveTextContent('0.25');
+  expect(screen.getByTestId('expanded')).toHaveTextContent('false');
+
+  await fireEvent.press(screen.getByTestId('reveal'));
+  expect(screen.getByTestId('edge-hidden')).toHaveTextContent('false');
+  expect(screen.getByTestId('expanded')).toHaveTextContent('true');
+
+  await fireEvent.press(screen.getByTestId('collapse'));
+  expect(screen.getByTestId('expanded')).toHaveTextContent('false');
+
+  await fireEvent.press(screen.getByTestId('hide-left'));
+  expect(screen.getByTestId('edge-hidden')).toHaveTextContent('true');
+  expect(screen.getByTestId('fab-side')).toHaveTextContent('left');
+  expect(screen.getByTestId('fab-ratio')).toHaveTextContent('0.75');
+
+  const controller = mockControllers.at(-1)!;
+  await act(async () => { controller.publish([]); });
+  await waitFor(() => expect(screen.getByTestId('pending')).toHaveTextContent('0'));
+  expect(screen.getByTestId('edge-hidden')).toHaveTextContent('false');
+  expect(screen.getByTestId('expanded')).toHaveTextContent('false');
+});
+
+test('focused header height is registered as the drag upper boundary input', async () => {
+  const screen = await render(tree());
+  expect(screen.getByTestId('header-inset')).toHaveTextContent('0');
+
+  await fireEvent.press(screen.getByTestId('register-header'));
+  expect(screen.getByTestId('header-inset')).toHaveTextContent('132');
 });
 
 

@@ -59,7 +59,8 @@ function summary(entry: PendingApproval): ApprovalSummary {
 
 export class OperationApprovals {
   private readonly entries = new Map<string, PendingApproval>();
-  private readonly revisions = new Map<string, number>();
+  private readonly generation = createId("approval_generation");
+  private revision = 0;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly events: ControlPlaneEventBus;
   private readonly policy: z.output<typeof OperationApprovalPolicySchema>;
@@ -76,10 +77,14 @@ export class OperationApprovals {
   requiresApproval(operation: ApprovalOperation) { return this.policy[operation]; }
 
   private publish(entry: PendingApproval, status: ApprovalStatus | "expired" | "consumed" | "cancelled") {
-    const revision = (this.revisions.get(entry.userId) ?? 0) + 1;
-    this.revisions.set(entry.userId, revision);
-    this.events.publish("operation-approval.changed", { request: summary(entry), status, revision }, {
-      topic: "operation.approvals", audienceUserId: entry.userId,
+    const revision = ++this.revision;
+    this.events.publish("operation-approval.changed", {
+      request: summary(entry),
+      status,
+      generation: this.generation,
+      revision,
+    }, {
+      topic: "operation.approvals",
     });
   }
 
@@ -92,11 +97,12 @@ export class OperationApprovals {
     }
   }
 
-  snapshot(userId: string) {
+  snapshot() {
     this.sweep();
     return {
-      revision: this.revisions.get(userId) ?? 0,
-      requests: [...this.entries.values()].filter((entry) => entry.userId === userId && entry.status === "pending").map(summary),
+      generation: this.generation,
+      revision: this.revision,
+      requests: [...this.entries.values()].filter((entry) => entry.status === "pending").map(summary),
     };
   }
 
@@ -138,10 +144,10 @@ export class OperationApprovals {
     return { id: entry.id, status: entry.status, expiresAt: entry.expiresAt };
   }
 
-  decide(userId: string, id: string, decision: "approve" | "deny") {
+  decide(id: string, decision: "approve" | "deny") {
     this.sweep();
     const entry = this.entries.get(id);
-    if (!entry || entry.userId !== userId || entry.status !== "pending") {
+    if (!entry || entry.status !== "pending") {
       throw approvalError("OPERATION_APPROVAL_NOT_FOUND", "Pending approval request not found.", 404);
     }
     entry.status = decision === "approve" ? "approved" : "denied";

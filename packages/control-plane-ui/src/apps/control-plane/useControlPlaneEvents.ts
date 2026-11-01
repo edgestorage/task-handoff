@@ -8,6 +8,7 @@ import {
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  CloudNodeRelayChangedEventSchema,
   NodeStateProjectionEventSchema,
   NodeJoinedEventSchema,
   type InstanceLifecycleSnapshot,
@@ -114,6 +115,8 @@ export function useControlPlaneEvents(input: {
   const reconnectBackoff = new StandardReconnectBackoff();
   const authoritativeRecoveries = ([
     ["nodes", ["nodeState"]],
+    ["nodeTrust", ["nodeTrust"]],
+    ["cloudNodeRelay", ["cloudNodeRelay"]],
     ["instances", ["instances"]],
     ["stories", ["stories"]],
   ] as const).map(([name, domains]) => createAuthoritativeQueryRecovery(
@@ -246,6 +249,15 @@ export function useControlPlaneEvents(input: {
     }
     if (event.type === "device-trust.changed") {
       input.deviceTrust?.applyEvent(event.payload);
+      return true;
+    }
+    if (event.type === "node.control-plane-trust.changed") {
+      queueDomainInvalidation("cloudNodeRelay");
+      return true;
+    }
+    if (event.type === "cloud-node-relay.changed") {
+      if (!safeParseResponse(CloudNodeRelayChangedEventSchema, event.payload).success) return false;
+      queueDomainInvalidation("cloudNodeRelay");
       return true;
     }
     if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
@@ -418,6 +430,10 @@ export function useControlPlaneEvents(input: {
       pendingInvalidationKeys.clear();
       for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
     }, 100);
+  }
+
+  function queueDomainInvalidation(domain: ControlPlaneQueryDomain) {
+    for (const queryKey of controlPlaneDomainQueryKeys([domain])) queueInvalidation(queryKey);
   }
 
   onMounted(connect);

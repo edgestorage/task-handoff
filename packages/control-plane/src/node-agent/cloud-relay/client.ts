@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 import type { NodeRelayClaimGrant, NodeRelayNodeAllocation } from "@task-handoff/cloud-contracts";
 import type { NodeAgentCloudRelayStatus } from "@task-handoff/protocol/control-plane";
+import { NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/node-agent-control-plane-trust";
 import { initiateNodeRelayHandshake, nodeRelayFingerprint, writeNodeAgentControlPlaneTrustOutcome, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { EventConnectionRetryTimer } from "../../shared/events/connection-retry.ts";
 import { WebSocketConnectionSupervisor } from "../../shared/transport/websocket-connection-supervisor.ts";
@@ -11,7 +12,12 @@ import { verifyNodeRelayClaimGrant } from "./claim-grant.ts";
 import { NodeRelayNodeChannel, type NodeRelayTunnelHost } from "./channel.ts";
 import { probeNodeRelayTargets } from "./probe.ts";
 import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "./types.ts";
-import type { NodeAgentCloudControlPlanePin, NodeAgentCloudControlPlaneTrustContext, NodeAgentCloudControlPlaneTrustRequest } from "./trust-types.ts";
+import type {
+  NodeAgentCloudControlPlanePin,
+  NodeAgentCloudControlPlaneTrustContext,
+  NodeAgentCloudControlPlaneTrustObservation,
+  NodeAgentCloudControlPlaneTrustRequest,
+} from "./trust-types.ts";
 import { cloudOriginError, resolveCloudOrigin, trustedNodeRelayUrl } from "./trust.ts";
 import { CloudEndpointResolver, hostMatchesSuffix, type CloudDiscoveryConfig } from "../../../../../shared/cloud-discovery.cjs";
 
@@ -55,6 +61,7 @@ type ChannelEntry = {
   activePinId?: string;
   activeContextKey?: string;
   suppressedContextKey?: string;
+  pendingTrustSignature?: string;
 };
 
 export type NodeAgentCloudRelayClientOptions = {
@@ -887,6 +894,7 @@ export class NodeAgentCloudRelayClient {
           }
         }
       }
+      this.publishPendingTrustChange(entry, trustObservation);
       if (trustObservation.kind !== "active") {
         const request = trustObservation.request;
         const issuedAt = new Date(this.now()).toISOString();
@@ -949,6 +957,7 @@ export class NodeAgentCloudRelayClient {
       entry.activePinId = trustObservation.pin.id;
       entry.activeContextKey = trustContextKey;
       entry.suppressedContextKey = undefined;
+      entry.pendingTrustSignature = undefined;
       attempt.phase = "handshaking";
       const storedPairing = this.options.identity.cloudRelayPairing(grant.controlPlaneId);
       const handshake = await initiateNodeRelayHandshake({
@@ -1039,6 +1048,26 @@ export class NodeAgentCloudRelayClient {
     } finally {
       if (entry.attempt === attempt) entry.attempt = undefined;
     }
+  }
+
+  private publishPendingTrustChange(entry: ChannelEntry, observation: NodeAgentCloudControlPlaneTrustObservation) {
+    if (observation.kind !== "pending") {
+      entry.pendingTrustSignature = undefined;
+      return;
+    }
+    const request = observation.request;
+    const signature = `${request.id}:${request.revision}`;
+    if (entry.pendingTrustSignature === signature) return;
+    entry.pendingTrustSignature = signature;
+    this.options.host.nodeAgentEventForwarder?.publish?.(
+      NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE,
+      {
+        controlPlaneId: request.controlPlaneId,
+        requestId: request.id,
+        state: request.status,
+      },
+      { nodeId: this.options.nodeId },
+    );
   }
 
   private handleChannelClosed(entry: ChannelEntry, channel: NodeRelayNodeChannel, reason: string) {

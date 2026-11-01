@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { CloudNodeRelayChangedEvent } from "@task-handoff/protocol/control-plane";
 import { nodeAgentControlPlaneComparisonCode, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
 import { verifyCoordinatorNodeRelayAllocation } from "./relay-connector.ts";
 import type { CloudNodeRelayConnectorResult, VerifiedNodeRelayAllocation } from "./node-relay-connector.ts";
@@ -40,6 +41,10 @@ export type CloudNodeRelayChannelsOptions = {
   onPreserveLocalConnection?(nodeHandle: string): void | Promise<void>;
   /** An unexpectedly closed live channel; the runtime must claim a fresh allocation. */
   onChannelClosed?(input: { nodeHandle: string; nodeId: string; relayId: string; reason: string }): void;
+  /** The account-node relay projection changed and consumers must recover its HTTP snapshot. */
+  onChanged?(input: NodeRelayStateChange): void;
+  /** The authoritative Control Plane trust projection gained, changed, or cleared an entry. */
+  onTrustChanged?(input: NodeRelayControlPlaneTrustChange): void;
   now?: () => number;
   audit?(event: { type: string; outcome: "allowed" | "denied"; nodeHandle?: string; reason: string }): void;
 };
@@ -67,6 +72,15 @@ export type NodeRelayControlPlaneTrustProjection = {
   observedAt: string;
 };
 
+export type NodeRelayControlPlaneTrustChange = {
+  nodeHandle: string;
+  nodeId: string;
+  requestId?: string;
+  state?: NodeRelayControlPlaneTrustProjection["state"];
+};
+
+export type NodeRelayStateChange = CloudNodeRelayChangedEvent;
+
 /**
  * Owns the Control Plane end of every account node channel: verifying each
  * pushed allocation against the local binding and scope, dialing the Relay,
@@ -81,6 +95,8 @@ export class CloudNodeRelayChannels {
   private readonly errors = new Map<string, { code: string; message: string; at: string }>();
   private readonly trust = new Map<string, NodeRelayControlPlaneTrustProjection>();
   private readonly claimRevisions = new Map<string, number>();
+  private readonly nodeLifecycleOperations = new Map<string, Promise<void>>();
+  private revision = 0;
 
   constructor(options: CloudNodeRelayChannelsOptions) {
     this.options = options;
@@ -89,6 +105,7 @@ export class CloudNodeRelayChannels {
   /** A Control Plane claim was accepted; the channel follows when the node asks for allocations. */
   noteClaim(nodeHandle: string) {
     this.claims.set(nodeHandle, { requestedAt: new Date(this.now()).toISOString() });
+    this.publishChanged("claim-noted", { nodeHandle });
   }
 
   hasClaimOrChannel(nodeHandle: string) {
@@ -104,15 +121,19 @@ export class CloudNodeRelayChannels {
   }
 
   forgetClaim(nodeHandle: string) {
-    this.claims.delete(nodeHandle);
+    if (this.claims.delete(nodeHandle)) this.publishChanged("claim-forgotten", { nodeHandle });
   }
 
   forgetNode(nodeHandle: string) {
     this.claimRevisions.set(nodeHandle, (this.claimRevisions.get(nodeHandle) ?? 0) + 1);
-    this.claims.delete(nodeHandle);
-    this.errors.delete(nodeHandle);
-    this.trust.delete(nodeHandle);
-    this.closeNode(nodeHandle, "node-relay-claim-revoked");
+    const changed = this.claims.delete(nodeHandle) || this.errors.delete(nodeHandle);
+    this.clearTrust(nodeHandle);
+    const closed = this.closeNode(nodeHandle, "node-relay-claim-revoked");
+    if (changed && !closed) this.publishChanged("node-forgotten", { nodeHandle });
+  }
+
+  notifyChanged(reason: string, input: Pick<NodeRelayStateChange, "nodeHandle" | "nodeId"> = {}) {
+    this.publishChanged(reason, input);
   }
 
   async attach(raw: unknown) {
@@ -145,6 +166,7 @@ export class CloudNodeRelayChannels {
       this.discardChannel(verified.nodeHandle, "local-connection-preserved");
       this.claims.delete(verified.nodeHandle);
       this.errors.delete(verified.nodeHandle);
+      this.publishChanged("local-connection-preserved", { nodeHandle: verified.nodeHandle, nodeId: resolved.nodeId });
       await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
       return { status: "attached" as const, preservedLocalConnection: true, nodeId: resolved.nodeId, nodeHandle: verified.nodeHandle };
     }
@@ -160,6 +182,7 @@ export class CloudNodeRelayChannels {
       this.discardChannel(verified.nodeHandle, "local-connection-preserved");
       this.claims.delete(verified.nodeHandle);
       this.errors.delete(verified.nodeHandle);
+      this.publishChanged("local-connection-preserved", { nodeHandle: verified.nodeHandle, nodeId: knownIdentity.nodeId });
       await Promise.resolve(this.options.onPreserveLocalConnection?.(verified.nodeHandle)).catch(() => undefined);
       this.options.audit?.({ type: "node-relay.channel.preserved", outcome: "allowed", nodeHandle: verified.nodeHandle, reason: "direct-connection" });
       return { status: "attached" as const, preservedLocalConnection: true, nodeId: knownIdentity.nodeId, nodeHandle: verified.nodeHandle };
@@ -200,7 +223,7 @@ export class CloudNodeRelayChannels {
         throw error;
       }
       const identity = this.options.state.snapshot().identity;
-      this.trust.set(verified.nodeHandle, {
+      this.setTrust(verified.nodeHandle, {
         nodeHandle: verified.nodeHandle,
         nodeId: connection.outcome.nodeId,
         ...(verified.displayName ? { displayName: verified.displayName } : {}),
@@ -270,7 +293,8 @@ export class CloudNodeRelayChannels {
     this.channels.set(verified.nodeHandle, activeChannel);
     this.claims.delete(verified.nodeHandle);
     this.errors.delete(verified.nodeHandle);
-    this.trust.delete(verified.nodeHandle);
+    this.clearTrust(verified.nodeHandle);
+    this.publishChanged("channel-attached", { nodeHandle: verified.nodeHandle, nodeId: identity.nodeId });
     transport.attachNode(identity.nodeId, {
       socket: connection.socket,
       key: connection.key,
@@ -278,7 +302,7 @@ export class CloudNodeRelayChannels {
       ...(connection.channelId ? { relayChannelId: connection.channelId } : {}),
       onClosed: (reason) => this.handleClosed(verified.nodeHandle, activeChannel, reason),
     });
-    await this.options.nodes.connected(identity.nodeId, { nodeHandle: verified.nodeHandle });
+    await this.enqueueNodeLifecycle(identity.nodeId, () => this.options.nodes.connected(identity.nodeId, { nodeHandle: verified.nodeHandle }));
     if (this.channels.get(verified.nodeHandle) !== activeChannel) {
       // The channel can close while the node record is being persisted. Do not
       // report a successful attach that the runtime has already treated as gone.
@@ -294,7 +318,7 @@ export class CloudNodeRelayChannels {
     const channel = this.channels.get(nodeHandle);
     if (!channel) return false;
     this.discardChannel(nodeHandle, reason);
-    void this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason });
+    void this.enqueueNodeLifecycle(channel.nodeId, () => this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason })).catch(() => undefined);
     return true;
   }
 
@@ -323,8 +347,9 @@ export class CloudNodeRelayChannels {
     // offline or trigger another recovery claim.
     if (this.channels.get(nodeHandle) !== channel) return;
     this.channels.delete(nodeHandle);
-    void this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason });
+    void this.enqueueNodeLifecycle(channel.nodeId, () => this.options.nodes.disconnected(channel.nodeId, { nodeHandle, reason })).catch(() => undefined);
     this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
+    this.publishChanged("channel-closed", { nodeHandle, nodeId: channel.nodeId });
     this.options.onChannelClosed?.({ nodeHandle, nodeId: channel.nodeId, relayId: channel.relayId, reason });
   }
 
@@ -335,7 +360,31 @@ export class CloudNodeRelayChannels {
     this.channels.delete(nodeHandle);
     this.options.transport?.()?.detachNode(channel.nodeId, reason);
     this.options.audit?.({ type: "node-relay.channel.closed", outcome: "allowed", nodeHandle, reason });
+    this.publishChanged("channel-discarded", { nodeHandle, nodeId: channel.nodeId });
     return true;
+  }
+
+  private enqueueNodeLifecycle(nodeId: string, operation: () => void | Promise<void>) {
+    const previous = this.nodeLifecycleOperations.get(nodeId);
+    if (!previous) {
+      try {
+        const result = operation();
+        if (!result || typeof (result as PromiseLike<void>).then !== "function") return Promise.resolve();
+        return this.trackNodeLifecycle(nodeId, Promise.resolve(result));
+      } catch (error) {
+        return this.trackNodeLifecycle(nodeId, Promise.reject(error));
+      }
+    }
+    return this.trackNodeLifecycle(nodeId, previous.catch(() => undefined).then(operation));
+  }
+
+  private trackNodeLifecycle(nodeId: string, next: Promise<void>) {
+    this.nodeLifecycleOperations.set(nodeId, next);
+    const settle = () => {
+      if (this.nodeLifecycleOperations.get(nodeId) === next) this.nodeLifecycleOperations.delete(nodeId);
+    };
+    void next.then(settle, settle);
+    return next;
   }
 
   private recordError(nodeHandle: string | undefined, error: unknown) {
@@ -343,10 +392,47 @@ export class CloudNodeRelayChannels {
     const code = typeof (error as any)?.code === "string" ? (error as any).code : "NODE_RELAY_CHANNEL_FAILED";
     this.errors.set(nodeHandle, { code, message: error instanceof Error ? error.message : String(error), at: new Date(this.now()).toISOString() });
     this.options.audit?.({ type: "node-relay.channel.rejected", outcome: "denied", nodeHandle, reason: code });
+    this.publishChanged("channel-error", { nodeHandle });
+  }
+
+  private setTrust(nodeHandle: string, trust: NodeRelayControlPlaneTrustProjection) {
+    const previous = this.trust.get(nodeHandle);
+    this.trust.set(nodeHandle, trust);
+    if (previous?.nodeId === trust.nodeId && previous.state === trust.state && previous.requestId === trust.requestId) return;
+    this.publishChanged("trust-changed", { nodeHandle, nodeId: trust.nodeId });
+    this.options.onTrustChanged?.({
+      nodeHandle,
+      nodeId: trust.nodeId,
+      ...(trust.requestId ? { requestId: trust.requestId } : {}),
+      state: trust.state,
+    });
+  }
+
+  private clearTrust(nodeHandle: string) {
+    const previous = this.trust.get(nodeHandle);
+    if (!previous) return;
+    this.trust.delete(nodeHandle);
+    this.publishChanged("trust-cleared", { nodeHandle, nodeId: previous.nodeId });
+    this.options.onTrustChanged?.({
+      nodeHandle,
+      nodeId: previous.nodeId,
+      ...(previous.requestId ? { requestId: previous.requestId } : {}),
+    });
   }
 
   private now() {
     return this.options.now ? this.options.now() : Date.now();
+  }
+
+  private publishChanged(reason: string, input: { nodeHandle?: string; nodeId?: string }) {
+    const nodeHandle = typeof input.nodeHandle === "string" && input.nodeHandle.length <= 240 ? input.nodeHandle : undefined;
+    const nodeId = typeof input.nodeId === "string" && input.nodeId.length <= 120 ? input.nodeId : undefined;
+    this.options.onChanged?.({
+      revision: ++this.revision,
+      reason: reason.slice(0, 120),
+      ...(nodeHandle ? { nodeHandle } : {}),
+      ...(nodeId ? { nodeId } : {}),
+    });
   }
 }
 

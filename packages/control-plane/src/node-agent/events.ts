@@ -114,6 +114,7 @@ type EventTransportCongestionIncident = {
 
 export class NodeAgentInstanceEventForwarder {
   private readonly sockets = new Map<string, WebSocket>();
+  private readonly sentInstanceSubscriptions = new WeakMap<WebSocket, string>();
   private readonly socketUrls = new Map<string, string>();
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
@@ -771,7 +772,7 @@ export class NodeAgentInstanceEventForwarder {
     const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
     const legacyAll = subscriptions.some((entry) => entry === undefined);
     if (legacyAll) {
-      socket.send(JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      this.sendInstanceSubscriptionFrame(socket, JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
       return;
     }
     const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
@@ -780,7 +781,7 @@ export class NodeAgentInstanceEventForwarder {
       .filter((session) => session.instanceId === instanceId)
       .map((session) => session.sessionId)))];
     const replaySince = earliestReplaySince(subscriptions.map((entry) => entry!.replaySince));
-    socket.send(JSON.stringify({
+    this.sendInstanceSubscriptionFrame(socket, JSON.stringify({
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
@@ -802,6 +803,12 @@ export class NodeAgentInstanceEventForwarder {
         timelineSessions: timelineSessionIds.map((sessionId) => ({ instanceId, sessionId })),
       },
     }));
+  }
+
+  private sendInstanceSubscriptionFrame(socket: WebSocket, encoded: string) {
+    if (this.sentInstanceSubscriptions.get(socket) === encoded) return;
+    this.sentInstanceSubscriptions.set(socket, encoded);
+    socket.send(encoded);
   }
 
   private outputAccepts(output: WebSocket, event: ForwardedInstanceEvent) {

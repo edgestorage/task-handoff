@@ -444,14 +444,19 @@
       >
         <StoryView
           v-model:selection="storySelection"
+          :active-action-label="activeActionLabel"
+          :can-export-config="canExportConfig"
           :choose-project-folder="desktopBridge?.chooseProjectFolder"
           :header-density="effectiveHeaderDensity"
+          :is-closing-all-sessions="isClosingAllInstanceSessions"
+          :is-instance-action-busy="isInstanceActionBusy"
           :node-filter="nodeFilter"
           :instances="boardInstancesWithAiSessions"
           :launching-app="storyResourceLaunching"
           :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
           :nodes="nodes.data.value || []"
           @launch-app="launchStoryResourceApp"
+          @instance-context-menu-command="handleInstanceContextMenuCommand"
           @open-session="openStoryAiSessionResource"
           @open-settings="openInstanceSettings"
           @open-repository-workspace="openStoryRepositoryWorkspace"
@@ -543,6 +548,7 @@
         :active-terminal-socket-url="activeTerminalSocketUrl"
         :app-launch-button-label="appLaunchButtonLabel"
         :app-launch-button-title="appLaunchButtonTitle"
+        :can-export-config="canExportConfig"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
         :choose-project-folder="activeProjectFolderChooser"
@@ -550,6 +556,7 @@
         :instance="standaloneOwnershipReady ? activeInstanceWithAiSessions : undefined"
         :instance-display-name="instanceDisplayName"
         :instance-sidebar-visible="instancesSidebarVisible"
+        :is-closing-all-sessions="isClosingAllInstanceSessions"
         :is-instance-action-busy="isInstanceActionBusy"
         :last-refresh-label="lastRefreshLabel"
         :left-session="leftSession"
@@ -575,10 +582,13 @@
         :session-tabs="sessionTabs"
         :stopping-session-id="stoppingSessionId"
         :session-toolbar-target="standaloneMode && sessionPreviewExpanded && !hasSessionSplit ? '#instance-detail-titlebar-tabs' : undefined"
+        @close-all-sessions="confirmCloseAllInstanceSessions"
         @copy-registration="copyRegistration"
+        @instance-context-menu-command="handleInstanceContextMenuCommand"
         @launch-app="launchSelectedApp"
         @new-instance="newInstanceOpen = true"
         @open-ai-session-app="openAiSessionApp"
+        @open-config-sync="openConfigSync"
         @open-repository-workspace="openRepositoryWorkspace"
         @open-settings="openInstanceSettings"
         @open-window="openInstanceWindow"
@@ -590,6 +600,7 @@
         @close-session-split="closeSessionSplit"
         @set-session-split-ratio="setSessionSplitRatio"
         @run-action="runInstanceAction"
+        @save-template="openSaveEnvironmentTemplate"
         @select-ai-session="selectAiSession"
         @select-session="selectSession"
         @stop-session="stopSelectedAppSession"
@@ -698,6 +709,7 @@ import { aiSessionApprovalItems, type AiSessionApprovalDecision } from "./action
 import { mergeActionInboxItems } from "./action-inbox/items";
 import { applyStoryDecisionUpdate, isStoryDecisionResumePending, storyDecisionItemsOutsideSessionDisplay, type StoryDecisionList } from "./action-inbox/storyDecisionItems";
 import { useOperationApprovalStore } from "./action-inbox/useOperationApprovalStore";
+import { canReadOperationApprovals } from "./action-inbox/operationApprovalState";
 import { useDeviceTrustStore } from "./action-inbox/useDeviceTrustStore";
 import { useNodeControlPlaneTrustInbox } from "./action-inbox/useNodeControlPlaneTrustInbox";
 import { useStoryDecisionInbox } from "./action-inbox/useStoryDecisionInbox";
@@ -754,6 +766,7 @@ import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWi
 import { canUseNativeProjectFolderPicker } from "./nodePath";
 import WorkbenchLayoutContextMenu from "./shared/WorkbenchLayoutContextMenu.vue";
 import { closeAiSessionBatch } from "./closeAiSessionBatch";
+import type { InstanceContextMenuCommandEvent } from "./shared/instanceContextMenu";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -1033,6 +1046,29 @@ function confirmCloseAllInstanceSessions(instance: InstanceBoardItem) {
   void closeAllInstanceSessions(instance, sessions);
 }
 
+function handleInstanceContextMenuCommand({ command, instance }: InstanceContextMenuCommandEvent) {
+  switch (command.type) {
+    case "run-action":
+      runInstanceAction(command.action, instance);
+      return;
+    case "open-config-sync":
+      openConfigSync(command.direction, instance);
+      return;
+    case "open-settings":
+      openInstanceSettings(instance.id);
+      return;
+    case "open-window":
+      openInstanceWindow(instance);
+      return;
+    case "save-template":
+      openSaveEnvironmentTemplate(instance);
+      return;
+    case "close-all-sessions":
+      confirmCloseAllInstanceSessions(instance);
+      return;
+  }
+}
+
 async function closeAllInstanceSessions(instance: InstanceBoardItem, sessions: AiSessionSummary[]) {
   closingAllSessionInstanceId.value = instance.id;
   try {
@@ -1147,20 +1183,18 @@ const aiSessionStore = useAiSessionStore({
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
 const operationApprovalStore = useOperationApprovalStore();
+const operationApprovalsAccessible = computed(() => canReadOperationApprovals(authSession.data.value));
 const deviceTrustStore = useDeviceTrustStore();
 const nodeControlPlaneTrust = useCloudAccountNodesQuery({
   enabled: () => canManageSettings.value,
-  refetchIntervalMs: () => 4_000,
 });
 const managedNodeControlPlaneTrust = useNodeControlPlaneTrustInbox(() => canManageSettings.value);
-watch(() => [authSession.data.value?.user?.id, canManageSettings.value] as const, ([userId, manageSettings], previous) => {
-  if (userId === previous?.[0] && manageSettings === previous?.[1]) return;
+watch(() => [authSession.data.value?.user?.id, operationApprovalsAccessible.value, canManageSettings.value] as const, ([userId, operationApprovals, manageSettings], previous) => {
+  if (userId === previous?.[0] && operationApprovals === previous?.[1] && manageSettings === previous?.[2]) return;
   operationApprovalStore.reset();
   deviceTrustStore.reset();
-  if (userId && authSession.data.value?.enabled) {
-    void operationApprovalStore.recover().catch(() => undefined);
-    if (manageSettings) void deviceTrustStore.recover().catch(() => undefined);
-  }
+  if (operationApprovals) void operationApprovalStore.recover().catch(() => undefined);
+  if (userId && authSession.data.value?.enabled && manageSettings) void deviceTrustStore.recover().catch(() => undefined);
 }, { immediate: true });
 const storyDecisionInbox = useStoryDecisionInbox(() => !standaloneMode.value);
 // 会话内提示正在展示的决策不再进入右上角浮层，避免同一决策在会话和审批中心重复出现。
@@ -1650,8 +1684,8 @@ useControlPlaneEvents({
     },
   },
   operationApprovals: {
-    applyEvent: (payload) => { if (authSession.data.value?.enabled && authSession.data.value?.user?.id) operationApprovalStore.applyEvent(payload); },
-    recoverOpen: () => authSession.data.value?.enabled ? operationApprovalStore.recover() : undefined,
+    applyEvent: (payload) => { if (operationApprovalsAccessible.value) operationApprovalStore.applyEvent(payload); },
+    recoverOpen: () => operationApprovalsAccessible.value ? operationApprovalStore.recover() : undefined,
   },
   deviceTrust: {
     applyEvent: (payload) => { if (canManageSettings.value) deviceTrustStore.applyEvent(payload); },

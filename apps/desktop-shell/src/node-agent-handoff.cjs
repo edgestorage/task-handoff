@@ -4,6 +4,8 @@ const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { processStartIdentity } = require("../../../shared/process-start-identity.cjs");
 
+const DESKTOP_CONTROL_PLANE_GRACEFUL_TIMEOUT_MS = 20_000;
+const DESKTOP_CONTROL_PLANE_FORCE_TIMEOUT_MS = 2_000;
 const DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS = 20_000;
 const DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS = 2_000;
 
@@ -115,6 +117,50 @@ function inspectExistingDesktopNodeAgent(options = {}) {
   return { status: "running", owner };
 }
 
+function sameLockOwner(expected, current) {
+  return Boolean(
+    expected
+    && current
+    && expected.pid === current.pid
+    && expected.token === current.token
+    && expected.startIdentity === current.startIdentity,
+  );
+}
+
+async function ensureDesktopControlPlaneAvailable(options = {}) {
+  const inspection = inspectExistingDesktopControlPlane(options.inspectOptions || {});
+  if (inspection.status === "unverified") {
+    throw new Error(`The existing Control Plane pid=${inspection.owner.pid} could not be verified.`);
+  }
+  if (inspection.status !== "running") {
+    return { action: "clear", inspection };
+  }
+  if (typeof options.confirmStop !== "function") {
+    throw new Error("Desktop cannot replace the existing Control Plane without user confirmation.");
+  }
+  if (!await options.confirmStop({ owner: inspection.owner })) {
+    return { action: "cancelled", inspection };
+  }
+
+  const stopped = await stopExistingDesktopControlPlane({
+    ...(options.inspectOptions || {}),
+    ...(options.stopOptions || {}),
+    logInfo: options.logInfo,
+    logError: options.logError,
+    expectedOwner: inspection.owner,
+  });
+  if (["stopped", "forced", "stale"].includes(stopped.status)) {
+    return { action: "replaced", inspection, stopped };
+  }
+  if (stopped.status === "changed") {
+    throw new Error(`The existing Control Plane changed while Desktop was preparing to replace it.`);
+  }
+  if (stopped.status === "unverified") {
+    throw new Error(`The existing Control Plane pid=${inspection.owner.pid} could not be verified before it was stopped.`);
+  }
+  throw new Error(`The existing Control Plane pid=${inspection.owner.pid} could not be stopped (status=${stopped.status}).`);
+}
+
 async function ensureDesktopNodeAgent(options) {
   const inspection = inspectExistingDesktopNodeAgent({
     dataDir: options.dataDir,
@@ -161,8 +207,79 @@ async function waitForOwnerExit(owner, options) {
   return !lockOwnerMatchesProcess(owner, options);
 }
 
-async function stopExistingDesktopNodeAgent(options) {
+async function stopDesktopLockOwner(owner, options) {
   const startedAt = Date.now();
+  const common = {
+    isAlive: options.isAlive,
+    processIdentity: options.processIdentity,
+    wait: options.wait,
+    pollMs: options.pollMs ?? 100,
+  };
+  if (!lockOwnerMatchesProcess(owner, common)) {
+    return { status: "stale", owner };
+  }
+
+  options.logInfo?.(`[desktop-shell] stopping previous ${options.label} pid=${owner.pid}`);
+  try {
+    options.signal(owner.pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { status: "stopped", owner };
+    throw error;
+  }
+
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.gracefulTimeoutMs })) {
+    options.logInfo?.(`[desktop-shell] previous ${options.label} stopped pid=${owner.pid} elapsedMs=${Date.now() - startedAt}`);
+    return { status: "stopped", owner };
+  }
+
+  if (!lockOwnerMatchesProcess(owner, common)) {
+    return { status: "stopped", owner };
+  }
+  options.logError?.(`[desktop-shell] forcing previous ${options.label} to stop pid=${owner.pid} startIdentity=${owner.startIdentity} elapsedMs=${Date.now() - startedAt}`);
+  try {
+    options.signal(owner.pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { status: "stopped", owner };
+    throw error;
+  }
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.forceTimeoutMs })) {
+    return { status: "forced", owner };
+  }
+  throw new Error(`Previous ${options.label} pid=${owner.pid} did not exit.`);
+}
+
+async function stopExistingDesktopControlPlane(options = {}) {
+  const lockPath = options.lockPath || resolveControlPlaneSingletonLockPath();
+  const readOwner = options.readOwner || readControlPlaneLockOwner;
+  const isAlive = options.isAlive || processIsAlive;
+  const processIdentity = options.processIdentity || processStartIdentity;
+  const signal = options.signal || ((pid, value) => process.kill(pid, value));
+  const wait = options.wait || delay;
+  const inspection = inspectExistingDesktopControlPlane({
+    lockPath,
+    readOwner,
+    isAlive,
+    processIdentity,
+  });
+  if (inspection.status !== "running") return inspection;
+  if (options.expectedOwner && !sameLockOwner(options.expectedOwner, inspection.owner)) {
+    return { status: "changed", owner: inspection.owner };
+  }
+  return stopDesktopLockOwner(inspection.owner, {
+    label: "Control Plane",
+    isAlive,
+    processIdentity,
+    signal,
+    wait,
+    pollMs: options.pollMs,
+    gracefulTimeoutMs: options.gracefulTimeoutMs ?? DESKTOP_CONTROL_PLANE_GRACEFUL_TIMEOUT_MS,
+    forceTimeoutMs: options.forceTimeoutMs ?? DESKTOP_CONTROL_PLANE_FORCE_TIMEOUT_MS,
+    logInfo: options.logInfo,
+    logError: options.logError,
+  });
+}
+
+async function stopExistingDesktopNodeAgent(options) {
   const lockPath = options.lockPath || resolveNodeAgentSingletonLockPath();
   const readOwner = options.readOwner || readNodeAgentLockOwner;
   const isAlive = options.isAlive || processIsAlive;
@@ -177,46 +294,26 @@ async function stopExistingDesktopNodeAgent(options) {
     processIdentity,
   });
   if (inspection.status !== "running") return inspection;
-  const owner = inspection.owner;
-
-  options.logInfo?.(`[desktop-shell] stopping previous desktop node agent pid=${owner.pid}`);
-  try {
-    signal(owner.pid, "SIGTERM");
-  } catch (error) {
-    if (error?.code === "ESRCH") return { status: "stopped", owner };
-    throw error;
-  }
-
-  const common = {
+  return stopDesktopLockOwner(inspection.owner, {
+    label: "desktop node agent",
     isAlive,
     processIdentity,
+    signal,
     wait,
     pollMs: options.pollMs ?? 100,
-  };
-  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.gracefulTimeoutMs ?? DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS })) {
-    options.logInfo?.(`[desktop-shell] previous desktop node agent stopped pid=${owner.pid} elapsedMs=${Date.now() - startedAt}`);
-    return { status: "stopped", owner };
-  }
-
-  if (!lockOwnerMatchesProcess(owner, common)) {
-    return { status: "stopped", owner };
-  }
-  options.logError?.(`[desktop-shell] forcing previous desktop node agent to stop pid=${owner.pid} startIdentity=${owner.startIdentity} elapsedMs=${Date.now() - startedAt}`);
-  try {
-    signal(owner.pid, "SIGKILL");
-  } catch (error) {
-    if (error?.code === "ESRCH") return { status: "stopped", owner };
-    throw error;
-  }
-  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.forceTimeoutMs ?? DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS })) {
-    return { status: "forced", owner };
-  }
-  throw new Error(`Previous desktop node agent pid=${owner.pid} did not exit.`);
+    gracefulTimeoutMs: options.gracefulTimeoutMs ?? DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
+    forceTimeoutMs: options.forceTimeoutMs ?? DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
+    logInfo: options.logInfo,
+    logError: options.logError,
+  });
 }
 
 module.exports = {
+  DESKTOP_CONTROL_PLANE_FORCE_TIMEOUT_MS,
+  DESKTOP_CONTROL_PLANE_GRACEFUL_TIMEOUT_MS,
   DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
+  ensureDesktopControlPlaneAvailable,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
   inspectStartedDesktopControlPlane,
@@ -225,5 +322,6 @@ module.exports = {
   readNodeAgentLockOwner,
   resolveControlPlaneSingletonLockPath,
   resolveNodeAgentSingletonLockPath,
+  stopExistingDesktopControlPlane,
   stopExistingDesktopNodeAgent,
 };

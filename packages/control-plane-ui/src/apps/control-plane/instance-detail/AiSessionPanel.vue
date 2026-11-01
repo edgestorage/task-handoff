@@ -976,15 +976,22 @@
                     </span>
                   </AiSessionPathContextMenu>
                   <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
-                  <Tooltip>
-                    <TooltipTrigger as-child>
+                  <ContextMenu>
+                    <ContextMenuTrigger as-child :disabled="!instanceActionMenu">
                       <span class="session-ai-detail-context-item">
-                        <Boxes :size="14" aria-hidden="true" />
-                        <span>{{ selectedSessionInstanceName }}</span>
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <span class="session-ai-detail-context-item">
+                              <Boxes :size="14" aria-hidden="true" />
+                              <span>{{ selectedSessionInstanceName }}</span>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
+                        </Tooltip>
                       </span>
-                    </TooltipTrigger>
-                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
-                  </Tooltip>
+                    </ContextMenuTrigger>
+                    <InstanceActionMenuContent v-if="instanceActionMenu" v-bind="instanceActionMenu" @command="emit('instanceContextMenuCommand', $event)" />
+                  </ContextMenu>
                   <template v-if="selectedSessionAgentIcon">
                     <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
                     <Tooltip>
@@ -1063,43 +1070,29 @@
           {{ promptIndexFor(selectedSession) + 1 }}/{{ promptCount(selectedSession) }}
         </output>
         <article
-          v-if="effectiveTimelineViewMode === 'full' && timelineStickyUserMessage"
+          v-if="stickyContextVisible"
           class="session-ai-timeline-sticky-prompt"
-          aria-hidden="true"
         >
           <AiSessionStickyContext
             v-if="selectedSessionAgentIcon"
             :agent="selectedSessionAgentIcon"
+            :can-copy-folder-path="canCopySelectedSessionFolderPath"
+            :can-open-folder="canOpenSelectedSessionFolder"
             :folder-name="selectedSessionFolderName"
             :folder-path="selectedSessionFolderPath"
+            :instance-context-menu-enabled="Boolean(instanceActionMenu)"
             :instance-name="selectedSessionInstanceName"
             :node-name="selectedSessionNodeName"
             :status-label="aiSessionStatusLabel(selectedSession, t)"
-          />
-          <div class="session-ai-timeline-sticky-message">
-            <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
-          </div>
-        </article>
-        <article
-          v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"
-          class="session-ai-timeline-sticky-prompt"
-          aria-hidden="true"
-        >
-          <AiSessionStickyContext
-            v-if="selectedSessionAgentIcon"
-            :agent="selectedSessionAgentIcon"
-            :folder-name="selectedSessionFolderName"
-            :folder-path="selectedSessionFolderPath"
-            :instance-name="selectedSessionInstanceName"
-            :node-name="selectedSessionNodeName"
-            :status-label="aiSessionStatusLabel(selectedSession, t)"
-          />
-          <div class="session-ai-timeline-sticky-message">
-            <MarkdownContent
-              v-if="selectedSessionContentState === 'ready'"
-              :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
-              :code-tools="markdownCodeTools"
-            />
+            @copy-folder-path="copySelectedSessionFolderPath"
+            @open-folder="openSelectedSessionFolder"
+          >
+            <template v-if="instanceActionMenu" #instance-context-menu>
+              <InstanceActionMenuContent v-bind="instanceActionMenu" @command="emit('instanceContextMenuCommand', $event)" />
+            </template>
+          </AiSessionStickyContext>
+          <div class="session-ai-timeline-sticky-message" aria-hidden="true">
+            <MarkdownContent v-if="stickyContextMessage" :content="stickyContextMessage" :code-tools="markdownCodeTools" />
           </div>
         </article>
         <Button
@@ -1381,6 +1374,7 @@ import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../compon
 import { supportedAiSessionReasoningEfforts } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
 import type { LaunchableApp } from "../useInstanceSessions";
+import type { InstanceAction } from "../useInstanceActions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionDecisionPrompt from "../../../components/ai-session/AiSessionDecisionPrompt.vue";
@@ -1413,12 +1407,14 @@ import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathNa
 import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, partitionInstanceCwdFolders, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import InstanceActionMenuContent from "../shared/InstanceActionMenuContent.vue";
+import type { InstanceContextMenuCommand } from "../shared/instanceContextMenu";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizontalOverflow } from "../../../lib/horizontalOverflow";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import NewWorktreeDialog, { type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
-import AiSessionPathContextMenu from "./AiSessionPathContextMenu.vue";
+import AiSessionPathContextMenu from "../../../components/ai-session/AiSessionPathContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
@@ -1543,7 +1539,9 @@ function storedSidebarWidth() {
 }
 
 const props = defineProps<{
+  activeActionLabel?: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   activeSession: SessionTab;
+  canExportConfig?: (instance: InstanceBoardItem) => boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   creationInitialCwd?: string;
   creationInitialCwdFolderId?: string;
@@ -1563,6 +1561,8 @@ const props = defineProps<{
   initialHistoryId?: string;
   initialHistoryMode?: boolean;
   instance: InstanceWithAiSessions;
+  isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
+  isInstanceActionBusy?: (instance: InstanceBoardItem) => boolean;
   launchableApps?: LaunchableApp[];
   launchingApp?: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
@@ -1570,6 +1570,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   creationPresetSubmit: [draft: AiSessionCreationPresetDraft];
+  instanceContextMenuCommand: [command: InstanceContextMenuCommand];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
@@ -1863,6 +1864,19 @@ async function copySelectedSessionFolderPath() {
   if (!canCopySelectedSessionFolderPath.value) return;
   await copyRuntimePathToClipboard(selectedSessionRuntimePath.value);
 }
+const instanceActionMenu = computed(() => {
+  const { activeActionLabel, canExportConfig, isClosingAllSessions, isInstanceActionBusy } = props;
+  if (!activeActionLabel || !canExportConfig || !isClosingAllSessions || !isInstanceActionBusy) return undefined;
+  const sessionCount = (props.instance.aiSessions?.sessions || []).filter((session) => session.actions?.close !== false).length;
+  return {
+    activeActionLabel,
+    aiSessionCount: () => sessionCount,
+    canExportConfig,
+    instance: props.instance,
+    isClosingAllSessions,
+    isInstanceActionBusy,
+  };
+});
 const selectedSessionInstanceName = computed(() => props.instance.name || props.instance.id);
 const selectedSessionNodeName = computed(() => props.instance.node?.name || props.instance.nodeId);
 const selectedSessionAgentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
@@ -2356,6 +2370,16 @@ const detailPromptSectionEl = ref<HTMLElement>();
 const detailActionsEl = ref<HTMLElement>();
 const detailBottomAnchorEl = ref<HTMLElement>();
 const timelineStickyUserMessage = ref<{ id: string; text: string }>();
+const stickyContextVisible = computed(() => {
+  if (effectiveTimelineViewMode.value === "full") return Boolean(timelineStickyUserMessage.value);
+  return detailScrolled.value && !detailConversationTransitioning.value;
+});
+const stickyContextMessage = computed(() => {
+  if (effectiveTimelineViewMode.value === "full") return timelineStickyUserMessage.value?.text || "";
+  if (selectedSessionContentState.value !== "ready") return "";
+  const session = selectedConversationSession.value || selectedSession.value;
+  return session ? displayAiSessionTitle(session, promptIndexFor(session), t) : "";
+});
 let composerResizeObserver: ResizeObserver | undefined;
 let detailActionsResizeObserver: ResizeObserver | undefined;
 let detailScrollViewport: HTMLElement | undefined;

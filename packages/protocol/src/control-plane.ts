@@ -2175,6 +2175,14 @@ export const NodeJoinedEventSchema = z.object({
   inviteId: IdSchema.optional(),
 }).strict();
 
+/** A state mutation in the Control Plane-owned account-node relay projection. */
+export const CloudNodeRelayChangedEventSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  reason: NonEmptyTrimmedTextSchema.max(120),
+  nodeHandle: NonEmptyTrimmedTextSchema.max(240).optional(),
+  nodeId: IdSchema.optional(),
+}).strict();
+
 export const NodeJoinInviteStatusSchema = z.discriminatedUnion("status", [
   z.object({
     id: IdSchema,
@@ -3782,6 +3790,7 @@ export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeStateProjectionEvent = z.infer<typeof NodeStateProjectionEventSchema>;
 export type NodeJoinedEvent = z.infer<typeof NodeJoinedEventSchema>;
+export type CloudNodeRelayChangedEvent = z.infer<typeof CloudNodeRelayChangedEventSchema>;
 export type NodeJoinInviteStatus = z.infer<typeof NodeJoinInviteStatusSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
 export type InstanceResourceMetrics = z.infer<typeof InstanceResourceMetricsSchema>;

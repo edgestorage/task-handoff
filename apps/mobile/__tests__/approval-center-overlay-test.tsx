@@ -83,19 +83,26 @@ function center(overrides: Partial<MobileApprovalCenterContextValue> = {}): Mobi
   const items = overrides.items ?? [item];
   return {
     actions: {},
+    collapse: jest.fn(),
     decide: jest.fn(),
+    dockSide: 'right',
+    edgeHidden: false,
     expandOrCollapse: jest.fn(),
     expanded: false,
     fullScreenItem: undefined,
+    headerInset: 143,
     items,
     obstructionHeight: 0,
     pendingCount: items.length,
     preferredExpanded: false,
+    registerHeaderInset: jest.fn(() => () => undefined),
     registerOcclusion: jest.fn(() => () => undefined),
+    revealAndExpand: jest.fn(),
     retry: jest.fn(),
     scrollOffset: 0,
     selectedKey: undefined,
     selectItem: jest.fn(),
+    setFabPlacement: jest.fn(),
     setFullScreenItem: jest.fn(),
     setScrollOffset: jest.fn(),
     sourceHealth: {
@@ -105,6 +112,7 @@ function center(overrides: Partial<MobileApprovalCenterContextValue> = {}): Mobi
       'device-trust': { items: [], health: { source: 'device-trust', phase: 'ready', pendingCount: 0, retryable: true } },
       'node-control-plane-trust': { items: [], health: { source: 'node-control-plane-trust', phase: 'ready', pendingCount: 0, retryable: true } },
     },
+    verticalRatio: 1,
     ...overrides,
   };
 }
@@ -126,12 +134,21 @@ test('renders no approval surface at all when pending count is zero', async () =
   expect(screen.queryByTestId('mobile-approval-fab')).toBeNull();
 });
 
-test('uses one 56 point floating entry and exposes the true count independently of the capped badge', async () => {
+test('uses one 44 point floating entry and exposes the true count independently of the capped badge', async () => {
   const screen = await render(tree(center({ pendingCount: 150 })));
 
-  expect(screen.getByTestId('mobile-approval-fab')).toHaveStyle({ height: 56, width: 56 });
+  expect(screen.getByTestId('mobile-approval-fab')).toHaveStyle({ height: 44, width: 44 });
   expect(screen.getByLabelText(/Open approvals\. 150 pending, Approvals panel collapsed/u)).toBeTruthy();
   expect(screen.getByTestId('mobile-approval-center')).toBeTruthy();
+});
+
+test('reveals and expands an edge-hidden entry from the visible sliver', async () => {
+  const revealAndExpand = jest.fn();
+  const screen = await render(tree(center({ edgeHidden: true, revealAndExpand })));
+
+  await fireEvent.press(screen.getByTestId('mobile-approval-fab'));
+
+  expect(revealAndExpand).toHaveBeenCalledTimes(1);
 });
 
 test('opens and collapses in place without remounting or reordering the tab layout', async () => {
@@ -242,6 +259,7 @@ test('uses the desktop shield language for the FAB and approval sources', () => 
 test('renders approval actions as compact neutral outline buttons', async () => {
   const screen = await render(tree(center({ expanded: true })));
 
+  expect(screen.getByTestId(`approval-actions-${item.key}`)).toHaveStyle({ paddingTop: 12 });
   expect(screen.getByTestId(`approval-action-${item.key}-approve`)).toHaveStyle({
     backgroundColor: 'transparent',
     flexGrow: 1,

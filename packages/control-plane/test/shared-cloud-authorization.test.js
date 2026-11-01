@@ -108,7 +108,23 @@ test("shared event streams follow resolved permissions and unknown families fail
     { type: "future.unknown", topic: "system" },
   ]) assert.equal(cloudEventAllowed(actor, event), false, `${event.type} must stay denied`);
   assert.equal(cloudEventPermission({ type: "future.unknown" }), undefined);
+  assert.equal(cloudEventPermission({ type: "cloud-node-relay.changed" }), "settings:manage");
+  assert.equal(cloudEventPermission({ type: "node.control-plane-trust.changed" }), "settings:manage");
+  assert.equal(cloudEventAllowed(actor, { type: "node.control-plane-trust.changed", topic: "nodes" }), false);
+  assert.equal(cloudEventAllowed(
+    sharedActor("role_admin", ["settings:manage"]),
+    { type: "node.control-plane-trust.changed", topic: "nodes" },
+  ), true);
+  assert.equal(cloudEventAllowed(actor, { type: "cloud-node-relay.changed", topic: "cloud-node-relay" }), false);
+  assert.equal(cloudEventAllowed(
+    sharedActor("role_admin", ["settings:manage"]),
+    { type: "cloud-node-relay.changed", topic: "cloud-node-relay" },
+  ), true);
   assert.equal(cloudEventAllowed(actor, { type: "operation-approval.changed", topic: "operation.approvals" }), false);
+  assert.equal(cloudEventAllowed(
+    sharedActor("role_admin", ["settings:manage"]),
+    { type: "operation-approval.changed", topic: "operation.approvals" },
+  ), false);
   const ownerActor = sharedActor("role_admin", ["settings:manage"], { accessMode: "owner", accountId: "account_owner", ownerUserId: "usr_owner" });
   assert.equal(cloudEventAllowed(ownerActor, { type: "operation-approval.changed", topic: "operation.approvals" }), true);
 });

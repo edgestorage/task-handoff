@@ -38,6 +38,10 @@ import {
   NODE_AGENT_CAPABILITIES_CHANGED_EVENT_TYPE,
   NodeAgentCapabilitiesChangedEventSchema,
 } from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE,
+  NodeAgentControlPlaneTrustChangedEventSchema,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
 import { AGENT_DEFINITION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-definitions";
 import { AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-orchestrations";
 import { AGENT_RUN_CHANGED_EVENT_TYPE, AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-runs";
@@ -273,6 +277,22 @@ export class NodeTunnelEventRouter {
           eventType,
           error: error instanceof Error ? error.message : String(error),
         }, "node capability refresh failed");
+      });
+      return true;
+    }
+
+    if (eventType === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE) {
+      const parsed = safeParseResponse(NodeAgentControlPlaneTrustChangedEventSchema, payload);
+      if (!parsed.success) {
+        this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "node-control-plane-trust-event.transport.rejected");
+        return true;
+      }
+      this.options.events?.publish("node.control-plane-trust.changed", {
+        nodeId,
+        ...parsed.data,
+      }, {
+        topic: "nodes",
+        scope: { ...scope, nodeId },
       });
       return true;
     }

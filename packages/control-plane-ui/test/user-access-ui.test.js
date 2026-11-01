@@ -26,6 +26,18 @@ test("user management navigation consumes the authoritative permission projectio
   assert.doesNotMatch(workbench, /hiddenNodeIds|deniedNodeIds|roleAllows/);
 });
 
+test("desktop local mode displays users without management actions", () => {
+  assert.match(settings, /:read-only="authSession\.data\.value\?\.enabled === false"/);
+  assert.match(users, /readOnly\?: boolean/);
+  assert.match(users, /v-if="!readOnly" size="sm" @click="createOpen = true"/);
+  assert.match(users, /v-if="!readOnly" variant="outline" size="sm" @click="openUser\(user\.id\)"/);
+  assert.match(users, /<TabsList v-if="!readOnly"/);
+  assert.match(users, /<TabsContent v-if="!readOnly" value="roles"/);
+  assert.match(users, /<TabsContent v-if="!readOnly" value="providers"/);
+  assert.match(users, /readOnlyDescription/);
+  assert.match(zhSettings, /桌面本地模式只展示当前登录的本地操作员/);
+});
+
 test("temporary-password sessions are kept behind the password-change gate", () => {
   assert.match(authGate, /authenticated && !authSession\.data\.value\.requiresPasswordChange/);
   assert.match(authGate, /changeControlPlanePassword/);

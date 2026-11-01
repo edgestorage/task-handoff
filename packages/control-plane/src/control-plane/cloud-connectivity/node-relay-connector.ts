@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
-import { acceptNodeRelayHandshake } from "../../shared/cloud-relay/node-relay-session.ts";
+import { acceptNodeRelayHandshake, createNodeRelayHandshakeFrameReader, type NodeRelayHandshakeFrameReader } from "../../shared/cloud-relay/node-relay-session.ts";
 import type { NodeAgentControlPlaneTrustOutcome } from "@task-handoff/protocol/node-relay-channel";
 import { trustedRelayUrl } from "./relay-connector.ts";
 import { observeRelaySocketErrors } from "./relay-socket.ts";
@@ -68,10 +68,13 @@ export class CloudNodeRelayConnector {
     observeRelaySocketErrors(socket);
     const attachTimeoutMs = positiveDuration(this.options.attachTimeoutMs, DEFAULT_ATTACH_TIMEOUT_MS);
     const handshakeTimeoutMs = positiveDuration(this.options.handshakeTimeoutMs, DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    let handshakeReader: NodeRelayHandshakeFrameReader | undefined;
     try {
       await socketOpen(socket, attachTimeoutMs);
+      handshakeReader = createNodeRelayHandshakeFrameReader(socket as unknown as NodeRelayFrameSocket, handshakeTimeoutMs);
+      const attachedPromise = socketMessage(socket, (value) => value?.type === "attached", attachTimeoutMs);
       socket.send(JSON.stringify({ type: "attach", capability: attach }));
-      const attached = await socketMessage(socket, (value) => value?.type === "attached", attachTimeoutMs);
+      const attached = await attachedPromise;
       const accepted = await acceptNodeRelayHandshake({
         socket: socket as unknown as NodeRelayFrameSocket,
         identity: {
@@ -98,6 +101,7 @@ export class CloudNodeRelayConnector {
         ...(input.pairing ? { pairing: input.pairing } : {}),
         createPairing: input.createPairing,
         timeoutMs: handshakeTimeoutMs,
+        firstFrame: handshakeReader.promise,
       });
       if (accepted.status === "trust-required") {
         try { if (socket.readyState < WebSocket.CLOSING) socket.close(4403, "node-agent-control-plane-trust-required"); } catch { /* node closed it */ }
@@ -116,6 +120,8 @@ export class CloudNodeRelayConnector {
     } catch (error) {
       try { if (socket.readyState < WebSocket.CLOSING) socket.close(4400, "node-relay-handshake-failed"); } catch { /* already gone */ }
       throw error;
+    } finally {
+      handshakeReader?.dispose();
     }
   }
 }
@@ -143,7 +149,8 @@ function socketOpen(socket: WebSocket, timeoutMs: number) {
 
 function socketMessage(socket: WebSocket, predicate: (value: any) => boolean, timeoutMs: number) {
   return new Promise<any>((resolve, reject) => {
-    const onMessage = (raw: WebSocket.RawData) => {
+    const onMessage = (raw: WebSocket.RawData, isBinary: boolean) => {
+      if (isBinary) return;
       try {
         const value = JSON.parse(raw.toString());
         if (predicate(value)) { cleanup(); resolve(value); }

@@ -123,40 +123,68 @@ export function writeNodeRelayHandshakeFrame(socket: NodeRelayFrameSocket, messa
   socket.send(encodeRelayFrame({ kind: "handshake", sequence: 0, payload: Buffer.from(JSON.stringify(message)) }));
 }
 
-/** Reads frames until the peer's handshake frame arrives; a data frame before it is a protocol error. */
-export function readNodeRelayHandshakeFrame(socket: NodeRelayFrameSocket, timeoutMs = 15_000): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => {
+export type NodeRelayHandshakeFrameReader = {
+  promise: Promise<Record<string, unknown>>;
+  dispose(): void;
+};
+
+/**
+ * Arms the handshake reader before the Relay attach frame is sent. The Relay
+ * writes `attached` and then releases frames buffered from the other peer, so
+ * both can arrive in the same event-loop turn.
+ */
+export function createNodeRelayHandshakeFrameReader(socket: NodeRelayFrameSocket, timeoutMs = 15_000): NodeRelayHandshakeFrameReader {
+  let settled = false;
+  let cleanup = () => undefined;
+  const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
+    const finish = (action: () => void) => {
+      if (settled) return;
       settled = true;
+      cleanup();
+      action();
+    };
+    cleanup = () => {
       clearTimeout(timer);
       socket.off?.("message", onMessage);
       socket.off?.("close", onClose);
       socket.off?.("error", onError);
     };
-    const timer = setTimeout(() => { if (settled) return; cleanup(); reject(nodeRelaySessionError("NODE_RELAY_HANDSHAKE_TIMEOUT")); }, timeoutMs);
+    const timer = setTimeout(() => finish(() => reject(nodeRelaySessionError("NODE_RELAY_HANDSHAKE_TIMEOUT"))), timeoutMs);
     timer.unref?.();
     const onMessage = (raw: unknown, isBinary: boolean) => {
       if (settled) return;
       try {
-        if (!isBinary) throw nodeRelaySessionError("NODE_RELAY_FRAME_ENCODING_INVALID");
+        // The pre-armed reader also observes the Relay's text attach reply.
+        if (!isBinary) return;
         const frame = decodeRelayFrame(rawBytes(raw));
         if (frame.kind !== "handshake") throw nodeRelaySessionError("NODE_RELAY_HANDSHAKE_EXPECTED");
         if (frame.sequence !== 0) throw nodeRelaySessionError("NODE_RELAY_HANDSHAKE_SEQUENCE_INVALID");
         const message = JSON.parse(Buffer.from(frame.payload).toString("utf8")) as Record<string, unknown>;
-        cleanup();
-        resolve(message);
+        finish(() => resolve(message));
       } catch (error) {
-        cleanup();
-        reject(error);
+        finish(() => reject(error));
       }
     };
-    const onClose = () => { if (settled) return; cleanup(); reject(nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED")); };
-    const onError = (error: unknown) => { if (settled) return; cleanup(); reject(error instanceof Error ? error : nodeRelaySessionError("NODE_RELAY_CHANNEL_ERROR")); };
+    const onClose = () => finish(() => reject(nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED")));
+    const onError = (error: unknown) => finish(() => reject(error instanceof Error ? error : nodeRelaySessionError("NODE_RELAY_CHANNEL_ERROR")));
     socket.on("message", onMessage);
     socket.on("close", onClose);
     socket.on("error", onError);
   });
+  void promise.catch(() => undefined);
+  return {
+    promise,
+    dispose() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    },
+  };
+}
+
+/** Reads frames until the peer's handshake frame arrives; a data frame before it is a protocol error. */
+export function readNodeRelayHandshakeFrame(socket: NodeRelayFrameSocket, timeoutMs = 15_000): Promise<Record<string, unknown>> {
+  return createNodeRelayHandshakeFrameReader(socket, timeoutMs).promise;
 }
 
 export function nodeRelayFingerprint(publicKey: string) {
@@ -300,9 +328,11 @@ export async function acceptNodeRelayHandshake(options: {
   /** Called when this channel must pin a new pairing (first claim, or a lost record). */
   createPairing?: () => { keyId: string; secret: string };
   timeoutMs?: number;
+  /** A reader armed before attach so a coalesced first frame is not lost. */
+  firstFrame?: Promise<Record<string, unknown>>;
 }): Promise<AcceptNodeRelayHandshakeResult> {
   const now = (options.expectation.now ?? Date.now)();
-  const raw = await readNodeRelayHandshakeFrame(options.socket, options.timeoutMs);
+  const raw = await (options.firstFrame ?? readNodeRelayHandshakeFrame(options.socket, options.timeoutMs));
   if (NodeAgentControlPlaneTrustOutcomeSchema.safeParse(raw).success) {
     return {
       status: "trust-required",

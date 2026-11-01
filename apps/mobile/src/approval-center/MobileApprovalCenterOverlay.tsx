@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Animated,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -28,9 +30,14 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/messages';
 import {
+  APPROVAL_CENTER_EDGE_VISIBLE_SIZE,
   APPROVAL_CENTER_FAB_SIZE,
-  APPROVAL_CENTER_GAP,
+  approvalCenterHeaderFallback,
+  clampApprovalCenter,
   mobileApprovalCenterLayout,
+  resistedApprovalCenterDrag,
+  resolveApprovalCenterDrop,
+  type ApprovalCenterFabPlacement,
 } from './geometry';
 import {
   useApprovalCenterOcclusion,
@@ -44,6 +51,8 @@ const SOURCE_ORDER: readonly ApprovalCenterSource[] = [
   'device-trust',
   'node-control-plane-trust',
 ];
+
+const PRESS_SUPPRESSION_AFTER_DRAG_MS = 120;
 
 function sourceLabel(source: ApprovalCenterSource, t: ReturnType<typeof useI18n>['t']) {
   switch (source) {
@@ -183,9 +192,108 @@ function MobileApprovalCenterOverlayContent() {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveContentLayout();
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const draggingRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const pressSuppressionUntilRef = useRef(0);
+
+  const placement: ApprovalCenterFabPlacement = {
+    dockSide: center.dockSide,
+    verticalRatio: center.verticalRatio,
+    visibility: center.edgeHidden ? 'edge-hidden' : 'docked',
+  };
+  const headerHeight = center.headerInset > 0
+    ? center.headerInset
+    : approvalCenterHeaderFallback(Platform.OS, insets.top);
+  const layout = mobileApprovalCenterLayout({
+    adaptiveInsets: adaptive.contentInsets,
+    bottomInset: insets.bottom,
+    contentWidth: adaptive.contentWidth,
+    headerHeight,
+    obstructionHeight: center.obstructionHeight,
+    placement,
+    platform: Platform.OS,
+    windowHeight: height,
+    windowWidth: width,
+  });
+  const [fabPosition] = useState(() => new Animated.ValueXY(layout.fab));
+  const positionRef = useRef(layout.fab);
+
+  const animateTo = useCallback((x: number, y: number) => {
+    fabPosition.stopAnimation();
+    if (reduceMotion) {
+      fabPosition.setValue({ x, y });
+      return;
+    }
+    Animated.spring(fabPosition, {
+      damping: 24,
+      mass: 0.8,
+      stiffness: 280,
+      toValue: { x, y },
+      useNativeDriver: false,
+    }).start();
+  }, [fabPosition, reduceMotion]);
+
+  const dragContext = useRef({ animateTo, center, fabPosition, layout });
+  useLayoutEffect(() => {
+    dragContext.current = { animateTo, center, fabPosition, layout };
+  }, [animateTo, center, fabPosition, layout]);
+
+  useEffect(() => {
+    const listener = fabPosition.addListener((value) => { positionRef.current = value; });
+    return () => fabPosition.removeListener(listener);
+  }, [fabPosition]);
+
+  useEffect(() => {
+    if (draggingRef.current) return;
+    animateTo(layout.fab.x, layout.fab.y);
+  }, [animateTo, layout.fab.x, layout.fab.y]);
+
+  const shouldStartDrag = (_event: unknown, gesture: { dx: number; dy: number }) => (
+    Math.abs(gesture.dx) >= 4 || Math.abs(gesture.dy) >= 4
+  );
+  // PanResponder retains these callbacks; dragContext keeps the latest layout and actions current.
+  // eslint-disable-next-line react-hooks/refs
+  const [panResponder] = useState(() => PanResponder.create({
+    onMoveShouldSetPanResponder: shouldStartDrag,
+    onMoveShouldSetPanResponderCapture: shouldStartDrag,
+    onPanResponderGrant: () => {
+      dragStartRef.current = positionRef.current;
+      draggingRef.current = true;
+      pressSuppressionUntilRef.current = Number.POSITIVE_INFINITY;
+      setDragging(true);
+      dragContext.current.center.collapse();
+    },
+    onPanResponderMove: (_event, gesture) => {
+      const { bounds } = dragContext.current.layout;
+      dragContext.current.fabPosition.setValue({
+        x: resistedApprovalCenterDrag(dragStartRef.current.x + gesture.dx, bounds.minX, bounds.maxX),
+        y: clampApprovalCenter(dragStartRef.current.y + gesture.dy, bounds.minY, bounds.maxY),
+      });
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      const { center: currentCenter, layout: currentLayout } = dragContext.current;
+      const x = dragStartRef.current.x + gesture.dx;
+      const y = dragStartRef.current.y + gesture.dy;
+      const next = resolveApprovalCenterDrop({ bounds: currentLayout.bounds, velocityX: gesture.vx, x, y });
+      draggingRef.current = false;
+      setDragging(false);
+      currentCenter.setFabPlacement(next);
+      pressSuppressionUntilRef.current = Date.now() + PRESS_SUPPRESSION_AFTER_DRAG_MS;
+    },
+    onPanResponderTerminate: () => {
+      const { animateTo: animate, layout: currentLayout } = dragContext.current;
+      draggingRef.current = false;
+      setDragging(false);
+      pressSuppressionUntilRef.current = Date.now() + PRESS_SUPPRESSION_AFTER_DRAG_MS;
+      animate(currentLayout.fab.x, currentLayout.fab.y);
+    },
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
+  }));
 
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => undefined);
@@ -203,18 +311,12 @@ function MobileApprovalCenterOverlayContent() {
 
   if (!center.pendingCount) return null;
 
-  const layout = mobileApprovalCenterLayout({
-    adaptiveInsets: adaptive.contentInsets,
-    bottomInset: insets.bottom,
-    contentWidth: adaptive.contentWidth,
-    obstructionHeight: center.obstructionHeight,
-    platform: Platform.OS,
-    windowHeight: height,
-  });
   const unavailable = SOURCE_ORDER
     .map((source) => center.sourceHealth[source]?.health)
     .filter((health): health is ApprovalCenterSourceHealth => Boolean(health && (health.phase === 'stale' || health.phase === 'unavailable')));
-  const stateLabel = center.expanded ? t('approvalCenter.expanded') : t('approvalCenter.collapsed');
+  const stateLabel = center.edgeHidden
+    ? t('approvalCenter.hidden')
+    : center.expanded ? t('approvalCenter.expanded') : t('approvalCenter.collapsed');
 
   return <View pointerEvents="box-none" style={StyleSheet.absoluteFill} testID="mobile-approval-center">
     {center.expanded ? <Pressable
@@ -232,11 +334,8 @@ function MobileApprovalCenterOverlayContent() {
         {
           backgroundColor: colors.surface,
           borderColor: colors.border,
-          bottom: layout.bottom + APPROVAL_CENTER_FAB_SIZE + APPROVAL_CENTER_GAP,
-          maxHeight: layout.panelMaxHeight,
-          right: layout.right,
-          width: layout.panelWidth,
         },
+        layout.panel,
       ]}
       testID="mobile-approval-panel"
     >
@@ -292,27 +391,61 @@ function MobileApprovalCenterOverlayContent() {
       </ScrollView>
     </View> : null}
 
-    <Pressable
-      accessibilityLabel={`${t('approvalCenter.fabLabel', { count: center.pendingCount })}, ${stateLabel}`}
-      accessibilityRole="button"
-      accessibilityState={{ expanded: center.expanded }}
-      onPress={center.expandOrCollapse}
-      style={({ pressed }) => [
+    <Animated.View
+      style={[
         styles.fab,
         {
-          backgroundColor: pressed ? colors.primaryButton : colors.primary,
-          bottom: layout.bottom,
-          opacity: pressed ? 0.9 : 1,
-          right: layout.right,
+          left: fabPosition.x,
+          top: fabPosition.y,
+          transform: [{ scale: dragging ? 1.05 : 1 }],
         },
       ]}
-      testID="mobile-approval-fab"
+      testID="mobile-approval-fab-container"
+      {...panResponder.panHandlers}
     >
-      <Icon color="#ffffff" name={approvalFabIcon(center.expanded)} size={27} testID="mobile-approval-fab-icon" />
-      <View accessibilityElementsHidden style={[styles.badge, { backgroundColor: colors.error, borderColor: colors.surface }]}>
-        <Text adjustsFontSizeToFit numberOfLines={1} style={styles.badgeText}>{approvalCenterBadgeText(center.pendingCount)}</Text>
-      </View>
-    </Pressable>
+      <Pressable
+        accessibilityHint={t('approvalCenter.fabHint')}
+        accessibilityLabel={`${t('approvalCenter.fabLabel', { count: center.pendingCount })}, ${stateLabel}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: center.expanded }}
+        hitSlop={center.edgeHidden
+          ? {
+            bottom: 8,
+            left: center.dockSide === 'right' ? APPROVAL_CENTER_FAB_SIZE - APPROVAL_CENTER_EDGE_VISIBLE_SIZE : 0,
+            right: center.dockSide === 'left' ? APPROVAL_CENTER_FAB_SIZE - APPROVAL_CENTER_EDGE_VISIBLE_SIZE : 0,
+            top: 8,
+          }
+          : 4}
+        onPress={() => {
+          if (Date.now() < pressSuppressionUntilRef.current) return;
+          if (center.edgeHidden) center.revealAndExpand();
+          else center.expandOrCollapse();
+        }}
+        onPressIn={() => { pressSuppressionUntilRef.current = 0; }}
+        style={({ pressed }) => [
+          styles.fabSurface,
+          {
+            backgroundColor: pressed ? colors.primaryButton : colors.primary,
+            opacity: pressed ? 0.9 : 1,
+          },
+        ]}
+        testID="mobile-approval-fab"
+      >
+        <Icon color="#ffffff" name={approvalFabIcon(center.expanded)} size={21} testID="mobile-approval-fab-icon" />
+        <View
+          accessibilityElementsHidden
+          style={[
+            styles.badge,
+            { backgroundColor: colors.error, borderColor: colors.surface },
+            center.edgeHidden
+              ? center.dockSide === 'right' ? styles.badgeHiddenRight : styles.badgeHiddenLeft
+              : styles.badgeDockedRight,
+          ]}
+        >
+          <Text adjustsFontSizeToFit numberOfLines={1} style={styles.badgeText}>{approvalCenterBadgeText(center.pendingCount)}</Text>
+        </View>
+      </Pressable>
+    </Animated.View>
 
     <ApprovalDetailModal reduceMotion={reduceMotion} />
 
@@ -377,18 +510,20 @@ function ApprovalItemCard({ center, item }: {
       onDecision={(decision) => center.decide(item, { decision })}
       onOpen={open}
       roleUnavailable={roleUnavailable}
+      testID={`approval-actions-${item.key}`}
     />
     {failed ? <Text accessibilityLiveRegion="polite" style={[styles.actionError, { color: colors.error }]}>{actionErrorMessage(action?.error, t)}</Text> : null}
     {busy ? <View style={styles.busyRow}><ActivityIndicator color={colors.primary} size="small" /><Text accessibilityLiveRegion="polite" style={[styles.itemMeta, { color: colors.textMuted }]}>{t('approvalCenter.submitting')}</Text></View> : null}
   </View>;
 }
 
-function InlineActions({ disabled, item, onDecision, onOpen, roleUnavailable = false }: {
+function InlineActions({ disabled, item, onDecision, onOpen, roleUnavailable = false, testID }: {
   disabled: boolean;
   item: ApprovalItem;
   onDecision(decision: string): void;
   onOpen(): void;
   roleUnavailable?: boolean;
+  testID?: string;
 }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -401,7 +536,7 @@ function InlineActions({ disabled, item, onDecision, onOpen, roleUnavailable = f
       case 'node-control-plane-trust': return [{ decision: 'approve', label: t('approvalCenter.approve') }, { decision: 'reject', label: t('approvalCenter.reject'), danger: true }];
     }
   })();
-  return <View style={styles.inlineActions}>
+  return <View style={styles.inlineActions} testID={testID}>
     {actions.slice(0, 3).map((action) => {
       const actionDisabled = disabled || (roleUnavailable && action.decision === 'approve');
       return <Pressable
@@ -598,7 +733,10 @@ const styles = StyleSheet.create({
     top: 0,
     zIndex: 930,
   },
-  badge: { alignItems: 'center', borderRadius: 12, borderWidth: 2, justifyContent: 'center', minHeight: 22, minWidth: 22, paddingHorizontal: 5, position: 'absolute', right: -5, top: -5 },
+  badge: { alignItems: 'center', borderRadius: 10, borderWidth: 2, justifyContent: 'center', minHeight: 18, minWidth: 18, paddingHorizontal: 4, position: 'absolute', top: -4 },
+  badgeDockedRight: { right: -4 },
+  badgeHiddenLeft: { right: -4 },
+  badgeHiddenRight: { left: -4 },
   badgeText: { color: '#ffffff', fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '700', lineHeight: 16 },
   busyRow: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingBottom: 10, paddingHorizontal: 12 },
   detailActions: { gap: 10, marginTop: 8 },
@@ -609,7 +747,8 @@ const styles = StyleSheet.create({
   diagnostics: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 9 },
   diagnosticText: { fontSize: 12, lineHeight: 16 },
   diagnosticTitle: { fontSize: 13, lineHeight: 17 },
-  fab: { alignItems: 'center', borderRadius: APPROVAL_CENTER_FAB_SIZE / 2, elevation: 12, height: APPROVAL_CENTER_FAB_SIZE, justifyContent: 'center', position: 'absolute', shadowColor: '#000', shadowOffset: { height: 5, width: 0 }, shadowOpacity: 0.28, shadowRadius: 12, width: APPROVAL_CENTER_FAB_SIZE, zIndex: 950 },
+  fab: { height: APPROVAL_CENTER_FAB_SIZE, position: 'absolute', width: APPROVAL_CENTER_FAB_SIZE, zIndex: 950 },
+  fabSurface: { alignItems: 'center', borderRadius: APPROVAL_CENTER_FAB_SIZE / 2, elevation: 10, height: APPROVAL_CENTER_FAB_SIZE, justifyContent: 'center', shadowColor: '#000', shadowOffset: { height: 4, width: 0 }, shadowOpacity: 0.24, shadowRadius: 9, width: APPROVAL_CENTER_FAB_SIZE },
   field: { gap: 4 },
   fieldLabel: { fontSize: 12, lineHeight: 17 },
   fieldValue: { fontSize: 14, lineHeight: 20 },
@@ -617,7 +756,7 @@ const styles = StyleSheet.create({
   freeText: { borderRadius: 12, borderWidth: 1, fontSize: 15, lineHeight: 21, minHeight: 110, padding: 12 },
   headerCopy: { flex: 1, gap: 2 },
   iconButton: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
-  inlineActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 12, paddingHorizontal: 14 },
+  inlineActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 12, paddingHorizontal: 14, paddingTop: 12 },
   inlineButton: { alignItems: 'center', borderRadius: 9, borderWidth: 1, flexBasis: 78, flexGrow: 1, justifyContent: 'center', minHeight: 38, paddingHorizontal: 14 },
   inlineButtonText: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
   item: { borderBottomWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },

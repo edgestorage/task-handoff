@@ -167,8 +167,10 @@ export const settings = {
   userAccess: {
     navigation: "用户与权限",
     context: "管理员功能",
+    readOnlyContext: "本地身份",
     title: "用户与权限",
     description: "管理控制面板中的用户账号，并为每个用户分配角色以及可访问的节点和实例。",
+    readOnlyDescription: "桌面本地模式只展示当前登录的本地操作员。启用用户管理后才能创建用户并分配角色和访问范围。",
     displayName: "显示名称",
     username: "用户名",
     password: "初始密码",

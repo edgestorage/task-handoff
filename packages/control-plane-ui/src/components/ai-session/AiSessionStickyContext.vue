@@ -6,25 +6,64 @@
           <AiAgentIcon :agent="agent" :size="14" />
         </span>
         <span class="ai-session-sticky-context-details">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <span class="ai-session-sticky-context-item">
-                <Folder :size="14" aria-hidden="true" />
-                <span>{{ folderName }}</span>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ folderPath }}</TooltipContent>
-          </Tooltip>
+          <AiSessionPathContextMenu
+            :can-copy="canCopyFolderPath"
+            :can-open="canOpenFolder"
+            :can-rename="false"
+            @copy="emit('copyFolderPath')"
+            @open="emit('openFolder')"
+          >
+            <button v-if="canOpenFolder" type="button" class="ai-session-sticky-context-folder" @click="emit('openFolder')">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-session-sticky-context-item">
+                    <Folder :size="14" aria-hidden="true" />
+                    <span>{{ folderName }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ folderPath }}</TooltipContent>
+              </Tooltip>
+            </button>
+            <span v-else class="ai-session-sticky-context-folder-path">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-session-sticky-context-item">
+                    <Folder :size="14" aria-hidden="true" />
+                    <span>{{ folderName }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ folderPath }}</TooltipContent>
+              </Tooltip>
+            </span>
+          </AiSessionPathContextMenu>
           <span class="ai-session-sticky-context-separator" aria-hidden="true">·</span>
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <span class="ai-session-sticky-context-item">
-                <Boxes :size="14" aria-hidden="true" />
-                <span>{{ instanceName }}</span>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ nodeName }}</TooltipContent>
-          </Tooltip>
+          <ContextMenu v-if="instanceContextMenuEnabled">
+            <ContextMenuTrigger as-child>
+              <button type="button" class="ai-session-sticky-context-item ai-session-sticky-context-instance">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="ai-session-sticky-context-item">
+                      <Boxes :size="14" aria-hidden="true" />
+                      <span>{{ instanceName }}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ nodeName }}</TooltipContent>
+                </Tooltip>
+              </button>
+            </ContextMenuTrigger>
+            <slot name="instance-context-menu" />
+          </ContextMenu>
+          <span v-else class="ai-session-sticky-context-item">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <span class="ai-session-sticky-context-item">
+                  <Boxes :size="14" aria-hidden="true" />
+                  <span>{{ instanceName }}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ nodeName }}</TooltipContent>
+            </Tooltip>
+          </span>
           <span class="ai-session-sticky-context-separator" aria-hidden="true">·</span>
           <span>{{ statusLabel }}</span>
         </span>
@@ -36,15 +75,28 @@
 <script setup lang="ts">
 import { Boxes, Folder } from "@lucide/vue";
 import AiAgentIcon from "../AiAgentIcon.vue";
+import { ContextMenu, ContextMenuTrigger } from "../ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
+import AiSessionPathContextMenu from "./AiSessionPathContextMenu.vue";
 
-defineProps<{
+withDefaults(defineProps<{
   agent: "codex" | "claude" | "opencode";
+  canCopyFolderPath?: boolean;
+  canOpenFolder?: boolean;
   folderName: string;
   folderPath: string;
+  instanceContextMenuEnabled?: boolean;
   instanceName: string;
   nodeName: string;
   statusLabel: string;
+}>(), {
+  canCopyFolderPath: false,
+  canOpenFolder: false,
+  instanceContextMenuEnabled: false,
+});
+const emit = defineEmits<{
+  copyFolderPath: [];
+  openFolder: [];
 }>();
 </script>
 
@@ -92,11 +144,13 @@ defineProps<{
   transition: max-width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.ai-session-sticky-context:hover .ai-session-sticky-context-surface {
+.ai-session-sticky-context:hover .ai-session-sticky-context-surface,
+.ai-session-sticky-context:focus-within .ai-session-sticky-context-surface {
   max-width: min(620px, calc(100vw - 80px));
 }
 
-.ai-session-sticky-context:hover::after {
+.ai-session-sticky-context:hover::after,
+.ai-session-sticky-context:focus-within::after {
   opacity: 1;
 }
 
@@ -120,7 +174,8 @@ defineProps<{
   white-space: nowrap;
 }
 
-.ai-session-sticky-context:hover .ai-session-sticky-context-details {
+.ai-session-sticky-context:hover .ai-session-sticky-context-details,
+.ai-session-sticky-context:focus-within .ai-session-sticky-context-details {
   opacity: 1;
   transform: translateX(0);
   transition-delay: 35ms;
@@ -136,6 +191,52 @@ defineProps<{
 .ai-session-sticky-context-item > span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ai-session-sticky-context-instance {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ai-session-sticky-context-instance:hover {
+  color: var(--text);
+}
+
+.ai-session-sticky-context-instance:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ai-session-sticky-context-folder,
+.ai-session-sticky-context-folder-path {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-session-sticky-context-folder {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ai-session-sticky-context-folder:hover {
+  color: var(--text);
+}
+
+.ai-session-sticky-context-folder:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .ai-session-sticky-context-separator {

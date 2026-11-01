@@ -2,6 +2,7 @@ import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, E
 import { AiSessionEventTopic, AiSessionEventType, AiSessionMessageDeltaEventSchema, AiSessionPatchEventSchema, AiSessionRemovedEventSchema, AiSessionSnapshotEventSchema, AiSessionTimelineItemDeltaEventSchema, compactAiSessionMessageDeltaEvent, compactAiSessionTimelineItemDeltaEvent, projectAiSessionStreamEventForConsumer, type AiSessionStreamEvent } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionHierarchyCapabilitiesSchema, type AiSessionHierarchyCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
+import { OPERATION_APPROVAL_PERMISSION } from "@task-handoff/protocol/operation-approvals";
 
 export type ControlPlaneEvent<T = unknown> = {
   v: 1;
@@ -79,7 +80,10 @@ export class ControlPlaneEventBus {
     // send a subscribe frame and therefore retain the prior full stream. A new
     // client declares that it will subscribe so opening its socket cannot cause
     // a temporary full-stream demand spike before the first frame arrives.
-    socket.subscriptionReceived = options.authorization ? false : options.expectsTransientSubscription !== true;
+    // Restricted authorization scopes cannot produce a global legacy demand.
+    // Their subscribe frame is converted to the authorized instance scope; an
+    // unrestricted legacy connection keeps the prior full-stream semantics.
+    socket.subscriptionReceived = options.expectsTransientSubscription !== true && !options.authorization?.allowedInstanceIds;
     this.clients.add(socket);
     this.publishDemand();
     const keepaliveTimer = socket.ping ? setInterval(() => {
@@ -420,10 +424,16 @@ const NODE_DERIVED_EVENT_TOPICS = new Set([
 
 function authorizedEvent(client: EventSocket, event: EventEnvelope) {
   const authorization = client.authorization;
-  if (!authorization) return true;
-  if (event.type === "device-trust.changed") {
-    return authorization.permissionIds.includes("settings:manage");
+  if (event.type === "operation-approval.changed") {
+    return authorization?.permissionIds.includes(OPERATION_APPROVAL_PERMISSION) === true;
   }
+  if (event.type === "cloud-node-relay.changed") {
+    return authorization?.permissionIds.includes("settings:manage") === true;
+  }
+  if (event.type === "device-trust.changed" || event.type === "node.control-plane-trust.changed") {
+    return authorization?.permissionIds.includes("settings:manage") === true;
+  }
+  if (!authorization) return true;
   if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
     return authorization.permissionIds.includes("triggers:manage");
   }

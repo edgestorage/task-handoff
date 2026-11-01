@@ -1,8 +1,10 @@
 const assert = require("node:assert/strict");
+const { once } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const WebSocket = require("ws");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
 const { CONTROL_PLANE_PROTOCOL_VERSION } = require("../packages/protocol/src/control-plane.ts");
@@ -171,7 +173,12 @@ test("node relay settings read and write the node-agent authority and publish th
   assert.equal(unknownField.statusCode, 400, unknownField.body);
   assert.equal(mock.requests.some((request) => request.path === "/settings/model-relay" && request.method === "PATCH"), false);
 
-  const socket = await app.injectWS("/api/events");
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  t.after(() => socket.terminate());
+  await once(socket, "open");
   const updatedEvent = onceWebSocketJsonMatching(socket, (message) => message?.type === "node.model-relay.updated");
   const updated = await app.inject({
     method: "PATCH",

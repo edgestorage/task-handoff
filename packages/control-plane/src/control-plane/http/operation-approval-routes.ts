@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ApprovalOperation, ApprovalRequest } from "@task-handoff/protocol/operation-approvals";
 import type { ControlPlaneAuth } from "../auth/service.ts";
+import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 import { OperationApprovals } from "../approvals/operation-approvals.ts";
 import { createId } from "../../shared/persistence/store.ts";
@@ -24,16 +25,21 @@ async function cliOwner(request: FastifyRequest, auth: ControlPlaneAuth) {
     ? await auth.authorizationForSessionToken(token, ["cli"])
     : await auth.disabledModeAuthorization(token, ["cli"]);
   if (!actor || actor.type !== "user") throw forbidden("A CLI session is required.", 401);
-  if (!auth.enabled()) throw forbidden("Web sign-in is required to approve CLI operations.");
   return { userId: actor.userId, sessionId: token.split(".")[0] };
 }
 
-function webOwner(request: FastifyRequest, auth: ControlPlaneAuth) {
+async function approvalApprover(request: FastifyRequest) {
+  if (cliToken(request)) throw forbidden("A signed-in Control Plane session is required.");
   const actor = controlPlaneRequestActor(request);
-  if (!auth.enabled() || cliToken(request)) throw forbidden("A signed-in Control Plane session is required.");
-  if (actor?.type === "user") return actor.userId;
-  if (actor?.type === "cloud-account" && actor.ownerUserId) return actor.ownerUserId;
-  throw forbidden("A signed-in Control Plane session is required.");
+  if (!actor || actor.type === "system" || actor.type === "chat-bridge") {
+    throw forbidden("A signed-in Control Plane administrator is required.");
+  }
+  // Every administrator reviews the shared queue; the requester's CLI session
+  // remains fenced separately when the approved operation is consumed.
+  assertCan(actor, "manage-settings", { type: "control-plane-settings" });
+  const userId = actor.type === "user" ? actor.userId : actor.ownerUserId;
+  if (!userId) throw forbidden("A Control Plane administrator with a local identity is required.");
+  return { actor, userId };
 }
 
 async function gateOperation(
@@ -45,13 +51,16 @@ async function gateOperation(
   input: unknown,
   details?: ApprovalRequest["details"],
 ) {
+  if (request.headers.authorization === undefined) return undefined;
   const token = cliToken(request);
-  if (!auth.enabled() && request.headers.authorization !== undefined) throw forbidden("Web sign-in is required to approve CLI operations.");
-  if (!token) return undefined;
+  if (!token) throw forbidden("A valid CLI session is required.");
   const cliActor = auth.enabled()
     ? await auth.authorizationForSessionToken(token, ["cli"])
     : await auth.disabledModeAuthorization(token, ["cli"]);
-  if (!cliActor) return undefined;
+  // An explicit bearer token is a CLI request. If it cannot be resolved, do
+  // not let disabled auth fall back to the anonymous system actor and bypass
+  // approval gates on protected operations.
+  if (!cliActor) throw forbidden("A valid CLI session is required.");
   if (!approvals.requiresApproval(operation)) {
     if (request.headers["x-task-handoff-approval-id"] !== undefined) throw forbidden("This operation does not require an approval.", 400);
     return undefined;
@@ -107,14 +116,15 @@ export function registerOperationApprovalRoutes(app: FastifyInstance, auth: Cont
   app.delete("/api/operation-approvals/:id", async (request) => ({
     data: { cancelled: approvals.cancel(await cliOwner(request, auth), IdSchema.parse(request.params).id) },
   }));
-  app.get("/api/operation-approvals", async (request) => ({
-    data: approvals.snapshot(webOwner(request, auth)),
-  }));
+  app.get("/api/operation-approvals", async (request) => {
+    await approvalApprover(request);
+    return { data: approvals.snapshot() };
+  });
   app.post("/api/operation-approvals/:id/decision", { preHandler: decisionGuard }, async (request) => {
-    const userId = webOwner(request, auth);
+    const approver = await approvalApprover(request);
     const decision = DecisionSchema.parse(request.body).decision;
-    const result = approvals.decide(userId, IdSchema.parse(request.params).id, decision);
-    await auditOperationApproval(auth, app, { action: `operation-approval.${decision}`, userId, approvalId: result.id });
+    const result = approvals.decide(IdSchema.parse(request.params).id, decision);
+    await auditOperationApproval(auth, app, { action: `operation-approval.${decision}`, userId: approver.userId, approvalId: result.id });
     return { data: result };
   });
 }

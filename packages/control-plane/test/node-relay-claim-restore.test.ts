@@ -24,7 +24,7 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"]; deferClaimResponses?: boolean; claimResponse?: (payload: any) => any }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"]; deferClaimResponses?: boolean; claimResponse?: (payload: any) => any; onChanged?: CloudNodeRelayChannelsOptions["onChanged"]; onTrustChanged?: CloudNodeRelayChannelsOptions["onTrustChanged"] }) {
   const sockets: FakeSocket[] = [];
   const deferredClaimResponses: Array<() => void> = [];
   class FakeSocket {
@@ -100,6 +100,8 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
       nodes: input.nodes ?? cloudRelayNodes(input.handles),
       transport: () => input.transport ?? ({ attachNode: () => undefined, detachNode: () => true, connected: () => false }),
       ...(input.connector ? { connector: input.connector } : {}),
+      ...(input.onChanged ? { onChanged: input.onChanged } : {}),
+      ...(input.onTrustChanged ? { onTrustChanged: input.onTrustChanged } : {}),
     },
   });
   return {
@@ -136,6 +138,36 @@ test("a node with an existing original connection cannot be claimed again over t
     assert.deepEqual(sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").map((message) => message.payload.nodeHandle), ["nrh_new"]);
     assert.deepEqual(runtime.nodeRelayState().claims.map((claim) => claim.nodeHandle), ["nrh_new"]);
   } finally {
+    await runtime.stop();
+  }
+});
+
+test("a node binding hint publishes a relay change before its claim completes", async () => {
+  const changes: Array<{ revision: number; reason: string; nodeHandle?: string; nodeId?: string }> = [];
+  const { runtime, sockets, releaseClaimResponses } = runtimeFixture({
+    nodeRelay: true,
+    handles: [],
+    deferClaimResponses: true,
+    onChanged: (change) => changes.push(change),
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && !sockets[0]?.sent.some((message) => message.type === "register"); attempt += 1) {
+      await wait(5);
+    }
+    sockets[0].receive({
+      type: "event",
+      event: { type: "node-relay-node-bound", nodeHandle: "nrh_new", tokenId: "token_new" },
+    });
+    for (let attempt = 0; attempt < 100 && !changes.some((change) => change.reason === "onboarding-hint"); attempt += 1) {
+      await new Promise(setImmediate);
+    }
+
+    assert.equal(changes[0]?.reason, "onboarding-hint");
+    assert.equal(changes[0]?.nodeHandle, "nrh_new");
+    assert.deepEqual(runtime.nodeRelayState().onboarding.map((hint: any) => hint.nodeHandle), ["nrh_new"]);
+  } finally {
+    releaseClaimResponses();
     await runtime.stop();
   }
 });
@@ -352,6 +384,7 @@ test("a live node channel closing refreshes the Coordinator claim", async () => 
 });
 
 test("pending node trust keeps probing without timing out human approval", async (t) => {
+  const trustChanges: Array<{ nodeHandle: string; nodeId: string; requestId?: string; state?: "pending" | "rejected" | "expired" }> = [];
   const connector = {
     async connect(input: any) {
       return {
@@ -374,6 +407,7 @@ test("pending node trust keeps probing without timing out human approval", async
     nodeRelay: true,
     handles: ["nrh_macmini"],
     connector,
+    onTrustChanged: (change) => trustChanges.push(change),
   });
   runtime.start();
   try {
@@ -407,6 +441,12 @@ test("pending node trust keeps probing without timing out human approval", async
     t.mock.timers.tick(25_000);
     assert.equal(runtime.nodeRelayState().trust[0]?.state, "pending");
     assert.deepEqual(runtime.nodeRelayState().errors, []);
+    assert.deepEqual(trustChanges, [{
+      nodeHandle: "nrh_macmini",
+      nodeId: "node_macmini",
+      requestId: "cptreq_pending",
+      state: "pending",
+    }]);
     await runtime.revokeAccountNodeClaim("nrh_macmini");
     const claimsAfterCancel = sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").length;
     sockets[0].receive({ type: "event", event: { ...event, allocationId: "late_after_cancel" } });
@@ -414,6 +454,11 @@ test("pending node trust keeps probing without timing out human approval", async
     await new Promise(setImmediate);
     assert.deepEqual(runtime.nodeRelayState().trust, []);
     assert.deepEqual(runtime.nodeRelayState().claims, []);
+    assert.deepEqual(trustChanges[1], {
+      nodeHandle: "nrh_macmini",
+      nodeId: "node_macmini",
+      requestId: "cptreq_pending",
+    });
     assert.equal(sockets[0].sent.filter((message) => message.operation === "claim-node-relay-node").length, claimsAfterCancel);
   } finally {
     await runtime.stop();

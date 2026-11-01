@@ -410,6 +410,10 @@ export class NodeAgentIdentityService {
     });
   }
 
+  expireCloudControlPlaneTrustRequests(now = new Date().toISOString()) {
+    return this.repository.expireCloudControlPlaneTrustRequests(now);
+  }
+
   observeCloudControlPlaneTrust(context: NodeAgentCloudControlPlaneTrustContext, options: { now?: string; ttlMs?: number } = {}) {
     return this.repository.observeCloudControlPlaneTrust({
       context,

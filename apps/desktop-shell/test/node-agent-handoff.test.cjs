@@ -2,10 +2,12 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
+  ensureDesktopControlPlaneAvailable,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
   inspectStartedDesktopControlPlane,
   inspectExistingDesktopNodeAgent,
+  stopExistingDesktopControlPlane,
   stopExistingDesktopNodeAgent,
 } = require("../src/node-agent-handoff.cjs");
 
@@ -77,6 +79,124 @@ test("desktop rejects a Control Plane singleton owned by another launch", () => 
       processIdentity: () => existing.startIdentity,
     },
   }).status, "foreign");
+});
+
+test("desktop asks before stopping a verified Control Plane and then continues", async () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  let alive = true;
+  const signals = [];
+  let promptedOwner;
+  const inspection = {
+    readOwner: () => alive ? existing : undefined,
+    isAlive: () => alive,
+    processIdentity: () => existing.startIdentity,
+  };
+  const result = await ensureDesktopControlPlaneAvailable({
+    inspectOptions: inspection,
+    stopOptions: {
+      signal: (_pid, signal) => {
+        signals.push(signal);
+        alive = false;
+      },
+      wait: async () => {},
+    },
+    confirmStop: ({ owner: candidate }) => {
+      promptedOwner = candidate;
+      return true;
+    },
+  });
+
+  assert.equal(promptedOwner, existing);
+  assert.equal(result.action, "replaced");
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("desktop leaves the existing Control Plane running when the user cancels", async () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  const signals = [];
+  const result = await ensureDesktopControlPlaneAvailable({
+    inspectOptions: {
+      readOwner: () => existing,
+      isAlive: () => true,
+      processIdentity: () => existing.startIdentity,
+    },
+    stopOptions: {
+      signal: (_pid, signal) => signals.push(signal),
+    },
+    confirmStop: () => false,
+  });
+
+  assert.equal(result.action, "cancelled");
+  assert.deepEqual(signals, []);
+});
+
+test("desktop refuses to replace a Control Plane whose ownership changed after confirmation", async () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  const replacement = owner({
+    component: "control-plane",
+    pid: 5678,
+    token: "replacement-token",
+    dataDir: "/desktop/control-plane",
+  });
+  let reads = 0;
+  const signals = [];
+
+  await assert.rejects(ensureDesktopControlPlaneAvailable({
+    inspectOptions: {
+      readOwner: () => reads++ === 0 ? existing : replacement,
+      isAlive: () => true,
+      processIdentity: (pid) => pid === existing.pid ? existing.startIdentity : replacement.startIdentity,
+    },
+    stopOptions: {
+      signal: (_pid, signal) => signals.push(signal),
+    },
+    confirmStop: () => true,
+  }), /changed while Desktop was preparing/);
+  assert.deepEqual(signals, []);
+});
+
+test("desktop never prompts for or stops an unverified Control Plane owner", async () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  let prompted = false;
+  const signals = [];
+
+  await assert.rejects(ensureDesktopControlPlaneAvailable({
+    inspectOptions: {
+      readOwner: () => existing,
+      isAlive: () => true,
+      processIdentity: () => undefined,
+    },
+    stopOptions: {
+      signal: (_pid, signal) => signals.push(signal),
+    },
+    confirmStop: () => {
+      prompted = true;
+      return true;
+    },
+  }), /could not be verified/);
+  assert.equal(prompted, false);
+  assert.deepEqual(signals, []);
+});
+
+test("desktop force-stops the confirmed Control Plane when graceful shutdown times out", async () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  let alive = true;
+  const signals = [];
+  const result = await stopExistingDesktopControlPlane({
+    readOwner: () => alive ? existing : undefined,
+    isAlive: () => alive,
+    processIdentity: () => existing.startIdentity,
+    signal: (_pid, signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") alive = false;
+    },
+    wait: async () => {},
+    gracefulTimeoutMs: 0,
+    forceTimeoutMs: 1,
+  });
+
+  assert.equal(result.status, "forced");
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
 test("desktop node-agent ensure state machine replaces an existing verified owner", async () => {
@@ -243,7 +363,7 @@ test("desktop revalidates process identity before forcing a timed-out owner", as
     dataDir: "/desktop/node-agent",
     readOwner: () => existing,
     isAlive: () => true,
-    processIdentity: () => identityReads++ === 0 ? existing.startIdentity : "test:replacement-start",
+    processIdentity: () => identityReads++ < 2 ? existing.startIdentity : "test:replacement-start",
     signal: (_pid, signal) => signals.push(signal),
     wait: async () => {},
     gracefulTimeoutMs: 0,

@@ -236,6 +236,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
 import CloudNodeTrustEntry from "./CloudNodeTrustEntry.vue";
 import { cloudAccountNodeCandidates } from "./cloudAccountNodeCandidates";
+import { connectCloudAccountNodeWithTrustRetry } from "./cloudAccountNodeConnection";
 import { withNodeAgentInstallerSource } from "./nodeAgentInstallCommand";
 import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
 import {
@@ -296,7 +297,6 @@ const cloudRelayBound = computed(() => connectivity.data.value?.status === "acti
 const cloudRelayUsable = computed(() => cloudRelaySignedIn.value && cloudRelayBound.value);
 const accountNodes = useCloudAccountNodesQuery({
   enabled: () => cloudRelayUsable.value && (props.open || onboarding.active.value),
-  refetchIntervalMs: () => onboarding.active.value ? 2_000 : false,
 });
 let clock: ReturnType<typeof setInterval> | undefined;
 
@@ -405,7 +405,10 @@ async function connectAccountNode(nodeHandle: string) {
   beginCloudNodeOnboarding("existing");
   setCloudNodeOnboardingNodeHandle(nodeHandle);
   try {
-    await claimCloudAccountNode(nodeHandle);
+    await connectCloudAccountNodeWithTrustRetry({
+      reapply: () => reapplyCloudAccountNodeClaim(nodeHandle),
+      claim: () => claimCloudAccountNode(nodeHandle),
+    });
     await accountNodes.refetch();
     syncCloudNodeOnboarding(accountNodes.data.value);
     applyOnboardingState();

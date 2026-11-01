@@ -460,6 +460,10 @@ test("node delete API forwards explicit force and returns orphan risk without cl
   registerNodeRoutes({
     app,
     service: {
+      requireNode(id) {
+        assert.equal(id, "node_b");
+        return { id, connectionPath: { kind: "direct" }, labels: {} };
+      },
       async deleteNodeWithProxyLifecycle(id, force) {
         assert.equal(id, "node_b");
         assert.equal(force, true);

@@ -41,6 +41,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 
 const STORY_REFRESH_DEBOUNCE_MS = 100;
 const NODE_TRUST_REFRESH_DEBOUNCE_MS = 100;
+const OPERATION_GENERATION_RECOVERY_RETRIES = 1;
 
 export type ApprovalCenterActionState = {
   phase: 'idle' | 'busy' | 'failed' | 'result-unknown';
@@ -90,13 +91,20 @@ export class MobileApprovalCenterController {
   private readonly storyEntries = new Map<string, StoryDecisionSourceEntry>();
   private readonly nodeSnapshots = new Map<string, NodeControlPlaneTrustSnapshot>();
   private operationRequests = new Map<string, ApprovalRequest>();
+  private operationGeneration = '';
   private operationRevision = -1;
+  private operationRecoveryGeneration = '';
   private onlineConnection = true;
   private deviceSnapshot?: CloudDeviceTrustSnapshot;
   private abortController?: AbortController;
   private epoch = 0;
   private storyRefreshTimer?: ReturnType<typeof setTimeout>;
   private nodeRefreshTimer?: ReturnType<typeof setTimeout>;
+  private readonly pendingStoryRefreshIds = new Set<string>();
+  private readonly pendingNodeRefreshIds = new Set<string>();
+  private pendingStoryRefreshAll = false;
+  private pendingNodeRefreshAll = false;
+  private nodeDirectoryOnlineKey = '';
   private snapshotValue: MobileApprovalCenterState;
 
   constructor(
@@ -192,6 +200,17 @@ export class MobileApprovalCenterController {
       const phase = current?.phase === 'stale' || current?.phase === 'unavailable' ? current.phase : 'ready';
       this.updateNodeItems(phase, current?.diagnostic);
     }
+    if (this.options.supportsNodes) {
+      const onlineKey = this.options.directory().nodes
+        .filter((node) => node.status === 'online')
+        .map((node) => node.id)
+        .sort()
+        .join('\n');
+      if (onlineKey !== this.nodeDirectoryOnlineKey) {
+        this.nodeDirectoryOnlineKey = onlineKey;
+        this.scheduleNodeRefresh();
+      }
+    }
   }
 
   syncAiSessions() {
@@ -224,11 +243,20 @@ export class MobileApprovalCenterController {
   applyEvent(event: MobileControlPlaneEvent) {
     if (event.type === 'operation-approval.changed') {
       const parsed = ApprovalChangedEventSchema.safeParse(event.payload);
-      if (!parsed.success || parsed.data.revision <= this.operationRevision) return;
+      if (!parsed.success) return;
+      const generationChanged = parsed.data.generation !== this.operationGeneration;
+      if (generationChanged) {
+        this.operationGeneration = parsed.data.generation;
+        this.operationRevision = parsed.data.revision - 1;
+        this.operationRecoveryGeneration = parsed.data.generation;
+        this.operationRequests.clear();
+      }
+      if (parsed.data.revision <= this.operationRevision) return;
       this.operationRevision = parsed.data.revision;
       if (parsed.data.status === 'pending') this.operationRequests.set(parsed.data.request.id, parsed.data.request);
       else this.operationRequests.delete(parsed.data.request.id);
       this.updateOperationItems();
+      if (generationChanged) void this.refreshOperationApprovals(this.epoch, this.abortController?.signal);
       return;
     }
     if (event.type === 'device-trust.changed') {
@@ -401,7 +429,13 @@ export class MobileApprovalCenterController {
       })));
       const supportedNodeIds = new Set<string>();
       const unsupportedNodeIds = new Set<string>();
-      let partial = result.unavailableNodeIds.length > 0;
+      const unreachableNodeIds = new Set(this.options.directory().nodes
+        .filter((node) => node.status === 'offline' || node.status === 'unknown')
+        .map((node) => node.id));
+      // An offline node is an expected directory state, not a failed Story read.
+      // Only an expected-online node that still cannot return its Story list
+      // makes the loaded decision source incomplete.
+      let partial = result.unavailableNodeIds.some((nodeId) => !unreachableNodeIds.has(nodeId));
       capabilityReads.forEach((read) => {
         if (read.status === 'rejected') partial = true;
         else if (supportsDecisionTools(read.value.node.capabilities)) supportedNodeIds.add(read.value.nodeId);
@@ -446,10 +480,25 @@ export class MobileApprovalCenterController {
   private async refreshOperationApprovals(epoch: number, signal?: AbortSignal) {
     const source: ApprovalCenterSource = 'operation-approval';
     try {
-      const snapshot = await this.client.approvals.snapshot();
+      let snapshot = await this.client.approvals.snapshot();
       if (!this.live(epoch, signal)) return;
-      if (snapshot.revision >= this.operationRevision) {
+      let generationRecoveryAttempts = 0;
+      while (this.operationRecoveryGeneration && snapshot.generation !== this.operationRecoveryGeneration) {
+        if (generationRecoveryAttempts >= OPERATION_GENERATION_RECOVERY_RETRIES) {
+          // The register restarted again while recovery was in flight. Accept
+          // its newest snapshot rather than leaving the controller fenced on
+          // an obsolete generation forever.
+          this.operationRecoveryGeneration = '';
+          break;
+        }
+        generationRecoveryAttempts += 1;
+        snapshot = await this.client.approvals.snapshot();
+        if (!this.live(epoch, signal)) return;
+      }
+      if (snapshot.generation !== this.operationGeneration || snapshot.revision >= this.operationRevision) {
+        this.operationGeneration = snapshot.generation;
         this.operationRevision = snapshot.revision;
+        this.operationRecoveryGeneration = '';
         this.operationRequests = new Map(snapshot.requests.map((request) => [request.id, request]));
         this.updateOperationItems();
       }
@@ -479,6 +528,7 @@ export class MobileApprovalCenterController {
       return;
     }
     const onlineNodes = this.options.directory().nodes.filter((node) => node.status === 'online');
+    this.nodeDirectoryOnlineKey = onlineNodes.map((node) => node.id).sort().join('\n');
     const onlineIds = new Set(onlineNodes.map((node) => node.id));
     for (const nodeId of this.nodeSnapshots.keys()) {
       if (!onlineIds.has(nodeId)) this.nodeSnapshots.delete(nodeId);
@@ -598,22 +648,34 @@ export class MobileApprovalCenterController {
   }
 
   private scheduleStoryRefresh(storyId?: string) {
+    if (storyId) this.pendingStoryRefreshIds.add(storyId);
+    else this.pendingStoryRefreshAll = true;
     if (this.storyRefreshTimer) clearTimeout(this.storyRefreshTimer);
     this.storyRefreshTimer = setTimeout(() => {
       this.storyRefreshTimer = undefined;
+      const storyIds = [...this.pendingStoryRefreshIds];
+      const refreshAll = this.pendingStoryRefreshAll;
+      this.pendingStoryRefreshIds.clear();
+      this.pendingStoryRefreshAll = false;
       const epoch = this.epoch;
       const signal = this.abortController?.signal;
-      void (storyId ? this.refreshStory(storyId, epoch, signal) : this.refreshStories(epoch, signal));
+      void (refreshAll || storyIds.length !== 1 ? this.refreshStories(epoch, signal) : this.refreshStory(storyIds[0]!, epoch, signal));
     }, STORY_REFRESH_DEBOUNCE_MS);
   }
 
   private scheduleNodeRefresh(nodeId?: string) {
+    if (nodeId) this.pendingNodeRefreshIds.add(nodeId);
+    else this.pendingNodeRefreshAll = true;
     if (this.nodeRefreshTimer) clearTimeout(this.nodeRefreshTimer);
     this.nodeRefreshTimer = setTimeout(() => {
       this.nodeRefreshTimer = undefined;
+      const nodeIds = [...this.pendingNodeRefreshIds];
+      const refreshAll = this.pendingNodeRefreshAll;
+      this.pendingNodeRefreshIds.clear();
+      this.pendingNodeRefreshAll = false;
       const epoch = this.epoch;
       const signal = this.abortController?.signal;
-      void this.refreshNodeTrust(epoch, signal, nodeId);
+      void this.refreshNodeTrust(epoch, signal, !refreshAll && nodeIds.length === 1 ? nodeIds[0] : undefined);
     }, NODE_TRUST_REFRESH_DEBOUNCE_MS);
   }
 
@@ -696,6 +758,10 @@ export class MobileApprovalCenterController {
     if (this.nodeRefreshTimer) clearTimeout(this.nodeRefreshTimer);
     this.storyRefreshTimer = undefined;
     this.nodeRefreshTimer = undefined;
+    this.pendingStoryRefreshIds.clear();
+    this.pendingNodeRefreshIds.clear();
+    this.pendingStoryRefreshAll = false;
+    this.pendingNodeRefreshAll = false;
   }
 
   private buildSnapshot(): MobileApprovalCenterState {

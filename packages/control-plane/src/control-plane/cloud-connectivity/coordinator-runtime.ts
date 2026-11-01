@@ -277,6 +277,8 @@ export class CloudConnectivityBackgroundRuntime {
         transport: () => options.nodeRelay?.transport?.(),
         nodes: options.nodeRelay.nodes,
         audit: options.nodeRelay.audit,
+        ...(options.nodeRelay.onChanged ? { onChanged: options.nodeRelay.onChanged } : {}),
+        ...(options.nodeRelay.onTrustChanged ? { onTrustChanged: options.nodeRelay.onTrustChanged } : {}),
         onPreserveLocalConnection: async (nodeHandle) => { await this.revokeAccountNodeClaim(nodeHandle); },
         onChannelClosed: ({ nodeHandle, nodeId, relayId, reason }) => {
           this.options.logger?.warn?.({
@@ -536,6 +538,7 @@ export class CloudConnectivityBackgroundRuntime {
       ...(typeof event.tokenId === "string" ? { tokenId: event.tokenId } : {}),
       at: new Date(this.clock()).toISOString(),
     });
+    this.nodeRelayChannels.notifyChanged("onboarding-hint", { nodeHandle });
     await this.claimAccountNode(nodeHandle).catch(() => undefined);
     return { applied: true };
   }
@@ -1001,6 +1004,8 @@ type CloudRuntimeOptions = {
     transport?: () => CloudNodeRelayChannelTransport | undefined;
     nodes: CloudNodeRelayChannelsOptions["nodes"];
     audit?: CloudNodeRelayChannelsOptions["audit"];
+    onChanged?: CloudNodeRelayChannelsOptions["onChanged"];
+    onTrustChanged?: CloudNodeRelayChannelsOptions["onTrustChanged"];
   };
   webSocket?: typeof WebSocket;
   fetch?: typeof fetch;

@@ -310,7 +310,6 @@ const cloudNodes = computed(() => nodes.data.value || []);
 const canAddCloudNodes = computed(() => signedIn.value && state.value?.status === "active" && !originConflict.value);
 const nodeRelay = useCloudNodeRelayQuery({
   enabled: () => canAddCloudNodes.value,
-  refetchIntervalMs: () => addingNodeId.value ? false : 5_000,
 });
 const pendingScope = computed(() => session.value?.pendingRequest?.scope);
 const pendingUrl = computed(() => session.value?.pendingRequest?.authorizationUrl);

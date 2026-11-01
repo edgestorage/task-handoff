@@ -945,7 +945,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /naturalTop <= viewport\.scrollTop \+ 0\.5 && naturalTop > nearestTop/);
   assert.match(timeline, /detachViewportListeners\(scrollElement\.value\)/);
   assert.match(panel, /@sticky-user-message-change="timelineStickyUserMessage = \$event"/);
-  assert.match(panel, /effectiveTimelineViewMode === 'full' && timelineStickyUserMessage[\s\S]*session-ai-timeline-sticky-prompt[\s\S]*timelineStickyUserMessage\.text/);
+  assert.match(panel, /if \(effectiveTimelineViewMode\.value === "full"\) return Boolean\(timelineStickyUserMessage\.value\)/);
+  assert.match(panel, /if \(effectiveTimelineViewMode\.value === "full"\) return timelineStickyUserMessage\.value\?\.text \|\| ""/);
+  assert.match(panel, /<article\s+v-if="stickyContextVisible"[\s\S]*?class="session-ai-timeline-sticky-prompt"[\s\S]*?<MarkdownContent v-if="stickyContextMessage"/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt \{[\s\S]*position: absolute;[\s\S]*z-index: 5;[\s\S]*height: calc\([\s\S]*background: var\(--workspace-bg\);/);
   const stickyPromptRule = styles.match(/\.session-ai-timeline-sticky-prompt \{([^}]*)\}/);
   assert.ok(stickyPromptRule);

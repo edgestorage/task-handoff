@@ -207,7 +207,8 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(compactPrompt, /navigator\.clipboard\.writeText\(props\.content\)/);
   assert.match(compactPrompt, /\.ai-session-compact-prompt:hover \.ai-session-user-prompt-copy,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
-  assert.match(panel, /v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"[\s\S]*class="session-ai-timeline-sticky-prompt"/);
+  assert.match(panel, /const stickyContextVisible = computed\(\(\) => \{[\s\S]*?return detailScrolled\.value && !detailConversationTransitioning\.value;[\s\S]*?\}\);/);
+  assert.match(panel, /<article\s+v-if="stickyContextVisible"[\s\S]*?class="session-ai-timeline-sticky-prompt"/);
   assert.doesNotMatch(panelCss, /session-ai-detail\.is-scrolled header/);
   assert.doesNotMatch(panel, /session-ai-detail-head-placeholder|detailHeaderPlaceholderHeight/);
 });

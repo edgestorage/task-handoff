@@ -118,6 +118,10 @@ import { connectReverseTunnel } from "./reverse-tunnel/client.ts";
 import { createReverseTunnelManager } from "./reverse-tunnel/manager.ts";
 import { NodeAgentCloudRelayClient } from "./cloud-relay/client.ts";
 import { registerNodeAgentCloudRelayRoutes } from "./cloud-relay/routes.ts";
+import {
+  NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE,
+  type NodeAgentControlPlaneTrustChangedEvent,
+} from "@task-handoff/protocol/node-agent-control-plane-trust";
 import { resolveCloudDiscovery, type CloudDiscovery } from "../../../../shared/cloud-environments.cjs";
 import {
   DockerRuntimeAdapter,
@@ -184,6 +188,7 @@ declare module "fastify" {
 const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
 const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
 const ACTIVE_LOG_MAINTENANCE_INTERVAL_MS = 60_000;
+const CONTROL_PLANE_TRUST_SWEEP_INTERVAL_MS = 15_000;
 const DEFAULT_STORY_DRAIN_DIAGNOSTIC_MS = 30_000;
 const NODE_AGENT_PROCESS_START_IDENTITY = processStartIdentity(process.pid);
 // Container IPC is a separate trust boundary from the full-access local control socket.
@@ -1182,6 +1187,32 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const publishControlPlaneTrustInvalidation = (event: NodeAgentControlPlaneTrustChangedEvent) => {
+    eventForwarder.publish(NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE, event, { nodeId });
+  };
+  const publishControlPlaneTrustRequest = (request: {
+    id: string;
+    controlPlaneId: string;
+    status: "pending" | "approved" | "rejected" | "expired";
+    pinId?: string;
+  }) => publishControlPlaneTrustInvalidation({
+    controlPlaneId: request.controlPlaneId,
+    requestId: request.id,
+    state: request.status,
+    ...(request.pinId ? { pinId: request.pinId } : {}),
+  });
+  const sweepControlPlaneTrust = () => {
+    try {
+      for (const request of identity.expireCloudControlPlaneTrustRequests()) {
+        publishControlPlaneTrustRequest(request);
+      }
+    } catch (error) {
+      app.log.warn({ error }, "node-agent Control Plane trust expiry sweep failed");
+    }
+  };
+  const controlPlaneTrustSweepTimer = setInterval(sweepControlPlaneTrust, CONTROL_PLANE_TRUST_SWEEP_INTERVAL_MS);
+  controlPlaneTrustSweepTimer.unref();
+  app.addHook("onClose", () => clearInterval(controlPlaneTrustSweepTimer));
   // The account relay client owns every node-side relay channel; it starts
   // only after a binding exists and never touches local instances.
   const cloudRelay = new NodeAgentCloudRelayClient({
@@ -1912,10 +1943,21 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     fetchImpl,
     reverseTunnels: () => app.nodeAgentReverseTunnels,
     onTrustChanged: ({ decision, revokedPin, retried }) => {
-      for (const pin of decision?.revokedPins ?? []) cloudRelay.controlPlaneTrustChanged(pin);
-      if (revokedPin) cloudRelay.controlPlaneTrustChanged(revokedPin);
+      if (decision) publishControlPlaneTrustRequest(decision.request);
+      for (const pin of decision?.revokedPins ?? []) {
+        publishControlPlaneTrustInvalidation({ controlPlaneId: pin.controlPlaneId, pinId: pin.id });
+        cloudRelay.controlPlaneTrustChanged(pin);
+      }
+      if (revokedPin) {
+        publishControlPlaneTrustInvalidation({ controlPlaneId: revokedPin.controlPlaneId, pinId: revokedPin.id });
+        cloudRelay.controlPlaneTrustChanged(revokedPin);
+      }
       if (decision?.pin) cloudRelay.pollNow();
-      if (retried) cloudRelay.controlPlaneTrustRetried(retried);
+      else if (decision) cloudRelay.controlPlaneTrustChanged();
+      if (retried) {
+        publishControlPlaneTrustRequest(retried);
+        cloudRelay.controlPlaneTrustRetried(retried);
+      }
     },
   });
 

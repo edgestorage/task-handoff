@@ -5,6 +5,7 @@ import { createAuthoritativeQueryRecovery } from "../src/apps/control-plane/auth
 
 const source = fs.readFileSync(new URL("../src/apps/control-plane/useControlPlaneEvents.ts", import.meta.url), "utf8");
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
+const queries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
 
 test("Control Plane events reset reconnect backoff only after the authoritative hello", () => {
   const openHandler = source.match(/current\.addEventListener\("open",[\s\S]*?\n    \}\);/)?.[0] || "";
@@ -81,11 +82,29 @@ test("authoritative query recovery cancels a pending retry when its socket gener
 
 test("event connection recovers Node, Instance, and Story snapshots for each socket generation", () => {
   assert.match(source, /\["nodes", \["nodeState"\]\]/);
+  assert.match(source, /\["nodeTrust", \["nodeTrust"\]\]/);
+  assert.match(source, /\["cloudNodeRelay", \["cloudNodeRelay"\]\]/);
   assert.match(source, /\["instances", \["instances"\]\]/);
   assert.match(source, /\["stories", \["stories"\]\]/);
   assert.match(source, /current\.addEventListener\("open",[\s\S]*for \(const recovery of authoritativeRecoveries\) void recovery\.start\(\)/);
   assert.match(source, /current\.addEventListener\("close",[\s\S]*stopAuthoritativeRecovery\(\)/);
   assert.match(source, /invalidateQueries\([\s\S]*throwOnError: true/);
+});
+
+test("node control-plane trust is event-driven without an interval poll", () => {
+  const options = queries.match(/export function nodeControlPlaneTrustQueryOptions[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(source, /event\.type === "node\.control-plane-trust\.changed"[\s\S]*queueDomainInvalidation\("cloudNodeRelay"\)/);
+  assert.doesNotMatch(options, /refetchInterval/);
+});
+
+test("cloud account node state is event-driven and never interval-polled", () => {
+  const accountNodes = queries.match(/export function useCloudAccountNodesQuery[\s\S]*?\n\}/)?.[0] || "";
+  const relay = queries.match(/export function useCloudNodeRelayQuery[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(source, /event\.type === "cloud-node-relay\.changed"[\s\S]*CloudNodeRelayChangedEventSchema[\s\S]*queueDomainInvalidation\("cloudNodeRelay"\)/);
+  assert.match(source, /queueDomainInvalidation\("cloudNodeRelay"\)/);
+  assert.doesNotMatch(accountNodes, /refetchInterval/);
+  assert.doesNotMatch(relay, /refetchInterval/);
+  assert.doesNotMatch(workbench, /useCloudAccountNodesQuery\(\{[\s\S]*?refetchIntervalMs/);
 });
 
 test("Control Plane events declare list delta demand separately from detail timeline demand", () => {

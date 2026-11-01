@@ -10,6 +10,7 @@ export const NodeAgentControlPlaneTrustDecisionActionSchema = z.enum(["approve",
 export const NodeAgentControlPlaneTrustRequestStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
 export const NodeAgentControlPlaneTrustPinStatusSchema = z.enum(["active", "revoked"]);
 export const NodeAgentControlPlaneTrustActorTypeSchema = z.enum(["local", "control-plane", "system"]);
+export const NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE = "node-agent.control-plane-trust.changed";
 
 const TrustSummaryBaseSchema = z.object({
   controlPlaneId: IdSchema,
@@ -83,6 +84,16 @@ export const NodeAgentControlPlaneTrustRevokeSchema = z.strictObject({
 /** Explicitly reopens a rejected or expired request as a new pending request. */
 export const NodeAgentControlPlaneTrustRetrySchema = z.strictObject({});
 
+/** An invalidation signal; consumers read the authoritative snapshot after receiving it. */
+export const NodeAgentControlPlaneTrustChangedEventSchema = z.strictObject({
+  controlPlaneId: IdSchema,
+  requestId: IdSchema.optional(),
+  state: NodeAgentControlPlaneTrustRequestStatusSchema.optional(),
+  pinId: IdSchema.optional(),
+}).refine((value) => Boolean(value.requestId || value.pinId), {
+  message: "A trust invalidation must identify a request or pin.",
+});
+
 export type NodeAgentControlPlaneTrustDecisionAction = z.infer<typeof NodeAgentControlPlaneTrustDecisionActionSchema>;
 export type NodeAgentControlPlaneTrustRequest = z.infer<typeof NodeAgentControlPlaneTrustRequestSchema>;
 export type NodeAgentControlPlaneTrustPin = z.infer<typeof NodeAgentControlPlaneTrustPinSchema>;
@@ -90,3 +101,4 @@ export type NodeAgentControlPlaneTrustSnapshot = z.infer<typeof NodeAgentControl
 export type NodeAgentControlPlaneTrustDecision = z.infer<typeof NodeAgentControlPlaneTrustDecisionSchema>;
 export type NodeAgentControlPlaneTrustRevoke = z.infer<typeof NodeAgentControlPlaneTrustRevokeSchema>;
 export type NodeAgentControlPlaneTrustRetry = z.infer<typeof NodeAgentControlPlaneTrustRetrySchema>;
+export type NodeAgentControlPlaneTrustChangedEvent = z.infer<typeof NodeAgentControlPlaneTrustChangedEventSchema>;

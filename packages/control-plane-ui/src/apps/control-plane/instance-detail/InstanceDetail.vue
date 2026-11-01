@@ -211,11 +211,13 @@
         :app-launch-button-label="appLaunchButtonLabel"
         :app-launch-button-title="appLaunchButtonTitle"
         :app-launch-menu-open="appLaunchMenuOpen"
+        :can-export-config="canExportConfig"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
         :choose-project-folder="chooseProjectFolder"
         :instance="instance"
         :instance-sidebar-visible="instanceSidebarVisible"
+        :is-closing-all-sessions="isClosingAllSessions"
         :is-instance-action-busy="isInstanceActionBusy"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
@@ -242,6 +244,7 @@
         :standalone="standalone"
         :toolbar-target="sessionToolbarTarget"
         @copy-registration="$emit('copyRegistration', $event)"
+        @instance-context-menu-command="$emit('instanceContextMenuCommand', $event)"
         @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
         @move-session-tab="(sourceKey, targetKey, placement, targetPane) => $emit('moveSessionTab', sourceKey, targetKey, placement, targetPane)"
         @move-session-to-pane="(sessionKey, pane) => $emit('moveSessionToPane', sessionKey, pane)"
@@ -281,6 +284,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Box, ExternalLink, Folder, FolderOpen, Package, Play, Plus, RotateCw, Server, Settings, Square, Trash2 } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
+import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -296,6 +300,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import type { NativeNodeFolderPicker } from "../nodePath";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
+import type { InstanceContextMenuCommandEvent } from "../shared/instanceContextMenu";
 
 const { t } = useI18n();
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
@@ -312,6 +317,7 @@ const props = defineProps<{
   appLaunchButtonLabel: string;
   appLaunchButtonTitle: string;
   appLaunchMenuOpen: boolean;
+  canExportConfig?: (instance: InstanceBoardItem) => boolean;
   canLaunchApp: boolean;
   copiedText: string;
   chooseProjectFolder?: NativeNodeFolderPicker;
@@ -319,6 +325,7 @@ const props = defineProps<{
   instance?: InstanceWithAiSessions;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   instanceSidebarVisible?: boolean;
+  isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   lastRefreshLabel: string;
   leftSession?: SessionTab;
@@ -348,8 +355,10 @@ const props = defineProps<{
   sessionToolbarTarget?: string;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
+  closeAllSessions: [instance: InstanceBoardItem];
   copyRegistration: [instance: InstanceBoardItem];
+  instanceContextMenuCommand: [event: InstanceContextMenuCommandEvent];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
@@ -359,11 +368,13 @@ defineEmits<{
   setSessionSplitRatio: [ratio: number];
   newInstance: [];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openWindow: [instance: InstanceBoardItem];
   openSettings: [instanceId: string, section?: "general" | "ai" | "browser" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
+  saveTemplate: [instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
   selectSession: [sessionKey: string, pane?: SessionPaneId];
   stopSession: [instance: InstanceBoardItem, session: SessionTab];

@@ -24,6 +24,22 @@ TASK_HANDOFF_AGENT_RUNS_ENABLED=${TASK_HANDOFF_AGENT_RUNS_ENABLED:-1}
 # 否则设置面板里不会出现云连接分区。
 TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED=${TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED:-1}
 export TASK_HANDOFF_AGENT_RUNS_ENABLED TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED
+# Cloud identity is deployment input, not repository configuration. Require the caller to
+# provide one complete mapping so a partial environment cannot silently build with stale
+# or missing Relay suffixes.
+CLOUD_ENV_VARIABLES=(
+  TASK_HANDOFF_CLOUD_ENV
+  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN
+  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES
+  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES
+  TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY
+)
+for name in "${CLOUD_ENV_VARIABLES[@]}"; do
+  if [ -z "${!name:-}" ]; then
+    printf 'Required cloud environment variable is unset: %s\n' "$name" >&2
+    exit 1
+  fi
+done
 ARTIFACT_DIR=release/npm/artifacts
 BUILD_DATE=$(date +%Y%m%d)
 VERSION=${1:-}
@@ -121,7 +137,7 @@ if [ "$REUSE_ARTIFACTS" != 1 ]; then
   done
 fi
 
-log "Build and verify $VERSION (agentRuns=$TASK_HANDOFF_AGENT_RUNS_ENABLED)"
+log "Build and verify $VERSION (agentRuns=$TASK_HANDOFF_AGENT_RUNS_ENABLED, cloud=$TASK_HANDOFF_CLOUD_ENV, relaySuffixes=$TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES)"
 if [ "$REUSE_ARTIFACTS" = 1 ]; then
   log "Reuse existing verified artifacts for $VERSION"
 else
@@ -164,6 +180,38 @@ if [ -n "$MISSING_FLAG" ]; then
     "$MISSING_FLAG" "$TASK_HANDOFF_AGENT_RUNS_ENABLED" "$TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED" >&2
   exit 1
 fi
+
+# The runtime bundle must contain the expected cloud identity as well as the UI
+# feature flags. Checking only the UI bundle would not catch an incomplete Relay suffix list.
+bundle_has_cloud_setting() {
+  local bundle="$1" name="$2" value="$3"
+  # Terser prints identifier keys without quotes, while the pre-minified
+  # source quotes them. Accept both representations without parsing JavaScript.
+  grep -aFq "\"$name\":\"$value\"" "$bundle" || grep -aFq "$name:\"$value\"" "$bundle"
+}
+
+for name in control-plane node-agent; do
+  CLOUD_BUNDLE=$(mktemp -t task-handoff-cloud-bundle)
+  if ! tar -xOf "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" package/dist/cli.js > "$CLOUD_BUNDLE"; then
+    rm -f "$CLOUD_BUNDLE"
+    printf 'Runtime package %s is missing dist/cli.js; cannot verify its cloud environment.\n' "$name" >&2
+    exit 1
+  fi
+  for setting in \
+    "TASK_HANDOFF_CLOUD_ENV:$TASK_HANDOFF_CLOUD_ENV" \
+    "TASK_HANDOFF_CLOUD_SERVICE_ORIGIN:$TASK_HANDOFF_CLOUD_SERVICE_ORIGIN" \
+    "TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES:$TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES" \
+    "TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES:$TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES"; do
+    SETTING_NAME=${setting%%:*}
+    SETTING_VALUE=${setting#*:}
+    if ! bundle_has_cloud_setting "$CLOUD_BUNDLE" "$SETTING_NAME" "$SETTING_VALUE"; then
+      rm -f "$CLOUD_BUNDLE"
+      printf 'Runtime package %s is missing expected cloud setting %s. Rebuild the artifacts instead of reusing them.\n' "$name" "$SETTING_NAME" >&2
+      exit 1
+    fi
+  done
+  rm -f "$CLOUD_BUNDLE"
+done
 if [ "$REUSE_ARTIFACTS" = 1 ]; then
   for name in server control-plane node-agent controlled-instance; do
     tar -xOf "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" package/package.json | node -e '
@@ -192,7 +240,7 @@ shasum -a 256 \
   | sed "s#  $ARTIFACT_DIR/#  #" > "$CHECKSUMS"
 cat "$CHECKSUMS"
 
-log "Upload and assemble staging runtime"
+log "Upload and assemble new runtime"
 scp "${SCP_ARGS[@]}" \
   "$ARTIFACT_DIR/task-handoff-server-$VERSION.tgz" \
   "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" \

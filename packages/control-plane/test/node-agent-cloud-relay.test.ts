@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
+import { NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/node-agent-control-plane-trust";
 import { createNodeAgentApp } from "../src/node-agent/app.ts";
 import { createNodeAgentHmacHeaders } from "../src/shared/security/node-agent-auth.ts";
 import type { NodeAgentIdentityService } from "../src/node-agent/identity/service.ts";
@@ -40,6 +41,26 @@ async function waitFor<T>(check: () => T | undefined | Promise<T | undefined>, m
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${message}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function captureForwardedEvents(app: FastifyInstance) {
+  const messages: any[] = [];
+  const socket = {
+    readyState: 1,
+    bufferedAmount: 0,
+    send(raw: string) { messages.push(JSON.parse(raw)); },
+    on() { return socket; },
+    off() { return socket; },
+    close() {},
+  };
+  const dispose = app.nodeAgentEventForwarder!.addOutput(socket as any);
+  return { messages, dispose };
+}
+
+function trustEvent(messages: any[], requestId?: string) {
+  return messages.find((message) => message.type === "node-agent.event.forwarded"
+    && message.event?.type === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE
+    && (!requestId || message.event.payload?.requestId === requestId));
 }
 
 function authorizationHeaders() {
@@ -591,6 +612,8 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
   const { app, relay, identityService, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);
   const controlPlaneId = "control_plane_waiting_for_trust";
   const pendingPlane = planeFor(controlPlaneId);
+  const forwarded = captureForwardedEvents(app);
+  t.after(forwarded.dispose);
   await bind(app, stub, undefined, authorizationHeaders(), false);
 
   relay.pollNow();
@@ -599,6 +622,12 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
   assert.equal(pending.outcome.state, "pending");
   assert.equal(pending.outcome.reason, "first-seen");
   assert.equal(pending.outcome.controlPlaneId, controlPlaneId);
+  const pendingEvent = await waitFor(() => trustEvent(forwarded.messages, pending.outcome.requestId), "the pending trust event to be forwarded");
+  assert.deepEqual(pendingEvent.event.payload, {
+    controlPlaneId,
+    requestId: pending.outcome.requestId,
+    state: "pending",
+  });
   assert.equal(identityService.cloudRelayPairing(controlPlaneId), undefined);
   assert.deepEqual(identityService.listControlPlanePairings(), []);
   const beforeApproval = await status(app);
@@ -627,6 +656,13 @@ test("an unapproved Control Plane receives only a pending outcome; local approva
   });
   assert.equal(decided.statusCode, 200, decided.body);
   assert.equal(decided.json().data.pins.filter((pin: any) => pin.status === "active").length, 1);
+  const approvedEvent = await waitFor(() => forwarded.messages.find((message) => (
+    message.type === "node-agent.event.forwarded"
+    && message.event?.type === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE
+    && message.event.payload?.requestId === request.requestId
+    && message.event.payload?.state === "approved"
+  )), "the approved trust event to be forwarded");
+  assert.equal(approvedEvent.event.payload.pinId, decided.json().data.pins[0].pinId);
 
   const approvedPeer = await waitFor(async () => {
     if (pendingPlane.peers.length < 2) return undefined;
@@ -645,6 +681,8 @@ test("a rejected Control Plane is reopened only by a signed retry directive and 
   const { app, relay, identityService, planeFor, connect } = await cloudRelayFixture(t, stub);
   const controlPlaneId = "control_plane_reapply";
   const plane = planeFor(controlPlaneId);
+  const forwarded = captureForwardedEvents(app);
+  t.after(forwarded.dispose);
   await bind(app, stub, undefined, authorizationHeaders(), false);
 
   relay.pollNow();
@@ -666,6 +704,12 @@ test("a rejected Control Plane is reopened only by a signed retry directive and 
   });
   assert.equal(rejected.statusCode, 200, rejected.body);
   assert.equal(rejected.json().data.requests.find((item: any) => item.requestId === request.requestId)?.status, "rejected");
+  await waitFor(() => forwarded.messages.find((message) => (
+    message.type === "node-agent.event.forwarded"
+    && message.event?.type === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE
+    && message.event.payload?.requestId === request.requestId
+    && message.event.payload?.state === "rejected"
+  )), "the rejected trust event to be forwarded");
 
   // Deliver the authoritative rejection first. The early-frame race used to
   // turn this into a handshake timeout, so prove the Control Plane observes
@@ -697,6 +741,9 @@ test("a rejected Control Plane is reopened only by a signed retry directive and 
   }, "the signed retry directive to reopen the trust request");
   assert.equal(reopened.outcome.state, "pending");
   assert.notEqual(reopened.outcome.requestId, first.outcome.requestId);
+  const reopenedEvent = await waitFor(() => trustEvent(forwarded.messages, reopened.outcome.requestId), "the reopened pending trust event to be forwarded");
+  assert.equal(reopenedEvent.event.payload.controlPlaneId, controlPlaneId);
+  assert.equal(reopenedEvent.event.payload.state, "pending");
 
   const afterReapply = await app.inject({ method: "GET", url: listPath, headers: authorizationHeaders() });
   const trust = afterReapply.json().data;
@@ -709,6 +756,8 @@ test("a rejected Control Plane is reopened only by a signed retry directive and 
 test("revoking one Control Plane pin closes only that channel and clears only its relay pairing", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const { app, relay, identityService, planeFor, connect, hmacFor, localHeaders } = await cloudRelayFixture(t, stub);
+  const forwarded = captureForwardedEvents(app);
+  t.after(forwarded.dispose);
   planeFor("control_plane_revoke_one");
   const two = planeFor("control_plane_revoke_two");
   await bind(app, stub);
@@ -745,6 +794,11 @@ test("revoking one Control Plane pin closes only that channel and clears only it
   });
   assert.equal(revoked.statusCode, 200, revoked.body);
   assert.equal(revoked.json().data.pins.find((item: any) => item.pinId === pin.pinId)?.status, "revoked");
+  await waitFor(() => forwarded.messages.find((message) => (
+    message.type === "node-agent.event.forwarded"
+    && message.event?.type === NODE_AGENT_CONTROL_PLANE_TRUST_CHANGED_EVENT_TYPE
+    && message.event.payload?.pinId === pin.pinId
+  )), "the revoked pin invalidation to be forwarded");
 
   await waitFor(async () => {
     const snapshot = await status(app, localHeaders("GET", "/api/node-agent/cloud-relay"));

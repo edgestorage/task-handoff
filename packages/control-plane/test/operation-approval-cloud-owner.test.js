@@ -4,8 +4,33 @@ import Fastify from "fastify";
 
 import { ControlPlaneEventBus } from "../src/control-plane/events/bus.ts";
 import { OperationApprovals } from "../src/control-plane/approvals/operation-approvals.ts";
-import { registerOperationApprovalRoutes } from "../src/control-plane/http/operation-approval-routes.ts";
+import { executeApprovedOperation, registerOperationApprovalRoutes } from "../src/control-plane/http/operation-approval-routes.ts";
 import { setControlPlaneRequestActor } from "../src/control-plane/http/request-actor.ts";
+
+test("operation approval generations fence revisions across Control Plane restarts", () => {
+  const published = [];
+  const events = new ControlPlaneEventBus();
+  events.on((event) => published.push(event));
+  const first = new OperationApprovals(events, { "node.remove": true });
+  const request = first.gate(
+    { userId: "user_owner", sessionId: "cli_owner" },
+    "node.remove",
+    "node_owner",
+    { nodeId: "node_owner" },
+  );
+  const firstSnapshot = first.snapshot();
+  first.close();
+
+  const second = new OperationApprovals(events, { "node.remove": true });
+  const secondSnapshot = second.snapshot();
+  second.close();
+
+  assert.notEqual(firstSnapshot.generation, secondSnapshot.generation);
+  assert.equal(firstSnapshot.revision, 1);
+  assert.equal(secondSnapshot.revision, 0);
+  assert.equal(published[0].payload.generation, firstSnapshot.generation);
+  assert.equal(published[0].payload.request.id, request.id);
+});
 
 function ownerCloudActor(userId) {
   return {
@@ -26,25 +51,57 @@ function ownerCloudActor(userId) {
   };
 }
 
-async function harness() {
+function localUser(userId) {
+  return {
+    type: "user",
+    userId,
+    identityId: "identity_local",
+    roleIds: ["role_admin"],
+    permissionIds: ["settings:manage"],
+    nodeScope: { kind: "all" },
+    instanceScope: { kind: "inherit-node-scope" },
+    authorizationRevision: 1,
+    requiresPasswordChange: false,
+  };
+}
+
+async function harness({ enabled = true, currentAccess } = {}) {
   const app = Fastify({ logger: false });
   const events = new ControlPlaneEventBus();
   const approvals = new OperationApprovals(events, { "node.remove": true });
   const audit = [];
+  let executions = 0;
   const auth = {
-    enabled: () => true,
+    enabled: () => enabled,
+    authorizationForSessionToken: async () => localUser("user_owner"),
+    disabledModeAuthorization: async () => localUser("user_owner"),
+    currentAccess: async () => currentAccess,
     users: { store: { audit: { async put(record) { audit.push(record); return record; } } } },
   };
   app.addHook("preHandler", async (request) => {
     const raw = request.headers["x-test-actor"];
     if (typeof raw === "string") setControlPlaneRequestActor(request, JSON.parse(raw));
   });
+  app.post("/test/remove-node", async (request, reply) => executeApprovedOperation(
+    request,
+    reply,
+    auth,
+    approvals,
+    "node.remove",
+    "node_test",
+    {},
+    undefined,
+    async () => {
+      executions += 1;
+      return { removed: true };
+    },
+  ));
   registerOperationApprovalRoutes(app, auth, approvals, async () => undefined);
   await app.ready();
-  return { app, approvals, audit };
+  return { app, approvals, audit, executions: () => executions };
 }
 
-test("Cloud owner snapshots and decides only the mapped local user's operation approvals", async (t) => {
+test("Control Plane administrators share the operation approval queue", async (t) => {
   const { app, approvals, audit } = await harness();
   t.after(async () => { approvals.close(); await app.close(); });
   const ownerRequest = approvals.gate(
@@ -60,22 +117,31 @@ test("Cloud owner snapshots and decides only the mapped local user's operation a
     { nodeId: "node_other" },
   );
   const mapped = JSON.stringify(ownerCloudActor("user_owner"));
+  const localAdmin = JSON.stringify(localUser("user_admin"));
+  const nonAdmin = JSON.stringify({ ...localUser("user_viewer"), roleIds: ["role_viewer"], permissionIds: ["instances:read"] });
 
   const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": mapped } });
   assert.equal(snapshot.statusCode, 200);
-  assert.deepEqual(snapshot.json().data.requests.map((request) => request.id), [ownerRequest.id]);
-  assert.ok(!snapshot.body.includes(otherRequest.id));
+  assert.deepEqual(snapshot.json().data.requests.map((request) => request.id), [ownerRequest.id, otherRequest.id]);
+
+  const localSnapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": localAdmin } });
+  assert.equal(localSnapshot.statusCode, 200, localSnapshot.body);
+  assert.deepEqual(localSnapshot.json().data.requests.map((request) => request.id), [ownerRequest.id, otherRequest.id]);
+
+  const forbidden = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": nonAdmin } });
+  assert.equal(forbidden.statusCode, 403);
 
   const unmapped = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": JSON.stringify(ownerCloudActor()) } });
   assert.equal(unmapped.statusCode, 403);
 
-  const wrongOwnerDecision = await app.inject({
+  const otherAdminDecision = await app.inject({
     method: "POST",
     url: `/api/operation-approvals/${otherRequest.id}/decision`,
-    headers: { "x-test-actor": mapped, "content-type": "application/json" },
+    headers: { "x-test-actor": localAdmin, "content-type": "application/json" },
     payload: { decision: "approve" },
   });
-  assert.equal(wrongOwnerDecision.statusCode, 404);
+  assert.equal(otherAdminDecision.statusCode, 200, otherAdminDecision.body);
+  assert.equal(otherAdminDecision.json().data.status, "approved");
 
   const decision = await app.inject({
     method: "POST",
@@ -85,7 +151,65 @@ test("Cloud owner snapshots and decides only the mapped local user's operation a
   });
   assert.equal(decision.statusCode, 200);
   assert.equal(decision.json().data.status, "approved");
-  assert.deepEqual(approvals.snapshot("user_owner").requests, []);
-  assert.equal(approvals.snapshot("user_other").requests.length, 1);
+  assert.deepEqual(approvals.snapshot().requests, []);
   assert.equal(audit.at(-1).actorUserId, "user_owner");
+});
+
+test("Cloud owner approval routes remain available when password authentication is disabled", async (t) => {
+  const { app, approvals } = await harness({ enabled: false });
+  t.after(async () => { approvals.close(); await app.close(); });
+  const pending = approvals.gate(
+    { userId: "user_owner", sessionId: "cli_owner" },
+    "node.remove",
+    "node_owner",
+    { nodeId: "node_owner" },
+  );
+  const actor = JSON.stringify(ownerCloudActor("user_owner"));
+
+  const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": actor } });
+  assert.equal(snapshot.statusCode, 200, snapshot.body);
+  assert.deepEqual(snapshot.json().data.requests.map((request) => request.id), [pending.id]);
+
+  const decision = await app.inject({
+    method: "POST",
+    url: `/api/operation-approvals/${pending.id}/decision`,
+    headers: { "x-test-actor": actor, "content-type": "application/json" },
+    payload: { decision: "approve" },
+  });
+  assert.equal(decision.statusCode, 200, decision.body);
+  assert.equal(decision.json().data.status, "approved");
+});
+
+test("disabled local CLI operations gate, surface and consume approvals through the local operator", async (t) => {
+  const localOperator = localUser("user_owner");
+  const { app, approvals, executions } = await harness({ enabled: false, currentAccess: localOperator });
+  t.after(async () => { approvals.close(); await app.close(); });
+  const disabledActor = JSON.stringify(localOperator);
+  const cliHeaders = { authorization: "Bearer cli_session.token" };
+
+  const pendingResponse = await app.inject({ method: "POST", url: "/test/remove-node", headers: cliHeaders });
+  assert.equal(pendingResponse.statusCode, 202, pendingResponse.body);
+  assert.equal(pendingResponse.json().data.kind, "operation-approval");
+  const pendingId = pendingResponse.json().data.id;
+
+  const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": disabledActor } });
+  assert.equal(snapshot.statusCode, 200, snapshot.body);
+  assert.deepEqual(snapshot.json().data.requests.map((request) => request.id), [pendingId]);
+
+  const decision = await app.inject({
+    method: "POST",
+    url: `/api/operation-approvals/${pendingId}/decision`,
+    headers: { "x-test-actor": disabledActor, "content-type": "application/json" },
+    payload: { decision: "approve" },
+  });
+  assert.equal(decision.statusCode, 200, decision.body);
+
+  const approved = await app.inject({
+    method: "POST",
+    url: "/test/remove-node",
+    headers: { ...cliHeaders, "x-task-handoff-approval-id": pendingId },
+  });
+  assert.equal(approved.statusCode, 200, approved.body);
+  assert.deepEqual(approved.json(), { data: { removed: true } });
+  assert.equal(executions(), 1);
 });

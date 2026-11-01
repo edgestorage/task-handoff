@@ -19,6 +19,28 @@ function userActor(request: Parameters<typeof controlPlaneRequestActor>[0]) {
 }
 
 export function registerControlPlaneUserRoutes(app: FastifyInstance, auth: ControlPlaneAuth, operationApprovals: OperationApprovals, options: { onRoleCatalogChanged?: () => Promise<void> | void } = {}) {
+  if (!auth.enabled()) {
+    app.addHook("preHandler", async (request) => {
+      if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return;
+      // Fastify routes on the decoded path; raw request.url would let an
+      // encoded prefix bypass this disabled-auth management guard.
+      const matchedRoute = request.routeOptions.url;
+      const path = matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url.split("?")[0] || "/";
+      const managedPath = path === "/api/users"
+        || path.startsWith("/api/users/")
+        || path === "/api/roles"
+        || path.startsWith("/api/roles/")
+        || path === "/api/identity-providers"
+        || path.startsWith("/api/identity-providers/")
+        || path.startsWith("/api/external-identity-approvals/");
+      if (!managedPath) return;
+      throw Object.assign(new Error("User management is unavailable while Control Plane authentication is disabled."), {
+        code: "CONTROL_PLANE_USER_MANAGEMENT_DISABLED",
+        statusCode: 403,
+      });
+    });
+  }
+
   app.get("/api/users", async (request) => {
     const query = z.object({ search: z.string().trim().max(160).optional(), includeArchived: z.coerce.boolean().optional() }).strict().parse(request.query);
     return { data: await auth.users.list(query) };

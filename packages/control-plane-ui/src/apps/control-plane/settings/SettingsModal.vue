@@ -101,7 +101,7 @@
       <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
 
 
-      <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" :instances="instances" />
+      <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" :instances="instances" :read-only="authSession.data.value?.enabled === false" />
 
       <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
 
@@ -234,34 +234,36 @@
                     @select="selectPendingCloudNodeEnrollment"
                   />
                 </section>
-                <button v-for="target in orderedNodes" :key="target.id" type="button" class="node-list-item" :class="{ active: !selectedPendingCloudNodeHandle && selectedNodeId === target.id }" @click="selectRegistryNode(target.id)">
-                  <span class="node-status-dot" :class="nodeStatusClass(target.id)" />
-                  <span>
-                    <strong>{{ target.name }}</strong>
-                    <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
-                  </span>
-                  <span class="node-list-meta">
-                    <Tooltip @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
-                      <TooltipTrigger as-child>
-                        <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
-                          <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent class="node-diagnostic-tooltip" align="end" side="bottom">
-                        <div class="node-diagnostic-tooltip-grid">
-                          <span><b>{{ t("settings.nodeRegistry.protocol") }}</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
-                          <span><b>{{ t("settings.nodeRegistry.build") }}</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
-                          <span><b>{{ t("settings.nodeRegistry.package") }}</b><em>{{ nodePackageLabel(target.id) }}</em></span>
-                          <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
-                          <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
-                        </div>
-                        <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
-                      </TooltipContent>
-                    </Tooltip>
-                    <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
-                  </span>
-                </button>
-                <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
+                <div class="node-list-section node-list-registered">
+                  <button v-for="target in orderedNodes" :key="target.id" type="button" class="node-list-item" :class="{ active: !selectedPendingCloudNodeHandle && selectedNodeId === target.id }" @click="selectRegistryNode(target.id)">
+                    <span class="node-status-dot" :class="nodeStatusClass(target.id)" />
+                    <span>
+                      <strong>{{ target.name }}</strong>
+                      <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
+                    </span>
+                    <span class="node-list-meta">
+                      <Tooltip @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
+                        <TooltipTrigger as-child>
+                          <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
+                            <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent class="node-diagnostic-tooltip" align="end" side="bottom">
+                          <div class="node-diagnostic-tooltip-grid">
+                            <span><b>{{ t("settings.nodeRegistry.protocol") }}</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
+                            <span><b>{{ t("settings.nodeRegistry.build") }}</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
+                            <span><b>{{ t("settings.nodeRegistry.package") }}</b><em>{{ nodePackageLabel(target.id) }}</em></span>
+                            <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
+                            <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
+                          </div>
+                          <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
+                        </TooltipContent>
+                      </Tooltip>
+                      <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
+                    </span>
+                  </button>
+                  <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
+                </div>
               </div>
             </ScrollArea>
           </section>
@@ -661,7 +663,6 @@ const cloudNodeOnboardingOpen = ref(false);
 const cloudNodeOnboarding = useCloudNodeOnboardingAttempt();
 const cloudNodeRelay = useCloudNodeRelayQuery({
   enabled: () => isFeatureEnabled("officialAccount") && canManageSettings.value,
-  refetchIntervalMs: () => settingsSection.value === "nodes" ? 2_000 : false,
 });
 const selectedPendingCloudNodeHandle = ref("");
 const pendingCloudNodeEnrollments = computed(() => [...(cloudNodeRelay.data.value?.trust ?? [])]
@@ -1863,21 +1864,22 @@ function errorText(error: unknown) {
 
 .node-list {
   min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-raised);
   overflow: hidden;
 }
 
 .settings-scroll-content {
   display: grid;
   align-content: start;
-  gap: 0;
+  gap: 8px;
   min-height: 100%;
 }
 
 .node-list-section {
   min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .node-list-section-head {
@@ -1907,9 +1909,11 @@ function errorText(error: unknown) {
 }
 
 .node-list-incomplete {
-  border-bottom: 1px solid var(--line-strong);
+  border-color: var(--line-strong);
   background: color-mix(in srgb, var(--status-warning-bg) 28%, var(--surface-raised));
 }
+
+.node-list-registered > .settings-empty { padding: 12px; }
 
 .node-list-incomplete > p {
   margin: 0;

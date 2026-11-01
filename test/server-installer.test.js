@@ -677,6 +677,16 @@ test("test deployment switches the global command symlinks with the server runti
   assert.match(deployment, /test "\$\(\/usr\/local\/bin\/task-handoff-node-agent --version\)" = "\$VERSION"/);
 });
 
+test("test deployment requires and verifies an explicit cloud identity", () => {
+  const deployment = fs.readFileSync(path.join(root, "scripts", "update-test-control-plane.sh"), "utf8");
+  assert.match(deployment, /CLOUD_ENV_VARIABLES=\(\n  TASK_HANDOFF_CLOUD_ENV\n  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN\n  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES\n  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES\n  TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY\n\)/);
+  assert.match(deployment, /Required cloud environment variable is unset/);
+  assert.match(deployment, /for name in control-plane node-agent; do\n  CLOUD_BUNDLE=\$\(mktemp -t task-handoff-cloud-bundle\)/);
+  assert.match(deployment, /bundle_has_cloud_setting\(\)/);
+  assert.match(deployment, /"TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES:\$TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES"/);
+  assert.doesNotMatch(deployment, /^TASK_HANDOFF_CLOUD_ENV=/m);
+});
+
 test("node-agent installer honors an explicit npm package before an ambient binary", () => {
   const installer = fs.readFileSync(nodeAgentInstallerPath, "utf8");
   const explicitPackage = installer.indexOf('elif [ -n "$NPM_PACKAGE" ]; then');

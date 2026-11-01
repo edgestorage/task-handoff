@@ -10,6 +10,8 @@ export type ControlPlaneQueryDomain =
   | "nodeState"
   | "nodeTopology"
   | "nodeRuntimeState"
+  | "nodeTrust"
+  | "cloudNodeRelay"
   | "nodeFolders"
   | "stories"
   | "agents"
@@ -49,6 +51,12 @@ const domainQueryKeys: Record<Exclude<ControlPlaneQueryDomain, "manual">, () => 
   nodeRuntimeState: () => [
     controlPlaneQueryKeys.nodeRuntimes,
     controlPlaneQueryKeys.instanceBoard,
+  ],
+  nodeTrust: () => [controlPlaneQueryKeys.nodeControlPlaneTrust()],
+  cloudNodeRelay: () => [
+    controlPlaneQueryKeys.cloudAccountNodes,
+    controlPlaneQueryKeys.cloudNodeRelay,
+    controlPlaneQueryKeys.nodeControlPlaneTrust(),
   ],
   nodeFolders: () => [controlPlaneQueryKeys.nodeLocalFolders()],
   stories: () => [controlPlaneQueryKeys.stories()],

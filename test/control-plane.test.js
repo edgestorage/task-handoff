@@ -3969,7 +3969,13 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   t.after(() => instanceServer.close());
   instanceEvents.on("connection", (socket) => {
     instanceEventSocket = socket;
-    socket.on("message", () => {
+    socket.on("message", (raw) => {
+      let subscription;
+      try {
+        subscription = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
       const timestamp = new Date().toISOString();
       socket.send(JSON.stringify({
         type: AiSessionEventType.Snapshot,
@@ -4003,6 +4009,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
           }],
         }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision: 1 }),
       }));
+      if (!Array.isArray(subscription.topics) || !subscription.topics.includes(AiSessionEventType.MessageDelta)) return;
       const rawDeltas = ["stream", "ed ", "text ", "stays ", "exact"];
       const coalescer = new AiSessionMessageDeltaCoalescer({
         emit: (payload) => socket.send(JSON.stringify({
@@ -14039,12 +14046,20 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   assert.match(proxiedRoot.body, new RegExp(`window\\.__TASK_HANDOFF_PUBLIC_BASE__="/instances/${createdInstance.body.data.id}"`));
   assert.doesNotMatch(proxiedRoot.body, /<base href=/);
 
+  const localSession = await app.inject({
+    method: "POST",
+    url: "/api/auth/cli/local",
+    payload: { client: { name: "proxy-test", platform: process.platform } },
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(localSession.statusCode, 200, localSession.body);
+  const localSessionToken = localSession.json().data.sessionToken;
   const proxied = await app.inject({
     method: "GET",
     url: `/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/web/index.html?theme=dark`,
     headers: {
       cookie: "task_handoff_cp_session=control-plane-session; instance_session=instance-session",
-      authorization: "Bearer control-plane-credential",
+      authorization: `Bearer ${localSessionToken}`,
       "x-instance-client": "forward-me",
     },
   });

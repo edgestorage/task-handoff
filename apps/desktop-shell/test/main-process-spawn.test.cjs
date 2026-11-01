@@ -78,7 +78,17 @@ test("desktop rolls back failed children without coupling a healthy node-agent t
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /desktop services failed to start[\s\S]*desktopServiceLifecycle\.stop\("boot-failure", \{ nodeAgentReady \}\)/);
   assert.match(main, /if \(nodeAgentReady\)[\s\S]*bootNodeAgent\?\.unref\?\.\(\)/);
-  assert.match(main, /inspectExistingDesktopControlPlane\(\)[\s\S]*ensureDesktopNodeAgent/);
+  assert.match(main, /ensureDesktopControlPlaneAvailable\(\{[\s\S]*ensureDesktopNodeAgent/);
+});
+
+test("desktop asks before ending an existing Control Plane and only then continues booting", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /ensureDesktopControlPlaneAvailable\(\{/);
+  assert.match(main, /confirmStop: \(owner\) => confirmStopExistingControlPlane\(owner\)/);
+  assert.match(main, /async function confirmStopExistingControlPlane\(owner\)[\s\S]*dialog\.showMessageBox\(\{/);
+  assert.match(main, /buttons: \["Cancel", "Quit and Continue"\]/);
+  assert.match(main, /action === "cancelled"[\s\S]*app\.quit\(\)[\s\S]*return;/);
+  assert.doesNotMatch(main, /Close it before starting Desktop/);
 });
 
 test("desktop readiness uses health for availability and the singleton lease for ownership", () => {

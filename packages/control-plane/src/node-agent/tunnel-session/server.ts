@@ -25,6 +25,7 @@ export type NodeTunnelEventForwardSocket = { send(data: string): void };
 export type NodeTunnelSessionEventForwarder = {
   addOutput(socket: NodeTunnelEventForwardSocket, options?: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number }): () => void;
   setOutputSubscription?(socket: NodeTunnelEventForwardSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown, metricInstanceIds?: unknown): boolean;
+  publish?(type: string, payload: unknown, scope?: Record<string, unknown>): void;
 };
 
 export type NodeTunnelSessionHost = {

@@ -61,7 +61,7 @@ async function cliSession(app, cookie) {
   return exchanged.json().data.sessionToken;
 }
 
-test("CLI node removal waits for a same-user Web decision and executes exactly once", async (context) => {
+test("CLI node removal waits for a Web administrator decision and executes exactly once", async (context) => {
   const app = await createControlPlaneApp({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "operation-approval-")), logger: false, auth: { mode: "password" } });
   const sockets = [];
   context.after(async () => { sockets.forEach((socket) => socket.terminate()); await app.close(); });
@@ -107,17 +107,17 @@ test("CLI node removal waits for a same-user Web decision and executes exactly o
   await waitForEventSubscription(otherSocket, otherFrames, "viewer event socket");
   const otherSnapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { cookie: viewerCookie } });
   assert.equal(otherSnapshot.statusCode, 200, otherSnapshot.body);
-  assert.deepEqual(otherSnapshot.json().data.requests, []);
-  const otherDecision = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: headers(viewerCookie), payload: { decision: "approve" } });
-  assert.equal(otherDecision.statusCode, 404, otherDecision.body);
+  assert.equal(otherSnapshot.json().data.generation, snapshot.json().data.generation);
+  assert.deepEqual(otherSnapshot.json().data.requests.map((request) => request.id), [approvalId]);
   const badOrigin = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: { cookie, host: "control-plane.test", origin: "http://evil.test" }, payload: { decision: "approve" } });
   assert.equal(badOrigin.statusCode, 403, badOrigin.body);
-  const approved = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: headers(cookie), payload: { decision: "approve" } });
-  assert.equal(approved.statusCode, 200, approved.body);
+  const otherDecision = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: headers(viewerCookie), payload: { decision: "approve" } });
+  assert.equal(otherDecision.statusCode, 200, otherDecision.body);
+  const repeatedDecision = await app.inject({ method: "POST", url: `/api/operation-approvals/${approvalId}/decision`, headers: headers(cookie), payload: { decision: "approve" } });
+  assert.equal(repeatedDecision.statusCode, 404, repeatedDecision.body);
   const approvedFrames = (frames) => frames.filter((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "approved" && frame.payload.request.id === approvalId).length;
-  await settleApprovalFrames(webFrames, (frames) => approvedFrames(frames) === 1, "approved approval broadcast");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(otherFrames.some((frame) => frame.type === "operation-approval.changed"), false);
+  await settleApprovalFrames([...webFrames, otherFrames], (frames) => approvedFrames(frames) === 1, "approved approval broadcast");
+  assert.equal(otherFrames.some((frame) => frame.type === "operation-approval.changed" && frame.payload.status === "pending"), false);
   const status = await app.inject({ method: "GET", url: `/api/operation-approvals/${approvalId}/status`, headers: cliHeaders });
   assert.equal(status.json().data.status, "approved");
   const execute = await app.inject({ method: "DELETE", url: "/api/nodes/approval-test-node", headers: { ...cliHeaders, "x-task-handoff-approval-id": approvalId } });
@@ -174,9 +174,14 @@ test("deployments without Web sign-in fail closed for bearer deletion requests",
   const app = await createControlPlaneApp({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "operation-approval-disabled-")), logger: false, auth: { mode: "disabled" } });
   context.after(() => app.close());
   const response = await app.inject({ method: "DELETE", url: "/api/nodes/any-node", headers: { authorization: "Bearer untrusted" } });
-  assert.equal(response.statusCode, 403, response.body);
-  const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals" });
-  assert.equal(snapshot.statusCode, 403, snapshot.body);
+  assert.equal(response.statusCode, 401, response.body);
+  assert.equal(response.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED");
+  const malformed = await app.inject({ method: "DELETE", url: "/api/nodes/any-node", headers: { authorization: "Basic untrusted" } });
+  assert.equal(malformed.statusCode, 401, malformed.body);
+  assert.equal(malformed.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED");
+  const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { authorization: "Bearer untrusted" } });
+  assert.equal(snapshot.statusCode, 401, snapshot.body);
+  assert.equal(snapshot.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED");
 });
 
 test("server policy, not the CLI, decides whether a supported operation needs approval", async (context) => {

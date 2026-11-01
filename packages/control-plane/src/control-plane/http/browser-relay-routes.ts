@@ -27,7 +27,7 @@ export function registerBrowserRelayRoutes(options: RegisterBrowserRelayRoutesOp
 
   app.post("/api/controlled-instances/:id/browser-access", async (request) => {
     const { id } = IdParamsSchema.parse(request.params);
-    const actor = requireUserActor(request, auth);
+    const actor = requireUserActor(request);
     const instance = await assertRequestInstanceVisible(service, request, id);
     assertCan(actor, "interactive-access", { type: "instance", id, instanceId: id, nodeId: instance.nodeId });
     if (!supportsBrowserTunnel(instance.capabilities)) {
@@ -90,10 +90,9 @@ export function registerBrowserRelayRoutes(options: RegisterBrowserRelayRoutesOp
   return browserAccess;
 }
 
-function requireUserActor(request: FastifyRequest, auth: ControlPlaneAuth) {
+function requireUserActor(request: FastifyRequest) {
   const actor = controlPlaneRequestActor(request);
   if (actor?.type === "user") return actor;
-  if (auth.enabled?.() === false) return { type: "system" as const, reason: "auth-disabled", userId: "system:auth-disabled", authorizationRevision: 0 };
   throw Object.assign(new Error("A signed-in Control Plane user is required."), { statusCode: 403, code: "BROWSER_ACCESS_USER_REQUIRED" });
 }
 

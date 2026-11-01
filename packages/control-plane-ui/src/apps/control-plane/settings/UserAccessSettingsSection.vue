@@ -4,17 +4,17 @@
       <section class="user-access-panel">
         <header class="user-access-head">
           <div class="user-access-head-copy">
-            <span class="user-access-context">{{ t("settings.userAccess.context") }}</span>
-            <p>{{ t("settings.userAccess.description") }}</p>
+            <span class="user-access-context">{{ readOnly ? t("settings.userAccess.readOnlyContext") : t("settings.userAccess.context") }}</span>
+            <p>{{ readOnly ? t("settings.userAccess.readOnlyDescription") : t("settings.userAccess.description") }}</p>
           </div>
           <Button variant="outline" size="sm" :disabled="refreshing" @click="refresh"><RefreshCw :class="{ spinning: refreshing }" :size="14" />{{ t("common.actions.refresh") }}</Button>
         </header>
 
         <Tabs v-model="activeView" class="access-tabs">
-          <TabsList class="access-tabs-list"><TabsTrigger value="users"><Users :size="14" />{{ t("settings.userAccess.tabs.users") }}</TabsTrigger><TabsTrigger value="roles"><ShieldCheck :size="14" />{{ t("settings.userAccess.tabs.roles") }}</TabsTrigger><TabsTrigger value="providers"><KeyRound :size="14" />{{ t("settings.userAccess.tabs.providers") }}</TabsTrigger></TabsList>
+          <TabsList v-if="!readOnly" class="access-tabs-list"><TabsTrigger value="users"><Users :size="14" />{{ t("settings.userAccess.tabs.users") }}</TabsTrigger><TabsTrigger value="roles"><ShieldCheck :size="14" />{{ t("settings.userAccess.tabs.roles") }}</TabsTrigger><TabsTrigger value="providers"><KeyRound :size="14" />{{ t("settings.userAccess.tabs.providers") }}</TabsTrigger></TabsList>
           <TabsContent value="users" class="access-tab-content">
             <section class="access-directory">
-              <div class="user-toolbar"><div class="search-field"><Search :size="14" /><Input v-model="search" :placeholder="t('settings.userAccess.search')" /></div><ControlPlaneSelect v-model="statusFilter"><ControlPlaneSelectItem value="all">{{ t("settings.userAccess.allStatuses") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="active">{{ statusLabel("active") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="disabled">{{ statusLabel("disabled") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="archived">{{ statusLabel("archived") }}</ControlPlaneSelectItem></ControlPlaneSelect><Button size="sm" @click="createOpen = true"><UserPlus :size="14" />{{ t("settings.userAccess.create") }}</Button></div>
+              <div class="user-toolbar"><div class="search-field"><Search :size="14" /><Input v-model="search" :placeholder="t('settings.userAccess.search')" /></div><ControlPlaneSelect v-model="statusFilter"><ControlPlaneSelectItem value="all">{{ t("settings.userAccess.allStatuses") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="active">{{ statusLabel("active") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="disabled">{{ statusLabel("disabled") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="archived">{{ statusLabel("archived") }}</ControlPlaneSelectItem></ControlPlaneSelect><Button v-if="!readOnly" size="sm" @click="createOpen = true"><UserPlus :size="14" />{{ t("settings.userAccess.create") }}</Button></div>
               <p v-if="users.isLoading.value || roles.isLoading.value" class="user-access-state">{{ t("settings.userAccess.loading") }}</p>
               <p v-else-if="users.error.value || roles.error.value" class="user-access-error" role="alert">{{ errorText(users.error.value || roles.error.value) }}</p>
               <p v-else-if="!filteredUsers.length" class="user-access-state">{{ t("settings.userAccess.empty") }}</p>
@@ -23,13 +23,13 @@
                   <div class="user-identity"><div><strong>{{ user.displayName }}</strong><span class="status" :data-status="user.status">{{ statusLabel(user.status) }}</span></div><code>{{ user.primaryUsername || user.id }}</code></div>
                   <span class="user-role-summary">{{ roleSummary(user.id) }}</span>
                   <span class="user-scope-summary">{{ scopeSummary(user.id) }}</span>
-                  <Button variant="outline" size="sm" @click="openUser(user.id)"><Settings2 :size="14" />{{ t("settings.userAccess.manage") }}</Button>
+                  <Button v-if="!readOnly" variant="outline" size="sm" @click="openUser(user.id)"><Settings2 :size="14" />{{ t("settings.userAccess.manage") }}</Button>
                 </article>
               </div>
             </section>
           </TabsContent>
-          <TabsContent value="roles" class="access-tab-content"><RoleManagementPanel :details="details" /></TabsContent>
-          <TabsContent value="providers" class="access-tab-content"><IdentityProviderManagementPanel /></TabsContent>
+          <TabsContent v-if="!readOnly" value="roles" class="access-tab-content"><RoleManagementPanel :details="details" /></TabsContent>
+          <TabsContent v-if="!readOnly" value="providers" class="access-tab-content"><IdentityProviderManagementPanel /></TabsContent>
         </Tabs>
       </section>
     </div>
@@ -118,11 +118,14 @@ import IdentityProviderManagementPanel from "./IdentityProviderManagementPanel.v
 import RoleManagementPanel from "./RoleManagementPanel.vue";
 import { generateTemporaryPassword } from "./temporaryPassword";
 
-const props = defineProps<{ nodes: Node[]; instances: InstanceBoardItem[] }>();
+const props = defineProps<{ nodes: Node[]; instances: InstanceBoardItem[]; readOnly?: boolean }>();
 const { t, te, locale } = useI18n();
 const users = useUsersQuery(true, true), roles = useRolesQuery(), permissions = usePermissionsQuery(), providers = useIdentityProvidersQuery();
 const details = reactive<Record<string, ControlPlaneUserDetail>>({});
 const activeView = ref("users"), detailTab = ref("access"), search = ref(""), statusFilter = ref("all");
+watch(() => props.readOnly, (readOnly) => {
+  if (readOnly) activeView.value = "users";
+}, { immediate: true });
 const loadingDetails = ref(false), detailLoading = ref(false), creating = ref(false), busy = ref(false), createOpen = ref(false), profileOpen = ref(false), permissionsOpen = ref(false), passwordResetOpen = ref(false), selectedUserId = ref("");
 const confirmAction = ref<"enable" | "disable" | "archive" | "restore" | "revoke-all" | "">("");
 const unbindTargetId = ref(""), revokeSessionTarget = ref(""), profileName = ref(""), profileUsername = ref(""), newPassword = ref("");

@@ -59,7 +59,7 @@ function nodeStore() {
   };
 }
 
-function controlPlaneChannel(options: { controlPlaneId: string; bindingId: string; socket: ReturnType<typeof linkedFrameSockets>["left"] | (() => ReturnType<typeof linkedFrameSockets>["left"]); identity: ReturnType<typeof ed25519Identity>; store: ReturnType<typeof nodeStore>; audit?: Array<Record<string, unknown>>; onConnect?: (input: { paired: boolean }) => void; onPreserveLocalConnection?: (nodeHandle: string) => void }) {
+function controlPlaneChannel(options: { controlPlaneId: string; bindingId: string; socket: ReturnType<typeof linkedFrameSockets>["left"] | (() => ReturnType<typeof linkedFrameSockets>["left"]); identity: ReturnType<typeof ed25519Identity>; store: ReturnType<typeof nodeStore>; audit?: Array<Record<string, unknown>>; onConnect?: (input: { paired: boolean }) => void; onPreserveLocalConnection?: (nodeHandle: string) => void; onChanged?: (change: { revision: number; reason: string; nodeHandle?: string; nodeId?: string }) => void; onTrustChanged?: (change: { nodeHandle: string; nodeId: string; requestId?: string; state?: "pending" | "rejected" | "expired" }) => void }) {
   const tunnel = new ControlPlaneNodeAgentTunnelTransport();
   const transport = new CloudRelayNodeAgentTransport({ tunnel });
   const channels = new CloudNodeRelayChannels({
@@ -72,6 +72,8 @@ function controlPlaneChannel(options: { controlPlaneId: string; bindingId: strin
     transport: () => transport,
     nodes: options.store.adapter,
     ...(options.onPreserveLocalConnection ? { onPreserveLocalConnection: options.onPreserveLocalConnection } : {}),
+    ...(options.onChanged ? { onChanged: options.onChanged } : {}),
+    ...(options.onTrustChanged ? { onTrustChanged: options.onTrustChanged } : {}),
     ...(options.audit ? { audit: (event) => { options.audit!.push(event); } } : {}),
   });
   return { tunnel, transport, channels };
@@ -271,12 +273,98 @@ test("a superseding allocation replaces the live channel for the same handle", a
   one.channels.closeAll("test-done");
 });
 
+test("node lifecycle writes are serialized across channel replacement", async () => {
+  const node = ed25519Identity("node_lifecycle_order");
+  const store = nodeStore();
+  const order: string[] = [];
+  let releaseDisconnect: (() => void) | undefined;
+  const connector = {
+    async connect(input: any) {
+      return {
+        socket: linkedFrameSockets().left,
+        key: new Uint8Array(32),
+        nodeId: node.nodeId,
+        paired: true,
+        allocationId: input.allocation.allocationId,
+      };
+    },
+  };
+  const transport = {
+    attachNode() {},
+    detachNode: () => true,
+    connected: () => true,
+  };
+  const channels = new CloudNodeRelayChannels({
+    state: cloudState("control_plane_cp1", "binding_a"),
+    connector,
+    transport: () => transport,
+    nodes: store.adapter,
+  });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+  await channels.attach(event);
+
+  store.adapter.disconnected = () => new Promise<void>((resolve) => {
+    order.push("disconnect-start");
+    releaseDisconnect = () => {
+      order.push("disconnect-end");
+      resolve();
+    };
+  });
+  store.adapter.connected = () => { order.push("connected"); };
+  const replacement = channels.attach({ ...event, allocationId: "node_allocation_b" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ["disconnect-start"], "the new channel waits for the old node disconnect");
+  releaseDisconnect?.();
+  await replacement;
+  assert.deepEqual(order, ["disconnect-start", "disconnect-end", "connected"]);
+  channels.closeAll("test-done");
+});
+
+test("a failed node disconnect does not leak a rejection or block the replacement channel", async () => {
+  const node = ed25519Identity("node_lifecycle_rejection");
+  const store = nodeStore();
+  let connected = 0;
+  const connector = {
+    async connect(input: any) {
+      return {
+        socket: linkedFrameSockets().left,
+        key: new Uint8Array(32),
+        nodeId: node.nodeId,
+        paired: true,
+        allocationId: input.allocation.allocationId,
+      };
+    },
+  };
+  const transport = {
+    attachNode() {},
+    detachNode: () => true,
+    connected: () => true,
+  };
+  const channels = new CloudNodeRelayChannels({
+    state: cloudState("control_plane_cp1", "binding_a"),
+    connector,
+    transport: () => transport,
+    nodes: store.adapter,
+  });
+  const event = nodeRelayAllocationEvent({ allocationId: "node_allocation_a", nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, controlPlaneId: "control_plane_cp1", accountId: "account_a", bindingId: "binding_a", nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey) });
+  await channels.attach(event);
+
+  store.adapter.disconnected = async () => { throw new Error("node store unavailable"); };
+  store.adapter.connected = () => { connected += 1; };
+  await channels.attach({ ...event, allocationId: "node_allocation_b" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(connected, 1);
+  channels.closeAll("test-done");
+});
+
 test("a live channel close requests recovery while a stale close is ignored", async () => {
   const node = ed25519Identity("node_macmini");
   const cp = ed25519Identity();
   const store = nodeStore();
   const attached: Array<{ nodeId: string; onClosed?: (reason: string) => void }> = [];
-  const closed: Array<{ nodeHandle: string; nodeId: string; reason: string }> = [];
+  const closed: Array<{ nodeHandle: string; nodeId: string; relayId: string; reason: string }> = [];
   const connector = {
     async connect(input: any) {
       return {
@@ -316,7 +404,7 @@ test("a live channel close requests recovery while a stale close is ignored", as
 
   attached[1]?.onClosed?.("network-lost");
   assert.deepEqual(store.calls.disconnected, [`${node.nodeId}:network-lost`]);
-  assert.deepEqual(closed, [{ nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, reason: "network-lost" }]);
+  assert.deepEqual(closed, [{ nodeHandle: "nrh_node_alpha", nodeId: node.nodeId, relayId: "relay_a", reason: "network-lost" }]);
   assert.equal(channels.state().channels.length, 0);
 });
 
@@ -345,6 +433,7 @@ test("a trust-required outcome stays outside the managed node store", async () =
   let waitForConnect: Promise<void> | undefined;
   let createPairingCalls = 0;
   let attachCalls = 0;
+  const trustChanges: Array<{ nodeHandle: string; nodeId: string; requestId?: string; state?: "pending" | "rejected" | "expired" }> = [];
   const transport = {
     attachNode() { attachCalls += 1; },
     detachNode: () => true,
@@ -406,6 +495,7 @@ test("a trust-required outcome stays outside the managed node store", async () =
     },
     transport: () => transport,
     nodes: { ...store.adapter, claimEnabled: () => claimEnabled },
+    onTrustChanged: (change) => trustChanges.push(change),
   });
   const event = nodeRelayAllocationEvent({
     allocationId: "node_allocation_a",
@@ -435,6 +525,15 @@ test("a trust-required outcome stays outside the managed node store", async () =
   assert.equal(channels.state().trust[0]?.nodeId, node.nodeId);
   assert.equal(channels.state().trust[0]?.displayName, "Alpha box");
   assert.equal(store.records.size, 0, "pending trust is not a managed node");
+  assert.deepEqual(trustChanges, [{
+    nodeHandle: "nrh_node_alpha",
+    nodeId: node.nodeId,
+    requestId: "cptreq_pending",
+    state: "pending",
+  }]);
+
+  await channels.attach({ ...event, allocationId: "allocation_same_pending" });
+  assert.equal(trustChanges.length, 1, "the same pending request does not emit a duplicate trust event");
 
   approved = true;
   await channels.attach({ ...event, allocationId: "allocation_after_approval" });
@@ -443,6 +542,11 @@ test("a trust-required outcome stays outside the managed node store", async () =
   assert.deepEqual(store.calls.connected, [node.nodeId]);
   assert.equal(attachCalls, 1);
   assert.deepEqual(channels.state().trust, []);
+  assert.deepEqual(trustChanges[1], {
+    nodeHandle: "nrh_node_alpha",
+    nodeId: node.nodeId,
+    requestId: "cptreq_pending",
+  });
 
   let finishConnect!: () => void;
   waitForConnect = new Promise<void>((resolve) => { finishConnect = resolve; });
@@ -470,6 +574,41 @@ test("forgetting a revoked node clears its pending claim projection", () => {
   channel.channels.forgetNode("nrh_node_alpha");
 
   assert.deepEqual(channel.channels.state().claims, []);
+});
+
+test("relay state transitions publish monotonic change events for snapshot recovery", async () => {
+  const node = ed25519Identity();
+  const cp = ed25519Identity();
+  const store = nodeStore();
+  const sockets = linkedFrameSockets();
+  const changes: Array<{ revision: number; reason: string; nodeHandle?: string; nodeId?: string }> = [];
+  const channel = controlPlaneChannel({
+    controlPlaneId: "control_plane_cp1",
+    bindingId: "binding_a",
+    socket: sockets.left,
+    identity: cp,
+    store,
+    onChanged: (change) => changes.push(change),
+  });
+  const event = nodeRelayAllocationEvent({
+    allocationId: "node_allocation_change",
+    nodeHandle: "nrh_node_change",
+    nodeId: node.nodeId,
+    controlPlaneId: "control_plane_cp1",
+    accountId: "account_a",
+    bindingId: "binding_a",
+    nodePublicKeyFingerprint: nodeRelayFingerprint(node.publicKey),
+  });
+
+  channel.channels.noteClaim("nrh_node_change");
+  const session = startNodeSession(sockets.right, nodeRelayClaimGrant(event, cp.publicKey), node, []);
+  await channel.channels.attach(event);
+  await session;
+  channel.channels.closeNode("nrh_node_change", "test-close");
+
+  assert.deepEqual(changes.map((change) => change.reason), ["claim-noted", "channel-attached", "channel-discarded"]);
+  assert.equal(changes.every((change, index) => change.revision === index + 1), true);
+  assert.equal(changes.at(-1)?.nodeId, node.nodeId);
 });
 
 test("a node refuses a peer that does not hold the key pinned in its claim grant", async () => {

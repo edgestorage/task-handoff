@@ -25,7 +25,7 @@
 <script setup lang="ts">
 import { Copy, FolderOpen, Pencil } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../ui/context-menu";
 
 defineProps<{
   canCopy: boolean;

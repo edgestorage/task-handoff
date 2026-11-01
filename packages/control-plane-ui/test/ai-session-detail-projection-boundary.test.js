@@ -30,7 +30,7 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.match(panel, /:detail-state="selectedSessionContentState"/);
   assert.match(panel, /@transitioning-change="setDetailConversationTransitioning"/);
   assert.match(panel, /detailScrollLayoutPending \|\| detailConversationTransitioning\.value/);
-  assert.match(panel, /effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning/);
+  assert.match(panel, /return detailScrolled\.value && !detailConversationTransitioning\.value/);
   const stickyRule = panelCss.match(/\.session-ai-timeline-sticky-prompt \{([^}]*)\}/);
   assert.ok(stickyRule);
   assert.doesNotMatch(stickyRule[1], /opacity:\s*0/);
@@ -58,17 +58,18 @@ test("compact session switches start at the top while conversation mode follows 
 });
 
 test("sticky prompt context expands over the user message without changing its layout", () => {
-  assert.equal(panel.match(/<AiSessionStickyContext/g)?.length, 2);
+  assert.equal(panel.match(/<AiSessionStickyContext/g)?.length, 1);
   assert.match(stickyContext, /<span class="ai-session-sticky-context-agent">[\s\S]*?<AiAgentIcon[\s\S]*?<span class="ai-session-sticky-context-details">/);
-  assert.equal(stickyContext.match(/<TooltipTrigger as-child>/g)?.length, 2);
+  assert.equal(stickyContext.match(/<TooltipTrigger as-child>/g)?.length, 4);
   assert.match(stickyContext, /<TooltipContent[^>]*>\{\{ folderPath \}\}<\/TooltipContent>/);
   assert.match(stickyContext, /<TooltipContent[^>]*>\{\{ nodeName \}\}<\/TooltipContent>/);
-  assert.equal(panel.match(/:folder-path="selectedSessionFolderPath"/g)?.length, 2);
-  assert.equal(panel.match(/:node-name="selectedSessionNodeName"/g)?.length, 2);
+  assert.equal(panel.match(/:instance-context-menu-enabled="Boolean\(instanceActionMenu\)"/g)?.length, 1);
+  assert.equal(panel.match(/:folder-path="selectedSessionFolderPath"/g)?.length, 1);
+  assert.equal(panel.match(/:node-name="selectedSessionNodeName"/g)?.length, 1);
   assert.match(stickyContext, /\.ai-session-sticky-context \{[\s\S]*?position: absolute;[\s\S]*?width: max-content;/);
   assert.match(stickyContext, /left: var\(--ai-session-sticky-context-left, 0px\);/);
   assert.match(stickyContext, /\.ai-session-sticky-context-surface \{[\s\S]*?width: max-content;[\s\S]*?max-width: 18px;[\s\S]*?overflow: hidden;[\s\S]*?transition: max-width/);
-  assert.match(stickyContext, /\.ai-session-sticky-context:hover \.ai-session-sticky-context-surface \{[\s\S]*?max-width: min\(620px,/);
+  assert.match(stickyContext, /\.ai-session-sticky-context:hover \.ai-session-sticky-context-surface,[\s\S]*?\.ai-session-sticky-context:focus-within \.ai-session-sticky-context-surface \{[\s\S]*?max-width: min\(620px,/);
   assert.match(stickyContext, /\.ai-session-sticky-context::after \{[\s\S]*?left: 100%;[\s\S]*?linear-gradient\(90deg, var\(--workspace-bg\) 0%, transparent 100%\)/);
   assert.match(panelCss, /\.session-ai-timeline-sticky-message \{[\s\S]*?margin-left: 24px;/);
   assert.match(panelCss, /@media \(max-width: 920px\) \{[\s\S]*?\.session-ai-timeline-sticky-prompt \{[\s\S]*?--ai-session-sticky-context-left: 24px;/);
