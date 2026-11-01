@@ -44,7 +44,12 @@ function update(patch: Partial<CloudNodeOnboardingAttempt>) {
 }
 
 export function beginCloudNodeOnboarding(source: CloudNodeOnboardingSource, displayName = "") {
-  if (attempt.value && !terminal(attempt.value.phase)) return attempt.value;
+  if (attempt.value && !terminal(attempt.value.phase)) {
+    // Retrying a failed token request reuses the attempt so its error and
+    // identity stay together, but the operator's latest name must still win.
+    if (source === attempt.value.source && displayName !== attempt.value.displayName) update({ displayName });
+    return attempt.value;
+  }
   const timestamp = new Date().toISOString();
   attempt.value = {
     id: nextId++,

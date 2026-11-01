@@ -158,6 +158,7 @@
                 <span>{{ t("settings.nodeRelay.waitingForInstall") }}</span>
               </div>
             </template>
+            <p v-if="attempt?.phase === 'failed' && cloudRelayError" class="cloud-node-onboarding-error" role="alert">{{ cloudRelayError }}</p>
           </section>
 
           <section v-else-if="step === 'approval' && attempt" class="cloud-node-onboarding-section">
@@ -171,7 +172,7 @@
               @retry="retryOnboardingPoll"
               @cancel="cancelBindingToken"
             />
-            <p v-if="attemptCanContinueInBackground" class="cloud-node-onboarding-approval-hint">
+            <p v-if="attemptCanGoBack" class="cloud-node-onboarding-approval-hint">
               {{ t("settings.nodeRelay.approvalBackgroundHint") }}
             </p>
           </section>
@@ -195,7 +196,7 @@
           <span>{{ bindingToken ? t("settings.nodeRelay.regenerate") : t("settings.nodeRelay.generate") }}</span>
         </Button>
         <template v-else-if="step === 'approval'">
-          <Button type="button" variant="outline" @click="goBackFromApproval">
+          <Button v-if="attemptCanGoBack" type="button" variant="outline" @click="goBackFromApproval">
             <ArrowLeft :size="14" /><span>{{ t("common.actions.back") }}</span>
           </Button>
           <Button type="button" variant="outline" @click="closeDialog">{{ t("common.actions.close") }}</Button>
@@ -283,15 +284,20 @@ const nowMs = ref(Date.now());
 const onboarding = useCloudNodeOnboardingAttempt();
 const attempt = onboarding.attempt;
 const displayName = computed({
-  get: () => attempt.value?.displayName ?? displayNameDraft.value,
+  // The input is always editable on the connect step; restore and detach sync
+  // the persisted attempt name back into this draft.
+  get: () => displayNameDraft.value,
   set: (value: string) => { displayNameDraft.value = value; },
 });
 const bindingToken = computed(() => attempt.value?.token);
 const completedNode = computed(() => attempt.value?.nodeId ? props.nodes.find((node) => node.id === attempt.value?.nodeId) : undefined);
 const cloudRelayError = computed(() => attempt.value?.error || "");
 const trust = computed(() => attempt.value?.trust);
-const attemptCanContinueInBackground = computed(() => Boolean(attempt.value
-  && ["submitting", "waiting-node-trust", "approved-connecting"].includes(attempt.value.phase)));
+// Only attempts that stay observable without this wizard (an unconsumed token
+// or a trust entry in the pending list) may be left behind by "back".
+const attemptCanGoBack = computed(() => Boolean(attempt.value
+  && ["submitting", "waiting-node-trust"].includes(attempt.value.phase)));
+const attemptHasJoinIdentity = computed(() => Boolean(attempt.value?.nodeHandle || attempt.value?.trust));
 const account = useCloudAccountQuery();
 const connectivity = useCloudConnectivityQuery();
 const cloudRelaySignedIn = computed(() => Boolean(account.data.value?.signedIn));
@@ -394,11 +400,10 @@ function restoreAttemptView() {
   if (!attempt.value) return;
   source.value = attempt.value.source;
   displayNameDraft.value = attempt.value.displayName;
-  const provisioningNewNode = attempt.value.source === "new"
-    && attempt.value.phase === "submitting"
-    && !attempt.value.nodeHandle
-    && Boolean(attempt.value.token);
-  step.value = attempt.value.phase === "complete" ? "complete" : provisioningNewNode ? "connect" : "approval";
+  // A token request that failed or is still in flight has no join identity yet;
+  // it belongs to the connect step, not to the approval step.
+  const hasJoinIdentity = Boolean(attempt.value.nodeHandle || attempt.value.trust);
+  step.value = attempt.value.phase === "complete" ? "complete" : hasJoinIdentity ? "approval" : "connect";
   if (attempt.value.phase === "complete") applyOnboardingState();
 }
 
@@ -501,7 +506,7 @@ function applyOnboardingState() {
     }
     return;
   }
-  if (step.value === "connect" && attempt.value.phase !== "submitting") {
+  if (step.value === "connect" && attempt.value.phase !== "submitting" && attemptHasJoinIdentity.value) {
     step.value = "approval";
   }
 }

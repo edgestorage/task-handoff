@@ -130,13 +130,24 @@ export const settings = {
     nodeTrust: {
       status: { pending: "Pending approval", rejected: "Rejected", expired: "Expired" },
       currentNode: "Current node",
-      waitingDescription: "Compare the code below on the target machine, then approve the request. The node will connect automatically.",
+      chooseMethodHint: "Choose either way to approve. The node connects automatically after approval.",
+      methodGroupLabel: "Approval method",
       controlPlane: "Control Plane", reason: "Waiting reason", request: "Request ID", expires: "Request expires",
       fingerprint: "Public key fingerprint", comparisonCode: "Comparison code", copyFingerprint: "Copy fingerprint", copyCode: "Copy code",
       expiresAt: "Valid until {time}", nodeHandle: "Node handle", copyCommand: "Copy approval command", copyDone: "Copied", copyFailed: "Copy failed. Copy the value manually.",
       showDetails: "Connection details", hideDetails: "Hide details",
-      cliTitle: "Local CLI:", cliDescription: "On the target machine, compare the fingerprint or short code, then run:",
-      connectedTitle: "Connected admin Control Plane:", connectedDescription: "You can also approve in the approval center of a Control Plane already managing this node.",
+      controlPlaneMethod: {
+        action: "Approve in Control Plane",
+        description: "Use this when a Control Plane already manages this node.",
+        step1: "Open the Control Plane that manages this node.",
+        step2: "Go to its approval center and find the “Node Control Plane trust” request.",
+        step3: "Compare the short code, then select “Approve this Control Plane”.",
+      },
+      cliMethod: {
+        action: "Approve via CLI",
+        description: "Use this when the target machine has the Node Agent CLI.",
+        commandLabel: "Approval command",
+      },
       retryConnection: "Retry connection", reapply: "Request again", reapplying: "Requesting again…", reapplyWaiting: "Waiting for node…", reapplySubmitted: "Request submitted. Waiting for the target node to respond.", reapplyNoResponse: "No new trust request arrived within 30 seconds. Confirm that the target node is online and its version supports requesting again, then retry.", cancelAdd: "Cancel adding node",
       phase: {
         submitting: "Starting connection", "waiting-node-trust": "Waiting for node approval", "approved-connecting": "Approved; connecting", complete: "Node connected", rejected: "The node rejected the connection", expired: "Connection request expired", failed: "Connection failed",

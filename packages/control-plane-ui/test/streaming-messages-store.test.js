@@ -651,3 +651,144 @@ test("component-style subscription disposal does not own the module store lifecy
   assert.equal(notifications, 0);
   store.clear();
 });
+
+test("a late full-text delta cannot duplicate a terminal authoritative response", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const complete = "已修复并部署：\n\n- 原因\n- 修复\n\n刷新页面查看。";
+  const entry = store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: complete,
+    generatedAt: "2026-07-18T00:00:05.000Z",
+  });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "completed",
+    revision: 3,
+    lastMessage: complete,
+    lastMessageItemId: "item_1",
+    updatedAt: "2026-07-18T00:00:06.000Z",
+    completedAt: "2026-07-18T00:00:06.000Z",
+  });
+  store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: complete,
+    generatedAt: "2026-07-18T00:00:07.000Z",
+  });
+
+  assert.equal(entry.value.receivedText, complete);
+  assert.equal(entry.value.status, "complete");
+});
+
+test("a full-text delta after a running authoritative body replaces instead of appending", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const entry = store.settleAuthoritative({
+    identity: id,
+    streamId: "stream_1",
+    text: "abcdef",
+    status: "streaming",
+    generatedAt: "2026-07-18T00:00:02.000Z",
+  });
+
+  store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: "abcdef",
+    generatedAt: "2026-07-18T00:00:03.000Z",
+  });
+  assert.equal(entry.value.receivedText, "abcdef");
+
+  store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: "abcdefgh",
+    generatedAt: "2026-07-18T00:00:04.000Z",
+  });
+  assert.equal(entry.value.receivedText, "abcdefgh");
+});
+
+test("a terminal Turn ignores late deltas for older assistant items", () => {
+  const store = createStreamingMessagesStore();
+  const progress = identity({ itemId: "item_progress" });
+  const final = identity({ itemId: "item_final" });
+  const progressEntry = store.appendDelta({ identity: progress, streamId: "stream_1", delta: "progress" });
+  const finalEntry = store.appendDelta({ identity: final, streamId: "stream_1", delta: "final" });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "completed",
+    revision: 4,
+    lastMessage: "final answer",
+    lastMessageItemId: "item_final",
+    updatedAt: "2026-07-18T00:00:04.000Z",
+    completedAt: "2026-07-18T00:00:04.000Z",
+  });
+  store.appendDelta({
+    identity: progress,
+    streamId: "stream_1",
+    delta: "progress again",
+    generatedAt: "2026-07-18T00:00:05.000Z",
+  });
+
+  assert.equal(store.activeMessage("instance_1", "session_1").value, finalEntry);
+  assert.equal(finalEntry.value.receivedText, "final answer");
+  assert.equal(progressEntry.value.receivedText, "progress");
+});
+
+test("an older terminal Turn body cannot replace the newer terminal item", () => {
+  const store = createStreamingMessagesStore();
+  const final = identity({ itemId: "item_final" });
+  const finalEntry = store.appendDelta({ identity: final, streamId: "stream_1", delta: "final answer" });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "completed",
+    revision: 4,
+    lastMessage: "final answer",
+    lastMessageItemId: "item_final",
+    updatedAt: "2026-07-18T00:00:04.000Z",
+    completedAt: "2026-07-18T00:00:04.000Z",
+  });
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "completed",
+    revision: 2,
+    lastMessage: "previous answer",
+    lastMessageItemId: "item_previous",
+    updatedAt: "2026-07-18T00:00:02.000Z",
+    completedAt: "2026-07-18T00:00:02.000Z",
+  });
+
+  assert.equal(store.activeMessage("instance_1", "session_1").value, finalEntry);
+  assert.equal(finalEntry.value.receivedText, "final answer");
+});
+
+test("a late repeated delta after a compact terminal patch is ignored", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const entry = store.appendDelta({ identity: id, streamId: "stream_1", delta: "complete response" });
+
+  store.applyPatch({
+    meta: meta({ revision: 2, generatedAt: "2026-07-18T00:00:02.000Z" }),
+    upserted: [session({
+      status: "idle",
+      turns: undefined,
+      lastMessage: "complete response",
+      lastMessageItemId: "item_1",
+    })],
+    removed: [],
+  });
+  store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: "complete response",
+    generatedAt: "2026-07-18T00:00:03.000Z",
+  });
+
+  assert.equal(entry.value.receivedText, "complete response");
+  assert.equal(entry.value.status, "complete");
+});

@@ -660,6 +660,91 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(active).toEqual(expect.objectContaining({ itemId: 'item-new', receivedText: 'new' }));
   });
 
+  test('a terminal turn does not duplicate full-text deltas or reactivate older items', () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-terminal-delta', 'session-terminal-delta');
+    store.replaceSnapshot('cp-terminal-delta', initial);
+    const current = initial.instances[0].aiSessions.sessions[0];
+    const generatedAt = '2026-08-05T00:10:00.000Z';
+    const append = (itemId: string, delta: string, at: string) => store.appendMessageDelta('cp-terminal-delta', {
+      instanceId: 'instance-terminal-delta',
+      sessionId: 'session-terminal-delta',
+      providerSessionId: 'session-terminal-delta',
+      turnId: 'turn-1',
+      itemId,
+      delta,
+      generatedAt: at,
+    });
+
+    append('item-final', 'partial', '2026-08-05T00:09:59.000Z');
+    const result = store.applyStreamEvent('cp-terminal-delta', {
+      type: AiSessionEventType.Patch,
+      payload: {
+        meta: {
+          streamId: initial.instances[0].streamId,
+          instanceId: 'instance-terminal-delta',
+          revision: 2,
+          previousRevision: 1,
+          traceId: 'trace-terminal-delta',
+          generatedAt,
+          reason: 'provider-event',
+        },
+        upserted: [{
+          ...current,
+          status: 'idle',
+          updatedAt: generatedAt,
+          lastMessage: 'final answer',
+          lastMessageItemId: 'item-final',
+        }],
+        removed: [],
+      },
+    });
+    expect(result.kind).toBe('applied');
+
+    append('item-final', 'final answer', '2026-08-05T00:10:01.000Z');
+    append('item-final', 'final answer', '2026-08-05T00:10:02.000Z');
+    append('item-old', 'old answer', '2026-08-05T00:10:03.000Z');
+
+    const messages = Object.values(store.profile('cp-terminal-delta').messages);
+    expect(messages.filter((message) => message.itemId === 'item-final')).toHaveLength(1);
+    expect(messages.some((message) => message.itemId === 'item-old')).toBe(false);
+    expect(messages[0]?.receivedText).toBe('final answer');
+
+    store.applyStreamEvent('cp-terminal-delta', {
+      type: AiSessionEventType.Patch,
+      payload: {
+        meta: {
+          streamId: initial.instances[0].streamId,
+          instanceId: 'instance-terminal-delta',
+          revision: 3,
+          previousRevision: 2,
+          traceId: 'trace-next-turn',
+          generatedAt: '2026-08-05T00:11:00.000Z',
+          reason: 'provider-event',
+        },
+        upserted: [{
+          ...current,
+          status: 'running',
+          activeTurnId: 'turn-2',
+          updatedAt: '2026-08-05T00:11:00.000Z',
+        }],
+        removed: [],
+      },
+    });
+    store.appendMessageDelta('cp-terminal-delta', {
+      instanceId: 'instance-terminal-delta',
+      sessionId: 'session-terminal-delta',
+      providerSessionId: 'session-terminal-delta',
+      turnId: 'turn-2',
+      itemId: 'item-2',
+      delta: 'next turn',
+      generatedAt: '2026-08-05T00:11:01.000Z',
+    });
+    expect(store.profile('cp-terminal-delta').messages[
+      JSON.stringify(['instance-terminal-delta', 'session-terminal-delta', 'turn-2', 'item-2'])
+    ]?.receivedText).toBe('next turn');
+  });
+
   test('reconnects snapshot-first after an event socket closes while the app remains active', async () => {
     jest.useFakeTimers();
     try {

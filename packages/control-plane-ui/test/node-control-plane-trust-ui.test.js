@@ -253,6 +253,14 @@ test("transport diagnostics do not replace a signed pending approval outcome", (
   resetCloudNodeOnboarding();
 });
 
+test("reusing an active attempt keeps the latest operator-provided name", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("new", "Old name");
+  const reused = beginCloudNodeOnboarding("new", "New name");
+  assert.equal(reused.displayName, "New name");
+  resetCloudNodeOnboarding();
+});
+
 test("dialog close and back only hide the view while explicit cancel owns join cancellation", () => {
   const dialog = read("settings/CloudNodeOnboardingDialog.vue");
   assert.match(dialog, /function goBack\(\) \{\s*step\.value = "source";\s*\}/);
@@ -272,12 +280,15 @@ test("node trust UI exposes approval, reapply and connection retry entry points 
   const detail = read("settings/CloudNodeTrustDetailPanel.vue");
   const inbox = read("action-inbox/ActionInbox.vue");
   assert.match(status, /task-handoff-node-agent trust approve/);
-  assert.match(status, /settings\.nodeRelay\.nodeTrust\.connectedDescription/);
+  assert.match(status, /settings\.nodeRelay\.nodeTrust\.controlPlaneMethod\.step3/);
+  assert.match(status, /settings\.nodeRelay\.nodeTrust\.cliMethod\.description/);
   assert.match(status, /font-size: 12px/);
-  assert.match(status, /class="cloud-node-trust-cli"[\s\S]*?<pre><code>\{\{ approveCommand \}\}<\/code><\/pre>[\s\S]*?<Collapsible/);
+  assert.match(status, /<Tabs v-model="method">[\s\S]*?<TabsTrigger value="cli">/);
+  assert.match(status, /class="cloud-node-trust-command"[\s\S]*?<pre tabindex="0"><code>\{\{ approveCommand \}\}<\/code><\/pre>[\s\S]*?<Collapsible/);
   assert.match(status, /showControlPlaneToast\(t\("settings\.nodeRelay\.nodeTrust\.copyFailed"\), "error"\)/);
   assert.doesNotMatch(status, /copyError/);
   assert.match(status, /\.cloud-node-trust-cli-head \{[^}]*align-items: center;/);
+  assert.match(status, /\.cloud-node-trust-command :deep\(pre\) \{[^}]*white-space: pre;/);
   assert.match(dialog, /CloudNodeTrustStatus/);
   assert.match(inbox, /decide-node-control-plane/);
   assert.doesNotMatch(dialog, /api\/device-trust|deviceTrustStore/);

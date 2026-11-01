@@ -3,14 +3,17 @@ import type {
   ControlPlaneAiSessions,
 } from '@task-handoff/control-plane-client';
 import {
+  AiSessionTerminalTurnAuthorityStore,
   aiSessionAuthoritativeMessageStatus,
   aiSessionMessageKey,
   appendAiSessionMessageDelta,
   applyControlPlaneAiSessionStreamEvent,
   AiSessionConversationCache,
   aiSessionTurnsCacheRevision,
+  reconcileAiSessionMessageDelta,
 } from '@task-handoff/control-plane-client';
 import {
+  AiSessionEventType,
   mergeAiSessionTimelineItems,
   type AiSessionDetail,
   type AiSessionMessageDeltaEvent,
@@ -60,6 +63,7 @@ export type MobileStreamingMessage = {
   turnId: string;
   itemId: string;
   receivedText: string;
+  authoritativeText?: string;
   status: 'streaming' | 'complete' | 'waiting' | 'failed' | 'interrupted';
   updatedAt: string;
   receivedAt?: string;
@@ -87,6 +91,7 @@ type StoredTurnTimelineState = MobileTurnTimelineState & {
 };
 
 export const MOBILE_MESSAGE_TURN_LIMIT = 50;
+const MOBILE_TERMINAL_TURN_WILDCARD = '__terminal__';
 export const MOBILE_TIMELINE_TURN_LIMIT = 500;
 export const MOBILE_TIMELINE_ITEMS_PER_TURN = 500;
 
@@ -111,6 +116,7 @@ export class MobileAiSessionStore {
   private readonly sessionViewCache = new Map<string, MobileAiSessionViewState>();
   private readonly sessionViewKeysByControlPlane = new Map<string, Set<string>>();
   private readonly messageTurnsByControlPlane = new Map<string, Set<string>>();
+  private readonly terminalTurnAuthorities = new AiSessionTerminalTurnAuthorityStore();
   private readonly timelineStates = new Map<string, StoredTurnTimelineState>();
   private readonly timelineSessionRevisions = new Map<string, string>();
   private readonly timelineSessionOrder = new Map<string, string[]>();
@@ -221,6 +227,16 @@ export class MobileAiSessionStore {
   setSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, revision: string, turn: AiSessionTurn, authoritativeRevision?: string) {
     const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
     if (!this.conversations.setTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, revision, turn, authoritativeRevision)) return false;
+    const terminal = turn.status === 'completed' || turn.status === 'failed';
+    if (terminal && turn.lastMessage !== undefined) {
+      this.terminalTurnAuthorities.record(
+        mobileTerminalAuthorityKey(controlPlaneId, instanceId, sessionId),
+        [turn.id, turn.providerTurnId],
+        turn.lastMessageItemId,
+        turn.revision,
+        turn.completedAt ?? turn.updatedAt,
+      );
+    }
     this.sessionViewCache.delete(key);
     for (const listener of this.sessionListeners.get(key) ?? []) listener();
     return true;
@@ -234,9 +250,18 @@ export class MobileAiSessionStore {
     return true;
   }
 
-  replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions, affectedSessionKeys?: ReadonlySet<string>) {
+  replaceSnapshot(
+    controlPlaneId: string,
+    snapshot: ControlPlaneAiSessions,
+    affectedSessionKeys?: ReadonlySet<string>,
+    recordAuthorities = true,
+  ) {
     const current = this.profile(controlPlaneId);
     const authoritativeSnapshot = preserveNewerAiSessionEntries(current.snapshot, snapshot);
+    if (recordAuthorities) {
+      this.terminalTurnAuthorities.deleteWhere((key) => terminalAuthorityKeyOwner(key) === controlPlaneId);
+      this.recordSnapshotTerminalAuthorities(controlPlaneId, authoritativeSnapshot);
+    }
     const next = {
       ...current,
       controlPlaneId,
@@ -315,7 +340,8 @@ export class MobileAiSessionStore {
     this.replaceSnapshot(controlPlaneId, {
       updatedAt: result.projection.lastEventAt,
       instances: nextInstances,
-    }, affectedSessionKeys);
+    }, affectedSessionKeys, false);
+    this.applyTerminalAuthoritiesFromEvent(controlPlaneId, entry, replacement, event);
     return result;
   }
 
@@ -330,13 +356,44 @@ export class MobileAiSessionStore {
     const key = aiSessionMessageKey(identity);
     const existingMessage = current.messages[key];
     if (options.replay && existingMessage?.receivedAt && event.generatedAt <= existingMessage.receivedAt) return existingMessage;
+    const authority = this.terminalTurnAuthorities.get(
+      mobileTerminalAuthorityKey(controlPlaneId, event.instanceId, event.sessionId),
+      event.turnId,
+    ) ?? this.terminalTurnAuthorities.get(
+      mobileTerminalAuthorityKey(controlPlaneId, event.instanceId, event.sessionId),
+      MOBILE_TERMINAL_TURN_WILDCARD,
+    );
+    if (authority && (!authority.itemId || authority.itemId !== event.itemId)) return existingMessage;
     const existing = existingMessage ?? {
       ...identity,
       receivedText: '',
       status: 'streaming' as const,
       updatedAt: event.generatedAt,
     };
-    const updated = appendAiSessionMessageDelta(existing, event.delta, event.generatedAt);
+    let updated = existing;
+    if (authority) {
+      if (!existing.receivedText) {
+        updated = { ...existing, receivedText: event.delta, updatedAt: event.generatedAt };
+      } else if (event.delta === existing.receivedText || event.delta === existing.authoritativeText) {
+        updated = existing;
+      } else if (event.delta.length > existing.receivedText.length && event.delta.startsWith(existing.receivedText)) {
+        updated = { ...existing, receivedText: event.delta, updatedAt: event.generatedAt };
+      }
+    } else {
+      const action = reconcileAiSessionMessageDelta(existing, event.delta);
+      if (action === 'replace') {
+        updated = {
+          ...existing,
+          receivedText: event.delta,
+          status: 'streaming',
+          receivedAt: event.generatedAt,
+          settledAt: undefined,
+          updatedAt: event.generatedAt,
+        };
+      } else if (action === 'append') {
+        updated = appendAiSessionMessageDelta(existing, event.delta, event.generatedAt);
+      }
+    }
     const candidateMessages = {
       ...current.messages,
       [key]: { ...updated, receivedText: updated.receivedText.slice(0, 200_000) },
@@ -679,6 +736,7 @@ export class MobileAiSessionStore {
       this.conversations.clearInstance(mobileConversationInstanceKey(controlPlaneId, instance.instanceId));
     }
     this.messageTurnsByControlPlane.delete(controlPlaneId);
+    this.terminalTurnAuthorities.deleteWhere((key) => terminalAuthorityKeyOwner(key) === controlPlaneId);
     this.timelineRecoveryRevisions.delete(controlPlaneId);
     for (const [key, state] of this.timelineStates) if (state.controlPlaneId === controlPlaneId) this.timelineStates.delete(key);
     const timelinePrefix = `${JSON.stringify([controlPlaneId]).slice(0, -1)},`;
@@ -748,6 +806,79 @@ export class MobileAiSessionStore {
   private emitSessions(keys: ReadonlySet<string>) {
     for (const key of keys) {
       for (const listener of this.sessionListeners.get(key) ?? []) listener();
+    }
+  }
+
+  private recordSnapshotTerminalAuthorities(controlPlaneId: string, snapshot: ControlPlaneAiSessions) {
+    for (const instance of snapshot.instances) {
+      for (const session of instance.aiSessions.sessions) {
+        this.recordTerminalAuthorityForSummary(controlPlaneId, instance.instanceId, session);
+      }
+    }
+  }
+
+  private recordTerminalAuthorityForSummary(
+    controlPlaneId: string,
+    instanceId: string,
+    session: ControlPlaneAiSessionSummary,
+  ) {
+    const sessionKey = mobileTerminalAuthorityKey(controlPlaneId, instanceId, session.id);
+    if (session.status !== 'idle' && session.status !== 'failed') {
+      // A new non-terminal projection ends the previous compact terminal scope.
+      this.terminalTurnAuthorities.deleteTurn(sessionKey, MOBILE_TERMINAL_TURN_WILDCARD);
+      return;
+    }
+    const turn = session.turns?.find((candidate) => (
+      candidate.lastMessageItemId && candidate.lastMessageItemId === session.lastMessageItemId
+    )) ?? session.turns?.find((candidate) => candidate.id === session.activeTurnId) ?? session.turns?.at(-1);
+    const itemId = turn?.lastMessageItemId ?? session.lastMessageItemId;
+    if (!itemId) return;
+    this.terminalTurnAuthorities.record(
+      sessionKey,
+      turn ? [turn.id, turn.providerTurnId] : [MOBILE_TERMINAL_TURN_WILDCARD],
+      itemId,
+      turn?.revision,
+      turn?.completedAt ?? turn?.updatedAt ?? session.updatedAt,
+    );
+  }
+
+  private applyTerminalAuthoritiesFromEvent(
+    controlPlaneId: string,
+    previousEntry: ControlPlaneAiSessions['instances'][number] | undefined,
+    replacement: ControlPlaneAiSessions['instances'][number] | undefined,
+    event: AiSessionStreamEvent,
+  ) {
+    const instanceId = event.payload.meta.instanceId;
+    const belongsToInstance = (key: string) => (
+      terminalAuthorityKeyOwner(key) === controlPlaneId
+      && terminalAuthorityKeyInstance(key) === instanceId
+    );
+    if (previousEntry?.streamId !== replacement?.streamId) {
+      this.terminalTurnAuthorities.deleteWhere(belongsToInstance);
+    }
+    if (!replacement) return;
+    if (event.type === AiSessionEventType.Snapshot) {
+      const sessions = event.payload.snapshot.sessions;
+      const present = new Set(sessions.map((session) => session.id));
+      this.terminalTurnAuthorities.deleteWhere((key) => (
+        belongsToInstance(key) && !present.has(terminalAuthorityKeySession(key) || '')
+      ));
+      for (const session of sessions) this.recordTerminalAuthorityForSummary(controlPlaneId, instanceId, session);
+      return;
+    }
+    if (event.type === AiSessionEventType.Patch) {
+      for (const session of event.payload.upserted) {
+        this.recordTerminalAuthorityForSummary(controlPlaneId, instanceId, session);
+      }
+      for (const sessionId of event.payload.removed) {
+        this.terminalTurnAuthorities.delete(mobileTerminalAuthorityKey(controlPlaneId, instanceId, sessionId));
+      }
+      return;
+    }
+    if (event.type === AiSessionEventType.Removed) {
+      for (const sessionId of event.payload.sessionIds) {
+        this.terminalTurnAuthorities.delete(mobileTerminalAuthorityKey(controlPlaneId, instanceId, sessionId));
+      }
     }
   }
 
@@ -831,6 +962,7 @@ function reconcileStreamingMessages(
     next[key] = {
       ...message,
       receivedText: authoritativeText ?? message.receivedText,
+      authoritativeText: authoritativeText ?? message.authoritativeText,
       status,
       settledAt: undefined,
       updatedAt: snapshot.updatedAt,
@@ -850,6 +982,7 @@ function reconcileStreamingMessages(
       next[key] = {
         ...identity,
         receivedText: text,
+        authoritativeText: text,
         status,
         receivedAt: snapshot.updatedAt,
         settledAt: status === 'streaming' ? undefined : snapshot.updatedAt,
@@ -884,6 +1017,31 @@ function mobileMessageTurnKey(message: Pick<MobileStreamingMessage, 'instanceId'
 
 function mobileSessionSubscriptionKey(controlPlaneId: string, instanceId: string, sessionId: string) {
   return JSON.stringify([controlPlaneId, instanceId, sessionId]);
+}
+
+function mobileTerminalAuthorityKey(controlPlaneId: string, instanceId: string, sessionId: string) {
+  return JSON.stringify([controlPlaneId, instanceId, sessionId]);
+}
+
+function terminalAuthorityKeyParts(key: string): string[] {
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function terminalAuthorityKeyOwner(key: string) {
+  return terminalAuthorityKeyParts(key)[0];
+}
+
+function terminalAuthorityKeyInstance(key: string) {
+  return terminalAuthorityKeyParts(key)[1];
+}
+
+function terminalAuthorityKeySession(key: string) {
+  return terminalAuthorityKeyParts(key)[2];
 }
 
 function mobileConversationInstanceKey(controlPlaneId: string, instanceId: string) {

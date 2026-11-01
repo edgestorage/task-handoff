@@ -10,7 +10,7 @@
     </header>
 
     <template v-if="phase === 'waiting-node-trust' && trust">
-      <p>{{ t("settings.nodeRelay.nodeTrust.waitingDescription") }}</p>
+      <p>{{ t("settings.nodeRelay.nodeTrust.chooseMethodHint") }}</p>
       <div class="cloud-node-trust-verification">
         <div class="cloud-node-trust-code-row">
           <div>
@@ -23,16 +23,36 @@
         </div>
         <p>{{ t("settings.nodeRelay.nodeTrust.expiresAt", { time: formatTrustDate(trust.expiresAt) }) }}</p>
       </div>
-      <div class="cloud-node-trust-cli">
+      <Tabs v-model="method">
+        <TabsList class="cloud-node-trust-tabs" :aria-label="t('settings.nodeRelay.nodeTrust.methodGroupLabel')">
+          <TabsTrigger value="control-plane">
+            <MonitorSmartphone :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.controlPlaneMethod.action") }}</span>
+          </TabsTrigger>
+          <TabsTrigger value="cli">
+            <Terminal :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.cliMethod.action") }}</span>
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <div v-if="method === 'control-plane'" class="cloud-node-trust-pane">
+        <p>{{ t("settings.nodeRelay.nodeTrust.controlPlaneMethod.description") }}</p>
+        <ol class="cloud-node-trust-steps">
+          <li>{{ t("settings.nodeRelay.nodeTrust.controlPlaneMethod.step1") }}</li>
+          <li>{{ t("settings.nodeRelay.nodeTrust.controlPlaneMethod.step2") }}</li>
+          <li>{{ t("settings.nodeRelay.nodeTrust.controlPlaneMethod.step3") }}</li>
+        </ol>
+      </div>
+      <div v-else class="cloud-node-trust-pane">
+        <p>{{ t("settings.nodeRelay.nodeTrust.cliMethod.description") }}</p>
         <div class="cloud-node-trust-cli-head">
-          <p>{{ t("settings.nodeRelay.nodeTrust.cliDescription") }}</p>
+          <span class="cloud-node-trust-cli-label">{{ t("settings.nodeRelay.nodeTrust.cliMethod.commandLabel") }}</span>
           <Button type="button" size="sm" variant="outline" @click="copy(approveCommand, 'command')">
             <Copy :size="14" aria-hidden="true" /><span aria-live="polite">{{ copied === "command" ? t("settings.nodeRelay.nodeTrust.copyDone") : t("settings.nodeRelay.nodeTrust.copyCommand") }}</span>
           </Button>
         </div>
-        <pre><code>{{ approveCommand }}</code></pre>
+        <ScrollArea class="cloud-node-trust-command">
+          <pre tabindex="0"><code>{{ approveCommand }}</code></pre>
+        </ScrollArea>
       </div>
-      <p>{{ t("settings.nodeRelay.nodeTrust.connectedDescription") }}</p>
       <p v-if="trust.reason !== 'first-seen'" class="cloud-node-trust-diagnostic">{{ reasonLabel }}</p>
       <p v-if="error" class="cloud-node-trust-diagnostic">{{ error }}</p>
     </template>
@@ -82,9 +102,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, Copy, LoaderCircle, RefreshCw, ShieldCheck } from "@lucide/vue";
+import { ChevronDown, Copy, LoaderCircle, MonitorSmartphone, RefreshCw, ShieldCheck, Terminal } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
+import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { formatDateTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import type { CloudNodeRelayTrust } from "../../../api/types";
@@ -103,8 +125,10 @@ const props = defineProps<{
 const emit = defineEmits<{ cancel: []; retry: []; reapply: [] }>();
 const { t, locale } = useI18n();
 type CopyTarget = "fingerprint" | "code" | "command";
+type ApprovalMethod = "control-plane" | "cli";
 const copied = ref<CopyTarget>();
 const detailsOpen = ref(false);
+const method = ref<ApprovalMethod>("control-plane");
 const formatTrustDate = (value?: string) => value ? formatDateTime(new Date(value), locale.value as SupportedLocale) : "—";
 
 const visible = computed(() => Boolean(props.trust) || ["submitting", "waiting-node-trust", "approved-connecting", "rejected", "expired", "failed"].includes(props.phase || ""));
@@ -127,9 +151,14 @@ const approveCommand = computed(() => props.trust?.requestId
   : "task-handoff-node-agent trust list");
 const recoveryCommand = computed(() => props.trust?.requestId ? "task-handoff-node-agent trust list --json" : undefined);
 
-watch(() => [props.trust?.requestId, props.trust?.controlPlaneFingerprint, props.nodeHandle, props.phase], () => {
+// Watch a primitive key instead of an array. Every authoritative snapshot
+// replaces the trust object, so an array getter would fire on every refresh
+// and reset the selected approval method while the request stays the same.
+const requestKey = computed(() => [props.trust?.requestId, props.trust?.controlPlaneFingerprint, props.nodeHandle, props.phase].join("\u0000"));
+watch(requestKey, () => {
   copied.value = undefined;
   detailsOpen.value = false;
+  method.value = "control-plane";
 });
 
 async function copy(value: string, target: CopyTarget) {
@@ -165,9 +194,21 @@ async function copy(value: string, target: CopyTarget) {
 .cloud-node-trust-code-row > div { display: grid; gap: 5px; min-width: 0; }
 .cloud-node-trust-code-row span, .cloud-node-trust-identity-item > span { color: var(--text-muted); font-size: 12px; }
 .cloud-node-trust-comparison { color: var(--text-strong); font-size: 16px; font-weight: 500; line-height: 1.5; letter-spacing: 0.04em; overflow-wrap: anywhere; }
-.cloud-node-trust-cli { display: grid; gap: 8px; min-width: 0; }
+.cloud-node-trust-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; height: 32px; min-height: 32px; gap: 1px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); }
+.cloud-node-trust-tabs :deep(button) { display: inline-flex; align-items: center; justify-content: center; height: 26px; min-height: 26px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.cloud-node-trust-tabs :deep(button > span) { display: inline-flex; align-items: center; gap: 6px; }
+.cloud-node-trust-tabs :deep(svg) { flex: 0 0 auto; }
+.cloud-node-trust-tabs :deep(button:hover),
+.cloud-node-trust-tabs :deep(button:focus-visible),
+.cloud-node-trust-tabs :deep(button[data-state="active"]) { background: var(--surface-active); color: var(--text-strong); box-shadow: none; outline: none; }
+.cloud-node-trust-pane { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-inset); }
+.cloud-node-trust-steps { display: grid; gap: 5px; margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.cloud-node-trust-steps li::marker { color: var(--text-subtle); }
 .cloud-node-trust-cli-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .cloud-node-trust-cli-head :deep(svg) { flex: 0 0 auto; }
+.cloud-node-trust-cli-label { color: var(--text-muted); font-size: 12px; }
+.cloud-node-trust-command { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-hover); }
+.cloud-node-trust-command :deep(pre) { width: max-content; min-width: 100%; padding-bottom: 18px; background: transparent; white-space: pre; }
 .cloud-node-trust-disclosure, .cloud-node-trust-details { min-width: 0; }
 .cloud-node-trust-tools, .cloud-node-trust-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .cloud-node-trust-tools :deep(svg) { flex: 0 0 auto; }

@@ -75,7 +75,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly projectionBySession = new Map<string, OpenCodeProjection>();
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
-  private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; delta: string }>>();
+  private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; chunks: string[]; size: number }>>();
   private readonly retryWarningsBySession = new Map<string, { turnId: string; message: string }>();
   private readonly armedTitleSessions = new Set<string>();
   private readonly attemptedTitleSessions = new Set<string>();
@@ -513,13 +513,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   private async onGlobalEvent(event: OpenCodeGlobalEvent) {
     this.reconnectAttempt = 0;
-    if (event.payload.type === "server.connected" || event.payload.type === "sync") {
+    if (event.payload.type === "server.connected") {
       // The SSE stream has no replay cursor. A session created while this
       // connection was down would not be in directoryBySession, so reconnect
       // must perform discovery rather than only refreshing known sessions.
       await this.refresh({ registry: this.registry, appSessions: [] });
       return;
     }
+    // OpenCode emits a `sync` envelope for every durable event. It is a
+    // replication hint, not a reconnect signal; the matching provider event
+    // follows on the same stream. Treating every sync as a reconnect queued a
+    // full discovery behind the SSE reader, delaying later part events by the
+    // duration of that scan.
+    if (event.payload.type === "sync") return;
     const properties = event.payload.properties;
     const info = asRecord(properties.info);
     const part = asRecord(properties.part);
@@ -616,7 +622,18 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
           const pending = this.pendingPartDeltas.get(sessionID) || new Map();
           const previous = pending.get(rawDelta.partID);
           if (!previous || previous.messageID === rawDelta.messageID) {
-            pending.set(rawDelta.partID, { ...rawDelta, delta: `${previous?.delta || ""}${rawDelta.delta}`.slice(0, 1_000_000) });
+            const size = previous?.size ?? 0;
+            const remaining = Math.max(0, 1_000_000 - size);
+            const chunk = remaining > 0 ? rawDelta.delta.slice(0, remaining) : "";
+            const chunks = previous?.chunks ? [...previous.chunks] : [];
+            if (chunk) chunks.push(chunk);
+            pending.set(rawDelta.partID, {
+              partID: rawDelta.partID,
+              messageID: rawDelta.messageID,
+              field: rawDelta.field,
+              chunks,
+              size: size + chunk.length,
+            });
             while (pending.size > 500) pending.delete(pending.keys().next().value as string);
             this.pendingPartDeltas.set(sessionID, pending);
           }
@@ -631,12 +648,20 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
         const partID = stringValue(part.id);
         const partType = stringValue(part.type);
         if (partID && partType) projection?.partById.set(partID, { ...message, messageId: messageID, type: partType });
+        const pending = partID ? this.pendingPartDeltas.get(sessionID)?.get(partID) : undefined;
+        if (pending) this.pendingPartDeltas.get(sessionID)?.delete(partID);
+        // Assistant text has a separate streaming channel from its timeline
+        // item. Replay buffered chunks before publishing the completed text so
+        // the UI sees the same delta-before-snapshot order as the Codex
+        // app-server. Reasoning deltas must still follow their timeline item so
+        // the timeline store can merge them into the activity output.
+        if (pending && partType === "text" && !stringValue(part.text)) {
+          for (const chunk of pending.chunks) this.publishPartDelta(sessionID, { ...pending, delta: chunk });
+        }
         const item = projectOpenCodePart(part as never, message.turnId);
         if (item) this.publishTimelineItem(projectedSession.id, sessionID, item);
-        const pending = partID ? this.pendingPartDeltas.get(sessionID)?.get(partID) : undefined;
-        if (pending) {
-          this.pendingPartDeltas.get(sessionID)?.delete(partID);
-          if (!stringValue(part.text)) this.publishPartDelta(sessionID, pending);
+        if (pending && partType !== "text" && !stringValue(part.text)) {
+          for (const chunk of pending.chunks) this.publishPartDelta(sessionID, { ...pending, delta: chunk });
         }
       }
     }

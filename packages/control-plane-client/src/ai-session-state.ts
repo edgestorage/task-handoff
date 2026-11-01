@@ -56,6 +56,100 @@ export function appendAiSessionMessageDelta<T extends {
   };
 }
 
+export type AiSessionTerminalTurnAuthority = {
+  itemId?: string;
+  revision?: number;
+  updatedAt?: string;
+};
+
+export type AiSessionMessageDeltaAction = "append" | "replace" | "ignore";
+
+/**
+ * Reconcile a text delta with the last authoritative Turn body. OpenCode can
+ * emit a whole assistant part as one delta after the body already exposed that
+ * text, so a repeated whole value is a replay and a longer value that starts
+ * with the current text is a snapshot extension.
+ */
+export function reconcileAiSessionMessageDelta(
+  current: { receivedText: string; authoritativeText?: string },
+  delta: string,
+): AiSessionMessageDeltaAction {
+  if (current.authoritativeText === undefined) return "append";
+  if (delta === current.receivedText || delta === current.authoritativeText) return "ignore";
+  if (current.receivedText && delta.length > current.receivedText.length && delta.startsWith(current.receivedText)) {
+    return "replace";
+  }
+  return "append";
+}
+
+export function aiSessionTerminalAuthorityIsOlder(
+  authority: AiSessionTerminalTurnAuthority,
+  revision: number | undefined,
+  updatedAt: string | undefined,
+): boolean {
+  if (revision !== undefined && authority.revision !== undefined && revision !== authority.revision) {
+    return revision < authority.revision;
+  }
+  if (updatedAt && authority.updatedAt && updatedAt !== authority.updatedAt) {
+    return updatedAt < authority.updatedAt;
+  }
+  return false;
+}
+
+/** Per-session terminal Turn authority shared by the Web and mobile stores. */
+export class AiSessionTerminalTurnAuthorityStore {
+  private readonly authorities = new Map<string, Map<string, AiSessionTerminalTurnAuthority>>();
+
+  get(sessionKey: string, turnId: string) {
+    return this.authorities.get(sessionKey)?.get(turnId);
+  }
+
+  record(
+    sessionKey: string,
+    identities: readonly (string | undefined)[],
+    itemId: string | undefined,
+    revision: number | undefined,
+    updatedAt: string | undefined,
+  ) {
+    const ids = [...new Set(identities.filter((value): value is string => Boolean(value)))];
+    if (!ids.length) return;
+    const byTurn = this.authorities.get(sessionKey) || new Map<string, AiSessionTerminalTurnAuthority>();
+    const previous = ids.map((id) => byTurn.get(id)).find(Boolean);
+    // A compact summary patch does not carry a Turn revision. Once a Turn body
+    // has established the final item, keep that stronger identity instead of
+    // letting a late summary downgrade it to an older assistant item.
+    const keepStrongerItem = previous?.revision !== undefined && revision === undefined;
+    const next: AiSessionTerminalTurnAuthority = {
+      itemId: keepStrongerItem ? previous.itemId : itemId ?? previous?.itemId,
+      revision: revision ?? previous?.revision,
+      updatedAt: updatedAt ?? previous?.updatedAt,
+    };
+    for (const id of ids) byTurn.set(id, next);
+    this.authorities.set(sessionKey, byTurn);
+  }
+
+  delete(sessionKey: string) {
+    this.authorities.delete(sessionKey);
+  }
+
+  deleteTurn(sessionKey: string, turnId: string) {
+    const byTurn = this.authorities.get(sessionKey);
+    if (!byTurn) return;
+    byTurn.delete(turnId);
+    if (!byTurn.size) this.authorities.delete(sessionKey);
+  }
+
+  deleteWhere(predicate: (sessionKey: string) => boolean) {
+    for (const key of this.authorities.keys()) {
+      if (predicate(key)) this.authorities.delete(key);
+    }
+  }
+
+  clear() {
+    this.authorities.clear();
+  }
+}
+
 export function aiSessionAuthoritativeMessageStatus(session: AiSessionSummary, turnStatus?: string): AiSessionStreamingMessageStatus {
   if (session.status === "failed" || turnStatus === "failed") return "failed";
   if (session.status === "waiting" || turnStatus === "waiting") return "waiting";

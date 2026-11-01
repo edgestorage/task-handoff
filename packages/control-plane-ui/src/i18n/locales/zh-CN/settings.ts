@@ -133,13 +133,24 @@ export const settings = {
     nodeTrust: {
       status: { pending: "等待审核", rejected: "已拒绝", expired: "已过期" },
       currentNode: "当前节点",
-      waitingDescription: "请在目标机器核对下方比较码，再批准连接。批准后将自动连接。",
+      chooseMethodHint: "选择任一方式批准，批准后节点会自动连接。",
+      methodGroupLabel: "批准方式",
       controlPlane: "Control Plane", reason: "等待原因", request: "请求 ID", expires: "请求过期时间",
       fingerprint: "公钥指纹", comparisonCode: "比较码", copyFingerprint: "复制指纹", copyCode: "复制比较码",
       expiresAt: "有效期至 {time}", nodeHandle: "节点标识", copyCommand: "复制批准命令", copyDone: "已复制", copyFailed: "复制失败，请手动复制。",
       showDetails: "连接详情", hideDetails: "收起详情",
-      cliTitle: "本机 CLI：", cliDescription: "在目标机器上核对指纹或短码后执行：",
-      connectedTitle: "已连接的管理 Control Plane：", connectedDescription: "也可在已管理此节点的控制面板中，进入审批中心批准。",
+      controlPlaneMethod: {
+        action: "控制面板批准",
+        description: "该节点已由某个 Control Plane 管理时使用。",
+        step1: "打开已管理此节点的控制面板。",
+        step2: "进入审批中心，找到「节点 Control Plane 信任」请求。",
+        step3: "核对短比较码后点「批准此 Control Plane」。",
+      },
+      cliMethod: {
+        action: "命令行批准",
+        description: "目标机器已安装 Node Agent 命令行时使用。",
+        commandLabel: "批准命令",
+      },
       retryConnection: "重试连接", reapply: "重新申请", reapplying: "重新申请中…", reapplyWaiting: "等待节点响应…", reapplySubmitted: "已提交重新申请，正在等待目标节点响应。", reapplyNoResponse: "已等待 30 秒仍未收到新的信任请求。请确认目标节点在线且版本支持重新申请，然后重试。", cancelAdd: "取消加入",
       phase: {
         submitting: "正在发起连接", "waiting-node-trust": "等待节点批准连接", "approved-connecting": "已批准，正在连接", complete: "节点已连接", rejected: "节点已拒绝连接", expired: "连接请求已过期", failed: "连接失败",

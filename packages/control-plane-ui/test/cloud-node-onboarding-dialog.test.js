@@ -31,10 +31,12 @@ test("cloud node approval is displayed as the step after connecting", () => {
   assert.equal((dialog.match(/<CloudNodeTrustStatus/g) || []).length, 1);
   assert.match(dialog, /<section v-else-if="step === 'approval' && attempt" class="cloud-node-onboarding-section">/);
   assert.match(dialog, /settings\.nodeRelay\.onboardingSteps\.approval/);
-  assert.match(dialog, /<template v-else-if="step === 'approval'">\n\s*<Button type="button" variant="outline" @click="goBackFromApproval">\n\s*<ArrowLeft :size="14" \/><span>\{\{ t\("common\.actions\.back"\) \}\}<\/span>\n\s*<\/Button>\n\s*<Button type="button" variant="outline" @click="closeDialog">\{\{ t\("common\.actions\.close"\) \}\}<\/Button>/);
+  assert.match(dialog, /<template v-else-if="step === 'approval'">\n\s*<Button v-if="attemptCanGoBack" type="button" variant="outline" @click="goBackFromApproval">\n\s*<ArrowLeft :size="14" \/><span>\{\{ t\("common\.actions\.back"\) \}\}<\/span>\n\s*<\/Button>\n\s*<Button type="button" variant="outline" @click="closeDialog">\{\{ t\("common\.actions\.close"\) \}\}<\/Button>/);
   assert.match(dialog, /\.cloud-node-onboarding-progress \{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
-  assert.match(dialog, /if \(step\.value === "connect" && attempt\.value\.phase !== "submitting"\) \{\n    step\.value = "approval";/);
-  assert.match(dialog, /attempt\.value\.phase === "complete" \? "complete" : provisioningNewNode \? "connect" : "approval"/);
+  assert.match(dialog, /if \(step\.value === "connect" && attempt\.value\.phase !== "submitting" && attemptHasJoinIdentity\.value\) \{\n    step\.value = "approval";/);
+  assert.match(dialog, /attempt\.value\.phase === "complete" \? "complete" : hasJoinIdentity \? "approval" : "connect"/);
+  assert.match(dialog, /const hasJoinIdentity = Boolean\(attempt\.value\.nodeHandle \|\| attempt\.value\.trust\)/);
+  assert.match(dialog, /const attemptCanGoBack = computed\(\(\) => Boolean\(attempt\.value\n\s*&& \["submitting", "waiting-node-trust"\]\.includes\(attempt\.value\.phase\)\)\)/);
 });
 
 test("cloud node onboarding derives query readiness before creating the query", () => {

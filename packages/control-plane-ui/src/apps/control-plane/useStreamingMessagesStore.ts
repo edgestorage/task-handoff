@@ -6,9 +6,12 @@ import type {
 } from "../../api/types";
 import type { AiSessionSummary, AiSessionsSnapshot, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import {
+  AiSessionTerminalTurnAuthorityStore,
   aiSessionAuthoritativeMessageStatus,
   aiSessionMessageKey,
+  aiSessionTerminalAuthorityIsOlder,
   appendAiSessionMessageDelta,
+  reconcileAiSessionMessageDelta,
   type AiSessionStreamingMessageStatus,
 } from "@task-handoff/control-plane-client";
 
@@ -25,6 +28,10 @@ export type StreamingMessageState = StreamingMessageIdentity & {
   key: string;
   streamId: string;
   receivedText: string;
+  // The last complete text supplied by an authoritative Turn body. Message
+  // deltas can arrive after that body (OpenCode emits a whole part at once),
+  // so they must be reconciled against this snapshot instead of appended.
+  authoritativeText?: string;
   status: StreamingMessageStatus;
   createdAt: string;
   receivedAt?: string;
@@ -90,6 +97,10 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
   const activeMessages = new Map<string, ShallowRef<StreamingMessageRef | undefined>>();
   const activeSessionKeysByInstance = new Map<string, Set<string>>();
   const activeStreams = new Map<string, string>();
+  // A terminal Turn body owns the final item. Late deltas for an older item
+  // must not reactivate it, and late replays of the final item's complete text
+  // must not be appended to the authoritative snapshot.
+  const terminalTurnAuthorities = new AiSessionTerminalTurnAuthorityStore();
 
   function message(identity: StreamingMessageIdentity) {
     return messages.get(streamingMessageKey(identity));
@@ -109,13 +120,45 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
   function appendDelta(input: AppendDeltaInput) {
     if (!input.delta) return message(input.identity);
     activateStream(input.identity.instanceId, input.streamId);
+    const authority = terminalTurnAuthorities.get(streamingSessionKey(input.identity.instanceId, input.identity.sessionId), input.identity.turnId);
+    if (authority && (!authority.itemId || authority.itemId !== input.identity.itemId)) {
+      // The Turn is terminal and another item owns the final response. A late
+      // delta for an older assistant item must not replace or reactivate it.
+      return message(input.identity);
+    }
     const at = input.generatedAt || now();
     const entry = ensureMessage(input.identity, input.streamId, at);
     const current = entry.value;
+    if (authority && current.status !== "streaming") {
+      if (!current.receivedText) {
+        entry.value = { ...current, receivedText: input.delta, updatedAt: at };
+        return entry;
+      }
+      if (input.delta === current.receivedText || input.delta === current.authoritativeText) return entry;
+      if (input.delta.length > current.receivedText.length && input.delta.startsWith(current.receivedText)) {
+        entry.value = { ...current, receivedText: input.delta, updatedAt: at };
+      }
+      // A terminal authoritative item never resumes streaming. Full replays may
+      // refresh its text, but later fragments must not append another copy.
+      return entry;
+    }
     // A demand transition loads an authoritative snapshot while the source
     // replays transient events after its cursor. Do not append replay that the
     // snapshot already incorporates.
     if (input.replay && current.receivedAt && at <= current.receivedAt) return entry;
+    const action = reconcileAiSessionMessageDelta(current, input.delta);
+    if (action === "ignore") return entry;
+    if (action === "replace") {
+      entry.value = {
+        ...current,
+        receivedText: input.delta,
+        status: "streaming",
+        receivedAt: at,
+        settledAt: undefined,
+        updatedAt: at,
+      };
+      return entry;
+    }
     entry.value = appendAiSessionMessageDelta(current, input.delta, at);
     return entry;
   }
@@ -128,6 +171,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     entry.value = {
       ...current,
       receivedText: input.text,
+      authoritativeText: input.text,
       status: input.status,
       receivedAt: at,
       settledAt: input.status === "streaming" ? undefined : at,
@@ -145,6 +189,14 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     const active = activeMessage(instanceId, sessionId);
     const activeMatchesTurn = Boolean(active.value && identities.has(active.value.value.turnId));
     const terminal = turn.status === "completed" || turn.status === "failed";
+    const existingAuthority = [...identities]
+      .map((identity) => terminalTurnAuthorities.get(streamingSessionKey(instanceId, sessionId), identity))
+      .find(Boolean);
+    if (existingAuthority && (!terminal || aiSessionTerminalAuthorityIsOlder(
+      existingAuthority,
+      turn.revision,
+      turn.completedAt || turn.updatedAt,
+    ))) return false;
     const authoritativeItemId = turn.lastMessageItemId;
     let target = authoritativeItemId
       ? candidates.find((entry) => entry.value.itemId === authoritativeItemId)
@@ -171,6 +223,15 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     // Settle the item named by the body without reactivating it over a newer
     // item in the same Turn. A terminal body owns the final item selection.
     if (!active.value || active.value === target || (terminal && activeMatchesTurn)) active.value = target;
+    if (terminal && turn.lastMessage !== undefined) {
+      terminalTurnAuthorities.record(
+        streamingSessionKey(instanceId, sessionId),
+        [turn.id, turn.providerTurnId],
+        authoritativeItemId,
+        turn.revision,
+        turn.completedAt || turn.updatedAt,
+      );
+    }
     return true;
   }
 
@@ -226,6 +287,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
 
   function cleanupSession(instanceId: string, sessionId: string) {
     const sessionKey = streamingSessionKey(instanceId, sessionId);
+    terminalTurnAuthorities.delete(sessionKey);
     const keys = keysBySession.get(sessionKey);
     if (!keys) {
       dropActiveMessage(instanceId, sessionKey);
@@ -246,6 +308,10 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     }
     activeSessionKeysByInstance.delete(instanceId);
     activeStreams.delete(instanceId);
+    terminalTurnAuthorities.deleteWhere((key) => {
+      const [owner] = JSON.parse(key) as [string, string];
+      return owner === instanceId;
+    });
   }
 
   function clear() {
@@ -256,6 +322,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     activeMessages.clear();
     activeSessionKeysByInstance.clear();
     activeStreams.clear();
+    terminalTurnAuthorities.clear();
   }
 
   function size() {
@@ -289,6 +356,10 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     if (current !== undefined) {
       for (const key of [...(keysByInstance.get(instanceId) || [])]) deleteMessage(key, false);
       clearActiveMessagesForInstance(instanceId);
+      terminalTurnAuthorities.deleteWhere((key) => {
+        const [owner] = JSON.parse(key) as [string, string];
+        return owner === instanceId;
+      });
     }
     activeStreams.set(instanceId, streamId);
     return current !== undefined;
@@ -305,13 +376,30 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       : activeTurn;
     const authoritativeItemId = turn?.lastMessageItemId || session.lastMessageItemId;
     const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
+    const terminal = status === "complete" || status === "failed";
+    const authorityIdentities = turn
+      ? [turn.id, turn.providerTurnId]
+      : [target?.value.turnId || session.activeTurnId];
+    const existingAuthority = authorityIdentities
+      .map((identity) => identity ? terminalTurnAuthorities.get(streamingSessionKey(instanceId, session.id), identity) : undefined)
+      .find(Boolean);
     // The current list projection deliberately omits turns and compacts the
     // top-level lastMessage for previews. It may advance lifecycle state, but
     // it is not authoritative conversation content and must never replace the
     // complete text accumulated from message-delta events.
     if (session.turns === undefined) {
       if (target) {
+        if (existingAuthority && !terminal) return;
         settleProjectedStatus(target, status, generatedAt);
+        if (terminal) {
+          terminalTurnAuthorities.record(
+            streamingSessionKey(instanceId, session.id),
+            [target.value.turnId],
+            authoritativeItemId ?? target.value.itemId,
+            undefined,
+            undefined,
+          );
+        }
       } else if (session.activeTurnId) {
         // Summary-only patches still establish an authoritative Turn boundary.
         // Keep the previous Turn cached for history, but never expose it as the
@@ -320,6 +408,11 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       }
       return;
     }
+    if (existingAuthority && (!terminal || (turn && aiSessionTerminalAuthorityIsOlder(
+      existingAuthority,
+      turn.revision,
+      turn.completedAt || turn.updatedAt,
+    )))) return;
     const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
     if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
       if (status === "streaming") return;
@@ -353,6 +446,15 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       status,
       generatedAt,
     });
+    if (terminal) {
+      terminalTurnAuthorities.record(
+        streamingSessionKey(instanceId, session.id),
+        turn ? [turn.id, turn.providerTurnId] : [target.value.turnId],
+        authoritativeItemId,
+        turn?.revision,
+        turn?.completedAt || turn?.updatedAt,
+      );
+    }
   }
 
   function reconciliationTarget(instanceId: string, session: AiSessionSummary) {

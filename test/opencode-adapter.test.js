@@ -429,17 +429,17 @@ test("OpenCode realtime parts separate reasoning activity deltas from assistant 
   await event("message.part.updated", { part: { id: "part_reasoning", sessionID: providerSession.id, messageID: "msg_assistant", type: "reasoning", text: "" } });
   await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_reasoning", field: "text", delta: "repository" });
   await event("message.part.updated", { part: { id: "part_reasoning", sessionID: providerSession.id, messageID: "msg_assistant", type: "reasoning", text: "Inspect the repository", time: { start: 1700000002000, end: 1700000003000 } } });
-  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_assistant", field: "text", delta: "Assistant output" });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_assistant", field: "text", delta: "Assistant " });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_assistant", field: "text", delta: "output" });
   await event("message.part.updated", { part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "" } });
   await event("message.part.updated", { part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Assistant output" } });
   await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_complete", field: "text", delta: "Already complete" });
   await event("message.part.updated", { part: { id: "part_complete", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Already complete" } });
 
-  assert.deepEqual(deltas.map((delta) => ({ itemId: delta.itemId, turnId: delta.turnId, delta: delta.delta })), [{
-    itemId: "part_assistant",
-    turnId: "msg_user",
-    delta: "Assistant output",
-  }]);
+  assert.deepEqual(deltas.map((delta) => ({ itemId: delta.itemId, turnId: delta.turnId, delta: delta.delta })), [
+    { itemId: "part_assistant", turnId: "msg_user", delta: "Assistant " },
+    { itemId: "part_assistant", turnId: "msg_user", delta: "output" },
+  ]);
   assert.deepEqual(timelineDeltas.map(({ itemId, turnId, field, delta }) => ({ itemId, turnId, field, delta })), [
     { itemId: "part_reasoning", turnId: "msg_user", field: "output", delta: "Inspect the " },
     { itemId: "part_reasoning", turnId: "msg_user", field: "output", delta: "repository" },
@@ -450,6 +450,63 @@ test("OpenCode realtime parts separate reasoning activity deltas from assistant 
     { id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Assistant output" },
     { id: "part_complete", turnId: "msg_user", type: "ai-message", text: "Already complete" },
   ]);
+  bridge.close();
+});
+
+test("OpenCode sync envelopes do not trigger blocking discovery", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-sync-")) });
+  const providerSession = {
+    id: "ses_sync",
+    directory: "/workspace",
+    title: "Sync envelopes",
+    version: "1.18.21",
+    time: { created: 1700000000000, updated: 1700000005000 },
+  };
+  const messages = [
+    {
+      info: { id: "msg_user", sessionID: providerSession.id, role: "user", time: { created: 1700000001000 } },
+      parts: [{ id: "part_user", sessionID: providerSession.id, messageID: "msg_user", type: "text", text: "Check sync" }],
+    },
+    {
+      info: { id: "msg_assistant", sessionID: providerSession.id, role: "assistant", parentID: "msg_user", time: { created: 1700000002000 } },
+      parts: [],
+    },
+  ];
+  const session = registry.applyAdapterSnapshot(projectOpenCodeSession({
+    session: providerSession,
+    status: { type: "busy" },
+    permissions: [],
+    messages,
+  }).snapshot);
+  const items = [];
+  let refreshCalls = 0;
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    getSession: async () => providerSession,
+    status: async () => ({ [providerSession.id]: { type: "busy" } }),
+    messages: async () => messages,
+    permissions: async () => [],
+  };
+  bridge.refresh = async () => {
+    refreshCalls += 1;
+  };
+  bridge.subscribeTimelineItems((event) => items.push(event.item));
+  await bridge.timeline(session);
+
+  const event = (type, properties) => bridge.onGlobalEvent({ directory: "/workspace", payload: { type, properties } });
+  await event("sync", { syncEvent: { id: "evt_sync", type: "message.part.updated.1", seq: 1 } });
+  assert.equal(refreshCalls, 0);
+
+  await event("message.part.updated", {
+    part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Late text" },
+  });
+  assert.deepEqual(items, [{ id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Late text" }]);
+
+  await event("server.connected", {});
+  assert.equal(refreshCalls, 1);
   bridge.close();
 });
 
