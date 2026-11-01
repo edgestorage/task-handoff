@@ -508,6 +508,21 @@ test("node relay RPCs carry the active Control Plane binding", async () => {
   }
 });
 
+test("node claim revoke treats an already-revoked or absent claim as the desired state", async () => {
+  const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  for (const code of ["NODE_RELAY_CLAIM_ALREADY_REVOKED", "NODE_RELAY_CLAIM_NOT_FOUND"]) {
+    const pending = runtime.revokeAccountNodeClaim("node_a");
+    await new Promise((resolve) => setImmediate(resolve));
+    const request = sockets[0].sent.filter((message) => message.type === "request" && message.operation === "revoke-node-relay-claim").at(-1);
+    assert.ok(request, "missing revoke-node-relay-claim request");
+    sockets[0].receive({ type: "response", requestId: request.requestId, error: { code, message: code, statusCode: 409 } });
+    assert.deepEqual(await pending, { nodeHandle: "node_a", status: "revoked" });
+  }
+  await runtime.stop();
+});
+
 test("the existing account-node directory advertises sharing before claiming through the unchanged RPC", () => {
   const source = fs.readFileSync(new URL("../src/control-plane/cloud-connectivity/coordinator-runtime.ts", import.meta.url), "utf8");
   assert.match(source, /accountRequest\("\/api\/v1\/nodes"/);

@@ -1,4 +1,4 @@
-import { supportsNodeControlPlaneTrust, supportsNodeLocalFolderNameUpdate, supportsNodeModelRelay, supportsNodeModelRelayImagePruning, supportsNodeModelRelayUnknownModelPolicy, supportsNodeModelRequestMappings } from "@task-handoff/protocol/control-plane";
+import { supportsNodeControlPlaneTrust, supportsNodeLocalFolderNameUpdate, supportsNodeModelProviderCapabilities, supportsNodeModelRelay, supportsNodeModelRelayImagePruning, supportsNodeModelRelayUnknownModelPolicy, supportsNodeModelRequestMappings } from "@task-handoff/protocol/control-plane";
 import type { Node } from "./types";
 
 function nodeAgentCapabilities(node: Pick<Node, "capabilities"> | undefined) {
@@ -29,4 +29,8 @@ export function nodeSupportsModelRelayImagePruning(node: Pick<Node, "capabilitie
 
 export function nodeSupportsModelRequestMappings(node: Pick<Node, "capabilities"> | undefined) {
   return supportsNodeModelRequestMappings(nodeAgentCapabilities(node));
+}
+
+export function nodeSupportsModelProviderCapabilities(node: Pick<Node, "capabilities"> | undefined) {
+  return supportsNodeModelProviderCapabilities(nodeAgentCapabilities(node));
 }

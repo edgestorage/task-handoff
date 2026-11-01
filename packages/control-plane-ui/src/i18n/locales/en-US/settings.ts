@@ -139,7 +139,9 @@ export const settings = {
       retryConnection: "Retry connection", reapply: "Request again", reapplying: "Requesting again…", reapplyWaiting: "Waiting for node…", reapplySubmitted: "Request submitted. Waiting for the target node to respond.", reapplyNoResponse: "No new trust request arrived within 30 seconds. Confirm that the target node is online and its version supports requesting again, then retry.", cancelAdd: "Cancel adding node",
       phase: {
         submitting: "Starting connection", "waiting-node-trust": "Waiting for node approval", "approved-connecting": "Approved; connecting", complete: "Node connected", rejected: "The node rejected the connection", expired: "Connection request expired", failed: "Connection failed",
+        submittingDescription: "The connection request is being created. This usually takes a few seconds.",
         "approved-connectingDescription": "The Control Plane trust request was approved. Waiting for the Node Agent to finish the relay handshake and open the management channel.",
+        completeDescription: "The node is connected and its management channel is ready.",
         rejectedDescription: "The node rejected this connection. After checking the target machine, request it again here. This creates a new pending request; it never approves automatically.", expiredDescription: "The connection request expired. Request it again here to create a new pending request.", failedDescription: "A valid Node Agent trust result was not received. Check whether the node is online, whether the relay/network link is healthy, and the local CLI state.",
       },
       reasons: { "first-seen": "First connection", "key-changed": "The Control Plane public key changed", "access-context-changed": "The access context changed", rejected: "Rejected by an administrator", expired: "Request expired" },
@@ -355,6 +357,7 @@ export const settings = {
     locationCount: "{count} location | {count} locations", configure: "Configure", moreActions: "More model actions", controlPlaneManaged: "Managed by the Control Plane", copy: "Copy model",
     editScopeWarning: "Name, endpoint, model names, API protocols, status, and any replacement credential will be updated at every location.",
     basicInformation: "Basic information", basicInformationDescription: "Name the connection and set its availability.", enabledDescription: "Allow this model to be selected for new and existing configurations.",
+    imageInput: "Image input", imageInputDescription: "Enable image input for every model under this provider.", imageInputUnsupported: "Image input is configured on Control Plane models.",
     connection: "Connection", connectionDescription: "Configure the provider endpoint, API protocols, and private credential.", deleteTitle: "Delete model location?",
     discardTitle: "Discard unsaved changes?", discardDescription: "The model draft has changed. Closing now will discard those changes.", discard: "Discard changes",
     references: "{count} reference | {count} references", locations: "Model locations", referenceDistribution: "Reference distribution", noReferences: "No instances reference this model", moveUp: "Move model up", moveDown: "Move model down",

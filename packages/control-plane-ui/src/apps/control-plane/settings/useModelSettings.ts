@@ -51,6 +51,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     modelNames: [] as Array<{ name: string; upstreamName?: string; order: number }>,
     mappings: [] as ModelRequestMapping[],
     protocols: ["openai-responses"] as ModelProtocol[],
+    imageInput: false,
     app: "codex" as ModelApp,
     enabled: true,
     locationScope: "control-plane",
@@ -81,6 +82,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
    */
   const mappingsEditable = computed(() => settingsModel.locationScope === "control-plane"
     || nodeSupportsModelRequestMappings(nodes().find((item) => item.id === settingsModel.locationScope)));
+  const imageInputEditable = computed(() => settingsModel.locationScope === "control-plane");
   const mappingTargetDefault = () => {
     const primary = settingsModel.modelNames[0];
     return primary ? modelUpstreamName(primary) : "";
@@ -259,6 +261,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.modelNames = [{ name: "", upstreamName: "", order: 100 }];
     settingsModel.mappings = [];
     settingsModel.protocols = ["openai-responses"];
+    settingsModel.imageInput = false;
     settingsModel.app = "codex";
     settingsModel.enabled = true;
     settingsModel.locationScope = "control-plane";
@@ -286,6 +289,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       order: entry.order,
     }));
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
+    settingsModel.imageInput = model.capabilities?.image === true;
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
     const location = model.locations?.find((item) => item.type === "control-plane") || model.locations?.find((item) => item.type === "node");
@@ -314,6 +318,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       order: entry.order,
     }));
     settingsModel.protocols = model.protocols?.length ? [...model.protocols] : legacyProtocols(model.app);
+    settingsModel.imageInput = model.capabilities?.image === true;
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
     settingsModel.locationScope = "control-plane";
@@ -344,6 +349,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           order: (index + 1) * 100,
         })),
         protocols: [...settingsModel.protocols],
+        capabilities: { image: settingsModel.imageInput },
         app: settingsModel.app,
         enabled: settingsModel.enabled,
         ...(settingsModel.key.trim() ? { key: settingsModel.key.trim() } : {}),
@@ -575,6 +581,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     addMapping,
     applyMappingPreset,
     mappingsEditable,
+    imageInputEditable,
     moveMapping,
     reorderMapping,
     removeMapping,

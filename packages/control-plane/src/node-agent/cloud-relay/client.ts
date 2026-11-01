@@ -780,7 +780,27 @@ export class NodeAgentCloudRelayClient {
       this.releaseChannel(entry, "allocation-withdrawn");
       this.channels.delete(controlPlaneId);
     }
+    this.withdrawMissingTrustRequests(binding, allocations);
     return complete;
+  }
+
+  /**
+   * A pending trust request only makes sense while the Coordinator still lists
+   * the claim. Drop it as soon as the authoritative snapshot removes the claim
+   * instead of leaving the approval prompt until its 24 hour TTL.
+   */
+  private withdrawMissingTrustRequests(binding: NodeAgentCloudRelayBinding, allocations: NodeRelayNodeAllocation[]) {
+    const active = new Set(allocations.map((allocation) => String(allocation.claimGrant?.controlPlaneId ?? "")).filter(Boolean));
+    const withdrawn = new Set<string>();
+    for (const request of this.options.identity.listCloudControlPlaneTrust().requests) {
+      if (request.status !== "pending" || request.nodeHandle !== binding.nodeHandle || active.has(request.controlPlaneId) || withdrawn.has(request.controlPlaneId)) continue;
+      withdrawn.add(request.controlPlaneId);
+      try {
+        this.options.identity.withdrawCloudControlPlaneTrustRequests(request.controlPlaneId, "claim-withdrawn");
+      } catch {
+        // A failed local trust cleanup must not block the relay snapshot.
+      }
+    }
   }
 
   private verifyAllocation(binding: NodeAgentCloudRelayBinding, allocation: NodeRelayNodeAllocation): VerifiedAllocation {

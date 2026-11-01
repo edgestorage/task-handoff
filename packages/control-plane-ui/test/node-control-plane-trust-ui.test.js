@@ -113,7 +113,7 @@ test("onboarding attempt waits for node trust, recovers after approval and remai
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.trust?.comparisonCode, "AAAA-BBBB-CCCC-DDDD");
 
-  syncCloudNodeOnboarding(snapshot([]));
+  syncCloudNodeOnboarding(snapshot([], { claims: [{ nodeHandle: "node_handle_a", requestedAt: "2026-10-26T08:00:30.000Z" }] }));
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "approved-connecting");
 
   syncCloudNodeOnboarding(snapshot([], { channels: [{ nodeHandle: "node_handle_a", nodeId: "node_a", allocationId: "allocation_a", connectedAt: "2026-10-26T08:01:00.000Z", connected: true }] }));
@@ -128,6 +128,20 @@ test("onboarding attempt waits for node trust, recovers after approval and remai
   syncCloudNodeOnboarding(snapshot([], { channels: [{ nodeHandle: "node_handle_a", nodeId: "node_a", allocationId: "allocation_a", connectedAt: "2026-10-26T08:02:00.000Z", connected: true }] }));
   assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "rejected");
   resetCloudNodeOnboarding();
+});
+
+test("a cancelled join clears the attempt once the snapshot drops its claim and trust", () => {
+  resetCloudNodeOnboarding();
+  beginCloudNodeOnboarding("existing");
+  setCloudNodeOnboardingNodeHandle("node_handle_a");
+  syncCloudNodeOnboarding(snapshot([trust()], { claims: [{ nodeHandle: "node_handle_a", requestedAt: "2026-10-26T08:00:00.000Z" }] }));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "waiting-node-trust");
+
+  syncCloudNodeOnboarding(snapshot([], { claims: [{ nodeHandle: "node_handle_a", requestedAt: "2026-10-26T08:00:00.000Z" }] }));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value?.phase, "approved-connecting");
+
+  syncCloudNodeOnboarding(snapshot([]));
+  assert.equal(useCloudNodeOnboardingAttempt().attempt.value, undefined);
 });
 
 test("an explicitly retried rejected attempt can resume and observe a new pending request", () => {
@@ -230,7 +244,7 @@ test("dialog close and back only hide the view while explicit cancel owns token 
   assert.match(dialog, /function goBack\(\) \{\s*step\.value = "source";\s*\}/);
   assert.match(dialog, /function closeDialog\(\) \{\s*stopClock\(\);/);
   assert.doesNotMatch(dialog, /function closeDialog\(\) \{[\s\S]*?cancelCloudNodeBindingToken/);
-  assert.match(dialog, /async function cancelBindingToken\(\) \{[\s\S]*?cancelCloudNodeBindingToken/);
+  assert.match(dialog, /async function cancelBindingToken\(\)[\s\S]*?cancelCloudNodeBindingToken/);
   assert.match(dialog, /onboarding\.active\.value/);
 });
 
@@ -266,7 +280,24 @@ test("node trust UI exposes approval, reapply and connection retry entry points 
   assert.match(detail, /\.cloud-node-pending-detail \{[^}]*gap: 0;/);
   assert.match(detail, /\.cloud-node-pending-detail > header \{[^}]*padding: 0 0 8px;/);
   assert.match(detail, /\.cloud-node-pending-content \{[^}]*padding: 8px 0 20px;/);
+  assert.match(detail, /cancelCloudNodeJoin\(\{ nodeHandle, nodeId: props\.trust\.nodeId \}\)/);
+  const joinActions = read("settings/cloudNodeJoinActions.ts");
+  assert.match(joinActions, /releaseCloudAccountNodeClaim\(input\.nodeHandle\)/);
+  assert.match(joinActions, /deleteNode\(input\.nodeId\)/);
+  assert.match(joinActions, /NODE_NOT_FOUND/);
   assert.doesNotMatch(dialog, /refetchIntervalMs|refetchInterval/);
+});
+
+test("cloud node join cancel is shared and available before terminal states", () => {
+  const dialog = read("settings/CloudNodeOnboardingDialog.vue");
+  const status = read("settings/CloudNodeTrustStatus.vue");
+  assert.match(status, /const canCancel = computed\(\(\) => props\.phase !== "complete"\)/);
+  assert.match(status, /v-if="canCancel"/);
+  assert.match(dialog, /const accountNodeClaimed = \(nodeHandle: string\) => Boolean\(accountNodes\.data\.value\?\.nodeRelay\.claims/);
+  assert.match(dialog, /step === 'connect' && !attempt/);
+  assert.match(dialog, /async function closeDialog\(\)[\s\S]*?cancelBindingToken\(\)/);
+  assert.match(dialog, /cancelCloudNodeJoin\(\{ nodeHandle: attempt\.value\.nodeHandle, nodeId \}\)/);
+  assert.match(dialog, /v-if="attempt\?\.source === 'existing' && attempt\.nodeHandle"/);
 });
 
 test("settings registry shows incomplete trust enrollments separately from managed nodes", () => {
@@ -290,8 +321,17 @@ test("settings registry shows incomplete trust enrollments separately from manag
 test("node trust status has localized copy for every visible phase description", () => {
   for (const locale of ["en-US", "zh-CN"]) {
     const messages = fs.readFileSync(new URL(`../../i18n/locales/${locale}/settings.ts`, root), "utf8");
-    assert.match(messages, /"approved-connectingDescription":/);
+    for (const key of ["submittingDescription", '"approved-connectingDescription"', "completeDescription", "rejectedDescription", "expiredDescription", "failedDescription"]) {
+      assert.ok(messages.includes(key), `${locale} is missing ${key}`);
+    }
   }
+});
+
+test("cancelling a cloud node refresh both trust projections", () => {
+  const modal = read("settings/SettingsModal.vue");
+  const dialog = read("settings/CloudNodeOnboardingDialog.vue");
+  assert.match(modal, /function refreshCloudNodeTrust\(\) \{[\s\S]*?controlPlaneQueryKeys\.cloudAccountNodes/);
+  assert.match(dialog, /async function cancelBindingToken\(\)[\s\S]*?controlPlaneQueryKeys\.cloudNodeRelay[\s\S]*?await accountNodes\.refetch\(\)/);
 });
 
 

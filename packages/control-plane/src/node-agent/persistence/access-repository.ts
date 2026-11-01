@@ -596,6 +596,42 @@ export class AccessRepository {
     return this.transaction(() => this.expireCloudControlPlaneTrustRequestsInTransaction(now, { type: "system", id: "node-agent" }));
   }
 
+  withdrawCloudControlPlaneTrustRequests(input: { controlPlaneId: string; reason: string; now?: string }) {
+    const now = input.now ?? new Date().toISOString();
+    const actor: NodeAgentControlPlaneTrustActor = { type: "system", id: "node-agent" };
+    return this.transaction(() => {
+      const rows = this.client.prepare(
+        "SELECT * FROM na_cloud_control_plane_trust_requests WHERE status = 'pending' AND control_plane_id = ?",
+      ).all(input.controlPlaneId) as Row[];
+      return rows.map((row) => {
+        const request = controlPlaneTrustRequestFromRow(row);
+        const expired: NodeAgentCloudControlPlaneTrustRequest = {
+          ...request,
+          status: "expired",
+          decidedAt: now,
+          decidedByActorType: actor.type,
+          decidedByActorId: actor.id,
+          decisionReason: input.reason,
+          revision: request.revision + 1,
+          updatedAt: now,
+        };
+        this.writeCloudControlPlaneTrustRequest(expired);
+        this.appendCloudControlPlaneTrustAudit({
+          action: "expire",
+          actor,
+          requestId: request.id,
+          controlPlaneId: request.controlPlaneId,
+          fingerprint: this.controlPlaneFingerprint(request.controlPlanePublicKey),
+          accessMode: request.accessMode,
+          shareRole: request.shareRole,
+          reason: input.reason,
+          now,
+        });
+        return expired;
+      });
+    });
+  }
+
   private expireCloudControlPlaneTrustRequestsInTransaction(now: string, actor: NodeAgentControlPlaneTrustActor) {
     const rows = this.client.prepare("SELECT * FROM na_cloud_control_plane_trust_requests WHERE status = 'pending' AND expires_at <= ?").all(now) as Row[];
     const expiredRequests: NodeAgentCloudControlPlaneTrustRequest[] = [];

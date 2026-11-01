@@ -45,7 +45,8 @@ import { LoaderCircle, RefreshCw } from "@lucide/vue";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import { reapplyCloudAccountNodeClaim, releaseCloudAccountNodeClaim } from "../../../api/queries";
+import { reapplyCloudAccountNodeClaim } from "../../../api/queries";
+import { cancelCloudNodeJoin } from "./cloudNodeJoinActions";
 import type { CloudNodeRelayTrust } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
@@ -126,7 +127,7 @@ async function cancelJoin() {
   actionError.value = "";
   actionMessage.value = "";
   try {
-    await releaseCloudAccountNodeClaim(nodeHandle);
+    await cancelCloudNodeJoin({ nodeHandle, nodeId: props.trust.nodeId });
     emit("cancelled", nodeHandle);
   } catch (error) {
     actionError.value = translateApiError(error, t);

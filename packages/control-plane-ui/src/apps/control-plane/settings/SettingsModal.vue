@@ -680,6 +680,7 @@ watch(() => cloudNodeRelay.data.value?.channels.map((channel) => `${channel.node
 function refreshCloudNodeTrust() {
   void cloudNodeRelay.refetch();
   void nodes.refetch();
+  void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.cloudAccountNodes });
 }
 function selectRegistryNode(nodeId: string) {
   selectedPendingCloudNodeHandle.value = "";
@@ -700,7 +701,7 @@ async function openCloudNodeTrustDetails(nodeHandle: string) {
   refreshCloudNodeTrust();
 }
 function handleCloudNodeJoinCancelled(nodeHandle: string) {
-  if (cloudNodeOnboarding.attempt.value?.nodeHandle === nodeHandle) resetCloudNodeOnboarding();
+  resetCloudNodeOnboarding();
   if (selectedPendingCloudNodeHandle.value === nodeHandle) selectedPendingCloudNodeHandle.value = "";
   refreshCloudNodeTrust();
 }

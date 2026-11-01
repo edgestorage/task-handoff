@@ -89,6 +89,7 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     stableModelIdentity: false,
     modelRelay: { protocols: [], streaming: false, unknownModelPolicy: false, imagePruning: false },
     requestMappings: false,
+    providerCapabilities: false,
   });
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { stableModelIdentity: true } }), true);
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { multiEntityAssignment: true } }), false);

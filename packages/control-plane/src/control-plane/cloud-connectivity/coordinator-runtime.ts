@@ -470,6 +470,14 @@ export class CloudConnectivityBackgroundRuntime {
       // revoked; local invalidation above happens immediately.
       return await this.enqueueNodeRelayOperation(nodeHandle, () =>
         this.request("revoke-node-relay-claim", this.nodeRelayBindingPayload({ nodeHandle })));
+    } catch (error) {
+      // Unbinding is idempotent: an already-revoked or absent claim already
+      // reached the desired state, so local deletion can continue.
+      const code = errorCode(error);
+      if (code === "NODE_RELAY_CLAIM_ALREADY_REVOKED" || code === "NODE_RELAY_CLAIM_NOT_FOUND") {
+        return { nodeHandle, status: "revoked" as const };
+      }
+      throw error;
     } finally {
       // Even if the remote revoke cannot be delivered now, stop using the
       // local relay channel. A later stale allocation is then ignored because

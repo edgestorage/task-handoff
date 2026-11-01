@@ -659,7 +659,9 @@ export class NodeModelRegistry {
   }
 
   private toPublic(model: NodeModelConfig, referenceCount: number): NodeModelPublicRecord {
-    const { key, ...safe } = model;
+    // Node public projections predate provider capabilities; older control
+    // planes parse this record with a strict schema.
+    const { key, capabilities: _capabilities, ...safe } = model;
     return NodeModelPublicRecordSchema.parse({
       ...safe,
       modelNames: projectModelNameEntries(model.modelNames),
@@ -681,7 +683,7 @@ function openCodeReasoningVariants() {
     .map((effort) => [effort, { reasoningEffort: effort }]));
 }
 
-function openCodeProvider(
+export function openCodeProvider(
   model: NodeModelConfig,
   modelNames: string[],
   options?: { baseUrl: string; apiKey: string },
@@ -693,6 +695,12 @@ function openCodeProvider(
     models: Object.fromEntries(modelNames.map((name) => [name, {
       name: model.name,
       variants: openCodeReasoningVariants(),
+      ...(model.capabilities?.image
+        ? {
+            attachment: true,
+            modalities: { input: ["text", "image"], output: ["text"] },
+          }
+        : {}),
     }])),
   };
 }

@@ -105,7 +105,7 @@
             </div>
             <p v-if="relayAccountError" class="cloud-node-onboarding-error" role="alert">{{ t("settings.nodeRelay.statusError", { message: relayAccountError }) }}</p>
             <CloudNodeTrustStatus
-              v-if="attempt?.source === 'existing' && attempt.nodeHandle && !trust"
+              v-if="attempt?.source === 'existing' && attempt.nodeHandle"
               :phase="attempt.phase"
               :trust="trust"
               :display-name="attempt.displayName"
@@ -192,7 +192,7 @@
 
       <DialogFooter class="cloud-node-onboarding-footer">
         <Button v-if="step === 'source'" type="button" variant="outline" @click="closeDialog">{{ t("common.actions.cancel") }}</Button>
-        <Button v-else-if="step === 'connect'" type="button" variant="outline" :disabled="busy" @click="goBack">
+        <Button v-else-if="step === 'connect' && !attempt" type="button" variant="outline" :disabled="busy" @click="goBack">
           <ArrowLeft :size="14" /><span>{{ t("common.actions.back") }}</span>
         </Button>
         <Button v-if="step === 'source'" type="button" :disabled="!source || !cloudRelayUsable" @click="step = 'connect'">{{ t("common.actions.continue") }}</Button>
@@ -223,7 +223,6 @@ import {
   controlPlaneQueryKeys,
   createCloudNodeBindingToken,
   reapplyCloudAccountNodeClaim,
-  releaseCloudAccountNodeClaim,
   useCloudAccountNodesQuery,
   useCloudAccountQuery,
   useCloudConnectivityQuery,
@@ -236,6 +235,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import CloudNodeTrustStatus from "./CloudNodeTrustStatus.vue";
 import CloudNodeTrustEntry from "./CloudNodeTrustEntry.vue";
 import { cloudAccountNodeCandidates } from "./cloudAccountNodeCandidates";
+import { cancelCloudNodeJoin } from "./cloudNodeJoinActions";
 import { connectCloudAccountNodeWithTrustRetry } from "./cloudAccountNodeConnection";
 import { withNodeAgentInstallerSource } from "./nodeAgentInstallCommand";
 import NodeAgentInstallerSourceToggle from "./NodeAgentInstallerSourceToggle.vue";
@@ -316,7 +316,7 @@ const accountNodeItems = computed(() => {
     trust: snapshot?.nodeRelay.trust.find((trust) => trust.nodeHandle === item.nodeHandle),
   }));
 });
-const accountNodeClaimed = (nodeHandle: string) => attempt.value?.nodeHandle === nodeHandle || Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle));
+const accountNodeClaimed = (nodeHandle: string) => Boolean(accountNodes.data.value?.nodeRelay.claims.some((claim) => claim.nodeHandle === nodeHandle));
 const accountNodeStatus = (item: CloudAccountNode) => t(`settings.nodeRelay.accountStatus.${item.status}`);
 const accountNodeAccess = (item: CloudAccountNode) => item.access?.kind === 'shared'
   ? t("settings.nodeRelay.accountAccessShared", { expiresAt: formatDateTime(new Date(item.access.expiresAt), locale.value) })
@@ -346,6 +346,7 @@ watch(() => props.open, (open) => {
   else resetView();
   void account.refetch();
   void connectivity.refetch();
+  if (cloudRelayUsable.value) void accountNodes.refetch();
   clock = setInterval(() => {
     const now = Date.now();
     nowMs.value = now;
@@ -434,19 +435,24 @@ async function generateBindingToken() {
   }
 }
 
-async function cancelBindingToken() {
-  if (busy.value) return;
+async function cancelBindingToken(): Promise<boolean> {
+  if (busy.value) return false;
   busy.value = true;
   try {
-    if (attempt.value?.nodeHandle) await releaseCloudAccountNodeClaim(attempt.value.nodeHandle);
-    else if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
+    if (attempt.value?.nodeHandle) {
+      const nodeId = attempt.value.nodeId || props.nodes.find((node) => node.connectionPath?.kind === "cloud-relay" && node.connectionPath.nodeHandle === attempt.value?.nodeHandle)?.id;
+      await cancelCloudNodeJoin({ nodeHandle: attempt.value.nodeHandle, nodeId });
+    } else if (bindingToken.value) await cancelCloudNodeBindingToken(bindingToken.value.tokenId);
     await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes });
     resetCloudNodeOnboarding();
     resetView();
-    void accountNodes.refetch();
+    void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.cloudNodeRelay });
+    await accountNodes.refetch();
     copied.value = false;
+    return true;
   } catch (error) {
     failCloudNodeOnboarding(translateApiError(error, t));
+    return false;
   } finally {
     busy.value = false;
   }
@@ -489,9 +495,14 @@ function goBack() {
   step.value = "source";
 }
 
-function closeDialog() {
+async function closeDialog() {
   stopClock();
-  if (attempt.value?.phase === "complete") resetCloudNodeOnboarding();
+  if (attempt.value && attempt.value.phase !== "complete") {
+    const cancelled = await cancelBindingToken();
+    if (!cancelled) return;
+  } else if (attempt.value?.phase === "complete") {
+    resetCloudNodeOnboarding();
+  }
   emit("close");
 }
 

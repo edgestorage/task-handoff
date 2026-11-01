@@ -259,6 +259,7 @@ export type ModelConfig = {
   modelNames?: ModelNameEntry[];
   mappings?: ModelRequestMapping[];
   protocols?: ModelProtocol[];
+  capabilities?: { image: boolean };
   app: ModelApp;
   enabled: boolean;
   order: number;

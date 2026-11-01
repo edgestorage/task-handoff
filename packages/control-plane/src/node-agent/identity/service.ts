@@ -414,6 +414,14 @@ export class NodeAgentIdentityService {
     return this.repository.expireCloudControlPlaneTrustRequests(now);
   }
 
+  withdrawCloudControlPlaneTrustRequests(controlPlaneId: string, reason: string, options: { now?: string } = {}) {
+    return this.repository.withdrawCloudControlPlaneTrustRequests({
+      controlPlaneId,
+      reason,
+      now: options.now ?? now(),
+    });
+  }
+
   observeCloudControlPlaneTrust(context: NodeAgentCloudControlPlaneTrustContext, options: { now?: string; ttlMs?: number } = {}) {
     return this.repository.observeCloudControlPlaneTrust({
       context,

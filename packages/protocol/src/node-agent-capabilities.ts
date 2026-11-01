@@ -46,6 +46,10 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   // earlier) keeps mapping edits disabled and makes writers strip the field
   // from node payloads so the legacy strict request schema keeps working.
   requestMappings: z.boolean().default(false),
+  // Additive capability: the node accepts provider-level model capabilities
+  // and projects them into agent model configs. Absence keeps the legacy
+  // strict wire model, so writers strip the field for older nodes.
+  providerCapabilities: z.boolean().default(false),
   // Additive capability: the node can relay model traffic for assigned
   // entities over the declared protocols. Absence (v0.0.34 and earlier) keeps
   // mapping deployment disabled; the relay switch is node configuration and
@@ -204,6 +208,11 @@ export function supportsNodeStableModelIdentity(capabilities: unknown) {
 /** Single query for the relay request mapping producer capability. */
 export function supportsNodeModelRequestMappings(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.requestMappings;
+}
+
+/** Single query for provider-level model capability projection. */
+export function supportsNodeModelProviderCapabilities(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.providerCapabilities;
 }
 
 /** Single query for the relay producer capability declared by this boundary. */

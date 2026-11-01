@@ -408,3 +408,15 @@ test("fingerprint and short comparison code are derived from the full public key
   assert.match(fingerprint, /^sha256:[A-Za-z0-9_-]{43}$/);
   assert.notEqual(fingerprint, nodeRelayFingerprint(crypto.randomBytes(32).toString("base64url")));
 });
+
+test("withdrawing a claim expires its pending node-side trust request", (t) => {
+  const { repository } = fixture(t);
+  const pending = observe(repository, context());
+  assert.equal(pending.kind, "pending");
+  if (pending.kind !== "pending") return;
+
+  const [expired] = repository.withdrawCloudControlPlaneTrustRequests({ controlPlaneId: "cp_alpha", reason: "claim-withdrawn", now: NOW });
+  assert.equal(expired.status, "expired");
+  assert.equal(expired.decisionReason, "claim-withdrawn");
+  assert.equal(repository.listCloudControlPlaneTrust(NOW).requests.find((request) => request.id === pending.request.id)?.status, "expired");
+});

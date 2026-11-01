@@ -143,10 +143,17 @@ export function syncCloudNodeOnboarding(snapshot: CloudAccountNodes | undefined,
   }
   const candidates = relay.trust.filter((item) => item.nodeHandle === nodeHandle);
   const channelError = relay.errors.find((item) => item.nodeHandle === nodeHandle);
+  const claim = relay.claims.find((item) => item.nodeHandle === nodeHandle);
   const trust = attempt.value.trust?.requestId
     ? candidates.find((item) => item.requestId === attempt.value?.trust?.requestId)
       || candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0]
     : candidates.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
+  if (!trust && !claim && attempt.value.phase === "approved-connecting") {
+    // A revoked or cancelled join no longer has a trust request, a claim or a
+    // channel. Keeping the attempt alive would keep the node marked as claimed.
+    resetCloudNodeOnboarding();
+    return undefined;
+  }
   if (channelError && !trust) {
     update({ phase: "failed", trust, error: channelError.message });
     return attempt.value;

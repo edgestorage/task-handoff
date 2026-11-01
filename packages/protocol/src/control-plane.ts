@@ -1340,6 +1340,14 @@ export const ProjectSchema = z
   })
   .strict();
 
+export const ModelProviderCapabilitiesSchema = z
+  .object({
+    // Compatibility: absent on records written before provider capabilities
+    // existed, so every reader treats it as text-only.
+    image: z.boolean().default(false),
+  })
+  .strict();
+
 export const ModelConfigSchema = z
   .object({
     id: IdSchema,
@@ -1354,6 +1362,8 @@ export const ModelConfigSchema = z
     mappings: ModelRequestMappingsSchema,
     // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
     protocols: z.array(ModelProtocolSchema).max(3).default([]),
+    // Provider-level capabilities apply to every model name under this entity.
+    capabilities: ModelProviderCapabilitiesSchema.optional(),
     /** @deprecated Compatibility discriminator for pre-protocol model records. */
     app: ModelAppSchema,
     enabled: z.boolean().default(true),
@@ -1375,7 +1385,10 @@ export const PublicModelConfigSchema = ModelConfigSchema.omit({ key: true }).ext
   revision: NonEmptyTrimmedTextSchema.max(160).optional(),
 }).strict();
 
-export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
+// Compatibility: node public projections predate provider capabilities. Keep
+// the wire record free of the additive control-plane field so an older control
+// plane with a strict schema can still read a newer node agent.
+export const NodeModelPublicRecordSchema = PublicModelConfigSchema.omit({ capabilities: true }).extend({
   referenceCount: z.number().int().min(0),
 }).strict();
 
@@ -1623,6 +1636,7 @@ export function modelContentRevision(
     modelNames?: ModelNameEntry[];
     mappings?: ModelRequestMapping[];
     protocols?: ModelProtocol[];
+    capabilities?: { image?: boolean };
   },
 ) {
   const app = ModelAppSchema.parse(input.app);
@@ -1642,6 +1656,9 @@ export function modelContentRevision(
     ...(mappings.length
       ? { mappings: mappings.map((entry) => ({ name: entry.name, upstreamName: entry.upstreamName, order: entry.order })) }
       : {}),
+    // Keep legacy revisions byte-identical while making image support part of
+    // the entity's content revision once enabled.
+    ...(input.capabilities?.image ? { capabilities: { image: true } } : {}),
   };
   return `mdlr_${sha256Hex(JSON.stringify(canonical))}`;
 }
@@ -3999,6 +4016,7 @@ export const CreateModelInputSchema = z.object({
   modelNames: ModelConfigSchema.shape.modelNames.optional(),
   mappings: ModelRequestMappingListSchema.optional(),
   protocols: ModelConfigSchema.shape.protocols.optional(),
+  capabilities: ModelConfigSchema.shape.capabilities.optional(),
   app: ModelConfigSchema.shape.app,
   enabled: ModelConfigSchema.shape.enabled.optional(),
   order: ModelConfigSchema.shape.order.optional(),

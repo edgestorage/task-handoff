@@ -16,6 +16,7 @@ import {
   normalizeModelRequestMappings,
   projectModelNameEntries,
   NodeModelMergeSchema,
+  supportsNodeModelProviderCapabilities,
   supportsNodeModelRequestMappings,
   supportsNodeModelRelay,
   supportsNodeStableModelIdentity,
@@ -124,7 +125,7 @@ function suppliedModelPatch(input: unknown, parsed: UpdateModelInput): UpdateMod
  * is not projected; a replacement key only flips the public availability flags.
  */
 function applyNodeOwnedPatch(model: NodeModelPublicRecord, patch: UpdateModelInput): NodeModelPublicRecord {
-  const { key, ...publicPatch } = patch;
+  const { key, capabilities: _capabilities, ...publicPatch } = patch;
   const app = patch.app ?? model.app;
   const modelNames = patch.modelNames?.length
     ? normalizeModelNames(patch.modelNames, patch.model || model.model)
@@ -160,8 +161,18 @@ function withoutRequestMappings<T extends { mappings?: ModelRequestMapping[] }>(
  * ignored silently and the record is projected with upstreamName = name
  * instead of failing the write or the assignment that depends on it.
  */
-function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[] }>(node: Node, patch: T): T {
-  const wire = nodeSupportsModelRequestMappings(node) ? patch : withoutRequestMappings(patch);
+function withoutModelCapabilities<T extends { capabilities?: unknown }>(patch: T): T {
+  if (!("capabilities" in patch)) return patch;
+  const { capabilities: _capabilities, ...rest } = patch;
+  return rest as T;
+}
+
+function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[]; capabilities?: unknown }>(node: Node, patch: T): T {
+  let wire = nodeSupportsModelRequestMappings(node) ? patch : withoutRequestMappings(patch);
+  // Compatibility for nodes that predate provider-level model capabilities:
+  // their strict wire schema rejects the additive field, so it never leaves
+  // the control plane for those nodes.
+  if (!supportsNodeModelProviderCapabilities(nodeAgentCapabilities(node))) wire = withoutModelCapabilities(wire);
   if (!wire.modelNames?.length) return wire;
   const entries = normalizeModelNameEntries(wire.modelNames, wire.model);
   const projected = supportsNodeModelRelay(nodeAgentCapabilities(node))
@@ -361,8 +372,10 @@ export class ControlPlaneModelService {
     const parsedInput = CopyModelInputSchema.parse(input);
     const candidate = {
       ...parsedInput,
-      // A copy inherits the source mappings unless the operator replaced them.
+      // A copy inherits the source mappings and provider capabilities unless
+      // the operator replaced them.
       mappings: normalizeModelRequestMappings(parsedInput.mappings === undefined ? source.mappings : parsedInput.mappings),
+      capabilities: parsedInput.capabilities ?? source.capabilities,
       key: parsedInput.key?.trim() || source.key,
     };
     return this.create(candidate);

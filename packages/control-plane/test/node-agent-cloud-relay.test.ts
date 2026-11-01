@@ -1121,6 +1121,20 @@ test("a failed allocation verification clears maintenance expiry, retries with b
   }, "automatic retry to recover the channel");
 });
 
+test("withdrawing a claim expires the pending node-side trust request", async (t) => {
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const { app, relay, identityService, planeFor } = await cloudRelayFixture(t, stub);
+  planeFor("control_plane_one");
+  await bind(app, stub, undefined, undefined, false);
+  relay.pollNow();
+
+  await waitFor(() => identityService.listCloudControlPlaneTrust().requests.some((request) => request.controlPlaneId === "control_plane_one" && request.status === "pending") ? true : undefined, "pending trust request");
+
+  stub.dropClaim("control_plane_one");
+  relay.pollNow();
+  await waitFor(() => identityService.listCloudControlPlaneTrust().requests.some((request) => request.controlPlaneId === "control_plane_one" && request.status === "expired") ? true : undefined, "withdrawn trust request");
+});
+
 test("a refused credential stops the channels and requires rebinding", async (t) => {
   const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
   const { app, relay, planeFor, connect, localHeaders } = await cloudRelayFixture(t, stub);

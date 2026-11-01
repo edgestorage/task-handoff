@@ -67,14 +67,14 @@
       </CollapsibleContent>
     </Collapsible>
 
-    <div v-if="!hideActions && (retryable || terminal)" class="cloud-node-trust-actions">
+    <div v-if="!hideActions && (retryable || terminal || canCancel)" class="cloud-node-trust-actions">
       <Button v-if="canReapply" type="button" size="sm" variant="outline" @click="emit('reapply')">
         <RefreshCw :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.reapply") }}</span>
       </Button>
       <Button v-if="retryable" type="button" size="sm" variant="outline" @click="emit('retry')">
         <RefreshCw :size="14" aria-hidden="true" /><span>{{ t("settings.nodeRelay.nodeTrust.retryConnection") }}</span>
       </Button>
-      <Button v-if="terminal" type="button" size="sm" variant="outline" @click="emit('cancel')">{{ t("settings.nodeRelay.nodeTrust.cancelAdd") }}</Button>
+      <Button v-if="canCancel" type="button" size="sm" variant="outline" @click="emit('cancel')">{{ t("settings.nodeRelay.nodeTrust.cancelAdd") }}</Button>
     </div>
   </section>
 </template>
@@ -110,6 +110,7 @@ const formatTrustDate = (value?: string) => value ? formatDateTime(new Date(valu
 const visible = computed(() => Boolean(props.trust) || ["submitting", "waiting-node-trust", "approved-connecting", "rejected", "expired", "failed"].includes(props.phase || ""));
 const terminal = computed(() => ["rejected", "expired", "failed"].includes(props.phase || ""));
 const retryable = computed(() => props.phase === "failed");
+const canCancel = computed(() => props.phase !== "complete");
 const canReapply = computed(() => props.phase === "rejected" || props.phase === "expired");
 const nodeLabel = computed(() => props.displayName || t("settings.nodeRelay.nodeTrust.currentNode"));
 const title = computed(() => t(`settings.nodeRelay.nodeTrust.phase.${props.phase || "waiting-node-trust"}`));

@@ -288,3 +288,13 @@ test("model request mappings stay independent, preset-driven, and hint relay dep
     assert.match(locale, /"codex-background-tasks": \{ label: "/);
   }
 });
+
+test("model settings expose provider-level image input", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
+  assert.match(settings, /settingsModel\.imageInput/);
+  assert.match(settings, /imageInputUnsupported/);
+  assert.match(state, /imageInputEditable/);
+  assert.match(state, /capabilities: \{ image: settingsModel\.imageInput \}/);
+  assert.match(state, /settingsModel\.imageInput = model\.capabilities\?\.image === true/);
+});

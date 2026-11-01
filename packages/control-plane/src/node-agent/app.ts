@@ -1874,6 +1874,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             privateModelCatalog: true,
             stableModelIdentity: true,
             requestMappings: true,
+            providerCapabilities: true,
             // Protocol capabilities follow the registered adapters: the switch is
             // node configuration and deliberately not part of this document.
             modelRelay: (() => {

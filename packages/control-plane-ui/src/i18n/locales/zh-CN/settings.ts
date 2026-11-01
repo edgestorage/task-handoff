@@ -142,7 +142,9 @@ export const settings = {
       retryConnection: "重试连接", reapply: "重新申请", reapplying: "重新申请中…", reapplyWaiting: "等待节点响应…", reapplySubmitted: "已提交重新申请，正在等待目标节点响应。", reapplyNoResponse: "已等待 30 秒仍未收到新的信任请求。请确认目标节点在线且版本支持重新申请，然后重试。", cancelAdd: "取消加入",
       phase: {
         submitting: "正在发起连接", "waiting-node-trust": "等待节点批准连接", "approved-connecting": "已批准，正在连接", complete: "节点已连接", rejected: "节点已拒绝连接", expired: "连接请求已过期", failed: "连接失败",
+        submittingDescription: "正在创建连接请求，通常需要几秒钟。",
         "approved-connectingDescription": "Control Plane 信任请求已获批准，正在等待 Node Agent 完成 Relay 握手并建立管理通道。",
+        completeDescription: "节点已连接，管理通道已就绪。",
         rejectedDescription: "节点已拒绝本次连接。确认目标机器后，可在此重新申请；重新申请只会生成新的待审核请求，不会自动批准。", expiredDescription: "连接请求已过期。可在此重新申请，生成新的待审核请求。", failedDescription: "未能收到有效的 Node Agent 信任结果。请检查节点是否在线、Network/Relay 连接和本机 CLI 状态。",
       },
       reasons: { "first-seen": "首次连接", "key-changed": "Control Plane 公钥已变化", "access-context-changed": "访问上下文已变化", rejected: "管理员已拒绝", expired: "请求已过期" },
@@ -358,6 +360,7 @@ export const settings = {
     locationCount: "{count} 个位置", configure: "配置", moreActions: "更多模型操作", controlPlaneManaged: "由 Control Plane 管理", copy: "复制模型",
     editScopeWarning: "名称、端点、模型名称、接口协议、状态以及新填写的凭据会同步更新到全部位置。",
     basicInformation: "基本信息", basicInformationDescription: "设置连接名称和可用状态。", enabledDescription: "允许在新建和现有配置中选择此模型。",
+    imageInput: "图片输入", imageInputDescription: "为该 provider 下的所有模型启用图片输入。", imageInputUnsupported: "图片输入只在控制面的模型配置中设置。",
     connection: "连接配置", connectionDescription: "配置提供方端点、接口协议及私有凭据。", deleteTitle: "删除模型位置？",
     discardTitle: "放弃未保存的更改？", discardDescription: "模型草稿已经修改，关闭后这些更改不会保留。", discard: "放弃更改",
     references: "{count} 个引用", locations: "模型位置", referenceDistribution: "引用分布", noReferences: "暂无实例引用此模型", moveUp: "上移模型", moveDown: "下移模型", editAll: "编辑全部",
