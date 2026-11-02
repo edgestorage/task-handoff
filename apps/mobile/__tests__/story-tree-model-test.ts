@@ -1,7 +1,7 @@
 import { ControlPlaneAiSessionsSchema, normalizeManualStoryOrder, reorderStoryKeys, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, storyDragPreview, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, replaceVisibleStoryOrder, sortStoryTree, storyDragPreview, storyDragRowHeight, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -60,6 +60,19 @@ describe('mobile Story tree model', () => {
     const secondSwap = storyDragPreview(keys, 'n1:a', 50, targets, 250, STORY_TREE_ROW_GAP);
     expect(secondSwap.keys).toEqual(['n1:b', 'n1:c', 'n1:a']);
     expect(secondSwap.offsetY).toBe(-26);
+  });
+
+  test('uses the collapsed header height instead of a stale expanded group measurement', () => {
+    expect(storyDragRowHeight(false, 320, 50, 1)).toBe(52);
+    expect(storyDragRowHeight(true, 320, 50, 1)).toBe(320);
+    expect(storyDragRowHeight(false, 320, undefined, 1)).toBe(320);
+  });
+
+  test('merges a visible reorder back into the complete manual order', () => {
+    expect(replaceVisibleStoryOrder(
+      ['n1:a', 'n1:hidden', 'n1:b', 'n1:c'],
+      ['n1:c', 'n1:a', 'n1:b'],
+    )).toEqual(['n1:c', 'n1:hidden', 'n1:a', 'n1:b']);
   });
 
   test('keeps archived Stories after active Stories in every sort mode', () => {

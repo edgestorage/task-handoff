@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { BlurView } from 'expo-blur';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import { ActivityIndicator, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Animated, {
+  interpolate,
+  useAnimatedStyle,
+} from 'react-native-reanimated';
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
 import { Icon } from '../components/Icon';
@@ -16,6 +20,7 @@ import {
   SESSION_COMPOSER_ACTION_RADIUS,
   SESSION_COMPOSER_ACTION_SIZE,
   SESSION_COMPOSER_ATTACHMENT_ICON_SIZE,
+  SESSION_COMPOSER_COLLAPSED_RADIUS,
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_COLLAPSED_INPUT_LEFT,
   SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION,
@@ -24,6 +29,7 @@ import {
   SESSION_COMPOSER_MODEL_MAX_WIDTH,
   SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT,
   SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE,
+  SESSION_COMPOSER_PERMISSION_COLLAPSED_WIDTH,
   SESSION_COMPOSER_PERMISSION_HEIGHT,
   SESSION_COMPOSER_PERMISSION_ICON_LEFT,
   SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE,
@@ -38,6 +44,8 @@ import {
 } from './composer-metrics';
 import { AttachmentMenu, ModelSettingsMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
 import type { SessionComposerProps } from './session-composer-types';
+
+const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
 
 export function SessionComposer(props: SessionComposerProps) {
   const { dark, colors } = useMobileTheme();
@@ -59,45 +67,47 @@ export function SessionComposer(props: SessionComposerProps) {
     : undefined;
   const modelControlsVisible = Boolean(modelGroups.length || props.reasoningEffortEnabled);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
-  const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
-  const expansion = props.expansion ?? fallbackExpansion;
-  const mounted = useRef(false);
+  const expansion = props.expansion;
   const inputRef = useRef<TextInput>(null);
   useEffect(() => {
     if (!props.focusRequestKey) return;
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [props.focusRequestKey]);
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      expansion.setValue(props.focused ? 1 : 0);
-      return;
-    }
-    const animation = Animated.timing(expansion, {
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      toValue: props.focused ? 1 : 0,
-      useNativeDriver: false,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [expansion, props.focused]);
-  const animatedContainerStyle = {
-    borderRadius: expansion.interpolate({ inputRange: [0, 1], outputRange: [28, SESSION_COMPOSER_EXPANDED_RADIUS] }),
-    height: expansion.interpolate({ inputRange: [0, 1], outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT] }),
-  };
+  const animatedContainerStyle = useAnimatedStyle(() => ({
+    borderRadius: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_RADIUS, SESSION_COMPOSER_EXPANDED_RADIUS]),
+    height: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]),
+  }));
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
     ? Math.ceil(permissionLabelMeasurement.width) + SESSION_COMPOSER_PERMISSION_WIDTH_OVERHEAD
     : estimatedPermissionWidth(effectivePermissionMode);
-  const permissionWidth = expansion.interpolate({ inputRange: [0, 1], outputRange: [36, measuredPermissionWidth] });
-  const permissionTextOpacity = expansion.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] });
+  const permissionWidthStyle = useAnimatedStyle(() => ({
+    width: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_PERMISSION_COLLAPSED_WIDTH, measuredPermissionWidth]),
+  }));
+  const permissionContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(expansion.value, [0, 0.2, 0.7, 1], [0, 0, 0.72, 1]),
+    transform: [{ translateX: interpolate(expansion.value, [0, 0.2, 0.7, 1], [4, 4, 1, 0]) }],
+  }));
+  const collapsedInputLeft = permissionOptions.length ? SESSION_COMPOSER_COLLAPSED_INPUT_LEFT : SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION;
+  const collapsedInputRight = sessionComposerCollapsedInputRight(modelControlsVisible);
+  const animatedInputStyle = useAnimatedStyle(() => ({
+    bottom: interpolate(expansion.value, [0, 1], [0, 50]),
+    left: interpolate(expansion.value, [0, 1], [collapsedInputLeft, 0]),
+    paddingBottom: interpolate(expansion.value, [0, 1], [15, 8]),
+    paddingLeft: interpolate(expansion.value, [0, 1], [4, 14]),
+    paddingRight: interpolate(expansion.value, [0, 1], [4, 14]),
+    paddingTop: interpolate(expansion.value, [0, 1], [15, 14]),
+    right: interpolate(expansion.value, [0, 1], [collapsedInputRight, 0]),
+  }));
   // Android's expo-paste-input wrapper stretches children to its own bounds, so collapsed input
   // offsets must live on the wrapper there instead of on the TextInput.
-  const collapsedInputInset = !props.focused ? {
-    left: permissionOptions.length ? SESSION_COMPOSER_COLLAPSED_INPUT_LEFT : SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION,
-    right: sessionComposerCollapsedInputRight(modelControlsVisible),
-  } : undefined;
+  const androidInputWrapperStyle = useAnimatedStyle(() => {
+    if (Platform.OS !== 'android') return {};
+    return {
+      left: interpolate(expansion.value, [0, 1], [collapsedInputLeft, 0]),
+      right: interpolate(expansion.value, [0, 1], [collapsedInputRight, 0]),
+    };
+  });
   return (
     <Animated.View
       accessibilityState={{ expanded: props.focused }}
@@ -128,35 +138,37 @@ export function SessionComposer(props: SessionComposerProps) {
         style={[StyleSheet.absoluteFill, { backgroundColor: dark ? 'rgba(23, 24, 28, 0.30)' : 'rgba(255, 255, 255, 0.44)' }]}
         testID="session-composer-material"
       />
-      <TextInputWrapper
-        interceptTextPasteAbove={
-          props.editingLabel ? undefined : AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD
-        }
-        onPaste={(payload: PasteEventPayload) => {
-          if (payload.type === 'images') props.onPasteImages(payload.uris);
-          else if (payload.type === 'text' && payload.intercepted) props.onPasteText(payload.value);
-        }}
-        pointerEvents="box-none"
-        style={[StyleSheet.absoluteFill, Platform.OS === 'android' ? collapsedInputInset : undefined]}
-        testID="session-message-paste-input"
-      >
-        <TextInput
-          ref={inputRef}
-          accessibilityLabel={t('composer.message')}
-          editable={props.editable && !props.actionBusy}
-          multiline
-          onBlur={() => props.onFocusChange(false)}
-          onChangeText={props.onValueChange}
-          onFocus={() => props.onFocusChange(true)}
-          placeholder={t('composer.placeholder')}
-          placeholderTextColor={colors.textPlaceholder}
-          scrollEnabled={props.focused}
-          style={[styles.input, props.focused ? styles.inputFocused : [styles.inputCollapsed, { right: sessionComposerCollapsedInputRight(modelControlsVisible) }], !props.focused && !permissionOptions.length && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
-          textAlignVertical={props.focused ? 'top' : 'center'}
-          testID="session-message-input"
-          value={props.value}
-        />
-      </TextInputWrapper>
+      <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFill, androidInputWrapperStyle]}>
+        <TextInputWrapper
+          interceptTextPasteAbove={
+            props.editingLabel ? undefined : AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD
+          }
+          onPaste={(payload: PasteEventPayload) => {
+            if (payload.type === 'images') props.onPasteImages(payload.uris);
+            else if (payload.type === 'text' && payload.intercepted) props.onPasteText(payload.value);
+          }}
+          pointerEvents="box-none"
+          style={StyleSheet.absoluteFill}
+          testID="session-message-paste-input"
+        >
+          <AnimatedTextInput
+            ref={inputRef}
+            accessibilityLabel={t('composer.message')}
+            editable={props.editable && !props.actionBusy}
+            multiline
+            onBlur={() => props.onFocusChange(false)}
+            onChangeText={props.onValueChange}
+            onFocus={() => props.onFocusChange(true)}
+            placeholder={t('composer.placeholder')}
+            placeholderTextColor={colors.textPlaceholder}
+            scrollEnabled={props.focused}
+            style={[styles.input, styles.inputFrame, animatedInputStyle, { color: colors.text }]}
+            textAlignVertical="top"
+            testID="session-message-input"
+            value={props.value}
+          />
+        </TextInputWrapper>
+      </Animated.View>
       <View pointerEvents="box-none" style={styles.toolbar}>
         {props.editingLabel ? <View style={styles.editingState}>
           <Pencil color={colors.textMuted} size={16} strokeWidth={1.8} />
@@ -190,7 +202,7 @@ export function SessionComposer(props: SessionComposerProps) {
               <Plus color={colors.textMuted} size={SESSION_COMPOSER_ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
             </Pressable>}
           </AttachmentMenu>
-          {permissionOptions.length ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]} testID="session-permission-button-frame">
+          {permissionOptions.length ? <Animated.View style={[styles.permissionButtonFrame, permissionWidthStyle]} testID="session-permission-button-frame">
             <PermissionMenu
               cancelLabel={t('common.cancel')}
               disabled={props.actionBusy}
@@ -199,7 +211,7 @@ export function SessionComposer(props: SessionComposerProps) {
               options={permissionOptions}
               title={t('composer.permissionMode')}
             >
-              {(onPress) => <Animated.View style={[styles.permissionMenuTriggerFrame, { width: permissionWidth }]} testID="session-permission-menu-trigger-frame">
+              {(onPress) => <Animated.View style={[styles.permissionMenuTriggerFrame, permissionWidthStyle]} testID="session-permission-menu-trigger-frame">
                 <Pressable
                   accessibilityLabel={t('composer.permissionModeValue', { mode: currentPermissionLabel })}
                   accessibilityRole="button"
@@ -211,10 +223,10 @@ export function SessionComposer(props: SessionComposerProps) {
                   <View style={styles.permissionIconSlot}>
                     <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(effectivePermissionMode)} strokeWidth={1.8} />
                   </View>
-                  <Animated.Text numberOfLines={1} style={[styles.permissionText, { color: permissionDanger ? colors.error : colors.textMuted, opacity: permissionTextOpacity }]}>
+                  <Animated.Text numberOfLines={1} style={[styles.permissionText, permissionContentStyle, { color: permissionDanger ? colors.error : colors.textMuted }]}>
                     {currentPermissionLabel}
                   </Animated.Text>
-                  <Animated.View pointerEvents="none" style={[styles.permissionChevron, { opacity: permissionTextOpacity }]} testID="session-permission-chevron">
+                  <Animated.View pointerEvents="none" style={[styles.permissionChevron, permissionContentStyle]} testID="session-permission-chevron">
                     <Icon color={colors.textMuted} name="chevron-down" size={10} />
                   </Animated.View>
                 </Pressable>
@@ -279,9 +291,7 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   input: { fontSize: 16, lineHeight: 23 },
-  inputCollapsed: { bottom: 0, left: SESSION_COMPOSER_COLLAPSED_INPUT_LEFT, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', top: 0 },
-  inputCollapsedWithoutPermission: { left: SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION },
-  inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
+  inputFrame: { position: 'absolute', top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
   trailingTools: { alignItems: 'center', flexDirection: 'row', gap: 4, minWidth: 0 },

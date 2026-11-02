@@ -4,7 +4,6 @@ export type InstanceDetailStatusTone = 'healthy' | 'error' | 'muted';
 
 export type InstanceDetailContentProps = {
   actions: readonly ControlPlaneInstanceAction[];
-  actionsEnabled: boolean;
   activeSessionCount: number;
   error?: { code: string; message: string };
   heartbeat: string;

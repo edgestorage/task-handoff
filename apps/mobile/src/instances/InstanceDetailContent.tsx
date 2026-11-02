@@ -23,7 +23,7 @@ export function InstanceDetailContent(props: InstanceDetailContentProps) {
 
     {lifecycleActions.length ? <View accessibilityRole="toolbar" style={[styles.lifecycleToolbar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       {lifecycleActions.map((action, index) => {
-        const enabled = props.actionsEnabled && !props.lifecycleAction && props.actions.includes(action);
+        const enabled = !props.lifecycleAction && props.actions.includes(action);
         const destructive = action === 'stop';
         const color = enabled ? destructive ? colors.error : colors.primary : colors.textMuted;
         return <Fragment key={action}>

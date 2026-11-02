@@ -30,7 +30,7 @@ export function InstanceDetailContent(props: InstanceDetailContentProps) {
             frame({ maxWidth: Infinity }),
           ]}>
             {lifecycleActions.map((action, index) => {
-              const enabled = props.actionsEnabled && !props.lifecycleAction && props.actions.includes(action);
+              const enabled = !props.lifecycleAction && props.actions.includes(action);
               const destructive = action === 'stop';
               const busy = props.lifecycleAction === action;
               const color = busy || enabled ? destructive ? colors.error : colors.primary : colors.textMuted;

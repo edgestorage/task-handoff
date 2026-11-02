@@ -87,7 +87,7 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
     id: action,
     image: action === 'start' ? 'play.circle' : action === 'stop' ? 'stop.circle' : 'arrow.clockwise.circle',
     title: lifecycleActionLabel(action),
-    attributes: { disabled: Boolean(lifecycleAction) || state.phase !== 'ready', destructive: action === 'stop' },
+    attributes: { disabled: Boolean(lifecycleAction), destructive: action === 'stop' },
   }));
   const menuActions: MenuAction[] = [
     ...lifecycleMenuActions,
@@ -109,7 +109,7 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
     ]);
   };
   const executeLifecycleAction = async (action: ControlPlaneInstanceAction) => {
-    if (lifecycleAction || state.phase !== 'ready' || !instance.availableActions.includes(action)) return;
+    if (lifecycleAction || !instance.availableActions.includes(action)) return;
     setLifecycleAction(action);
     try {
       await runInstanceAction(instance.id, action);
@@ -155,7 +155,6 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
       : <><Stack.Screen options={pane ? { headerRight: () => menu } : { title: instance.name, headerRight: () => menu }} /><PaneHeaderRestore pane={pane} /></>}
     <InstanceDetailContent
       actions={instance.availableActions}
-      actionsEnabled={state.phase === 'ready' && !lifecycleAction}
       activeSessionCount={activeSessionCount}
       error={instance.error}
       heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString(locale) : t('instance.notObserved')}

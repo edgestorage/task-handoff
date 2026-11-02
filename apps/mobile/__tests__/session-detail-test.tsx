@@ -1996,11 +1996,6 @@ test('OpenCode composer sends the advertised full-access permission mode', async
 });
 
 test('composer expands to a multiline editor while focused', async () => {
-  const timing = jest.spyOn(Animated, 'timing').mockImplementation(() => ({
-    reset: () => undefined,
-    start: (callback) => callback?.({ finished: true }),
-    stop: () => undefined,
-  }));
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
@@ -2023,7 +2018,6 @@ test('composer expands to a multiline editor while focused', async () => {
   within(screen.getByRole('button', { name: 'Permission mode: Ask for approval' })).getByText('Ask for approval');
   await fireEvent(screen.getByTestId('session-message-input'), 'blur');
   await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false));
-  timing.mockRestore();
 });
 
 test('touching outside the composer dismisses the keyboard', async () => {

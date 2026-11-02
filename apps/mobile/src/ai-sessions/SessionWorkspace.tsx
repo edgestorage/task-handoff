@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { CircleHelp, CornerDownRight, GripVertical, Pause, Pencil, Play, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
-import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Animated, { Easing, interpolate, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -20,7 +21,12 @@ import { useMobileTheme } from '../components/theme';
 import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon, type IconName } from '../components/Icon';
 import { SessionComposer } from './SessionComposer';
-import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } from './composer-metrics';
+import {
+  SESSION_COMPOSER_COLLAPSED_HEIGHT,
+  SESSION_COMPOSER_COLLAPSE_DURATION_MS,
+  SESSION_COMPOSER_EXPANDED_HEIGHT,
+  SESSION_COMPOSER_EXPAND_DURATION_MS,
+} from './composer-metrics';
 import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
 import { useMobileToast } from '../components/MobileToast';
@@ -116,7 +122,14 @@ export function SessionWorkspace({
   }>();
   const [composerFocused, setComposerFocused] = useState(false);
   const [keyboardViewportRevision, setKeyboardViewportRevision] = useState(0);
-  const [composerExpansion] = useState(() => new Animated.Value(0));
+  const composerExpansion = useSharedValue(0);
+  useEffect(() => {
+    composerExpansion.value = withTiming(composerFocused ? 1 : 0, {
+      duration: composerFocused ? SESSION_COMPOSER_EXPAND_DURATION_MS : SESSION_COMPOSER_COLLAPSE_DURATION_MS,
+      easing: Easing.out(Easing.cubic),
+      reduceMotion: ReduceMotion.System,
+    });
+  }, [composerExpansion, composerFocused]);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(
     () => SESSION_COMPOSER_COLLAPSED_HEIGHT + 16 + composerBottomInset,
   );
@@ -467,6 +480,12 @@ export function SessionWorkspace({
     () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
     [decisionsSessionId, storyDecisionList],
   );
+  const composerFadeBackdropStyle = useAnimatedStyle(() => ({
+    bottom: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]) + composerBottomInset,
+  }));
+  const composerBackdropStyle = useAnimatedStyle(() => ({
+    height: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]),
+  }));
   if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnBodyFailure = selectedTurn && turnBodyFailure && turnBodyFailure.sessionId === sessionId && turnBodyFailure.turnId === selectedTurn.id
@@ -834,11 +853,6 @@ export function SessionWorkspace({
     if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
-  const composerBackdropHeight = composerExpansion.interpolate({
-    inputRange: [0, 1],
-    outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT],
-  });
-  const composerFadeBottom = Animated.add(composerBackdropHeight, composerBottomInset);
   const bottomBackdrop = composerBottomBackdropGeometry(composerBottomInset);
   const overlayInsetStyle = adaptive.contentInsets.left || adaptive.contentInsets.right
     ? { left: adaptive.contentInsets.left, right: adaptive.contentInsets.right }
@@ -879,7 +893,7 @@ export function SessionWorkspace({
         />
       </View>
       <>
-        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { bottom: composerFadeBottom, height: 16 }]} testID="session-composer-fade-backdrop">
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { height: 16 }, composerFadeBackdropStyle]} testID="session-composer-fade-backdrop">
           <Svg height="100%" width="100%">
             <Defs>
               <LinearGradient id="session-composer-gradient" x1="0" x2="0" y1="0" y2="100%">
@@ -890,7 +904,7 @@ export function SessionWorkspace({
             <Rect fill="url(#session-composer-gradient)" height="100%" width="100%" />
           </Svg>
         </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { backgroundColor: colors.background, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { backgroundColor: colors.background, bottom: composerBottomInset, opacity: COMPOSER_BACKDROP_OPACITIES.composer }, composerBackdropStyle]} testID="session-composer-backdrop" />
         <View pointerEvents="none" style={[styles.composerBackdrop, overlayInsetStyle, { bottom: 0, height: bottomBackdrop.height }]} testID="session-composer-bottom-backdrop">
           <Svg height="100%" width="100%">
             <Defs>

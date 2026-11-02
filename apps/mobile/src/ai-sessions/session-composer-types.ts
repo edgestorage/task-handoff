@@ -1,6 +1,6 @@
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
-import type { Animated } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
 
 export type SessionComposerAction = 'save' | 'send' | 'stop';
 
@@ -10,7 +10,7 @@ export type SessionComposerProps = {
   actionDisabled: boolean;
   editable: boolean;
   editingLabel?: string;
-  expansion: Animated.Value;
+  expansion: SharedValue<number>;
   fileDisabled: boolean;
   focused: boolean;
   focusRequestKey?: number;

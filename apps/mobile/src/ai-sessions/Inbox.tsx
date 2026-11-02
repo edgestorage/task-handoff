@@ -1,5 +1,5 @@
 import { Profiler, useEffect, useMemo, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode } from 'react';
-import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import {
   aiSessionLastUserMessageAt,
@@ -24,6 +24,7 @@ import { sessionActivityText } from './SessionDetail';
 import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { SessionContextRow } from './SessionContextRow';
+import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
 import { useI18n } from '../i18n';
 import {
   aiSessionInboxSections,
@@ -46,9 +47,6 @@ export { inboxCardContent, inboxEntries, sessionScopeOptions } from './InboxMode
 const ALL_SCOPE: AiSessionScope = { kind: 'all' };
 const STATUS_FILTERS = ['all', 'active', 'waiting', 'idle', 'problem'] as const;
 const STATUS_FILTER_PADDING = 3;
-const GROUP_COLLAPSE_DURATION = 170;
-const GROUP_EXPAND_DURATION = 220;
-const GROUP_DISCLOSURE_DURATION = 200;
 const LIST_ROW_PADDING_HORIZONTAL = 10;
 const LIST_ROW_GAP = 8;
 const LIST_LEADING_SLOT_WIDTH = 20;
@@ -331,24 +329,6 @@ function AiSessionGroup({ group, onToggle, renderEntry }: {
 }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const [progress] = useState(() => new Animated.Value(group.collapsed ? 0 : 1));
-  const [contentHeight, setContentHeight] = useState<number>();
-  const [keepMounted, setKeepMounted] = useState(!group.collapsed);
-  useEffect(() => {
-    if (!group.collapsed && contentHeight === undefined) return;
-    const animation = Animated.timing(progress, {
-      duration: group.collapsed ? GROUP_COLLAPSE_DURATION : GROUP_EXPAND_DURATION,
-      easing: group.collapsed ? Easing.in(Easing.cubic) : Easing.out(Easing.cubic),
-      toValue: group.collapsed ? 0 : 1,
-      useNativeDriver: false,
-    });
-    animation.start(({ finished }) => {
-      if (!finished) return;
-      setKeepMounted(!group.collapsed);
-      if (group.collapsed) setContentHeight(undefined);
-    });
-    return () => animation.stop();
-  }, [contentHeight, group.collapsed, progress]);
   return <View>
     <Pressable
       accessibilityLabel={t(group.collapsed ? 'sessions.inbox.expandGroup' : 'sessions.inbox.collapseGroup', { name: group.label })}
@@ -358,42 +338,14 @@ function AiSessionGroup({ group, onToggle, renderEntry }: {
       style={({ pressed }) => [styles.groupHeader, pressed && styles.groupHeaderPressed]}
       testID="session-group-header"
     >
-      <View style={styles.groupDisclosure} testID="session-group-disclosure"><GroupDisclosure collapsed={group.collapsed} color={colors.textMuted} /></View>
+      <View style={styles.groupDisclosure} testID="session-group-disclosure"><DisclosureChevron color={colors.textMuted} expanded={!group.collapsed} size={15} /></View>
       <Text numberOfLines={1} style={[styles.groupLabel, { color: colors.text }]} testID="session-group-label">{group.label}</Text>
       <Text style={[styles.groupCount, { color: colors.textMuted }]}>{group.count}</Text>
     </Pressable>
-    {(!group.collapsed || keepMounted) ? <Animated.View
-      accessibilityElementsHidden={group.collapsed}
-      importantForAccessibility={group.collapsed ? 'no-hide-descendants' : 'auto'}
-      pointerEvents={group.collapsed ? 'none' : 'auto'}
-      style={[styles.groupChildren, { height: progress.interpolate({ inputRange: [0, 1], outputRange: [0, contentHeight ?? 0] }), opacity: progress }]}
-      testID="session-group-content"
-    >
-      <View onLayout={(event) => {
-        const next = event.nativeEvent.layout.height;
-        setContentHeight((current) => (current !== undefined && Math.abs(current - next) < 0.5 ? current : next));
-      }} style={styles.groupChildrenInner}>
-        {group.entries.map(renderEntry)}
-      </View>
-    </Animated.View> : null}
+    <AnimatedDisclosure expanded={!group.collapsed} testID="session-group-content">
+      {group.entries.map(renderEntry)}
+    </AnimatedDisclosure>
   </View>;
-}
-
-function GroupDisclosure({ collapsed, color }: { collapsed: boolean; color: string }) {
-  const [rotation] = useState(() => new Animated.Value(collapsed ? 0 : 1));
-  useEffect(() => {
-    const animation = Animated.timing(rotation, {
-      duration: GROUP_DISCLOSURE_DURATION,
-      easing: Easing.out(Easing.cubic),
-      toValue: collapsed ? 0 : 1,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [collapsed, rotation]);
-  return <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
-    <Icon color={color} name="chevron-forward" size={15} />
-  </Animated.View>;
 }
 
 function sessionMessageGroupKey(instanceId: string, sessionId: string) {
@@ -418,8 +370,6 @@ const styles = StyleSheet.create({
   groupContainer: { marginHorizontal: 20 },
   groupCardContainer: { borderRadius: 16, marginBottom: 12 },
   groupListRowContainer: { marginBottom: 2 },
-  groupChildren: { overflow: 'hidden' },
-  groupChildrenInner: { left: 0, position: 'absolute', right: 0, top: 0 },
   groupDisclosure: { alignItems: 'center', height: 24, justifyContent: 'center', width: LIST_LEADING_SLOT_WIDTH },
   groupHeader: { alignItems: 'center', flexDirection: 'row', gap: LIST_ROW_GAP, minHeight: 36, paddingBottom: 6, paddingLeft: LIST_ROW_PADDING_HORIZONTAL, paddingRight: 2, paddingTop: 4 },
   groupHeaderPressed: { opacity: 0.65 },

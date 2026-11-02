@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Alert, Animated, Easing, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { MenuView, type MenuAction } from './StoryMenuView';
 import * as Crypto from 'expo-crypto';
 import { BookOpen, MessageSquare } from 'lucide-react-native';
@@ -27,7 +37,9 @@ import { useI18n } from '../i18n';
 import {
   groupStoryTreeSessions,
   mergeStoryTreeSnapshot,
+  replaceVisibleStoryOrder,
   sortStoryTree,
+  storyDragRowHeight,
   storyDragPreview,
   storyTreeKey,
   visibleStoryTreeDocuments,
@@ -71,8 +83,15 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [pressedStoryKey, setPressedStoryKey] = useState<string>();
   const [storyDragOffsetY, setStoryDragOffsetY] = useState(0);
   const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
-  const storyRowHeights = useRef(new Map<string, number>());
-  const storyDrag = useRef<{ key: string; sourceCenter: number; sourceOrder: string[]; targets: { key: string; center: number; height: number }[] } | undefined>(undefined);
+  const storyGroupHeights = useRef(new Map<string, number>());
+  const storyHeaderHeights = useRef(new Map<string, number>());
+  const storyDrag = useRef<{
+    key: string;
+    sourceCenter: number;
+    sourceOrder: string[];
+    baseManualOrder: string[];
+    targets: { key: string; center: number; height: number }[];
+  } | undefined>(undefined);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
@@ -156,19 +175,24 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     updateStoryViewPreferences({ manualKeys: reorderStoryKeys(manualKeys, key, storyTreeKey(target), offset < 0 ? 'before' : 'after') });
   };
   const beginStoryDrag = (key: string) => {
-    const sourceOrder = normalizeManualStoryOrder(stories, preferences.manualKeys);
+    const sourceOrder = sortedStories.map(storyTreeKey);
+    const baseManualOrder = normalizeManualStoryOrder(stories, preferences.manualKeys);
     let cursor = 0;
-    const targets = sortedStories.flatMap((story) => {
-      const candidateKey = storyTreeKey(story);
-      const height = storyRowHeights.current.get(candidateKey);
+    const targets = sourceOrder.flatMap((candidateKey) => {
+      const height = storyDragRowHeight(
+        expandedStoryKeys.has(candidateKey),
+        storyGroupHeights.current.get(candidateKey),
+        storyHeaderHeights.current.get(candidateKey),
+        STORY_GROUP_BORDER_WIDTH,
+      );
       if (!height) return [];
       const target = { key: candidateKey, center: cursor + height / 2, height };
       cursor += height + STORY_TREE_ROW_GAP;
       return [target];
     });
     const source = targets.find((target) => target.key === key);
-    if (!source || targets.length < 2) return;
-    storyDrag.current = { key, sourceCenter: source.center, sourceOrder, targets };
+    if (!source || targets.length !== sourceOrder.length || targets.length < 2) return;
+    storyDrag.current = { baseManualOrder, key, sourceCenter: source.center, sourceOrder, targets };
     manualOrderPreviewRef.current = sourceOrder;
     setManualOrderPreview(sourceOrder);
     setDraggingStoryKey(key);
@@ -193,7 +217,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     setManualOrderPreview(undefined);
     setDraggingStoryKey(undefined);
     setStoryDragOffsetY(0);
-    if (!sameStringOrder(manualKeys, drag.sourceOrder)) updateStoryViewPreferences({ manualKeys });
+    if (!sameStringOrder(manualKeys, drag.sourceOrder)) {
+      updateStoryViewPreferences({ manualKeys: replaceVisibleStoryOrder(drag.baseManualOrder, manualKeys) });
+    }
   };
   const cancelStoryDrag = (key: string) => {
     if (storyDrag.current?.key !== key) return;
@@ -252,8 +278,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         );
         const isPressed = pressedStoryKey === key;
         const storyIconColor = storyMuted ? colors.textMuted : colors.text;
-        return <View
-          onLayout={(event) => storyRowHeights.current.set(key, event.nativeEvent.layout.height)}
+        return <Animated.View
+          layout={draggingStoryKey === key ? undefined : STORY_GROUP_LAYOUT}
+          onLayout={(event) => storyGroupHeights.current.set(key, event.nativeEvent.layout.height)}
           style={[styles.storyGroup, {
             backgroundColor: colors.surface,
             borderColor: colors.workbenchCardBorder,
@@ -261,6 +288,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           testID={`story-row-${key}`}
         >
         <View
+          onLayout={(event) => storyHeaderHeights.current.set(key, event.nativeEvent.layout.height)}
           style={[styles.storyRow, { backgroundColor: isPressed || isSelected ? colors.workbenchSelectionBackground : 'transparent' }, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}
           testID={`story-node-${key}`}
         >
@@ -380,7 +408,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           })}
           {!storySessions.length ? <Text style={[styles.emptyChild, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text> : null}
         </StoryChildren>
-      </View>;
+      </Animated.View>;
     }}
   />
   <Modal animationType="fade" onRequestClose={() => setRenamingDocument(undefined)} transparent visible={Boolean(renamingDocument)}>
@@ -395,6 +423,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
 
 const STORY_CHILD_ROW_INSET = 34;
 const STORY_CHILD_SPACING = 4;
+const STORY_GROUP_BORDER_WIDTH = 1;
 const STORY_GROUP_RADIUS = 16;
 const STORY_CHILD_RADIUS = STORY_GROUP_RADIUS - STORY_CHILD_SPACING;
 
@@ -403,7 +432,7 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
-  storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: 1, marginBottom: STORY_TREE_ROW_GAP, overflow: 'hidden' },
+  storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: STORY_GROUP_BORDER_WIDTH, marginBottom: STORY_TREE_ROW_GAP, overflow: 'hidden' },
   storyGroupUnavailable: { opacity: 0.5 },
   storyGroupDragging: { opacity: 0.72 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
@@ -412,8 +441,7 @@ const styles = StyleSheet.create({
   disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 34 },
   storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 6, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
   storyIcon: { alignItems: 'center', height: 22, justifyContent: 'center', width: 24 },
-  children: { marginBottom: STORY_CHILD_SPACING, marginTop: 0, overflow: 'hidden' },
-  childrenInner: { gap: STORY_CHILD_SPACING, left: 0, paddingHorizontal: STORY_CHILD_SPACING, paddingTop: STORY_CHILD_SPACING, position: 'absolute', right: 0, top: 0 },
+  children: { gap: STORY_CHILD_SPACING, marginBottom: STORY_CHILD_SPACING, overflow: 'hidden', paddingHorizontal: STORY_CHILD_SPACING, paddingTop: STORY_CHILD_SPACING },
   childRow: { alignItems: 'center', borderRadius: STORY_CHILD_RADIUS, flexDirection: 'row', gap: 6, minHeight: 38, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4, paddingVertical: 4, width: '100%' },
   childMenu: { alignSelf: 'stretch' },
   moreRow: { borderRadius: 7, justifyContent: 'center', minHeight: 40, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4 },
@@ -448,6 +476,18 @@ function sameStringOrder(left: readonly string[] | undefined, right: readonly st
 const DISCLOSURE_ROTATION_DURATION = 200;
 const STORY_CHILDREN_EXPAND_DURATION = 220;
 const STORY_CHILDREN_COLLAPSE_DURATION = 170;
+const STORY_GROUP_LAYOUT = LinearTransition
+  .duration(STORY_CHILDREN_EXPAND_DURATION)
+  .easing(Easing.out(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
+const STORY_CHILDREN_ENTERING = FadeIn
+  .duration(STORY_CHILDREN_EXPAND_DURATION)
+  .easing(Easing.out(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
+const STORY_CHILDREN_EXITING = FadeOut
+  .duration(STORY_CHILDREN_COLLAPSE_DURATION)
+  .easing(Easing.in(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
 
 function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
   accessibilityLabel: string;
@@ -455,17 +495,17 @@ function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
   expanded: boolean;
   onPress(): void;
 }) {
-  const [rotation] = useState(() => new Animated.Value(expanded ? 1 : 0));
+  const rotation = useSharedValue(expanded ? 1 : 0);
   useEffect(() => {
-    const animation = Animated.timing(rotation, {
+    rotation.value = withTiming(expanded ? 1 : 0, {
       duration: DISCLOSURE_ROTATION_DURATION,
       easing: Easing.out(Easing.cubic),
-      toValue: expanded ? 1 : 0,
-      useNativeDriver: true,
+      reduceMotion: ReduceMotion.System,
     });
-    animation.start();
-    return () => animation.stop();
   }, [expanded, rotation]);
+  const rotationStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value * 90}deg` }],
+  }));
   return <Pressable
     accessibilityLabel={accessibilityLabel}
     accessibilityRole="button"
@@ -474,34 +514,13 @@ function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
     onPress={onPress}
     style={({ pressed }) => [styles.disclosure, pressed && styles.pressed]}
   >
-    <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
+    <Animated.View style={rotationStyle}>
       <Icon color={color} name="chevron-forward" size={17} />
     </Animated.View>
   </Pressable>;
 }
 
 function StoryChildren({ children, expanded }: { children: ReactNode; expanded: boolean }) {
-  const [progress] = useState(() => new Animated.Value(expanded ? 1 : 0));
-  const [contentHeight, setContentHeight] = useState<number>();
-  const [keepMounted, setKeepMounted] = useState(expanded);
-  useEffect(() => {
-    if (expanded && contentHeight === undefined) return;
-    const animation = Animated.timing(progress, {
-      duration: expanded ? STORY_CHILDREN_EXPAND_DURATION : STORY_CHILDREN_COLLAPSE_DURATION,
-      easing: expanded ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
-      toValue: expanded ? 1 : 0,
-      useNativeDriver: false,
-    });
-    animation.start(({ finished }) => {
-      if (finished) setKeepMounted(expanded);
-    });
-    return () => animation.stop();
-  }, [contentHeight, expanded, progress]);
-  if (!expanded && !keepMounted) return null;
-  return <Animated.View style={[styles.children, { height: progress.interpolate({ inputRange: [0, 1], outputRange: [0, contentHeight ?? 0] }), opacity: progress }]}>
-    <View onLayout={(event) => {
-      const next = event.nativeEvent.layout.height;
-      setContentHeight((current) => (current !== undefined && Math.abs(current - next) < 0.5 ? current : next));
-    }} style={styles.childrenInner}>{children}</View>
-  </Animated.View>;
+  if (!expanded) return null;
+  return <Animated.View entering={STORY_CHILDREN_ENTERING} exiting={STORY_CHILDREN_EXITING} style={styles.children}>{children}</Animated.View>;
 }

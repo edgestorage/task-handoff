@@ -89,7 +89,8 @@
   "jest": {
     "preset": "jest-expo",
     "moduleNameMapper": {
-      "^@bsky.app/react-native-uitextview$": "<rootDir>/__mocks__/react-native-uitextview.tsx"
+      "^@bsky.app/react-native-uitextview$": "<rootDir>/__mocks__/react-native-uitextview.tsx",
+      "^react-native-worklets$": "<rootDir>/node_modules/react-native-worklets/src/mock"
     },
     "transform": {
       "^.+\\.mjs$": [

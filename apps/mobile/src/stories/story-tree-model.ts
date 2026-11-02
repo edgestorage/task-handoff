@@ -23,6 +23,18 @@ export function storyTreeKey(story: Pick<Story, 'id' | 'ownerNodeId'>) {
   return `${story.ownerNodeId}:${story.id}`;
 }
 
+export function storyDragRowHeight(expanded: boolean, groupHeight: number | undefined, headerHeight: number | undefined, borderWidth: number) {
+  if (expanded) return groupHeight;
+  return headerHeight === undefined ? groupHeight : headerHeight + borderWidth * 2;
+}
+
+export function replaceVisibleStoryOrder(fullOrder: readonly string[], visibleOrder: readonly string[]) {
+  const visible = new Set(visibleOrder);
+  const reordered = visibleOrder.filter((key) => fullOrder.includes(key));
+  let index = 0;
+  return fullOrder.map((key) => visible.has(key) ? reordered[index++] ?? key : key);
+}
+
 export function storyDragPreview(
   keys: readonly string[],
   sourceKey: string,

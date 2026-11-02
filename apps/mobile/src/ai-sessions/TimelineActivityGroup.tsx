@@ -7,8 +7,6 @@ import {
   BookOpen,
   Brain,
   Check,
-  ChevronDown,
-  ChevronRight,
   CircleHelp,
   ClipboardCheck,
   Clock3,
@@ -31,6 +29,7 @@ import {
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
+import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
 
 export function TimelineActivityGroup({
   activities,
@@ -56,11 +55,11 @@ export function TimelineActivityGroup({
         onPress={() => setExpanded((value) => !value)}
         style={styles.groupHeader}
       >
-        {expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} />}
+        <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
         <Text style={[styles.groupTitle, { color: colors.textMuted }]}>{t('sessions.timelineActivityCount', { count: activities.length })}</Text>
         <Text numberOfLines={1} style={[styles.groupLatest, { color: colors.textMuted }]}>· {activitySummary(latest) || latest.title}</Text>
       </Pressable>
-      {expanded ? activityList : null}
+      <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(8)}>{activityList}</AnimatedDisclosure>
     </View>
   );
 }
@@ -80,9 +79,7 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
     : undefined;
   const content = <>
     {ActivityIcon ? createElement(ActivityIcon, { color: failed ? colors.error : colors.textMuted, size: mobileWebMetric(14), style: styles.activityKindIcon })
-      : hasDetails ? expanded
-        ? <ChevronDown color={failed ? colors.error : colors.textMuted} size={mobileWebMetric(14)} style={styles.activityKindIcon} />
-        : <ChevronRight color={failed ? colors.error : colors.textMuted} size={mobileWebMetric(14)} style={styles.activityKindIcon} />
+      : hasDetails ? <DisclosureChevron color={failed ? colors.error : colors.textMuted} expanded={expanded} size={mobileWebMetric(14)} style={styles.activityKindIcon} />
         : null}
     <Text style={[styles.activityTitle, { color: failed ? colors.error : colors.textMuted }]}>{title}</Text>
     {activitySummary(activity) ? <Text numberOfLines={1} style={[styles.activitySummary, { color: colors.textMuted }]}>· {activitySummary(activity)}</Text> : null}
@@ -91,7 +88,7 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
   return <View style={styles.activity}>
     {hasDetails ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.activityHeader}>{content}</Pressable>
       : <View style={styles.activityHeader}>{content}</View>}
-    {expanded ? <View style={[styles.details, { borderTopColor: colors.border }]}>
+    <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(7)}><View style={[styles.details, { borderTopColor: colors.border }]}>
       {activity.activityKind === 'commandExecution'
         ? <TimelineCommandResult command={activity.input} exitCode={activity.exitCode} output={activity.output} />
         : <>
@@ -99,7 +96,7 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
           {activity.output ? <TimelineActivityDetail label={t('sessions.timelineOutput')} text={activity.output} /> : null}
           {activity.exitCode !== undefined ? <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{t('sessions.timelineExitCode', { code: activity.exitCode })}</Text> : null}
         </>}
-    </View> : null}
+    </View></AnimatedDisclosure>
   </View>;
 }
 
@@ -191,19 +188,19 @@ export function timelineActivityIcon(kind: string): LucideIcon | undefined {
 }
 
 const styles = StyleSheet.create({
-  group: { gap: mobileWebMetric(8), minWidth: 0 },
+  group: { minWidth: 0 },
   groupHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   groupTitle: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   groupLatest: { flex: 1, fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   activityList: { gap: mobileWebMetric(6), marginLeft: mobileWebMetric(20) },
   activityListInline: { marginLeft: 0 },
-  activity: { gap: mobileWebMetric(5), minWidth: 0 },
+  activity: { minWidth: 0 },
   activityHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   activityKindIcon: { flexShrink: 0 },
   activityTitle: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   activitySummary: { flex: 1, fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   activityStatus: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine, marginLeft: 'auto' },
-  details: { borderTopWidth: StyleSheet.hairlineWidth, gap: mobileWebMetric(8), marginTop: mobileWebMetric(2), paddingTop: mobileWebMetric(7) },
+  details: { borderTopWidth: StyleSheet.hairlineWidth, gap: mobileWebMetric(8), paddingTop: mobileWebMetric(7) },
   detailSection: { gap: mobileWebMetric(4) },
   detailLabel: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
   detailScroll: { borderLeftWidth: StyleSheet.hairlineWidth, maxHeight: mobileWebMetric(280), paddingLeft: mobileWebMetric(10) },

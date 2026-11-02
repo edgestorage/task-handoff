@@ -2,7 +2,7 @@ import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
-import { Check, ChevronDown, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
+import { Check, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
@@ -27,6 +27,7 @@ import { translate, useI18n, type Translate } from '../i18n';
 import { TimelineActivityGroup } from './TimelineActivityGroup';
 import { formatSessionTurnTime } from '../session-time';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
+import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
@@ -630,10 +631,12 @@ function TimelineHistory({
   </View>;
   return <View style={styles.timelineHistory}>
     <Pressable accessibilityLabel={t('sessions.timelineDetails')} accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.timelineHistoryHeader}>
-    {expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} />}
+      <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
       <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
     </Pressable>
-    {expanded ? <View style={[styles.timelineHistoryItems, { borderLeftColor: colors.border }]} testID="session-timeline-history-items">{items.map((item) => <DetailItemContent conversation={false} item={item} key={item.id} timelineNested />)}</View> : null}
+    <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(12)}>
+      <View style={[styles.timelineHistoryItems, { borderLeftColor: colors.border }]} testID="session-timeline-history-items">{items.map((item) => <DetailItemContent conversation={false} item={item} key={item.id} timelineNested />)}</View>
+    </AnimatedDisclosure>
   </View>;
 }
 
@@ -671,15 +674,15 @@ function TimelineCurrentActivity({ item }: { item: DetailItem }) {
   const nodes = item.history ?? [];
   const interactive = Boolean(item.interactive);
   const content = <>
-    {interactive ? expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} /> : null}
+    {interactive ? <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} /> : null}
     <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
   </>;
   return <View style={styles.currentActivity}>
     {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.currentActivityHeader}>{content}</Pressable>
       : <View style={styles.currentActivityHeader}>{content}</View>}
-    {expanded ? <View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
+    <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(10)}><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
       ? <TimelineActivityGroup activities={node.activities ?? []} key={node.id} summaryVisible={false} />
-      : <DetailItemContent conversation={false} item={node} key={node.id} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View> : null}
+      : <DetailItemContent conversation={false} item={node} key={node.id} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View></AnimatedDisclosure>
   </View>;
 }
 
@@ -720,9 +723,9 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
     <View style={[styles.subAgents, { borderTopColor: colors.border }]}> 
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setUserExpanded(!expanded)} style={styles.subAgentHeader}>
         <Text style={[styles.subAgentTitle, { color: colors.text }]}>{t('sessions.subAgents', { count: agents.length, action: expanded ? t('common.hide') : t('common.show') })}</Text>
-        <ChevronDown color={colors.textMuted} size={mobileWebMetric(14)} style={expanded ? styles.subAgentDisclosureOpen : undefined} />
+        <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(14)} />
       </Pressable>
-      {expanded ? agents.slice(0, 50).map((agent) => (
+      <AnimatedDisclosure expanded={expanded} spacing={12}><View style={styles.subAgentList}>{agents.slice(0, 50).map((agent) => (
         <View key={agent.threadId} style={[styles.subAgent, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
           <View style={styles.subAgentNameRow}>
             <View style={[styles.statusDot, { backgroundColor: ['running', 'pending-init'].includes(agent.status) ? colors.primary : colors.textMuted }]} />
@@ -731,7 +734,7 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
           <Text style={[styles.subAgentMeta, { color: colors.textMuted }]}>{agent.status} · {agent.activity || t('sessions.activityUnknown')} · {new Date(agent.updatedAt).toLocaleString(locale)}</Text>
           <Text style={[styles.subAgentMessage, { color: colors.textMuted }]}>{agent.message || t('sessions.noAgentMessage')}</Text>
         </View>
-      )) : null}
+      ))}</View></AnimatedDisclosure>
     </View>
   );
 }
@@ -777,7 +780,7 @@ const styles = StyleSheet.create({
   meta: { fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine, textTransform: 'capitalize' },
   muted: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
   toolText: { flex: 1 },
-  currentActivity: { gap: mobileWebMetric(10), minWidth: 0 },
+  currentActivity: { minWidth: 0 },
   currentActivityHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   currentActivityText: { fontSize: mobileWebType.body, fontWeight: '400', lineHeight: mobileWebType.bodyLine },
   currentActivityEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
@@ -802,7 +805,7 @@ const styles = StyleSheet.create({
   contentErrorAction: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
   errorText: { flex: 1, gap: 6 },
   role: { fontSize: mobileWebType.meta, fontWeight: '600', lineHeight: mobileWebType.metaLine, textTransform: 'capitalize' },
-  timelineHistory: { gap: mobileWebMetric(12) },
+  timelineHistory: { minWidth: 0 },
   timelineHistoryHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   timelineHistoryTitle: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   timelineHistoryError: { flex: 1, fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
@@ -812,9 +815,9 @@ const styles = StyleSheet.create({
     marginLeft: mobileWebMetric(7),
     paddingLeft: mobileWebMetric(12),
   },
-  subAgents: { borderTopWidth: StyleSheet.hairlineWidth, gap: 12, marginTop: 8, paddingTop: 16 },
+  subAgents: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 8, paddingTop: 16 },
   subAgentHeader: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 44 },
-  subAgentDisclosureOpen: { transform: [{ rotate: '180deg' }] },
+  subAgentList: { gap: 12 },
   subAgentTitle: { flex: 1, fontSize: mobileWebType.meta, fontWeight: '700', lineHeight: mobileWebType.metaLine },
   subAgent: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 8, padding: 12 },
   subAgentNameRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
