@@ -117,7 +117,7 @@ export const runtimePackages = {
     input: "apps/thctl/src/bin.ts",
     entryFile: "thctl.js",
     binName: "thctl",
-    readmeFile: "docs/control-plane-cli.md",
+    readmeFile: "apps/thctl/README.md",
     // The workspace client/protocol/core modules are inlined into the minified
     // CLI bundle; only the CLI runtime libraries stay external. Deriving the
     // external set from the whole workspace closure would declare unrelated core

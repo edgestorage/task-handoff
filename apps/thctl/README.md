@@ -1,6 +1,6 @@
 # thctl
 
-`@task-handoff/thctl` 是控制面板的命令行客户端：连接一个或多个远程 control-plane，复用 Web 登录完成授权，并对脚本和 AI agent 暴露稳定的机器可读契约。安装、授权、命令面与服务端最低版本的完整说明见 [`docs/control-plane-cli.md`](../../docs/control-plane-cli.md)。
+`@task-handoff/thctl` 是控制面板的命令行客户端：连接一个或多个远程 control-plane，复用 Web 登录完成授权，并对脚本和 AI agent 暴露稳定的机器可读契约。本文档覆盖安装、授权、命令面、事件流与服务端兼容性。
 
 ## 使用
 
@@ -92,6 +92,69 @@ thctl schema --format json
 
 命令面以 `thctl schema` 导出的契约作为唯一来源；同一份声明同时驱动命令树、帮助和 schema。
 
+### 操作审批
+
+- 服务端决定哪些写操作需要 Web 审批。CLI 收到审批请求后等待发起用户在 Web 中决定，最长五分钟；批准后携带 approval ID 重发一次同一请求。
+- `--yes` 只跳过本地交互确认，不跳过服务端审批。`--dry-run` 只打印将要发送的请求。
+- 默认受审批保护的操作包括实例删除、节点移除、节点更新应用、用户访问/角色/身份提供方变更和 git-credential 分配；实际门控始终以服务端返回为准。
+- 不支持审批协议的老服务端会在发送写请求前以能力缺失失败（退出码 14），不会绕过审批边界。
+
+### 实例
+
+```bash
+thctl instance list --json
+thctl instance show <instanceId> --json
+thctl instance create --config ./instance.json --start
+thctl instance delete <instanceId> --yes
+thctl instance delete <instanceId> --volumes --yes
+
+# ./instance.json：POST /api/controlled-instances 的请求体
+# {
+#   "nodeId": "node_x",
+#   "source": { "type": "local-folder", "path": "/Users/me/project" },
+#   "imageSelection": { "imageId": "img_x" },
+#   "start": true
+# }
+```
+
+- `create` 省略 `runtimeId` 时使用 `runtime_local_docker`；省略 `nodeId` 时按 project 或服务端默认节点解析。Docker runtime 必须能从 `environmentSource`、`imageSelection` 或 project 默认镜像解析出镜像，否则返回 `RUNTIME_IMAGE_REQUIRED`。
+- 带 `gitCredentialRetention: "instance-retained"` 的创建要求账号具备 `manage-secrets` 权限，否则退出码 6。
+- 创建返回 `startOutcome`：`not-requested` 表示请求体未要求启动，`started` 表示已请求启动（Docker 镜像可能仍在 provisioning），`failed` 表示实例已创建但启动失败，错误位于 `startOutcome.error`。
+- `delete` 始终发送布尔值 `deleteVolumes`：不带 `--volumes` 时为 `false`（保留卷），带 `--volumes` 时为 `true`。删除未完成会以退出码 8 结束，错误详情包含 `volumeResults`，可重跑同一命令重试。
+
+### 节点、设置与访问
+
+```bash
+# 节点清点与设置
+thctl node list --json
+thctl node check <nodeId>
+thctl node folders tree <nodeId> --json
+thctl node runtimes list <nodeId> --json
+thctl node updates apply <nodeId> --config ./rollout.json --wait
+
+# 注册另一台机器
+thctl node-join invite --config ./join-invite.json --yes
+thctl node-join status <inviteId>
+thctl node-join complete --config ./join-complete.json --yes
+
+# 云账号与连接
+thctl cloud account show --json
+thctl cloud account sign-in --yes
+thctl cloud account-nodes list --json
+thctl cloud scopes set --device-access true --node-relay true --yes
+
+# 访问管理
+thctl user create --config ./user.json --yes
+thctl user role list --json
+thctl user external-identity approve <approvalId> --yes
+```
+
+- `node updates apply --wait` 轮询 `updates/jobs` 直到 rollout 进入终态；等待被中断时退出码为 15。
+- `control-plane diagnostic-logs export` 把归档流式写入 `--out`，不会把内容打印到 stdout。
+- `cloud account sign-in` 启动云账号授权并在 JSON 中返回 URL；交互式 `--table` 还会打开审批页。`cloud bind` 同样只返回请求元数据和授权 URL。
+- `cloud scopes set --device-access <true|false> --node-relay <true|false>` 分别设置设备访问与节点 relay 两个独立连接域。
+- 用户、角色、身份提供方与外部身份命令分别受 `userManagement`、`customRoles` 和 `externalIdentityLogin` capability 门控；失去一个能力不会影响 `user list|show|sessions`。
+
 ### 模型中转图片裁剪
 
 节点模型 relay 可在请求体超过阈值时只保留最近的 N 张图片，旧图片直接丢弃；不做压缩、缩放或重新编码，也不下载远程 URL。该设置默认关闭，`show` 会显示阈值、保留数、解析上限和超限策略；`set` 仍通过共享 schema 的嵌套 `imagePruning` 对象写入：
@@ -116,6 +179,26 @@ thctl node settings model-relay set <nodeId> --config '{"enabled":true,"imagePru
 - 控制面板管理命令（`user *`、`control-plane *`、`cloud *`、`proxy *`、`mobile-session *`）按身份文档里的 `supportsControlPlane*` 查询；
 - 旧服务端缺路由返回无信封的 404/405/501 时归一为 `CLI_CAPABILITY_MISSING`（退出码 14），只关闭该命令域，登录、`whoami` 与其他命令域不受影响；协议版本不匹配只产生 warning。
 
-`instance logs`（阶段 C 预留）仍是未实现契约，调用会以未实现错误（退出码 3）退出，不会发送业务请求。`thctl schema` 是全部契约的唯一来源，`outputMode: json-lines` 标记流式命令。`story` 系列的 `--node` 在省略时按权威目录解析 ownerNodeId，不做本地缓存。
+`instance logs` 仍是预留契约，调用会以未实现错误（退出码 3）退出，不会发送业务请求。`thctl schema` 是全部契约的唯一来源，`outputMode: json-lines` 标记流式命令。`story` 系列的 `--node` 在省略时按权威目录解析 ownerNodeId，不做本地缓存。
 
-`instance create --config` 直接提交 `POST /api/controlled-instances` 的 wire body（`InstanceCreateInputSchema`，见 `@task-handoff/protocol/control-plane`）；`--name`/`--node`/`--start` 只覆盖同名字段。服务端 `start` 默认 `false`，Docker 实例的镜像 provisioning 与容器启动是异步的，创建/启动请求返回后请用 `thctl instance show <instanceId>` 观察状态。`instance delete --volumes` 删除托管卷且不可恢复；不传 `--volumes` 时卷保留。
+## 事件流
+
+```bash
+thctl events
+thctl events --topic ai.sessions --topic instances
+thctl events --instance <instanceId> --json
+thctl events --json | jq -c 'select(.topic == "instances")'
+```
+
+- `thctl events` 使用 CLI session bearer token 订阅 `/api/events` WebSocket，并把每个事件信封写成一行 JSON Lines；默认和 `--json` 模式都保持流式输出。
+- `--topic` 可重复，接受协议 topic（例如 `ai.sessions`、`app.sessions`、`instances`、`nodes`、`triggers`、`stories`、`models`）或精确事件类型；`ai-sessions` 和 `app-sessions` 是别名。省略时订阅全部事件。
+- `--instance <instanceId>` 在服务端限定订阅范围；账号不可见的范围会以退出码 6 关闭事件流。
+- 连接重建采用 snapshot-first：收到新的 `streams.hello` 握手前不输出事件，重放的事件 id 会去重，因此同一事件不会输出两次，也不会退化为轮询。
+- HTTP 401 会清除本地 CLI session 并以退出码 5 结束；首次连接失败退出 10，不无限重试；握手成功后的断线按共享指数退避重连。`Ctrl+C` 关闭事件流并退出 0。
+
+## 服务端兼容性
+
+- 远程 Control Plane 必须在公开身份文档中声明 `cliSessions` capability，并提供 CLI 授权与会话路由；老服务端会在写入任何本地状态前以退出码 14 拒绝。
+- 本机桌面 Control Plane 使用 `localCliSessions` 与 `POST /api/auth/cli/local`，只允许 loopback 会话，不要求先执行 `profile add`。
+- profile 固定并展示 `YYYY-MM-DD` 形式的协议版本。协议版本不匹配只产生 warning，不阻断注册、登录或已支持的命令。
+- 服务端缺少某个命令域的路由时，CLI 将无结构化信封的 404/405/501 归一为 `CLI_CAPABILITY_MISSING`（退出码 14），只关闭对应命令域。
