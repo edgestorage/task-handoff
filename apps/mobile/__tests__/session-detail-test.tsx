@@ -86,6 +86,25 @@ test('a missing session stays in recovery until the snapshot is authoritative', 
   await missing.unmount();
 });
 
+test('detail status row reuses the inbox card context row', async () => {
+  const screen = await render(<SessionDetail
+    instanceName="Instance A"
+    messages={[]}
+    session={session}
+    workspaceName="Project A"
+  />);
+  const context = within(screen.getByTestId('session-detail-context'));
+
+  expect(StyleSheet.flatten(screen.getByTestId('session-detail-context').props.style)).toEqual(expect.objectContaining({ gap: 6 }));
+  expect(context.getByTestId('session-detail-workspace-context')).toBeTruthy();
+  expect(context.getByTestId('session-detail-instance-context').props.children).toBeTruthy();
+  expect(context.getByText('Project A')).toBeTruthy();
+  expect(context.getByText('Instance A')).toBeTruthy();
+  expect(context.getByTestId('ai-agent-icon-codex')).toBeTruthy();
+  expect(screen.queryByText('Active')).toBeNull();
+  await screen.unmount();
+});
+
 test('timeline activity groups stay collapsed until explicitly expanded', async () => {
   const screen = await render(<TimelineActivityGroup activities={[{
     id: 'failed-command',

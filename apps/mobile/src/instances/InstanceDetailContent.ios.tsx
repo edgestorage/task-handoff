@@ -1,16 +1,17 @@
-import { Button, HStack, Host, Image, Label, LabeledContent, List, ProgressView, Section, Spacer, Text, VStack } from '@expo/ui/swift-ui';
-import { background, buttonStyle, controlSize, disabled as disabledModifier, font, foregroundStyle, frame, lineLimit, listStyle, scrollContentBackground, tint } from '@expo/ui/swift-ui/modifiers';
+import { Fragment } from 'react';
+import { Button, Divider, HStack, Host, Image, Label, LabeledContent, List, ProgressView, Section, Spacer, Text, VStack } from '@expo/ui/swift-ui';
+import { accessibilityLabel, background, buttonStyle, controlSize, disabled as disabledModifier, font, foregroundStyle, frame, lineLimit, listStyle, padding, scrollContentBackground, shapes, tint } from '@expo/ui/swift-ui/modifiers';
 import { View } from 'react-native';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { InstanceDetailContentProps } from './instance-detail-content-types';
-import { PRIMARY_INSTANCE_LIFECYCLE_ACTIONS, instanceLifecycleActionLabel, instanceRetryAction } from './instance-lifecycle';
+import { instanceControlActions, instanceLifecycleActionLabel } from './instance-lifecycle';
 
 export function InstanceDetailContent(props: InstanceDetailContentProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
-  const retryAction = instanceRetryAction(props.actions);
+  const lifecycleActions = instanceControlActions(props.actions);
   const statusColor = props.statusTone === 'healthy' ? '#34c759' : props.statusTone === 'error' ? colors.error : colors.textMuted;
 
   return <View style={{ flex: 1 }}>
@@ -23,39 +24,40 @@ export function InstanceDetailContent(props: InstanceDetailContentProps) {
               <Text modifiers={[font({ size: 13 }), foregroundStyle(statusColor), lineLimit(2)]}>{props.status}</Text>
             </HStack>
           </LabeledContent>
-          <HStack spacing={8}>
-            {PRIMARY_INSTANCE_LIFECYCLE_ACTIONS.map((action) => {
+          {lifecycleActions.length ? <HStack spacing={0} modifiers={[
+            padding({ vertical: 3 }),
+            background(colors.background, shapes.roundedRectangle({ cornerRadius: 10, roundedCornerStyle: 'continuous' })),
+            frame({ maxWidth: Infinity }),
+          ]}>
+            {lifecycleActions.map((action, index) => {
               const enabled = props.actionsEnabled && !props.lifecycleAction && props.actions.includes(action);
               const destructive = action === 'stop';
+              const busy = props.lifecycleAction === action;
+              const color = busy || enabled ? destructive ? colors.error : colors.primary : colors.textMuted;
               const systemImage = action === 'start' ? 'play.fill' : action === 'stop' ? 'stop.fill' : 'arrow.clockwise';
-              return <Button
-                key={action}
-                label={instanceLifecycleActionLabel(action, t)}
-                systemImage={systemImage}
-                role={destructive ? 'destructive' : 'default'}
-                onPress={() => props.onLifecycleAction(action)}
-                modifiers={[
-                  buttonStyle('bordered'),
-                  controlSize('small'),
-                  frame({ maxWidth: Infinity }),
-                  tint(destructive ? colors.error : colors.primary),
-                  disabledModifier(!enabled),
-                ]}
-              />;
+              const label = instanceLifecycleActionLabel(action, t);
+              return <Fragment key={action}>
+                {index ? <Divider modifiers={[frame({ height: 20 })]} /> : null}
+                <Button
+                  role={destructive ? 'destructive' : 'default'}
+                  onPress={() => props.onLifecycleAction(action)}
+                  modifiers={[
+                    buttonStyle('plain'),
+                    controlSize('small'),
+                    frame({ maxWidth: Infinity, minHeight: 38 }),
+                    tint(color),
+                    disabledModifier(!enabled),
+                    accessibilityLabel(label),
+                  ]}
+                >
+                  <HStack alignment="center" spacing={6}>
+                    {busy ? <ProgressView modifiers={[controlSize('small')]} /> : <Image color={color} size={15} systemName={systemImage} />}
+                    <Text modifiers={[font({ size: 13, weight: 'medium' }), foregroundStyle(color), lineLimit(1)]}>{label}</Text>
+                  </HStack>
+                </Button>
+              </Fragment>;
             })}
-          </HStack>
-          {retryAction ? <Button
-            label={instanceLifecycleActionLabel(retryAction, t)}
-            systemImage="arrow.clockwise"
-            onPress={() => props.onLifecycleAction(retryAction)}
-            modifiers={[
-              buttonStyle('bordered'),
-              controlSize('small'),
-              frame({ maxWidth: Infinity }),
-              tint(colors.primary),
-              disabledModifier(!props.actionsEnabled || Boolean(props.lifecycleAction)),
-            ]}
-          /> : null}
+          </HStack> : null}
         </Section>
 
         <Section title={t('nav.instance').toLocaleUpperCase()}>

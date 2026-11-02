@@ -90,7 +90,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
                   <Image color={colors.textMuted} size={12} systemName="chevron.right" />
                 </HStack>
               </Button>
-              {instances.map((instance) => <InstanceSummaryRow instance={instance} key={instance.id} />)}
+              {instances.map((instance) => <InstanceSummaryRow instance={instance} key={instance.id} nodeConnectionEnabled={node.connectionEnabled} />)}
               {!instances.length && (fleetState?.phase === 'loading' || fleetState?.phase === 'uninitialized')
                 ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{t('directories.loading')}</Text></HStack>
                 : !instances.length ? <Label title={t('directories.noInstancesOnNode')} systemImage="shippingbox" modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]} /> : null}
@@ -137,7 +137,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
         {nodeId ? (
           <Section title={t('directories.status')}>
             <HStack alignment="center" spacing={8}>
-              <Image color={node?.health === 'ok' ? '#34c759' : colors.textMuted} size={8} systemName="circle.fill" />
+              <Image color={node?.health === 'ok' && node.connectionEnabled !== false ? '#34c759' : colors.textMuted} size={8} systemName="circle.fill" />
               <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>
                 {node ? `${nodeStateLabel(node, t)} · ${connectionModeLabel(node.connectionMode, t)}` : t('directories.nodeUnavailable')}
               </Text>
@@ -155,7 +155,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
         {visibleNodeIds.map((visibleNodeId) => (
           <Section key={visibleNodeId} title={nodeId ? `${t('directories.instances')} (${instances.length})` : nodeLabel(state, visibleNodeId)}>
             {(instancesByNode.get(visibleNodeId) ?? []).map((instance) => (
-              <InstanceButton instance={instance} key={instance.id} onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} />
+              <InstanceButton instance={instance} key={instance.id} nodeConnectionEnabled={state.nodes.find((candidate) => candidate.id === instance.nodeId)?.connectionEnabled} onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} />
             ))}
           </Section>
         ))}
@@ -165,7 +165,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
   );
 }
 
-function InstanceButton({ instance, onPress, selected }: { instance: ControlPlaneInstanceDirectoryEntry; onPress(): void; selected: boolean }) {
+function InstanceButton({ instance, nodeConnectionEnabled, onPress, selected }: { instance: ControlPlaneInstanceDirectoryEntry; nodeConnectionEnabled?: boolean; onPress(): void; selected: boolean }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   return (
@@ -176,7 +176,7 @@ function InstanceButton({ instance, onPress, selected }: { instance: ControlPlan
       ...(selected ? [listRowBackground(colors.workbenchSelectionBackground)] : []),
     ]} onPress={onPress}>
       <HStack alignment="center" spacing={12}>
-        <InstanceIdentity instance={instance} />
+        <InstanceIdentity instance={instance} nodeConnectionEnabled={nodeConnectionEnabled} />
         <Spacer />
         <Image color={selected ? colors.primary : colors.textMuted} size={12} systemName={selected ? 'checkmark.circle.fill' : 'chevron.right'} />
       </HStack>
@@ -184,26 +184,26 @@ function InstanceButton({ instance, onPress, selected }: { instance: ControlPlan
   );
 }
 
-function InstanceSummaryRow({ instance }: { instance: ControlPlaneInstanceDirectoryEntry }) {
+function InstanceSummaryRow({ instance, nodeConnectionEnabled }: { instance: ControlPlaneInstanceDirectoryEntry; nodeConnectionEnabled?: boolean }) {
   const { t } = useI18n();
   const activity = aiSessionSummary(instance.aiSessions, t);
   return (
     <HStack alignment="center" spacing={12}>
-      <InstanceIdentity instance={instance} />
+      <InstanceIdentity instance={instance} nodeConnectionEnabled={nodeConnectionEnabled} />
       <Spacer />
       {activity ? <Text modifiers={[font({ textStyle: 'caption', weight: 'medium' }), foregroundStyle(instance.aiSessions.problemCount ? '#ff3b30' : instance.aiSessions.waitingCount ? '#9a6700' : '#007aff')]}>{activity}</Text> : null}
     </HStack>
   );
 }
 
-function InstanceIdentity({ instance }: { instance: ControlPlaneInstanceDirectoryEntry }) {
+function InstanceIdentity({ instance, nodeConnectionEnabled }: { instance: ControlPlaneInstanceDirectoryEntry; nodeConnectionEnabled?: boolean }) {
   const { t } = useI18n();
   return (
     <HStack alignment="center" spacing={10}>
       <Image size={19} systemName="shippingbox" />
       <VStack alignment="leading" spacing={3}>
         <Text modifiers={[font({ textStyle: 'body', weight: 'medium' }), lineLimit(1)]}>{instance.name}</Text>
-        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{instanceStateLabel(instance, t)} · {runtimeLabel(instance)}</Text>
+        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{instanceStateLabel(instance, t, nodeConnectionEnabled)} · {runtimeLabel(instance)}</Text>
         {!instance.protocol.compatible ? <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#9a6700')]}>{instance.protocol.warning || t('directories.protocolWarning')}</Text> : null}
         {instance.error ? <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#c9342f')]}>{instance.error.code}: {instance.error.message}</Text> : null}
       </VStack>
@@ -291,12 +291,13 @@ const styles = StyleSheet.create({
 
 function nodeConnectionSummary(node: ControlPlaneNodeDirectoryEntry, t: Translate) {
   const connection = connectionModeLabel(node.connectionMode, t);
-  return node.status === 'online' && node.health === 'ok'
+  return node.status === 'online' && node.health === 'ok' && node.connectionEnabled !== false
     ? connection
     : `${connection} · ${relativeObservedAt(node.lastSeenAt || node.observedAt, t)}`;
 }
 
 function nodeStatusColor(node: ControlPlaneNodeDirectoryEntry, fallback: string) {
+  if (node.connectionEnabled === false) return fallback;
   if (node.status === 'online' && node.health === 'ok') return '#34c759';
   if (node.status === 'degraded' || node.health === 'degraded') return '#ff9f0a';
   if (node.status === 'offline' || node.health === 'failed') return '#ff3b30';

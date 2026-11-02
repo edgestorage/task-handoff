@@ -10417,6 +10417,7 @@ test("control plane checks node agent runtime targets and lists their images", a
   assert.equal(nodeDirectory.statusCode, 200, JSON.stringify(nodeDirectory.body));
   assert.equal(nodeDirectory.body.data.length, 1);
   assert.equal(nodeDirectory.body.data[0].id, "node_agent");
+  assert.equal(nodeDirectory.body.data[0].connectionEnabled, true);
   assert.equal(nodeDirectory.body.data[0].connectionMode, "direct-http");
   assert.equal(nodeDirectory.body.data[0].connectionPhase, "healthy");
   assert.ok(nodeDirectory.body.data[0].capabilities.includes("agent"));

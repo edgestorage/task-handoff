@@ -213,14 +213,35 @@ test('directory controller treats resource metrics and unchanged proxy state as 
 
   expect(controller.applyEvent({
     type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: node.id },
-    payload: { ...proxyState, health: 'degraded' },
+    payload: { ...proxyState, health: 'degraded', connectionEnabled: false },
   })).toBe(true);
   await new Promise((resolve) => setTimeout(resolve, 150));
   // The projection carries the field it changed, so the node board is written
   // through instead of re-fetched.
   expect(store.profile('cp-telemetry').nodes[0].health).toBe('degraded');
+  expect(store.profile('cp-telemetry').nodes[0].connectionEnabled).toBe(false);
   expect(nodes).toHaveBeenCalledTimes(1);
   expect(instanceBoard).toHaveBeenCalledTimes(1);
+  controller.stop();
+});
+
+test('older node state projections do not clear a paused connection', () => {
+  const store = new MobileDirectoryStore();
+  const pausedNode = ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: 'node-paused', name: 'Paused Node', connectionEnabled: false, status: 'offline', health: 'failed',
+    connectionMode: 'reverse-wss', connectionPhase: 'offline', observedAt: '2026-08-05T00:00:00.000Z', capabilities: [],
+  });
+  store.set('cp-paused', { nodes: [pausedNode], phase: 'ready' });
+  const controller = new MobileDirectoryController('cp-paused', { resources: {} } as unknown as ControlPlaneClient, store);
+
+  expect(controller.applyEvent({
+    type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: pausedNode.id },
+    payload: {
+      nodeId: pausedNode.id, status: 'offline', health: 'failed', lastSeenAt: null, connectionPhase: 'offline',
+      connectionDiagnostics: null, proxyState: null,
+    },
+  })).toBe(true);
+  expect(store.profile('cp-paused').nodes[0].connectionEnabled).toBe(false);
   controller.stop();
 });
 

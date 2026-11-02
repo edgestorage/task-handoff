@@ -235,6 +235,9 @@ export const ControlPlaneFleetDirectoryMetaSchema = z.object({
 export const ControlPlaneNodeDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
+  // Compatibility for v0.0.47: older directory producers omit this additive
+  // user-configured flag. Absence means the node connection is not paused.
+  connectionEnabled: z.boolean().optional(),
   status: z.enum(["unknown", "online", "offline", "degraded"]),
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy", "cloud-relay"]),

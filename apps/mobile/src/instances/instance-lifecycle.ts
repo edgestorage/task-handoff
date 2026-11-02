@@ -15,3 +15,11 @@ export function instanceRetryAction(actions: readonly ControlPlaneInstanceAction
   // single retry for whichever step failed.
   return actions.includes('retry-git') ? 'retry-git' : actions.includes('retry-image') ? 'retry-image' : undefined;
 }
+
+export function instanceControlActions(actions: readonly ControlPlaneInstanceAction[]): ControlPlaneInstanceAction[] {
+  const retryAction = instanceRetryAction(actions);
+  return [
+    ...PRIMARY_INSTANCE_LIFECYCLE_ACTIONS.filter((action) => actions.includes(action)),
+    ...(retryAction ? [retryAction] : []),
+  ];
+}

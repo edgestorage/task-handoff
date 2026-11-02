@@ -53,6 +53,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
           {state.nodes.map((node) => {
             const selected = nodeIsSelected(storyNodeFilter, node.id);
             const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
+            const paused = node.connectionEnabled === false;
             const status = nodeStateLabel(node, t);
             return <Pressable
               accessibilityRole="checkbox"
@@ -66,8 +67,8 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
               <View style={styles.nodeCopy}>
                 <Text numberOfLines={1} style={[styles.nodeLabel, { color: colors.text }]}>{nodeDisplayName(node, t)}</Text>
                 {status ? <View style={styles.nodeStatusRow}>
-                  {connecting ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: node.health === 'ok' && node.status === 'online' ? colors.sessionActive : node.health === 'failed' ? colors.error : colors.textMuted }]} />}
-                  <Text style={[styles.nodeStatus, { color: connecting ? colors.primary : colors.textMuted }]}>{status}</Text>
+                  {connecting && !paused ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: paused ? colors.textMuted : node.health === 'ok' && node.status === 'online' ? colors.sessionActive : node.health === 'failed' ? colors.error : colors.textMuted }]} />}
+                  <Text style={[styles.nodeStatus, { color: connecting && !paused ? colors.primary : colors.textMuted }]}>{status}</Text>
                 </View> : null}
               </View>
               <Icon color={selected ? colors.primary : colors.border} name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={20} />
@@ -82,6 +83,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
             const instances = instancesByNode.get(node.id) ?? [];
             const isCollapsed = collapsed[node.id] === true;
             const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
+            const paused = node.connectionEnabled === false;
             const status = nodeStateLabel(node, t);
             return <View key={node.id}>
               <Pressable
@@ -94,8 +96,8 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                 <View style={styles.nodeCopy}>
                   <Text numberOfLines={1} style={[styles.nodeLabel, { color: colors.text }]}>{nodeDisplayName(node, t)}</Text>
                   {status ? <View style={styles.nodeStatusRow}>
-                    {connecting ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: node.health === 'ok' && node.status === 'online' ? colors.sessionActive : node.health === 'failed' ? colors.error : colors.textMuted }]} />}
-                    <Text style={[styles.nodeStatus, { color: connecting ? colors.primary : colors.textMuted }]}>{status}</Text>
+                    {connecting && !paused ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: paused ? colors.textMuted : node.health === 'ok' && node.status === 'online' ? colors.sessionActive : node.health === 'failed' ? colors.error : colors.textMuted }]} />}
+                    <Text style={[styles.nodeStatus, { color: connecting && !paused ? colors.primary : colors.textMuted }]}>{status}</Text>
                   </View> : null}
                 </View>
                 <Text style={[styles.count, { color: colors.textMuted }]}>{instances.length}</Text>
@@ -109,7 +111,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                   label={instance.name}
                   nested
                   onPress={() => select(instance.id)}
-                  subtitle={instanceStateLabel(instance, t)}
+                  subtitle={instanceStateLabel(instance, t, node.connectionEnabled)}
                 />
               )}</View> : null}
             </View>;

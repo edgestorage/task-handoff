@@ -63,6 +63,7 @@ export function publicNodeDirectory(node: Node & { connectionPhase?: "connecting
   return ControlPlaneNodeDirectoryEntrySchema.parse({
     id: node.id,
     name: node.name,
+    connectionEnabled: node.connectionEnabled !== false,
     status: node.status,
     health: node.health,
     connectionMode: node.connectionMode,

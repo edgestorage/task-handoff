@@ -6,6 +6,7 @@ import { MenuView, type MenuAction } from '../components/MenuView';
 
 import { SessionWorkspace } from './SessionWorkspace';
 import type { SessionDetailMode } from './SessionDetail';
+import { workspaceLabel } from './InboxModel';
 import { mobileAiSessionBusyKey } from './actions';
 import { useActiveAiSessionView, useActiveAiSessionsRuntime } from './use-active-sessions';
 import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
@@ -67,6 +68,8 @@ export function AiSessionDetailScreen({
     void client.aiSessions.markRead(instanceId, sessionId).catch(() => undefined);
   }, [client, controlPlaneId, instanceId, session?.unread, sessionId]);
   const title = session?.title || session?.agent || 'AI Session';
+  const workspaceName = workspaceLabel(session?.cwd, t);
+  const instanceName = instance?.name || instanceId;
   const trackedSession = taskStatus.trackedSession;
   const trackedHere = Boolean(trackedSession
     && trackedSession.controlPlaneId === controlPlaneId
@@ -193,6 +196,7 @@ export function AiSessionDetailScreen({
     modelGroups={modelGroups}
     detailMode={detailMode}
     instanceId={instanceId}
+    instanceName={instanceName}
     instanceCapabilities={instance?.capabilities}
     messages={messages}
     nodeId={instance?.nodeId}
@@ -207,6 +211,7 @@ export function AiSessionDetailScreen({
     session={session}
     syncPhase={sessionView.syncPhase}
     timelines={sessionView.timelines}
+    workspaceName={workspaceName}
   />;
   return <>
     {embeddedHeader ? null : <Stack.Screen options={pane ? { headerRight: () => menu } : { title, headerRight: () => menu }} />}

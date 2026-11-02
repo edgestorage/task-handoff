@@ -22,6 +22,7 @@ import { NativeSessionModePicker } from './NativeSessionModePicker';
 import { ToolActivityText } from './ToolActivityText';
 import { RetryWarning } from './RetryWarning';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
+import { SessionContextRow } from './SessionContextRow';
 import { translate, useI18n, type Translate } from '../i18n';
 import { TimelineActivityGroup } from './TimelineActivityGroup';
 import { formatSessionTurnTime } from '../session-time';
@@ -76,6 +77,8 @@ export function SessionDetail({
   onRetryContent,
   recovering = false,
   keyboardViewportRevision = 0,
+  instanceName,
+  workspaceName,
 }: {
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
@@ -99,6 +102,8 @@ export function SessionDetail({
   /** The session is expected to reappear after a transient connection recovery. */
   recovering?: boolean;
   keyboardViewportRevision?: number;
+  instanceName?: string;
+  workspaceName?: string;
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
@@ -245,10 +250,20 @@ export function SessionDetail({
     </Pressable> : null}
     {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
     <View style={styles.sessionBar}>
-      <View style={styles.metaRow}>
+      {instanceName && workspaceName ? <View style={styles.sessionContext} testID="session-detail-context">
+        <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
+        <SessionContextRow
+          agent={session.agent}
+          instanceName={instanceName}
+          instanceTestID="session-detail-instance-context"
+          style={styles.sessionContextRow}
+          testID="session-detail-workspace-context"
+          workspace={workspaceName}
+        />
+      </View> : <View style={styles.metaRow}>
         <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
         <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
-      </View>
+      </View>}
       {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator} testID="session-turn-navigator">
         <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><Icon color={colors.primary} name="chevron-back" size={14} /></Pressable>
         <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
@@ -750,6 +765,8 @@ const styles = StyleSheet.create({
   modePicker: { alignItems: 'center' },
   sessionBar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 36 },
   metaRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  sessionContext: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 6, minWidth: 0 },
+  sessionContextRow: { flex: 1 },
   turnNavigator: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   turnButton: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   turnButtonDisabled: { opacity: 0.3 },

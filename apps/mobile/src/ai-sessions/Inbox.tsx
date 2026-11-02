@@ -1,7 +1,6 @@
 import { Profiler, useEffect, useMemo, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import { Boxes, Folder } from 'lucide-react-native';
 import {
   aiSessionLastUserMessageAt,
   aiSessionStatusGroup,
@@ -14,7 +13,6 @@ import type { AiSessionScope, MobileAiSessionProfileState } from './store';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
-import { AiAgentIcon, aiAgentKind } from '../components/AiAgentIcon';
 import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { InitialSyncLoading, type InitialSyncConnection } from '../components/InitialSyncLoading';
@@ -25,6 +23,7 @@ import { markdownPlainText } from '../components/SafeMarkdown';
 import { sessionActivityText } from './SessionDetail';
 import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
+import { SessionContextRow } from './SessionContextRow';
 import { useI18n } from '../i18n';
 import {
   aiSessionInboxSections,
@@ -220,7 +219,6 @@ export function AiSessionInbox({
     const statusGroup = aiSessionStatusGroup(item.session);
     const statusLabel = statusFilterLabel(statusGroup, t);
     const workspace = workspaceLabel(item.session.cwd, t);
-    const agent = aiAgentKind(item.session.agent);
     const instanceName = instanceNames.get(item.instanceId) || item.instanceId;
     const isSelected = selected?.instanceId === item.instanceId && selected.sessionId === item.session.id;
     const updatedAt = aiSessionLastUserMessageAt(item.session) || item.session.startedAt;
@@ -268,21 +266,7 @@ export function AiSessionInbox({
               testID="session-disclosure"
             ><Icon color={colors.textMuted} name={expandedSessionIds.has(item.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : <View style={styles.leadingIcon} testID="session-status-leading"><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View>}
             <View style={styles.sessionIdentityText}>
-              <View style={styles.workspaceContext} testID="session-workspace-context">
-                <View style={styles.contextItem}>
-                  <Folder color={colors.textMuted} size={14} />
-                  <Text numberOfLines={1} style={[styles.workspaceName, { color: colors.textMuted }]}>{workspace}</Text>
-                </View>
-                <Text aria-hidden style={[styles.contextSeparator, { color: colors.textMuted }]}>·</Text>
-                <View style={[styles.contextItem, styles.instanceContext]} testID="session-instance-context">
-                  <Boxes color={colors.textMuted} size={14} />
-                  <Text numberOfLines={1} style={[styles.instanceName, { color: colors.textMuted }]}>{instanceName}</Text>
-                </View>
-                <Text aria-hidden style={[styles.contextSeparator, { color: colors.textMuted }]}>·</Text>
-                {agent
-                  ? <AiAgentIcon agent={agent} color={colors.textMuted} label={item.session.agent} />
-                  : <Text numberOfLines={1} style={[styles.agentFallback, { color: colors.textMuted }]}>{item.session.agent}</Text>}
-              </View>
+              <SessionContextRow agent={item.session.agent} instanceName={instanceName} style={styles.workspaceContext} workspace={workspace} />
             </View>
           </View>
         </View>
@@ -459,13 +443,7 @@ const styles = StyleSheet.create({
   leadingIcon: { alignItems: 'center', height: 14, justifyContent: 'center', width: 14 },
   disclosure: { alignItems: 'center', height: 20, justifyContent: 'center', width: 18 },
   sessionIdentityText: { flex: 1, minWidth: 0 },
-  workspaceContext: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 6, minWidth: 0, overflow: 'hidden' },
-  contextItem: { alignItems: 'center', flexDirection: 'row', flexShrink: 1, gap: 5, minWidth: 0 },
-  instanceContext: { flexShrink: 1.2 },
-  workspaceName: { flexShrink: 1, fontSize: 13, fontWeight: '400', lineHeight: 20, minWidth: 0 },
-  contextSeparator: { flexShrink: 0, fontSize: 13, lineHeight: 20 },
-  agentFallback: { flexShrink: 0, fontSize: 13, lineHeight: 20 },
-  instanceName: { flexShrink: 1, fontSize: 13, fontWeight: '400', lineHeight: 20, minWidth: 0 },
+  workspaceContext: { flex: 1 },
   promptPreview: { fontSize: 17, fontWeight: '600', lineHeight: 22 },
   responsePreview: { fontSize: 15, lineHeight: 20, minHeight: 60 },
   unread: { backgroundColor: '#2563eb', borderRadius: 5, height: 10, position: 'absolute', right: 16, top: 16, width: 10, zIndex: 1 },

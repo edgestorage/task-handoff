@@ -23,7 +23,7 @@ export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfil
       <View style={styles.nodeSummary}>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node, t)}</Text>
       </View>
-      {node.status === 'online' && node.health === 'ok' ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt, t)}</Text>}
+      {node.status === 'online' && node.health === 'ok' && node.connectionEnabled !== false ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt, t)}</Text>}
       {node.error ? <Text style={[styles.error, { color: colors.error }]}>{node.error.code}: {node.error.message}</Text> : null}
       {fleetState?.phase === 'loading' || fleetState?.phase === 'uninitialized' ? <Text style={[styles.meta, { color: colors.textMuted }]}>{t('directories.loading')}</Text> : null}
       {fleetState?.error ? <Text style={[styles.error, { color: colors.error }]}>{fleetState.error.message}</Text> : null}
@@ -65,7 +65,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
   return <View style={[styles.screen, { backgroundColor: colors.background }]}>
     {nodeId ? (
       <View style={[styles.nodeStatusSummary, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-        <View style={[styles.nodeStatusDot, { backgroundColor: node?.health === 'ok' ? '#34c759' : colors.textMuted }]} />
+        <View style={[styles.nodeStatusDot, { backgroundColor: node?.health === 'ok' && node.connectionEnabled !== false ? '#34c759' : colors.textMuted }]} />
         <Text numberOfLines={1} style={[styles.nodeStatusText, { color: colors.textMuted }]}>{node ? `${nodeStateLabel(node, t)} · ${connectionModeLabel(node.connectionMode, t)}` : t('directories.nodeUnavailable')}</Text>
       </View>
     ) : null}
@@ -78,7 +78,7 @@ export function InstancesDirectory({ state, nodeId, onOpen, onRefresh, selectedI
       </ScrollView>
     </View>
     <DirectoryListContent emptyIcon="layers-outline" state={state} data={instances} keyOf={(instance) => instance.id} onRefresh={pullToRefresh.onRefresh} refreshing={pullToRefresh.refreshing} render={(instance) => (
-      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
+      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} selected={instance.id === selectedInstanceId} title={instance.name} subtitle={instanceStateLabel(instance, t, nodeConnectionEnabled(state, instance.nodeId))}>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{!nodeId ? `${nodeLabel(state, instance.nodeId, t)} · ` : ''}{runtimeSummary(instance)}</Text>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt, t) : t('directories.heartbeatMissing')}</Text>
       {aiSessionSummary(instance.aiSessions, t) ? <Text style={[styles.meta, { color: colors.textMuted }]}>AI · {aiSessionSummary(instance.aiSessions, t)}</Text> : null}
@@ -155,6 +155,10 @@ function FilterPill({ label, onChange, options, title, value }: { label: string;
 function nodeLabel(state: MobileDirectoryProfileState, nodeId: string, t: Translate) {
   const node = state.nodes.find((candidate) => candidate.id === nodeId);
   return node ? nodeDisplayName(node, t) : nodeId;
+}
+
+function nodeConnectionEnabled(state: MobileDirectoryProfileState, nodeId: string) {
+  return state.nodes.find((candidate) => candidate.id === nodeId)?.connectionEnabled;
 }
 
 /** Keeps the runtime line short: "Local Docker" already carries its type, so it is not repeated. */

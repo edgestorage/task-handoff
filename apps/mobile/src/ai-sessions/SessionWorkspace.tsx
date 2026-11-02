@@ -52,6 +52,7 @@ function missingTimelineSyncRoute(error: unknown) {
 export function SessionWorkspace({
   controlPlaneId,
   instanceId,
+  instanceName,
   nodeId,
   session,
   messages,
@@ -63,6 +64,7 @@ export function SessionWorkspace({
   defaultPermissionMode,
   maxFileAttachmentBytes,
   modelGroups = [],
+  workspaceName,
   client,
   refresh,
   onVisible,
@@ -75,6 +77,7 @@ export function SessionWorkspace({
 }: {
   controlPlaneId: string;
   instanceId: string;
+  instanceName?: string;
   nodeId?: string;
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
@@ -86,6 +89,7 @@ export function SessionWorkspace({
   defaultPermissionMode?: AiSessionPermissionMode;
   maxFileAttachmentBytes?: number;
   modelGroups?: AiSessionModelGroup[];
+  workspaceName?: string;
   client?: ControlPlaneClient;
   refresh?(): Promise<void>;
   onVisible?(): void;
@@ -463,7 +467,7 @@ export function SessionWorkspace({
     () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
     [decisionsSessionId, storyDecisionList],
   );
-  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail messages={messages} recovering={syncPhase !== 'ready'} session={session} /></View>;
+  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnBodyFailure = selectedTurn && turnBodyFailure && turnBodyFailure.sessionId === sessionId && turnBodyFailure.turnId === selectedTurn.id
     ? turnBodyFailure.message
@@ -847,6 +851,7 @@ export function SessionWorkspace({
           bottomInset={composerOverlayHeight}
           contentLoading={initialTurnLoading}
           keyboardViewportRevision={keyboardViewportRevision}
+          instanceName={instanceName}
           messages={messages}
           mode={detailMode}
           onModeChange={setDetailMode}
@@ -870,6 +875,7 @@ export function SessionWorkspace({
           turnLoading={pendingTurnIndex !== undefined || selectedTurnRefreshing}
           turnIndex={selectedTurnIndex}
           contentError={loadError}
+          workspaceName={workspaceName}
         />
       </View>
       <>

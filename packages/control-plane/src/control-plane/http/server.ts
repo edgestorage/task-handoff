@@ -225,6 +225,7 @@ function nodeStateProjection(node: Node & {
 }) {
   return NodeStateProjectionEventSchema.parse({
     nodeId: node.id,
+    connectionEnabled: node.connectionEnabled !== false,
     status: node.status,
     health: node.health,
     lastSeenAt: node.lastSeenAt ?? null,

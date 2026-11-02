@@ -13,7 +13,9 @@ test("node state projection carries only public target connection state", () => 
     proxyState: null,
   });
   assert.equal(parsed.nodeId, "node_target");
+  assert.equal(parsed.connectionEnabled, undefined, "older producers may omit the additive flag");
   assert.equal(parsed.connectionDiagnostics.pingRttMs, 12);
+  assert.equal(NodeStateProjectionEventSchema.parse({ ...parsed, connectionEnabled: false }).connectionEnabled, false);
   assert.throws(() => NodeStateProjectionEventSchema.parse({
     ...parsed,
     auth: { secret: "must-not-cross-the-event-boundary" },

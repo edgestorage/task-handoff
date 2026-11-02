@@ -2334,6 +2334,9 @@ export const NodeSchema = z
 /** Minimal public projection for converging one node's ephemeral connection state. */
 export const NodeStateProjectionEventSchema = z.object({
   nodeId: IdSchema,
+  // Compatibility for v0.0.47: older event producers omit this additive
+  // user-configured flag. Consumers must treat absence as not paused.
+  connectionEnabled: z.boolean().optional(),
   status: z.enum(["unknown", "online", "offline", "degraded"]),
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   lastSeenAt: TimestampSchema.nullable(),

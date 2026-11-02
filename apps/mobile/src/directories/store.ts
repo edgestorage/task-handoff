@@ -137,20 +137,29 @@ export class MobileDirectoryStore {
    */
   applyNodeStateProjection(controlPlaneId: string, projection: Pick<
     NodeStateProjectionEvent,
-    'nodeId' | 'status' | 'health' | 'lastSeenAt' | 'connectionPhase'
+    'nodeId' | 'connectionEnabled' | 'status' | 'health' | 'lastSeenAt' | 'connectionPhase'
   >) {
     const current = this.profile(controlPlaneId);
     const target = current.nodes.find((node) => node.id === projection.nodeId);
     if (!target) return false;
+    const connectionEnabled = projection.connectionEnabled ?? target.connectionEnabled;
     const lastSeenAt = projection.lastSeenAt ?? undefined;
     const connectionPhase = projection.connectionPhase ?? undefined;
-    if (target.status === projection.status
+    if (target.connectionEnabled === connectionEnabled
+      && target.status === projection.status
       && target.health === projection.health
       && (target.lastSeenAt ?? undefined) === lastSeenAt
       && (target.connectionPhase ?? undefined) === connectionPhase) return false;
     this.set(controlPlaneId, {
       nodes: current.nodes.map((node) => node.id === projection.nodeId
-        ? { ...node, status: projection.status, health: projection.health, lastSeenAt, connectionPhase }
+        ? {
+          ...node,
+          ...(connectionEnabled === undefined ? {} : { connectionEnabled }),
+          status: projection.status,
+          health: projection.health,
+          lastSeenAt,
+          connectionPhase,
+        }
         : node),
     });
     return true;

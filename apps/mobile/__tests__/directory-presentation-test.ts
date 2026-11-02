@@ -19,11 +19,14 @@ describe('directory presentation', () => {
     expect(nodeSummary(1, { status: 'unknown', health: 'unknown' })).toBe('1 Instance');
     expect(nodeSummary(2, { status: 'online', health: 'ok' })).toBe('2 Instances · Online');
     expect(nodeSummary(1, { status: 'online', health: 'failed' })).toBe('1 Instance · Failed');
+    expect(nodeSummary(1, { status: 'offline', health: 'failed', connectionEnabled: false })).toBe('1 Instance · Paused');
+    expect(nodeStateLabel({ status: 'online', health: 'ok', connectionEnabled: false })).toBe('Paused');
   });
 
   test('normalizes lifecycle, health, and connectivity into one state', () => {
     expect(instanceStateLabel({ status: 'running', health: 'ok', connectionStatus: 'online' })).toBe('Running');
     expect(instanceStateLabel({ status: 'running', health: 'ok', connectionStatus: 'offline' })).toBe('Offline');
+    expect(instanceStateLabel({ status: 'running', health: 'ok', connectionStatus: 'offline' }, undefined, false)).toBe('Paused');
     expect(instanceStateLabel({ status: 'running', health: 'degraded', connectionStatus: 'online' })).toBe('Needs attention');
     expect(instanceStateLabel({ status: 'failed', health: 'unknown', connectionStatus: 'unknown' })).toBe('Failed');
   });
