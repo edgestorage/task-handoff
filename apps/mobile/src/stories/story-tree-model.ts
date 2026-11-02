@@ -9,6 +9,7 @@ import type { StorySortMode } from './story-view-preferences';
 import { deriveAiSessionForest, flattenAiSessionForest } from '@task-handoff/protocol/ai-session-hierarchy';
 
 export const STORY_TREE_DOCUMENT_LIMIT = 5;
+export const STORY_TREE_ROW_GAP = 8;
 
 export type StoryTreeSession = {
   depth: number;
@@ -22,14 +23,29 @@ export function storyTreeKey(story: Pick<Story, 'id' | 'ownerNodeId'>) {
   return `${story.ownerNodeId}:${story.id}`;
 }
 
-export function storyDragPreview(keys: readonly string[], sourceKey: string, sourceCenter: number, targets: readonly { key: string; center: number }[], dy: number) {
+export function storyDragPreview(
+  keys: readonly string[],
+  sourceKey: string,
+  sourceCenter: number,
+  targets: readonly { key: string; center: number; height: number }[],
+  dy: number,
+  rowGap: number,
+) {
   const pointerCenter = sourceCenter + dy;
   const target = targets.reduce((closest, candidate) => (
     Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
   ));
+  const reorderedKeys = reorderStoryKeys(keys, sourceKey, target.key, target.center > sourceCenter ? 'after' : 'before');
+  const targetsByKey = new Map(targets.map((item) => [item.key, item]));
+  let previewTop = 0;
+  for (const key of reorderedKeys) {
+    if (key === sourceKey) break;
+    previewTop += (targetsByKey.get(key)?.height ?? 0) + rowGap;
+  }
+  const previewCenter = previewTop + (targetsByKey.get(sourceKey)?.height ?? 0) / 2;
   return {
-    keys: reorderStoryKeys(keys, sourceKey, target.key, target.center > sourceCenter ? 'after' : 'before'),
-    offsetY: pointerCenter - target.center,
+    keys: reorderedKeys,
+    offsetY: pointerCenter - previewCenter,
   };
 }
 

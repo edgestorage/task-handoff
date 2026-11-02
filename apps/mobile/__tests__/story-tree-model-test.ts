@@ -1,7 +1,7 @@
 import { ControlPlaneAiSessionsSchema, normalizeManualStoryOrder, reorderStoryKeys, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, storyDragPreview, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, storyDragPreview, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -33,11 +33,33 @@ describe('mobile Story tree model', () => {
     const keys = normalizeManualStoryOrder(stories, ['n1:b', 'missing', 'n1:b']);
     expect(keys).toEqual(['n1:a', 'n2:c', 'n1:b']);
     expect(reorderStoryKeys(keys, 'n1:a', 'n1:b', 'after')).toEqual(['n2:c', 'n1:b', 'n1:a']);
-    expect(storyDragPreview(keys, 'n1:b', 25, [
-      { key: 'n1:b', center: 25 },
-      { key: 'n1:a', center: 85 },
-      { key: 'n2:c', center: 145 },
-    ], 75).keys).toEqual(['n1:a', 'n1:b', 'n2:c']);
+    const preview = storyDragPreview(keys, 'n1:b', 25, [
+      { key: 'n1:b', center: 25, height: 50 },
+      { key: 'n1:a', center: 90, height: 60 },
+      { key: 'n2:c', center: 150, height: 40 },
+    ], 75, STORY_TREE_ROW_GAP);
+    expect(preview.keys).toEqual(['n1:a', 'n1:b', 'n2:c']);
+    expect(preview.offsetY).toBe(7);
+  });
+
+  test('keeps the dragged Story under the pointer when row heights differ', () => {
+    const keys = ['n1:a', 'n1:b', 'n1:c'];
+    const targets = [
+      { key: 'n1:a', center: 50, height: 100 },
+      { key: 'n1:b', center: 208, height: 200 },
+      { key: 'n1:c', center: 346, height: 60 },
+    ];
+    const beforeSwap = storyDragPreview(keys, 'n1:a', 50, targets, 70, STORY_TREE_ROW_GAP);
+    expect(beforeSwap.keys).toEqual(keys);
+    expect(beforeSwap.offsetY).toBe(70);
+
+    const firstSwap = storyDragPreview(keys, 'n1:a', 50, targets, 100, STORY_TREE_ROW_GAP);
+    expect(firstSwap.keys).toEqual(['n1:b', 'n1:a', 'n1:c']);
+    expect(firstSwap.offsetY).toBe(-108);
+
+    const secondSwap = storyDragPreview(keys, 'n1:a', 50, targets, 250, STORY_TREE_ROW_GAP);
+    expect(secondSwap.keys).toEqual(['n1:b', 'n1:c', 'n1:a']);
+    expect(secondSwap.offsetY).toBe(-26);
   });
 
   test('keeps archived Stories after active Stories in every sort mode', () => {

@@ -32,6 +32,7 @@ import {
   storyTreeKey,
   visibleStoryTreeDocuments,
   STORY_TREE_DOCUMENT_LIMIT,
+  STORY_TREE_ROW_GAP,
   unassignedStoryRootInstanceIds,
 } from './story-tree-model';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from './story-view-preferences';
@@ -71,7 +72,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [storyDragOffsetY, setStoryDragOffsetY] = useState(0);
   const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const storyRowHeights = useRef(new Map<string, number>());
-  const storyDrag = useRef<{ key: string; sourceCenter: number; sourceOrder: string[]; targets: { key: string; center: number }[] } | undefined>(undefined);
+  const storyDrag = useRef<{ key: string; sourceCenter: number; sourceOrder: string[]; targets: { key: string; center: number; height: number }[] } | undefined>(undefined);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
@@ -161,8 +162,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       const candidateKey = storyTreeKey(story);
       const height = storyRowHeights.current.get(candidateKey);
       if (!height) return [];
-      const target = { key: candidateKey, center: cursor + height / 2 };
-      cursor += height + 10;
+      const target = { key: candidateKey, center: cursor + height / 2, height };
+      cursor += height + STORY_TREE_ROW_GAP;
       return [target];
     });
     const source = targets.find((target) => target.key === key);
@@ -176,7 +177,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const updateStoryDrag = (key: string, dy: number) => {
     const drag = storyDrag.current;
     if (!drag || drag.key !== key) return;
-    const preview = storyDragPreview(drag.sourceOrder, key, drag.sourceCenter, drag.targets, dy);
+    const preview = storyDragPreview(drag.sourceOrder, key, drag.sourceCenter, drag.targets, dy, STORY_TREE_ROW_GAP);
     setStoryDragOffsetY(preview.offsetY);
     if (!sameStringOrder(preview.keys, manualOrderPreviewRef.current)) {
       manualOrderPreviewRef.current = preview.keys;
@@ -402,7 +403,7 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 24, paddingHorizontal: 16, paddingTop: 12 },
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
-  storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: 1, marginBottom: 8, overflow: 'hidden' },
+  storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: 1, marginBottom: STORY_TREE_ROW_GAP, overflow: 'hidden' },
   storyGroupUnavailable: { opacity: 0.5 },
   storyGroupDragging: { opacity: 0.72 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
