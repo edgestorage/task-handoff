@@ -69,12 +69,12 @@ index f0a72cc..b0b35d8 100644
  }
  
 diff --git a/ios/gamma/split/RNSSplitHostComponentView.mm b/ios/gamma/split/RNSSplitHostComponentView.mm
-index 3c1b9d5..c241517 100644
+index 3c1b9d5..7964132 100644
 --- a/ios/gamma/split/RNSSplitHostComponentView.mm
 +++ b/ios/gamma/split/RNSSplitHostComponentView.mm
-@@ -130,5 +130,27 @@ - (void)didMoveToWindow
-                       toViewControllerManaging:self.reactSuperview
-                              withContainerView:self];
+@@ -130,4 +130,26 @@ - (void)didMoveToWindow
+                        toViewControllerManaging:self.reactSuperview
+                               withContainerView:self];
    }
 +
 +  [self recoverEmptySplitControllerIfNeeded];
@@ -99,8 +99,7 @@ index 3c1b9d5..c241517 100644
 +    [weakSelf recoverEmptySplitControllerIfNeeded];
 +  });
  }
- RNS_IGNORE_SUPER_CALL_BEGIN
-@@ -164,5 +186,8 @@ - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponen
+@@ -161,4 +183,7 @@ - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompone
    childScreen.splitHost = self;
    [_reactSubviews insertObject:childScreen atIndex:index];
    _hasModifiedReactSubviewsInCurrentTransaction = true;
@@ -108,7 +107,6 @@ index 3c1b9d5..c241517 100644
 +  // A host attached before its columns mount has no controller update in the first transaction.
 +  [self scheduleSplitControllerRecovery];
  }
- - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
 diff --git a/ios/gamma/split/RNSSplitNavigationController.swift b/ios/gamma/split/RNSSplitNavigationController.swift
 index 6fb3c84..6192e0e 100644
 --- a/ios/gamma/split/RNSSplitNavigationController.swift
