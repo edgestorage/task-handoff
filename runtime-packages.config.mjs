@@ -97,10 +97,6 @@ export const runtimePackages = {
     entryFile: "cli.js",
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
-    standaloneInputs: [{
-      input: "apps/cli/src/runtime/git-provisioning-helper.ts",
-      entryFile: "git-provisioning-helper.js",
-    }],
     binName: "task-handoff-node-agent",
     bundledDependencies: bundledControlPlaneDependencies,
     bundledNativeDependencies: ["node-pty"],
@@ -128,6 +124,11 @@ export const runtimePackages = {
     packageName: "@task-handoff/controlled-instance",
     description: "Prebuilt TaskHandoff controlled instance runtime.",
     keywords: ["task-handoff", "controlled-instance", "sandbox", "runtime", "ai-agents", "agent-orchestration"],
+    // The deployable runtime is Rust. The Node inputs below remain buildable
+    // with TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=node for the v0.0.46
+    // rollback artifact and source parity checks.
+    implementation: "rust",
+    rustPackageDir: "release/rust-controlled-instance",
     input: "apps/controlled-instance-image/src/cli.ts",
     entryFile: "controlled-instance-cli.js",
     standaloneInputs: [{

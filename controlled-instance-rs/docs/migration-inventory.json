@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "compatibilityBaseline": "v0.0.46",
+  "statusSemantics": {
+    "implemented": "A Rust owner exists and every referenced test path exists. This is an ownership/implementation gate, not a claim of full Node behavioral parity, platform runtime verification, or 109 acceptance.",
+    "verificationLevels": {
+      "unit-and-contract-tested": "Focused Rust unit or contract tests exist for the mapped behavior; differential and platform runtime evidence may still be pending.",
+      "unit-and-contract-tested-differential-partial": "Focused Rust tests plus selected scripted HTTP differential coverage exist; the full route/WS/CLI/persistence corpus is not complete.",
+      "unit-tested-platform-runtime-unverified": "Platform-specific code exists and has focused tests or compile checks, but the target platform runtime has not been verified.",
+      "compatibility-surface-only": "The source is included by the Node protocol package barrel or compatibility surface, but there is no direct per-export Rust parity fixture."
+    }
+  },
+  "entrypoints": [
+    "apps/controlled-instance-image/src/cli.ts",
+    "packages/controlled-instance/src/index.ts",
+    "packages/ai-session-runtime/src/index.ts",
+    "packages/app-runtime/src/index.ts"
+  ],
+  "exceptions": [
+    {
+      "path": "packages/controlled-instance/src/opencode-story-plugin.ts",
+      "kind": "opencode-plugin-adapter"
+    }
+  ],
+  "adapters": [
+    {
+      "path": "controlled-instance-rs/packaging/bin/task-handoff-controlled-instance",
+      "kind": "launcher-abi"
+    },
+    {
+      "path": "controlled-instance-rs/packaging/dist/controlled-instance-cli.js",
+      "kind": "launcher-abi"
+    },
+    {
+      "path": "packages/controlled-instance/src/opencode-story-plugin.ts",
+      "kind": "opencode-plugin-adapter"
+    }
+  ],
+  "families": [
+    {
+      "source": "apps/controlled-instance-image/src/cli.ts",
+      "rust": ["controlled-instance-rs/crates/cli/src/main.rs"],
+      "tests": ["controlled-instance-rs/crates/cli/tests/git_cli_contract.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Windows and macOS launcher/Git helper runtime smoke is still pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/index.ts",
+      "rust": ["controlled-instance-rs/crates/instance/src/lib.rs", "controlled-instance-rs/crates/instance/src/server.rs"],
+      "tests": ["controlled-instance-rs/crates/instance/src/server.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested-differential-partial",
+      "limitations": ["Route registration parity is tested; per-route body/status/error fixtures are incomplete."]
+    },
+    {
+      "source": "packages/controlled-instance/src/repository/{branches,changes,context,files,git-process,index,mutation-queue,routes,worktrees}.ts",
+      "rust": ["controlled-instance-rs/crates/workspace/src/service.rs", "controlled-instance-rs/crates/workspace/src/git.rs", "controlled-instance-rs/crates/workspace/src/worktrees.rs"],
+      "tests": ["controlled-instance-rs/crates/workspace/src/changes.rs", "controlled-instance-rs/crates/workspace/src/files.rs", "controlled-instance-rs/crates/workspace/src/git.rs", "controlled-instance-rs/crates/workspace/src/worktrees.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Temporary-repository tests exist; full conflict, credential, and Node/Rust differential fixtures remain pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/triggers/{executor,manager,store}.ts",
+      "rust": ["controlled-instance-rs/crates/workspace/src/triggers/manager.rs", "controlled-instance-rs/crates/workspace/src/triggers/executor.rs", "controlled-instance-rs/crates/workspace/src/triggers/store.rs"],
+      "tests": ["controlled-instance-rs/crates/workspace/src/triggers/manager.rs", "controlled-instance-rs/crates/workspace/src/triggers/executor.rs", "controlled-instance-rs/crates/workspace/src/triggers/store.rs", "controlled-instance-rs/crates/workspace/src/triggers/schedule.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Restart and event-matching tests exist; recorded Node/Rust trigger fixtures remain pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/{app-management,app-recipe-executor,app-update-check}.ts",
+      "rust": ["controlled-instance-rs/crates/app-runtime/src/management.rs", "controlled-instance-rs/crates/app-runtime/src/recipe.rs", "controlled-instance-rs/crates/app-runtime/src/update_check.rs"],
+      "tests": ["controlled-instance-rs/crates/app-runtime/src/management.rs", "controlled-instance-rs/crates/app-runtime/src/recipe.rs", "controlled-instance-rs/crates/app-runtime/src/update_check.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Install/update/uninstall runtime acceptance and cross-platform app lifecycle smoke remain pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/{claude-model-config,codex-model-config,private-model-catalog,session-title-model}.ts",
+      "rust": ["controlled-instance-rs/crates/instance/src/private_model.rs", "controlled-instance-rs/crates/protocol/src/model_config.rs", "controlled-instance-rs/crates/ai-session/src/title.rs"],
+      "tests": ["controlled-instance-rs/crates/instance/src/private_model.rs", "controlled-instance-rs/crates/protocol/src/model_config.rs", "controlled-instance-rs/crates/ai-session/src/title.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Live provider title/model selection parity and full secret-boundary acceptance remain pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/config-sync.ts",
+      "rust": ["controlled-instance-rs/crates/workspace/src/config_sync.rs"],
+      "tests": ["controlled-instance-rs/crates/workspace/src/config_sync.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Symlink and batch tests exist; full cross-platform folder differential remains pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/{git-credential-broker,git-transport}.ts",
+      "rust": ["controlled-instance-rs/crates/instance/src/git_credentials.rs", "controlled-instance-rs/crates/core/src/git_transport.rs"],
+      "tests": ["controlled-instance-rs/crates/instance/src/git_credentials.rs", "controlled-instance-rs/crates/core/src/git_transport.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Windows credential/SSH/named-pipe runtime e2e remains pending."]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/{agent-run-member-bindings,agent-run-member-status,ai-session-authority-events,ai-session-message-delta-coalescer,auth,browser-tunnel,events,instance-shell,node-agent-client,server,status,story-agent-tool-bridge,story-tool-policy-cache,story-tools,web-proxy-helpers}.ts",
+      "rust": ["controlled-instance-rs/crates/instance/src/server.rs", "controlled-instance-rs/crates/instance/src/state.rs", "controlled-instance-rs/crates/instance/src/events.rs", "controlled-instance-rs/crates/instance/src/node_agent_client.rs", "controlled-instance-rs/crates/instance/src/instance_shell.rs", "controlled-instance-rs/crates/instance/src/browser_tunnel.rs"],
+      "tests": ["controlled-instance-rs/crates/instance/src/agent_run_bindings.rs", "controlled-instance-rs/crates/instance/src/ai_session_authority.rs", "controlled-instance-rs/crates/instance/src/ai_session_delta_coalescer.rs", "controlled-instance-rs/crates/instance/src/auth.rs", "controlled-instance-rs/crates/instance/src/browser_tunnel.rs", "controlled-instance-rs/crates/instance/src/events.rs", "controlled-instance-rs/crates/instance/src/instance_shell.rs", "controlled-instance-rs/crates/instance/src/node_agent_client.rs", "controlled-instance-rs/crates/instance/src/server.rs", "controlled-instance-rs/crates/instance/src/state.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested-differential-partial",
+      "limitations": ["Selected HTTP differential steps exist; full WS, body, status, and error fixtures remain pending.", "Windows instance-shell and process-group runtime semantics are unverified."]
+    },
+    {
+      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/lib.rs", "controlled-instance-rs/crates/ai-session/src/history.rs", "controlled-instance-rs/crates/ai-session/src/timeline.rs", "controlled-instance-rs/crates/ai-session/src/attachments.rs", "controlled-instance-rs/crates/ai-session/src/provider.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/lib.rs", "controlled-instance-rs/crates/ai-session/src/history.rs", "controlled-instance-rs/crates/ai-session/src/timeline.rs", "controlled-instance-rs/crates/ai-session/src/attachments.rs", "controlled-instance-rs/crates/ai-session/src/provider.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Session persistence and revision behavior have focused tests; recorded Node/Rust fixtures and full provider lifecycle parity remain pending."]
+    },
+    {
+      "source": "packages/ai-session-runtime/src/ai-session/*.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/lib.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/lib.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Persistence samples/sanitize fixtures and cross-version read/write evidence remain pending."]
+    },
+    {
+      "source": "packages/ai-session-runtime/src/codex-app-server/**/*.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/codex_app_server.rs", "controlled-instance-rs/crates/app-runtime/src/codex_app_server.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/codex_app_server.rs", "controlled-instance-rs/crates/app-runtime/tests/codex_shared_app_server.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Fake app-server integration tests pass; recorded real provider/event/error fixtures remain pending."]
+    },
+    {
+      "source": "packages/ai-session-runtime/src/opencode/*.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/opencode.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/opencode.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Mock HTTP/SSE tests exist; live OpenCode differential and recorded error streams remain pending."]
+    },
+    {
+      "source": "packages/app-runtime/src/{catalog,codex-app-server-proxy,index,log-retention,managed-apps,runtime-utils,runtime,terminal-screen-state,types}.ts",
+      "rust": ["controlled-instance-rs/crates/app-runtime/src/runtime.rs", "controlled-instance-rs/crates/app-runtime/src/managed.rs", "controlled-instance-rs/crates/app-runtime/src/pty.rs"],
+      "tests": ["controlled-instance-rs/crates/app-runtime/src/runtime.rs", "controlled-instance-rs/crates/app-runtime/src/managed.rs", "controlled-instance-rs/crates/app-runtime/tests/codex_shared_app_server.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Unix PTY uses libc::openpty and process groups; Windows ConPTY/Job Object code is compile-checked only. macOS and Windows runtime smoke remain pending."]
+    },
+    {
+      "source": "packages/app-runtime/src/managed-app-definitions/**/*.ts",
+      "rust": ["controlled-instance-rs/crates/app-runtime/src/managed.rs", "controlled-instance-rs/crates/app-runtime/src/catalog.rs", "controlled-instance-rs/crates/app-runtime/src/recipe.rs", "controlled-instance-rs/crates/app-runtime/src/profiles.rs"],
+      "tests": ["controlled-instance-rs/crates/app-runtime/src/managed.rs", "controlled-instance-rs/crates/app-runtime/src/catalog.rs", "controlled-instance-rs/crates/app-runtime/src/recipe.rs", "controlled-instance-rs/crates/app-runtime/src/profiles.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Provider registry tests exist; real app install/update smoke and platform artifact acceptance remain pending."]
+    },
+    {
+      "source": "packages/core/src/core/claude-control-sock.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/claude_control_sock.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/claude_control_sock.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Live Claude provider differential remains pending."]
+    },
+    {
+      "source": "packages/core/src/core/{command-invocation,executable-resolver,javascript-runtime,package-version,process-tree}.ts",
+      "rust": ["controlled-instance-rs/crates/core/src/process.rs", "controlled-instance-rs/crates/cli/src/main.rs", "controlled-instance-rs/crates/app-runtime/src/command_invocation.rs", "controlled-instance-rs/crates/app-runtime/src/executable_resolver.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/process.rs", "controlled-instance-rs/crates/app-runtime/src/command_invocation.rs", "controlled-instance-rs/crates/app-runtime/src/executable_resolver.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Platform-specific process-tree behavior is not runtime-tested on Windows or macOS."]
+    },
+    {
+      "source": "packages/core/src/core/{diagnostics,http-proxy}.ts",
+      "rust": ["controlled-instance-rs/crates/instance/src/diagnostics.rs", "controlled-instance-rs/crates/instance/src/server.rs"],
+      "tests": ["controlled-instance-rs/crates/instance/src/diagnostics.rs", "controlled-instance-rs/crates/instance/src/server.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested-differential-partial",
+      "limitations": ["Proxy and diagnostics smoke exists; full header/cookie/upgrade/error differential remains pending."]
+    },
+    {
+      "source": "packages/core/src/core/{instance-private-model-catalog,local-ipc-endpoint}.ts",
+      "rust": ["controlled-instance-rs/crates/protocol/src/model_config.rs", "controlled-instance-rs/crates/core/src/local_ipc.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/local_ipc.rs", "controlled-instance-rs/crates/instance/src/private_model.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Windows named-pipe runtime remains pending outside unit coverage."]
+    },
+    {
+      "source": "packages/core/src/core/{local-controlled-instance-lock,process-singleton-lock,reconnect,time,persistence}.ts",
+      "rust": ["controlled-instance-rs/crates/core/src/singleton_lock.rs", "controlled-instance-rs/crates/core/src/reconnect.rs", "controlled-instance-rs/crates/core/src/paths.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/singleton_lock.rs", "controlled-instance-rs/crates/core/src/reconnect.rs", "controlled-instance-rs/crates/core/src/paths.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Cross-platform lock and restart behavior still needs runtime acceptance."]
+    },
+    {
+      "source": "packages/core/src/core/{file-names,pty,transcript}.ts",
+      "rust": ["controlled-instance-rs/crates/ai-session/src/attachments.rs", "controlled-instance-rs/crates/ai-session/src/history.rs", "controlled-instance-rs/crates/app-runtime/src/pty.rs", "controlled-instance-rs/crates/app-runtime/src/pty_windows.rs"],
+      "tests": ["controlled-instance-rs/crates/ai-session/src/attachments.rs", "controlled-instance-rs/crates/ai-session/src/history.rs", "controlled-instance-rs/crates/app-runtime/src/pty_windows.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Unix PTY uses libc::openpty; Windows uses ConPTY/Job Object code. Windows resize/exit/signal semantics and real PTY differential remain pending."]
+    },
+    {
+      "source": "packages/core/src/core/scheduler-runtime.ts",
+      "rust": ["controlled-instance-rs/crates/workspace/src/triggers/schedule.rs", "controlled-instance-rs/crates/workspace/src/triggers/scheduler.rs"],
+      "tests": ["controlled-instance-rs/crates/workspace/src/triggers/schedule.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Scheduler restart and timezone differential remain pending."]
+    },
+    {
+      "source": "packages/core/src/storage/{atomic-write,domain-store,paths}.ts",
+      "rust": ["controlled-instance-rs/crates/core/src/atomic.rs", "controlled-instance-rs/crates/core/src/paths.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/atomic.rs", "controlled-instance-rs/crates/core/src/paths.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Cross-platform permissions and crash-recovery acceptance remain pending."]
+    },
+    {
+      "source": "packages/core/src/storage/{managed-file-backup,open-log-retention,retention}.ts",
+      "rust": ["controlled-instance-rs/crates/core/src/managed_backup.rs", "controlled-instance-rs/crates/app-runtime/src/management.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/managed_backup.rs", "controlled-instance-rs/crates/app-runtime/src/management.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Retention and rotation behavior still needs runtime scale/differential evidence."]
+    },
+    {
+      "source": "packages/protocol/src/{agent-invocation-tools,agent-run-instance,agent-runs,ai-session-agent-tools,ai-session-hierarchy,ai-session-provider-capabilities,ai-sessions,app-profiles,app-sessions,browser-tunnel,client-request-id,config-sync,control-plane,events,instance-shell,internal/text-schemas,managed-git-credentials,model-protocol,repository,response-validation,stories,story-agent-authorization,story-agent-tools,story-automation-instance,story-id,triggers,websocket-bridge,workspace-git}.ts",
+      "rust": ["controlled-instance-rs/crates/protocol/src/lib.rs", "controlled-instance-rs/crates/protocol/src/event.rs", "controlled-instance-rs/crates/protocol/src/status.rs", "controlled-instance-rs/crates/protocol/src/ai_session.rs", "controlled-instance-rs/crates/protocol/src/repository.rs"],
+      "tests": ["controlled-instance-rs/crates/protocol/src/lib.rs", "controlled-instance-rs/crates/protocol/src/event.rs", "controlled-instance-rs/crates/protocol/src/status.rs", "controlled-instance-rs/crates/protocol/src/ai_session.rs", "controlled-instance-rs/crates/protocol/src/repository.rs"],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": ["Wire fixtures and per-field sanitize/schema parity remain incomplete."]
+    },
+    {
+      "source": "packages/protocol/src/{agent-definitions,agent-orchestrations,browser-access,control-plane-access,control-plane-directory,control-plane-proxy,control-plane-users,crypto,device-trust,index,node-agent-capabilities,node-agent-control-plane-trust,node-relay-channel}.ts",
+      "rust": ["controlled-instance-rs/crates/protocol/src/lib.rs", "controlled-instance-rs/crates/protocol/src/status.rs"],
+      "tests": ["controlled-instance-rs/crates/protocol/src/lib.rs", "controlled-instance-rs/crates/protocol/src/status.rs"],
+      "status": "implemented",
+      "verification": "compatibility-surface-only",
+      "limitations": ["These files enter the controlled-instance import closure through the protocol barrel/shared compatibility surface; they are not each direct controlled-instance runtime modules and do not have per-export Rust parity fixtures."]
+    },
+    {
+      "source": "shared/process-start-identity.cjs",
+      "rust": ["controlled-instance-rs/crates/core/src/process.rs"],
+      "tests": ["controlled-instance-rs/crates/core/src/process.rs"],
+      "status": "implemented",
+      "verification": "unit-tested-platform-runtime-unverified",
+      "limitations": ["Windows process start identity uses PowerShell and remains runtime-unverified."]
+    }
+  ]
+}

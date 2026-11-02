@@ -1,0 +1,29 @@
+[package]
+name = "controlled-instance-workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+controlled-instance-ai-session = { path = "../ai-session" }
+controlled-instance-core = { path = "../core" }
+controlled-instance-protocol = { path = "../protocol" }
+globset.workspace = true
+hex.workspace = true
+libc.workspace = true
+notify.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile.workspace = true

@@ -35,7 +35,7 @@ function compareUtf8(left, right) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
-async function payloadEntries(rootDir, relativeDir = "") {
+export async function payloadEntries(rootDir, relativeDir = "") {
   const result = [];
   for (const entry of await fs.readdir(path.join(rootDir, relativeDir), { withFileTypes: true })) {
     const relativePath = relativeDir ? path.posix.join(relativeDir, entry.name) : entry.name;
@@ -102,7 +102,7 @@ export async function computePayloadSha256(rootDir) {
   return hash.digest("hex");
 }
 
-async function sha256File(filePath) {
+export async function sha256File(filePath) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest("hex");

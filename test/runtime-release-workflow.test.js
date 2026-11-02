@@ -90,7 +90,7 @@ test("runtime releases sync npmmirror as a non-blocking post-publish step", () =
   assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
 });
 
-test("runtime release builds one Linux controlled-instance artifact from supported node-pty prebuilds", () => {
+test("runtime release builds the Rust artifact and retains a Node rollback artifact", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
 
   for (const identity of ["linux-x64", "linux-arm64"]) {
@@ -101,17 +101,25 @@ test("runtime release builds one Linux controlled-instance artifact from support
   assert.doesNotMatch(workflow, /Collect packaged node-pty prebuild/);
   assert.match(workflow, /node scripts\/node-pty-prebuild\.mjs build/);
   assert.match(workflow, /node:24-bullseye/);
-  assert.match(workflow, /npm_config_nodedir=\/usr\/local/);
+  assert.match(workflow, /rust:1\.89-bookworm/);
+  assert.match(workflow, /CARGO_TARGET_DIR="target\/linux-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /RUST_TOOLCHAIN: \$\{\{ matrix\.arch == 'x64' && 'x86_64-unknown-linux-gnu' \|\| 'aarch64-unknown-linux-gnu' \}\}/);
+  assert.match(workflow, /\/usr\/local\/rustup\/toolchains\/1\.89\.0-\$\{RUST_TOOLCHAIN\}\/bin/);
+  assert.doesNotMatch(workflow, /sh\.rustup\.rs/);
+  assert.match(workflow, /cargo build --locked --release -p controlled-instance-cli/);
+  assert.match(workflow, /rust-controlled-instance-linux-\*/);
+  assert.match(workflow, /node scripts\/rust-controlled-instance-artifact\.mjs build/);
+  assert.match(workflow, /TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: node/);
+  assert.match(workflow, /stem-node\.tar\.gz/);
   assert.match(workflow, /pattern: node-pty-prebuild-\*/);
-  assert.match(workflow, /Build Linux controlled instance production runtime/);
+  assert.match(workflow, /Assemble Linux Rust controlled instance production runtime/);
   assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
   assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
   assert.match(workflow, /pattern: node-pty-prebuild-\*[\s\S]*path: release\/node-pty-prebuilds[\s\S]*merge-multiple: true/);
-  assert.match(workflow, /release\/runtime-artifacts\/\*/);
-  assert.match(workflow, /needs: node-pty-prebuilds/);
-  assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
+  assert.match(workflow, /controlled-instance-node-rollback-artifact:\n\s+name: Linux Node controlled instance rollback artifact\n\s+needs: node-pty-prebuilds/);
+  assert.match(workflow, /runtime-packages:\n\s+needs: \[controlled-instance-artifact, controlled-instance-rust-binaries\]/);
   assert.ok(workflow.indexOf("name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}") < workflow.indexOf("name: Build npm tarballs"));
-  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template\]/);
+  assert.match(workflow, /needs: \[controlled-instance-artifact, controlled-instance-node-rollback-artifact, runtime-packages, wsl-base-template\]/);
   // The WSL base template rides the same release chain and must be attached to the published release.
   assert.match(workflow, /wsl-base-template:\n\s+name: WSL base template \(linux-x64\)\n\s+needs: runtime-packages/);
   assert.match(workflow, /apt-get install -y --no-install-recommends systemd systemd-sysv dbus/);

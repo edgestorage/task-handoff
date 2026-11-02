@@ -1,0 +1,24 @@
+[package]
+name = "controlled-instance-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "controlled-instance-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+controlled-instance-core = { path = "../core" }
+controlled-instance-instance = { path = "../instance" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+controlled-instance-core = { path = "../core" }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

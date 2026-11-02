@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+"use strict";
+
+// Launcher ABI 1 keeps this historical bin path. It only forwards to the
+// platform-selecting launcher; no product behavior belongs here.
+require("../dist/controlled-instance-cli.js");

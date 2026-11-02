@@ -80,8 +80,114 @@ jobs:
           path: release/node-pty-prebuilds/*
           if-no-files-found: error
 
+  controlled-instance-rust-binaries:
+    name: Rust controlled instance binary (linux-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build on the glibc baseline
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace/controlled-instance-rs \
+            -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
+            -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            rust:1.89-bookworm \
+            bash -c '
+              set -euo pipefail
+              export PATH="/usr/local/rustup/toolchains/1.89.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              cargo build --locked --release -p controlled-instance-cli
+              install -d -m 0755 /workspace/release/rust-controlled-instance-binaries
+              install -m 0755 "$CARGO_TARGET_DIR/release/controlled-instance-rs" \
+                "/workspace/release/rust-controlled-instance-binaries/controlled-instance-linux-${{ matrix.arch }}"
+            '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-controlled-instance-linux-${{ matrix.arch }}
+          path: release/rust-controlled-instance-binaries/*
+          if-no-files-found: error
+
   controlled-instance-artifact:
     name: Linux controlled instance artifact
+    needs: controlled-instance-rust-binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
+
+      - name: Assemble Linux Rust controlled instance production runtime
+        shell: bash
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          pnpm controlled-instance-ui:build
+          pnpm build:controlled-instance
+          node scripts/rust-controlled-instance-artifact.mjs build \
+            --version "$TASK_HANDOFF_VERSION" \
+            --platform linux \
+            --archs x64,arm64 \
+            --plugin dist/opencode-story-plugin.mjs \
+            --binaries-dir release/rust-controlled-instance-binaries \
+            --static-dir packages/controlled-instance-ui/dist
+          node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: controlled-instance-runtime-${{ steps.version.outputs.value }}
+          path: release/runtime-artifacts/controlled-instance-runtime-${{ steps.version.outputs.value }}-linux-universal.*
+          if-no-files-found: error
+
+  controlled-instance-node-rollback-artifact:
+    name: Linux Node controlled instance rollback artifact
     needs: node-pty-prebuilds
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -121,22 +227,28 @@ jobs:
           path: release/node-pty-prebuilds
           merge-multiple: true
 
-      - name: Build Linux controlled instance production runtime
+      - name: Build v0.0.46-compatible Node rollback artifact
         shell: bash
         env:
           TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+          TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: node
         run: |
           pnpm runtime:build -- --target controlled-instance
           pnpm runtime:artifact -- --version "$TASK_HANDOFF_VERSION" --prebuilds-dir release/node-pty-prebuilds
+          stem="controlled-instance-runtime-$TASK_HANDOFF_VERSION-linux-universal"
+          install -d -m 0755 release/node-rollback-artifacts
+          mv "release/runtime-artifacts/$stem.tar.gz" "release/node-rollback-artifacts/$stem-node.tar.gz"
+          mv "release/runtime-artifacts/$stem.manifest.json" "release/node-rollback-artifacts/$stem-node.manifest.json"
+          (cd release/node-rollback-artifacts && sha256sum "$stem-node.tar.gz" > "$stem-node.tar.gz.sha256")
 
       - uses: actions/upload-artifact@v7
         with:
-          name: controlled-instance-runtime-${{ steps.version.outputs.value }}
-          path: release/runtime-artifacts/*
+          name: controlled-instance-node-rollback-${{ steps.version.outputs.value }}
+          path: release/node-rollback-artifacts/*
           if-no-files-found: error
 
   runtime-packages:
-    needs: controlled-instance-artifact
+    needs: [controlled-instance-artifact, controlled-instance-rust-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
@@ -185,6 +297,12 @@ jobs:
         with:
           name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}
           path: release/runtime-artifacts
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
 
       - uses: actions/download-artifact@v7
         with:
@@ -279,7 +397,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [controlled-instance-artifact, runtime-packages, wsl-base-template]
+    needs: [controlled-instance-artifact, controlled-instance-node-rollback-artifact, runtime-packages, wsl-base-template]
     if: github.event_name == 'push' || inputs.publish_npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -303,6 +421,11 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
+          name: controlled-instance-node-rollback-${{ needs.runtime-packages.outputs.version }}
+          path: release/node-rollback-artifacts
+
+      - uses: actions/download-artifact@v7
+        with:
           name: wsl-base-template-${{ needs.runtime-packages.outputs.version }}
           path: release/runtime-artifacts
 
@@ -322,10 +445,10 @@ jobs:
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" \
-              release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
+              release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
           elif [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 gh release upload "$GITHUB_REF_NAME" "$asset"
@@ -333,7 +456,7 @@ jobs:
             done
           else
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 echo "Public release $GITHUB_REF_NAME is missing immutable asset $name." >&2

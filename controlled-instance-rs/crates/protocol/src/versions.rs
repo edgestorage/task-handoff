@@ -1,0 +1,9 @@
+pub const CONTROL_PLANE_PROTOCOL_VERSION: &str = "2026-10-02";
+pub const AI_SESSION_RENAME_PROTOCOL_VERSION: &str = "2026-09-17";
+pub const APP_PROFILES_PROTOCOL_VERSION: &str = "2026-10-02";
+pub const STORY_PROTOCOL_VERSION: &str = "2026-09-28";
+pub const TTY_STREAM_PROTOCOL_VERSION: &str = "2026-08-11";
+pub const COMPACT_EVENT_ENVELOPE_VERSION: &str = "2026-08-25";
+pub const SESSION_STREAM_PROTOCOL_VERSION: u32 = 1;
+pub const COMPATIBILITY_BASELINE: &str = "v0.0.46";
+pub const NODE_AGENT_PROTOCOL_VERSION_HEADER: &str = "x-task-handoff-node-agent-protocol-version";

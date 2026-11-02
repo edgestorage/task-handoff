@@ -42,6 +42,58 @@ jobs:
         run: pnpm --filter @task-handoff/mobile test
       - run: pnpm check
       - run: pnpm web:typecheck
+      - name: Check controlled instance Rust migration boundary
+        run: node scripts/check-controlled-instance-rust-migration.mjs
+
+  rust-controlled-instance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.89 and Windows check target
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --target x86_64-pc-windows-gnu
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path controlled-instance-rs/Cargo.toml --all -- --check
+
+      - name: Test Rust workspace
+        run: cargo test --manifest-path controlled-instance-rs/Cargo.toml --workspace
+
+      - name: Check Windows target
+        run: cargo check --manifest-path controlled-instance-rs/Cargo.toml --workspace --all-targets --target x86_64-pc-windows-gnu
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path controlled-instance-rs/Cargo.toml --workspace --all-targets
+
+  controlled-instance-differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install Rust 1.89
+        run: rustup toolchain install 1.89.0 --profile minimal
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Node controlled-instance baseline
+        run: pnpm run build:controlled-instance
+
+      - name: Build Rust controlled-instance
+        run: cargo build --manifest-path controlled-instance-rs/Cargo.toml -p controlled-instance-cli
+
+      - name: Compare Node and Rust controlled-instance HTTP behavior
+        run: node scripts/controlled-instance-differential.mjs --out release/controlled-instance-rust-validation/ci-differential.json
 
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})

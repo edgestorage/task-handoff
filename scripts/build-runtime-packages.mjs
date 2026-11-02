@@ -26,15 +26,34 @@ const options = new Command()
 const target = options.target;
 const shouldPack = options.pack;
 const selected = target ? Object.keys(runtimePackages).filter((name) => name === target) : Object.keys(runtimePackages);
+const controlledInstanceImplementation = process.env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION
+  ?? runtimePackages["controlled-instance"].implementation
+  ?? "rust";
+if (!["rust", "node"].includes(controlledInstanceImplementation)) {
+  throw new Error("TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION must be rust or node.");
+}
+const buildEnvironment = {
+  ...process.env,
+  TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: controlledInstanceImplementation,
+};
+const rustGitProvisioningHelperPaths = ["x64", "arm64"].map((arch) => `docker/controlled-instance-linux-${arch}`);
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", ...options });
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env: buildEnvironment, ...options });
   if (result.status !== 0) {
     process.exit(result.status || 1);
   }
 }
 
 function requiredExecutablePaths(name, definition) {
+  if (name === "controlled-instance" && controlledInstanceImplementation === "rust") {
+    const packageManifest = JSON.parse(fs.readFileSync(path.join(root, "release", "npm", name, "package.json"), "utf8"));
+    return [
+      "bin/task-handoff-controlled-instance",
+      "dist/controlled-instance-cli.js",
+      ...packageManifest.taskHandoffRuntime.binaries.map((binary) => binary.path),
+    ];
+  }
   return [
     `bin/${definition.binName}`,
     ...(definition.assets || []).filter((asset) => asset.executable).map((asset) => asset.target),
@@ -49,7 +68,7 @@ function requiredExecutablePaths(name, definition) {
       "docker/private-config.mjs",
       "docker/runtime-installer.mjs",
       "docker/git-provision.sh",
-      ...(definition.standaloneInputs || []).map((entry) => `docker/${entry.entryFile}`),
+      ...rustGitProvisioningHelperPaths,
     ] : []),
   ];
 }
@@ -77,6 +96,7 @@ function requiredAssetPaths(name) {
 
 async function verifyArchiveExecutables(name, definition, archivePath) {
   const requiredNativeFiles = definition.bundledNativeDependencies?.includes("node-pty")
+    && !(name === "controlled-instance" && controlledInstanceImplementation === "rust")
     ? [
         "node_modules/node-pty/prebuilds/linux-x64/pty.node",
         "node_modules/node-pty/prebuilds/linux-arm64/pty.node",
@@ -119,11 +139,27 @@ if (selected.includes("controlled-instance")) {
 if (selected.some((name) => runtimePackages[name].input)) {
   run("pnpm", ["exec", "rollup", "-c"], {
     env: {
-      ...process.env,
+      ...buildEnvironment,
       TASK_HANDOFF_ROLLUP_TARGET: "runtime-packages",
       ...(target ? { TASK_HANDOFF_RUNTIME_PACKAGE: target } : {}),
     },
   });
+}
+if (selected.includes("controlled-instance") && controlledInstanceImplementation === "rust") {
+  const version = process.env.TASK_HANDOFF_VERSION || JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+  const plugin = path.join(root, "dist", "runtime-packages", "controlled-instance", "opencode-story-plugin.mjs");
+  run(process.execPath, [
+    "scripts/rust-controlled-instance-artifact.mjs",
+    "build",
+    "--version", version,
+    "--platform", "linux",
+    "--archs", "x64,arm64",
+    "--plugin", plugin,
+    "--package-dir", path.join(root, "release", "rust-controlled-instance"),
+    "--binaries-dir", path.join(root, "release", "rust-controlled-instance-binaries"),
+    "--static-dir", path.join(root, "packages", "controlled-instance-ui", "dist"),
+    "--output", path.join(root, "release", "runtime-artifacts"),
+  ]);
 }
 run(process.execPath, ["scripts/prepare-runtime-packages.mjs", ...(target ? [target] : [])]);
 run(process.execPath, ["scripts/check-runtime-packages.mjs", ...(target ? [target] : [])]);

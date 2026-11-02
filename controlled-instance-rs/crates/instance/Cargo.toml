@@ -1,0 +1,44 @@
+[package]
+name = "controlled-instance-instance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+controlled-instance-ai-session = { path = "../ai-session" }
+controlled-instance-app-runtime = { path = "../app-runtime" }
+controlled-instance-core = { path = "../core" }
+controlled-instance-protocol = { path = "../protocol" }
+controlled-instance-workspace = { path = "../workspace" }
+futures-util.workspace = true
+hex.workspace = true
+http.workspace = true
+libc.workspace = true
+mime_guess.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tokio-tungstenite.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+http-body-util.workspace = true
+sha2.workspace = true
+tempfile.workspace = true

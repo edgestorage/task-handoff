@@ -36,6 +36,9 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
+const controlledInstanceImplementation = process.env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION
+  ?? runtimePackages["controlled-instance"].implementation
+  ?? "rust";
 
 function copyBundledNodePty(packageDir) {
   const sourceDir = path.dirname(require.resolve("node-pty/package.json"));
@@ -66,9 +69,51 @@ function copyLinuxExecutable(source, destination) {
   fs.writeFileSync(destination, contents, { mode: 0o755 });
 }
 
+function copyBinaryExecutable(source, destination) {
+  fs.copyFileSync(source, destination);
+  fs.chmodSync(destination, 0o755);
+}
+
+function rustGitProvisioningHelper(dir, arch) {
+  const name = `controlled-instance-linux-${arch}`;
+  for (const sourceDir of [
+    path.join(root, "release", "rust-controlled-instance-binaries"),
+    path.join(root, "release", "rust-controlled-instance", "bin"),
+  ]) {
+    const candidate = path.join(sourceDir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Rust Git provisioning helper is missing: ${name}. Build the Linux controlled-instance binaries first.`);
+}
+
 for (const [name, definition] of selected) {
   const packageDir = path.join(root, "release", "npm", name);
+  fs.rmSync(packageDir, { recursive: true, force: true });
   fs.mkdirSync(packageDir, { recursive: true });
+  if (name === "controlled-instance" && controlledInstanceImplementation === "rust") {
+    const sourceDir = path.resolve(root, definition.rustPackageDir);
+    const sourceManifestPath = path.join(sourceDir, "package.json");
+    if (!fs.existsSync(sourceManifestPath)) {
+      throw new Error("Rust controlled-instance package is missing; build the Rust artifact first.");
+    }
+    const sourceManifest = JSON.parse(fs.readFileSync(sourceManifestPath, "utf8"));
+    const version = process.env.TASK_HANDOFF_VERSION || rootPackage.version;
+    if (sourceManifest.name !== definition.packageName || sourceManifest.version !== version) {
+      throw new Error(`Rust controlled-instance package identity does not match ${definition.packageName}@${version}.`);
+    }
+    if (sourceManifest.taskHandoffRuntime?.implementation !== "rust") {
+      throw new Error("Rust controlled-instance package is missing its runtime implementation marker.");
+    }
+    fs.cpSync(sourceDir, packageDir, { recursive: true });
+    const readmePath = path.join(packageDir, "README.md");
+    const readmeBody = fs.existsSync(readmePath)
+      ? fs.readFileSync(readmePath, "utf8").replace(/\s+$/, "")
+      : `# ${definition.packageName}\n\n${definition.description}`;
+    fs.writeFileSync(readmePath, `${readmeBody}\n\n${readmeLinks}`);
+    fs.copyFileSync(path.join(root, "LICENSE"), path.join(packageDir, "LICENSE"));
+    fs.copyFileSync(path.join(root, "NOTICE"), path.join(packageDir, "NOTICE"));
+    continue;
+  }
   if (definition.input) {
     const builtDist = path.join(root, "dist", "runtime-packages", name);
     fs.cpSync(builtDist, path.join(packageDir, "dist"), { recursive: true });
@@ -122,8 +167,11 @@ for (const [name, definition] of selected) {
     for (const asset of ["entrypoint.sh", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs", "git-provision.sh"]) {
       copyLinuxExecutable(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
     }
-    for (const standalone of definition.standaloneInputs || []) {
-      copyLinuxExecutable(path.join(root, "dist", "runtime-packages", name, standalone.entryFile), path.join(dockerAssetsDir, standalone.entryFile));
+    for (const arch of ["x64", "arm64"]) {
+      copyBinaryExecutable(
+        rustGitProvisioningHelper(dockerAssetsDir, arch),
+        path.join(dockerAssetsDir, `controlled-instance-linux-${arch}`),
+      );
     }
     // Built-in project content is materialized on the host, so it ships with the
     // node agent package and is verified at startup against its manifest digest.

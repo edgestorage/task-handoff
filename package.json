@@ -65,6 +65,7 @@
     "desktop:dist": "pnpm run desktop:runtime:prepare && pnpm run desktop:prepare && electron-builder --publish never",
     "check": "node bin/check-package-boundaries.js && node scripts/check-cloud-contracts-sync.mjs && pnpm run typecheck:legacy && pnpm run build:legacy && node bin/check-dist.js",
     "check:controlled-instance": "node bin/check-package-boundaries.js && pnpm run typecheck:controlled-instance && pnpm run controlled-instance-ui:typecheck && pnpm run build:controlled-instance && node bin/check-dist.js",
+    "controlled-instance:differential": "node scripts/controlled-instance-differential.mjs",
     "pack:dry": "pnpm run build:legacy && npm_config_cache=/private/tmp/task-handoff-npm-cache npm pack --dry-run",
     "test": "pnpm run test:node && pnpm --filter @task-handoff/control-plane-client test && pnpm --filter @task-handoff/control-plane-ui test && pnpm --filter @task-handoff/mobile test",
     "test:node": "node --import ./test/setup-isolated-runtime.mjs --test --test-timeout=30000 test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"

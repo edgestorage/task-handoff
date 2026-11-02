@@ -10,6 +10,7 @@ import { Argument, Command } from "commander";
 import { list as listTar } from "tar";
 import { runtimePackages } from "../runtime-packages.config.mjs";
 import { installedDependencyManifests, materializeInstalledDependencies } from "./runtime-dependency-versions.mjs";
+import { checkControlledInstanceArtifact } from "./controlled-instance-artifact-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -71,43 +72,30 @@ function assertNodeAgentDatabaseBoundary(packageDir, manifest, outputs) {
   }
 }
 
+function assertNodeAgentGitProvisioningBoundary(packageDir) {
+  const dockerDir = path.join(packageDir, "docker");
+  for (const arch of ["x64", "arm64"]) {
+    const helper = path.join(dockerDir, `controlled-instance-linux-${arch}`);
+    const stats = fs.statSync(helper, { throwIfNoEntry: false });
+    if (!stats?.isFile() || (stats.mode & 0o111) === 0) {
+      throw new Error(`node-agent runtime package is missing executable Rust Git provisioning helper controlled-instance-linux-${arch}.`);
+    }
+  }
+  const script = fs.readFileSync(path.join(dockerDir, "git-provision.sh"), "utf8");
+  if (/git-provisioning-helper\.js|\bjs-runtime\.sh\b/.test(script)) {
+    throw new Error("node-agent Git provisioning still invokes the retired JavaScript helper.");
+  }
+  if (!script.includes("git-provisioning-helper credential") || !script.includes("git-provisioning-helper ssh")) {
+    throw new Error("node-agent Git provisioning does not invoke the Rust credential and SSH helper commands.");
+  }
+  if (fs.existsSync(path.join(packageDir, "dist", "git-provisioning-helper.js"))) {
+    throw new Error("node-agent runtime package still contains the retired JavaScript Git provisioning helper.");
+  }
+}
+
 async function checkEmbeddedControlledInstance(packageDir, name) {
   if (name !== "node-agent") return;
-  const artifactDir = path.join(packageDir, "runtime-artifacts");
-  const archiveName = fs.readdirSync(artifactDir).find((entry) => entry.endsWith(".tar.gz"));
-  if (!archiveName) throw new Error("node-agent package is missing its controlled-instance runtime artifact.");
-  let manifest;
-  const outputs = [];
-  const nativeAddons = [];
-  const reads = [];
-  await listTar({
-    file: path.join(artifactDir, archiveName),
-    onReadEntry(entry) {
-      if (entry.path.endsWith(".node")) nativeAddons.push(entry.path);
-      if (entry.path !== "package.json" && !/^dist\/.*\.(?:js|mjs)$/.test(entry.path)) {
-        entry.resume();
-        return;
-      }
-      reads.push(new Promise((resolve, reject) => {
-        const chunks = [];
-        entry.on("data", (chunk) => chunks.push(chunk));
-        entry.on("error", reject);
-        entry.on("end", () => {
-          const content = Buffer.concat(chunks).toString("utf8");
-          if (entry.path === "package.json") manifest = JSON.parse(content);
-          else outputs.push([entry.path, content]);
-          resolve();
-        });
-      }));
-    },
-  });
-  await Promise.all(reads);
-  if (!manifest) throw new Error("controlled-instance runtime artifact is missing package.json.");
-  assertNoControlPlaneDatabasePayload("controlled-instance runtime artifact", manifest, outputs);
-  const unexpectedAddons = nativeAddons.filter((entry) => !entry.split("/").includes("node-pty"));
-  if (unexpectedAddons.length) {
-    throw new Error(`controlled-instance runtime artifact contains unexpected native addons: ${unexpectedAddons.join(", ")}.`);
-  }
+  await checkControlledInstanceArtifact(path.join(packageDir, "runtime-artifacts"));
 }
 
 async function availablePort() {
@@ -201,6 +189,8 @@ function materializeHostNodePtyPrebuild(packageDir, manifest) {
 for (const [name, definition] of selected) {
   const packageDir = path.join(root, "release", "npm", name);
   const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+  const isRustControlledInstance = name === "controlled-instance"
+    && manifest.taskHandoffRuntime?.implementation === "rust";
   if (manifest.name !== definition.packageName) {
     throw new Error(`${name} package name does not match its runtime definition.`);
   }
@@ -221,7 +211,8 @@ for (const [name, definition] of selected) {
       throw new Error(`${name} package is missing ${legalFile}.`);
     }
   }
-  for (const dependency of definition.bundledNativeDependencies || []) {
+  const bundledNativeDependencies = isRustControlledInstance ? [] : (definition.bundledNativeDependencies || []);
+  for (const dependency of bundledNativeDependencies) {
     if (!manifest.bundledDependencies?.includes(dependency)) {
       throw new Error(`${name} package must declare bundled native dependency ${dependency}.`);
     }
@@ -244,7 +235,34 @@ for (const [name, definition] of selected) {
   if (definition.uiDir && !fs.existsSync(path.join(packageDir, "ui", "index.html"))) {
     throw new Error(`${name} package is missing its built UI.`);
   }
-  if (definition.input) {
+  if (isRustControlledInstance) {
+    if (Object.keys(manifest.dependencies || {}).length || Object.keys(manifest.optionalDependencies || {}).length) {
+      throw new Error("Rust controlled-instance package must not declare Node dependencies.");
+    }
+    if (fs.existsSync(path.join(packageDir, "node_modules"))) {
+      throw new Error("Rust controlled-instance package must not contain node_modules.");
+    }
+    if (!Array.isArray(manifest.taskHandoffRuntime.binaries) || !manifest.taskHandoffRuntime.binaries.length) {
+      throw new Error("Rust controlled-instance package must declare its native binaries.");
+    }
+    for (const binary of manifest.taskHandoffRuntime.binaries) {
+      const binaryPath = path.join(packageDir, binary.path);
+      const stats = fs.statSync(binaryPath);
+      if (!stats.isFile() || (stats.mode & 0o111) === 0) {
+        throw new Error(`Rust controlled-instance binary is missing or not executable: ${binary.path}.`);
+      }
+    }
+    const scripts = fs.readdirSync(path.join(packageDir, "dist"))
+      .filter((entry) => /\.(?:c?js|mjs)$/.test(entry))
+      .sort();
+    const binScript = path.join(packageDir, "bin", "task-handoff-controlled-instance");
+    if (!fs.existsSync(binScript)) {
+      throw new Error("Rust controlled-instance package is missing its launcher ABI bin entrypoint.");
+    }
+    if (JSON.stringify(scripts) !== JSON.stringify(["controlled-instance-cli.js", "opencode-story-plugin.mjs"])) {
+      throw new Error(`Rust controlled-instance package contains unapproved JavaScript: ${scripts.join(", ")}.`);
+    }
+  } else if (definition.input) {
     const runtimeOutputs = [];
     for (const entry of fs.readdirSync(path.join(packageDir, "dist"))) {
       if (!entry.endsWith(".js") && !entry.endsWith(".mjs")) continue;
@@ -276,6 +294,7 @@ for (const [name, definition] of selected) {
     if (name === "node-agent") assertNodeAgentDatabaseBoundary(packageDir, manifest, runtimeOutputs);
   }
   await checkEmbeddedControlledInstance(packageDir, name);
+  if (name === "node-agent") assertNodeAgentGitProvisioningBoundary(packageDir);
   const binNames = Object.keys(manifest.bin);
   if (binNames.length !== 1 || binNames[0] !== definition.binName) {
     throw new Error(`${name} package must expose only the ${definition.binName} executable.`);
@@ -311,14 +330,18 @@ for (const [name, definition] of selected) {
     }
     continue;
   }
-  const externalDependencies = Object.fromEntries(Object.entries(manifest.dependencies)
+  const externalDependencies = Object.fromEntries(Object.entries(manifest.dependencies || {})
     .filter(([dependency]) => !manifest.bundledDependencies?.includes(dependency)));
   const removeInstalledDependencies = materializeInstalledDependencies(packageDir, root, externalDependencies);
   const removeHostNodePtyPrebuild = materializeHostNodePtyPrebuild(packageDir, manifest);
   try {
-    const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: packageDir, encoding: "utf8" });
-    if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
-      throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
+    const hostBinaryAvailable = !isRustControlledInstance
+      || manifest.taskHandoffRuntime.binaries.some((binary) => binary.platform === process.platform && binary.arch === process.arch);
+    if (hostBinaryAvailable) {
+      const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+      if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
+        throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
+      }
     }
     if (definition.updateWorkerInput) {
       const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");

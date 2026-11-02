@@ -1,0 +1,10 @@
+pub mod atomic;
+pub mod claude;
+pub mod fs_permissions;
+pub mod git_transport;
+pub mod local_ipc;
+pub mod managed_backup;
+pub mod paths;
+pub mod process;
+pub mod reconnect;
+pub mod singleton_lock;

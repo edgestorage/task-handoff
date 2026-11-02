@@ -27,7 +27,7 @@ test("Docker bootstrap assets update in place without replacing the mounted dire
   const source = path.join(root, "source");
   const target = path.join(root, "target");
   fs.mkdirSync(source);
-  for (const name of ["entrypoint.sh", "git-provision.sh", "git-provisioning-helper.js", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs"]) {
+  for (const name of ["entrypoint.sh", "git-provision.sh", "controlled-instance-linux-x64", "controlled-instance-linux-arm64", "instance-launcher.sh", "instance-launcher.mjs", "js-runtime.sh", "node-agent-unix-proxy.mjs", "private-config.mjs", "runtime-installer.mjs"]) {
     fs.writeFileSync(path.join(source, name), `old:${name}\n`, { mode: 0o755 });
   }
   fs.mkdirSync(target);

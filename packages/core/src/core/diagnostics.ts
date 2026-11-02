@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const SECRET_PATTERN = /(TOKEN|KEY|SECRET|AUTH|PASSWORD|COOKIE)/i;
+const SECRET_PATTERN = /(TOKEN|KEY|SECRET|AUTH|PASSWORD|COOKIE|CONFIG_CONTENT)/i;
 const RELEVANT_ENV_PATTERN = /^(TASK_HANDOFF|CODEX|CLAUDE|PWD$|OLDPWD$|SHELL$|TERM$)/;
 
 function redactValue(key: string, value: string | undefined) {
