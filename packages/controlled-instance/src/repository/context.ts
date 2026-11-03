@@ -89,7 +89,7 @@ export class RepositorySessionResolver {
     const parsed = parsePorcelainV2(statusResult.stdout);
     const index = await git.run("ls-files", ["--stage", "-z"]);
     const refs = await git.run("for-each-ref", ["--format=%(refname)%00%(objectname)", "refs/heads", "refs/remotes"]);
-    const versions = changedPathVersions(worktreeRoot, parsed.records, index.stdout);
+    const versions = await changedPathVersions(worktreeRoot, parsed.records, index.stdout);
     const head = parsed.branch === "(detached)"
       ? { state: "detached" as const, oid: parsed.headOid }
       : parsed.headOid
@@ -198,19 +198,43 @@ export function parsePorcelainV2(output: string): ParsedStatus {
   return parsed;
 }
 
-function changedPathVersions(root: string, records: ParsedStatusRecord[], indexState: string) {
+async function changedPathVersions(root: string, records: ParsedStatusRecord[], indexState: string) {
+  // Parse the index once, retaining every stage of conflicted paths. Re-splitting
+  // the full index for each changed path made a large worktree quadratic.
+  const indexByPath = new Map<string, string>();
+  for (const line of indexState.split("\0")) {
+    const separator = line.indexOf("\t");
+    if (separator < 0) continue;
+    const filePath = line.slice(separator + 1);
+    const previous = indexByPath.get(filePath);
+    indexByPath.set(filePath, previous ? `${previous}\0${line}` : line);
+  }
+
   const result = new Map<string, string>();
-  for (const record of records) {
-    const filePath = path.join(root, ...record.path.split("/"));
-    let content = "missing";
-    try {
-      const stat = fs.lstatSync(filePath);
-      content = stat.isFile()
-        ? crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")
-        : `${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.isSymbolicLink() ? fs.readlinkSync(filePath) : "special"}`;
-    } catch {}
-    const indexLines = indexState.split("\0").filter((line) => line.endsWith(`\t${record.path}`) || (record.oldPath && line.endsWith(`\t${record.oldPath}`))).join("\0");
-    result.set(record.path, hashId("version", [record.xy, content, indexLines]));
+  // Listing tokens describe filesystem revisions, not file contents. ctime
+  // catches same-size writes even when a tool restores mtime; dev/ino catches
+  // atomic replacements. Exclude atime so merely opening a file stays stable.
+  // The editor separately checks the selected file's content version on save.
+  // Bound outstanding stats and yield between batches: neither file sizes nor
+  // the number of paths may turn this HTTP request into synchronous bulk I/O.
+  const batchSize = 64;
+  for (let offset = 0; offset < records.length; offset += batchSize) {
+    const versions = await Promise.all(records.slice(offset, offset + batchSize).map(async (record) => {
+      const filePath = path.join(root, ...record.path.split("/"));
+      let revision = "missing";
+      try {
+        const stat = await fs.promises.lstat(filePath, { bigint: true });
+        const target = stat.isSymbolicLink() ? await fs.promises.readlink(filePath) : "";
+        revision = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${target}`;
+      } catch (error) {
+        // A path may vanish between Git status and stat. Other failures must not
+        // silently look like a stable missing file in a mutation guard.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+      }
+      const indexLines = [indexByPath.get(record.path), record.oldPath ? indexByPath.get(record.oldPath) : undefined].filter(Boolean).join("\0");
+      return [record.path, hashId("version", [record.xy, revision, indexLines])] as const;
+    }));
+    for (const [filePath, version] of versions) result.set(filePath, version);
   }
   return result;
 }

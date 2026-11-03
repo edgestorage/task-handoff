@@ -26,7 +26,7 @@ function resolver(aiSessions, appSessions = {}, gitOptions = {}) {
   }, gitOptions);
 }
 
-test("repository context reports staged and unstaged scopes independently and fingerprints content", async () => {
+test("repository context reports staged and unstaged scopes independently and detects file revisions", async () => {
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "staged\n");
   fixture.git(["add", "--", "tracked.txt"]);
@@ -48,6 +48,121 @@ test("repository context reports staged and unstaged scopes independently and fi
   const secondVersion = second.changes.entries.find((entry) => entry.path === "tracked.txt" && entry.scope === "unstaged").version;
   assert.notEqual(second.context.snapshotId, first.context.snapshotId);
   assert.notEqual(secondVersion, firstVersion);
+});
+
+test("repository listing versions detect same-size writes with restored mtime, replacement, mode, and symlink changes", async (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fs.rmSync(fixture.base, { recursive: true, force: true }));
+  const file = fixture.write("tracked.txt", "first\n");
+  const fixedTime = new Date("2020-01-01T00:00:00.000Z");
+  fs.utimesSync(file, fixedTime, fixedTime);
+  const service = resolver({ ai_1: { cwd: fixture.root, status: "idle" } });
+  const first = await service.resolveAiSession("ai_1");
+  const version = (state, name = "tracked.txt") => state.changes.entries.find((entry) => entry.path === name).version;
+  const unchanged = await service.resolveAiSession("ai_1");
+  assert.equal(unchanged.context.snapshotId, first.context.snapshotId);
+  assert.equal(version(unchanged), version(first));
+
+  fixture.write("tracked.txt", "other\n");
+  fs.utimesSync(file, fixedTime, fixedTime);
+  const rewritten = await service.resolveAiSession("ai_1");
+  assert.equal(fs.statSync(file).size, 6);
+  assert.equal(fs.statSync(file).mtimeMs, fixedTime.getTime());
+  assert.notEqual(rewritten.context.snapshotId, first.context.snapshotId);
+  assert.notEqual(version(rewritten), version(first));
+
+  const replacement = fixture.write("replacement.tmp", "other\n");
+  fs.utimesSync(replacement, fixedTime, fixedTime);
+  fs.renameSync(replacement, file);
+  const replaced = await service.resolveAiSession("ai_1");
+  assert.notEqual(version(replaced), version(rewritten));
+  fs.chmodSync(file, 0o755);
+  const executable = await service.resolveAiSession("ai_1");
+  assert.notEqual(version(executable), version(replaced));
+
+  fs.readFileSync(file);
+  const read = await service.resolveAiSession("ai_1");
+  assert.equal(read.context.snapshotId, executable.context.snapshotId, "opening a file must not invalidate its revision");
+
+  const link = path.join(fixture.root, "link");
+  fs.symlinkSync("tracked.txt", link);
+  const linked = await service.resolveAiSession("ai_1");
+  fs.unlinkSync(link);
+  fs.symlinkSync("missing.txt", link);
+  const retargeted = await service.resolveAiSession("ai_1");
+  assert.notEqual(version(linked, "link"), version(retargeted, "link"));
+});
+
+test("large repository listings do not read file contents and keep filesystem work bounded", async (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fs.rmSync(fixture.base, { recursive: true, force: true }));
+  // Sparse files reproduce a multi-GiB worktree without allocating its contents.
+  // The guarantee applies to arbitrary source paths, with no build-dir exclusions.
+  const count = 257;
+  for (let i = 0; i < count; i += 1) {
+    const file = fixture.write(`sources/file-${i}.bin`, "");
+    fs.truncateSync(file, 64 * 1024 * 1024);
+  }
+  let reads = 0;
+  const denyContentRead = () => { reads += 1; throw new Error("Listing may not read file contents"); };
+  t.mock.method(fs, "readFileSync", denyContentRead);
+  t.mock.method(fs.promises, "readFile", denyContentRead);
+  t.mock.method(fs, "createReadStream", denyContentRead);
+  const lstat = fs.promises.lstat.bind(fs.promises);
+  let outstanding = 0;
+  let peak = 0;
+  let stats = 0;
+  t.mock.method(fs.promises, "lstat", async (...args) => {
+    outstanding += 1;
+    peak = Math.max(peak, outstanding);
+    stats += 1;
+    try { return await lstat(...args); }
+    finally { outstanding -= 1; }
+  });
+  const service = resolver({ ai_1: { cwd: fixture.root, status: "idle" } });
+  const first = await service.resolveAiSession("ai_1");
+  const repeated = await service.resolveAiSession("ai_1");
+  assert.equal(first.changes.entries.length, count);
+  assert.equal(first.changes.summary.untracked, count);
+  assert.equal(repeated.context.snapshotId, first.context.snapshotId);
+  assert.equal(reads, 0);
+  assert.equal(stats, count * 2);
+  assert.ok(peak > 1 && peak <= 64, `outstanding filesystem calls: ${peak}`);
+});
+
+test("index-only changes invalidate listing versions without worktree edits", async (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fs.rmSync(fixture.base, { recursive: true, force: true }));
+  fixture.write("tracked.txt", "worktree\n");
+  const service = resolver({ ai_1: { cwd: fixture.root, status: "idle" } });
+  const before = await service.resolveAiSession("ai_1");
+  // Change the staged blob while leaving both porcelain XY and the file alone.
+  const blob = fixture.git(["hash-object", "-w", "--stdin"], { input: "index-only\n", stdio: ["pipe", "pipe", "pipe"] });
+  fixture.git(["update-index", "--cacheinfo", `100644,${blob},tracked.txt`]);
+  const staged = await service.resolveAiSession("ai_1");
+  const otherBlob = fixture.git(["hash-object", "-w", "--stdin"], { input: "other-index\n", stdio: ["pipe", "pipe", "pipe"] });
+  fixture.git(["update-index", "--cacheinfo", `100644,${otherBlob},tracked.txt`]);
+  const restaged = await service.resolveAiSession("ai_1");
+  assert.notEqual(before.context.snapshotId, staged.context.snapshotId);
+  assert.notEqual(staged.context.snapshotId, restaged.context.snapshotId);
+  assert.notEqual(staged.changes.entries.find((e) => e.scope === "staged").version, restaged.changes.entries.find((e) => e.scope === "staged").version);
+});
+
+test("repository listing tolerates a vanished path but does not hide filesystem inspection errors", async (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fs.rmSync(fixture.base, { recursive: true, force: true }));
+  const file = fs.realpathSync(fixture.write("tracked.txt", "changed\n"));
+  const service = resolver({ ai_1: { cwd: fixture.root, status: "idle" } });
+  const lstat = fs.promises.lstat.bind(fs.promises);
+  let code = "ENOENT";
+  t.mock.method(fs.promises, "lstat", async (filePath, options) => {
+    if (filePath === file) throw Object.assign(new Error("inspection failed"), { code });
+    return lstat(filePath, options);
+  });
+  const vanished = await service.resolveAiSession("ai_1");
+  assert.equal(vanished.changes.entries[0].path, "tracked.txt");
+  code = "EACCES";
+  await assert.rejects(() => service.resolveAiSession("ai_1"), (error) => error.code === "EACCES");
 });
 
 test("repository context distinguishes unavailable, non-worktree, unborn, detached, and inactive sessions", async () => {

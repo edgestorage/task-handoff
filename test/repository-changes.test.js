@@ -220,6 +220,25 @@ test("change mutations reject stale snapshots, stale path versions, and unsuppor
   assert.equal(fs.existsSync(path.join(fixture.root, "new.txt")), true);
 });
 
+test("discard rejects a same-size external edit even when its mtime was restored", async (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fs.rmSync(fixture.base, { recursive: true, force: true }));
+  const file = fixture.write("tracked.txt", "before\n");
+  const fixedTime = new Date("2020-01-01T00:00:00.000Z");
+  fs.utimesSync(file, fixedTime, fixedTime);
+  const { resolve, changes } = services(fixture);
+  const before = await resolve();
+  fixture.write("tracked.txt", "after!\n");
+  fs.utimesSync(file, fixedTime, fixedTime);
+  await assert.rejects(() => changes.discardWorktree({
+    expectedSnapshotId: before.context.snapshotId,
+    paths: selected(before, "unstaged", ["tracked.txt"]),
+    confirm: true,
+  }), (error) => error.code === "REPOSITORY_STATE_STALE");
+  assert.equal(fs.readFileSync(file, "utf8"), "after!\n");
+  assert.equal(fixture.git(["show", ":tracked.txt"]), "initial");
+});
+
 test("Git lock competition is reported as failure with refreshed authority", async () => {
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "changed\n");
