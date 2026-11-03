@@ -6835,6 +6835,11 @@ test("transcript progress extracts user prompts", () => {
 test("web app serves core API routes with isolated storage", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-api-"));
   const paths = appRuntimeTestPaths(root);
+  for (const id of ["codex", "claude"]) {
+    const bin = path.join(root, "managed-apps", "node-package", id, "node_modules", ".bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(bin, id));
+  }
   const historicalChannelsDir = path.join(root, "channels");
   const historicalConversationsDir = path.join(root, "conversations");
   const historicalFiles = [
@@ -6933,10 +6938,10 @@ test("web app serves core API routes with isolated storage", async () => {
     const catalogItems = JSON.parse(catalog.payload).data;
     assert.equal(catalogItems.some((entry) => entry.id === "terminal-tty"), true);
     const codexApp = catalogItems.find((entry) => entry.id === "codex");
-    assert.equal(codexApp.command, process.env.TASK_HANDOFF_CODEX_COMMAND || "codex");
+    assert.equal(codexApp.command, path.join(root, "managed-apps/node-package/codex/node_modules/.bin/codex"));
     assert.deepEqual(codexApp.args, ["-c", "check_for_update_on_startup=false", "--model", "gpt-codex-test"]);
     const claudeApp = catalogItems.find((entry) => entry.id === "claude");
-    assert.equal(claudeApp.command, process.env.TASK_HANDOFF_CLAUDE_COMMAND || "claude");
+    assert.equal(claudeApp.command, path.join(root, "managed-apps/node-package/claude/node_modules/.bin/claude"));
     assert.deepEqual(claudeApp.args, ["--dangerously-skip-permissions", "--model", "claude-sonnet-test"]);
     assert.equal(catalogItems.some((entry) => entry.id === "cc-switch"), false);
     assert.equal(catalogItems.some((entry) => entry.id === "web-cap"), false);
@@ -9147,11 +9152,13 @@ test("app runtime prepares vscode web sessions with a dark default theme", () =>
 test("app runtime resumes claude through the background worker and attaches by short id", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-bg-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "claude");
+  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   const callsPath = path.join(root, "claude-calls.log");
+  const commandPath = path.join(root, "claude-child-command.log");
   fs.writeFileSync(
     fakeClaude,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsPath)}\nif [ "$1" = "--bg" ]; then echo "worker ac8eaf94"; exit 0; fi\nexit 1\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsPath)}\ncommand -v opencode > ${JSON.stringify(commandPath)}\nif [ "$1" = "--bg" ]; then echo "worker ac8eaf94"; exit 0; fi\nexit 1\n`,
     { mode: 0o755 },
   );
   const restoreEnv = withWebStorageEnv(paths, {
@@ -9186,6 +9193,7 @@ test("app runtime resumes claude through the background worker and attaches by s
     assert.equal(session.ai.agent, "claude");
     assert.equal(session.ai.claude.short, "ac8eaf94");
     assert.equal(spawned[0].shell, fakeClaude);
+    assert.equal(fs.readFileSync(commandPath, "utf8").trim(), path.join(root, "managed-apps", "bin", "opencode"));
     assert.deepEqual(spawned[0].args, ["attach", "ac8eaf94"]);
     const bgCall = fs.readFileSync(callsPath, "utf8").trim();
     assert.equal(bgCall, "--bg --dangerously-skip-permissions --model sonnet-test --resume claude_provider_resume");
@@ -9274,7 +9282,8 @@ test("app runtime injects managed model credentials without persisting them in s
 test("app runtime stops claude background worker when attach fails", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-attach-fail-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "claude");
+  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   const callsPath = path.join(root, "claude-calls.log");
   fs.writeFileSync(
     fakeClaude,
@@ -9304,7 +9313,8 @@ test("app runtime stops claude background worker when attach fails", () => {
 test("app runtime stop terminates claude background worker", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-stop-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "claude");
+  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   fs.writeFileSync(fakeClaude, "#!/bin/sh\nif [ \"$1\" = \"--bg\" ]; then echo ac8eaf94; exit 0; fi\nexit 0\n", { mode: 0o755 });
   const socketPath = path.join(root, "control.sock");
   const requests = [];

@@ -478,6 +478,7 @@ struct AppRuntimeInner {
     persisted_sessions: RwLock<BTreeMap<String, AppSession>>,
     changes: broadcast::Sender<AppRuntimeChange>,
     draining: AtomicBool,
+    app_launch_allowed: RwLock<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
     next_display: Mutex<u32>,
     next_vnc_port: Mutex<u16>,
     next_websockify_port: Mutex<u16>,
@@ -498,8 +499,19 @@ impl Clone for AppRuntime {
 }
 
 impl AppRuntime {
-    pub fn new(storage_paths: StoragePaths, _workspace: impl Into<PathBuf>) -> Self {
-        let catalog = AppCatalogRepository::new(&storage_paths.app_catalog_dir);
+    pub fn new(storage_paths: StoragePaths, workspace: impl Into<PathBuf>) -> Self {
+        Self::new_with_managed_root(storage_paths, workspace, None)
+    }
+
+    pub fn new_with_managed_root(
+        storage_paths: StoragePaths,
+        _workspace: impl Into<PathBuf>,
+        managed_app_root: Option<PathBuf>,
+    ) -> Self {
+        let catalog = AppCatalogRepository::new_with_managed_root(
+            &storage_paths.app_catalog_dir,
+            managed_app_root,
+        );
         let profiles = ChromiumProfileStore::new(&storage_paths.data_dir);
         if let Err(error) = profiles.ensure_default() {
             warn!(%error, "failed to initialize browser profiles");
@@ -519,6 +531,7 @@ impl AppRuntime {
                 persisted_sessions: RwLock::new(BTreeMap::new()),
                 changes,
                 draining: AtomicBool::new(false),
+                app_launch_allowed: RwLock::new(Arc::new(|_| true)),
                 next_display: Mutex::new(101),
                 next_vnc_port: Mutex::new(6101),
                 next_websockify_port: Mutex::new(7101),
@@ -540,6 +553,10 @@ impl AppRuntime {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AppRuntimeChange> {
         self.inner.changes.subscribe()
+    }
+
+    pub fn catalog_entry(&self, app_id: &str) -> Option<crate::CatalogEntry> {
+        self.inner.catalog.find(app_id)
     }
 
     pub fn catalog(&self) -> Vec<AppCatalogItem> {
@@ -791,6 +808,84 @@ impl AppRuntime {
         }
     }
 
+    pub fn set_app_launch_admission(&self, allowed: impl Fn(&str) -> bool + Send + Sync + 'static) {
+        *self
+            .inner
+            .app_launch_allowed
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Arc::new(allowed);
+    }
+
+    fn require_app_launch_admission(&self, app_id: &str) -> Result<(), AppRuntimeError> {
+        if !(self
+            .inner
+            .app_launch_allowed
+            .read()
+            .unwrap_or_else(|p| p.into_inner()))(app_id)
+        {
+            return Err(AppRuntimeError::Conflict(
+                "The app is being changed. Try again after the operation completes.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn process_environment(
+        &self,
+        base: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, AppRuntimeError> {
+        self.inner
+            .catalog
+            .managed_node_apps()
+            .map(|apps| apps.terminal_environment(base))
+            .transpose()
+            .map_err(|error| AppRuntimeError::storage(error.to_string()))
+            .map(|env| env.unwrap_or_else(|| base.clone()))
+    }
+
+    pub fn prepare_shell(
+        &self,
+        command: &str,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+    ) -> Result<(Vec<String>, BTreeMap<String, String>), AppRuntimeError> {
+        self.inner
+            .catalog
+            .managed_node_apps()
+            .map(|apps| apps.prepare_shell(command, args, env))
+            .transpose()
+            .map_err(|error| AppRuntimeError::storage(error.to_string()))
+            .map(|result| result.unwrap_or_else(|| (args.to_vec(), env.clone())))
+    }
+
+    fn missing_app_command(&self, app: &AppCatalogItem) -> AppRuntimeError {
+        if self
+            .inner
+            .catalog
+            .managed_node_apps()
+            .is_some_and(|apps| apps.contains(&app.id))
+        {
+            AppRuntimeError::MissingCommand(format!(
+                "{} is not installed in this instance. Install it from app management.",
+                app.name
+            ))
+        } else {
+            AppRuntimeError::missing_command(app.command.clone().unwrap_or_else(|| app.id.clone()))
+        }
+    }
+
+    pub fn stop_shared_resource(&self, app_id: &str) {
+        match app_id {
+            "codex" => self.stop_shared_codex(),
+            "opencode" => self.stop_shared_opencode(),
+            _ => {}
+        }
+    }
+
+    pub fn invalidate_catalog(&self) {
+        self.inner.catalog.invalidate();
+    }
+
     pub fn stop_shared_codex(&self) {
         let server = self
             .inner
@@ -809,6 +904,7 @@ impl AppRuntime {
         consumer_id: &str,
     ) -> Result<SharedCodexConnection, AppRuntimeError> {
         let _guard = self.inner.shared_codex_start.lock().await;
+        self.require_app_launch_admission("codex")?;
         if let Some(server) = self
             .inner
             .shared_codex
@@ -836,18 +932,22 @@ impl AppRuntime {
             .command
             .clone()
             .unwrap_or_else(|| "codex".to_string());
-        let command = std::env::var("TASK_HANDOFF_CODEX_APP_SERVER_COMMAND")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| catalog_command.clone());
+        let command = if self.inner.catalog.managed_node_apps().is_some() {
+            catalog_command.clone()
+        } else {
+            std::env::var("TASK_HANDOFF_CODEX_APP_SERVER_COMMAND")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| catalog_command.clone())
+        };
         let cwd = entry
             .app
             .cwd
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.inner.storage_paths.data_dir.clone());
-        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false);
+        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
         if let Some(private) = self
             .inner
             .shared_resource_private_environment
@@ -862,7 +962,7 @@ impl AppRuntime {
             entry
                 .executable
                 .clone()
-                .ok_or_else(|| AppRuntimeError::missing_command(command.clone()))?
+                .ok_or_else(|| self.missing_app_command(&entry.app))?
         } else {
             crate::catalog::resolve_executable(
                 &command,
@@ -1088,6 +1188,7 @@ impl AppRuntime {
         consumer_id: &str,
     ) -> Result<SharedOpenCodeConnection, AppRuntimeError> {
         let _guard = self.inner.shared_opencode_start.lock().await;
+        self.require_app_launch_admission("opencode")?;
         if let Some(server) = self
             .inner
             .shared_opencode
@@ -1110,22 +1211,16 @@ impl AppRuntime {
             self.inner.catalog.find("opencode").ok_or_else(|| {
                 AppRuntimeError::NotFound("OpenCode app is unavailable.".to_string())
             })?;
-        let executable = entry.executable.ok_or_else(|| {
-            AppRuntimeError::missing_command(
-                entry
-                    .app
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "opencode".to_string()),
-            )
-        })?;
+        let executable = entry
+            .executable
+            .ok_or_else(|| self.missing_app_command(&entry.app))?;
         let cwd = entry
             .app
             .cwd
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.inner.storage_paths.data_dir.clone());
-        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false);
+        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
         if let Some(private) = self
             .inner
             .shared_resource_private_environment
@@ -1168,11 +1263,21 @@ impl AppRuntime {
         std::fs::create_dir_all(&log_dir)
             .map_err(|error| AppRuntimeError::storage(error.to_string()))?;
         let log_path = log_dir.join("opencode-server.log");
-        let mut command = Command::new(&executable);
+        let invocation = invoke_command(
+            &executable.display().to_string(),
+            &[
+                "serve".into(),
+                "--hostname=127.0.0.1".into(),
+                format!("--port={port}"),
+            ],
+            &cwd,
+            &server_environment,
+        )?;
+        let mut command = Command::new(&invocation.executable);
         command
-            .args(["serve", "--hostname=127.0.0.1", &format!("--port={port}")])
+            .args(&invocation.args)
             .current_dir(&cwd)
-            .envs(&server_environment)
+            .envs(&invocation.env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1325,6 +1430,7 @@ impl AppRuntime {
                     .to_string(),
             ));
         }
+        self.require_app_launch_admission(app_id)?;
         let options = normalize_launch_options(options)?;
         let entry = self
             .inner
@@ -1342,9 +1448,9 @@ impl AppRuntime {
             self.assert_app_profile_idle(&app.id, profile_id)?;
             self.inner.profiles.resolve(profile_id)?;
         }
-        let executable = entry.executable.ok_or_else(|| {
-            AppRuntimeError::missing_command(app.command.clone().unwrap_or_else(|| app.id.clone()))
-        })?;
+        let executable = entry
+            .executable
+            .ok_or_else(|| self.missing_app_command(&app))?;
         match app.kind {
             AppKind::Tty => self.start_tty(app, executable, options, Vec::new()).await,
             AppKind::Web => self.start_web(app, executable, options).await,
@@ -1384,7 +1490,7 @@ impl AppRuntime {
             .ok_or_else(|| AppRuntimeError::NotFound("App not found.".to_string()))?;
         let executable = entry
             .executable
-            .ok_or_else(|| AppRuntimeError::missing_command(agent.to_string()))?;
+            .ok_or_else(|| self.missing_app_command(&entry.app))?;
         let mut session = self
             .start_tty(entry.app, executable, options, resume_args)
             .await?;
@@ -1418,6 +1524,7 @@ impl AppRuntime {
         mut options: AppLaunchOptions,
         resume_args: Vec<String>,
     ) -> Result<AppSession, AppRuntimeError> {
+        self.require_app_launch_admission(&app.id)?;
         let cwd = resolve_launch_cwd(options.cwd.as_deref(), app.cwd.as_deref());
         if !cwd.is_dir() {
             return Err(AppRuntimeError::Invalid(format!(
@@ -1442,7 +1549,7 @@ impl AppRuntime {
         let mut args = app.args.clone().unwrap_or_default();
         args.extend(options.args.clone());
         args.extend(resume_args);
-        let mut env = self.environment(&app, &options, true);
+        let mut env = self.environment(&app, &options, true)?;
         let shell = executable.display().to_string();
         let mut tty_mode = "pty".to_string();
         let mut ai = None;
@@ -1552,6 +1659,10 @@ impl AppRuntime {
                 claude_control_socket = Some(control_socket);
             }
         }
+        self.require_app_launch_admission(&app.id)?;
+        let (prepared_args, prepared_env) = self.prepare_shell(&shell, &args, &env)?;
+        args = prepared_args;
+        env = prepared_env;
         let dimensions = (DEFAULT_TTY_COLS, DEFAULT_TTY_ROWS);
         let invocation = invoke_command(&shell, &args, &cwd, &env)?;
         let spawn = match crate::pty::spawn_pty(
@@ -1684,7 +1795,7 @@ impl AppRuntime {
             args.insert(0, placeholders(port_arg));
         }
         prepare_web_app_session(&app, &session_dir);
-        let env = self.environment(&app, &options, false);
+        let env = self.environment(&app, &options, false)?;
         let log_path = log_dir.join(format!("{}.log", app.id));
         let invocation = invoke_command(&executable.display().to_string(), &args, &cwd, &env)?;
         let mut command = Command::new(&invocation.executable);
@@ -1803,7 +1914,7 @@ impl AppRuntime {
         launch.cwd = Some(cwd.display().to_string());
         let cdp_port = self.allocate_cdp_port()?;
         let args = self.gui_args(&app, &session_dir, &cwd, cdp_port, &launch)?;
-        let mut env = self.environment(&app, &launch, false);
+        let mut env = self.environment(&app, &launch, false)?;
         let width = launch
             .display
             .as_ref()
@@ -2321,7 +2432,7 @@ impl AppRuntime {
         let websockify_port = (backend == VncBackend::NoVnc)
             .then(|| self.allocate_websockify_port())
             .transpose()?;
-        let mut env = self.environment(app, launch, false);
+        let mut env = self.environment(app, launch, false)?;
         env.insert("DISPLAY".to_string(), display.clone());
         let display_processes = self
             .start_display_backend(DisplayBackendRequest {
@@ -3232,7 +3343,7 @@ impl AppRuntime {
         app: &AppCatalogItem,
         options: &AppLaunchOptions,
         terminal: bool,
-    ) -> BTreeMap<String, String> {
+    ) -> Result<BTreeMap<String, String>, AppRuntimeError> {
         let managed = self
             .inner
             .managed_environment
@@ -3245,14 +3356,15 @@ impl AppRuntime {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        merge_app_environment(
+        let env = merge_app_environment(
             std::env::vars().collect(),
             app.env.as_ref(),
             &options.env,
             &managed,
             &unset,
             terminal,
-        )
+        );
+        self.process_environment(&env)
     }
 
     fn allocate_web_port(&self) -> Result<u16, AppRuntimeError> {
@@ -3785,10 +3897,11 @@ fn capture_command(
     environment: &BTreeMap<String, String>,
     timeout: std::time::Duration,
 ) -> Result<CapturedCommand, AppRuntimeError> {
-    let mut child = std::process::Command::new(command)
-        .args(args)
+    let invocation = invoke_command(command, args, cwd, environment)?;
+    let mut child = std::process::Command::new(&invocation.executable)
+        .args(&invocation.args)
         .current_dir(cwd)
-        .envs(environment)
+        .envs(&invocation.env)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -5180,6 +5293,24 @@ mod tests {
             .block_on(runtime.start("terminal-tty", AppLaunchOptions::default()))
             .expect_err("draining");
         assert_eq!(error.code(), "APP_RUNTIME_DRAINING");
+    }
+
+    #[tokio::test]
+    async fn missing_private_apps_report_not_installed() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new_with_managed_root(
+            storage(root.path()),
+            root.path(),
+            Some(root.path().join("managed-apps")),
+        );
+        for id in ["codex", "claude", "opencode"] {
+            let error = runtime
+                .start(id, AppLaunchOptions::default())
+                .await
+                .expect_err("private package absent");
+            assert_eq!(error.code(), "APP_DEPENDENCY_MISSING");
+            assert!(error.to_string().contains("not installed in this instance"));
+        }
     }
 
     #[cfg(unix)]

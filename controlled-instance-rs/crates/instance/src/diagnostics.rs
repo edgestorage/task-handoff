@@ -40,7 +40,14 @@ pub(crate) fn instance_diagnostics(
             .collect::<BTreeSet<_>>()
     });
 
-    let commands = command_diagnostics(required_capabilities.as_ref());
+    let root = std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps"));
+    let catalog = controlled_instance_app_runtime::AppCatalogRepository::new_with_managed_root(
+        &config.storage_paths.app_catalog_dir,
+        Some(root),
+    );
+    let commands = command_diagnostics(required_capabilities.as_ref(), &catalog);
     let storage = storage_diagnostics(&config.storage_paths);
     let linux_runtime = std::env::consts::OS == "linux";
     let gui_required = required_capabilities.as_ref().is_none_or(|capabilities| {
@@ -126,7 +133,10 @@ pub(crate) fn instance_diagnostics(
     })
 }
 
-fn command_diagnostics(required_capabilities: Option<&BTreeSet<String>>) -> Vec<Value> {
+fn command_diagnostics(
+    required_capabilities: Option<&BTreeSet<String>>,
+    catalog: &controlled_instance_app_runtime::AppCatalogRepository,
+) -> Vec<Value> {
     let commands = [
         (
             "Xvfb".to_string(),
@@ -221,6 +231,10 @@ fn command_diagnostics(required_capabilities: Option<&BTreeSet<String>>) -> Vec<
     commands
         .into_iter()
         .map(|(label, command, required_for)| {
+            let command = catalog
+                .find(&label)
+                .and_then(|entry| entry.app.command)
+                .unwrap_or(command);
             let path = resolve_executable(&command, &BTreeMap::new(), None);
             let required = required_capabilities.is_none_or(|capabilities| {
                 required_for

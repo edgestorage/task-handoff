@@ -183,7 +183,6 @@ impl AppState {
                 .map(Duration::from_millis)
                 .unwrap_or(Duration::from_secs(5 * 60));
         let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        let instance_shell = InstanceShellRuntime::new(config.workspace_path.clone());
         let story_tools = StoryToolService::new(
             node_agent_client.clone(),
             format!("http://127.0.0.1:{}/api/internal/agent-tools", config.port),
@@ -220,10 +219,16 @@ impl AppState {
         let _ = ai_session_attachments
             .set_retention_days(initial_persistence_settings.attachment_retention_days);
         let ai_session_attachment_streams = Arc::new(ai_session_attachments.draft_streams());
-        let app_runtime = Arc::new(AppRuntime::new(
+        let managed_app_root = std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps"));
+        let app_runtime = Arc::new(AppRuntime::new_with_managed_root(
             config.storage_paths.clone(),
             config.workspace_path.clone(),
+            Some(managed_app_root.clone()),
         ));
+        let instance_shell = InstanceShellRuntime::new(config.workspace_path.clone())
+            .with_app_runtime(app_runtime.clone());
         if node_agent_client.enabled() {
             app_runtime.set_shared_resource_private_environment(
                 "codex",
@@ -333,13 +338,13 @@ impl AppState {
         )));
         let app_management_events = events.clone();
         let app_management_sessions = app_runtime.clone();
-        let app_management = Arc::new(AppManagementManager::new(
+        let app_management_runtime = app_runtime.clone();
+        let app_management_ai_sessions = ai_sessions.clone();
+        let app_management = Arc::new(AppManagementManager::new_with_runtime_hook(
             config.storage_paths.runtime_dir.join("app-management"),
-            std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps")),
+            managed_app_root,
             move || {
-                app_management_sessions
+                let mut sessions = app_management_sessions
                     .list_sessions()
                     .into_iter()
                     .map(|session| AppManagementSession {
@@ -347,14 +352,36 @@ impl AppState {
                         app_id: session.app_id,
                         status: session.status,
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                sessions.extend(
+                    app_management_ai_sessions
+                        .list()
+                        .into_iter()
+                        .filter(|session| session.active_turn_id.is_some())
+                        .map(|session| AppManagementSession {
+                            id: session.id,
+                            app_id: session.agent,
+                            status: "running".into(),
+                        }),
+                );
+                sessions
             },
             move |event| {
                 if let Ok(payload) = serde_json::to_value(event) {
                     let _ = app_management_events.publish("app.management", payload);
                 }
             },
+            move |app_id| {
+                app_management_runtime.stop_shared_resource(app_id);
+                app_management_runtime.invalidate_catalog();
+            },
         ));
+        let management_admission = Arc::downgrade(&app_management);
+        app_runtime.set_app_launch_admission(move |app_id| {
+            management_admission
+                .upgrade()
+                .is_none_or(|manager| !manager.has_active_operation(app_id))
+        });
         // Node publishes the initial app-management snapshot once during
         // startup. That establishes sequence 1 for both the HTTP snapshot and
         // the first WebSocket projection.

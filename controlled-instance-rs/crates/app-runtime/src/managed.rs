@@ -76,6 +76,8 @@ pub enum InstallRecipe {
         privilege: Option<AppInstallPrivilege>,
         installer: AppInstaller,
         packages: Vec<String>,
+        managed: bool,
+        version: Option<String>,
     },
     Archive {
         platforms: Vec<FinalComputerPlatform>,
@@ -138,6 +140,17 @@ impl InstallRecipe {
         match self {
             Self::SystemPackage { packages, .. } | Self::NodePackage { packages, .. } => packages,
             Self::Bundled { .. } | Self::Archive { .. } => &[],
+        }
+    }
+
+    pub fn is_managed_node_package(&self) -> bool {
+        matches!(self, Self::NodePackage { managed: true, .. })
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            Self::NodePackage { version, .. } => version.as_deref(),
+            _ => None,
         }
     }
 }
@@ -224,6 +237,16 @@ fn node_recipe(
     package: &str,
     privilege: AppInstallPrivilege,
 ) -> InstallRecipe {
+    node_recipe_with_version(installer, package, false, None, privilege)
+}
+
+fn node_recipe_with_version(
+    installer: AppInstaller,
+    package: &str,
+    managed: bool,
+    version: Option<&str>,
+    privilege: AppInstallPrivilege,
+) -> InstallRecipe {
     InstallRecipe::NodePackage {
         platforms: vec![
             FinalComputerPlatform::Linux,
@@ -234,6 +257,8 @@ fn node_recipe(
         privilege: Some(privilege),
         installer,
         packages: vec![package.to_string()],
+        managed,
+        version: version.map(ToString::to_string),
     }
 }
 
@@ -269,7 +294,14 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 "Terminal",
                 AppKind::Tty,
                 "Interactive shell in the task workspace.",
-                env_string("SHELL", "/bin/bash"),
+                env_string(
+                    "SHELL",
+                    if cfg!(windows) {
+                        "cmd.exe"
+                    } else {
+                        "/bin/bash"
+                    },
+                ),
                 None,
             ),
             launchable: true,
@@ -294,18 +326,13 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![
-                node_recipe(
-                    AppInstaller::Npm,
-                    "@openai/codex",
-                    AppInstallPrivilege::User,
-                ),
-                node_recipe(
-                    AppInstaller::Npm,
-                    "@openai/codex",
-                    AppInstallPrivilege::PasswordlessSudo,
-                ),
-            ],
+            recipes: vec![node_recipe_with_version(
+                AppInstaller::Npm,
+                "@openai/codex",
+                true,
+                Some("0.165.0"),
+                AppInstallPrivilege::User,
+            )],
         },
         ManagedAppDefinition {
             launcher: launcher(
@@ -318,14 +345,13 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![
-                node_recipe(AppInstaller::Npm, "opencode-ai", AppInstallPrivilege::User),
-                node_recipe(
-                    AppInstaller::Npm,
-                    "opencode-ai",
-                    AppInstallPrivilege::PasswordlessSudo,
-                ),
-            ],
+            recipes: vec![node_recipe_with_version(
+                AppInstaller::Npm,
+                "opencode-ai",
+                true,
+                Some("1.18.30"),
+                AppInstallPrivilege::User,
+            )],
         },
         ManagedAppDefinition {
             launcher: launcher(
@@ -351,18 +377,13 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![
-                node_recipe(
-                    AppInstaller::Npm,
-                    "@anthropic-ai/claude-code",
-                    AppInstallPrivilege::User,
-                ),
-                node_recipe(
-                    AppInstaller::Npm,
-                    "@anthropic-ai/claude-code",
-                    AppInstallPrivilege::PasswordlessSudo,
-                ),
-            ],
+            recipes: vec![node_recipe_with_version(
+                AppInstaller::Npm,
+                "@anthropic-ai/claude-code",
+                true,
+                Some("2.1.286"),
+                AppInstallPrivilege::User,
+            )],
         },
         ManagedAppDefinition {
             launcher: {
@@ -506,6 +527,24 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
         ],
     });
+    if let Some(claude) = definitions
+        .iter_mut()
+        .find(|definition| definition.launcher.id == "claude")
+    {
+        claude.launcher.env = Some(BTreeMap::from([(
+            "DISABLE_AUTOUPDATER".to_string(),
+            "1".to_string(),
+        )]));
+    }
+    if let Some(opencode) = definitions
+        .iter_mut()
+        .find(|definition| definition.launcher.id == "opencode")
+    {
+        opencode.launcher.env = Some(BTreeMap::from([(
+            "OPENCODE_DISABLE_AUTOUPDATE".to_string(),
+            "1".to_string(),
+        )]));
+    }
     definitions
 }
 
@@ -554,6 +593,44 @@ fn find_executable(
 
 pub fn detect_managed_app(definition: &ManagedAppDefinition) -> ManagedAppDetectionResult {
     detect_managed_app_inner(definition, false)
+}
+
+pub fn detect_managed_app_with_managed_root(
+    definition: &ManagedAppDefinition,
+    managed_root: Option<&Path>,
+) -> ManagedAppDetectionResult {
+    let Some(root) = managed_root else {
+        return detect_managed_app(definition);
+    };
+    let is_managed = definition
+        .recipes
+        .iter()
+        .any(InstallRecipe::is_managed_node_package);
+    if !is_managed {
+        return detect_managed_app(definition);
+    }
+    let mut scoped = definition.clone();
+    let bin = root
+        .join("node-package")
+        .join(&definition.launcher.id)
+        .join("node_modules")
+        .join(".bin");
+    let command = definition.launcher.id.clone();
+    scoped.launcher.command = Some(bin.join(&command).display().to_string());
+    let env = scoped.launcher.env.get_or_insert_with(BTreeMap::new);
+    let current_path = env
+        .get("PATH")
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    env.insert(
+        "PATH".to_string(),
+        std::iter::once(bin.display().to_string())
+            .chain((!current_path.is_empty()).then_some(current_path))
+            .collect::<Vec<_>>()
+            .join(if cfg!(windows) { ";" } else { ":" }),
+    );
+    detect_managed_app_inner(&scoped, false)
 }
 
 pub fn detect_managed_app_with_version(
@@ -692,13 +769,15 @@ pub fn select_install_recipe(
     let writable_matches = privilege_matches
         .into_iter()
         .filter(|recipe| {
-            !matches!(
-                recipe,
-                InstallRecipe::NodePackage {
-                    privilege: Some(AppInstallPrivilege::User),
-                    ..
-                }
-            ) || capabilities.privilege == AppInstallPrivilege::Root
+            recipe.is_managed_node_package()
+                || !matches!(
+                    recipe,
+                    InstallRecipe::NodePackage {
+                        privilege: Some(AppInstallPrivilege::User),
+                        ..
+                    }
+                )
+                || capabilities.privilege == AppInstallPrivilege::Root
                 || capabilities
                     .installer_access
                     .as_ref()
@@ -1380,6 +1459,20 @@ pub async fn detect_managed_app_ownership_with_context(
     }
     for recipe in viable {
         let owned = match &recipe {
+            InstallRecipe::NodePackage { .. } if recipe.is_managed_node_package() => context
+                .is_some_and(|context| {
+                    let root = absolute_normalized(
+                        &context
+                            .install_base_dir
+                            .join("node-package")
+                            .join(&definition.launcher.id),
+                    );
+                    !detection.executable_paths.is_empty()
+                        && detection
+                            .executable_paths
+                            .iter()
+                            .all(|path| path_is_inside(path, &root))
+                }),
             InstallRecipe::NodePackage { .. } => {
                 node_package_owns_executable(&recipe, detection, capabilities).await
             }
@@ -1520,6 +1613,34 @@ mod tests {
         assert!(definitions
             .iter()
             .any(|item| item.launcher.id == "codex" && item.launchable));
+        let codex = find_builtin_managed_app("codex").expect("codex");
+        let codex_recipe = &codex.recipes[0];
+        assert!(codex_recipe.is_managed_node_package());
+        assert_eq!(codex_recipe.version(), Some("0.165.0"));
+        assert_eq!(codex_recipe.packages(), &["@openai/codex".to_string()]);
+        assert_eq!(codex.recipes.len(), 1);
+        let opencode = find_builtin_managed_app("opencode").expect("opencode");
+        assert!(opencode.recipes[0].is_managed_node_package());
+        assert_eq!(opencode.recipes[0].version(), Some("1.18.30"));
+    }
+
+    #[test]
+    fn managed_node_recipes_do_not_require_a_writable_global_npm_prefix() {
+        let caps = FinalComputerCapabilities {
+            installer_access: Some(AppInstallerAccess {
+                npm_global_writable: Some(false),
+            }),
+            ..capabilities(AppInstallPrivilege::User)
+        };
+        let codex = find_builtin_managed_app("codex").expect("codex");
+        assert!(select_install_recipe(&codex, &caps).recipe.is_some());
+        let thctl = find_builtin_managed_app("thctl").expect("thctl");
+        let selection = select_install_recipe(&thctl, &caps);
+        assert!(selection.recipe.is_none());
+        assert_eq!(
+            selection.reason.map(|reason| reason.code),
+            Some(ManagedAppActionReasonCode::InstallerNotWritable)
+        );
     }
 
     #[test]

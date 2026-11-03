@@ -19,6 +19,7 @@ import {
   detectManagedApp,
   detectManagedAppOwnership,
   managedAppProjection,
+  resolveApp,
   selectInstallRecipe,
 } from "@task-handoff/app-runtime";
 import type { ManagedAppOwnershipResult } from "@task-handoff/app-runtime";
@@ -33,6 +34,24 @@ const JOB_FIELDS = new Set(["id", "requestId", "appId", "operation", "state", "p
 
 function commandArgument(value: string) {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+function managedNodePackageRecipe(definition: ManagedAppDefinition) {
+  return definition.distribution.recipes.find((recipe) => recipe.type === "node-package" && recipe.managed === true);
+}
+
+function definitionWithManagedLauncher(definition: ManagedAppDefinition, installBaseDir: string) {
+  if (!managedNodePackageRecipe(definition)) return definition;
+  const resolved = resolveApp(definition.launcher, process.env, {
+    managedAppRoot: installBaseDir,
+    managedAppIds: new Set([definition.launcher.id]),
+  });
+  return { ...definition, launcher: resolved.app };
+}
+
+function pathInside(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function commandLine(command: { executable: string; args: string[] }) {
@@ -134,6 +153,7 @@ export type AppManagementManagerOptions = {
   ownership?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppOwnershipResult | Promise<ManagedAppOwnershipResult>;
   execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext) => Promise<unknown>;
   updateCheck?: (recipe: InstallRecipe, context: AppUpdateCheckContext) => Promise<AppUpdateCheckResult>;
+  stopAppRuntime?: (appId: string) => void | Promise<void>;
   sessions?: () => Array<{ id: string; appId: string; status: string }>;
   publish?: (event: AppManagementEvent) => void;
   warn?: (message: string) => void;
@@ -153,11 +173,13 @@ export class AppManagementManager {
   private readonly ownership: NonNullable<AppManagementManagerOptions["ownership"]>;
   private readonly execute: AppManagementManagerOptions["execute"];
   private readonly updateCheck: NonNullable<AppManagementManagerOptions["updateCheck"]>;
+  private readonly stopAppRuntime: NonNullable<AppManagementManagerOptions["stopAppRuntime"]>;
   private readonly sessions: NonNullable<AppManagementManagerOptions["sessions"]>;
   private readonly publishEvent: NonNullable<AppManagementManagerOptions["publish"]>;
   private readonly now: NonNullable<AppManagementManagerOptions["now"]>;
   private readonly onTerminal: NonNullable<AppManagementManagerOptions["onTerminal"]>;
   private readonly warn: NonNullable<AppManagementManagerOptions["warn"]>;
+  private readonly installBaseDir: string;
   private readonly ownershipByApp = new Map<string, { fingerprint: string; source: ManagedAppManagementSource; recipe?: InstallRecipe }>();
   private readonly updateChecks = new Map<string, ManagedAppUpdateState>();
   private ownershipRefresh?: Promise<void>;
@@ -167,31 +189,43 @@ export class AppManagementManager {
 
   constructor(options: AppManagementManagerOptions) {
     this.store = new AppManagementJobStore(path.join(options.stateDir, "jobs.json"), options.warn);
+    this.installBaseDir = options.installBaseDir;
     this.definitions = options.definitions || (() => builtinManagedAppDefinitions());
     this.capabilities = options.capabilities || (() => this.capabilitiesSnapshot || (this.capabilitiesSnapshot = detectFinalComputerCapabilities()));
     this.refreshCapabilities = options.capabilities
       ? async () => options.capabilities!()
       : () => detectFinalComputerCapabilitiesAsync();
-    this.detection = options.detection || ((definition) => detectManagedApp(definition));
-    const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => detectManagedAppOwnership(definition, detection, capabilities, {
-      archiveManifestOwned: async (_definition, recipe, detected) => {
-        const expectedRoot = path.resolve(options.installBaseDir, recipe.installRoot);
-        const manifestFile = path.join(options.stateDir, "manifests", `${definition.launcher.id}.json`);
-        try {
-          const manifest = JSON.parse(await fs.promises.readFile(manifestFile, "utf8")) as { installRoot?: unknown; files?: unknown };
-          if (manifest.installRoot !== expectedRoot || !Array.isArray(manifest.files)) return false;
-          const owned = new Set(manifest.files.map((value) => path.resolve(expectedRoot, String(value))));
-          return detected.executablePaths.some((value) => owned.has(path.resolve(value)));
-        } catch {
-          return false;
-        }
-      },
-    });
+    this.detection = options.detection || ((definition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir)));
+    const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => {
+      const managedRecipe = managedNodePackageRecipe(definition);
+      if (managedRecipe) {
+        if (detection.state !== "installed") return { source: "none" as const };
+        const root = path.resolve(options.installBaseDir, "node-package", definition.launcher.id);
+        return detection.executablePaths.length > 0 && detection.executablePaths.every((value) => pathInside(path.resolve(value), root))
+          ? { source: "recipe" as const, recipe: managedRecipe }
+          : { source: "external" as const };
+      }
+      return detectManagedAppOwnership(definition, detection, capabilities, {
+        archiveManifestOwned: async (_definition, recipe, detected) => {
+          const expectedRoot = path.resolve(options.installBaseDir, recipe.installRoot);
+          const manifestFile = path.join(options.stateDir, "manifests", `${definition.launcher.id}.json`);
+          try {
+            const manifest = JSON.parse(await fs.promises.readFile(manifestFile, "utf8")) as { installRoot?: unknown; files?: unknown };
+            if (manifest.installRoot !== expectedRoot || !Array.isArray(manifest.files)) return false;
+            const owned = new Set(manifest.files.map((value) => path.resolve(expectedRoot, String(value))));
+            return detected.executablePaths.some((value) => owned.has(path.resolve(value)));
+          } catch {
+            return false;
+          }
+        },
+      });
+    };
     this.ownership = options.ownership || (options.managementSource
       ? async (definition, detection, capabilities) => ({ source: await options.managementSource!(definition, detection, capabilities) })
       : defaultOwnership);
     this.execute = options.execute || createAppRecipeExecutor({ installBaseDir: options.installBaseDir, stateDir: options.stateDir });
     this.updateCheck = options.updateCheck || createAppUpdateChecker();
+    this.stopAppRuntime = options.stopAppRuntime || (() => undefined);
     this.sessions = options.sessions || (() => []);
     this.publishEvent = options.publish || (() => undefined);
     this.now = options.now || (() => new Date().toISOString());
@@ -277,7 +311,7 @@ export class AppManagementManager {
     }
     let outcome: AppUpdateCheckResult;
     try {
-      outcome = await this.updateCheck(selected.recipe, { appId, capabilities });
+      outcome = await this.updateCheck(selected.recipe, { appId, capabilities, installBaseDir: this.installBaseDir });
     } catch (error) {
       outcome = { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
     }
@@ -312,11 +346,11 @@ export class AppManagementManager {
       if (active.operation === operation) return active;
       throw new AppManagementRequestError("app_operation_conflict", "A conflicting app operation is already active.", 409, { activeJobId: active.id });
     }
-    const runningSessions = operation === "uninstall"
+    const runningSessions = operation !== "install"
       ? this.sessions().filter((session) => session.appId === appId && ["created", "running", "stopping"].includes(session.status))
       : [];
     if (runningSessions.length) {
-      throw new AppManagementRequestError("app_sessions_running", "The app has running sessions and cannot be uninstalled.", 409, { sessionIds: runningSessions.map((session) => session.id) });
+      throw new AppManagementRequestError("app_sessions_running", "The app has running sessions and cannot be changed.", 409, { sessionIds: runningSessions.map((session) => session.id) });
     }
     const capabilities = this.capabilities();
     const selected = selectInstallRecipe(definition, capabilities);
@@ -350,6 +384,10 @@ export class AppManagementManager {
     this.emit(job, true);
     this.queue = this.queue.then(() => this.run(job.id, definition, operationRecipe)).catch(() => undefined);
     return job;
+  }
+
+  hasActiveOperation(appId: string) {
+    return this.store.list().some((job) => job.appId === appId && ACTIVE_STATES.has(job.state));
   }
 
   waitForIdle() {
@@ -420,6 +458,11 @@ export class AppManagementManager {
     job = this.store.save({ ...job, state: "running", phase: "starting", startedAt, updatedAt: startedAt });
     this.emit(job, true);
     try {
+      if (job.operation !== "install") {
+        const active = this.sessions().filter((session) => session.appId === job.appId && ["created", "running", "stopping"].includes(session.status));
+        if (active.length) throw new AppRecipeExecutionError("app_sessions_running", "The app has running sessions and cannot be changed.", true);
+        await this.stopAppRuntime(job.appId);
+      }
       await this.execute!(job.operation, recipe, {
         appId: job.appId,
         capabilities: this.capabilities(),

@@ -164,6 +164,7 @@ export function selectInstallRecipe(definition: ManagedAppDefinition, capabiliti
     return { reason: { code: "INSUFFICIENT_PRIVILEGE", message: "The controlled instance does not have the privilege required by this recipe." } };
   }
   const writableMatches = privilegeMatches.filter((recipe) => recipe.type !== "node-package"
+    || recipe.managed === true
     || recipe.privilege !== "user"
     || capabilities.privilege === "root"
     || capabilities.installerAccess?.npmGlobalWritable === true);

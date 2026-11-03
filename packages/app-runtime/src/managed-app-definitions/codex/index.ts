@@ -21,8 +21,7 @@ export const codexProvider: ManagedAppProvider = {
     detection: launcherDetection(),
     distribution: {
       recipes: [
-        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@openai/codex"], privilege: "user" },
-        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@openai/codex"], privilege: "passwordless-sudo" },
+        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@openai/codex"], managed: true, version: "0.165.0", privilege: "user" },
       ],
     },
   }),

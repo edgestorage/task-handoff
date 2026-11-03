@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveExecutable } from "@task-handoff/app-runtime";
 import type { FinalComputerCapabilities, ManagedAppUpdateStatus } from "@task-handoff/protocol/control-plane";
 import type { InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
@@ -7,6 +9,7 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_VERSION_CHARS = 120;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
+const NODE_PACKAGE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,120}$/;
 
 export type AppUpdateCheckResult = {
   status: ManagedAppUpdateStatus;
@@ -18,6 +21,7 @@ export type AppUpdateCheckResult = {
 export type AppUpdateCheckContext = {
   appId: string;
   capabilities: FinalComputerCapabilities;
+  installBaseDir?: string;
 };
 
 export type AppUpdateCheckerOptions = {
@@ -144,11 +148,35 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
     return parseBrewOutdated(response.stdout);
   };
 
-  const checkNodePackage = async (recipe: NodePackageInstallRecipe, capabilities: FinalComputerCapabilities): Promise<AppUpdateCheckResult> => {
+  const checkNodePackage = async (recipe: NodePackageInstallRecipe, capabilities: FinalComputerCapabilities, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
     if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
       return result("unknown", { reason: "The built-in Node package recipe contains an invalid package name." });
     }
+    if (recipe.managed && recipe.version !== undefined && !NODE_PACKAGE_VERSION.test(recipe.version)) {
+      return result("unknown", { reason: "The built-in Node package recipe contains an invalid package version." });
+    }
     if (!capabilities.installers.includes(recipe.installer)) return result("unknown", { reason: `The ${recipe.installer} installer is unavailable.` });
+    if (recipe.managed) {
+      if (!recipe.version) return result("unknown", { reason: "The managed Node package recipe has no pinned version." });
+      const manifestPath = context.installBaseDir
+        ? path.join(context.installBaseDir, "node-package", context.appId, "managed-app.json")
+        : undefined;
+      let packages: Record<string, unknown> = {};
+      try {
+        const parsed = manifestPath ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : undefined;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) packages = (parsed as { packages?: Record<string, unknown> }).packages || {};
+      } catch {
+        packages = {};
+      }
+      const installed = recipe.packages.map((item) => version(packages[item]));
+      if (installed.every((item) => item === recipe.version)) {
+        return result("up-to-date", { installedVersion: recipe.version, latestVersion: recipe.version });
+      }
+      return result("update-available", {
+        installedVersion: installed.find((item) => item !== undefined),
+        latestVersion: recipe.version,
+      });
+    }
     const elevate = capabilities.privilege === "passwordless-sudo" && recipe.privilege !== "user";
     const response = await run("npm", ["outdated", "--global", "--json", "--depth=0", ...recipe.packages], capabilities, elevate);
     if (!response.stdout.trim()) {
@@ -161,6 +189,6 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
   return async (recipe: InstallRecipe, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
     if (recipe.type === "bundled") return result("unsupported", { reason: "Bundled apps ship with the controlled computer and have no update source." });
     if (recipe.type === "archive") return result("unsupported", { reason: "Archive updates are delivered with the built-in app definition." });
-    return recipe.type === "system-package" ? checkSystemPackage(recipe, context.capabilities) : checkNodePackage(recipe, context.capabilities);
+    return recipe.type === "system-package" ? checkSystemPackage(recipe, context.capabilities) : checkNodePackage(recipe, context.capabilities, context);
   };
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createGunzip } from "node:zlib";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
+import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 import { commandInvocation, quoteCommandInterpreterArgument } from "@task-handoff/core/core/command-invocation";
 import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
@@ -15,6 +16,8 @@ const MAX_ARCHIVE_ENTRIES = 100_000;
 const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
+const NODE_PACKAGE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,120}$/;
+const MANAGED_NODE_PACKAGE_DIR = "node-package";
 
 export class AppRecipeExecutionError extends Error {
   readonly code: string;
@@ -161,16 +164,24 @@ function aptRefreshCommand(capabilities: FinalComputerCapabilities, recipe: Syst
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot refresh the apt package index.");
 }
 
-function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv): AppRecipeCommand {
+function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv, managedPrefix?: string): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package name.");
+  }
+  if (recipe.managed && recipe.version !== undefined && !NODE_PACKAGE_VERSION.test(recipe.version)) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package version.");
   }
   if (!capabilities.installers.includes(recipe.installer)) {
     throw new AppRecipeExecutionError("installer_unavailable", `The ${recipe.installer} installer is unavailable.`);
   }
-  const args = operation === "uninstall"
-    ? ["uninstall", "--global", ...recipe.packages]
-    : ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages];
+  const packageSpecs = recipe.managed && recipe.version
+    ? recipe.packages.map((item) => `${item}@${recipe.version}`)
+    : recipe.packages;
+  const args = managedPrefix
+    ? ["install", "--prefix", managedPrefix, "--no-save", "--include=optional", "--no-audit", "--no-fund", ...packageSpecs]
+    : operation === "uninstall"
+      ? ["uninstall", "--global", ...recipe.packages]
+      : ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...packageSpecs];
   const invocation = commandInvocation(recipe.installer, args, {
     env,
     platform: capabilities.platform as NodeJS.Platform,
@@ -183,7 +194,7 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
     env: invocation.env,
     timeoutMs: 15 * 60_000,
   };
-  if (capabilities.privilege === "root" || recipe.privilege === "user") {
+  if (managedPrefix || capabilities.privilege === "root" || recipe.privilege === "user") {
     return command;
   }
   if (capabilities.privilege === "passwordless-sudo") {
@@ -551,6 +562,65 @@ function uninstallArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecut
   fs.unlinkSync(filePath);
 }
 
+function managedNodePackageRoot(installBaseDir: string, appId: string) {
+  return path.join(installBaseDir, MANAGED_NODE_PACKAGE_DIR, appId);
+}
+
+function managedNodePackageStaging(installBaseDir: string, appId: string) {
+  return path.join(installBaseDir, MANAGED_NODE_PACKAGE_DIR, ".staging", `${appId}-${crypto.randomUUID()}`);
+}
+
+function verifyManagedNodePackage(staging: string, recipe: NodePackageInstallRecipe, appId: string) {
+  const command = path.join(staging, "node_modules", ".bin", appId);
+  const resolved = resolveExecutable(command);
+  if (!resolved || !pathInsideRoot(fs.realpathSync(resolved.executable), fs.realpathSync(staging))) {
+    throw new AppRecipeExecutionError("postcondition_failed", "The staged package has no executable managed launcher inside its install root.");
+  }
+  for (const packageName of recipe.packages) {
+    const packageRoot = path.join(staging, "node_modules", ...packageName.split("/"));
+    let manifest: { bin?: string | Record<string, string> };
+    try {
+      manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as { bin?: string | Record<string, string> };
+    } catch {
+      throw new AppRecipeExecutionError("postcondition_failed", `Installed package ${packageName} has no readable package manifest.`);
+    }
+    const bins = typeof manifest.bin === "string"
+      ? [manifest.bin]
+      : Object.values(manifest.bin || {});
+    if (!bins.length || bins.some((value) => !path.isAbsolute(path.resolve(packageRoot, value)) || !pathInsideRoot(path.resolve(packageRoot, value), packageRoot) || !fs.existsSync(path.resolve(packageRoot, value)))) {
+      throw new AppRecipeExecutionError("postcondition_failed", `Installed package ${packageName} has no usable executable.`);
+    }
+  }
+}
+
+function pathInsideRoot(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function writeManagedNodePackageManifest(staging: string, appId: string, recipe: NodePackageInstallRecipe) {
+  fs.writeFileSync(path.join(staging, "managed-app.json"), `${JSON.stringify({
+    appId,
+    packages: Object.fromEntries(recipe.packages.map((packageName) => [packageName, recipe.version])),
+    source: "npm",
+    installedAt: new Date().toISOString(),
+  }, null, 2)}\n`, { mode: 0o600 });
+}
+
+function replaceManagedNodePackage(installBaseDir: string, appId: string, staging: string) {
+  const target = managedNodePackageRoot(installBaseDir, appId);
+  const previous = `${target}.previous-${crypto.randomUUID()}`;
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  if (fs.existsSync(target)) fs.renameSync(target, previous);
+  try {
+    fs.renameSync(staging, target);
+  } catch (error) {
+    if (fs.existsSync(previous)) fs.renameSync(previous, target);
+    throw error;
+  }
+  fs.rmSync(previous, { recursive: true, force: true });
+}
+
 export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
   const resolved = {
     ...options,
@@ -577,6 +647,29 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     }
     if (recipe.type === "node-package") {
       context.onPhase?.(operation === "install" ? "install-node-package" : operation === "update" ? "update-node-package" : "uninstall-node-package");
+      if (recipe.managed) {
+        if (!recipe.version) throw new AppRecipeExecutionError("invalid_builtin_recipe", "A managed Node package recipe requires an exact version.");
+        const target = managedNodePackageRoot(resolved.installBaseDir, context.appId);
+        if (operation === "uninstall") {
+          fs.rmSync(target, { recursive: true, force: true });
+          return { log: "" };
+        }
+        const staging = managedNodePackageStaging(resolved.installBaseDir, context.appId);
+        fs.rmSync(staging, { recursive: true, force: true });
+        fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+        try {
+          const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, staging);
+          const result = await runCommand(command);
+          if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
+          verifyManagedNodePackage(staging, recipe, context.appId);
+          writeManagedNodePackageManifest(staging, context.appId, recipe);
+          replaceManagedNodePackage(resolved.installBaseDir, context.appId, staging);
+          return { log: bounded(result.stdout || result.stderr) };
+        } catch (error) {
+          fs.rmSync(staging, { recursive: true, force: true });
+          throw error;
+        }
+      }
       const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env);
       let result = await runCommand(command);
       const retirementDirectory = result.exitCode === 0 ? undefined : npmRetirementDirectory(result.stderr, recipe);

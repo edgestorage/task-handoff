@@ -191,7 +191,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     const transport = codexAppServerTransport();
     const runtimeDir = path.join(this.host.paths.runtimeDir, "codex-app-server");
     const logDir = path.join(this.host.paths.logDir, "app-sessions", "codex-app-server");
-    const appServerCommand = process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND || command;
+    const appServerCommand = command;
     const childEnvironment = { ...env, ...this.privateEnvironment };
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.mkdirSync(logDir, { recursive: true });

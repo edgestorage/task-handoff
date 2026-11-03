@@ -1,5 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use controlled_instance_app_runtime::{
+    command_invocation::{command_invocation, CommandInvocationOptions},
+    executable_resolver::ExecutableResolverOptions,
     process_group_exists, spawn_pty, terminate_process_group, PtyHandle,
 };
 use controlled_instance_protocol::{
@@ -51,6 +53,7 @@ impl Drop for ActivityGuard {
 #[derive(Clone)]
 pub struct InstanceShellRuntime {
     workspace: PathBuf,
+    app_runtime: Option<Arc<controlled_instance_app_runtime::AppRuntime>>,
     max_activities: usize,
     active: Arc<AtomicUsize>,
     processes: Arc<Mutex<BTreeMap<u32, ProcessControl>>>,
@@ -66,11 +69,20 @@ impl InstanceShellRuntime {
         let (shutdown, _) = broadcast::channel(8);
         Self {
             workspace,
+            app_runtime: None,
             max_activities: max_activities.max(1),
             active: Arc::new(AtomicUsize::new(0)),
             processes: Arc::new(Mutex::new(BTreeMap::new())),
             shutdown,
         }
+    }
+
+    pub fn with_app_runtime(
+        mut self,
+        runtime: Arc<controlled_instance_app_runtime::AppRuntime>,
+    ) -> Self {
+        self.app_runtime = Some(runtime);
+        self
     }
 
     pub fn capabilities(&self) -> InstanceShellCapabilities {
@@ -266,6 +278,7 @@ impl InstanceShellRuntime {
                                         }
                                     };
                                     match spawn_shell(
+                                        self.app_runtime.as_deref(),
                                         &workspace,
                                         &frame,
                                         events_tx.clone(),
@@ -494,11 +507,17 @@ struct SpawnedShell {
 }
 
 async fn spawn_shell(
+    runtime: Option<&controlled_instance_app_runtime::AppRuntime>,
     workspace: &Path,
     frame: &controlled_instance_protocol::InstanceShellStartFrame,
     events: mpsc::Sender<ShellEvent>,
 ) -> Result<SpawnedShell, ()> {
     let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    let env = runtime
+        .map(|runtime| runtime.process_environment(&env))
+        .transpose()
+        .map_err(|_| ())?
+        .unwrap_or(env);
     let cols = frame.cols.unwrap_or(120);
     let rows = frame.rows.unwrap_or(40);
     if frame.mode == InstanceShellMode::Interactive || frame.tty {
@@ -522,7 +541,30 @@ async fn spawn_shell(
                     .collect(),
             )
         };
-        let spawned = spawn_pty(&command, &args, workspace, &env, cols, rows).map_err(|_| ())?;
+        let (args, env) = runtime
+            .map(|runtime| runtime.prepare_shell(&command, &args, &env))
+            .transpose()
+            .map_err(|_| ())?
+            .unwrap_or((args, env));
+        let invocation = command_invocation(
+            &command,
+            &args,
+            &CommandInvocationOptions::from(ExecutableResolverOptions {
+                env,
+                cwd: workspace.to_path_buf(),
+                ..Default::default()
+            }),
+        )
+        .map_err(|_| ())?;
+        let spawned = spawn_pty(
+            &invocation.executable.display().to_string(),
+            &invocation.args,
+            workspace,
+            &invocation.env,
+            cols,
+            rows,
+        )
+        .map_err(|_| ())?;
         let pid = spawned.pid;
         let handle = spawned.handle.clone();
         spawn_pty_reader(spawned.reader, events.clone());
@@ -535,11 +577,27 @@ async fn spawn_shell(
     } else {
         let argv = frame.command.as_ref().ok_or(())?;
         let command = argv.first().ok_or(())?;
-        let mut process = Command::new(command);
+        let args = argv.iter().skip(1).cloned().collect::<Vec<_>>();
+        let (args, env) = runtime
+            .map(|runtime| runtime.prepare_shell(command, &args, &env))
+            .transpose()
+            .map_err(|_| ())?
+            .unwrap_or((args, env));
+        let invocation = command_invocation(
+            command,
+            &args,
+            &CommandInvocationOptions::from(ExecutableResolverOptions {
+                env,
+                cwd: workspace.to_path_buf(),
+                ..Default::default()
+            }),
+        )
+        .map_err(|_| ())?;
+        let mut process = Command::new(&invocation.executable);
         process
-            .args(argv.iter().skip(1))
+            .args(&invocation.args)
             .current_dir(workspace)
-            .envs(&env)
+            .envs(&invocation.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

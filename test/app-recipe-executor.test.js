@@ -386,3 +386,105 @@ test("archive checksum failure never inspects or activates the artifact", async 
   assert.equal(commandCount, 0);
   assert.equal(fs.existsSync(path.join(root, "apps", "tool")), false);
 });
+
+test("Managed npm recipes install into the instance prefix and remove only that managed tree", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-app-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    commandRunner: async (command) => {
+      commands.push(command);
+      const prefix = command.args[command.args.indexOf("--prefix") + 1];
+      const packageRoot = path.join(prefix, "node_modules", "@openai", "codex");
+      fs.mkdirSync(path.join(packageRoot, "bin"), { recursive: true });
+      fs.writeFileSync(path.join(packageRoot, "bin", "codex.js"), "#!/usr/bin/env node\n");
+      fs.chmodSync(path.join(packageRoot, "bin", "codex.js"), 0o755);
+      fs.mkdirSync(path.join(prefix, "node_modules", ".bin"), { recursive: true });
+      fs.symlinkSync(path.join("..", "@openai", "codex", "bin", "codex.js"), path.join(prefix, "node_modules", ".bin", "codex"));
+      fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ bin: { codex: "bin/codex.js" } }));
+      return { exitCode: 0, stdout: "ok", stderr: "" };
+    },
+  });
+  const recipe = {
+    type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"],
+    managed: true, version: "0.165.0", privilege: "user",
+  };
+  const executionContext = {
+    appId: "codex",
+    capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: false } },
+  };
+
+  await execute("install", recipe, executionContext);
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args.includes("--global"), false);
+  assert.ok(commands[0].args.includes("--prefix"));
+  assert.ok(commands[0].args.includes("@openai/codex@0.165.0"));
+  const target = path.join(root, "managed-apps", "node-package", "codex");
+  assert.equal(fs.existsSync(path.join(target, "managed-app.json")), true);
+  assert.equal(fs.existsSync(path.join(target, "node_modules", "@openai", "codex", "bin", "codex.js")), true);
+
+  await execute("uninstall", recipe, executionContext);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(commands.length, 1);
+});
+
+test("Managed npm recipes keep the previous install when staging validation fails", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-app-failed-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, "managed-apps", "node-package", "codex");
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, "managed-app.json"), JSON.stringify({ appId: "codex", packages: { "@openai/codex": "0.164.0" } }));
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    commandRunner: async () => ({ exitCode: 0, stdout: "installed nothing", stderr: "" }),
+  });
+
+  await assert.rejects(
+    execute("update", {
+      type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"],
+      managed: true, version: "0.165.0", privilege: "user",
+    }, {
+      appId: "codex",
+      capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user" },
+    }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "postcondition_failed",
+  );
+  assert.equal(JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8")).packages["@openai/codex"], "0.164.0");
+});
+
+for (const launcher of ["missing", "external"]) {
+  test(`Managed npm activation rejects a ${launcher} launcher and preserves the working install`, { skip: process.platform === "win32" }, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-launcher-validation-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const installBaseDir = path.join(root, "managed-apps");
+    const target = path.join(installBaseDir, "node-package", "codex", "node_modules", ".bin", "codex");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "#!/bin/sh\nprintf previous-version\n", { mode: 0o755 });
+    const external = path.join(root, "global-codex");
+    fs.writeFileSync(external, "#!/bin/sh\nprintf global-version\n", { mode: 0o755 });
+    const execute = createAppRecipeExecutor({
+      installBaseDir, stateDir: path.join(root, "state"),
+      commandRunner: async (command) => {
+        const prefix = command.args[command.args.indexOf("--prefix") + 1];
+        const packageRoot = path.join(prefix, "node_modules", "@openai", "codex");
+        fs.mkdirSync(packageRoot, { recursive: true });
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ bin: { codex: "cli.js" } }));
+        fs.writeFileSync(path.join(packageRoot, "cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        if (launcher === "external") {
+          fs.mkdirSync(path.join(prefix, "node_modules", ".bin"), { recursive: true });
+          fs.symlinkSync(external, path.join(prefix, "node_modules", ".bin", "codex"));
+        }
+        return { exitCode: 0, stdout: "ok", stderr: "" };
+      },
+    });
+    await assert.rejects(execute("update", {
+      type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], managed: true, version: "0.165.0", privilege: "user",
+    }, { appId: "codex", capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user" } }),
+    (error) => error.code === "postcondition_failed");
+    assert.equal(spawnSync(target, [], { encoding: "utf8" }).stdout, "previous-version");
+  });
+}

@@ -12628,7 +12628,12 @@ mod tests {
 
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
-        let script = workspace.path().join("resume.sh");
+        let script = state
+            .config
+            .storage_paths
+            .data_dir
+            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
         std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
             .expect("permissions");

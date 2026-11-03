@@ -114,3 +114,25 @@ test("unavailable installers are reported as unknown", async () => {
   assert.equal(result.status, "unknown");
   assert.equal(commands.length, 0);
 });
+
+test("managed npm recipes compare the manifest version with the pinned version", async (context) => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-update-check-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const manifestDir = path.join(root, "node-package", "codex");
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.writeFileSync(path.join(manifestDir, "managed-app.json"), JSON.stringify({ appId: "codex", packages: { "@openai/codex": "0.165.0" } }));
+  const pinned = { ...npmRecipe, managed: true, version: "0.165.0" };
+  const { checker } = checkerWith([]);
+
+  assert.deepEqual(await checker(pinned, { appId: "codex", capabilities: npmCapabilities, installBaseDir: root }), {
+    status: "up-to-date", installedVersion: "0.165.0", latestVersion: "0.165.0",
+  });
+
+  fs.writeFileSync(path.join(manifestDir, "managed-app.json"), JSON.stringify({ appId: "codex", packages: { "@openai/codex": "0.166.0" } }));
+  assert.deepEqual(await checker(pinned, { appId: "codex", capabilities: npmCapabilities, installBaseDir: root }), {
+    status: "update-available", installedVersion: "0.166.0", latestVersion: "0.165.0",
+  });
+});

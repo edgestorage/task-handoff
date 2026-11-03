@@ -62,6 +62,10 @@ export type NodePackageInstallRecipe = ManagedAppRecipeConstraint & {
   type: "node-package";
   installer: "npm";
   packages: string[];
+  /** Install into the instance managed app root instead of the system npm prefix. */
+  managed?: boolean;
+  /** Exact npm version used for install and update when managed. */
+  version?: string;
 };
 
 export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {

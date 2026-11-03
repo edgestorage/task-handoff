@@ -1,3 +1,4 @@
+import { commandInvocation } from "@task-handoff/core/core/command-invocation";
 import { spawnSync } from "node:child_process";
 import { claudeControlSock, killClaudeDaemonJob } from "@task-handoff/core/core/claude-control-sock";
 import { claudeShortFromOutput } from "../../runtime-utils";
@@ -9,9 +10,10 @@ function timeoutMs() {
 
 function stopBackgroundLaunch(command: string, short: string, cwd: string, env: NodeJS.ProcessEnv) {
   try {
-    spawnSync(command, ["stop", short], {
+    const invocation = commandInvocation(command, ["stop", short], { cwd, env });
+    spawnSync(invocation.executable, invocation.args, {
       cwd,
-      env,
+      env: invocation.env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: timeoutMs(),
@@ -26,9 +28,10 @@ function prepareClaudeTtyLaunch(input: ManagedAppTtyLaunchInput) {
     return {};
   }
   const bgArgs = ["--bg", ...input.args];
-  const result = spawnSync(input.command, bgArgs, {
+  const invocation = commandInvocation(input.command, bgArgs, { cwd: input.cwd, env: input.env });
+  const result = spawnSync(invocation.executable, invocation.args, {
     cwd: input.cwd,
-    env: input.env,
+    env: invocation.env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: timeoutMs(),

@@ -80,6 +80,28 @@ test("runtime diagnostics require only commands declared by the image profile", 
   }
 });
 
+test("runtime diagnostics ignore global managed commands and reflect private installation", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-command-diagnostics-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previous = process.env.TASK_HANDOFF_CLAUDE_COMMAND;
+  process.env.TASK_HANDOFF_CLAUDE_COMMAND = process.execPath;
+  t.after(() => {
+    if (previous === undefined) delete process.env.TASK_HANDOFF_CLAUDE_COMMAND;
+    else process.env.TASK_HANDOFF_CLAUDE_COMMAND = previous;
+  });
+  const paths = storagePaths(root);
+  const read = () => runtimeDiagnostics(paths).commands.find((command) => command.name === "claude");
+  assert.equal(read().available, false);
+  assert.equal(fs.existsSync(path.join(root, "managed-apps")), false, "diagnostic reads must not materialize launchers");
+  const command = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", process.platform === "win32" ? "claude.cmd" : "claude");
+  fs.mkdirSync(path.dirname(command), { recursive: true });
+  fs.writeFileSync(command, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  assert.equal(read().available, true);
+  assert.equal(read().path, command);
+  fs.rmSync(command);
+  assert.equal(read().available, false);
+});
+
 test("instance capabilities are projected from available inventory items", () => {
   const capabilities = controlledInstanceCapabilities({
     appInventory: () => ({

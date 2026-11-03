@@ -10,6 +10,7 @@ import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
+import { ManagedNodeApps, managedNodePackageBin } from "./managed-node-apps";
 import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 
 export {
@@ -103,21 +104,59 @@ export function executablePath(command: string, env: NodeJS.ProcessEnv = process
   return resolveExecutable(command, { env, cwd })?.executable;
 }
 
-export function resolveAppExecutable(app: AppCatalogItem, baseEnv: NodeJS.ProcessEnv = process.env): AppCatalogItem {
+type AppResolutionOptions = {
+  env?: NodeJS.ProcessEnv;
+  managedAppRoot?: string;
+  managedAppIds?: ReadonlySet<string>;
+};
+
+type ResolvedCatalogApp = {
+  app: AppCatalogItem;
+  executable?: string;
+};
+
+export function resolveApp(app: AppCatalogItem, baseEnv: NodeJS.ProcessEnv = process.env, options: AppResolutionOptions = {}): ResolvedCatalogApp {
   const command = app.command?.trim();
-  if (!command) return app;
-  const resolution = resolveExecutable(command, { env: { ...baseEnv, ...app.env }, cwd: app.cwd });
-  if (!resolution) return app;
+  if (!command) return { app };
+  const env = { ...baseEnv, ...app.env };
+  const managedId = options.managedAppIds?.has(app.id) ? app.id : options.managedAppIds?.has(command) ? command : undefined;
+  const managed = Boolean(options.managedAppRoot && managedId);
+  if (managed) {
+    const bin = managedNodePackageBin(options.managedAppRoot!, managedId!);
+    const candidate = path.join(bin, managedId!);
+    const resolution = resolveExecutable(candidate, { env, cwd: app.cwd });
+    const managedEnv = {
+      ...app.env,
+      PATH: [bin, env.PATH].filter(Boolean).join(path.delimiter),
+    };
+    if (!resolution) return { app: { ...app, command: candidate, env: managedEnv } };
+    return {
+      app: {
+        ...app,
+        command: resolution.executable,
+        env: { ...managedEnv, ...resolution.env },
+      },
+      executable: resolution.executable,
+    };
+  }
+  const resolution = resolveExecutable(command, { env, cwd: app.cwd });
+  if (!resolution) return { app };
   return {
-    ...app,
-    command: resolution.executable,
-    env: { ...app.env, ...resolution.env },
+    app: {
+      ...app,
+      command: resolution.executable,
+      env: { ...app.env, ...resolution.env },
+    },
+    executable: resolution.executable,
   };
 }
 
-export function isAppAvailable(app: AppCatalogItem) {
-  const command = app.command?.trim();
-  return Boolean(command && executablePath(command, { ...process.env, ...app.env }, app.cwd));
+export function resolveAppExecutable(app: AppCatalogItem, baseEnv: NodeJS.ProcessEnv = process.env, options: AppResolutionOptions = {}): AppCatalogItem {
+  return resolveApp(app, baseEnv, options).app;
+}
+
+export function isAppAvailable(app: AppCatalogItem, options: AppResolutionOptions = {}) {
+  return Boolean(resolveApp(app, options.env || process.env, options).executable);
 }
 
 const APP_CATALOG_LIST_CACHE_MS = 30_000;
@@ -125,58 +164,67 @@ const APP_CATALOG_LIST_CACHE_MS = 30_000;
 export class AppCatalogRepository {
   private readonly customStore: DomainStore<CustomCatalog>;
   private readonly customCatalogSchema: ReturnType<typeof customCatalogSchema>;
+  private readonly managedAppIds: ReadonlySet<string>;
+  readonly managedNodeApps?: ManagedNodeApps;
   private inventoryCache?: { fingerprint: string; items: InstanceAppInventoryItem[] };
   // Executable resolution probes PATH/Homebrew/npm candidates with accessSync.
   // Shared-resource ensure runs on every OpenCode request, so keep the resolved
   // catalog warm instead of re-probing every executable on each request.
   private listCache?: { expiresAt: number; items: AppCatalogItem[] };
 
-  constructor(paths: TaskHandoffStoragePaths, private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry) {
+  constructor(
+    paths: TaskHandoffStoragePaths,
+    private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry,
+    private readonly options: { managedAppRoot?: string } = {},
+  ) {
     this.customCatalogSchema = customCatalogSchema(registry);
     this.customStore = new DomainStore<CustomCatalog>(path.join(paths.appCatalogDir, "custom.json"), {
       schema: this.customCatalogSchema,
       defaultValue: () => ({ schemaVersion: 1, items: [] }),
       sanitize: sanitizeCustomCatalog,
     });
+    if (options.managedAppRoot) this.managedNodeApps = new ManagedNodeApps(options.managedAppRoot, registry.definitions({ includeOptional: true }));
+    this.managedAppIds = new Set(registry.definitions({ includeOptional: true })
+      .filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "node-package" && recipe.managed === true))
+      .map((definition) => definition.launcher.id));
+  }
+
+  private resolveCatalogApp(app: AppCatalogItem, source: "builtin" | "custom", env: NodeJS.ProcessEnv = process.env): ResolvedCatalogApp {
+    return resolveApp(app, env, {
+      managedAppRoot: this.options.managedAppRoot,
+      managedAppIds: this.managedAppIds,
+    });
+  }
+
+  private resolvedEntries(env: NodeJS.ProcessEnv = process.env) {
+    const merged = new Map<string, { app: AppCatalogItem; source: "builtin" | "custom"; executable?: string }>();
+    for (const { launcher: app } of this.registry.launchableDefinitions()) {
+      const resolved = this.resolveCatalogApp(app, "builtin", env);
+      merged.set(app.id, { ...resolved, source: "builtin" });
+    }
+    const custom = this.safeCustom();
+    for (const app of custom.data?.items || []) {
+      const resolved = this.resolveCatalogApp(app, "custom", env);
+      merged.set(app.id, { ...resolved, source: "custom" });
+    }
+    return merged;
   }
 
   list() {
     const now = Date.now();
     if (this.listCache && this.listCache.expiresAt > now) return this.listCache.items;
-    const merged = new Map<string, AppCatalogItem>();
-    for (const { launcher: app } of this.registry.launchableDefinitions()) {
-      merged.set(app.id, resolveAppExecutable(app));
-    }
-    const custom = this.safeCustom();
-    if (custom.data) {
-      for (const app of custom.data.items) {
-        merged.set(app.id, resolveAppExecutable(app));
-      }
-    }
-    const items = Array.from(merged.values());
+    const items = [...this.resolvedEntries().values()].map(({ app }) => app);
     this.listCache = { expiresAt: now + APP_CATALOG_LIST_CACHE_MS, items };
     return items;
   }
 
   available() {
-    return this.list().filter(isAppAvailable);
+    return [...this.resolvedEntries().values()].filter(({ executable }) => Boolean(executable)).map(({ app }) => app);
   }
 
   inventory(observedAt = new Date().toISOString()): InstanceAppInventory {
-    const builtin = this.registry.launchableDefinitions().map(({ launcher: app }) => ({ app, source: "builtin" as const }));
     const custom = this.safeCustom();
-    const merged = new Map<string, { app: AppCatalogItem; source: "builtin" | "custom" }>();
-    for (const entry of builtin) merged.set(entry.app.id, entry);
-    for (const app of custom.data?.items || []) merged.set(app.id, { app, source: "custom" });
-
-    const resolved = [...merged.values()].map(({ app: unresolvedApp, source }) => ({
-      app: resolveAppExecutable(unresolvedApp),
-      source,
-    })).map(({ app, source }) => ({
-      app,
-      source,
-      executable: app.command?.trim() ? executablePath(app.command.trim(), { ...process.env, ...app.env }, app.cwd) : undefined,
-    }));
+    const resolved = [...this.resolvedEntries().values()];
     const fingerprint = JSON.stringify(resolved.map(({ app, source, executable }) => ({
       id: app.id,
       name: app.name,
@@ -218,7 +266,7 @@ export class AppCatalogRepository {
   }
 
   find(appId: string) {
-    return this.list().find((app) => app.id === appId);
+    return this.resolvedEntries().get(appId)?.app;
   }
 
   custom() {

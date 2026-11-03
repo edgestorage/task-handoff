@@ -200,6 +200,16 @@ impl AppUpdateChecker {
         recipe: &InstallRecipe,
         capabilities: &FinalComputerCapabilities,
     ) -> AppUpdateCheckResult {
+        self.check_with_install_root(recipe, capabilities, None)
+            .await
+    }
+
+    pub async fn check_with_install_root(
+        &self,
+        recipe: &InstallRecipe,
+        capabilities: &FinalComputerCapabilities,
+        managed_context: Option<(&str, &std::path::Path)>,
+    ) -> AppUpdateCheckResult {
         match recipe {
             InstallRecipe::Bundled { .. } => AppUpdateCheckResult::new(
                 ManagedAppUpdateStatus::Unsupported,
@@ -217,14 +227,19 @@ impl AppUpdateChecker {
             InstallRecipe::NodePackage {
                 installer,
                 packages,
+                managed,
+                version,
                 privilege,
                 ..
             } => {
                 self.check_node(
                     *installer,
                     packages,
+                    *managed,
+                    version.as_deref(),
                     privilege.unwrap_or(AppInstallPrivilege::User),
                     capabilities,
+                    managed_context,
                 )
                 .await
             }
@@ -292,9 +307,53 @@ impl AppUpdateChecker {
         &self,
         installer: AppInstaller,
         packages: &[String],
+        managed: bool,
+        version: Option<&str>,
         recipe_privilege: AppInstallPrivilege,
         capabilities: &FinalComputerCapabilities,
+        managed_context: Option<(&str, &std::path::Path)>,
     ) -> AppUpdateCheckResult {
+        if managed {
+            let Some(version) = version else {
+                return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                    .reason("The managed Node package recipe has no pinned version.");
+            };
+            let Some((app_id, install_base_dir)) = managed_context else {
+                return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                    .reason("The managed app install root is unavailable.");
+            };
+            let manifest_path = install_base_dir
+                .join("node-package")
+                .join(app_id)
+                .join("managed-app.json");
+            let mut installed = BTreeMap::<String, String>::new();
+            if let Ok(raw) = std::fs::read_to_string(manifest_path) {
+                if let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&raw) {
+                    if let Some(Value::Object(packages)) = record.get("packages") {
+                        for (package, value) in packages {
+                            if let Some(value) = value.as_str() {
+                                installed.insert(package.clone(), value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            let versions = packages
+                .iter()
+                .map(|package| installed.get(package).cloned())
+                .collect::<Vec<_>>();
+            if versions
+                .iter()
+                .all(|value| value.as_deref() == Some(version))
+            {
+                return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpToDate)
+                    .installed(Some(version))
+                    .latest(Some(version));
+            }
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
+                .installed(versions.iter().find_map(|value| value.as_deref()))
+                .latest(Some(version));
+        }
         if packages.is_empty()
             || packages
                 .iter()
@@ -376,6 +435,7 @@ impl AppUpdateChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use controlled_instance_protocol::{FinalComputerArch, FinalComputerPlatform};
 
     #[test]
     fn parsers_match_the_node_update_check_contract() {
@@ -389,6 +449,50 @@ mod tests {
         );
         assert_eq!(brew.status, ManagedAppUpdateStatus::UpdateAvailable);
         assert_eq!(brew.latest_version.as_deref(), Some("1.1.0"));
+    }
+
+    #[tokio::test]
+    async fn managed_node_updates_compare_the_manifest_with_the_pinned_version() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let manifest_dir = temporary.path().join("node-package").join("codex");
+        std::fs::create_dir_all(&manifest_dir).expect("manifest directory");
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            r#"{"appId":"codex","packages":{"@openai/codex":"0.165.0"}}"#,
+        )
+        .expect("manifest");
+        let recipe = InstallRecipe::NodePackage {
+            platforms: vec![FinalComputerPlatform::Linux],
+            arches: Some(vec![FinalComputerArch::X64]),
+            privilege: Some(AppInstallPrivilege::User),
+            installer: AppInstaller::Npm,
+            packages: vec!["@openai/codex".to_string()],
+            managed: true,
+            version: Some("0.165.0".to_string()),
+        };
+        let capabilities = FinalComputerCapabilities {
+            platform: FinalComputerPlatform::Linux,
+            arch: FinalComputerArch::X64,
+            installers: vec![AppInstaller::Npm],
+            privilege: AppInstallPrivilege::User,
+            installer_access: None,
+        };
+        let check = AppUpdateChecker::new()
+            .check_with_install_root(&recipe, &capabilities, Some(("codex", temporary.path())))
+            .await;
+        assert_eq!(check.status, ManagedAppUpdateStatus::UpToDate);
+
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            r#"{"appId":"codex","packages":{"@openai/codex":"0.166.0"}}"#,
+        )
+        .expect("manifest");
+        let check = AppUpdateChecker::new()
+            .check_with_install_root(&recipe, &capabilities, Some(("codex", temporary.path())))
+            .await;
+        assert_eq!(check.status, ManagedAppUpdateStatus::UpdateAvailable);
+        assert_eq!(check.installed_version.as_deref(), Some("0.166.0"));
+        assert_eq!(check.latest_version.as_deref(), Some("0.165.0"));
     }
 
     #[test]

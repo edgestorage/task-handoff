@@ -20,8 +20,8 @@ use serde_json::{json, Value};
 
 use crate::{
     builtin_managed_app_definitions, detect_final_computer_capabilities,
-    detect_final_computer_capabilities_sync, detect_managed_app,
-    detect_managed_app_ownership_with_context, managed_app_projection, select_install_recipe,
+    detect_final_computer_capabilities_sync, detect_managed_app_ownership_with_context,
+    detect_managed_app_with_managed_root, managed_app_projection, select_install_recipe,
     AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult,
     AppUpdateChecker, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult,
     ManagedAppOwnershipContext,
@@ -101,6 +101,7 @@ type Definitions = Arc<dyn Fn() -> Vec<ManagedAppDefinition> + Send + Sync>;
 type Sessions = Arc<dyn Fn() -> Vec<AppManagementSession> + Send + Sync>;
 type Publisher = Arc<dyn Fn(AppManagementEvent) + Send + Sync>;
 type Warning = Arc<dyn Fn(&str) + Send + Sync>;
+type RuntimeHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct AppManagementManager {
@@ -111,6 +112,7 @@ pub struct AppManagementManager {
     sessions: Sessions,
     publish: Publisher,
     warn: Warning,
+    runtime_hook: RuntimeHook,
     executor: AppRecipeExecutor,
     update_checker: Arc<AppUpdateChecker>,
     queue: Arc<tokio::sync::Mutex<()>>,
@@ -130,6 +132,25 @@ impl AppManagementManager {
             Arc::new(sessions),
             Arc::new(publish),
             Arc::new(|message| tracing::warn!(message, "app management warning")),
+            Arc::new(|_| {}),
+        )
+    }
+
+    pub fn new_with_runtime_hook(
+        state_dir: impl Into<PathBuf>,
+        install_base_dir: impl Into<PathBuf>,
+        sessions: impl Fn() -> Vec<AppManagementSession> + Send + Sync + 'static,
+        publish: impl Fn(AppManagementEvent) + Send + Sync + 'static,
+        runtime_hook: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_parts(
+            state_dir,
+            install_base_dir,
+            Arc::new(builtin_managed_app_definitions),
+            Arc::new(sessions),
+            Arc::new(publish),
+            Arc::new(|message| tracing::warn!(message, "app management warning")),
+            Arc::new(runtime_hook),
         )
     }
 
@@ -140,6 +161,7 @@ impl AppManagementManager {
         sessions: Sessions,
         publish: Publisher,
         warn: Warning,
+        runtime_hook: RuntimeHook,
     ) -> Self {
         let state_dir = state_dir.into();
         let install_base_dir = install_base_dir.into();
@@ -162,6 +184,7 @@ impl AppManagementManager {
             sessions,
             publish,
             warn,
+            runtime_hook,
             executor: AppRecipeExecutor::new(install_base_dir, state_dir),
             update_checker: Arc::new(AppUpdateChecker::new()),
             queue: Arc::new(tokio::sync::Mutex::new(())),
@@ -173,7 +196,7 @@ impl AppManagementManager {
     pub fn snapshot(&self) -> AppManagementSnapshot {
         let definitions = (self.definitions)();
         let mut state = self.lock();
-        snapshot_locked(&definitions, &mut state)
+        snapshot_locked(&definitions, &mut state, &self.install_base_dir)
     }
 
     pub async fn refresh_snapshot(&self, force_capabilities: bool) -> AppManagementSnapshot {
@@ -187,7 +210,12 @@ impl AppManagementManager {
         }
         let detections = definitions
             .iter()
-            .map(|definition| (definition.clone(), detect_managed_app(definition)))
+            .map(|definition| {
+                (
+                    definition.clone(),
+                    detect_managed_app_with_managed_root(definition, Some(&self.install_base_dir)),
+                )
+            })
             .collect::<Vec<_>>();
         let capabilities = self.lock().capabilities.clone();
         let ownership_context = ManagedAppOwnershipContext {
@@ -215,7 +243,14 @@ impl AppManagementManager {
                 },
             );
         }
-        snapshot_locked(&definitions, &mut state)
+        snapshot_locked(&definitions, &mut state, &self.install_base_dir)
+    }
+
+    pub fn has_active_operation(&self, app_id: &str) -> bool {
+        self.lock()
+            .jobs
+            .values()
+            .any(|job| job.app_id == app_id && ACTIVE_STATES.contains(&job.state))
     }
 
     pub fn get_job(&self, job_id: &str) -> Result<AppManagementJob, AppManagementRequestError> {
@@ -248,7 +283,8 @@ impl AppManagementManager {
             })?;
         let (capabilities, detection, selected, source) = {
             let state = self.lock();
-            let detection = detect_managed_app(&definition);
+            let detection =
+                detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
             let selected = select_install_recipe(&definition, &state.capabilities);
             let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
             let cached = state.ownership.get(app_id);
@@ -280,9 +316,10 @@ impl AppManagementManager {
         }
         let outcome = self
             .update_checker
-            .check(
+            .check_with_install_root(
                 selected.recipe.as_ref().expect("selected recipe"),
                 &capabilities,
+                Some((app_id, &self.install_base_dir)),
             )
             .await;
         let state_value = update_state(outcome);
@@ -359,7 +396,7 @@ impl AppManagementManager {
             )
             .details(json!({ "activeJobId": active.id })));
         }
-        if operation == AppManagementOperation::Uninstall {
+        if operation != AppManagementOperation::Install {
             let running = (self.sessions)()
                 .into_iter()
                 .filter(|session| {
@@ -370,7 +407,7 @@ impl AppManagementManager {
             if !running.is_empty() {
                 return Err(AppManagementRequestError::new(
                     "app_sessions_running",
-                    "The app has running sessions and cannot be uninstalled.",
+                    "The app has running sessions and cannot be changed.",
                     409,
                 )
                 .details(json!({
@@ -378,7 +415,8 @@ impl AppManagementManager {
                 })));
             }
         }
-        let detection = detect_managed_app(&definition);
+        let detection =
+            detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
         let selected = select_install_recipe(&definition, &state.capabilities);
         let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
         let cached = state.ownership.get(app_id).cloned();
@@ -471,7 +509,7 @@ impl AppManagementManager {
         state.sequence = state.sequence.saturating_add(1);
         let sequence = state.sequence;
         let observed_at = now();
-        let snapshot = snapshot_locked(&definitions, &mut state);
+        let snapshot = snapshot_locked(&definitions, &mut state, &self.install_base_dir);
         let event = AppManagementEvent {
             event_type: "app-management".to_string(),
             stream_id: snapshot.stream_id.clone(),
@@ -570,12 +608,32 @@ impl AppManagementManager {
                 })
             }),
         };
-        let result = self.executor.execute(operation, &recipe, &context).await;
+        let busy = operation != AppManagementOperation::Install
+            && (self.sessions)().iter().any(|session| {
+                session.app_id == definition.launcher.id
+                    && matches!(session.status.as_str(), "created" | "running" | "stopping")
+            });
+        let result = if busy {
+            Err(AppRecipeExecutionError::new(
+                "app_sessions_running",
+                "The app has running sessions and cannot be changed.",
+                true,
+            ))
+        } else {
+            if operation != AppManagementOperation::Install {
+                (self.runtime_hook)(&definition.launcher.id);
+            }
+            self.executor.execute(operation, &recipe, &context).await
+        };
+        if result.is_ok() {
+            (self.runtime_hook)(&definition.launcher.id);
+        }
         stop_flush.notify_waiters();
         let _ = flush_task.await;
         let terminal = match result {
             Ok(_) => {
-                let detection = detect_managed_app(&definition);
+                let detection =
+                    detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
                 let satisfied = if operation == AppManagementOperation::Uninstall {
                     detection.state == controlled_instance_protocol::ManagedAppState::NotInstalled
                 } else {
@@ -689,7 +747,7 @@ impl AppManagementManager {
         let observed_at = now();
         let snapshot = include_snapshot.then(|| {
             let definitions = (self.definitions)();
-            snapshot_locked(&definitions, state)
+            snapshot_locked(&definitions, state, &self.install_base_dir)
         });
         let event = AppManagementEvent {
             event_type: "app-management".to_string(),
@@ -742,6 +800,7 @@ impl AppManagementManager {
 fn snapshot_locked(
     definitions: &[ManagedAppDefinition],
     state: &mut ManagerState,
+    install_base_dir: &Path,
 ) -> AppManagementSnapshot {
     let mut jobs = state.jobs.values().cloned().collect::<Vec<_>>();
     jobs.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
@@ -757,7 +816,8 @@ fn snapshot_locked(
     let apps = definitions
         .iter()
         .map(|definition| {
-            let detection = detect_managed_app(definition);
+            let detection =
+                detect_managed_app_with_managed_root(definition, Some(install_base_dir));
             let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
             let selected = select_install_recipe(definition, &state.capabilities);
             let cached = state.ownership.get(&definition.launcher.id);
@@ -1063,6 +1123,7 @@ mod tests {
             Arc::new(|| vec![definition("test")]),
             Arc::new(Vec::new),
             Arc::new(move |event| published.lock().expect("events").push(event)),
+            Arc::new(|_| {}),
             Arc::new(|_| {}),
         );
 

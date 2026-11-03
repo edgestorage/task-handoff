@@ -37,6 +37,7 @@ const {
   resolveExecutable,
 } = require("../packages/core/src/core/executable-resolver.ts");
 const {
+  resolveApp,
   resolveAppExecutable,
 } = require("../packages/app-runtime/src/catalog.ts");
 const {
@@ -479,8 +480,14 @@ test("builtin definitions are the single launcher source and custom launchers ar
   assert.equal(codex.distribution.recipes[0].type, "node-package");
   assert.equal(codex.distribution.recipes[0].installer, "npm");
   assert.deepEqual(codex.distribution.recipes[0].packages, ["@openai/codex"]);
+  assert.equal(codex.distribution.recipes[0].managed, true);
+  assert.equal(codex.distribution.recipes[0].version, "0.165.0");
+  assert.equal(codex.distribution.recipes.length, 1);
   assert.deepEqual(codex.distribution.recipes[0].platforms, ["linux", "darwin", "win32"]);
   assert.deepEqual(codex.distribution.recipes[0].arches, ["x64", "arm64"]);
+  const opencode = definitions.find((entry) => entry.launcher.id === "opencode");
+  assert.equal(opencode.distribution.recipes[0].managed, true);
+  assert.equal(opencode.distribution.recipes[0].version, "1.18.30");
   const claude = definitions.find((entry) => entry.launcher.id === "claude");
   assert.equal(claude.distribution.recipes[0].type, "node-package");
   assert.equal(claude.distribution.recipes[0].installer, "npm");
@@ -492,7 +499,9 @@ test("builtin definitions are the single launcher source and custom launchers ar
   }).recipe.privilege, "user");
   assert.equal(selectInstallRecipe(claude, {
     platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo", installerAccess: { npmGlobalWritable: false },
-  }).recipe.privilege, "passwordless-sudo");
+  }).recipe.privilege, "user");
+  assert.equal(claude.distribution.recipes[0].managed, true);
+  assert.equal(claude.distribution.recipes[0].version, "2.1.286");
   assert.equal(selectInstallRecipe(claude, {
     platform: "freebsd", arch: "x64", installers: ["npm"], privilege: "root",
   }).reason.code, "UNSUPPORTED_PLATFORM");
@@ -510,8 +519,12 @@ test("builtin definitions are the single launcher source and custom launchers ar
   const readOnlyCodexProjection = managedAppProjection(codex, { state: "not-installed", executablePaths: [] }, {
     platform: "linux", arch: "arm64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: false },
   });
-  assert.equal(readOnlyCodexProjection.canInstall, false);
-  assert.equal(readOnlyCodexProjection.installReason.code, "INSTALLER_NOT_WRITABLE");
+  assert.equal(readOnlyCodexProjection.canInstall, true);
+  const readOnlyThctlProjection = managedAppProjection(thctl, { state: "not-installed", executablePaths: [] }, {
+    platform: "linux", arch: "arm64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: false },
+  });
+  assert.equal(readOnlyThctlProjection.canInstall, false);
+  assert.equal(readOnlyThctlProjection.installReason.code, "INSTALLER_NOT_WRITABLE");
   const publicDefinitions = publicManagedAppDefinitions({ includeOptional: true });
   assert.equal(publicDefinitions.some((entry) => entry.id === "custom-tool"), false);
   assert.equal(publicDefinitions.some((entry) => Object.hasOwn(entry, "command") || Object.hasOwn(entry, "args")), false);
@@ -604,4 +617,24 @@ test("controlled Claude launch relies on materialized settings instead of a mode
     },
   });
   assert.deepEqual(definitions.find((entry) => entry.launcher.id === "claude").launcher.args, []);
+});
+
+
+test("managed node apps resolve from the instance root and do not fall back to PATH", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-app-resolver-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const app = { id: "codex", name: "Codex", kind: "tty", command: "codex" };
+  const options = { managedAppRoot: path.join(root, "managed-apps"), managedAppIds: new Set(["codex"]) };
+
+  const missing = resolveApp(app, { PATH: "" }, options);
+  assert.equal(missing.executable, undefined);
+  assert.equal(missing.app.command, path.join(root, "managed-apps", "node-package", "codex", "node_modules", ".bin", "codex"));
+
+  const bin = path.join(root, "managed-apps", "node-package", "codex", "node_modules", ".bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, "codex");
+  fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const resolved = resolveApp(app, { PATH: "" }, options);
+  assert.equal(resolved.executable, executable);
+  assert.equal(resolved.app.command, executable);
 });

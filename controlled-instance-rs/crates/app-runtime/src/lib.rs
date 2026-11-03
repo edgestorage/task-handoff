@@ -4,6 +4,7 @@ pub mod command_invocation;
 pub mod executable_resolver;
 mod log_retention;
 mod managed;
+mod managed_node_apps;
 mod management;
 mod profiles;
 mod pty;
@@ -20,11 +21,13 @@ pub use managed::{
     builtin_managed_app_definitions, current_arch, current_platform,
     detect_final_computer_capabilities, detect_final_computer_capabilities_sync,
     detect_managed_app, detect_managed_app_ownership, detect_managed_app_ownership_with_context,
-    detect_managed_app_with_version, find_builtin_managed_app, is_launchable_managed_definition,
-    managed_app_projection, select_install_recipe, validate_managed_definition, InstallRecipe,
-    InstallRecipeSelection, ManagedAppDefinition, ManagedAppDetectionResult,
-    ManagedAppDetectionRule, ManagedAppOwnership, ManagedAppOwnershipContext,
+    detect_managed_app_with_managed_root, detect_managed_app_with_version,
+    find_builtin_managed_app, is_launchable_managed_definition, managed_app_projection,
+    select_install_recipe, validate_managed_definition, InstallRecipe, InstallRecipeSelection,
+    ManagedAppDefinition, ManagedAppDetectionResult, ManagedAppDetectionRule, ManagedAppOwnership,
+    ManagedAppOwnershipContext,
 };
+pub use managed_node_apps::ManagedNodeApps;
 pub use management::{AppManagementManager, AppManagementRequestError, AppManagementSession};
 pub use profiles::ChromiumProfileStore;
 pub use pty::{

@@ -10,7 +10,7 @@ export const terminalTtyProvider: ManagedAppProvider = {
       name: "Terminal",
       kind: "tty",
       description: "Interactive shell in the task workspace.",
-      command: env.SHELL || "/bin/bash",
+      command: env.SHELL || (process.platform === "win32" ? env.ComSpec || "cmd.exe" : "/bin/bash"),
     },
     detection: launcherDetection(),
     distribution: bundledDistribution(),

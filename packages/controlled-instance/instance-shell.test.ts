@@ -28,6 +28,7 @@ class FakeSocket extends EventEmitter {
 
   send(data: unknown, options?: { binary?: boolean }) {
     this.sent.push({ data, binary: options?.binary === true });
+    this.emit("sent");
   }
 
   close(code?: number, reason?: string) {
@@ -40,6 +41,18 @@ class FakeSocket extends EventEmitter {
 
   sendControl(frame: unknown) {
     this.emit("message", Buffer.from(JSON.stringify(frame)), false);
+  }
+
+  waitForOutput(text: string, timeoutMs = 5_000) {
+    return new Promise<void>((resolve, reject) => {
+      const check = () => {
+        const output = Buffer.concat(serverData(this).map((frame) => frame.subarray(1))).toString("utf8");
+        if (!output.includes(text)) return;
+        clearTimeout(timer); this.off("sent", check); resolve();
+      };
+      const timer = setTimeout(() => { this.off("sent", check); reject(new Error("shell did not become ready")); }, timeoutMs);
+      this.on("sent", check); check();
+    });
   }
 
   waitForClose(timeoutMs = 5_000) {
@@ -63,6 +76,7 @@ function serverControls(socket: FakeSocket) {
 function serverData(socket: FakeSocket) {
   return socket.sent.filter((frame) => frame.binary).map((frame) => Buffer.from(frame.data as Uint8Array));
 }
+
 
 test("non-TTY exec streams raw stdout and stderr separately, preserves stdin bytes, and returns the remote exit status", async () => {
   const runtime = new InstanceShellRuntime({ workspace: () => process.cwd() });
@@ -159,7 +173,7 @@ test("non-TTY exec forwards SIGINT and SIGTERM to the instance process", { skip:
         `process.on('${signal}', () => { process.stdout.write('${signal}'); process.exit(0); }); process.stdout.write('ready'); setInterval(() => {}, 1000);`,
       ],
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await socket.waitForOutput("ready");
     socket.sendControl({ type: "signal", signal });
     await socket.waitForClose();
     assert.deepEqual(serverControls(socket).at(-1), { type: "exit", code: 0 });
@@ -328,10 +342,10 @@ test("socket close escalates a signal-ignoring process group to SIGKILL", { skip
   socket.sendControl({
     type: "start",
     mode: "exec",
-    command: [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+    command: [process.execPath, "-e", "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)"],
     tty: false,
   });
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await socket.waitForOutput("ready");
   assert.ok(childPid);
   assert.doesNotThrow(() => process.kill(-childPid!, 0));
   socket.close(1000, "client disconnected");

@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::AppRuntimeError;
+use crate::InstallRecipe;
 use crate::{
     command_invocation::{resolve_command_executable, CommandInvocationOptions},
     executable_resolver::ExecutableResolverOptions,
@@ -38,6 +39,8 @@ pub struct CatalogEntry {
 #[derive(Clone)]
 pub struct AppCatalogRepository {
     custom_path: Arc<PathBuf>,
+    managed_app_root: Option<Arc<PathBuf>>,
+    managed_app_ids: Arc<BTreeSet<String>>,
     mutation: Arc<Mutex<()>>,
     cache: Arc<RwLock<Option<Vec<CatalogEntry>>>>,
 }
@@ -53,11 +56,36 @@ impl std::fmt::Debug for AppCatalogRepository {
 
 impl AppCatalogRepository {
     pub fn new(app_catalog_dir: impl AsRef<Path>) -> Self {
+        Self::new_with_managed_root(app_catalog_dir, None)
+    }
+
+    pub fn new_with_managed_root(
+        app_catalog_dir: impl AsRef<Path>,
+        managed_app_root: Option<PathBuf>,
+    ) -> Self {
+        let managed_app_ids = crate::builtin_managed_app_definitions()
+            .into_iter()
+            .filter(|definition| {
+                definition
+                    .recipes
+                    .iter()
+                    .any(InstallRecipe::is_managed_node_package)
+            })
+            .map(|definition| definition.launcher.id)
+            .collect();
         Self {
             custom_path: Arc::new(app_catalog_dir.as_ref().join("custom.json")),
+            managed_app_root: managed_app_root.map(Arc::new),
+            managed_app_ids: Arc::new(managed_app_ids),
             mutation: Arc::new(Mutex::new(())),
             cache: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub fn managed_node_apps(&self) -> Option<crate::ManagedNodeApps> {
+        self.managed_app_root
+            .as_ref()
+            .map(|root| crate::ManagedNodeApps::new(root.as_ref().clone()))
     }
 
     pub fn custom_path(&self) -> &Path {
@@ -136,7 +164,14 @@ impl AppCatalogRepository {
         }
         let entries = merged
             .into_iter()
-            .map(|(app, source)| resolve_entry(app, source))
+            .map(|(app, source)| {
+                resolve_entry(
+                    app,
+                    source,
+                    self.managed_app_root.as_deref().map(PathBuf::as_path),
+                    &self.managed_app_ids,
+                )
+            })
             .collect::<Vec<_>>();
         *self
             .cache
@@ -245,8 +280,55 @@ fn builtin_app_ids() -> BTreeSet<String> {
         .collect()
 }
 
-fn resolve_entry(mut app: AppCatalogItem, source: AppSource) -> CatalogEntry {
-    let launcher_env = app.env.clone().unwrap_or_default();
+fn resolve_entry(
+    mut app: AppCatalogItem,
+    source: AppSource,
+    managed_app_root: Option<&Path>,
+    managed_app_ids: &BTreeSet<String>,
+) -> CatalogEntry {
+    let mut launcher_env = app.env.clone().unwrap_or_default();
+    let command = app.command.clone().unwrap_or_default();
+    let managed_id = if source == AppSource::Builtin && managed_app_ids.contains(&app.id) {
+        Some(app.id.clone())
+    } else if managed_app_ids.contains(&command) {
+        Some(command.clone())
+    } else {
+        None
+    };
+    let managed = managed_app_root.is_some() && managed_id.is_some();
+    if managed {
+        let root = managed_app_root.expect("managed root checked above");
+        let bin = root
+            .join("node-package")
+            .join(managed_id.as_ref().expect("managed id"))
+            .join("node_modules")
+            .join(".bin");
+        let candidate = bin.join(managed_id.as_ref().expect("managed id"));
+        let existing = launcher_env
+            .get("PATH")
+            .cloned()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        launcher_env.insert(
+            "PATH".to_string(),
+            std::iter::once(bin.display().to_string())
+                .chain((!existing.is_empty()).then_some(existing))
+                .collect::<Vec<_>>()
+                .join(if cfg!(windows) { ";" } else { ":" }),
+        );
+        let executable = resolve_executable(
+            candidate.to_string_lossy().as_ref(),
+            &launcher_env,
+            app.cwd.as_deref(),
+        );
+        app.command = Some(candidate.display().to_string());
+        app.env = Some(launcher_env);
+        return CatalogEntry {
+            app,
+            source,
+            executable,
+        };
+    }
     let executable = app
         .command
         .as_deref()
@@ -523,6 +605,43 @@ fn now_iso() -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn managed_node_apps_resolve_from_the_instance_root_without_path_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let managed = root.path().join("managed-apps");
+        let repository = AppCatalogRepository::new_with_managed_root(
+            root.path().join("app-catalog"),
+            Some(managed.clone()),
+        );
+        let missing = repository.find("codex").expect("codex");
+        assert!(missing.executable.is_none());
+        assert!(missing
+            .app
+            .command
+            .as_deref()
+            .is_some_and(|command| command.contains("managed-apps")));
+
+        let bin = managed
+            .join("node-package")
+            .join("codex")
+            .join("node_modules")
+            .join(".bin");
+        std::fs::create_dir_all(&bin).expect("bin directory");
+        let executable = bin.join("codex");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("executable");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("executable permissions");
+        let repository = AppCatalogRepository::new_with_managed_root(
+            root.path().join("app-catalog"),
+            Some(managed),
+        );
+        let resolved = repository.find("codex").expect("codex");
+        assert_eq!(resolved.executable.as_deref(), Some(executable.as_path()));
+    }
+
     #[test]
     fn custom_catalog_rejects_builtin_ids_and_ignores_unknown_fields() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -661,7 +780,7 @@ mod tests {
 
         let mut terminal = terminal.clone();
         terminal.command = Some("/bin/sh".to_string());
-        let resolved = resolve_entry(terminal, AppSource::Builtin).app;
+        let resolved = resolve_entry(terminal, AppSource::Builtin, None, &BTreeSet::new()).app;
         let value = serde_json::to_value(resolved).expect("serialize catalog item");
         assert_eq!(value.get("env"), Some(&json!({})));
         assert!(value.get("args").is_none());

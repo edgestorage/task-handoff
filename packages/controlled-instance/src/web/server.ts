@@ -709,6 +709,7 @@ async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor,
 export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const startedAt = new Date().toISOString();
   const storagePaths = resolveStoragePaths();
+  const managedAppRoot = process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps");
   let nodeAgentClient!: NodeAgentRegistrationClient;
   const gitCredentialBroker = new GitCredentialBroker({ nodeAgentClient: () => nodeAgentClient });
   await gitCredentialBroker.start();
@@ -725,19 +726,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
-  const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
+  const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths, undefined, { managedAppRoot });
   const app = Fastify({ logger: options.logger ?? true });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
-    installBaseDir: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps"),
-    sessions: () => appRuntime.listSessions(),
+    installBaseDir: managedAppRoot,
+    sessions: () => [
+      ...appRuntime.listSessions(),
+      ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
+    ],
+    stopAppRuntime: (appId) => appRuntime.stopSharedResource(appId),
     publish: (event) => events.publish("app.management", event),
     warn: (message) => app.log?.warn?.({ message }, "app management persistence warning"),
     onTerminal: async () => {
       if (nodeAgentClient.enabled()) await nodeAgentClient.heartbeat();
     },
   });
+  appRuntime.setAppLaunchAdmission((appId) => !appManagement.hasActiveOperation(appId));
   const aiSessionPersistenceSettings = new AiSessionPersistenceSettingsStore(storagePaths, (reason) => {
     app.log.warn({ reason }, "AI session persistence settings were sanitized");
   });
@@ -798,7 +804,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
-  const instanceShellRuntime = new InstanceShellRuntime();
+  const instanceShellRuntime = new InstanceShellRuntime({
+    environment: () => appRuntime.processEnvironment(),
+    prepareShell: (command, args, env) => appRuntime.prepareShell(command, args, env),
+  });
   registerInstanceShellRoute(app, instanceShellRuntime);
   app.addHook("preHandler", async (request, reply) => {
     if (request.method === "GET") return;
@@ -2805,7 +2814,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.get("/api/diagnostics", async () => ({
     data: {
-      ...runtimeDiagnostics(storagePaths, noVncRoot),
+      ...runtimeDiagnostics(storagePaths, noVncRoot, appRuntime),
       sessionStreams: {
         ai: {
           streamId: aiSessionStreamId,

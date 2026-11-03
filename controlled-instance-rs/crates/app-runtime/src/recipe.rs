@@ -29,6 +29,7 @@ const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const PACKAGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const MANAGED_NODE_PACKAGE_DIR: &str = "node-package";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppRecipeExecutionError {
@@ -135,6 +136,8 @@ impl AppRecipeExecutor {
             InstallRecipe::NodePackage {
                 installer,
                 packages,
+                managed,
+                version,
                 privilege,
                 ..
             } => {
@@ -142,6 +145,8 @@ impl AppRecipeExecutor {
                     operation,
                     *installer,
                     packages,
+                    *managed,
+                    version.as_deref(),
                     privilege.unwrap_or(AppInstallPrivilege::User),
                     context,
                 )
@@ -241,6 +246,8 @@ impl AppRecipeExecutor {
         operation: AppManagementOperation,
         installer: AppInstaller,
         packages: &[String],
+        managed: bool,
+        version: Option<&str>,
         recipe_privilege: AppInstallPrivilege,
         context: &AppRecipeExecutionContext,
     ) -> Result<String, AppRecipeExecutionError> {
@@ -248,6 +255,13 @@ impl AppRecipeExecutor {
             return Err(AppRecipeExecutionError::new(
                 "invalid_builtin_recipe",
                 "The built-in Node package recipe contains an invalid package name.",
+                false,
+            ));
+        }
+        if managed && !version.is_some_and(valid_node_version) {
+            return Err(AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "A managed Node package recipe requires an exact version.",
                 false,
             ));
         }
@@ -266,9 +280,87 @@ impl AppRecipeExecutor {
                 AppManagementOperation::Uninstall => "uninstall-node-package",
             },
         );
+        if managed {
+            let target = managed_node_package_dir(&self.install_base_dir, &context.app_id)?;
+            if operation == AppManagementOperation::Uninstall {
+                match fs::remove_dir_all(&target) {
+                    Ok(()) => return Ok(String::new()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(String::new())
+                    }
+                    Err(error) => {
+                        return Err(AppRecipeExecutionError::new(
+                            "package_cleanup_failed",
+                            error.to_string(),
+                            true,
+                        ))
+                    }
+                }
+            }
+            let staging = managed_node_package_staging(&self.install_base_dir, &context.app_id)?;
+            let _ = fs::remove_dir_all(&staging);
+            fs::create_dir_all(&staging).map_err(|error| {
+                AppRecipeExecutionError::new("storage_error", error.to_string(), false)
+            })?;
+            let command = node_package_command(
+                operation,
+                packages,
+                version,
+                Some(&staging),
+                recipe_privilege,
+                &context.capabilities,
+                &self.env,
+            )?;
+            let result = self.run_command(command, context).await;
+            let result = match result {
+                Ok(result) if result.exit_code == 0 => result,
+                Ok(result) => {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Err(AppRecipeExecutionError::new(
+                        "package_manager_failed",
+                        bounded(if result.stderr.is_empty() {
+                            "The Node package manager failed."
+                        } else {
+                            &result.stderr
+                        }),
+                        true,
+                    ));
+                }
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Err(error);
+                }
+            };
+            if let Err(error) = verify_managed_node_package(&staging, packages, &context.app_id) {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+            if let Err(error) = write_managed_node_package_manifest(
+                &staging,
+                &context.app_id,
+                packages,
+                version.unwrap_or_default(),
+            ) {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+            if let Err(error) =
+                replace_managed_node_package(&self.install_base_dir, &context.app_id, &staging)
+            {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+            return Ok(bounded(if result.stdout.is_empty() {
+                &result.stderr
+            } else {
+                &result.stdout
+            }));
+        }
         let command = node_package_command(
             operation,
             packages,
+            version,
+            None,
             recipe_privilege,
             &context.capabilities,
             &self.env,
@@ -732,18 +824,219 @@ async fn apt_refresh_command(
     ))
 }
 
+fn valid_node_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 121
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'_' | b'-'))
+}
+
+fn valid_managed_app_id(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+}
+
+fn managed_node_package_dir(
+    install_base_dir: &Path,
+    app_id: &str,
+) -> Result<PathBuf, AppRecipeExecutionError> {
+    if !valid_managed_app_id(app_id) {
+        return Err(AppRecipeExecutionError::new(
+            "invalid_app_id",
+            "The managed app id is invalid.",
+            false,
+        ));
+    }
+    Ok(install_base_dir.join(MANAGED_NODE_PACKAGE_DIR).join(app_id))
+}
+
+fn managed_node_package_staging(
+    install_base_dir: &Path,
+    app_id: &str,
+) -> Result<PathBuf, AppRecipeExecutionError> {
+    if !valid_managed_app_id(app_id) {
+        return Err(AppRecipeExecutionError::new(
+            "invalid_app_id",
+            "The managed app id is invalid.",
+            false,
+        ));
+    }
+    Ok(install_base_dir
+        .join(MANAGED_NODE_PACKAGE_DIR)
+        .join(".staging")
+        .join(format!("{app_id}-{}", uuid::Uuid::new_v4())))
+}
+
+fn verify_managed_node_package(
+    staging: &Path,
+    packages: &[String],
+    app_id: &str,
+) -> Result<(), AppRecipeExecutionError> {
+    let launcher = staging.join("node_modules/.bin").join(app_id);
+    let launcher = resolve_executable(&launcher.display().to_string(), &BTreeMap::new(), None);
+    let owned = launcher
+        .and_then(|launcher| fs::canonicalize(launcher).ok())
+        .zip(fs::canonicalize(staging).ok())
+        .is_some_and(|(launcher, root)| launcher.starts_with(root));
+    if !owned {
+        return Err(AppRecipeExecutionError::new(
+            "postcondition_failed",
+            "The staged package has no executable managed launcher.",
+            false,
+        ));
+    }
+    for package in packages {
+        let package_root = staging
+            .join("node_modules")
+            .join(package.split('/').collect::<PathBuf>());
+        let manifest_path = package_root.join("package.json");
+        let raw = fs::read_to_string(&manifest_path).map_err(|error| {
+            AppRecipeExecutionError::new(
+                "postcondition_failed",
+                format!("Installed package {package} has no readable package manifest: {error}"),
+                false,
+            )
+        })?;
+        let manifest = serde_json::from_str::<Value>(&raw).map_err(|error| {
+            AppRecipeExecutionError::new(
+                "postcondition_failed",
+                format!("Installed package {package} has an invalid package manifest: {error}"),
+                false,
+            )
+        })?;
+        let bins = match manifest.get("bin") {
+            Some(Value::String(value)) => vec![value.clone()],
+            Some(Value::Object(values)) => values
+                .values()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect(),
+            _ => Vec::new(),
+        };
+        if bins.is_empty()
+            || bins.iter().any(|value| {
+                let candidate = package_root.join(value);
+                !candidate.starts_with(&package_root) || !candidate.is_file()
+            })
+        {
+            return Err(AppRecipeExecutionError::new(
+                "postcondition_failed",
+                format!("Installed package {package} has no usable executable."),
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn write_managed_node_package_manifest(
+    staging: &Path,
+    app_id: &str,
+    packages: &[String],
+    version: &str,
+) -> Result<(), AppRecipeExecutionError> {
+    let packages = packages
+        .iter()
+        .map(|package| (package.clone(), Value::String(version.to_string())))
+        .collect::<serde_json::Map<_, _>>();
+    let manifest = json!({
+        "appId": app_id,
+        "packages": packages,
+        "source": "npm",
+        "installedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    fs::write(
+        staging.join("managed-app.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).unwrap_or_default()
+        ),
+    )
+    .map_err(|error| AppRecipeExecutionError::new("storage_error", error.to_string(), false))
+}
+
+fn replace_managed_node_package(
+    install_base_dir: &Path,
+    app_id: &str,
+    staging: &Path,
+) -> Result<(), AppRecipeExecutionError> {
+    let target = managed_node_package_dir(install_base_dir, app_id)?;
+    let previous = target.with_file_name(format!(
+        "{}.previous-{}",
+        target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(app_id),
+        uuid::Uuid::new_v4()
+    ));
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            AppRecipeExecutionError::new("storage_error", error.to_string(), false)
+        })?;
+    }
+    if target.exists() {
+        fs::rename(&target, &previous).map_err(|error| {
+            AppRecipeExecutionError::new("storage_error", error.to_string(), false)
+        })?;
+    }
+    if let Err(error) = fs::rename(staging, &target) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, &target);
+        }
+        return Err(AppRecipeExecutionError::new(
+            "storage_error",
+            error.to_string(),
+            false,
+        ));
+    }
+    let _ = fs::remove_dir_all(previous);
+    Ok(())
+}
+
 fn node_package_command(
     operation: AppManagementOperation,
     packages: &[String],
+    version: Option<&str>,
+    managed_prefix: Option<&Path>,
     recipe_privilege: AppInstallPrivilege,
     capabilities: &FinalComputerCapabilities,
     env: &BTreeMap<String, String>,
 ) -> Result<AppRecipeCommand, AppRecipeExecutionError> {
-    let args = if operation == AppManagementOperation::Uninstall {
+    let package_specs = version
+        .filter(|_| managed_prefix.is_some())
+        .map(|version| {
+            packages
+                .iter()
+                .map(|package| format!("{package}@{version}"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| packages.to_vec());
+    let args = if let Some(prefix) = managed_prefix {
+        [
+            "install".to_string(),
+            "--prefix".to_string(),
+            prefix.display().to_string(),
+            "--no-save".to_string(),
+            "--include=optional".to_string(),
+            "--no-audit".to_string(),
+            "--no-fund".to_string(),
+        ]
+        .into_iter()
+        .chain(package_specs)
+        .collect::<Vec<_>>()
+    } else if operation == AppManagementOperation::Uninstall {
         ["uninstall", "--global"]
             .into_iter()
             .map(ToString::to_string)
-            .chain(packages.iter().cloned())
+            .chain(package_specs)
             .collect::<Vec<_>>()
     } else {
         [
@@ -755,10 +1048,11 @@ fn node_package_command(
         ]
         .into_iter()
         .map(ToString::to_string)
-        .chain(packages.iter().cloned())
+        .chain(package_specs)
         .collect::<Vec<_>>()
     };
-    if capabilities.privilege == AppInstallPrivilege::Root
+    if managed_prefix.is_some()
+        || capabilities.privilege == AppInstallPrivilege::Root
         || recipe_privilege == AppInstallPrivilege::User
     {
         return Ok(resolved_command("npm", args, env, PACKAGE_COMMAND_TIMEOUT));
@@ -1324,9 +1618,14 @@ fn uninstall_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use controlled_instance_protocol::FinalComputerArch;
 
     #[test]
     fn node_package_names_and_archive_paths_reject_unsafe_values() {
+        assert!(valid_node_version("0.165.0"));
+        assert!(valid_node_version("1.18.30"));
+        assert!(!valid_node_version(""));
+        assert!(!valid_node_version("0.165.0;touch-pwned"));
         assert!(valid_node_package("@task-handoff/thctl"));
         assert!(valid_node_package("OpenAI.Codex"));
         assert!(!valid_node_package("@scope"));
@@ -1349,6 +1648,33 @@ mod tests {
     }
 
     #[test]
+    fn managed_node_package_command_uses_a_local_prefix_and_pinned_version() {
+        let capabilities = FinalComputerCapabilities {
+            platform: FinalComputerPlatform::Linux,
+            arch: FinalComputerArch::X64,
+            installers: vec![AppInstaller::Npm],
+            privilege: AppInstallPrivilege::User,
+            installer_access: None,
+        };
+        let command = node_package_command(
+            AppManagementOperation::Install,
+            &["@openai/codex".to_string()],
+            Some("0.165.0"),
+            Some(Path::new("/tmp/managed/codex")),
+            AppInstallPrivilege::User,
+            &capabilities,
+            &BTreeMap::new(),
+        )
+        .expect("command");
+        assert!(!command.args.iter().any(|arg| arg == "--global"));
+        assert!(command.args.iter().any(|arg| arg == "--prefix"));
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg == "@openai/codex@0.165.0"));
+    }
+
+    #[test]
     fn npm_retirement_detection_matches_the_node_diagnostics() {
         let stderr = "npm ERR! code ENOTEMPTY\nnpm ERR! path /usr/lib/node_modules/@task-handoff/thctl\nnpm ERR! dest /usr/lib/node_modules/@task-handoff/.thctl-AbC123\n";
         let directory = npm_retirement_directory(stderr, &["@task-handoff/thctl".to_string()]);
@@ -1358,5 +1684,39 @@ mod tests {
                 "/usr/lib/node_modules/@task-handoff/.thctl-AbC123"
             ))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_node_package_requires_an_owned_executable_launcher() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = tempfile::tempdir().expect("tempdir");
+        let stage = root.path().join("stage");
+        let package = stage.join("node_modules/@openai/codex");
+        fs::create_dir_all(&package).expect("package");
+        fs::write(
+            package.join("package.json"),
+            r#"{"bin":{"codex":"cli.js"}}"#,
+        )
+        .expect("manifest");
+        let cli = package.join("cli.js");
+        fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("cli");
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let packages = vec!["@openai/codex".to_string()];
+        assert_eq!(
+            verify_managed_node_package(&stage, &packages, "codex")
+                .expect_err("missing launcher")
+                .code,
+            "postcondition_failed"
+        );
+        let bin = stage.join("node_modules/.bin/codex");
+        fs::create_dir_all(bin.parent().expect("bin parent")).expect("bin");
+        let external = root.path().join("global-codex");
+        fs::copy(&cli, &external).expect("host command");
+        symlink(&external, &bin).expect("external link");
+        assert!(verify_managed_node_package(&stage, &packages, "codex").is_err());
+        fs::remove_file(&bin).expect("remove link");
+        symlink("../@openai/codex/cli.js", &bin).expect("owned link");
+        verify_managed_node_package(&stage, &packages, "codex").expect("valid private launcher");
     }
 }

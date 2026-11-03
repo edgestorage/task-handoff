@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { executablePath } from "@task-handoff/app-runtime/catalog";
+import { AppCatalogRepository, executablePath } from "@task-handoff/app-runtime/catalog";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import { createAiSessionRegistry } from "@task-handoff/ai-session-runtime";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
@@ -85,7 +85,8 @@ function storageDiagnostic(paths: TaskHandoffStoragePaths) {
   });
 }
 
-export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: string | undefined) {
+export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: string | undefined, appRuntime?: AppRuntimeManager) {
+  const catalog = new AppCatalogRepository(paths, undefined, { managedAppRoot: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(paths.dataDir, "managed-apps") });
   const imageProfile = optionalEnv("TASK_HANDOFF_IMAGE_PROFILE");
   const declaredCapabilities = optionalEnv("TASK_HANDOFF_IMAGE_CAPABILITIES")
     ?.split(",")
@@ -111,13 +112,15 @@ export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: st
     { name: process.env.TASK_HANDOFF_CLAUDE_COMMAND || process.env.CLAUDE_CLI_PATH || "claude", label: "claude", requiredFor: ["claude"] },
     { name: process.env.TASK_HANDOFF_OPENCODE_COMMAND || "opencode", label: "opencode", requiredFor: ["opencode"] },
   ].map((command) => {
-    const resolvedPath = executablePath(command.name);
+    const app = command.label ? appRuntime?.catalogEntry(command.label) || catalog.find(command.label) : undefined;
+    const name = app?.command || command.name;
+    const resolvedPath = executablePath(name);
     const required = requiredCapabilities
       ? command.requiredFor.some((capability) => requiredCapabilities.has(capability))
       : true;
     return {
       name: command.label || command.name,
-      command: command.name,
+      command: name,
       available: Boolean(resolvedPath),
       path: resolvedPath,
       requiredFor: command.requiredFor,

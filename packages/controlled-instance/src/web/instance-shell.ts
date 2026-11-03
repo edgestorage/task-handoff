@@ -50,6 +50,7 @@ type ShellProcess = {
 export type InstanceShellRuntimeOptions = {
   workspace?: () => string;
   environment?: () => NodeJS.ProcessEnv;
+  prepareShell?: (command: string, args: string[], env: NodeJS.ProcessEnv) => { args: string[]; env: NodeJS.ProcessEnv };
   platform?: NodeJS.Platform;
   maxActivities?: number;
   socketBacklogMaxBytes?: number;
@@ -93,6 +94,7 @@ export class InstanceShellRuntime {
 
   private readonly workspace: () => string;
   private readonly environment: () => NodeJS.ProcessEnv;
+  private readonly prepareShell: NonNullable<InstanceShellRuntimeOptions["prepareShell"]>;
   private readonly platform: NodeJS.Platform;
   private readonly maxActivities: number;
   private readonly socketBacklogMaxBytes: number;
@@ -105,6 +107,7 @@ export class InstanceShellRuntime {
   constructor(options: InstanceShellRuntimeOptions = {}) {
     this.workspace = options.workspace || defaultWorkspace;
     this.environment = options.environment || (() => process.env);
+    this.prepareShell = options.prepareShell || ((_command, args, env) => ({ args, env }));
     this.platform = options.platform || process.platform;
     this.maxActivities = options.maxActivities ?? INSTANCE_SHELL_ACTIVITY_LIMIT;
     this.socketBacklogMaxBytes = options.socketBacklogMaxBytes ?? INSTANCE_SHELL_SOCKET_BACKLOG_MAX_BYTES;
@@ -235,7 +238,8 @@ export class InstanceShellRuntime {
       try {
         if (frame.mode === "interactive" || frame.tty) {
           const argv = frame.mode === "interactive" ? [shellCommand(env, this.platform)] : frame.command!;
-          const invocation = commandInvocation(argv[0]!, argv.slice(1), { env, cwd: workspace });
+          const prepared = this.prepareShell(argv[0]!, argv.slice(1), env);
+          const invocation = commandInvocation(argv[0]!, prepared.args, { env: prepared.env, cwd: workspace });
           const pty = this.spawnTerminal(invocation.executable, invocation.args, {
             name: "xterm-256color", cols, rows, cwd: workspace, env: invocation.env,
           });
@@ -264,7 +268,8 @@ export class InstanceShellRuntime {
             finish(signal ? { type: "exit", signal } : { type: "exit", code: event.exitCode });
           });
         } else {
-          const invocation = commandInvocation(frame.command![0]!, frame.command!.slice(1), { env, cwd: workspace });
+          const prepared = this.prepareShell(frame.command![0]!, frame.command!.slice(1), env);
+          const invocation = commandInvocation(frame.command![0]!, prepared.args, { env: prepared.env, cwd: workspace });
           const child = this.spawnChild(invocation.executable, invocation.args, {
             cwd: workspace,
             env: invocation.env,

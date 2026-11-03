@@ -14,13 +14,13 @@ export const opencodeProvider: ManagedAppProvider = {
       kind: "tty",
       description: "OpenCode CLI attached to the managed TaskHandoff agent server.",
       command: env.TASK_HANDOFF_OPENCODE_COMMAND || "opencode",
+      env: { OPENCODE_DISABLE_AUTOUPDATE: "1" },
       args: [],
     },
     detection: launcherDetection(),
     distribution: {
       recipes: [
-        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["opencode-ai"], privilege: "user" },
-        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["opencode-ai"], privilege: "passwordless-sudo" },
+        { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["opencode-ai"], managed: true, version: "1.18.30", privilege: "user" },
       ],
     },
   }),

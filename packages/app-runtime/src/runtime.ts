@@ -123,13 +123,20 @@ export class AppRuntimeManager extends EventEmitter {
   private readonly persistSessionMetadata: boolean;
   private managedEnvironment: NodeJS.ProcessEnv = {};
   private draining = false;
+  private appLaunchAllowed: (appId: string) => boolean = () => true;
   private readonly maintenanceTimer?: ReturnType<typeof setInterval>;
 
-  constructor(paths: TaskHandoffStoragePaths, registry: ManagedAppRegistry = builtinManagedAppRegistry) {
+  constructor(
+    paths: TaskHandoffStoragePaths,
+    registry: ManagedAppRegistry = builtinManagedAppRegistry,
+    options: { managedAppRoot?: string } = {},
+  ) {
     super();
     this.paths = paths;
     this.registry = registry;
-    this.catalogRepository = new AppCatalogRepository(paths, registry);
+    this.catalogRepository = new AppCatalogRepository(paths, registry, {
+      managedAppRoot: options.managedAppRoot || path.join(paths.dataDir, "managed-apps"),
+    });
     const host: ManagedAppRuntimeHost = {
       paths,
       allocatePort: (kind) => this.allocatePort(kind),
@@ -151,6 +158,10 @@ export class AppRuntimeManager extends EventEmitter {
     this.safeRunPersistenceMaintenance();
     this.maintenanceTimer = setInterval(() => this.safeRunPersistenceMaintenance(), MAINTENANCE_INTERVAL_MS);
     this.maintenanceTimer.unref();
+  }
+
+  catalogEntry(appId: string) {
+    return this.catalogRepository.find(appId);
   }
 
   catalog() {
@@ -293,25 +304,55 @@ export class AppRuntimeManager extends EventEmitter {
     this.sharedAppResource(appId)?.replacePrivateEnvironment?.(env);
   }
 
-  ensureSharedResource(appId: string) {
+  setAppLaunchAdmission(allowed: (appId: string) => boolean) {
+    this.appLaunchAllowed = allowed;
+  }
+
+  private requireAppLaunchAdmission(appId: string) {
     this.requireLaunchAdmission();
+    if (!this.appLaunchAllowed(appId)) throw Object.assign(new Error("The app is being changed. Try again after the operation completes."), { code: "APP_OPERATION_IN_PROGRESS" });
+  }
+
+  private missingAppCommand(app: AppCatalogItem) {
+    return Object.assign(new Error(this.catalogRepository.managedNodeApps?.definitions.some(({ launcher }) => launcher.id === app.id)
+      ? `${app.name} is not installed in this instance. Install it from app management.`
+      : `Missing required command: ${app.command || app.id}`), { code: "APP_DEPENDENCY_MISSING" });
+  }
+
+  processEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    return this.catalogRepository.managedNodeApps?.terminalEnvironment(base) || base;
+  }
+
+  prepareShell(command: string, args: string[], env: NodeJS.ProcessEnv) {
+    return this.catalogRepository.managedNodeApps?.prepareShell(command, args, env) || { args, env };
+  }
+
+  stopSharedResource(appId: string) {
+    this.appRuntimeExtensions.get(appId)?.stopAll?.();
+  }
+
+  ensureSharedResource(appId: string) {
+    this.requireAppLaunchAdmission(appId);
     const resource = this.sharedAppResource(appId);
     if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
     const app = this.catalogRepository.find(appId);
     if (!app) throw Object.assign(new Error("Shared backend app is unavailable."), { code: "APP_NOT_FOUND" });
+    if (!this.hasCommand(app.command || app.id, { ...process.env, ...app.env })) throw this.missingAppCommand(app);
     // Shared provider backends are instance resources, not workspace processes. A Docker
     // workspace may intentionally be unreadable by the app user while an isolated session
     // workspace remains usable, so starting the backend from it would fail before the session
     // can supply its own cwd.
     const cwd = app.cwd || this.paths.dataDir;
-    const env = { ...process.env, ...app.env, ...this.managedEnvironment, TERM: "xterm-256color" };
+    const env = this.processEnvironment({ ...process.env, ...app.env, ...this.managedEnvironment, TERM: "xterm-256color" });
     return resource.ensure({ app, cwd, env });
   }
 
   acquireSharedResource(appId: string, command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string) {
+    this.requireAppLaunchAdmission(appId);
     const resource = this.sharedAppResource(appId);
     if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
-    return resource.acquire(command, cwd, env, consumerId);
+    const app = this.catalogRepository.find(appId);
+    return resource.acquire(app?.command || command, cwd, this.processEnvironment({ ...env, ...app?.env }), consumerId);
   }
 
   releaseSharedResource(appId: string, consumerId: string) {
@@ -384,7 +425,7 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   start(appId = "terminal-tty", options: AppLaunchOptions = {}) {
-    this.requireLaunchAdmission();
+    this.requireAppLaunchAdmission(appId);
     const app = this.catalogRepository.find(appId);
     if (!app) {
       throw Object.assign(new Error("App not found."), { code: "APP_NOT_FOUND" });
@@ -394,7 +435,7 @@ export class AppRuntimeManager extends EventEmitter {
       throw Object.assign(new Error(`Managed app ${app.id} does not support launch profiles.`), { code: "BROWSER_PROFILE_UNSUPPORTED" });
     }
     if (!this.hasCommand(app.command || app.id, { ...process.env, ...app.env }, options.cwd || app.cwd)) {
-      throw Object.assign(new Error(`Missing required command: ${app.command || app.id}`), { code: "APP_DEPENDENCY_MISSING" });
+      throw this.missingAppCommand(app);
     }
     if (app.kind === "gui") {
       return this.startGuiApp(app, options);
@@ -413,7 +454,7 @@ export class AppRuntimeManager extends EventEmitter {
     launch.cwd = cwd;
     const resumeArgs = this.aiSessionResumeArgs(app.id, launch);
     let args = [...(app.args || []), ...(launch.args || []), ...resumeArgs];
-    let env: NodeJS.ProcessEnv = definedEnvironment({ ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" });
+    let env: NodeJS.ProcessEnv = this.processEnvironment(definedEnvironment({ ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" }));
     const sessionDir = path.join(this.paths.appSessionsDir, id);
     const logDir = path.join(this.paths.logDir, "app-sessions", id);
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -432,7 +473,10 @@ export class AppRuntimeManager extends EventEmitter {
       resumeArgs,
     });
     args = appLifecycle?.args || args;
-    env = appLifecycle?.env || env;
+    env = this.processEnvironment(appLifecycle?.env || env);
+    const shellLaunch = this.prepareShell(shell, args, env);
+    args = shellLaunch.args;
+    env = shellLaunch.env;
 
     const metadata: AppSession = {
       id,
@@ -2074,6 +2118,7 @@ export class AppRuntimeManager extends EventEmitter {
 
   private spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string, logHeader?: string) {
     const logStream = new RotatingLogWriter(path.join(logDir, logName));
+    env = this.processEnvironment(env);
     const invocation = commandInvocation(command, args, { env, cwd });
     const child = spawn(invocation.executable, invocation.args, {
       cwd,

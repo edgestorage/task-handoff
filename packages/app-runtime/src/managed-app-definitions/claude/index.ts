@@ -17,6 +17,7 @@ export const claudeProvider: ManagedAppProvider = {
         kind: "tty",
         description: "Claude Code CLI in the task workspace.",
         command: env.TASK_HANDOFF_CLAUDE_COMMAND || "claude",
+        env: { DISABLE_AUTOUPDATER: "1" },
         args: [
           ...(skipPermissions ? ["--dangerously-skip-permissions"] : []),
           ...(env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? [] : modelArgs(env, "TASK_HANDOFF_CLAUDE_MODEL", "CLAUDE_MODEL")),
@@ -25,8 +26,7 @@ export const claudeProvider: ManagedAppProvider = {
       detection: launcherDetection(),
       distribution: {
         recipes: [
-          { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@anthropic-ai/claude-code"], privilege: "user" },
-          { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@anthropic-ai/claude-code"], privilege: "passwordless-sudo" },
+          { type: "node-package", platforms: ["linux", "darwin", "win32"], arches: ["x64", "arm64"], installer: "npm", packages: ["@anthropic-ai/claude-code"], managed: true, version: "2.1.286", privilege: "user" },
         ],
       },
     };

@@ -347,7 +347,7 @@ test("update re-runs the installed recipe and keeps detection authoritative", as
   assert.deepEqual(operations, ["update"]);
 });
 
-test("update does not require stopping running app sessions", async () => {
+test("update refuses running app sessions before stopping their backend", async () => {
   const dirs = stateDirs("task-handoff-app-update-sessions-");
   const recipe = { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["tool"], privilege: "root" };
   const sessions = [{ id: "session_1", appId: "tool", status: "running" }];
@@ -360,9 +360,7 @@ test("update does not require stopping running app sessions", async () => {
     execute: async (_operation, _recipe, context) => { context.onPhase("update-node-package"); },
   });
   await manager.refreshSnapshot();
-  const job = manager.request("tool", "update");
-  await manager.waitForIdle();
-  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.throws(() => manager.request("tool", "update"), (error) => error.code === "app_sessions_running");
   assert.equal(sessions[0].status, "running");
 });
 
