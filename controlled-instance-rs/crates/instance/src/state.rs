@@ -568,6 +568,17 @@ impl AppState {
         controlled_models.sync_app_environment(&app_runtime);
         ai_session_controller.set_model_selection_resolver(controlled_models.clone());
         ai_session_opencode.set_model_selection_projector(controlled_models.clone());
+        ai_session_opencode.set_model_selection_resolver(controlled_models.clone());
+        let attachment_sessions = ai_sessions.clone();
+        let conversation_attachments = ai_session_controller.attachments().clone();
+        ai_session_opencode.set_conversation_attachment_resolver(move |provider_id, message_id| {
+            attachment_sessions
+                .get_by_provider_session_id("opencode", provider_id)
+                .map(|session| {
+                    conversation_attachments.attachments_for_message(&session.id, message_id)
+                })
+                .unwrap_or_default()
+        });
         ai_session_opencode.set_title_generator(controlled_models.clone());
         Ok(Self {
             config: Arc::new(config),
@@ -1374,12 +1385,12 @@ impl AppState {
     }
 
     async fn maybe_generate_codex_title(&self, provider_session_id: &str, user_prompt: &str) {
-        if !self
+        let Some(request) = self
             .ai_session_codex
             .take_armed_title_generation(provider_session_id)
-        {
+        else {
             return;
-        }
+        };
         let Some(session) = self.ai_session_for_provider(provider_session_id) else {
             return;
         };
@@ -1401,21 +1412,25 @@ impl AppState {
         else {
             return;
         };
+        if !self
+            .ai_session_codex
+            .title_generation_is_current(provider_session_id, request)
+        {
+            return;
+        }
         let cwd = snapshot.cwd.trim().to_string();
         let cwd = if cwd.is_empty() {
             session.cwd.clone().unwrap_or_default()
         } else {
             cwd
         };
-        let (Some(model), Some(model_provider)) = (
-            snapshot
-                .model
-                .as_deref()
-                .filter(|value| !value.trim().is_empty()),
-            snapshot
-                .model_provider
-                .as_deref()
-                .filter(|value| !value.trim().is_empty()),
+        let selection = session.model_selection.as_ref().and_then(|selection| {
+            serde_json::from_value::<AiSessionModelSelection>(selection.clone()).ok()
+        });
+        let Some((model, model_provider)) = self.controlled_models.codex_title_model(
+            selection.as_ref(),
+            snapshot.model.as_deref(),
+            snapshot.model_provider.as_deref(),
         ) else {
             return;
         };
@@ -1428,8 +1443,8 @@ impl AppState {
             .client()
             .run_ephemeral_structured_turn(
                 &cwd,
-                model,
-                model_provider,
+                &model,
+                &model_provider,
                 &prompt,
                 controlled_instance_ai_session::ai_session_title_output_schema(),
                 session.reasoning_effort.as_deref(),
@@ -1444,6 +1459,12 @@ impl AppState {
         let Some(latest) = self.ai_session_for_provider(provider_session_id) else {
             return;
         };
+        if !self
+            .ai_session_codex
+            .title_generation_is_current(provider_session_id, request)
+        {
+            return;
+        }
         if latest
             .title
             .as_deref()

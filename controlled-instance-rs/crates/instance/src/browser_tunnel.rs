@@ -4,11 +4,10 @@ use controlled_instance_protocol::{
     decode_browser_tunnel_window_update, encode_browser_tunnel_error, encode_browser_tunnel_frame,
     encode_browser_tunnel_window_update, parse_browser_tunnel_hello, BrowserTunnelErrorCode,
     BrowserTunnelErrorPayload, BrowserTunnelFrame, BrowserTunnelFrameType,
-    BROWSER_TUNNEL_CONNECT_TIMEOUT_MS, BROWSER_TUNNEL_FRAME_HEADER_BYTES,
-    BROWSER_TUNNEL_IDLE_TIMEOUT_MS, BROWSER_TUNNEL_INITIAL_WINDOW_BYTES,
-    BROWSER_TUNNEL_MAX_CHANNEL_BUFFERED_BYTES, BROWSER_TUNNEL_MAX_DATA_BYTES,
-    BROWSER_TUNNEL_MAX_QUEUED_BYTES_PER_STREAM, BROWSER_TUNNEL_MAX_STREAMS,
-    BROWSER_TUNNEL_MAX_WINDOW_BYTES,
+    BROWSER_TUNNEL_CONNECT_TIMEOUT_MS, BROWSER_TUNNEL_IDLE_TIMEOUT_MS,
+    BROWSER_TUNNEL_INITIAL_WINDOW_BYTES, BROWSER_TUNNEL_MAX_CHANNEL_BUFFERED_BYTES,
+    BROWSER_TUNNEL_MAX_DATA_BYTES, BROWSER_TUNNEL_MAX_QUEUED_BYTES_PER_STREAM,
+    BROWSER_TUNNEL_MAX_STREAMS, BROWSER_TUNNEL_MAX_WINDOW_BYTES,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -830,8 +829,8 @@ pub fn websocket_upgrade(
     upgrade: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::extract::ws::WebSocketUpgrade {
     upgrade
-        .max_message_size(BROWSER_TUNNEL_FRAME_HEADER_BYTES + BROWSER_TUNNEL_MAX_DATA_BYTES)
-        .max_frame_size(BROWSER_TUNNEL_FRAME_HEADER_BYTES + BROWSER_TUNNEL_MAX_DATA_BYTES)
+        .max_message_size(crate::WEBSOCKET_MAX_PAYLOAD_BYTES)
+        .max_frame_size(crate::WEBSOCKET_MAX_PAYLOAD_BYTES)
         .max_write_buffer_size(BROWSER_TUNNEL_MAX_CHANNEL_BUFFERED_BYTES)
 }
 
@@ -927,7 +926,9 @@ mod tests {
 
     async fn tunnel_server() -> Fixture {
         async fn upgrade(websocket: WebSocketUpgrade) -> Response {
-            websocket.on_upgrade(handle_browser_tunnel).into_response()
+            websocket_upgrade(websocket)
+                .on_upgrade(handle_browser_tunnel)
+                .into_response()
         }
 
         let app = Router::new().route("/tunnel", get(upgrade));
@@ -1175,6 +1176,41 @@ mod tests {
             .expect("client write reached target after half-close")
             .expect("target received channel");
         assert_eq!(received, b"client-after-half-close");
+    }
+
+    #[tokio::test]
+    async fn oversized_binary_frames_reach_the_protocol_decoder() {
+        let tunnel = tunnel_server().await;
+        let mut client = connect(tunnel.address).await;
+        client
+            .send(ClientMessage::Text(
+                json!({
+                    "type": "browser-tunnel.hello",
+                    "protocolVersion": BROWSER_TUNNEL_PROTOCOL_VERSION,
+                    "initialWindowBytes": BROWSER_TUNNEL_INITIAL_WINDOW_BYTES,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(next(&mut client).await, ClientMessage::Text(_)));
+        client
+            .send(ClientMessage::Binary(
+                vec![
+                    0;
+                    controlled_instance_protocol::BROWSER_TUNNEL_FRAME_HEADER_BYTES
+                        + BROWSER_TUNNEL_MAX_DATA_BYTES
+                        + 1
+                ]
+                .into(),
+            ))
+            .await
+            .unwrap();
+        match next(&mut client).await {
+            ClientMessage::Close(Some(frame)) => assert_eq!(frame.code, CloseCode::Protocol),
+            other => panic!("expected protocol close, got {other:?}"),
+        }
     }
 
     #[tokio::test]

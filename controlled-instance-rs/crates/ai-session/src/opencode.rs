@@ -1,9 +1,10 @@
 use crate::{
     ai_session_title_output_schema, ai_session_title_prompt, parse_ai_session_title, AiSession,
-    AiSessionControlProvider, AiSessionModelSelection, AiSessionPermissionMode,
-    AiSessionTitleGenerator, AiSessionTitleInput, ProviderAction, ProviderAttachmentSource,
-    ProviderCreateInput, ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkInput,
-    ProviderMessage, ProviderResumeResult,
+    AiSessionControlProvider, AiSessionModelSelection, AiSessionModelSelectionIntent,
+    AiSessionModelSelectionResolver, AiSessionPermissionMode, AiSessionTitleGenerator,
+    AiSessionTitleInput, ProviderAction, ProviderAttachmentSource, ProviderCreateInput,
+    ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkInput, ProviderMessage,
+    ProviderResumeResult,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -60,6 +61,10 @@ pub struct OpenCodeTrackedSession {
 }
 
 pub type OpenCodeTrackedSessions = Arc<dyn Fn() -> Vec<OpenCodeTrackedSession> + Send + Sync>;
+
+type ConversationAttachmentResolver =
+    dyn Fn(&str, &str) -> Vec<AiSessionConversationAttachment> + Send + Sync;
+type MessageAttachmentResolver<'a> = dyn Fn(&str) -> Vec<AiSessionConversationAttachment> + 'a;
 
 pub trait OpenCodeModelSelectionProjector: Send + Sync {
     fn project_model_selection(
@@ -519,6 +524,8 @@ pub struct OpenCodeSessionProvider {
     reconcile_states: RwLock<HashMap<String, ReconcileState>>,
     aux: RwLock<OpenCodeAuxState>,
     model_selection_projector: RwLock<Option<Arc<dyn OpenCodeModelSelectionProjector>>>,
+    model_selection_resolver: RwLock<Option<Arc<dyn AiSessionModelSelectionResolver>>>,
+    conversation_attachment_resolver: RwLock<Option<Arc<ConversationAttachmentResolver>>>,
     title_generator: RwLock<Option<Arc<dyn AiSessionTitleGenerator>>>,
     closed_session_ids: RwLock<Option<OpenCodeClosedSessionIds>>,
     tracked_sessions: RwLock<Option<OpenCodeTrackedSessions>>,
@@ -544,6 +551,8 @@ impl OpenCodeSessionProvider {
             reconcile_states: RwLock::new(HashMap::new()),
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
+            model_selection_resolver: RwLock::new(None),
+            conversation_attachment_resolver: RwLock::new(None),
             title_generator: RwLock::new(None),
             closed_session_ids: RwLock::new(None),
             tracked_sessions: RwLock::new(None),
@@ -566,6 +575,16 @@ impl OpenCodeSessionProvider {
         provider
     }
 
+    pub fn set_conversation_attachment_resolver<F>(&self, resolver: F)
+    where
+        F: Fn(&str, &str) -> Vec<AiSessionConversationAttachment> + Send + Sync + 'static,
+    {
+        *self
+            .conversation_attachment_resolver
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(resolver));
+    }
+
     pub fn set_model_selection_projector(
         &self,
         projector: Arc<dyn OpenCodeModelSelectionProjector>,
@@ -574,6 +593,13 @@ impl OpenCodeSessionProvider {
             .model_selection_projector
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(projector);
+    }
+
+    pub fn set_model_selection_resolver(&self, resolver: Arc<dyn AiSessionModelSelectionResolver>) {
+        *self
+            .model_selection_resolver
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(resolver);
     }
 
     pub fn set_title_generator(&self, generator: Arc<dyn AiSessionTitleGenerator>) {
@@ -1716,6 +1742,17 @@ impl OpenCodeSessionProvider {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
+        let attachment_resolver = self
+            .conversation_attachment_resolver
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let resolve_attachments = |message_id: &str| {
+            attachment_resolver
+                .as_ref()
+                .map(|resolve| resolve(provider_session_id, message_id))
+                .unwrap_or_default()
+        };
         let mut projection = project_session(OpenCodeProjectionInput {
             session: &session,
             status: &status,
@@ -1724,6 +1761,7 @@ impl OpenCodeSessionProvider {
             retry_activities: &retry_activities,
             terminal_error: terminal_error.as_deref(),
             model_selection_projector: projector.as_deref(),
+            conversation_attachment_resolver: Some(&resolve_attachments),
         });
         if let Some(pending) = pending {
             let observed = projection.model_selection.as_ref();
@@ -1847,6 +1885,23 @@ impl OpenCodeSessionProvider {
         user_prompt: &str,
         current_title: &str,
     ) {
+        let (generation, prompt) = {
+            let mut aux = self
+                .aux
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !aux.armed_title_sessions.remove(provider_session_id)
+                || aux.attempted_title_sessions.contains(provider_session_id)
+            {
+                return;
+            }
+            aux.attempted_title_sessions
+                .insert(provider_session_id.to_string());
+            (
+                *aux.title_generations.get(provider_session_id).unwrap_or(&0),
+                ai_session_title_prompt(user_prompt),
+            )
+        };
         if !is_default_opencode_session_title(current_title) {
             return;
         }
@@ -1867,23 +1922,6 @@ impl OpenCodeSessionProvider {
                 "OpenCode title generation skipped because no model is resolved"
             );
             return;
-        };
-        let (generation, prompt) = {
-            let mut aux = self
-                .aux
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !aux.armed_title_sessions.remove(provider_session_id)
-                || aux.attempted_title_sessions.contains(provider_session_id)
-            {
-                return;
-            }
-            aux.attempted_title_sessions
-                .insert(provider_session_id.to_string());
-            (
-                *aux.title_generations.get(provider_session_id).unwrap_or(&0),
-                ai_session_title_prompt(user_prompt),
-            )
         };
         let Some(provider) = self
             .self_ref
@@ -2083,16 +2121,39 @@ impl OpenCodeSessionProvider {
         ))
     }
 
+    fn resolve_selection(
+        &self,
+        selection: &AiSessionModelSelection,
+    ) -> Option<AiSessionModelSelection> {
+        match self
+            .model_selection_resolver
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            Some(resolver) => resolver
+                .resolve(
+                    "opencode",
+                    Some(selection),
+                    AiSessionModelSelectionIntent::Target,
+                )
+                .ok()
+                .flatten(),
+            None => Some(selection.clone()),
+        }
+    }
+
     fn model_ref(
         &self,
         selection: &AiSessionModelSelection,
         effort: Option<&str>,
-    ) -> OpenCodeModelRef {
-        OpenCodeModelRef {
-            provider_id: opencode_provider_id(selection),
+    ) -> Option<OpenCodeModelRef> {
+        let selection = self.resolve_selection(selection)?;
+        Some(OpenCodeModelRef {
+            provider_id: opencode_provider_id(&selection),
             model_id: selection.upstream_name().to_string(),
             variant: effort.map(ToString::to_string),
-        }
+        })
     }
 
     async fn prompt_parts(
@@ -2289,7 +2350,7 @@ impl OpenCodeSessionProvider {
         let effort = session.reasoning_effort.as_deref();
         let model = selection
             .as_ref()
-            .map(|selection| self.model_ref(selection, effort));
+            .and_then(|selection| self.model_ref(selection, effort));
         self.client
             .prompt_async(
                 provider_session_id,
@@ -2383,7 +2444,7 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         let model = input
             .model_selection
             .as_ref()
-            .map(|selection| self.model_ref(selection, input.reasoning_effort.as_deref()));
+            .and_then(|selection| self.model_ref(selection, input.reasoning_effort.as_deref()));
         let permission = permission_rules(
             input.permission_mode,
             input.story_agent_tools.as_deref(),
@@ -2758,12 +2819,27 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 404,
             )
         })?;
-        self.pending_settings
+        let selection = self.resolve_selection(selection).ok_or_else(|| {
+            ProviderError::conflict(
+                "AI_SESSION_MODEL_SELECTION_INVALID",
+                "OpenCode model selection is unavailable.",
+            )
+        })?;
+        let mut settings = self
+            .pending_settings
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .entry(provider_session_id.to_string())
-            .or_default()
-            .model_selection = Some(selection.clone());
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let reasoning_effort = settings
+            .get(provider_session_id)
+            .and_then(|pending| pending.reasoning_effort.clone())
+            .or_else(|| session.reasoning_effort.clone());
+        settings.insert(
+            provider_session_id.to_string(),
+            PendingSettings {
+                model_selection: Some(selection.clone()),
+                reasoning_effort,
+            },
+        );
         Ok(Some(selection.clone()))
     }
 
@@ -2804,7 +2880,9 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                     409,
                 )
             })?;
-        if !is_reasoning_effort(reasoning_effort) {
+        if !is_reasoning_effort(reasoning_effort)
+            || self.model_ref(&selection, Some(reasoning_effort)).is_none()
+        {
             return Err(ProviderError::new(
                 "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
                 "OpenCode reasoning variant is unavailable.",
@@ -2943,6 +3021,7 @@ struct OpenCodeProjectionInput<'a> {
     retry_activities: &'a [RetryActivity],
     terminal_error: Option<&'a str>,
     model_selection_projector: Option<&'a dyn OpenCodeModelSelectionProjector>,
+    conversation_attachment_resolver: Option<&'a MessageAttachmentResolver<'a>>,
 }
 
 fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
@@ -2954,6 +3033,7 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         retry_activities,
         terminal_error,
         model_selection_projector,
+        conversation_attachment_resolver,
     } = input;
     let session_id = session
         .get("id")
@@ -3039,7 +3119,14 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
             .join("\n")
             .trim()
             .to_string();
-        let attachments = conversation_attachments(user_parts);
+        let stored_attachments = conversation_attachment_resolver
+            .map(|resolve| resolve(turn_id))
+            .unwrap_or_default();
+        let attachments = if stored_attachments.is_empty() {
+            conversation_attachments(user_parts)
+        } else {
+            stored_attachments
+        };
         timeline.push(AiSessionTimelineItem::UserMessage {
             id: turn_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -4358,6 +4445,7 @@ mod tests {
             retry_activities: &[],
             terminal_error: None,
             model_selection_projector: None,
+            conversation_attachment_resolver: None,
         });
         assert_eq!(projection.lifecycle, "waiting");
         assert_eq!(projection.phase, "approval");
@@ -4391,6 +4479,62 @@ mod tests {
             projection.tool_activity_ids,
             HashSet::from(["tool-1".into()])
         );
+    }
+
+    #[test]
+    fn title_generation_consumes_the_attempt_even_when_prerequisites_are_missing() {
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint: "http://127.0.0.1:1".into(),
+            roots: vec![PathBuf::from("/tmp")],
+        }));
+        provider.arm_title_generation("s1");
+        provider.maybe_generate_title("s1", "/tmp", "first message", "New session - 2026-11-04");
+        provider.arm_title_generation("s1");
+        let aux = provider.aux.read().unwrap();
+        assert!(aux.attempted_title_sessions.contains("s1"));
+        assert!(!aux.armed_title_sessions.contains("s1"));
+    }
+
+    #[test]
+    fn projection_preserves_stored_attachment_identity_in_turns_and_timeline() {
+        let fixture = fixture();
+        let stored = AiSessionConversationAttachment {
+            id: "att_stored".into(),
+            kind: AiSessionAttachmentKind::File,
+            name: "report.pdf".into(),
+            mime: "application/pdf".into(),
+            size: 123,
+            content_state: controlled_instance_protocol::AiSessionAttachmentContentState::Available,
+        };
+        let resolve = |message_id: &str| {
+            if message_id == "u1" {
+                vec![stored.clone()]
+            } else {
+                Vec::new()
+            }
+        };
+        let projection = project_session(OpenCodeProjectionInput {
+            session: &fixture.session,
+            status: &fixture.status["s1"],
+            messages: fixture.messages.as_array().unwrap(),
+            permissions: &[],
+            retry_activities: &[],
+            terminal_error: None,
+            model_selection_projector: None,
+            conversation_attachment_resolver: Some(&resolve),
+        });
+        assert_eq!(
+            projection.turns[0]["userMessages"][0]["attachments"][0]["id"],
+            "att_stored"
+        );
+        assert_eq!(
+            projection.turns[0]["userMessages"][0]["attachments"][0]["size"],
+            123
+        );
+        assert!(projection.timeline.iter().any(|item| matches!(item,
+            AiSessionTimelineItem::UserMessage { attachments: Some(attachments), .. }
+                if attachments == &vec![stored.clone()]
+        )));
     }
 
     #[tokio::test]
@@ -4537,6 +4681,8 @@ mod tests {
             reconcile_states: RwLock::new(HashMap::new()),
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
+            model_selection_resolver: RwLock::new(None),
+            conversation_attachment_resolver: RwLock::new(None),
             title_generator: RwLock::new(None),
             closed_session_ids: RwLock::new(None),
             tracked_sessions: RwLock::new(None),
@@ -4677,6 +4823,7 @@ mod tests {
                 retry_activities: &[],
                 terminal_error: Some("Provider failed"),
                 model_selection_projector: None,
+                conversation_attachment_resolver: None,
             });
             assert_eq!(projection.lifecycle, lifecycle);
             assert_eq!(projection.error.as_deref(), Some("Provider failed"));

@@ -24,6 +24,10 @@ pub mod state;
 mod story_agent_tool_bridge;
 mod story_tools;
 
+// Compatibility for v0.0.46: Node's ws transport accepts up to 100 MiB.
+// Subprotocol decoders own their smaller frame limits and structured errors.
+pub(crate) const WEBSOCKET_MAX_PAYLOAD_BYTES: usize = 100 * 1024 * 1024;
+
 pub use agent_run_bindings::{
     AgentRunMemberBinding, AgentRunMemberBindingInput, AgentRunMemberBindingStore,
 };

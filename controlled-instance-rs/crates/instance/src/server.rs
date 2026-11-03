@@ -618,16 +618,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/novnc/{*rest}", get(novnc_static))
         .merge(repository_routes("/api/ai-sessions/{id}/repository"))
         .merge(repository_routes("/api/apps/sessions/{id}/repository"))
-        .route("/api/{*rest}", any(api_not_found))
-        .fallback(static_ui_fallback)
-        .method_not_allowed_fallback(api_not_found)
-        .layer(DefaultBodyLimit::max(DEFAULT_JSON_BODY_LIMIT))
-        .layer(middleware::map_response(normalize_body_limit_response))
-        .layer(middleware::map_response(normalize_json_content_type))
-        .layer(middleware::from_fn_with_state(
+        .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
+        .route("/api/{*rest}", any(api_not_found))
+        .fallback(static_ui_fallback)
+        .method_not_allowed_fallback(api_method_not_allowed)
+        .layer(DefaultBodyLimit::max(DEFAULT_JSON_BODY_LIMIT))
+        .layer(middleware::map_response(normalize_body_limit_response))
+        .layer(middleware::map_response(normalize_json_content_type))
         .layer(middleware::map_response(normalize_json_content_type))
         .layer(middleware::from_fn(fastify_body_parser))
         .with_state(state)
@@ -14470,6 +14470,20 @@ async fn api_not_found() -> Response {
     api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found.")
 }
 
+async fn api_method_not_allowed(State(state): State<AppState>, request: Request) -> Response {
+    if request.uri().path() == "/api/internal/agent-tools/mcp" {
+        let token = request_token(request.headers(), request.uri());
+        if !state.auth.accepts(token.as_deref()) {
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Missing or invalid web token.",
+            );
+        }
+    }
+    api_not_found().await
+}
+
 async fn static_ui_fallback(State(state): State<AppState>, request: Request) -> Response {
     if request.uri().path().starts_with("/api/") {
         return api_not_found().await;
@@ -17635,6 +17649,24 @@ mod tests {
             token: Some("web-secret".to_string()),
         });
         let app = router(state);
+        for (method, path) in [
+            (Method::GET, "/api/does-not-exist"),
+            (Method::POST, "/api/status"),
+            (Method::GET, "/api/internal/node-agent/does-not-exist"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
         let unauthorized = app
             .clone()
             .oneshot(
@@ -20048,6 +20080,7 @@ mod tests {
     async fn app_session_resume_restores_the_history_entry_before_starting_the_app() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
         let script = state

@@ -823,7 +823,10 @@ async fn run_registration_loop<F>(
             break;
         }
         let revision = client.connection_revision();
-        let result = client.run_cycle(&snapshot_provider).await;
+        let result = tokio::select! {
+            result = client.run_cycle(&snapshot_provider) => result,
+            _ = stop.changed() => break,
+        };
         let delay = match result {
             Ok(()) => {
                 backoff.reset();
@@ -1088,6 +1091,20 @@ mod tests {
         assert!(normalize_node_agent_url("https://node.example/api").is_err());
         assert!(normalize_node_agent_url("ftp://node.example").is_err());
         assert!(normalize_node_agent_url("http://user@node.example").is_err());
+    }
+
+    #[tokio::test]
+    async fn stopping_registration_does_not_wait_for_an_in_flight_operation() {
+        let client = NodeAgentClient::new(config("http://127.0.0.1:1".into()));
+        let _operation = client.inner.operation.lock().await;
+        for _ in 0..2 {
+            client.start(snapshot);
+            tokio::task::yield_now().await;
+            tokio::time::timeout(Duration::from_millis(100), client.stop())
+                .await
+                .expect("stop must cancel a cycle waiting for an operation or request");
+            assert!(client.inner.task.lock().unwrap().is_none());
+        }
     }
 
     #[test]

@@ -338,6 +338,37 @@ impl ControlledModelConfig {
         }))
     }
 
+    pub(crate) fn codex_title_model(
+        &self,
+        selection: Option<&AiSessionModelSelection>,
+        observed_model: Option<&str>,
+        observed_provider: Option<&str>,
+    ) -> Option<(String, String)> {
+        if let Some(selection) = selection {
+            let selected = self
+                .resolve_selection(
+                    "codex",
+                    Some(selection),
+                    AiSessionModelSelectionIntent::Session,
+                )
+                .ok()??;
+            return Some((
+                selected.upstream_name().to_string(),
+                codex_model_provider_id(&selected.model_entity_id),
+            ));
+        }
+        Some((
+            observed_model
+                .map(str::trim)
+                .filter(|model| !model.is_empty())?
+                .to_string(),
+            observed_provider
+                .map(str::trim)
+                .filter(|provider| !provider.is_empty())?
+                .to_string(),
+        ))
+    }
+
     pub fn sync_app_environment(&self, runtime: &AppRuntime) {
         let environment = self.runtime_environment();
         let unset = CLAUDE_SHADOWED_ENV
@@ -1737,6 +1768,40 @@ mod tests {
         );
         assert!(
             parse_codex_instance_settings(json!({ "multiAgent": { "enabled": "yes" } })).is_err()
+        );
+    }
+
+    #[test]
+    fn codex_title_model_uses_the_catalog_selection_before_observed_thread_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let config = config_with_catalog(root.path(), direct_catalog());
+        let mut selection = AiSessionModelSelection {
+            model_entity_id: "model-primary".into(),
+            model_name: "Primary Label".into(),
+            model_upstream_name: Some("upstream-primary".into()),
+        };
+        assert_eq!(
+            config.codex_title_model(
+                Some(&selection),
+                Some("stale-model"),
+                Some("stale-provider")
+            ),
+            Some((
+                "upstream-primary".into(),
+                codex_model_provider_id("model-primary")
+            ))
+        );
+        selection.model_entity_id = "removed-model".into();
+        assert!(config
+            .codex_title_model(
+                Some(&selection),
+                Some("stale-model"),
+                Some("stale-provider")
+            )
+            .is_none());
+        assert_eq!(
+            config.codex_title_model(None, Some("observed"), Some("openai")),
+            Some(("observed".into(), "openai".into()))
         );
     }
 

@@ -715,6 +715,8 @@ struct ClientInner {
     next_id: AtomicU64,
     generation: AtomicU64,
     connected: AtomicBool,
+    fork_method_available: AtomicBool,
+    subagent_thread_list_available: AtomicBool,
     approvals: Mutex<Vec<CodexApprovalRequest>>,
     live_items: Mutex<HashMap<String, Vec<(String, LiveThreadItem)>>>,
     timeline_store: RwLock<Option<AiSessionTimelineStore>>,
@@ -726,6 +728,36 @@ struct ClientInner {
     subscribed_threads: Mutex<HashSet<String>>,
     turn_errors: Mutex<HashMap<String, PendingTurnError>>,
     retry_warnings: Mutex<HashMap<String, RetryWarning>>,
+    title_generation: std::sync::Mutex<CodexTitleGenerationState>,
+}
+
+#[derive(Default)]
+struct CodexTitleGenerationState {
+    armed: HashSet<String>,
+    requests: HashMap<String, (u64, u64)>,
+    next_request: u64,
+}
+
+impl CodexTitleGenerationState {
+    fn begin(&mut self, thread_id: &str, connection_generation: u64) -> Option<(u64, u64)> {
+        if !self.armed.remove(thread_id) {
+            return None;
+        }
+        self.next_request += 1;
+        let request = (connection_generation, self.next_request);
+        self.requests.insert(thread_id.to_string(), request);
+        Some(request)
+    }
+
+    fn cancel(&mut self, thread_id: &str) {
+        self.armed.remove(thread_id);
+        self.requests.remove(thread_id);
+    }
+
+    fn reset(&mut self) {
+        self.armed.clear();
+        self.requests.clear();
+    }
 }
 
 type PendingRequest = oneshot::Sender<Result<Value, CodexRpcError>>;
@@ -769,6 +801,8 @@ impl CodexAppServerClient {
                 next_id: AtomicU64::new(1),
                 generation: AtomicU64::new(0),
                 connected: AtomicBool::new(false),
+                fork_method_available: AtomicBool::new(true),
+                subagent_thread_list_available: AtomicBool::new(true),
                 approvals: Mutex::new(Vec::new()),
                 live_items: Mutex::new(HashMap::new()),
                 timeline_store: RwLock::new(None),
@@ -780,6 +814,7 @@ impl CodexAppServerClient {
                 subscribed_threads: Mutex::new(HashSet::new()),
                 turn_errors: Mutex::new(HashMap::new()),
                 retry_warnings: Mutex::new(HashMap::new()),
+                title_generation: std::sync::Mutex::new(CodexTitleGenerationState::default()),
             }),
         }
     }
@@ -944,6 +979,9 @@ impl CodexAppServerClient {
     }
 
     pub fn thread_fork_capabilities(&self) -> CodexThreadForkCapabilities {
+        if !self.inner.fork_method_available.load(Ordering::SeqCst) {
+            return CodexThreadForkCapabilities::default();
+        }
         self.capability_version()
             .as_deref()
             .map(codex_thread_fork_capabilities)
@@ -1033,6 +1071,12 @@ impl CodexAppServerClient {
         self.spawn_connection(generation).await?;
         match self.initialize_connection().await {
             Ok(()) => {
+                self.inner
+                    .fork_method_available
+                    .store(true, Ordering::SeqCst);
+                self.inner
+                    .subagent_thread_list_available
+                    .store(true, Ordering::SeqCst);
                 self.inner.connected.store(true, Ordering::SeqCst);
                 let _ = self
                     .inner
@@ -1347,6 +1391,11 @@ impl CodexAppServerClient {
 
     async fn disconnect(&self) {
         self.inner.connected.store(false, Ordering::SeqCst);
+        self.inner
+            .title_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reset();
         self.inner.subscribed_threads.lock().await.clear();
         let connection = self.inner.connection.lock().await.take();
         if let Some(connection) = connection {
@@ -1600,7 +1649,19 @@ impl CodexAppServerClient {
             params.insert("config".to_string(), Value::Object(config));
         }
         params.insert("ephemeral".to_string(), Value::Bool(false));
-        let result = self.request("thread/fork", Value::Object(params)).await?;
+        let result = self
+            .request_rpc("thread/fork", Value::Object(params))
+            .await
+            .map_err(|error| {
+                if error.code == Some(-32601) {
+                    self.inner
+                        .fork_method_available
+                        .store(false, Ordering::SeqCst);
+                    ProviderError::new("AI_SESSION_FORK_UNSUPPORTED", error.message, 409)
+                } else {
+                    ProviderError::bad_gateway("AI_SESSION_RPC_FAILED", error.message)
+                }
+            })?;
         let mut snapshot = thread_from_result(
             result,
             cwd.map(Path::to_path_buf)
@@ -1710,8 +1771,12 @@ impl CodexAppServerClient {
             "subAgentOther",
             "unknown",
         ];
-        let mut include_sources = true;
-        for _ in 0..10 {
+        let mut include_sources = self
+            .inner
+            .subagent_thread_list_available
+            .load(Ordering::SeqCst);
+        let mut pages = 0;
+        while pages < 10 {
             let params = json!({
                 "cursor": cursor,
                 "limit": 100,
@@ -1727,13 +1792,18 @@ impl CodexAppServerClient {
             let result = match self.request_rpc("thread/list", params).await {
                 Ok(result) => result,
                 Err(error) if include_sources && error.code == Some(-32602) => {
+                    self.inner
+                        .subagent_thread_list_available
+                        .store(false, Ordering::SeqCst);
                     include_sources = false;
                     cursor = None;
                     threads.clear();
+                    pages = 0;
                     continue;
                 }
                 Err(error) => return Err(error),
             };
+            pages += 1;
             if let Some(data) = result.get("data").and_then(Value::as_array) {
                 threads.extend(data.iter().filter(|value| value.is_object()).cloned());
             } else if let Some(data) = result.get("threads").and_then(Value::as_array) {
@@ -2583,7 +2653,6 @@ impl Default for CodexAppServerClient {
 pub struct CodexAppServerProvider {
     client: CodexAppServerClient,
     timeline_store: Option<AiSessionTimelineStore>,
-    armed_title_sessions: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl CodexAppServerProvider {
@@ -2597,22 +2666,47 @@ impl CodexAppServerProvider {
         Self {
             client,
             timeline_store,
-            armed_title_sessions: std::sync::Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
     pub fn arm_title_generation(&self, provider_session_id: &str) {
-        self.armed_title_sessions
+        self.client
+            .inner
+            .title_generation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .armed
             .insert(provider_session_id.to_string());
     }
 
-    pub fn take_armed_title_generation(&self, provider_session_id: &str) -> bool {
-        self.armed_title_sessions
+    pub fn take_armed_title_generation(&self, provider_session_id: &str) -> Option<(u64, u64)> {
+        self.client
+            .inner
+            .title_generation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(provider_session_id)
+            .begin(
+                provider_session_id,
+                self.client.inner.generation.load(Ordering::SeqCst),
+            )
+    }
+
+    pub fn title_generation_is_current(
+        &self,
+        provider_session_id: &str,
+        request: (u64, u64),
+    ) -> bool {
+        self.client.inner.connected.load(Ordering::SeqCst)
+            && self.client.inner.generation.load(Ordering::SeqCst) == request.0
+            && self
+                .client
+                .inner
+                .title_generation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .requests
+                .get(provider_session_id)
+                == Some(&request)
     }
 
     pub fn client(&self) -> &CodexAppServerClient {
@@ -2926,11 +3020,15 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         self.client.resolve_approval(session, decision).await
     }
 
-    async fn rename_session(
-        &self,
-        _session: &AiSession,
-        _title: &str,
-    ) -> Result<(), ProviderError> {
+    async fn rename_session(&self, session: &AiSession, _title: &str) -> Result<(), ProviderError> {
+        if let Some(thread_id) = session.provider_session_id.as_deref() {
+            self.client
+                .inner
+                .title_generation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .cancel(thread_id);
+        }
         Ok(())
     }
 
@@ -4613,6 +4711,11 @@ async fn connection_lost(inner: &Arc<ClientInner>, generation: u64) {
         return;
     }
     inner.connected.store(false, Ordering::SeqCst);
+    inner
+        .title_generation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .reset();
     fail_pending(&inner.pending, "Codex app-server exited.").await;
     inner.approvals.lock().await.clear();
     inner.turn_errors.lock().await.clear();
@@ -5631,6 +5734,122 @@ mod tests {
 
     fn test_client() -> CodexAppServerClient {
         CodexAppServerClient::with_command("missing-codex-for-notification-tests")
+    }
+
+    async fn rpc_test_transport(client: &CodexAppServerClient) -> mpsc::Receiver<String> {
+        let (writer, written) = mpsc::channel(4);
+        *client.inner.connection.lock().await = Some(Connection {
+            writer,
+            child: None,
+            shutdown: None,
+        });
+        client.inner.connected.store(true, Ordering::SeqCst);
+        written
+    }
+
+    #[tokio::test]
+    async fn unsupported_thread_sources_are_remembered_for_later_discovery() {
+        let client = test_client();
+        let mut written = rpc_test_transport(&client).await;
+        let server = client.clone();
+        let responder = tokio::spawn(async move {
+            for index in 0..3 {
+                let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+                assert_eq!(request["method"], "thread/list");
+                assert_eq!(
+                    request["params"]["sourceKinds"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    index != 0
+                );
+                let response = if index == 0 {
+                    Err(CodexRpcError {
+                        code: Some(-32602),
+                        message: "unsupported sources".into(),
+                        data: None,
+                    })
+                } else {
+                    Ok(json!({"data": []}))
+                };
+                server
+                    .inner
+                    .pending
+                    .lock()
+                    .await
+                    .remove(&request["id"].as_u64().unwrap())
+                    .unwrap()
+                    .send(response)
+                    .unwrap();
+            }
+        });
+        assert!(client.list_threads().await.unwrap().is_empty());
+        assert!(client.list_threads().await.unwrap().is_empty());
+        responder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_fork_disables_capability_and_further_requests() {
+        let client = test_client();
+        *client.inner.capability_version.write().unwrap() = Some("0.145.0".into());
+        let mut written = rpc_test_transport(&client).await;
+        let server = client.clone();
+        let responder = tokio::spawn(async move {
+            let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/fork");
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&request["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Err(CodexRpcError {
+                    code: Some(-32601),
+                    message: "no fork".into(),
+                    data: None,
+                }))
+                .unwrap();
+        });
+        let input = ProviderCreateInput {
+            cwd: PathBuf::from("/tmp"),
+            runtime_workspace_roots: Vec::new(),
+            permission_mode: None,
+            model_selection: None,
+            reasoning_effort: None,
+            story_agent_tools: None,
+        };
+        assert!(client.thread_fork_capabilities().full_history);
+        for _ in 0..2 {
+            let error = client
+                .fork_thread("thread-1", None, None, &input)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "AI_SESSION_FORK_UNSUPPORTED");
+        }
+        assert!(!client.thread_fork_capabilities().full_history);
+        responder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn title_generation_is_cancelled_by_manual_rename_and_disconnect() {
+        let client = test_client();
+        client.inner.connected.store(true, Ordering::SeqCst);
+        let provider = CodexAppServerProvider::new(client.clone(), None);
+        provider.arm_title_generation("thread-1");
+        let request = provider.take_armed_title_generation("thread-1").unwrap();
+        assert!(provider.title_generation_is_current("thread-1", request));
+        provider.rename_session(&test_session(), "").await.unwrap();
+        assert!(!provider.title_generation_is_current("thread-1", request));
+
+        provider.arm_title_generation("thread-1");
+        let newer = provider.take_armed_title_generation("thread-1").unwrap();
+        assert_ne!(newer, request);
+        provider.arm_title_generation("thread-2");
+        connection_lost(&client.inner, 0).await;
+        client.inner.connected.store(true, Ordering::SeqCst);
+        assert!(!provider.title_generation_is_current("thread-1", newer));
+        assert!(provider.take_armed_title_generation("thread-2").is_none());
     }
 
     fn test_approval(id: u64) -> CodexApprovalRequest {

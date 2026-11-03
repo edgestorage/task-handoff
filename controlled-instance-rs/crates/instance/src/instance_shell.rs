@@ -881,7 +881,8 @@ pub fn websocket_upgrade_options(
     upgrade: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::extract::ws::WebSocketUpgrade {
     upgrade
-        .max_message_size(controlled_instance_protocol::INSTANCE_SHELL_DATA_FRAME_MAX_BYTES + 1)
+        .max_message_size(crate::WEBSOCKET_MAX_PAYLOAD_BYTES)
+        .max_frame_size(crate::WEBSOCKET_MAX_PAYLOAD_BYTES)
         .max_write_buffer_size(INSTANCE_SHELL_SOCKET_BACKLOG_MAX_BYTES)
 }
 
@@ -922,7 +923,7 @@ mod tests {
             websocket: WebSocketUpgrade,
             axum::extract::State(runtime): axum::extract::State<InstanceShellRuntime>,
         ) -> Response {
-            websocket
+            websocket_upgrade_options(websocket)
                 .on_upgrade(move |socket| async move {
                     runtime.handle_socket(socket).await;
                 })
@@ -1162,6 +1163,36 @@ mod tests {
             exit["signal"] == "SIGTERM" || exit["code"] == 23,
             "unexpected exec signal result: {exit}"
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_binary_frames_report_a_shell_protocol_error() {
+        let runtime = InstanceShellRuntime::new(std::env::temp_dir());
+        let server = start_shell_server(runtime).await;
+        let mut client = connect(&server).await;
+        send_json(
+            &mut client,
+            json!({
+                "type": "start", "mode": "exec", "tty": false,
+                "command": ["/bin/sh", "-c", "cat"],
+            }),
+        )
+        .await;
+        wait_for_started(&mut client).await;
+        let mut bytes =
+            vec![0; controlled_instance_protocol::INSTANCE_SHELL_DATA_FRAME_MAX_BYTES + 2];
+        bytes[0] = InstanceShellDataChannel::Input as u8;
+        client
+            .send(ClientMessage::Binary(bytes.into()))
+            .await
+            .unwrap();
+        let (_, _, error) = collect_until_exit(&mut client).await;
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "INSTANCE_SHELL_PROTOCOL_ERROR");
+        match next(&mut client).await {
+            ClientMessage::Close(Some(frame)) => assert_eq!(frame.code, CloseCode::Policy),
+            other => panic!("expected policy close, got {other:?}"),
+        }
     }
 
     #[tokio::test]

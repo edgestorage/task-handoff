@@ -53,6 +53,7 @@ impl TerminalScreenState {
     pub fn snapshot(&self) -> TerminalScreenSnapshot {
         let screen = self.terminal.screen();
         let mut data = String::new();
+        let mut pen = Pen::default();
         for line in screen.all_lines() {
             let cells = line.cells();
             let end = cells
@@ -60,7 +61,6 @@ impl TerminalScreenState {
                 .rposition(|cell| cell.char() != ' ' || !cell.pen().is_default())
                 .map(|index| index + 1)
                 .unwrap_or(0);
-            let mut pen = Pen::default();
             for cell in &cells[..end] {
                 if cell.width() == 0 {
                     continue;
@@ -125,13 +125,16 @@ fn sgr(pen: Pen) -> String {
 fn append_color(params: &mut Vec<String>, color: Color, background: bool) {
     match color {
         Color::Indexed(index @ 0..=7) => {
-            params.push(format!("{}{}", if background { 40 } else { 30 }, index))
+            params.push((if background { 40 + index } else { 30 + index }).to_string())
         }
-        Color::Indexed(index @ 8..=15) => params.push(format!(
-            "{}{}",
-            if background { 100 } else { 90 },
-            index - 8
-        )),
+        Color::Indexed(index @ 8..=15) => params.push(
+            (if background {
+                100 + index - 8
+            } else {
+                90 + index - 8
+            })
+            .to_string(),
+        ),
         Color::Indexed(index) => {
             params.push(format!("{};5;{index}", if background { 48 } else { 38 }))
         }
@@ -166,6 +169,11 @@ impl PendingEscapeSequence {
         let mut state = EscapeState::Text;
         let mut sequence_start = None;
         for (index, character) in input.char_indices() {
+            if state != EscapeState::Text && matches!(character, '\u{18}' | '\u{1a}') {
+                state = EscapeState::Text;
+                sequence_start = None;
+                continue;
+            }
             match state {
                 EscapeState::Text => {
                     if character == '\u{1b}' {
@@ -174,10 +182,6 @@ impl PendingEscapeSequence {
                     }
                 }
                 EscapeState::Escape => match character {
-                    '\u{18}' | '\u{1a}' => {
-                        state = EscapeState::Text;
-                        sequence_start = None;
-                    }
                     '[' => state = EscapeState::Csi,
                     ']' | 'P' | 'X' | '^' | '_' => state = EscapeState::String,
                     '\u{1b}' => sequence_start = Some(index),
@@ -216,7 +220,7 @@ impl PendingEscapeSequence {
         }
         self.value = sequence_start
             .map(|start| input[start..].to_string())
-            .filter(|value| value.len() <= MAX_PENDING_ESCAPE_LENGTH)
+            .filter(|value| value.encode_utf16().count() <= MAX_PENDING_ESCAPE_LENGTH)
             .unwrap_or_default();
     }
 
@@ -228,6 +232,41 @@ impl PendingEscapeSequence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_replay_preserves_basic_and_bright_palette_colors() {
+        for index in 0..16 {
+            let foreground = if index < 8 {
+                30 + index
+            } else {
+                90 + index - 8
+            };
+            let background = if index < 8 {
+                40 + index
+            } else {
+                100 + index - 8
+            };
+            let mut screen = TerminalScreenState::new(20, 4);
+            screen.write(&format!("\x1b[{foreground};{background}mcolor"));
+            let mut replay = TerminalScreenState::new(20, 4);
+            replay.write(&screen.snapshot().data);
+            let pen = *replay.terminal.screen().all_lines().next().unwrap().cells()[0].pen();
+            assert_eq!(pen.foreground(), Some(Color::Indexed(index)));
+            assert_eq!(pen.background(), Some(Color::Indexed(index)));
+        }
+    }
+
+    #[test]
+    fn snapshot_replay_resets_styles_between_lines() {
+        let mut screen = TerminalScreenState::new(20, 4);
+        screen.write("\x1b[1;38;5;196mred\x1b[0m\r\nplain");
+        let mut replay = TerminalScreenState::new(20, 4);
+        replay.write(&screen.snapshot().data);
+        let replay_screen = replay.terminal.screen();
+        let lines = replay_screen.all_lines().collect::<Vec<_>>();
+        assert!(lines[0].cells()[0].pen().is_bold());
+        assert!(lines[1].cells()[0].pen().is_default());
+    }
 
     #[test]
     fn snapshots_restore_scrollback_styles_and_cursor() {
@@ -250,6 +289,27 @@ mod tests {
         let snapshot = screen.snapshot();
         assert!(snapshot.data.contains("hello"));
         assert_eq!(snapshot.pending_escape, "\x1b[31");
+    }
+
+    #[test]
+    fn cancelled_escape_sequences_are_not_replayed_after_reconnect() {
+        for prefix in ["\x1b", "\x1b[31", "\x1b]0;title", "\x1b]0;title\x1b"] {
+            for cancel in ['\u{18}', '\u{1a}'] {
+                let mut pending = PendingEscapeSequence::default();
+                pending.push(&format!("{prefix}{cancel}"));
+                assert_eq!(pending.current(), "", "{prefix:?}, {cancel:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pending_escape_budget_uses_the_node_utf16_length() {
+        let mut pending = PendingEscapeSequence::default();
+        let sequence = format!("\x1b]0;{}", "中".repeat(2000));
+        pending.push(&sequence);
+        assert_eq!(pending.current(), sequence);
+        pending.push(&"🙂".repeat(1100));
+        assert_eq!(pending.current(), "");
     }
 
     #[test]
