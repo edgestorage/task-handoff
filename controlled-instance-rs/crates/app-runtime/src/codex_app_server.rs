@@ -1,5 +1,4 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use controlled_instance_protocol::AppCatalogItem;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::{
@@ -154,12 +153,14 @@ pub fn configured_transport() -> CodexAppServerTransport {
 }
 
 pub fn app_server_disabled() -> bool {
+    std::env::var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED")
+        .ok()
+        .is_some_and(|value| disabled_value(&value))
+}
+
+fn disabled_value(value: &str) -> bool {
     matches!(
-        std::env::var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
+        value.to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
 }
@@ -327,7 +328,9 @@ pub async fn wait_until_ready(
             )));
         }
         let ready = match &plan.upstream {
-            CodexAppServerUpstream::Unix { socket_path } => socket_path.exists(),
+            CodexAppServerUpstream::Unix { socket_path } => {
+                unix_socket_connectable(socket_path).await
+            }
             CodexAppServerUpstream::WebSocket { .. } => match plan.health_url.as_deref() {
                 Some(health_url) => reqwest::get(health_url)
                     .await
@@ -344,6 +347,18 @@ pub async fn wait_until_ready(
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn unix_socket_connectable(socket_path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        socket_path.exists() && tokio::net::UnixStream::connect(socket_path).await.is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket_path;
+        false
     }
 }
 
@@ -673,13 +688,16 @@ fn thread_id_from_result(result: &Value) -> Option<String> {
         })
 }
 
-pub fn codex_app_id(app: &AppCatalogItem) -> bool {
-    app.id == "codex"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_flag_does_not_trim_values() {
+        assert!(disabled_value("TRUE"));
+        assert!(!disabled_value(" true"));
+        assert!(!disabled_value("true "));
+    }
 
     #[test]
     fn story_mcp_args_match_node_literal_toml_shape() {

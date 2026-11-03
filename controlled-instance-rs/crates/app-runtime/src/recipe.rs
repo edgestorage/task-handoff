@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use controlled_instance_core::text::truncate_utf16_tail;
 use controlled_instance_protocol::{
     AppInstallPrivilege, AppInstaller, AppManagementCommand, AppManagementOperation,
     AppManagementProgress, FinalComputerCapabilities, FinalComputerPlatform,
@@ -22,7 +23,11 @@ use tokio::{
 };
 use xz2::read::XzDecoder;
 
-use crate::{resolve_executable, InstallRecipe};
+use crate::{
+    command_invocation::{command_invocation, CommandInvocationOptions},
+    executable_resolver::{ExecutableResolverOptions, Platform},
+    resolve_executable, InstallRecipe,
+};
 
 const MAX_LOG_CHARS: usize = 8_192;
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
@@ -30,6 +35,13 @@ const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const PACKAGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MANAGED_NODE_PACKAGE_DIR: &str = "node-package";
+
+#[derive(Clone, Copy)]
+struct NodePackageOptions<'a> {
+    managed: bool,
+    version: Option<&'a str>,
+    privilege: AppInstallPrivilege,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppRecipeExecutionError {
@@ -145,9 +157,11 @@ impl AppRecipeExecutor {
                     operation,
                     *installer,
                     packages,
-                    *managed,
-                    version.as_deref(),
-                    privilege.unwrap_or(AppInstallPrivilege::User),
+                    NodePackageOptions {
+                        managed: *managed,
+                        version: version.as_deref(),
+                        privilege: privilege.unwrap_or(AppInstallPrivilege::User),
+                    },
                     context,
                 )
                 .await
@@ -246,11 +260,14 @@ impl AppRecipeExecutor {
         operation: AppManagementOperation,
         installer: AppInstaller,
         packages: &[String],
-        managed: bool,
-        version: Option<&str>,
-        recipe_privilege: AppInstallPrivilege,
+        options: NodePackageOptions<'_>,
         context: &AppRecipeExecutionContext,
     ) -> Result<String, AppRecipeExecutionError> {
+        let NodePackageOptions {
+            managed,
+            version,
+            privilege: recipe_privilege,
+        } = options;
         if packages.is_empty() || packages.iter().any(|package| !valid_node_package(package)) {
             return Err(AppRecipeExecutionError::new(
                 "invalid_builtin_recipe",
@@ -432,12 +449,31 @@ impl AppRecipeExecutor {
             uninstall_archive(&self.state_dir, context, &root)?;
             return Ok(String::new());
         }
+        let manifest_path = manifest_path(&self.state_dir, &context.app_id);
+        let update_manifest = if operation == AppManagementOperation::Update {
+            let manifest = read_manifest(&manifest_path, &root)?;
+            if !manifest.install_root.exists() {
+                return Err(AppRecipeExecutionError::new(
+                    "ownership_manifest_invalid",
+                    "The managed install target does not exist.",
+                    false,
+                ));
+            }
+            Some(manifest)
+        } else {
+            if root.exists() {
+                return Err(AppRecipeExecutionError::new(
+                    "install_target_exists",
+                    "The managed install target already exists.",
+                    false,
+                ));
+            }
+            None
+        };
         let staged = self
             .stage_archive(url, sha256, format, &root, context)
             .await?;
-        let manifest_path = manifest_path(&self.state_dir, &context.app_id);
-        if operation == AppManagementOperation::Update {
-            let manifest = read_manifest(&manifest_path, &root)?;
+        if let Some(manifest) = update_manifest {
             remove_owned_files(&manifest.install_root, &manifest.files)?;
             copy_tree(&staged.extracted, &manifest.install_root)?;
             write_manifest(
@@ -448,14 +484,6 @@ impl AppRecipeExecutor {
             )?;
             let _ = fs::remove_dir_all(&staged.staging);
             return Ok(String::new());
-        }
-        if root.exists() {
-            let _ = fs::remove_dir_all(&staged.staging);
-            return Err(AppRecipeExecutionError::new(
-                "install_target_exists",
-                "The managed install target already exists.",
-                false,
-            ));
         }
         if let Some(parent) = root.parent() {
             fs::create_dir_all(parent).map_err(storage_error)?;
@@ -496,14 +524,10 @@ impl AppRecipeExecutor {
             self.download(url, &artifact, expected_sha256, context)
                 .await?;
             phase(context, "inspect");
-            inspect_archive(format, &artifact).map_err(|error| {
-                AppRecipeExecutionError::new("archive_inspection_failed", error.message, false)
-            })?;
+            inspect_archive(format, &artifact)?;
             fs::create_dir_all(&extracted).map_err(storage_error)?;
             phase(context, "extract");
-            extract_archive(format, &artifact, &extracted).map_err(|error| {
-                AppRecipeExecutionError::new("archive_extraction_failed", error.message, false)
-            })?;
+            extract_archive(format, &artifact, &extracted)?;
             let files = walk_owned_files(&extracted)?;
             Ok(StagedArchive {
                 extracted,
@@ -550,6 +574,12 @@ impl AppRecipeExecutor {
         let mut file = tokio::fs::File::create(destination)
             .await
             .map_err(storage_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o600))
+                .await;
+        }
         let mut stream = response.bytes_stream();
         let mut hash = Sha256::new();
         let mut received = 0_u64;
@@ -634,6 +664,11 @@ fn create_archive_staging(
     fs::create_dir_all(parent).map_err(storage_error)?;
     let staging = parent.join(format!(".install-{app_id}-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&staging).map_err(storage_error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700));
+    }
     Ok(staging)
 }
 
@@ -646,11 +681,16 @@ fn storage_error(error: std::io::Error) -> AppRecipeExecutionError {
     AppRecipeExecutionError::new("app_operation_failed", error.to_string(), true)
 }
 
+fn archive_inspection_error(error: impl std::fmt::Display) -> AppRecipeExecutionError {
+    AppRecipeExecutionError::new("archive_inspection_failed", error.to_string(), false)
+}
+
+fn archive_extraction_error(error: impl std::fmt::Display) -> AppRecipeExecutionError {
+    AppRecipeExecutionError::new("archive_extraction_failed", error.to_string(), false)
+}
+
 fn bounded(value: &str) -> String {
-    let chars = value.chars().collect::<Vec<_>>();
-    chars[chars.len().saturating_sub(MAX_LOG_CHARS)..]
-        .iter()
-        .collect()
+    truncate_utf16_tail(value, MAX_LOG_CHARS)
 }
 
 fn phase(context: &AppRecipeExecutionContext, value: &str) {
@@ -704,17 +744,41 @@ fn resolved_command(
     args: Vec<String>,
     env: &BTreeMap<String, String>,
     timeout: Duration,
-) -> AppRecipeCommand {
-    let overrides = env.clone();
-    let path = resolve_executable(executable, &overrides, None);
-    AppRecipeCommand {
-        executable: path
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| executable.to_string()),
-        args,
-        env: BTreeMap::new(),
+    platform: FinalComputerPlatform,
+    win32_shim_when_unresolved: bool,
+) -> Result<AppRecipeCommand, AppRecipeExecutionError> {
+    let invocation = command_invocation(
+        executable,
+        &args,
+        &CommandInvocationOptions {
+            resolver: ExecutableResolverOptions {
+                env: env.clone(),
+                platform: recipe_platform(platform),
+                ..ExecutableResolverOptions::default()
+            },
+            win32_shim_when_unresolved,
+        },
+    )
+    .map_err(|error| AppRecipeExecutionError::new(error.code(), error.to_string(), false))?;
+    Ok(AppRecipeCommand {
+        executable: invocation.executable.display().to_string(),
+        args: invocation.args,
+        env: invocation.env,
         timeout,
         termination_grace: Duration::from_secs(5),
+    })
+}
+
+fn recipe_platform(platform: FinalComputerPlatform) -> Platform {
+    match platform {
+        FinalComputerPlatform::Linux => Platform::Linux,
+        FinalComputerPlatform::Darwin => Platform::MacOs,
+        FinalComputerPlatform::Win32 => Platform::Windows,
+        FinalComputerPlatform::Freebsd
+        | FinalComputerPlatform::Openbsd
+        | FinalComputerPlatform::Aix
+        | FinalComputerPlatform::Sunos => Platform::OtherUnix,
+        FinalComputerPlatform::Unknown => Platform::current(),
     }
 }
 
@@ -763,12 +827,14 @@ fn system_package_command(
     if capabilities.privilege == AppInstallPrivilege::Root
         || recipe_privilege == AppInstallPrivilege::User
     {
-        return Ok(resolved_command(
+        return resolved_command(
             executable,
             args,
             env,
             PACKAGE_COMMAND_TIMEOUT,
-        ));
+            capabilities.platform,
+            false,
+        );
     }
     if capabilities.privilege == AppInstallPrivilege::PasswordlessSudo {
         return Ok(AppRecipeCommand {
@@ -1055,7 +1121,14 @@ fn node_package_command(
         || capabilities.privilege == AppInstallPrivilege::Root
         || recipe_privilege == AppInstallPrivilege::User
     {
-        return Ok(resolved_command("npm", args, env, PACKAGE_COMMAND_TIMEOUT));
+        return resolved_command(
+            "npm",
+            args,
+            env,
+            PACKAGE_COMMAND_TIMEOUT,
+            capabilities.platform,
+            true,
+        );
     }
     if capabilities.privilege == AppInstallPrivilege::PasswordlessSudo {
         return Ok(AppRecipeCommand {
@@ -1193,9 +1266,13 @@ pub async fn run_app_recipe_command(
         })?,
         Err(_) => {
             terminate_child(&mut child, false).await;
-            tokio::time::sleep(command.termination_grace).await;
-            terminate_child(&mut child, true).await;
-            let _ = child.wait().await;
+            if tokio::time::timeout(command.termination_grace, child.wait())
+                .await
+                .is_err()
+            {
+                terminate_child(&mut child, true).await;
+                let _ = child.wait().await;
+            }
             return Err(AppRecipeExecutionError::new(
                 "command_timeout",
                 format!(
@@ -1254,16 +1331,10 @@ async fn read_stream(
 }
 
 fn trim_log(value: &mut String) {
-    let excess = value.chars().count().saturating_sub(MAX_LOG_CHARS);
-    if excess == 0 {
+    if controlled_instance_core::text::utf16_len(value) <= MAX_LOG_CHARS {
         return;
     }
-    let byte_offset = value
-        .char_indices()
-        .nth(excess)
-        .map(|(offset, _)| offset)
-        .unwrap_or(value.len());
-    value.drain(..byte_offset);
+    *value = controlled_instance_core::text::truncate_utf16_tail(value, MAX_LOG_CHARS);
 }
 
 fn controlled_path(
@@ -1316,21 +1387,23 @@ fn write_manifest(
     let bytes = serde_json::to_vec(&payload).map_err(|error| {
         AppRecipeExecutionError::new("app_operation_failed", error.to_string(), true)
     })?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&temporary, bytes).map_err(storage_error)?;
-    fs::rename(&temporary, path).map_err(storage_error)
+    controlled_instance_core::atomic::write_atomic(path, &bytes, Some(0o600)).map_err(storage_error)
 }
 
 fn read_manifest(
     path: &Path,
     expected_root: &Path,
 ) -> Result<ArchiveManifest, AppRecipeExecutionError> {
-    let raw = fs::read_to_string(path).map_err(|_| {
-        AppRecipeExecutionError::new(
-            "ownership_manifest_missing",
-            "The archive ownership manifest is missing.",
-            false,
-        )
+    let raw = fs::read_to_string(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AppRecipeExecutionError::new(
+                "ownership_manifest_missing",
+                "The archive ownership manifest is missing.",
+                false,
+            )
+        } else {
+            storage_error(error)
+        }
     })?;
     let value: Value = serde_json::from_str(&raw).map_err(|_| {
         AppRecipeExecutionError::new(
@@ -1351,7 +1424,7 @@ fn read_manifest(
     let files = files
         .unwrap()
         .iter()
-        .map(|value| value.as_str().unwrap_or_default().to_string())
+        .map(|value| value.as_str().unwrap_or_default().replace('\\', "/"))
         .collect::<Vec<_>>();
     validate_archive_paths(files.iter().map(|path| (path.as_str(), false)))?;
     Ok(ArchiveManifest {
@@ -1506,7 +1579,7 @@ fn inspect_archive(format: &str, path: &Path) -> Result<(), AppRecipeExecutionEr
     let mut archive = tar::Archive::new(reader);
     let mut paths = Vec::new();
     let mut total = 0_u64;
-    let entries = archive.entries().map_err(storage_error)?;
+    let entries = archive.entries().map_err(archive_inspection_error)?;
     for (index, entry) in entries.enumerate() {
         if index >= MAX_ARCHIVE_ENTRIES {
             return Err(AppRecipeExecutionError::new(
@@ -1515,13 +1588,13 @@ fn inspect_archive(format: &str, path: &Path) -> Result<(), AppRecipeExecutionEr
                 false,
             ));
         }
-        let entry = entry.map_err(storage_error)?;
+        let entry = entry.map_err(archive_inspection_error)?;
         let header = entry.header();
         let kind = header.entry_type();
         let link = kind.is_symlink() || kind.is_hard_link();
         let path = entry
             .path()
-            .map_err(storage_error)?
+            .map_err(archive_inspection_error)?
             .to_string_lossy()
             .to_string();
         if !kind.is_file() && !kind.is_dir() && !link {
@@ -1553,7 +1626,11 @@ fn extract_archive(
     let reader = archive_reader(format, path)?;
     let mut archive = tar::Archive::new(reader);
     let mut total = 0_u64;
-    for (index, entry) in archive.entries().map_err(storage_error)?.enumerate() {
+    for (index, entry) in archive
+        .entries()
+        .map_err(archive_extraction_error)?
+        .enumerate()
+    {
         if index >= MAX_ARCHIVE_ENTRIES {
             return Err(AppRecipeExecutionError::new(
                 "archive_too_large",
@@ -1561,7 +1638,7 @@ fn extract_archive(
                 false,
             ));
         }
-        let mut entry = entry.map_err(storage_error)?;
+        let mut entry = entry.map_err(archive_extraction_error)?;
         let header = entry.header();
         let kind = header.entry_type();
         if kind.is_symlink() || kind.is_hard_link() {
@@ -1573,23 +1650,28 @@ fn extract_archive(
         }
         let relative = entry
             .path()
-            .map_err(storage_error)?
+            .map_err(archive_extraction_error)?
             .to_string_lossy()
             .to_string();
         let validated = validate_archive_paths([(relative.as_str(), false)])?;
         let [relative] = validated.as_slice() else {
             unreachable!()
         };
+        if relative.split('/').count() > 100 {
+            return Err(archive_extraction_error(
+                "Archive path exceeds the maximum extraction depth of 100.",
+            ));
+        }
         let target = destination.join(relative);
         if kind.is_dir() {
-            fs::create_dir_all(&target).map_err(storage_error)?;
+            fs::create_dir_all(&target).map_err(archive_extraction_error)?;
             continue;
         }
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(storage_error)?;
+            fs::create_dir_all(parent).map_err(archive_extraction_error)?;
         }
-        let mut output = fs::File::create(&target).map_err(storage_error)?;
-        let copied = std::io::copy(&mut entry, &mut output).map_err(storage_error)?;
+        let mut output = fs::File::create(&target).map_err(archive_extraction_error)?;
+        let copied = std::io::copy(&mut entry, &mut output).map_err(archive_extraction_error)?;
         total = total.saturating_add(copied);
         if total > MAX_EXTRACTED_BYTES {
             return Err(AppRecipeExecutionError::new(
@@ -1598,7 +1680,7 @@ fn extract_archive(
                 false,
             ));
         }
-        output.flush().map_err(storage_error)?;
+        output.flush().map_err(archive_extraction_error)?;
     }
     Ok(())
 }
@@ -1672,6 +1754,38 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg == "@openai/codex@0.165.0"));
+    }
+
+    #[test]
+    fn windows_npm_commands_are_wrapped_by_the_command_interpreter() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let npm = temporary.path().join("npm.cmd");
+        std::fs::write(&npm, "@echo off\r\n").expect("npm shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o700))
+                .expect("permissions");
+        }
+        let environment = BTreeMap::from([
+            ("PATH".to_string(), temporary.path().display().to_string()),
+            ("ComSpec".to_string(), "cmd.exe".to_string()),
+        ]);
+
+        let command = resolved_command(
+            "npm",
+            vec!["install".to_string(), "example".to_string()],
+            &environment,
+            PACKAGE_COMMAND_TIMEOUT,
+            FinalComputerPlatform::Win32,
+            true,
+        )
+        .expect("wrapped npm command");
+
+        assert_eq!(command.executable, "cmd.exe");
+        assert_eq!(&command.args[..4], ["/d", "/s", "/c", "call"]);
+        assert!(command.args[4].eq_ignore_ascii_case(npm.to_str().expect("npm path")));
+        assert_eq!(command.args[5..], ["install", "example"]);
     }
 
     #[test]

@@ -22,7 +22,10 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc::{self, UnboundedSender},
+    sync::{
+        mpsc::{self, UnboundedSender},
+        watch,
+    },
     task::JoinHandle,
     time::{interval, timeout},
 };
@@ -33,6 +36,8 @@ const BROWSER_TUNNEL_IDLE_TIMEOUT: Duration = Duration::from_millis(BROWSER_TUNN
 
 enum StreamCommand {
     Data(Vec<u8>),
+    Pause,
+    Resume,
     HalfClose,
     Close,
 }
@@ -88,6 +93,7 @@ enum TunnelSendFailure {
     SlowConsumer,
 }
 
+#[derive(Clone)]
 struct TunnelWriter {
     frames: UnboundedSender<OutgoingFrame>,
     pending_bytes: Arc<AtomicUsize>,
@@ -181,12 +187,29 @@ impl TunnelWriter {
     }
 }
 
+#[cfg(test)]
 pub async fn handle_browser_tunnel(socket: WebSocket) {
+    handle_browser_tunnel_with_shutdown(socket, None).await;
+}
+
+pub async fn handle_browser_tunnel_with_shutdown(
+    socket: WebSocket,
+    mut shutdown: Option<watch::Receiver<bool>>,
+) {
     let (mut sink, mut receiver) = socket.split();
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<OutgoingFrame>();
     let pending_bytes = Arc::new(AtomicUsize::new(0));
     let writer_closed = Arc::new(AtomicBool::new(false));
     let writer = TunnelWriter::new(frames_tx, pending_bytes.clone(), writer_closed);
+    if let Some(shutdown) = shutdown.take() {
+        let writer = writer.clone();
+        tokio::spawn(async move {
+            let mut shutdown = shutdown;
+            if shutdown.changed().await.is_ok() && *shutdown.borrow() {
+                writer.close(1001, "Controlled instance is shutting down.");
+            }
+        });
+    }
     let mut writer_task = tokio::spawn(async move {
         while let Some(frame) = frames_rx.recv().await {
             let closes = frame.closes;
@@ -351,6 +374,12 @@ pub async fn handle_browser_tunnel(socket: WebSocket) {
                 }
                 stream.last_activity = Instant::now();
                 stream.queued_bytes = stream.queued_bytes.saturating_add(data.len());
+                let commands = stream.commands.clone();
+                if let Some(commands) = commands {
+                    // Node pauses the target after every chunk and resumes only
+                    // when the browser window and local queue are drained.
+                    let _ = commands.send(StreamCommand::Pause).await;
+                }
                 if stream.queued_bytes > BROWSER_TUNNEL_MAX_QUEUED_BYTES_PER_STREAM {
                     if send_error(
                         &writer,
@@ -366,7 +395,7 @@ pub async fn handle_browser_tunnel(socket: WebSocket) {
                     continue;
                 }
                 stream.queued.push_back(data);
-                if flush_target_data(&writer, id, stream).is_err() {
+                if flush_target_data(&writer, id, stream).await.is_err() {
                     break;
                 }
             }
@@ -611,7 +640,7 @@ async fn handle_client_frame(
                 return Ok(());
             }
             stream.send_credit += bytes;
-            flush_target_data(writer, frame.stream_id, stream)
+            flush_target_data(writer, frame.stream_id, stream).await
         }
         BrowserTunnelFrameType::HalfClose => {
             let Some(stream) = streams.get_mut(&frame.stream_id) else {
@@ -636,7 +665,11 @@ async fn handle_client_frame(
     }
 }
 
-fn flush_target_data(writer: &TunnelWriter, id: u32, stream: &mut TunnelStream) -> Result<(), ()> {
+async fn flush_target_data(
+    writer: &TunnelWriter,
+    id: u32,
+    stream: &mut TunnelStream,
+) -> Result<(), ()> {
     while stream.state == StreamState::Open && stream.send_credit > 0 {
         let Some(front) = stream.queued.front() else {
             break;
@@ -666,6 +699,11 @@ fn flush_target_data(writer: &TunnelWriter, id: u32, stream: &mut TunnelStream) 
             front.drain(..bytes);
         }
     }
+    if stream.queued.is_empty() && stream.send_credit > 0 {
+        if let Some(commands) = stream.commands.clone() {
+            let _ = commands.send(StreamCommand::Resume).await;
+        }
+    }
     Ok(())
 }
 
@@ -679,6 +717,7 @@ fn spawn_tunnel_stream(
         let (mut reader, mut writer) = stream.into_split();
         let mut read_done = false;
         let mut write_done = false;
+        let mut paused = false;
         let mut buffer = vec![0u8; BROWSER_TUNNEL_MAX_DATA_BYTES];
         while !(read_done && write_done) {
             tokio::select! {
@@ -697,6 +736,12 @@ fn spawn_tunnel_stream(
                                 return;
                             }
                         }
+                        Some(StreamCommand::Pause) => {
+                            paused = true;
+                        }
+                        Some(StreamCommand::Resume) => {
+                            paused = false;
+                        }
                         Some(StreamCommand::HalfClose) => {
                             let _ = writer.shutdown().await;
                             write_done = true;
@@ -707,7 +752,7 @@ fn spawn_tunnel_stream(
                         Some(StreamCommand::Close) | None => return,
                     }
                 }
-                read = reader.read(&mut buffer), if !read_done => {
+                read = reader.read(&mut buffer), if !read_done && !paused => {
                     match read {
                         Ok(0) => {
                             read_done = true;
@@ -744,15 +789,24 @@ fn loopback_alias(host: &str) -> String {
         return host.to_string();
     };
     let parts = rest.split('-').collect::<Vec<_>>();
-    if parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.parse::<u16>().is_ok_and(|value| value <= 255))
-    {
-        format!("127.{}.{}.{}", parts[0], parts[1], parts[2])
-    } else {
-        host.to_string()
+    let Some(parts) = parts
+        .iter()
+        .map(|part| loopback_alias_part(part))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return host.to_string();
+    };
+    if parts.len() != 3 {
+        return host.to_string();
     }
+    format!("127.{}.{}.{}", parts[0], parts[1], parts[2])
+}
+
+fn loopback_alias_part(part: &str) -> Option<u16> {
+    if part.is_empty() || part.len() > 3 || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    part.parse::<u16>().ok().filter(|value| *value <= 255)
 }
 
 fn send_error(
@@ -834,6 +888,38 @@ mod tests {
                         }
                     }
                 });
+            }
+        });
+        Fixture { address, task }
+    }
+
+    async fn half_close_after_write_server(
+        received: tokio::sync::oneshot::Sender<Vec<u8>>,
+    ) -> Fixture {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind half-close server");
+        let address = listener.local_addr().expect("half-close address");
+        let task = tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let _ = stream.write_all(b"target-first").await;
+            let _ = stream.shutdown().await;
+            let mut received = Some(received);
+            let mut buffer = [0u8; 4096];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        if let Some(received) = received.take() {
+                            if received.send(buffer[..size].to_vec()).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         });
         Fixture { address, task }
@@ -1025,6 +1111,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn target_half_close_does_not_close_the_client_write_side() {
+        let (received_tx, mut received_rx) = tokio::sync::oneshot::channel();
+        let target = half_close_after_write_server(received_tx).await;
+        let tunnel = tunnel_server().await;
+        let mut client = connect(tunnel.address).await;
+        client
+            .send(ClientMessage::Text(
+                json!({
+                    "type": "browser-tunnel.hello",
+                    "protocolVersion": BROWSER_TUNNEL_PROTOCOL_VERSION,
+                    "initialWindowBytes": BROWSER_TUNNEL_INITIAL_WINDOW_BYTES
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send hello");
+        assert!(matches!(next(&mut client).await, ClientMessage::Text(_)));
+
+        let stream_id = 9;
+        send_frame(
+            &mut client,
+            BrowserTunnelFrame {
+                frame_type: BrowserTunnelFrameType::Open,
+                stream_id,
+                payload: serde_json::to_vec(&BrowserTunnelOpenPayload {
+                    host: "127.0.0.1".to_string(),
+                    port: target.address.port(),
+                })
+                .expect("open payload"),
+            },
+        )
+        .await;
+        assert_eq!(
+            next_frame(&mut client).await.frame_type,
+            BrowserTunnelFrameType::OpenOk
+        );
+
+        let mut target_output = Vec::new();
+        loop {
+            let frame = next_frame(&mut client).await;
+            assert_eq!(frame.stream_id, stream_id);
+            match frame.frame_type {
+                BrowserTunnelFrameType::Data => target_output.extend_from_slice(&frame.payload),
+                BrowserTunnelFrameType::HalfClose => break,
+                other => panic!("unexpected target half-close frame: {other:?}"),
+            }
+        }
+        assert_eq!(target_output, b"target-first");
+
+        send_frame(
+            &mut client,
+            BrowserTunnelFrame {
+                frame_type: BrowserTunnelFrameType::Data,
+                stream_id,
+                payload: b"client-after-half-close".to_vec(),
+            },
+        )
+        .await;
+        let received = tokio::time::timeout(Duration::from_secs(2), &mut received_rx)
+            .await
+            .expect("client write reached target after half-close")
+            .expect("target received channel");
+        assert_eq!(received, b"client-after-half-close");
+    }
+
+    #[tokio::test]
     async fn invalid_handshake_or_text_frames_close_with_1002() {
         let tunnel = tunnel_server().await;
         let mut client = connect(tunnel.address).await;
@@ -1071,5 +1224,20 @@ mod tests {
             }
             other => panic!("expected protocol close after text frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn loopback_aliases_match_the_node_digit_and_length_rules() {
+        assert_eq!(loopback_alias("127-0-0-1.internal"), "127.0.0.1");
+        assert_eq!(loopback_alias("127-001-002-003.internal"), "127.1.2.3");
+        assert_eq!(loopback_alias("127-+1-2-3.internal"), "127-+1-2-3.internal");
+        assert_eq!(
+            loopback_alias("127-0001-2-3.internal"),
+            "127-0001-2-3.internal"
+        );
+        assert_eq!(
+            loopback_alias("127-256-2-3.internal"),
+            "127-256-2-3.internal"
+        );
     }
 }

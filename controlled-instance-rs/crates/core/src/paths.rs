@@ -61,16 +61,29 @@ impl StoragePaths {
 }
 
 fn env_path(name: &str, fallback: impl Into<PathBuf>) -> PathBuf {
-    let path = std::env::var(name)
-        .ok()
-        .map(|value| PathBuf::from(value.trim()))
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| fallback.into());
-    if path.is_absolute() {
-        path
-    } else {
-        std::path::absolute(&path).unwrap_or(path)
+    env_path_value(std::env::var(name).ok(), fallback)
+}
+
+fn env_path_value(value: Option<String>, fallback: impl Into<PathBuf>) -> PathBuf {
+    match value {
+        Some(value) if !value.trim().is_empty() => resolve_lexical(Path::new(value.trim())),
+        _ => fallback.into(),
     }
+}
+
+fn resolve_lexical(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            value => normalized.push(value.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -79,16 +92,19 @@ mod tests {
 
     #[test]
     fn relative_override_paths_are_resolved_like_the_node_runtime() {
-        let previous = std::env::var_os("TASK_HANDOFF_DATA_DIR");
-        std::env::set_var("TASK_HANDOFF_DATA_DIR", "  relative-data  ");
-        let paths = StoragePaths::resolve();
-        assert!(paths.data_dir.is_absolute());
-        assert!(paths.data_dir.ends_with("relative-data"));
-        if let Some(previous) = previous {
-            std::env::set_var("TASK_HANDOFF_DATA_DIR", previous);
-        } else {
-            std::env::remove_var("TASK_HANDOFF_DATA_DIR");
-        }
+        let current = std::env::current_dir().expect("current directory");
+        assert_eq!(
+            env_path_value(Some("  nested/../relative-data  ".to_string()), "/fallback"),
+            current.join("relative-data")
+        );
+        assert_eq!(
+            env_path_value(Some("../sibling".to_string()), "/fallback"),
+            current.parent().expect("parent").join("sibling")
+        );
+        assert_eq!(
+            env_path_value(Some("   ".to_string()), "relative-fallback"),
+            PathBuf::from("relative-fallback")
+        );
     }
 
     #[test]

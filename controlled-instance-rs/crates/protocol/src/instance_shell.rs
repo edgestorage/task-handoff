@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -203,17 +203,17 @@ struct ClientControlEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 struct StartWire {
     #[serde(rename = "type")]
     frame_type: String,
     mode: InstanceShellMode,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_option")]
     command: Option<Vec<String>>,
     tty: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_option")]
     cols: Option<u16>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_option")]
     rows: Option<u16>,
 }
 
@@ -341,7 +341,7 @@ fn validate_start(wire: &StartWire) -> Result<(), InstanceShellProtocolError> {
         }
         let mut total = 0usize;
         for item in command {
-            if item.len() > INSTANCE_SHELL_ARGV_ITEM_MAX_BYTES {
+            if item.chars().count() > INSTANCE_SHELL_ARGV_ITEM_MAX_BYTES {
                 return Err(invalid_control_frame());
             }
             total = total.saturating_add(item.len());
@@ -371,6 +371,20 @@ fn validate_dimensions(cols: u16, rows: u16) -> Result<(), InstanceShellProtocol
 
 fn invalid_control_frame() -> InstanceShellProtocolError {
     InstanceShellProtocolError::protocol("Instance shell client control frame is invalid.")
+}
+
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom("expected a value, not null"));
+    }
+    T::deserialize(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 pub fn encode_instance_shell_binary_frame(
@@ -474,6 +488,14 @@ mod tests {
         .is_err());
         assert!(parse_instance_shell_client_control_frame(
             r#"{"type":"start","mode":"exec","tty":false,"command":["sh"],"unknown":true}"#
+        )
+        .is_ok());
+        assert!(parse_instance_shell_client_control_frame(
+            r#"{"type":"start","mode":"exec","tty":false,"command":null}"#
+        )
+        .is_err());
+        assert!(parse_instance_shell_client_control_frame(
+            r#"{"type":"start","mode":"interactive","tty":true,"cols":null,"rows":40}"#
         )
         .is_err());
     }

@@ -323,6 +323,20 @@ fn is_rotated_log_name(name: &str) -> bool {
 }
 
 fn ensure_private_directory(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Managed persistence path must be a real directory: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     fs::create_dir_all(path)?;
     restrict_private_directory(path)
 }
@@ -495,5 +509,22 @@ mod tests {
         assert!(!inactive_new.exists());
         assert!(!active.join("active.1.log").exists());
         assert!(active.join("active.log").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_log_directory_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path().join("target");
+        let link = root.path().join("link");
+        fs::create_dir(&target).expect("target");
+        symlink(&target, &link).expect("symlink");
+
+        let error = ensure_private_directory(&link).expect_err("symlink must be rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(link.is_symlink());
     }
 }

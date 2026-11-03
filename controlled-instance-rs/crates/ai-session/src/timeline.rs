@@ -1,16 +1,19 @@
 use crate::AiSession;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
+use controlled_instance_core::atomic::write_json_atomic;
 use controlled_instance_protocol::{
     AiSessionConversationAttachment, AiSessionTimeline, AiSessionTimelineItem,
     AiSessionTimelineItemRevision, AiSessionTimelineSyncRead, AiSessionTimelineVersionedItem,
     AiSessionTurnTimeline, AI_SESSION_MAX_TIMELINE_ATTACHMENTS, AI_SESSION_TIMELINE_SYNC_MAX_ITEMS,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 use thiserror::Error;
 
@@ -24,20 +27,33 @@ pub enum AiSessionTimelineError {
     ProviderSessionMissing,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCodexTimeline {
+    schema_version: u64,
+    provider_session_id: String,
+    items: Vec<AiSessionTimelineItem>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AiSessionTimelineStore {
     directory: PathBuf,
+    write_lock: std::sync::Arc<Mutex<()>>,
 }
 
 impl AiSessionTimelineStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             directory: data_dir.join("ai-session-timeline").join("codex"),
+            write_lock: Default::default(),
         }
     }
 
     pub fn from_directory(directory: PathBuf) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            write_lock: Default::default(),
+        }
     }
 
     pub fn directory(&self) -> &Path {
@@ -83,6 +99,83 @@ impl AiSessionTimelineStore {
         items
     }
 
+    pub fn upsert(
+        &self,
+        provider_session_id: &str,
+        item: AiSessionTimelineItem,
+    ) -> std::io::Result<()> {
+        let Some(item) = sanitize_item(item) else {
+            return Ok(());
+        };
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut items = self.items(provider_session_id);
+        if let Some(index) = items
+            .iter()
+            .position(|candidate| candidate.id() == item.id())
+        {
+            items[index] = item;
+        } else {
+            items.push(item);
+        }
+        write_json_atomic(
+            &self.file_path(provider_session_id),
+            &StoredCodexTimeline {
+                schema_version: 1,
+                provider_session_id: provider_session_id.to_string(),
+                items,
+            },
+            Some(0o600),
+        )
+    }
+
+    pub fn retain(&self, provider_session_ids: &HashSet<String>) -> std::io::Result<usize> {
+        let retained = provider_session_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .collect::<HashSet<_>>();
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error),
+        };
+        let mut removed = 0;
+        for entry in entries {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            if !is_timeline_file_name(file_name) || !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let provider_session_id = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .and_then(|value| {
+                    value
+                        .get("providerSessionId")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_string)
+                });
+            if provider_session_id
+                .as_deref()
+                .is_some_and(|id| retained.contains(id))
+            {
+                continue;
+            }
+            std::fs::remove_file(path)?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
     pub fn timeline(
         &self,
         session: &AiSession,
@@ -93,7 +186,6 @@ impl AiSessionTimelineStore {
         let provider_session_id = session
             .provider_session_id
             .as_deref()
-            .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or(AiSessionTimelineError::ProviderSessionMissing)?;
         Ok(AiSessionTimeline {
@@ -119,16 +211,10 @@ impl AiSessionTimelineStore {
                     || turn.get("providerTurnId").and_then(Value::as_str) == Some(turn_id)
             })
             .ok_or(AiSessionTimelineError::TurnNotFound)?;
-        let canonical_turn_id = turn
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(turn_id);
+        let canonical_turn_id = turn.get("id").and_then(Value::as_str).unwrap_or(turn_id);
         let provider_turn_id = turn
             .get("providerTurnId")
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(canonical_turn_id);
         let timeline = self.timeline(session)?;
@@ -150,6 +236,16 @@ impl AiSessionTimelineStore {
         let key = hex::encode(Sha256::digest(provider_session_id.as_bytes()));
         self.directory.join(format!("{key}.json"))
     }
+}
+
+fn is_timeline_file_name(value: &str) -> bool {
+    let Some(key) = value.strip_suffix(".json") else {
+        return false;
+    };
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub fn ai_session_timeline_revision(items: &[AiSessionTimelineItem]) -> String {
@@ -457,6 +553,22 @@ mod tests {
     }
 
     #[test]
+    fn timeline_store_preserves_provider_session_ids_without_trimming() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = AiSessionTimelineStore::from_directory(root.path().to_path_buf());
+        store
+            .upsert(" thread-with-space ", item("item-1", "turn-1", "one"))
+            .expect("whitespace id");
+        store
+            .upsert("", item("item-2", "turn-1", "two"))
+            .expect("empty id");
+
+        assert_eq!(store.items(" thread-with-space ").len(), 1);
+        assert!(store.items("thread-with-space").is_empty());
+        assert_eq!(store.items("").len(), 1);
+    }
+
+    #[test]
     fn sync_returns_snapshot_delta_and_not_modified_like_node() {
         let first = item("item-1", "turn-1", "one");
         let second = item("item-2", "turn-1", "two");
@@ -498,5 +610,115 @@ mod tests {
             sync_ai_session_timeline_items(&[first, second], &unchanged_known),
             AiSessionTimelineSyncRead::NotModified { .. }
         ));
+    }
+
+    #[test]
+    fn timeline_store_upserts_replaces_and_skips_transient_items() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = AiSessionTimelineStore::from_directory(root.path().join("codex"));
+        let provider_session_id = "provider-thread";
+
+        store
+            .upsert(provider_session_id, item("item-1", "turn-1", "first"))
+            .expect("upsert");
+        store
+            .upsert(provider_session_id, item("item-1", "turn-1", "replacement"))
+            .expect("replace");
+        store
+            .upsert(
+                provider_session_id,
+                AiSessionTimelineItem::Activity {
+                    id: "reasoning".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    activity_kind: "reasoning".to_string(),
+                    title: "Reasoning".to_string(),
+                    status: None,
+                    summary: None,
+                    input: None,
+                    output: None,
+                    paths: None,
+                    exit_code: None,
+                    duration_ms: None,
+                },
+            )
+            .expect("skip transient");
+        store
+            .upsert(provider_session_id, item("item-2", "turn-1", "second"))
+            .expect("append");
+
+        let items = store.items(provider_session_id);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id(), "item-1");
+        match &items[0] {
+            AiSessionTimelineItem::AiMessage { text, .. } => {
+                assert_eq!(text, "replacement");
+            }
+            other => panic!("unexpected item: {other:?}"),
+        }
+        let raw = std::fs::read_to_string(store.file_path(provider_session_id)).expect("stored");
+        let value: Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["providerSessionId"], provider_session_id);
+        assert_eq!(value["items"].as_array().expect("items").len(), 2);
+    }
+
+    #[test]
+    fn timeline_store_retains_only_owned_and_valid_records() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = AiSessionTimelineStore::from_directory(root.path().to_path_buf());
+        std::fs::create_dir_all(store.directory()).expect("directory");
+        store
+            .upsert("retained-thread", item("item-1", "turn-1", "retained"))
+            .expect("retained");
+        store
+            .upsert("orphaned-thread", item("item-2", "turn-1", "orphaned"))
+            .expect("orphaned");
+        let malformed_path = store.directory().join(format!("{}.json", "a".repeat(64)));
+        std::fs::write(&malformed_path, "{not-json").expect("malformed");
+        let unrelated_path = store.directory().join("notes.txt");
+        std::fs::write(&unrelated_path, "keep").expect("unrelated");
+
+        let removed = store
+            .retain(&HashSet::from(["retained-thread".to_string()]))
+            .expect("retain");
+
+        assert_eq!(removed, 2);
+        assert_eq!(store.items("retained-thread").len(), 1);
+        assert!(store.items("orphaned-thread").is_empty());
+        assert!(!malformed_path.exists());
+        assert!(unrelated_path.exists());
+    }
+
+    #[test]
+    fn timeline_schema_limits_count_unicode_code_points_like_zod() {
+        let activity = AiSessionTimelineItem::Activity {
+            id: "activity-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            activity_kind: "tool".to_string(),
+            title: "😀".repeat(240),
+            status: None,
+            summary: Some("😀".repeat(4_000)),
+            input: None,
+            output: None,
+            paths: None,
+            exit_code: None,
+            duration_ms: None,
+        };
+        assert!(sanitize_item(activity.clone()).is_some());
+
+        let too_long = AiSessionTimelineItem::Activity {
+            id: "activity-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            activity_kind: "tool".to_string(),
+            title: "😀".repeat(241),
+            status: None,
+            summary: Some("😀".repeat(4_000)),
+            input: None,
+            output: None,
+            paths: None,
+            exit_code: None,
+            duration_ms: None,
+        };
+        assert!(sanitize_item(too_long).is_none());
     }
 }

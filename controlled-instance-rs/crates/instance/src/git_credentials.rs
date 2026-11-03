@@ -420,14 +420,14 @@ impl GitCredentialBrokerInner {
 
     async fn release_ssh_invocation(&self, invocation_id: &str) -> bool {
         let invocation = self.lock_state().ssh_invocations.remove(invocation_id);
-        let Some(invocation) = invocation else {
-            return false;
-        };
-        cleanup_ssh_invocation(invocation);
+        let local_invocation = invocation.is_some();
+        if let Some(invocation) = invocation {
+            cleanup_ssh_invocation(invocation);
+        }
         if let Err(error) = self.node_agent_client.release_git_ssh(invocation_id).await {
             warn!(%error, %invocation_id, "failed to release managed Git SSH invocation");
         }
-        true
+        local_invocation
     }
 }
 
@@ -1161,6 +1161,41 @@ mod tests {
         assert_eq!(
             mock.released.lock().expect("released").as_slice(),
             ["gitssh_test"]
+        );
+        broker.close().await.expect("close");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ssh_release_always_notifies_the_node_agent_and_reports_local_presence() {
+        let (address, mock, server) = start_mock_node_agent("unused").await;
+        let root = test_tempdir();
+        let broker = GitCredentialBroker::new(
+            managed_client(address),
+            GitCredentialBrokerOptions {
+                socket_path: Some(root.path().join("broker.sock")),
+                runtime_dir: Some(root.path().to_path_buf()),
+            },
+        )
+        .expect("broker");
+        broker.start().await.expect("start broker");
+        assert_eq!(
+            broker_request_over_socket(
+                broker.socket_path(),
+                json!({
+                    "type": "ssh-prepare",
+                    "args": ["git@git.example.com", "git-upload-pack 'team/repo.git'"]
+                }),
+            )
+            .await["status"],
+            "ok"
+        );
+
+        assert!(broker.inner.release_ssh_invocation("gitssh_test").await);
+        assert!(!broker.inner.release_ssh_invocation("gitssh_test").await);
+        assert_eq!(
+            mock.released.lock().expect("released").as_slice(),
+            ["gitssh_test", "gitssh_test"]
         );
         broker.close().await.expect("close");
         server.abort();

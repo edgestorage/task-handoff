@@ -4,6 +4,7 @@ pub mod command_invocation;
 pub mod executable_resolver;
 mod log_retention;
 mod managed;
+mod managed_app_providers;
 mod managed_node_apps;
 mod management;
 mod profiles;

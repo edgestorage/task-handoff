@@ -380,7 +380,7 @@ impl NodeAgentClient {
                 encode_path(&instance_id),
                 encode_path(invocation_id)
             ),
-            None,
+            Some(json!({})),
         )
         .await?;
         Ok(())
@@ -933,7 +933,10 @@ fn project_register_for_node_agent_protocol(mut payload: Value, version: Option<
 
 fn project_heartbeat_for_node_agent_protocol(mut payload: Value, version: Option<&str>) -> Value {
     project_app_inventory_for_node_agent_protocol(&mut payload, version);
-    if version.is_some_and(|version| version < AI_SESSION_RENAME_PROTOCOL_VERSION) {
+    let supports_rename = version.is_some_and(|version| {
+        !version.is_empty() && version >= AI_SESSION_RENAME_PROTOCOL_VERSION
+    });
+    if !supports_rename {
         if let Some(sessions) = payload
             .get_mut("aiSessions")
             .and_then(|value| value.get_mut("sessions"))
@@ -950,7 +953,9 @@ fn project_heartbeat_for_node_agent_protocol(mut payload: Value, version: Option
 }
 
 fn project_app_inventory_for_node_agent_protocol(payload: &mut Value, version: Option<&str>) {
-    if version.is_none_or(|version| version >= APP_PROFILES_PROTOCOL_VERSION) {
+    let supports_profiles = version
+        .is_some_and(|version| !version.is_empty() && version >= APP_PROFILES_PROTOCOL_VERSION);
+    if supports_profiles {
         return;
     }
     if let Some(items) = payload
@@ -968,7 +973,11 @@ fn project_app_inventory_for_node_agent_protocol(payload: &mut Value, version: O
 }
 
 fn normalize_node_agent_url(input: &str) -> Result<String, NodeAgentClientError> {
-    let parsed = Url::parse(input.trim()).map_err(|_| NodeAgentClientError::InvalidNodeAgentUrl)?;
+    let input = input.trim();
+    if input.chars().count() > 2_048 {
+        return Err(NodeAgentClientError::InvalidNodeAgentUrl);
+    }
+    let parsed = Url::parse(input).map_err(|_| NodeAgentClientError::InvalidNodeAgentUrl)?;
     if !matches!(parsed.scheme(), "http" | "https")
         || !parsed.username().is_empty()
         || parsed.password().is_some()

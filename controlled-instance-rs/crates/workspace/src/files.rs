@@ -1,11 +1,15 @@
-use crate::{display_path, error::RepositoryOperationError, hash_id};
+use crate::{
+    config_sync::node_name_collator, display_path, error::RepositoryOperationError, hash_id,
+};
 use controlled_instance_protocol::{
     RepositoryDirectoryEntry, RepositoryDirectoryListing, RepositoryFileContent,
     RepositoryFileKind, RepositoryFileMode, RepositoryPathKind, RepositoryPathSearchEntry,
     RepositoryPathSearchResult,
 };
+use icu_collator::CollatorBorrowed;
 use sha2::{Digest, Sha256};
 use std::{
+    cmp::Ordering,
     collections::VecDeque,
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -106,7 +110,10 @@ impl RepositoryFileService {
                 mode: is_file.then(|| file_mode(&metadata)),
             });
         }
-        entries.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        let collator = node_name_collator().ok();
+        entries.sort_by(|left, right| {
+            compare_repository_names(collator.as_ref(), &left.name, &right.name)
+        });
         let snapshot_id = directory_version(&entries)?;
         Ok(RepositoryDirectoryListing {
             path: relative_path.to_string(),
@@ -128,6 +135,7 @@ impl RepositoryFileService {
             });
         }
         let mut entries = Vec::new();
+        let collator = node_name_collator().ok();
         let mut pending = VecDeque::from([(self.root.clone(), String::new())]);
         while let Some((directory, relative_directory)) = pending.pop_front() {
             let mut children = fs::read_dir(&directory)
@@ -135,10 +143,13 @@ impl RepositoryFileService {
                 .filter_map(Result::ok)
                 .collect::<Vec<_>>();
             children.sort_by(|left, right| {
-                left.file_name()
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .cmp(&right.file_name().to_string_lossy().to_lowercase())
+                let left = left.file_name();
+                let right = right.file_name();
+                compare_repository_names(
+                    collator.as_ref(),
+                    &left.to_string_lossy(),
+                    &right.to_string_lossy(),
+                )
             });
             for child in children {
                 let name = child.file_name().to_string_lossy().into_owned();
@@ -151,9 +162,7 @@ impl RepositoryFileService {
                     format!("{relative_directory}/{name}")
                 };
                 let absolute_path = child.path();
-                let Ok(metadata) = fs::symlink_metadata(&absolute_path) else {
-                    continue;
-                };
+                let metadata = fs::symlink_metadata(&absolute_path).map_err(file_io_error)?;
                 let kind = self.kind(&absolute_path, &metadata);
                 let searchable = match kind {
                     RepositoryFileKind::File => Some(RepositoryPathKind::File),
@@ -477,6 +486,16 @@ fn is_windows_absolute(value: &str) -> bool {
         && matches!(bytes[2], b'/' | b'\\')
 }
 
+fn compare_repository_names(
+    collator: Option<&CollatorBorrowed<'_>>,
+    left: &str,
+    right: &str,
+) -> Ordering {
+    collator
+        .map(|collator| collator.compare(left, right))
+        .unwrap_or_else(|| left.to_lowercase().cmp(&right.to_lowercase()))
+}
+
 pub fn within_root(candidate: &Path, root: &Path) -> bool {
     let Ok(relative) = candidate.strip_prefix(root) else {
         return false;
@@ -602,5 +621,32 @@ mod tests {
             .any(|entry| entry.path == "README.md"));
         let search = service.search("read", 100).expect("search");
         assert_eq!(search.entries[0].path, "README.md");
+    }
+
+    #[test]
+    fn listings_and_searches_use_node_locale_ordering() {
+        let root = tempfile::tempdir().expect("tempdir");
+        for name in ["z-file", "É-file", "a-file", "10-file", "2-file"] {
+            fs::write(root.path().join(name), "").expect("file");
+        }
+        let service = RepositoryFileService::new(root.path(), None, None).expect("service");
+        let listing = service.list("").expect("list");
+        assert_eq!(
+            listing
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["10-file", "2-file", "a-file", "É-file", "z-file"]
+        );
+        let search = service.search("-file", 100).expect("search");
+        assert_eq!(
+            search
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["10-file", "2-file", "a-file", "É-file", "z-file"]
+        );
     }
 }

@@ -6,7 +6,10 @@ use std::{
 };
 
 use chrono::{SecondsFormat, Utc};
-use controlled_instance_core::atomic::{read_json, write_json_atomic};
+use controlled_instance_core::{
+    atomic::{read_json, write_json_atomic},
+    text::truncate_utf16_tail,
+};
 use controlled_instance_protocol::{
     mint_entity_id, AppManagementCommand, AppManagementError, AppManagementEvent, AppManagementJob,
     AppManagementJobState, AppManagementOperation, AppManagementOperationRequest,
@@ -32,6 +35,23 @@ const ACTIVE_STATES: [AppManagementJobState; 2] = [
     AppManagementJobState::Running,
 ];
 const JOB_LOG_LIMIT: usize = 32_768;
+const JOB_FIELDS: [&str; 15] = [
+    "id",
+    "requestId",
+    "appId",
+    "operation",
+    "state",
+    "phase",
+    "progress",
+    "command",
+    "logTail",
+    "logTruncated",
+    "error",
+    "requestedAt",
+    "startedAt",
+    "finishedAt",
+    "updatedAt",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppManagementRequestError {
@@ -343,9 +363,11 @@ impl AppManagementManager {
         operation: AppManagementOperation,
         input: AppManagementOperationRequest,
     ) -> Result<AppManagementJob, AppManagementRequestError> {
-        if let Some(request_id) = input.request_id.as_deref() {
-            validate_request_id(request_id)?;
-        }
+        let request_id = input
+            .request_id
+            .as_deref()
+            .map(normalize_request_id)
+            .transpose()?;
         self.refresh_snapshot(false).await;
         let definitions = (self.definitions)();
         let definition = definitions
@@ -360,7 +382,7 @@ impl AppManagementManager {
                 )
             })?;
         let mut state = self.lock();
-        if let Some(request_id) = input.request_id.as_deref() {
+        if let Some(request_id) = request_id.as_deref() {
             if let Some(prior) = state
                 .jobs
                 .values()
@@ -462,7 +484,7 @@ impl AppManagementManager {
         let timestamp = now();
         let job = AppManagementJob {
             id: mint_entity_id("appjob"),
-            request_id: input.request_id,
+            request_id,
             app_id: app_id.to_string(),
             operation,
             state: AppManagementJobState::Queued,
@@ -906,10 +928,9 @@ fn append_job_log(job: &mut AppManagementJob, value: &str) {
         job.log_tail.as_deref().unwrap_or_default(),
         sanitize_output(value)
     );
-    let chars = combined.chars().collect::<Vec<_>>();
-    let truncated = chars.len() > JOB_LOG_LIMIT;
+    let truncated = combined.encode_utf16().count() > JOB_LOG_LIMIT;
     job.log_tail = Some(if truncated {
-        chars[chars.len() - JOB_LOG_LIMIT..].iter().collect()
+        truncate_utf16_tail(&combined, JOB_LOG_LIMIT)
     } else {
         combined
     });
@@ -974,12 +995,13 @@ fn operation_name(operation: AppManagementOperation) -> &'static str {
     }
 }
 
-fn validate_request_id(value: &str) -> Result<(), AppManagementRequestError> {
-    if value.len() < 3
-        || value.len() > 160
-        || !value.starts_with(|character: char| character.is_ascii_lowercase())
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+fn normalize_request_id(value: &str) -> Result<String, AppManagementRequestError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 120
+        || !value.starts_with(|character: char| character.is_ascii_alphanumeric())
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | ':' | '-')
         })
     {
         return Err(AppManagementRequestError::new(
@@ -988,7 +1010,7 @@ fn validate_request_id(value: &str) -> Result<(), AppManagementRequestError> {
             400,
         ));
     }
-    Ok(())
+    Ok(value.to_string())
 }
 
 fn jobs_path(state_dir: &Path) -> PathBuf {
@@ -997,20 +1019,63 @@ fn jobs_path(state_dir: &Path) -> PathBuf {
 
 fn load_jobs(state_dir: &Path, warn: &Warning) -> BTreeMap<String, AppManagementJob> {
     let path = jobs_path(state_dir);
-    let Ok(stored) = read_json::<StoredJobs>(&path) else {
-        if path.exists() {
-            warn("App management job store could not be read; invalid jobs were ignored.");
+    let stored = match read_json::<Value>(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(error) => {
+            warn(&format!(
+                "App management job store could not be read: {error}"
+            ));
+            return BTreeMap::new();
         }
+    };
+    let Some(source) = stored.as_object() else {
         return BTreeMap::new();
     };
-    if stored.schema_version != 1 {
-        warn("App management job store has an unsupported schema version.");
+    if source
+        .keys()
+        .any(|key| !matches!(key.as_str(), "schemaVersion" | "jobs"))
+    {
+        warn("App management job store contains unknown top-level fields; they were ignored.");
     }
-    stored
-        .jobs
-        .into_iter()
-        .map(|job| (job.id.clone(), job))
-        .collect()
+    let Some(candidates) = source.get("jobs").and_then(Value::as_array) else {
+        return BTreeMap::new();
+    };
+    let mut jobs = BTreeMap::new();
+    for candidate in candidates {
+        let Some(record) = candidate.as_object() else {
+            warn("An invalid app management job was ignored.");
+            continue;
+        };
+        let id = record
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .unwrap_or("unknown");
+        if record.keys().any(|key| !JOB_FIELDS.contains(&key.as_str())) {
+            warn(&format!(
+                "App management job {id} contains unknown fields; they were ignored."
+            ));
+        }
+        let sanitized = JOB_FIELDS
+            .iter()
+            .filter_map(|field| {
+                record
+                    .get(*field)
+                    .map(|value| ((*field).to_string(), value.clone()))
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let parsed = serde_json::from_value::<AppManagementJob>(Value::Object(sanitized));
+        match parsed {
+            Ok(job) => {
+                jobs.insert(job.id.clone(), job);
+            }
+            Err(_) => warn(&format!(
+                "App management job {id} is invalid and was ignored."
+            )),
+        }
+    }
+    jobs
 }
 
 fn persist_jobs(state_dir: &Path, jobs: &BTreeMap<String, AppManagementJob>, warn: &Warning) {
@@ -1110,6 +1175,81 @@ mod tests {
                     Some(InstallRecipe::Bundled { .. })
                 )
         }));
+    }
+
+    #[test]
+    fn request_ids_use_the_node_trimmed_wire_contract() {
+        assert_eq!(
+            normalize_request_id("  Install-1.v2:retry  ").expect("valid request id"),
+            "Install-1.v2:retry"
+        );
+        for invalid in ["", " ", "-leading", "contains space", &"a".repeat(121)] {
+            let error = normalize_request_id(invalid).expect_err("invalid request id");
+            assert_eq!(error.code, "app_management_input_invalid");
+        }
+    }
+
+    #[test]
+    fn job_store_sanitizes_each_entry_and_keeps_valid_jobs() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let valid = serde_json::json!({
+            "id": "appjob_valid_00000000000",
+            "appId": "terminal-tty",
+            "operation": "install",
+            "state": "running",
+            "requestedAt": "2026-11-03T00:00:00.000Z",
+            "updatedAt": "2026-11-03T00:00:01.000Z"
+        });
+        let unknown_field = serde_json::json!({
+            "id": "appjob_unknown_00000000",
+            "appId": "terminal-tty",
+            "operation": "install",
+            "state": "queued",
+            "requestedAt": "2026-11-03T00:00:00.000Z",
+            "updatedAt": "2026-11-03T00:00:00.000Z",
+            "ignoredField": true
+        });
+        let invalid = serde_json::json!({
+            "id": "appjob_invalid_00000000",
+            "appId": "terminal-tty",
+            "operation": "install",
+            "state": "finished",
+            "requestedAt": "2026-11-03T00:00:00.000Z",
+            "updatedAt": "2026-11-03T00:00:00.000Z"
+        });
+        std::fs::write(
+            jobs_path(temporary.path()),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 2,
+                "ignoredTopLevelField": true,
+                "jobs": [valid, unknown_field, invalid, 7]
+            }))
+            .expect("jobs json"),
+        )
+        .expect("jobs file");
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let collected = warnings.clone();
+        let warn: Warning = Arc::new(move |message| {
+            collected
+                .lock()
+                .expect("warnings")
+                .push(message.to_string());
+        });
+
+        let jobs = load_jobs(temporary.path(), &warn);
+
+        assert_eq!(
+            jobs.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "appjob_unknown_00000000".to_string(),
+                "appjob_valid_00000000000".to_string()
+            ]
+        );
+        let warnings = warnings.lock().expect("warnings").join("\n");
+        assert!(warnings.contains("unknown top-level fields"));
+        assert!(warnings.contains("appjob_unknown_00000000 contains unknown fields"));
+        assert!(warnings.contains("appjob_invalid_00000000 is invalid"));
+        assert!(warnings.contains("An invalid app management job was ignored."));
     }
 
     #[tokio::test]

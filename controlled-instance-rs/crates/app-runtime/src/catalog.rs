@@ -4,14 +4,17 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
+use crate::managed_app_providers::{managed_app_provider, managed_app_runtime_provider};
 use crate::AppRuntimeError;
 use crate::InstallRecipe;
 use crate::{
     command_invocation::{resolve_command_executable, CommandInvocationOptions},
-    executable_resolver::ExecutableResolverOptions,
+    executable_resolver::{
+        resolve_executable as resolve_executable_resolution, ExecutableResolverOptions,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +45,6 @@ pub struct AppCatalogRepository {
     managed_app_root: Option<Arc<PathBuf>>,
     managed_app_ids: Arc<BTreeSet<String>>,
     mutation: Arc<Mutex<()>>,
-    cache: Arc<RwLock<Option<Vec<CatalogEntry>>>>,
 }
 
 impl std::fmt::Debug for AppCatalogRepository {
@@ -78,7 +80,6 @@ impl AppCatalogRepository {
             managed_app_root: managed_app_root.map(Arc::new),
             managed_app_ids: Arc::new(managed_app_ids),
             mutation: Arc::new(Mutex::new(())),
-            cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -92,12 +93,7 @@ impl AppCatalogRepository {
         self.custom_path.as_path()
     }
 
-    pub fn invalidate(&self) {
-        *self
-            .cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    }
+    pub fn invalidate(&self) {}
 
     pub fn load_custom(&self) -> Result<CustomAppCatalog, AppRuntimeError> {
         let raw = match read_json::<Value>(&self.custom_path) {
@@ -105,7 +101,7 @@ impl AppCatalogRepository {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(CustomAppCatalog::default())
             }
-            Err(error) => return Err(AppRuntimeError::storage(error.to_string())),
+            Err(error) => return Err(AppRuntimeError::catalog_invalid(error.to_string())),
         };
         let catalog = sanitize_custom_catalog(raw).map_err(AppRuntimeError::catalog_invalid)?;
         validate_custom_catalog(&catalog)?;
@@ -129,6 +125,7 @@ impl AppCatalogRepository {
     }
 
     pub fn save_custom(&self, value: Value) -> Result<CustomAppCatalog, AppRuntimeError> {
+        validate_custom_catalog_wire(&value).map_err(AppRuntimeError::catalog_invalid)?;
         let catalog = sanitize_custom_catalog(value).map_err(AppRuntimeError::catalog_invalid)?;
         validate_custom_catalog(&catalog)?;
         let _guard = self
@@ -142,27 +139,23 @@ impl AppCatalogRepository {
     }
 
     pub fn entries(&self) -> Vec<CatalogEntry> {
-        if let Some(cached) = self
-            .cache
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        {
-            return cached;
-        }
+        let (custom, _) = self.safe_custom();
+        self.merged_entries(custom)
+    }
+
+    fn merged_entries(&self, custom: CustomAppCatalog) -> Vec<CatalogEntry> {
         let mut merged = Vec::<(AppCatalogItem, AppSource)>::new();
         let mut seen = BTreeSet::new();
         for app in builtin_app_catalog() {
             seen.insert(app.id.clone());
             merged.push((app, AppSource::Builtin));
         }
-        let (custom, _) = self.safe_custom();
         for app in custom.items {
             if seen.insert(app.id.clone()) {
                 merged.push((app, AppSource::Custom));
             }
         }
-        let entries = merged
+        merged
             .into_iter()
             .map(|(app, source)| {
                 resolve_entry(
@@ -172,12 +165,7 @@ impl AppCatalogRepository {
                     &self.managed_app_ids,
                 )
             })
-            .collect::<Vec<_>>();
-        *self
-            .cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(entries.clone());
-        entries
+            .collect()
     }
 
     pub fn catalog(&self) -> Vec<AppCatalogItem> {
@@ -195,20 +183,33 @@ impl AppCatalogRepository {
     }
 
     pub fn inventory(&self) -> controlled_instance_protocol::AppInventorySnapshot {
-        let entries = self.entries();
-        let (_, error) = self.safe_custom();
+        let (custom, error) = self.safe_custom();
+        let entries = self.merged_entries(custom);
         let items = entries
             .into_iter()
             .map(|entry| {
                 let app = &entry.app;
+                let provider = if entry.source == AppSource::Builtin {
+                    managed_app_provider(&app.id)
+                } else {
+                    managed_app_runtime_provider(app)
+                };
                 let mut capabilities = serde_json::Map::from_iter([
                     (
                         "supportsCwdSelection".to_string(),
-                        Value::Bool(app.kind == AppKind::Tty && entry.source == AppSource::Builtin),
+                        Value::Bool(
+                            entry.source == AppSource::Builtin
+                                && provider.is_some_and(|provider| {
+                                    provider.capabilities.supports_cwd_selection
+                                }),
+                        ),
                     ),
                     (
                         "supportsProfiles".to_string(),
-                        Value::Bool(app.id == "chromium"),
+                        Value::Bool(
+                            provider
+                                .is_some_and(|provider| provider.capabilities.supports_profiles),
+                        ),
                     ),
                 ]);
                 if let Some(automation) = app.automation.as_ref() {
@@ -295,15 +296,13 @@ fn resolve_entry(
     } else {
         None
     };
-    let managed = managed_app_root.is_some() && managed_id.is_some();
-    if managed {
-        let root = managed_app_root.expect("managed root checked above");
+    if let (Some(root), Some(managed_id)) = (managed_app_root, managed_id.as_deref()) {
         let bin = root
             .join("node-package")
-            .join(managed_id.as_ref().expect("managed id"))
+            .join(managed_id)
             .join("node_modules")
             .join(".bin");
-        let candidate = bin.join(managed_id.as_ref().expect("managed id"));
+        let candidate = bin.join(managed_id);
         let existing = launcher_env
             .get("PATH")
             .cloned()
@@ -329,13 +328,31 @@ fn resolve_entry(
             executable,
         };
     }
-    let executable = app
+    let mut environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    environment.extend(launcher_env.clone());
+    let options = ExecutableResolverOptions {
+        env: environment,
+        cwd: app
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        ..ExecutableResolverOptions::default()
+    };
+    let resolution = app
         .command
         .as_deref()
-        .and_then(|command| resolve_executable(command, &launcher_env, app.cwd.as_deref()));
+        .and_then(|command| resolve_executable_resolution(command.trim(), &options));
+    let executable = resolution
+        .as_ref()
+        .map(|resolution| resolution.executable.clone());
     if let Some(path) = &executable {
         app.command = Some(path.display().to_string());
-        app.env = Some(launcher_env);
+        let mut resolved_env = launcher_env;
+        if let Some(resolution) = resolution {
+            resolved_env.extend(resolution.env);
+        }
+        app.env = Some(resolved_env);
     }
     CatalogEntry {
         app,
@@ -397,6 +414,67 @@ fn sanitize_custom_catalog(value: Value) -> Result<CustomAppCatalog, String> {
         schema_version,
         items,
     })
+}
+
+fn validate_custom_catalog_wire(value: &Value) -> Result<(), String> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| "Custom app catalog must be an object.".to_string())?;
+    reject_unknown_keys(root, &["schemaVersion", "items"], "")?;
+    let Some(items) = root.get("items") else {
+        return Ok(());
+    };
+    let items = items
+        .as_array()
+        .ok_or_else(|| "Custom app catalog items must be an array.".to_string())?;
+    for (index, item) in items.iter().enumerate() {
+        let item = item
+            .as_object()
+            .ok_or_else(|| format!("items[{index}]: expected object"))?;
+        reject_unknown_keys(
+            item,
+            &[
+                "id",
+                "name",
+                "kind",
+                "description",
+                "command",
+                "args",
+                "cwd",
+                "env",
+                "display",
+                "defaultDisplayTarget",
+                "automation",
+                "web",
+            ],
+            &format!("items[{index}]."),
+        )?;
+        for (key, fields) in [
+            ("display", &["width", "height", "depth"][..]),
+            ("defaultDisplayTarget", &["mode", "id", "autoCreate"][..]),
+            ("automation", &["type", "portArg", "endpointPath"][..]),
+            ("web", &["portArg", "readyPath"][..]),
+        ] {
+            if let Some(value) = item.get(key) {
+                let nested = value
+                    .as_object()
+                    .ok_or_else(|| format!("items[{index}].{key}: expected object"))?;
+                reject_unknown_keys(nested, fields, &format!("items[{index}].{key}."))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_unknown_keys(
+    object: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    prefix: &str,
+) -> Result<(), String> {
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("{prefix}{key}: Unrecognized key: \"{key}\""));
+    }
+    Ok(())
 }
 
 fn sanitize_custom_item(value: Value) -> Value {
@@ -497,15 +575,16 @@ fn validate_app_catalog_item(item: &AppCatalogItem) -> Result<(), String> {
     {
         return Err("Custom app description is invalid.".to_string());
     }
-    if let Some(command) = &item.command {
-        if command.is_empty()
-            || command.chars().count() > 512
-            || command
-                .chars()
-                .any(|character| character.is_whitespace() || ";|&<>`$".contains(character))
-        {
-            return Err("Custom app command must be a single executable path or name.".to_string());
-        }
+    let Some(command) = &item.command else {
+        return Err("Custom app command is required.".to_string());
+    };
+    if command.is_empty()
+        || command.chars().count() > 512
+        || command
+            .chars()
+            .any(|character| character.is_whitespace() || ";|&<>`$".contains(character))
+    {
+        return Err("Custom app command must be a single executable path or name.".to_string());
     }
     if item
         .args
@@ -643,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_catalog_rejects_builtin_ids_and_ignores_unknown_fields() {
+    fn custom_catalog_rejects_builtin_ids_and_unknown_fields() {
         let root = tempfile::tempdir().expect("tempdir");
         let repository = AppCatalogRepository::new(root.path());
         let error = repository
@@ -654,10 +733,18 @@ mod tests {
             .expect_err("builtin collision");
         assert_eq!(error.code(), "APP_CATALOG_INVALID");
 
-        let saved = repository
+        let error = repository
             .save_custom(json!({
                 "schemaVersion": 1,
                 "items": [{ "id": "my-shell", "name": "Mine", "kind": "tty", "command": "sh", "unknown": true }]
+            }))
+            .expect_err("unknown fields are rejected on save");
+        assert_eq!(error.code(), "APP_CATALOG_INVALID");
+
+        let saved = repository
+            .save_custom(json!({
+                "schemaVersion": 1,
+                "items": [{ "id": "my-shell", "name": "Mine", "kind": "tty", "command": "sh" }]
             }))
             .expect("custom catalog");
         assert_eq!(saved.items[0].id, "my-shell");
@@ -700,7 +787,74 @@ mod tests {
         );
         assert_eq!(issue.expect("catalog issue")["code"], "APP_CATALOG_INVALID");
         assert!(repository.find("recovered-app").is_some());
-        assert_eq!(repository.inventory().issues.len(), 1);
+        let inventory = repository.inventory();
+        assert_eq!(inventory.issues.len(), 1);
+        assert!(inventory
+            .items
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some("recovered-app")));
+    }
+
+    #[test]
+    fn custom_catalog_requires_an_executable_command() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let repository = AppCatalogRepository::new(root.path());
+        let error = repository
+            .save_custom(json!({
+                "schemaVersion": 1,
+                "items": [{ "id": "missing-command", "name": "Missing", "kind": "tty" }]
+            }))
+            .expect_err("command must be required");
+        assert_eq!(error.code(), "APP_CATALOG_INVALID");
+    }
+
+    #[test]
+    fn executable_availability_refreshes_without_invalidating_the_catalog() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let repository = AppCatalogRepository::new(root.path());
+        repository
+            .save_custom(json!({
+                "schemaVersion": 1,
+                "items": [{
+                    "id": "dynamic-app",
+                    "name": "Dynamic",
+                    "kind": "tty",
+                    "command": "dynamic-app",
+                    "env": { "PATH": bin.display().to_string() }
+                }]
+            }))
+            .expect("custom catalog");
+        assert!(repository
+            .find("dynamic-app")
+            .expect("catalog entry")
+            .executable
+            .is_none());
+
+        let executable = bin.join("dynamic-app");
+        std::fs::write(&executable, "#!/bin/sh\n").expect("executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+                .expect("permissions");
+        }
+
+        assert_eq!(
+            repository
+                .find("dynamic-app")
+                .expect("refreshed entry")
+                .executable,
+            Some(executable)
+        );
+        let inventory = repository.inventory();
+        let item = inventory
+            .items
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some("dynamic-app"))
+            .expect("inventory item");
+        assert_eq!(item.get("availability"), Some(&json!("available")));
     }
 
     #[test]
@@ -733,6 +887,26 @@ mod tests {
         assert!(vscode["capabilities"].get("automation").is_none());
         assert!(vscode.get("diagnosticCode").is_some());
         assert_ne!(vscode.get("diagnosticCode"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn inventory_capabilities_come_from_managed_app_providers() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let inventory = AppCatalogRepository::new(root.path()).inventory();
+        let capabilities = |id: &str| {
+            inventory
+                .items
+                .iter()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+                .expect("inventory item")["capabilities"]
+                .clone()
+        };
+
+        assert_eq!(capabilities("terminal-tty")["supportsCwdSelection"], true);
+        assert_eq!(capabilities("codex")["supportsCwdSelection"], true);
+        assert_eq!(capabilities("terminal-gui")["supportsCwdSelection"], false);
+        assert_eq!(capabilities("chromium")["supportsProfiles"], true);
+        assert_eq!(capabilities("terminal-gui")["supportsProfiles"], false);
     }
 
     #[test]

@@ -92,6 +92,7 @@ pub fn ai_session_transient_subscription_accepts(
         .payload
         .get("instanceId")
         .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
         .or_else(|| {
             event
                 .scope

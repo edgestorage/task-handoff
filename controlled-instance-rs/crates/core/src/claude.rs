@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    env,
+    env, fs,
     path::{Component, Path, PathBuf},
 };
 
@@ -19,6 +19,73 @@ pub fn control_socket_path(environment: &BTreeMap<String, String>) -> PathBuf {
         return PathBuf::from(path);
     }
     control_socket_dir(environment).join("control.sock")
+}
+
+pub fn find_claude_transcript_path(session_id: &str, cwd: Option<&str>) -> Option<PathBuf> {
+    let claude_home = claude_home_from_env()?;
+    find_claude_transcript_path_in(&claude_home, session_id, cwd)
+}
+
+pub fn claude_home_from_env() -> Option<PathBuf> {
+    env::var_os("CLAUDE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".claude"))
+        })
+}
+
+pub fn claude_sessions_dir(claude_home: &Path) -> PathBuf {
+    claude_home.join("sessions")
+}
+
+pub fn find_claude_transcript_path_in(
+    claude_home: &Path,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> Option<PathBuf> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let projects_dir = claude_home.join("projects");
+    if let Some(cwd) = cwd.map(str::trim).filter(|value| !value.is_empty()) {
+        let project_dir = absolute_lexical_path(Path::new(cwd));
+        let project_name = project_dir.to_string_lossy().replace(['\\', '/'], "-");
+        let candidate = projects_dir
+            .join(project_name)
+            .join(format!("{session_id}.jsonl"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let mut pending = vec![projects_dir];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file()
+                && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.contains(session_id))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn control_socket_dir(environment: &BTreeMap<String, String>) -> PathBuf {
@@ -112,5 +179,28 @@ mod tests {
             .expect("hash");
         assert_eq!(hash.len(), 8);
         assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn transcript_lookup_prefers_the_cwd_project_and_falls_back_to_a_scan() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().join(".claude");
+        let project = home.join("projects").join("-workspace");
+        std::fs::create_dir_all(&project).expect("project");
+        let direct = project.join("session-id.jsonl");
+        std::fs::write(&direct, b"{}\n").expect("transcript");
+        assert_eq!(
+            find_claude_transcript_path_in(&home, "session-id", Some("/workspace")),
+            Some(direct)
+        );
+
+        let fallback_project = home.join("projects").join("other");
+        std::fs::create_dir_all(&fallback_project).expect("fallback project");
+        let fallback = fallback_project.join("fallback-session.jsonl");
+        std::fs::write(&fallback, b"{}\n").expect("fallback transcript");
+        assert_eq!(
+            find_claude_transcript_path_in(&home, "fallback-session", Some("/missing")),
+            Some(fallback)
+        );
     }
 }

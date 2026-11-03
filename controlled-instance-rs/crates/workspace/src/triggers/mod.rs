@@ -11,10 +11,10 @@ pub use executor::{
 };
 pub use manager::{TriggerExecutionEvent, TriggerManager, TriggerPublisher};
 pub use matcher::{
-    default_ignored, normalize_lexical, root_within_workspace, workspace_relative_path,
-    FileTriggerMatcher,
+    default_ignored, normalize_lexical, path_within, resolve_path, root_within_workspace,
+    workspace_relative_path, FileTriggerMatcher,
 };
-pub use schedule::{delay_until, next_schedule_time};
+pub use schedule::{delay_until, next_schedule_time, ScheduleError};
 pub use scheduler::{
     QueuedExecution, Scheduler, SchedulerSkipReason, SubmitDecision, MAX_QUEUED_PER_TRIGGER,
 };

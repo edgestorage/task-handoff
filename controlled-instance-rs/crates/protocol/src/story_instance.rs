@@ -35,12 +35,12 @@ pub struct StoryAutomationInstanceCreateInput {
 
 impl StoryAutomationInstanceCreateInput {
     pub fn validate(&self) -> Result<(), String> {
-        if !matches!(self.agent.as_str(), "codex" | "claude" | "opencode") {
+        if self.agent.trim().is_empty() || self.agent.trim().chars().count() > 80 {
             return Err("agent is invalid.".to_string());
         }
         if self.cwd.runtime_path_type != "runtime-path"
             || self.cwd.path.trim().is_empty()
-            || self.cwd.path.len() > 4096
+            || self.cwd.path.chars().count() > 4096
             || !self.cwd.path.starts_with('/')
         {
             return Err("cwd must be an absolute runtime-path.".to_string());
@@ -48,10 +48,12 @@ impl StoryAutomationInstanceCreateInput {
         if self.message.trim().is_empty() || self.message.chars().count() > 32_000 {
             return Err("message must be between 1 and 32000 characters.".to_string());
         }
-        if self.client_request_id.trim().is_empty() || self.client_request_id.len() > 160 {
+        if self.client_request_id.trim().is_empty()
+            || self.client_request_id.trim().chars().count() > 160
+        {
             return Err("clientRequestId must be between 1 and 160 characters.".to_string());
         }
-        if self.story_id.trim().is_empty() || self.story_id.len() > 160 {
+        if self.story_id.trim().is_empty() || self.story_id.trim().chars().count() > 120 {
             return Err("storyId is invalid.".to_string());
         }
         if self.git_selection.is_some() && self.workspace_selection.is_some() {
@@ -74,13 +76,15 @@ impl StoryAutomationInstanceCreateInput {
         }
         if let Some(selection) = &self.model_selection {
             if selection.model_entity_id.trim().is_empty()
-                || selection.model_entity_id.len() > 120
+                || selection.model_entity_id.chars().count() > 120
                 || selection.model_name.trim().is_empty()
-                || selection.model_name.len() > 240
+                || selection.model_name.chars().count() > 240
                 || selection
                     .model_upstream_name
                     .as_deref()
-                    .is_some_and(|value| value.trim().is_empty() || value.len() > 240)
+                    .is_some_and(|value| {
+                        value.trim().is_empty() || value.trim().chars().count() > 240
+                    })
             {
                 return Err("modelSelection is invalid.".to_string());
             }
@@ -119,6 +123,16 @@ mod tests {
         invalid.git_selection = Some(json!({ "mode": "current-folder", "branch": "main" }));
         invalid.workspace_selection = Some(json!({ "type": "current-folder", "branch": "main" }));
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn story_automation_uses_the_node_story_id_and_codepoint_limits() {
+        let mut input = input();
+        input.client_request_id = "😀".repeat(160);
+        input.story_id = "😀".repeat(120);
+        assert_eq!(input.validate(), Ok(()));
+        input.story_id = "😀".repeat(121);
+        assert!(input.validate().is_err());
     }
 
     #[test]

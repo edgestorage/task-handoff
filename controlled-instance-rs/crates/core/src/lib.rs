@@ -8,3 +8,4 @@ pub mod paths;
 pub mod process;
 pub mod reconnect;
 pub mod singleton_lock;
+pub mod text;

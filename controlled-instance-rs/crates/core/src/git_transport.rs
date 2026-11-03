@@ -1,5 +1,3 @@
-use url::Url;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitSshInvocation {
     pub remote: String,
@@ -23,10 +21,7 @@ pub fn remote_from_https_credential_request(
 }
 
 pub fn parse_git_ssh_invocation(args: &[String]) -> Option<GitSshInvocation> {
-    if args
-        .iter()
-        .any(|argument| argument.is_empty() || argument.contains('\0'))
-    {
+    if args.iter().any(|argument| argument.contains('\0')) {
         return None;
     }
     let mut host_argument = None;
@@ -83,15 +78,32 @@ pub fn parse_git_ssh_invocation(args: &[String]) -> Option<GitSshInvocation> {
         Some(port) => format!("{host}:{port}"),
         None => host,
     };
-    let mut remote = Url::parse(&format!("ssh://{authority}/")).ok()?;
-    remote.set_path(&format!("/{}", repository.trim_start_matches('/')));
+    let repository = encode_uri_component(repository.trim_start_matches('/'));
+    let remote = format!("ssh://{authority}/{repository}");
     let mut sanitized = safe_options;
     sanitized.push(host_argument);
     sanitized.push(format!("{service} {}", shell_single_quote(&repository)));
     Some(GitSshInvocation {
-        remote: remote.to_string(),
+        remote,
         args: sanitized,
     })
+}
+
+fn encode_uri_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                *byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' | b'/'
+            )
+        {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 pub fn shell_single_quote(value: &str) -> String {
@@ -208,6 +220,15 @@ mod tests {
             .remote,
             "ssh://git.example.com/team/repo's.git"
         );
+        assert_eq!(
+            parse_git_ssh_invocation(&args(&[
+                "git@git.example.com",
+                "git-upload-pack 'team/repo@v1+beta:prod.git'"
+            ]))
+            .expect("encoded repository")
+            .remote,
+            "ssh://git.example.com/team/repo%40v1%2Bbeta%3Aprod.git"
+        );
     }
 
     #[test]
@@ -231,5 +252,9 @@ mod tests {
             "git-upload-pack 'repo.git'"
         ]))
         .is_none());
+        assert!(
+            parse_git_ssh_invocation(&args(&["", "git-upload-pack 'repo.git'"])).is_none(),
+            "empty host arguments are rejected by host parsing"
+        );
     }
 }

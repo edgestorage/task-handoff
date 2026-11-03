@@ -2,17 +2,19 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use controlled_instance_ai_session::ClaudeControlClient;
 use controlled_instance_core::{
     atomic::{read_json, write_json_atomic},
     paths::StoragePaths,
+    text::truncate_utf16,
 };
 use controlled_instance_protocol::{
     mint_entity_id, AppCatalogItem, AppDisplayMode, AppDisplayOptions, AppDisplayTarget, AppKind,
     AppLaunchOptions, AppProfile, AppProfileList, AppSession, AppSessionAutomation,
-    AppSessionDisplay, AppSessionPaths, AppSessionProcess, AppSessionTty, AppSessionVnc,
-    AppSessionWeb, AppSessionWorkspace as WireAppSessionWorkspace, AppSessionsSnapshot,
+    AppSessionBinding, AppSessionDisplay, AppSessionPaths, AppSessionProcess, AppSessionTty,
+    AppSessionVnc, AppSessionWeb, AppSessionWorkspace as WireAppSessionWorkspace,
+    AppSessionsSnapshot,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -22,14 +24,14 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
 };
 use thiserror::Error;
 use tokio::{
     process::{Child, Command},
-    sync::{broadcast, oneshot},
+    sync::{broadcast, oneshot, watch},
 };
 use tracing::{debug, warn};
 
@@ -46,10 +48,15 @@ use crate::{
         attach_child_logs, enforce_instance_log_budget, RotatingLogWriter,
         DEFAULT_APP_SESSION_LOG_BUDGET_BYTES,
     },
+    managed_app_providers::{
+        managed_app_provider, managed_app_runtime_provider, ManagedAppGuiRuntime,
+        ManagedAppTtyRuntime, ManagedAppWebRuntime,
+    },
     profiles::{profile_view, ChromiumProfileStore},
     pty::{
-        process_group_exists, terminate_pid, terminate_process_group, terminate_process_groups,
-        PtyHandle,
+        kill_process_groups, request_stop_process_groups, terminate_process_group,
+        terminate_process_groups, wait_process_groups, PtyHandle, PROCESS_KILL_TIMEOUT,
+        PROCESS_STOP_TIMEOUT,
     },
     terminal_screen::{TerminalScreenSnapshot, TerminalScreenState},
 };
@@ -69,16 +76,18 @@ pub struct AppProfileLocation {
     pub is_default: bool,
 }
 
-const APP_KILL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-const APP_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DEFAULT_TTY_COLS: u16 = 120;
 const DEFAULT_TTY_ROWS: u16 = 32;
+const DISPLAY_START: u32 = 101;
+const DISPLAY_END: u32 = 199;
+const SCREENSHOT_MAX_BYTES: usize = 20 * 1024 * 1024;
 const CLEANABLE_SESSION_STATUSES: [&str; 3] = ["stopped", "exited", "failed"];
 const DEFAULT_SESSION_RETENTION_DAYS: f64 = 7.0;
 const MAINTENANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 const SHARED_OPENCODE_CONSUMER: &str = "__shared_opencode_server__";
 const SHARED_CODEX_CONSUMER: &str = "__shared_codex_app_server__";
 pub const SHARED_CODEX_APP_SESSION_ID: &str = "__shared_codex_app_server__";
+static TTY_ATTACHMENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn command_options(cwd: &Path, env: &BTreeMap<String, String>) -> CommandInvocationOptions {
     CommandInvocationOptions::from(ExecutableResolverOptions {
@@ -109,6 +118,23 @@ fn merge_app_environment(
         env.insert("TERM".to_string(), "xterm-256color".to_string());
     }
     env
+}
+
+async fn stop_process_groups_with_escalation(pids: Vec<u32>) -> Vec<u32> {
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let fallback = pids.clone();
+    tokio::task::spawn_blocking(move || {
+        let remaining = wait_process_groups(&pids, PROCESS_STOP_TIMEOUT);
+        if remaining.is_empty() {
+            return remaining;
+        }
+        kill_process_groups(&remaining);
+        wait_process_groups(&remaining, PROCESS_KILL_TIMEOUT)
+    })
+    .await
+    .unwrap_or(fallback)
 }
 
 fn invoke_command(
@@ -153,18 +179,25 @@ pub enum AppRuntimeError {
     Draining(String),
     #[error("{0}")]
     CatalogInvalid(String),
-    #[error("{0}")]
-    ProfileBusy(String),
-    #[error("{0}")]
-    ProfileNotFound(String),
+    #[error("{message}")]
+    ProfileBusy {
+        message: String,
+        profile_id: String,
+        session_id: String,
+    },
+    #[error("{message}")]
+    ProfileNotFound {
+        message: String,
+        profile_id: Option<String>,
+    },
     #[error("{0}")]
     ProfileUnsupported(String),
     #[error("{0}")]
     ProfileNameInvalid(String),
     #[error("{0}")]
     ProfileNameConflict(String),
-    #[error("{0}")]
-    ProfileDefaultProtected(String),
+    #[error("{message}")]
+    ProfileDefaultProtected { message: String, profile_id: String },
     #[error("{0}")]
     DisplayNotFound(String),
     #[error("{0}")]
@@ -183,6 +216,18 @@ pub enum AppRuntimeError {
     AutomationUnavailable(String),
     #[error("{0}")]
     ResourceExhausted(String),
+    #[error("{0}")]
+    ResumeInvalid(String),
+    #[error("{0}")]
+    ResumeUnsupported(String),
+    #[error("{0}")]
+    ProcessStopTimeout(String),
+    #[error("{0}")]
+    CodexAppServerStartFailed(String),
+    #[error("{0}")]
+    OpenCodeServerStartFailed(String),
+    #[error("{0}")]
+    LogsFailed(String),
 }
 
 impl AppRuntimeError {
@@ -199,12 +244,12 @@ impl AppRuntimeError {
             Self::NotImplemented(_) => "APP_NOT_IMPLEMENTED",
             Self::Draining(_) => "APP_RUNTIME_DRAINING",
             Self::CatalogInvalid(_) => "APP_CATALOG_INVALID",
-            Self::ProfileBusy(_) => "BROWSER_PROFILE_BUSY",
-            Self::ProfileNotFound(_) => "BROWSER_PROFILE_NOT_FOUND",
+            Self::ProfileBusy { .. } => "BROWSER_PROFILE_BUSY",
+            Self::ProfileNotFound { .. } => "BROWSER_PROFILE_NOT_FOUND",
             Self::ProfileUnsupported(_) => "BROWSER_PROFILE_UNSUPPORTED",
             Self::ProfileNameInvalid(_) => "BROWSER_PROFILE_NAME_INVALID",
             Self::ProfileNameConflict(_) => "BROWSER_PROFILE_NAME_CONFLICT",
-            Self::ProfileDefaultProtected(_) => "BROWSER_PROFILE_DEFAULT_PROTECTED",
+            Self::ProfileDefaultProtected { .. } => "BROWSER_PROFILE_DEFAULT_PROTECTED",
             Self::DisplayNotFound(_) => "APP_DISPLAY_NOT_FOUND",
             Self::DisplayInvalid(_) => "APP_DISPLAY_INVALID",
             Self::DisplaySessionNotFound(_) => "APP_DISPLAY_SESSION_NOT_FOUND",
@@ -214,6 +259,12 @@ impl AppRuntimeError {
             Self::ScreenshotFailed(_) => "APP_SCREENSHOT_FAILED",
             Self::AutomationUnavailable(_) => "APP_AUTOMATION_UNAVAILABLE",
             Self::ResourceExhausted(_) => "APP_RESOURCE_EXHAUSTED",
+            Self::ResumeInvalid(_) => "APP_RESUME_INVALID",
+            Self::ResumeUnsupported(_) => "APP_RESUME_UNSUPPORTED",
+            Self::ProcessStopTimeout(_) => "APP_PROCESS_STOP_TIMEOUT",
+            Self::CodexAppServerStartFailed(_) => "CODEX_APP_SERVER_START_FAILED",
+            Self::OpenCodeServerStartFailed(_) => "OPENCODE_SERVER_START_FAILED",
+            Self::LogsFailed(_) => "APP_LOGS_FAILED",
         }
     }
 
@@ -234,6 +285,27 @@ impl AppRuntimeError {
 
     pub fn catalog_invalid(message: impl Into<String>) -> Self {
         Self::CatalogInvalid(format!("Custom app catalog is invalid: {}", message.into()))
+    }
+
+    pub fn details(&self) -> Option<Value> {
+        match self {
+            Self::ProfileBusy {
+                profile_id,
+                session_id,
+                ..
+            } => Some(json!({
+                "profileId": profile_id,
+                "sessionId": session_id,
+            })),
+            Self::ProfileNotFound {
+                profile_id: Some(profile_id),
+                ..
+            } => Some(json!({ "profileId": profile_id })),
+            Self::ProfileDefaultProtected { profile_id, .. } => {
+                Some(json!({ "profileId": profile_id }))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -259,6 +331,8 @@ pub enum TtyEvent {
     Resize {
         cols: u16,
         rows: u16,
+        #[serde(skip)]
+        source_client_id: u64,
     },
     Exit {
         code: Option<i32>,
@@ -269,13 +343,18 @@ pub enum TtyEvent {
 pub struct TtyAttachment {
     pub session: AppSession,
     pub dimensions: (u16, u16),
-    pub events: broadcast::Receiver<TtyEvent>,
+    events: Option<broadcast::Receiver<TtyEvent>>,
+    pub client_id: u64,
     entry: Arc<SessionEntry>,
 }
 
 impl TtyAttachment {
     pub fn snapshot(&self) -> Option<TerminalScreenSnapshot> {
         self.entry.terminal_snapshot()
+    }
+
+    pub fn take_events(&mut self) -> Option<broadcast::Receiver<TtyEvent>> {
+        self.events.take()
     }
 
     pub fn write(&self, data: &[u8]) -> Result<(), AppRuntimeError> {
@@ -294,7 +373,11 @@ impl TtyAttachment {
         }
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), AppRuntimeError> {
+    pub fn resize(
+        &self,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Option<TerminalScreenSnapshot>, AppRuntimeError> {
         if cols == 0 || rows == 0 {
             return Err(AppRuntimeError::Invalid(
                 "TTY dimensions are invalid.".to_string(),
@@ -307,7 +390,7 @@ impl TtyAttachment {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if *dimensions == (cols, rows) {
-                return Ok(());
+                return Ok(None);
             }
             *dimensions = (cols, rows);
         }
@@ -321,8 +404,15 @@ impl TtyAttachment {
             pty.resize(cols, rows)?;
         }
         self.entry.resize_terminal(cols, rows);
-        let _ = self.entry.clients.send(TtyEvent::Resize { cols, rows });
-        Ok(())
+        Ok(self.entry.terminal_snapshot())
+    }
+
+    pub fn notify_resize(&self, cols: u16, rows: u16) {
+        let _ = self.entry.clients.send(TtyEvent::Resize {
+            cols,
+            rows,
+            source_client_id: self.client_id,
+        });
     }
 }
 
@@ -332,11 +422,12 @@ struct SessionEntry {
     terminal: Mutex<Option<TerminalScreenState>>,
     stop: Mutex<Option<oneshot::Sender<()>>>,
     stop_receiver: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
-    finished: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
-    finished_sender: Mutex<Option<oneshot::Sender<()>>>,
     clients: broadcast::Sender<TtyEvent>,
     dimensions: RwLock<(u16, u16)>,
     stopping: AtomicBool,
+    stop_escalation_started: AtomicBool,
+    stop_escalation: Arc<watch::Sender<Option<Vec<u32>>>>,
+    stop_exit_sent: AtomicBool,
     processes: Mutex<Vec<u32>>,
     claude_lifecycle: Mutex<Option<ClaudeSessionLifecycle>>,
     opencode_consumer: Mutex<Option<String>>,
@@ -395,14 +486,10 @@ enum VncBackend {
 
 impl VncBackend {
     fn from_environment() -> Self {
-        match std::env::var("TASK_HANDOFF_VNC_BACKEND")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "kasmvnc" => Self::KasmVnc,
-            _ => Self::NoVnc,
+        if std::env::var("TASK_HANDOFF_VNC_BACKEND").as_deref() == Ok("kasmvnc") {
+            Self::KasmVnc
+        } else {
+            Self::NoVnc
         }
     }
 
@@ -465,6 +552,8 @@ pub struct AppRuntime {
     inner: Arc<AppRuntimeInner>,
 }
 
+type AppLaunchAdmission = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 struct AppRuntimeInner {
     storage_paths: StoragePaths,
     catalog: AppCatalogRepository,
@@ -478,7 +567,7 @@ struct AppRuntimeInner {
     persisted_sessions: RwLock<BTreeMap<String, AppSession>>,
     changes: broadcast::Sender<AppRuntimeChange>,
     draining: AtomicBool,
-    app_launch_allowed: RwLock<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    app_launch_allowed: RwLock<AppLaunchAdmission>,
     next_display: Mutex<u32>,
     next_vnc_port: Mutex<u16>,
     next_websockify_port: Mutex<u16>,
@@ -655,8 +744,8 @@ impl AppRuntime {
         app_id: &str,
         profile_id: &str,
     ) -> Result<(), AppRuntimeError> {
-        self.ensure_profile_app(app_id)?;
         self.assert_app_profile_idle(app_id, profile_id)?;
+        self.ensure_profile_app(app_id)?;
         self.inner.profiles.remove(profile_id)
     }
 
@@ -676,18 +765,24 @@ impl AppRuntime {
         profile_id: &str,
     ) -> Result<(), AppRuntimeError> {
         if let Some(session_id) = self.running_profile_session_id(app_id, profile_id) {
-            return Err(AppRuntimeError::ProfileBusy(format!(
-                "Browser profile {profile_id} is already running in session {session_id}."
-            )));
+            return Err(AppRuntimeError::ProfileBusy {
+                message: format!(
+                    "Browser profile {profile_id} is already running in session {session_id}."
+                ),
+                profile_id: profile_id.to_string(),
+                session_id,
+            });
         }
         Ok(())
     }
 
     fn ensure_profile_app(&self, app_id: &str) -> Result<(), AppRuntimeError> {
-        let entry = self.inner.catalog.find(app_id).ok_or_else(|| {
+        self.inner.catalog.find(app_id).ok_or_else(|| {
             AppRuntimeError::NotFound(format!("Managed app {app_id} was not found."))
         })?;
-        if entry.app.id != "chromium" {
+        if !managed_app_provider(app_id)
+            .is_some_and(|provider| provider.capabilities.supports_profiles)
+        {
             return Err(AppRuntimeError::ProfileUnsupported(format!(
                 "Managed app {app_id} does not support browser profiles."
             )));
@@ -731,6 +826,22 @@ impl AppRuntime {
         env: BTreeMap<String, String>,
         unset: BTreeSet<String>,
     ) {
+        let changed = {
+            let current = self
+                .inner
+                .managed_environment
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let current_unset = self
+                .inner
+                .managed_environment_unset
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *current != env || *current_unset != unset
+        };
+        if !changed {
+            return;
+        }
         *self
             .inner
             .managed_environment
@@ -750,11 +861,16 @@ impl AppRuntime {
         resource: &str,
         environment: BTreeMap<String, String>,
     ) {
-        self.inner
+        let mut environments = self
+            .inner
             .shared_resource_private_environment
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(resource.to_string(), environment);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if environments.get(resource) == Some(&environment) {
+            return;
+        }
+        environments.insert(resource.to_string(), environment);
+        drop(environments);
         if resource == "opencode" {
             self.stop_shared_opencode();
         } else if resource == "codex" {
@@ -763,7 +879,7 @@ impl AppRuntime {
     }
 
     pub async fn ensure_shared_codex(&self) -> Result<SharedCodexConnection, AppRuntimeError> {
-        self.acquire_shared_codex(SHARED_CODEX_CONSUMER).await
+        self.acquire_shared_codex(SHARED_CODEX_CONSUMER, None).await
     }
 
     pub fn shared_codex_connection(&self) -> Option<SharedCodexConnection> {
@@ -902,6 +1018,7 @@ impl AppRuntime {
     async fn acquire_shared_codex(
         &self,
         consumer_id: &str,
+        launch_environment: Option<&BTreeMap<String, String>>,
     ) -> Result<SharedCodexConnection, AppRuntimeError> {
         let _guard = self.inner.shared_codex_start.lock().await;
         self.require_app_launch_admission("codex")?;
@@ -947,7 +1064,15 @@ impl AppRuntime {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.inner.storage_paths.data_dir.clone());
-        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
+        let mut environment = match launch_environment {
+            Some(environment) => environment.clone(),
+            None => {
+                let mut environment =
+                    self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
+                environment.insert("TERM".to_string(), "xterm-256color".to_string());
+                environment
+            }
+        };
         if let Some(private) = self
             .inner
             .shared_resource_private_environment
@@ -1000,7 +1125,9 @@ impl AppRuntime {
             }
             let _ = child.start_kill();
             remove_upstream_artifacts(&plan.upstream);
-            return Err(error);
+            return Err(AppRuntimeError::CodexAppServerStartFailed(
+                error.to_string(),
+            ));
         }
         let pid = child.id();
         let id = uuid::Uuid::new_v4().to_string();
@@ -1131,7 +1258,8 @@ impl AppRuntime {
     pub async fn ensure_shared_opencode(
         &self,
     ) -> Result<SharedOpenCodeConnection, AppRuntimeError> {
-        self.acquire_shared_opencode(SHARED_OPENCODE_CONSUMER).await
+        self.acquire_shared_opencode(SHARED_OPENCODE_CONSUMER, None)
+            .await
     }
 
     pub fn shared_opencode_connection(&self) -> Option<SharedOpenCodeConnection> {
@@ -1186,6 +1314,7 @@ impl AppRuntime {
     async fn acquire_shared_opencode(
         &self,
         consumer_id: &str,
+        launch_environment: Option<&BTreeMap<String, String>>,
     ) -> Result<SharedOpenCodeConnection, AppRuntimeError> {
         let _guard = self.inner.shared_opencode_start.lock().await;
         self.require_app_launch_admission("opencode")?;
@@ -1220,7 +1349,15 @@ impl AppRuntime {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.inner.storage_paths.data_dir.clone());
-        let mut environment = self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
+        let mut environment = match launch_environment {
+            Some(environment) => environment.clone(),
+            None => {
+                let mut environment =
+                    self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
+                environment.insert("TERM".to_string(), "xterm-256color".to_string());
+                environment
+            }
+        };
         if let Some(private) = self
             .inner
             .shared_resource_private_environment
@@ -1313,7 +1450,9 @@ impl AppRuntime {
         {
             server.stop();
             self.stop_shared_opencode();
-            return Err(error);
+            return Err(AppRuntimeError::OpenCodeServerStartFailed(
+                error.to_string(),
+            ));
         }
         Ok(server.connection())
     }
@@ -1439,7 +1578,9 @@ impl AppRuntime {
             .ok_or_else(|| AppRuntimeError::NotFound("App not found.".to_string()))?;
         let app = entry.app;
         if let Some(profile_id) = options.profile_id.as_deref() {
-            if app.id != "chromium" {
+            if !managed_app_provider(&app.id)
+                .is_some_and(|provider| provider.capabilities.supports_profiles)
+            {
                 return Err(AppRuntimeError::ProfileUnsupported(format!(
                     "Managed app {} does not support launch profiles.",
                     app.id
@@ -1451,8 +1592,9 @@ impl AppRuntime {
         let executable = entry
             .executable
             .ok_or_else(|| self.missing_app_command(&app))?;
+        let resume_args = self.ai_session_resume_args(&app, &options)?;
         match app.kind {
-            AppKind::Tty => self.start_tty(app, executable, options, Vec::new()).await,
+            AppKind::Tty => self.start_tty(app, executable, options, resume_args).await,
             AppKind::Web => self.start_web(app, executable, options).await,
             AppKind::Gui => self.start_gui(app, executable, options).await,
         }
@@ -1462,18 +1604,9 @@ impl AppRuntime {
         &self,
         agent: &str,
         cwd: &str,
+        ai_session_id: &str,
         provider_session_id: &str,
     ) -> Result<AppSession, AppRuntimeError> {
-        let resume_args = match agent {
-            "codex" => vec!["resume".to_string(), provider_session_id.to_string()],
-            "claude" => vec!["--resume".to_string(), provider_session_id.to_string()],
-            "opencode" => vec!["--session".to_string(), provider_session_id.to_string()],
-            other => {
-                return Err(AppRuntimeError::Invalid(format!(
-                    "Managed app {other} does not support AI Session resume."
-                )))
-            }
-        };
         if !Path::new(cwd).is_dir() {
             return Err(AppRuntimeError::Invalid(format!(
                 "App workspace is not a directory: {cwd}"
@@ -1481,40 +1614,39 @@ impl AppRuntime {
         }
         let options = AppLaunchOptions {
             cwd: Some(cwd.to_string()),
+            ai_session_resume: Some(controlled_instance_protocol::AppAiSessionResume {
+                ai_session_id: ai_session_id.to_string(),
+                provider_session_id: provider_session_id.to_string(),
+            }),
             ..AppLaunchOptions::default()
         };
-        let entry = self
-            .inner
-            .catalog
-            .find(agent)
-            .ok_or_else(|| AppRuntimeError::NotFound("App not found.".to_string()))?;
-        let executable = entry
-            .executable
-            .ok_or_else(|| self.missing_app_command(&entry.app))?;
-        let mut session = self
-            .start_tty(entry.app, executable, options, resume_args)
-            .await?;
-        let ai = session.ai.get_or_insert_with(|| json!({ "agent": agent }));
-        if let Some(object) = ai.as_object_mut() {
-            object.insert("agent".to_string(), json!(agent));
-            object.insert("activeThreadId".to_string(), json!(provider_session_id));
-            let threads = object
-                .entry("threadIds")
-                .or_insert_with(|| json!([]))
-                .as_array_mut();
-            if let Some(threads) = threads {
-                if !threads
-                    .iter()
-                    .any(|value| value.as_str() == Some(provider_session_id))
-                {
-                    threads.push(json!(provider_session_id));
-                }
-            }
-        }
-        let _ = self.update_metadata(&session.id, |metadata| *metadata = session.clone());
-        self.persist(&session);
-        self.emit(AppRuntimeChangeKind::Updated, session.clone());
-        Ok(session)
+        self.start(agent, options).await
+    }
+
+    fn ai_session_resume_args(
+        &self,
+        app: &AppCatalogItem,
+        options: &AppLaunchOptions,
+    ) -> Result<Vec<String>, AppRuntimeError> {
+        let Some(resume) = options.ai_session_resume.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let provider = managed_app_provider(&app.id)
+            .filter(|provider| provider.capabilities.supports_ai_session_resume)
+            .ok_or_else(|| {
+                AppRuntimeError::ResumeUnsupported(format!(
+                    "{} does not support AI session resume.",
+                    app.id
+                ))
+            })?;
+        provider
+            .ai_session_resume_args(&resume.provider_session_id)
+            .ok_or_else(|| {
+                AppRuntimeError::ResumeUnsupported(format!(
+                    "{} does not support AI session resume.",
+                    app.id
+                ))
+            })
     }
 
     async fn start_tty(
@@ -1557,8 +1689,11 @@ impl AppRuntime {
         let mut claude_control_socket = None;
         let mut opencode_consumer = None;
         let mut codex_lifecycle = None;
-        if app.id == "codex" && !app_server_disabled() {
-            let shared = self.acquire_shared_codex(&id).await?;
+        let tty_runtime = managed_app_provider(&app.id)
+            .map(|provider| provider.tty_runtime)
+            .unwrap_or(ManagedAppTtyRuntime::Default);
+        if tty_runtime == ManagedAppTtyRuntime::Codex && !app_server_disabled() {
+            let shared = self.acquire_shared_codex(&id, Some(&env)).await?;
             let proxy_port = match self.allocate_web_port() {
                 Ok(port) => port,
                 Err(error) => {
@@ -1620,8 +1755,8 @@ impl AppRuntime {
                 proxy,
                 consumer_id: id.clone(),
             });
-        } else if app.id == "opencode" {
-            let connection = self.acquire_shared_opencode(&id).await?;
+        } else if tty_runtime == ManagedAppTtyRuntime::OpenCode {
+            let connection = self.acquire_shared_opencode(&id, Some(&env)).await?;
             args = vec![
                 "attach".to_string(),
                 connection.endpoint.clone(),
@@ -1641,7 +1776,7 @@ impl AppRuntime {
             env.insert("OPENCODE_CLIENT".to_string(), "task-handoff".to_string());
             ai = Some(json!({ "agent": "opencode" }));
             opencode_consumer = Some(id.clone());
-        } else if app.id == "claude" {
+        } else if tty_runtime == ManagedAppTtyRuntime::Claude {
             if let Some(prepared) = prepare_claude_tty_launch(&shell, &args, &cwd, &env, &id)? {
                 let PreparedClaudeLaunch {
                     args: prepared_args,
@@ -1746,7 +1881,7 @@ impl AppRuntime {
         self.persist(&metadata);
         self.emit(AppRuntimeChangeKind::Created, metadata.clone());
         self.start_tty_reader(entry.clone(), reader, log_dir.join("tty.log"));
-        self.start_child_monitor(entry, child, app.id, true);
+        self.start_child_monitor(entry, child, app.id);
         Ok(metadata)
     }
 
@@ -1756,6 +1891,10 @@ impl AppRuntime {
         executable: PathBuf,
         mut options: AppLaunchOptions,
     ) -> Result<AppSession, AppRuntimeError> {
+        let command = app.command.clone().unwrap_or_else(|| app.id.clone());
+        if crate::catalog::resolve_executable(&command, &BTreeMap::new(), None).is_none() {
+            return Err(AppRuntimeError::missing_command(command));
+        }
         let cwd = resolve_launch_cwd(options.cwd.as_deref(), app.cwd.as_deref());
         if !cwd.is_dir() {
             return Err(AppRuntimeError::Invalid(format!(
@@ -1794,7 +1933,11 @@ impl AppRuntime {
         if let Some(port_arg) = app.web.as_ref().and_then(|web| web.port_arg.as_ref()) {
             args.insert(0, placeholders(port_arg));
         }
-        prepare_web_app_session(&app, &session_dir);
+        if managed_app_runtime_provider(&app)
+            .is_some_and(|provider| provider.web_runtime == ManagedAppWebRuntime::VscodeWeb)
+        {
+            prepare_vscode_web_session(&session_dir);
+        }
         let env = self.environment(&app, &options, false)?;
         let log_path = log_dir.join(format!("{}.log", app.id));
         let invocation = invoke_command(&executable.display().to_string(), &args, &cwd, &env)?;
@@ -1853,6 +1996,9 @@ impl AppRuntime {
             extra: BTreeMap::new(),
         };
         let entry = Arc::new(SessionEntry::new(metadata.clone()));
+        if let Some(pid) = pid {
+            entry.add_process(pid);
+        }
         self.inner
             .sessions
             .write()
@@ -1860,16 +2006,7 @@ impl AppRuntime {
             .insert(id, entry.clone());
         self.persist(&metadata);
         self.emit(AppRuntimeChangeKind::Created, metadata.clone());
-        self.start_child_monitor(entry, child, app.id, false);
-        if let Some(ready_path) = metadata
-            .web
-            .as_ref()
-            .and_then(|web| web.ready_path.as_deref())
-        {
-            let url = format!("http://127.0.0.1:{port}{ready_path}");
-            self.wait_for_http(&url, std::time::Duration::from_secs(15))
-                .await;
-        }
+        self.start_child_monitor(entry, child, app.id);
         Ok(metadata)
     }
 
@@ -1887,6 +2024,31 @@ impl AppRuntime {
             )));
         }
         let backend = VncBackend::from_environment();
+        let app_command = app.command.clone().unwrap_or_else(|| app.id.clone());
+        let required_commands: &[&str] = if backend == VncBackend::KasmVnc {
+            &[
+                "vncserver",
+                "vncpasswd",
+                "openssl",
+                "xrdb",
+                "xrandr",
+                "openbox",
+                app_command.as_str(),
+            ]
+        } else {
+            &[
+                "Xvfb",
+                "openbox",
+                "x11vnc",
+                "websockify",
+                app_command.as_str(),
+            ]
+        };
+        for command in required_commands {
+            if crate::catalog::resolve_executable(command, &BTreeMap::new(), None).is_none() {
+                return Err(AppRuntimeError::missing_command(*command));
+            }
+        }
         let id = mint_entity_id("app");
         let session_dir = self.inner.storage_paths.app_sessions_dir.join(&id);
         let log_dir = self
@@ -1913,7 +2075,7 @@ impl AppRuntime {
         launch.display_target = Some(display_target.clone());
         launch.cwd = Some(cwd.display().to_string());
         let cdp_port = self.allocate_cdp_port()?;
-        let args = self.gui_args(&app, &session_dir, &cwd, cdp_port, &launch)?;
+        let args = self.gui_args(&app, &session_dir, cdp_port, &launch)?;
         let mut env = self.environment(&app, &launch, false)?;
         let width = launch
             .display
@@ -1963,7 +2125,7 @@ impl AppRuntime {
                 .await?;
             (Some(shared.clone()), Vec::<SpawnedGuiProcess>::new())
         } else {
-            let display_number = self.allocate_display();
+            let display_number = self.allocate_display()?;
             let display = format!(":{display_number}");
             let vnc_port = if backend == VncBackend::KasmVnc {
                 self.allocate_web_port()?
@@ -2213,7 +2375,7 @@ impl AppRuntime {
         for process in isolated_display {
             self.start_auxiliary_process_monitor(entry.clone(), process);
         }
-        self.start_child_monitor(entry, app_process.child, app.id, false);
+        self.start_child_monitor(entry, app_process.child, app.id);
         Ok(metadata)
     }
 
@@ -2422,7 +2584,7 @@ impl AppRuntime {
             .map_err(|error| AppRuntimeError::storage(error.to_string()))?;
         std::fs::create_dir_all(&log_dir)
             .map_err(|error| AppRuntimeError::storage(error.to_string()))?;
-        let display_number = self.allocate_display();
+        let display_number = self.allocate_display()?;
         let display = format!(":{display_number}");
         let vnc_port = if backend == VncBackend::KasmVnc {
             self.allocate_web_port()?
@@ -2452,7 +2614,12 @@ impl AppRuntime {
                 env: &env,
             })
             .await?;
-        let app_env = self.gui_app_environment(&env, backend);
+        let mut app_env = self.gui_app_environment(&env, backend);
+        let xauthority =
+            (backend == VncBackend::KasmVnc).then(|| session_dir.join("home").join(".Xauthority"));
+        if let Some(xauthority) = xauthority.as_ref() {
+            app_env.insert("XAUTHORITY".to_string(), xauthority.display().to_string());
+        }
         let openbox = match self.spawn_gui_process(
             "openbox",
             &[],
@@ -2506,7 +2673,7 @@ impl AppRuntime {
             x_pid: display_processes.first().map(|process| process.pid),
             wm_pid: Some(openbox.pid),
             compositor_pid: compositor.as_ref().map(|process| process.pid),
-            xauthority: env.get("XAUTHORITY").cloned(),
+            xauthority: xauthority.as_ref().map(|path| path.display().to_string()),
             processes,
             app_session_ids: HashSet::new(),
         };
@@ -2599,6 +2766,7 @@ impl AppRuntime {
         tokio::spawn(async move {
             let exit = child.wait().await.ok();
             let code = exit.and_then(|status| status.code());
+            let signal = exit.and_then(signal_name);
             if !critical || entry.stopping.load(Ordering::SeqCst) || code == Some(0) {
                 return;
             }
@@ -2616,7 +2784,11 @@ impl AppRuntime {
                     "error".to_string(),
                     json!({
                         "code": "APP_PROCESS_EXITED",
-                        "message": format!("{label} exited unexpectedly with code {}.", code.map(|code| code.to_string()).unwrap_or_else(|| "null".to_string())),
+                        "message": format!(
+                            "{label} exited unexpectedly with code {} signal {}.",
+                            code.map(|code| code.to_string()).unwrap_or_else(|| "null".to_string()),
+                            signal.unwrap_or_else(|| "null".to_string()),
+                        ),
                     }),
                 );
                 metadata.clone()
@@ -2630,13 +2802,18 @@ impl AppRuntime {
         let runtime = self.clone();
         let SpawnedGuiProcess {
             mut child,
-            label,
+            label: _,
             critical,
             ..
         } = process;
         tokio::spawn(async move {
             let exit = child.wait().await.ok();
             let code = exit.and_then(|status| status.code());
+            let signal = exit.and_then(signal_name);
+            let code_text = code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            let signal_text = signal.unwrap_or_else(|| "null".to_string());
             if !critical || code == Some(0) {
                 return;
             }
@@ -2664,7 +2841,11 @@ impl AppRuntime {
                         "error".to_string(),
                         json!({
                             "code": "APP_DISPLAY_PROCESS_EXITED",
-                            "message": format!("Shared display {display_id} exited unexpectedly in {label} with code {}.", code.map(|code| code.to_string()).unwrap_or_else(|| "null".to_string())),
+                            "message": format!(
+                                "Shared display {display_id} exited unexpectedly with code {} signal {}.",
+                                code_text,
+                                signal_text,
+                            ),
                         }),
                     );
                 }) {
@@ -2703,16 +2884,10 @@ impl AppRuntime {
         &self,
         app: &AppCatalogItem,
         session_dir: &Path,
-        cwd: &Path,
         cdp_port: u16,
         launch: &AppLaunchOptions,
     ) -> Result<Vec<String>, AppRuntimeError> {
-        let render = |arg: &str| {
-            arg.replace("{sessionDir}", &session_dir.display().to_string())
-                .replace("{cwd}", &cwd.display().to_string())
-                .replace("{cdpPort}", &cdp_port.to_string())
-                .replace("{port}", &cdp_port.to_string())
-        };
+        let render = |arg: &str| render_gui_argument(arg, session_dir, cdp_port);
         let mut args = app
             .args
             .as_deref()
@@ -2721,7 +2896,10 @@ impl AppRuntime {
             .chain(launch.args.iter())
             .map(|arg| render(arg))
             .collect::<Vec<_>>();
-        if app.id == "chromium" {
+        let gui_runtime = managed_app_runtime_provider(app)
+            .map(|provider| provider.gui_runtime)
+            .unwrap_or(ManagedAppGuiRuntime::Default);
+        if gui_runtime == ManagedAppGuiRuntime::Chromium {
             let user_data_dir = launch
                 .profile_id
                 .as_deref()
@@ -2730,15 +2908,7 @@ impl AppRuntime {
                 .map(|profile| profile.directory)
                 .unwrap_or_else(|| session_dir.join("profile").display().to_string());
             let mut chromium_args = Vec::new();
-            if std::env::var("TASK_HANDOFF_CHROMIUM_NO_SANDBOX")
-                .ok()
-                .is_some_and(|value| {
-                    matches!(
-                        value.trim().to_ascii_lowercase().as_str(),
-                        "1" | "true" | "yes" | "on"
-                    )
-                })
-            {
+            if env_flag("TASK_HANDOFF_CHROMIUM_NO_SANDBOX") {
                 chromium_args.push("--no-sandbox".to_string());
             }
             chromium_args.extend([
@@ -2762,12 +2932,12 @@ impl AppRuntime {
                 app.automation
                     .as_ref()
                     .and_then(|automation| automation.port_arg.as_ref())
-                    .map(|arg| render(arg))
+                    .map(|arg| arg.replace("{port}", &cdp_port.to_string()))
                     .unwrap_or_else(|| format!("--remote-debugging-port={cdp_port}")),
             ]);
             chromium_args.extend(args);
             args = chromium_args;
-        } else if app.id == "terminal-gui" {
+        } else if gui_runtime == ManagedAppGuiRuntime::TerminalGui {
             args.splice(
                 0..0,
                 [
@@ -2784,7 +2954,7 @@ impl AppRuntime {
             .as_ref()
             .and_then(|automation| automation.port_arg.as_ref())
         {
-            args.insert(0, render(port_arg));
+            args.insert(0, port_arg.replace("{port}", &cdp_port.to_string()));
         }
         Ok(args)
     }
@@ -2822,6 +2992,7 @@ impl AppRuntime {
         tokio::task::spawn_blocking(move || {
             use std::io::Read;
             let mut buffer = [0u8; 8192];
+            let mut pending = Vec::new();
             let log = RotatingLogWriter::open(log_path).ok();
             loop {
                 match reader.read(&mut buffer) {
@@ -2831,7 +3002,10 @@ impl AppRuntime {
                         if let Some(log) = log.as_ref() {
                             let _ = log.write(bytes);
                         }
-                        let data = String::from_utf8_lossy(bytes).into_owned();
+                        let data = decode_utf8_stream(&mut pending, bytes);
+                        if data.is_empty() {
+                            continue;
+                        }
                         entry.write_terminal(&data);
                         let _ = event_tx.send(TtyEvent::Output { data });
                     }
@@ -2842,22 +3016,16 @@ impl AppRuntime {
         });
     }
 
-    fn start_child_monitor(
-        &self,
-        entry: Arc<SessionEntry>,
-        mut child: Child,
-        log_name: String,
-        tty: bool,
-    ) {
+    fn start_child_monitor(&self, entry: Arc<SessionEntry>, mut child: Child, log_name: String) {
         let runtime = self.clone();
         tokio::spawn(async move {
             let mut stop = entry.take_stop_receiver();
             let exit = tokio::select! {
                 status = child.wait() => match status {
-                    Ok(status) => (status.code(), signal_name(status)),
+                    Ok(status) => (status.code(), signal_name(status), None),
                     Err(error) => {
                         debug!(app_id = %log_name, %error, "App process wait failed");
-                        (None, None)
+                        (None, None, Some(error.to_string()))
                     }
                 },
                 _ = async {
@@ -2867,18 +3035,13 @@ impl AppRuntime {
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    if tty {
-                        terminate_pid(entry.pid().unwrap_or(0));
-                    } else {
-                        let pid = entry.pid().unwrap_or(0);
-                        if process_group_exists(pid) {
-                            terminate_pid(pid);
-                        } else {
-                            let _ = child.start_kill();
+                    match child.wait().await {
+                        Ok(status) => (status.code(), signal_name(status), None),
+                        Err(error) => {
+                            debug!(app_id = %log_name, %error, "App process wait failed");
+                            (None, None, Some(error.to_string()))
                         }
                     }
-                    let _ = tokio::time::timeout(APP_KILL_TIMEOUT, child.wait()).await;
-                    (None, Some("SIGTERM".to_string()))
                 }
             };
             let stopping = entry.stopping.load(Ordering::SeqCst);
@@ -2888,30 +3051,61 @@ impl AppRuntime {
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if !stopping {
-                    metadata.status = if exit.0 == Some(0) {
-                        "exited"
+                    if let Some(error) = exit.2.as_deref() {
+                        metadata.status = "failed".to_string();
+                        metadata.extra.insert(
+                            "error".to_string(),
+                            json!({
+                                "code": "APP_PROCESS_ERROR",
+                                "message": format!("{log_name} failed: {error}"),
+                            }),
+                        );
                     } else {
-                        "failed"
+                        metadata.status = if metadata.tty.is_some() || exit.0 == Some(0) {
+                            "exited"
+                        } else {
+                            "failed"
+                        }
+                        .to_string();
                     }
-                    .to_string();
-                }
-                metadata.updated_at = now_iso();
-                if let Some(process) = metadata.process.as_mut() {
-                    process.exit_code = exit.0;
-                    process.signal = exit.1.clone();
+                    metadata.updated_at = now_iso();
+                    if let Some(process) = metadata.process.as_mut() {
+                        process.exit_code = Some(exit.0);
+                        process.signal = Some(exit.1.clone());
+                    }
+                    if exit.2.is_none() && metadata.tty.is_none() && exit.0 != Some(0) {
+                        metadata.extra.insert(
+                            "error".to_string(),
+                            json!({
+                                "code": "APP_PROCESS_EXITED",
+                                "message": format!(
+                                    "{log_name} exited with code {} signal {}.",
+                                    exit.0
+                                        .map(|code| code.to_string())
+                                        .unwrap_or_else(|| "null".to_string()),
+                                    exit.1
+                                        .as_deref()
+                                        .unwrap_or("null"),
+                                ),
+                            }),
+                        );
+                    }
                 }
                 metadata.clone()
             };
             entry.clear_pty();
-            let _ = entry.clients.send(TtyEvent::Exit {
-                code: exit.0,
-                signal: exit.1,
-            });
-            runtime.persist(&paused);
-            runtime.emit(AppRuntimeChangeKind::Updated, paused);
+            entry.notify_exit(exit.0, exit.1.clone());
             if !stopping {
-                let pids = entry.process_pids();
-                terminate_process_groups(&pids);
+                runtime.persist(&paused);
+                let has_tty = paused.tty.is_some();
+                runtime.emit(AppRuntimeChangeKind::Updated, paused);
+                // Node only reaps the PTY process group when its root exits;
+                // GUI helper processes (Xvfb/openbox/VNC) stay until the
+                // session is explicitly stopped or restarted.
+                if has_tty {
+                    let pids = entry.all_process_pids();
+                    terminate_process_groups(&pids);
+                }
             }
             if let Some(consumer) = entry.take_opencode_consumer() {
                 runtime.release_shared_opencode(&consumer);
@@ -2920,7 +3114,6 @@ impl AppRuntime {
                 lifecycle.proxy.stop();
                 runtime.release_shared_codex(&lifecycle.consumer_id);
             }
-            entry.finish();
             if let Some(display_id) = entry
                 .metadata
                 .read()
@@ -2951,8 +3144,23 @@ impl AppRuntime {
                 .get(id)
                 .cloned();
         };
+        let stopping = {
+            let mut metadata = entry
+                .metadata
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            metadata.status = "stopping".to_string();
+            metadata.updated_at = now_iso();
+            metadata.clone()
+        };
+        self.persist(&stopping);
+        entry.notify_stop_exit();
         entry.stop();
-        entry.stop_claude_daemon().await;
+        entry.clear_terminal();
+        let lifecycle_entry = entry.clone();
+        tokio::spawn(async move {
+            lifecycle_entry.stop_claude_daemon().await;
+        });
         if let Some(consumer) = entry.take_opencode_consumer() {
             self.release_shared_opencode(&consumer);
         }
@@ -2960,18 +3168,10 @@ impl AppRuntime {
             lifecycle.proxy.stop();
             self.release_shared_codex(&lifecycle.consumer_id);
         }
-        let finished = entry.take_finished_receiver();
-        if let Some(receiver) = finished {
-            let _ = tokio::time::timeout(APP_STOP_TIMEOUT, receiver).await;
-        }
         let metadata = self
             .update_metadata(id, |metadata| {
                 metadata.status = "stopped".to_string();
                 metadata.updated_at = now_iso();
-                if let Some(process) = metadata.process.as_mut() {
-                    process.exit_code = None;
-                    process.signal = None;
-                }
             })
             .ok()?;
         self.persist(&metadata);
@@ -2992,26 +3192,42 @@ impl AppRuntime {
     }
 
     pub async fn restart(&self, id: &str) -> Result<AppSession, AppRuntimeError> {
+        if self.is_draining() {
+            return Err(AppRuntimeError::Draining(
+                "App launches are unavailable while the controlled instance is draining for a runtime update."
+                    .to_string(),
+            ));
+        }
         let session = self.get_session(id).ok_or_else(|| {
             AppRuntimeError::SessionNotFound("App session not found.".to_string())
         })?;
         self.stop_session(id).await;
-        let launch = session.launch.unwrap_or_default();
+        let launch = AppLaunchOptions {
+            title: Some(session.title.clone()),
+            ..session.launch.unwrap_or_default()
+        };
         self.start(&session.app_id, launch).await
     }
 
     pub fn rename(&self, id: &str, title: &str) -> Result<AppSession, AppRuntimeError> {
+        if self.get_session(id).is_none() {
+            return Err(AppRuntimeError::SessionNotFound(
+                "App session not found.".to_string(),
+            ));
+        }
         let title = title.trim();
-        if title.is_empty() || title.chars().count() > 120 {
+        if title.is_empty() || controlled_instance_core::text::utf16_len(title) > 120 {
             return Err(AppRuntimeError::SessionTitleInvalid(
                 "App session title must contain between 1 and 120 characters.".to_string(),
             ));
         }
         let metadata = self.update_metadata(id, |metadata| {
             metadata.title = title.to_string();
-            if let Some(launch) = metadata.launch.as_mut() {
-                launch.title = Some(title.to_string());
-            }
+            let launch = metadata.launch.take().unwrap_or_default();
+            metadata.launch = Some(AppLaunchOptions {
+                title: Some(title.to_string()),
+                ..launch
+            });
             metadata.updated_at = now_iso();
         })?;
         self.persist(&metadata);
@@ -3025,6 +3241,31 @@ impl AppRuntime {
                 "App session not found.".to_string(),
             ));
         };
+        let entry = self
+            .inner
+            .sessions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(id)
+            .cloned();
+        if let Some(entry) = entry.as_ref() {
+            // Node waits for process-tree escalation before committing the
+            // stopped/removed session state, so a failed delete remains
+            // retryable instead of leaving an already-stopped ghost.
+            entry.notify_stop_exit();
+            entry.stop();
+            let remaining = entry.wait_for_stop_escalation().await;
+            if !remaining.is_empty() {
+                return Err(AppRuntimeError::ProcessStopTimeout(format!(
+                    "App session process trees did not exit: {}.",
+                    remaining
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
         let metadata = self.stop_session(id).await.unwrap_or(metadata);
         let _removed = self
             .inner
@@ -3050,40 +3291,65 @@ impl AppRuntime {
         Ok(metadata)
     }
 
-    pub fn read_logs(&self, id: &str, max_bytes: usize) -> Result<Value, AppRuntimeError> {
+    pub fn read_logs(&self, id: &str, max_bytes: f64) -> Result<Value, AppRuntimeError> {
         let session = self.get_session(id).ok_or_else(|| {
             AppRuntimeError::SessionNotFound("App session not found.".to_string())
         })?;
         let log_dir = PathBuf::from(&session.paths.log_dir);
-        let max_bytes = max_bytes.clamp(1024, 512 * 1024);
-        let mut files = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&log_dir) {
-            let mut paths = entries
-                .filter_map(Result::ok)
-                .filter(|entry| entry.path().extension().is_some_and(|value| value == "log"))
-                .map(|entry| entry.path())
-                .collect::<Vec<_>>();
-            paths.sort();
-            for path in paths {
-                let metadata = std::fs::metadata(&path).ok();
-                let size = metadata.as_ref().map(|value| value.len()).unwrap_or(0);
-                let start = size.saturating_sub(max_bytes as u64);
-                let content = read_tail(&path, start).unwrap_or_default();
-                let updated_at = metadata
-                    .and_then(|value| value.modified().ok())
-                    .map(|value| {
-                        chrono::DateTime::<Utc>::from(value)
-                            .to_rfc3339_opts(SecondsFormat::Millis, true)
-                    })
-                    .unwrap_or_else(now_iso);
-                files.push(json!({
-                    "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("log"),
-                    "size": size,
-                    "updatedAt": updated_at,
-                    "truncated": start > 0,
-                    "content": content,
+        let max_bytes = max_bytes.clamp(1024.0, (512 * 1024) as f64);
+        let entries = match std::fs::read_dir(&log_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(json!({
+                    "sessionId": id,
+                    "logDir": session.paths.log_dir,
+                    "maxBytes": max_bytes,
+                    "files": [],
                 }));
             }
+            Err(error) => {
+                return Err(AppRuntimeError::LogsFailed(error.to_string()));
+            }
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| AppRuntimeError::LogsFailed(error.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| AppRuntimeError::LogsFailed(error.to_string()))?;
+            if file_type.is_file() && entry.path().extension().is_some_and(|value| value == "log") {
+                paths.push(entry.path());
+            }
+        }
+        paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        let mut files = Vec::new();
+        for path in paths {
+            let metadata = std::fs::metadata(&path)
+                .map_err(|error| AppRuntimeError::LogsFailed(error.to_string()))?;
+            let size = metadata.len();
+            let remaining = (size as f64 - max_bytes).max(0.0);
+            if remaining.fract() != 0.0 {
+                return Err(AppRuntimeError::LogsFailed(format!(
+                    "The argument 'size' is invalid. Received {remaining}"
+                )));
+            }
+            let start = remaining as u64;
+            let content = read_tail(&path, start)
+                .map_err(|error| AppRuntimeError::LogsFailed(error.to_string()))?;
+            let updated_at = metadata
+                .modified()
+                .map(|value| {
+                    chrono::DateTime::<Utc>::from(value)
+                        .to_rfc3339_opts(SecondsFormat::Millis, true)
+                })
+                .map_err(|error| AppRuntimeError::LogsFailed(error.to_string()))?;
+            files.push(json!({
+                "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("log"),
+                "size": size,
+                "updatedAt": updated_at,
+                "truncated": start > 0,
+                "content": content,
+            }));
         }
         Ok(json!({
             "sessionId": id,
@@ -3106,7 +3372,7 @@ impl AppRuntime {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        if session.status != "running" || session.tty.is_none() {
+        if session.status != "running" {
             return None;
         }
         let dimensions = *entry
@@ -3116,7 +3382,8 @@ impl AppRuntime {
         Some(TtyAttachment {
             session,
             dimensions,
-            events: entry.clients.subscribe(),
+            events: Some(entry.clients.subscribe()),
+            client_id: TTY_ATTACHMENT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             entry,
         })
     }
@@ -3131,7 +3398,6 @@ impl AppRuntime {
 
     pub fn vnc_target(&self, id: &str) -> Option<(String, u16)> {
         self.live_session(id)
-            .filter(|session| session.status == "running")
             .and_then(|session| session.vnc.map(|vnc| (vnc.host, vnc.port)))
     }
 
@@ -3152,8 +3418,13 @@ impl AppRuntime {
                 env.insert("HOME".to_string(), parent.display().to_string());
             }
         }
-        let executable = crate::catalog::resolve_executable("import", &env, None)
-            .ok_or_else(|| AppRuntimeError::missing_command("import"))?;
+        let executable =
+            crate::catalog::resolve_executable("import", &env, None).ok_or_else(|| {
+                AppRuntimeError::MissingCommand(
+                    "Missing required command: import. Install ImageMagick in the runtime image."
+                        .to_string(),
+                )
+            })?;
         let output = Command::new(executable)
             .args(["-window", "root", "png:-"])
             .envs(&env)
@@ -3162,6 +3433,11 @@ impl AppRuntime {
             .map_err(|error| {
                 AppRuntimeError::ScreenshotFailed(format!("Screenshot failed: {error}"))
             })?;
+        if output.stdout.len() > SCREENSHOT_MAX_BYTES {
+            return Err(AppRuntimeError::ScreenshotFailed(
+                "Screenshot failed: stdout maxBuffer length exceeded".to_string(),
+            ));
+        }
         if !output.status.success() {
             return Err(AppRuntimeError::ScreenshotFailed(format!(
                 "Screenshot failed: {}",
@@ -3182,23 +3458,21 @@ impl AppRuntime {
         let current = session.display.clone().ok_or_else(|| {
             AppRuntimeError::DisplayNotFound("Display session not found.".to_string())
         })?;
-        if display
+        // Node normalizes each requested field independently and falls back to
+        // the current value for out-of-range dimensions instead of rejecting
+        // the whole resize.
+        let width = display
             .width
-            .is_some_and(|width| !(320..=7680).contains(&width))
-            || display
-                .height
-                .is_some_and(|height| !(240..=4320).contains(&height))
-            || display
-                .depth
-                .is_some_and(|depth| !(8..=32).contains(&depth))
-        {
-            return Err(AppRuntimeError::DisplayInvalid(
-                "Display dimensions are invalid.".to_string(),
-            ));
-        }
-        let width = display.width.unwrap_or(current.width);
-        let height = display.height.unwrap_or(current.height);
-        let depth = display.depth.unwrap_or(current.depth);
+            .filter(|width| (320..=7680).contains(width))
+            .unwrap_or(current.width);
+        let height = display
+            .height
+            .filter(|height| (240..=4320).contains(height))
+            .unwrap_or(current.height);
+        let depth = display
+            .depth
+            .filter(|depth| (8..=32).contains(depth))
+            .unwrap_or(current.depth);
         let mut env = std::env::vars().collect::<BTreeMap<_, _>>();
         env.insert("DISPLAY".to_string(), current.display.clone());
         if let Some(xauthority) = &current.xauthority {
@@ -3301,19 +3575,56 @@ impl AppRuntime {
     }
 
     pub async fn stop_all(&self) {
-        let ids = self
+        let entries = self
             .inner
             .sessions
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .keys()
+            .values()
             .cloned()
             .collect::<Vec<_>>();
-        for id in ids {
-            let _ = self.stop_session(&id).await;
+        for entry in &entries {
+            let metadata = {
+                let mut metadata = entry
+                    .metadata
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                metadata.status = "stopped".to_string();
+                metadata.updated_at = now_iso();
+                metadata.clone()
+            };
+            self.persist(&metadata);
+            entry.stop();
+            entry.clear_terminal();
+            let lifecycle_entry = entry.clone();
+            tokio::spawn(async move {
+                lifecycle_entry.stop_claude_daemon().await;
+            });
+            if let Some(consumer) = entry.take_opencode_consumer() {
+                self.release_shared_opencode(&consumer);
+            }
+            if let Some(lifecycle) = entry.take_codex_lifecycle() {
+                lifecycle.proxy.stop();
+                self.release_shared_codex(&lifecycle.consumer_id);
+            }
+            if let Some(display_id) = metadata
+                .display
+                .as_ref()
+                .and_then(|display| display.display_session_id.clone())
+            {
+                self.release_shared_display(&display_id, &metadata.id);
+            }
         }
         self.stop_shared_opencode();
         self.stop_shared_codex();
+        self.inner
+            .sessions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        for entry in &entries {
+            let _ = entry.wait_for_stop_escalation().await;
+        }
     }
 
     fn release_shared_display(&self, display_id: &str, session_id: &str) {
@@ -3371,15 +3682,62 @@ impl AppRuntime {
         self.allocate_port(&self.inner.next_web_port, 8101, 8199)
     }
 
-    fn allocate_display(&self) -> u32 {
+    fn allocate_display(&self) -> Result<u32, AppRuntimeError> {
+        let mut used = BTreeSet::new();
+        for entry in self
+            .inner
+            .sessions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+        {
+            let metadata = entry
+                .metadata
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(number) = metadata
+                .display
+                .as_ref()
+                .and_then(|display| parse_display_number(&display.display))
+            {
+                used.insert(number);
+            }
+        }
+        for display in self
+            .inner
+            .shared_displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+        {
+            if let Some(number) = parse_display_number(&display.display) {
+                used.insert(number);
+            }
+        }
         let mut next = self
             .inner
             .next_display
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let display = *next;
-        *next = if display >= 199 { 101 } else { display + 1 };
-        display
+        let initial = (*next).clamp(DISPLAY_START, DISPLAY_END);
+        let total = DISPLAY_END - DISPLAY_START + 1;
+        for offset in 0..total {
+            let candidate = DISPLAY_START + ((initial - DISPLAY_START + offset) % total);
+            if !used.contains(&candidate)
+                && !Path::new(&format!("/tmp/.X{candidate}-lock")).exists()
+                && !Path::new(&format!("/tmp/.X11-unix/X{candidate}")).exists()
+            {
+                *next = if candidate >= DISPLAY_END {
+                    DISPLAY_START
+                } else {
+                    candidate + 1
+                };
+                return Ok(candidate);
+            }
+        }
+        Err(AppRuntimeError::ResourceExhausted(format!(
+            "No available allocation in range {DISPLAY_START}-{DISPLAY_END}."
+        )))
     }
 
     fn allocate_vnc_port(&self) -> Result<u16, AppRuntimeError> {
@@ -3528,7 +3886,7 @@ impl AppRuntime {
                 continue;
             };
             let path = entry.path().join("metadata.json");
-            let Ok(metadata) = read_json::<AppSession>(&path) else {
+            let Ok(metadata) = read_json::<Value>(&path) else {
                 continue;
             };
             let Some(session) = self.sanitize_persisted_session(metadata, &expected_id) else {
@@ -3544,43 +3902,57 @@ impl AppRuntime {
         }
     }
 
-    fn sanitize_persisted_session(
-        &self,
-        metadata: AppSession,
-        expected_id: &str,
-    ) -> Option<AppSession> {
-        if metadata.id != expected_id
-            || !matches!(metadata.kind.as_str(), "tty" | "gui" | "web")
+    fn sanitize_persisted_session(&self, metadata: Value, expected_id: &str) -> Option<AppSession> {
+        let record = metadata.as_object()?.clone();
+        let string_field = |name: &str| record.get(name).and_then(Value::as_str);
+        if string_field("id") != Some(expected_id)
+            || string_field("appId").is_none()
+            || string_field("title").is_none()
+            || string_field("createdAt").is_none()
+            || string_field("updatedAt").is_none()
+            || !matches!(string_field("kind"), Some("tty" | "gui" | "web"))
             || !matches!(
-                metadata.status.as_str(),
-                "created" | "running" | "stopping" | "stopped" | "exited" | "failed"
+                string_field("status"),
+                Some("created" | "running" | "stopping" | "stopped" | "exited" | "failed")
             )
+        {
+            return None;
+        }
+        let paths = record.get("paths")?.as_object()?;
+        if !paths.get("sessionDir").is_some_and(Value::is_string)
+            || !paths.get("logDir").is_some_and(Value::is_string)
         {
             return None;
         }
         let process_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let workspace_env = std::env::var("TASK_HANDOFF_WORKSPACE").ok();
-        let claude_cwd = metadata
-            .ai
-            .as_ref()
+        let claude_cwd = record
+            .get("ai")
             .and_then(|ai| ai.get("claude"))
             .and_then(|claude| claude.get("cwd"))
             .and_then(Value::as_str);
         let app_cwd = self
             .inner
             .catalog
-            .find(&metadata.app_id)
+            .find(string_field("appId")?)
             .and_then(|entry| entry.app.cwd);
         let candidate = [
-            Some(metadata.workspace.cwd.as_str()),
-            metadata.tty.as_ref().map(|tty| tty.cwd.as_str()),
+            record
+                .get("workspace")
+                .and_then(|workspace| workspace.get("cwd"))
+                .and_then(Value::as_str),
+            record
+                .get("tty")
+                .and_then(|tty| tty.get("cwd"))
+                .and_then(Value::as_str),
             claude_cwd,
-            metadata
-                .launch
-                .as_ref()
-                .and_then(|launch| launch.cwd.as_deref()),
+            record
+                .get("launch")
+                .and_then(|launch| launch.get("cwd"))
+                .and_then(Value::as_str),
             app_cwd.as_deref(),
             workspace_env.as_deref(),
+            process_cwd.to_str(),
         ]
         .into_iter()
         .flatten()
@@ -3590,26 +3962,19 @@ impl AppRuntime {
             .map(|candidate| resolve_path_from(candidate, &process_cwd))
             .unwrap_or_else(|| resolve_path_from(&process_cwd, &process_cwd));
 
-        let mut session = controlled_instance_protocol::normalize_app_session(metadata);
-        session.workspace.cwd = cwd.display().to_string();
-        session.paths = AppSessionPaths {
-            session_dir: self
-                .inner
-                .storage_paths
-                .app_sessions_dir
-                .join(expected_id)
-                .display()
-                .to_string(),
-            log_dir: self
-                .inner
-                .storage_paths
-                .log_dir
-                .join("app-sessions")
-                .join(expected_id)
-                .display()
-                .to_string(),
-        };
-        Some(session)
+        let mut record = record;
+        record.insert("workspace".to_string(), json!({ "cwd": cwd }));
+        record.insert(
+            "paths".to_string(),
+            json!({
+                "sessionDir": self.inner.storage_paths.app_sessions_dir.join(expected_id),
+                "logDir": self.inner.storage_paths.log_dir.join("app-sessions").join(expected_id),
+            }),
+        );
+        sanitize_persisted_optional_fields(&mut record);
+        serde_json::from_value::<AppSession>(Value::Object(record))
+            .ok()
+            .map(controlled_instance_protocol::normalize_app_session)
     }
 
     fn recover_persisted_session(&self, mut session: AppSession) -> AppSession {
@@ -3625,7 +3990,8 @@ impl AppRuntime {
             })
         });
         if let Some(process) = session.process.as_mut() {
-            process.exit_code = process.exit_code.or(Some(0));
+            process.exit_code = Some(process.exit_code.flatten());
+            process.signal = Some(process.signal.clone().flatten());
         }
         session
     }
@@ -3751,26 +4117,6 @@ impl AppRuntime {
     fn emit(&self, kind: AppRuntimeChangeKind, session: AppSession) {
         let _ = self.inner.changes.send(AppRuntimeChange { kind, session });
     }
-
-    async fn wait_for_http(&self, url: &str, timeout: std::time::Duration) {
-        let client = reqwest::Client::new();
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                return;
-            }
-            if client
-                .get(url)
-                .timeout(std::time::Duration::from_secs(1))
-                .send()
-                .await
-                .is_ok()
-            {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-    }
 }
 
 struct PreparedClaudeLaunch {
@@ -3800,21 +4146,12 @@ fn prepare_claude_tty_launch(
     }
     let mut args = vec!["--bg".to_string()];
     args.extend(launch_args.iter().cloned());
-    let timeout_ms = std::env::var("TASK_HANDOFF_CLAUDE_BG_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(15_000);
-    let result = capture_command(
-        command,
-        &args,
-        cwd,
-        environment,
-        std::time::Duration::from_millis(timeout_ms),
-    )?;
+    let timeout = claude_background_timeout();
+    let result = capture_command(command, &args, cwd, environment, timeout)?;
     if result.timed_out {
         return Err(AppRuntimeError::spawn(format!(
-            "Claude background launch timed out after {timeout_ms}ms."
+            "Claude background launch timed out after {}ms.",
+            timeout.as_millis()
         )));
     }
     if result.status != Some(0) {
@@ -3859,12 +4196,12 @@ fn prepare_claude_tty_launch(
 }
 
 fn claude_short_from_output(output: &str) -> Option<String> {
-    let labeled = regex::Regex::new(r"\b(?:short|id|worker|session)\D+([a-f0-9]{8})\b")
+    let labeled = regex::Regex::new(r"(?i)\b(?:short|id|worker|session)\D+([a-f0-9]{8})\b")
         .expect("static Claude worker regex");
     if let Some(captures) = labeled.captures(output) {
         return captures.get(1).map(|value| value.as_str().to_string());
     }
-    regex::Regex::new(r"\b([a-f0-9]{8})\b")
+    regex::Regex::new(r"(?i)\b([a-f0-9]{8})\b")
         .expect("static Claude short regex")
         .captures(output)
         .and_then(|captures| captures.get(1).map(|value| value.as_str().to_string()))
@@ -3876,17 +4213,12 @@ fn stop_claude_background(
     cwd: &Path,
     environment: &BTreeMap<String, String>,
 ) {
-    let timeout_ms = std::env::var("TASK_HANDOFF_CLAUDE_BG_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(15_000);
     let _ = capture_command(
         command,
         &["stop".to_string(), short.to_string()],
         cwd,
         environment,
-        std::time::Duration::from_millis(timeout_ms),
+        claude_background_timeout(),
     );
 }
 
@@ -3961,18 +4293,19 @@ impl SessionEntry {
     fn new(metadata: AppSession) -> Self {
         let (clients, _) = broadcast::channel(256);
         let (stop, stop_receiver) = oneshot::channel();
-        let (finished_sender, finished) = oneshot::channel();
+        let (stop_escalation, _) = watch::channel(None);
         Self {
             metadata: RwLock::new(metadata),
             pty: Mutex::new(None),
             terminal: Mutex::new(None),
             stop: Mutex::new(Some(stop)),
             stop_receiver: tokio::sync::Mutex::new(Some(stop_receiver)),
-            finished: tokio::sync::Mutex::new(Some(finished)),
-            finished_sender: Mutex::new(Some(finished_sender)),
             clients,
             dimensions: RwLock::new((DEFAULT_TTY_COLS, DEFAULT_TTY_ROWS)),
             stopping: AtomicBool::new(false),
+            stop_escalation_started: AtomicBool::new(false),
+            stop_escalation: Arc::new(stop_escalation),
+            stop_exit_sent: AtomicBool::new(false),
             processes: Mutex::new(Vec::new()),
             claude_lifecycle: Mutex::new(None),
             opencode_consumer: Mutex::new(None),
@@ -4032,6 +4365,13 @@ impl SessionEntry {
             .map(TerminalScreenState::snapshot)
     }
 
+    fn clear_terminal(&self) {
+        *self
+            .terminal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
     fn clear_pty(&self) {
         *self
             .pty
@@ -4049,6 +4389,7 @@ impl SessionEntry {
 
     fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        let process_pids = self.all_process_pids();
         if let Some(pty) = self
             .pty
             .lock()
@@ -4062,7 +4403,7 @@ impl SessionEntry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        terminate_process_groups(&processes);
+        request_stop_process_groups(&processes);
         if let Some(stop) = self
             .stop
             .lock()
@@ -4071,6 +4412,41 @@ impl SessionEntry {
         {
             let _ = stop.send(());
         }
+        self.start_stop_escalation(process_pids);
+    }
+
+    fn start_stop_escalation(&self, process_pids: Vec<u32>) {
+        if self.stop_escalation_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let completed = self.stop_escalation.clone();
+        tokio::spawn(async move {
+            let remaining = stop_process_groups_with_escalation(process_pids).await;
+            completed.send_replace(Some(remaining));
+        });
+    }
+
+    async fn wait_for_stop_escalation(&self) -> Vec<u32> {
+        let mut receiver = self.stop_escalation.subscribe();
+        loop {
+            if let Some(remaining) = receiver.borrow().clone() {
+                return remaining;
+            }
+            if receiver.changed().await.is_err() {
+                return Vec::new();
+            }
+        }
+    }
+
+    fn notify_exit(&self, code: Option<i32>, signal: Option<String>) {
+        if self.stop_exit_sent.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.clients.send(TtyEvent::Exit { code, signal });
+    }
+
+    fn notify_stop_exit(&self) {
+        self.notify_exit(None, Some("SIGHUP".to_string()));
     }
 
     fn set_claude_lifecycle(&self, short: String, control_socket: PathBuf) {
@@ -4164,22 +4540,14 @@ impl SessionEntry {
             .clone()
     }
 
-    fn take_finished_receiver(&self) -> Option<oneshot::Receiver<()>> {
-        self.finished
-            .try_lock()
-            .ok()
-            .and_then(|mut slot| slot.take())
-    }
-
-    fn finish(&self) {
-        if let Some(sender) = self
-            .finished_sender
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            let _ = sender.send(());
+    fn all_process_pids(&self) -> Vec<u32> {
+        let mut pids = self.process_pids();
+        if let Some(pid) = self.pid() {
+            pids.push(pid);
         }
+        pids.sort_unstable();
+        pids.dedup();
+        pids
     }
 }
 
@@ -4189,9 +4557,10 @@ impl SharedCodexAppServer {
             .child
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        child
+        let child_running = child
             .as_mut()
-            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+        child_running && codex_upstream_is_live(&self.upstream)
     }
 
     fn connection(&self) -> SharedCodexConnection {
@@ -4349,11 +4718,7 @@ async fn wait_for_opencode_health(
         }
         if let Ok(response) = request.send().await {
             if response.status().is_success() {
-                if let Ok(value) = response.json::<Value>().await {
-                    if value.get("healthy").and_then(Value::as_bool) == Some(true) {
-                        return Ok(());
-                    }
-                }
+                return Ok(());
             }
         }
         if tokio::time::Instant::now() >= deadline {
@@ -4374,15 +4739,12 @@ fn normalize_launch_options(
         .title
         .map(|title| title.trim().to_string())
         .filter(|title| !title.is_empty());
-    if options
-        .title
-        .as_ref()
-        .is_some_and(|title| title.chars().count() > 120)
-    {
-        return Err(AppRuntimeError::Invalid(
-            "App title is too long.".to_string(),
-        ));
-    }
+    options.env = options
+        .env
+        .into_iter()
+        .filter(|(key, _)| !key.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_string(), value))
+        .collect();
     options.cwd = options
         .cwd
         .map(|cwd| cwd.trim().to_string())
@@ -4391,7 +4753,7 @@ fn normalize_launch_options(
         .profile_id
         .map(|profile| profile.trim().to_string())
         .filter(|profile| !profile.is_empty())
-        .map(|profile| profile.chars().take(120).collect());
+        .map(|profile| truncate_utf16(&profile, 120));
     if let Some(display) = options.display.take() {
         let mut normalized = AppDisplayOptions::default();
         if let Some(width) = display.width.filter(|width| (320..=7680).contains(width)) {
@@ -4403,22 +4765,128 @@ fn normalize_launch_options(
         {
             normalized.height = Some(height);
         }
-        if let Some(depth) = display.depth.filter(|depth| matches!(depth, 16 | 24 | 32)) {
+        if let Some(depth) = display.depth.filter(|depth| (8..=32).contains(depth)) {
             normalized.depth = Some(depth);
         }
         if normalized != AppDisplayOptions::default() {
             options.display = Some(normalized);
         }
     }
-    if let Some(resume) = &options.ai_session_resume {
-        if resume.ai_session_id.trim().is_empty() || resume.provider_session_id.trim().is_empty() {
-            return Err(AppRuntimeError::Invalid(
+    if let Some(resume) = options.ai_session_resume.take() {
+        let ai_session_id = resume.ai_session_id.trim().to_string();
+        let provider_session_id = resume.provider_session_id.trim().to_string();
+        if ai_session_id.is_empty() || provider_session_id.is_empty() {
+            return Err(AppRuntimeError::ResumeInvalid(
                 "AI session resume requires both AI and provider session ids.".to_string(),
             ));
         }
+        options.ai_session_resume = Some(controlled_instance_protocol::AppAiSessionResume {
+            ai_session_id,
+            provider_session_id,
+        });
     }
     options.display_target = normalize_display_target(options.display_target);
     Ok(options)
+}
+
+fn sanitize_persisted_optional_fields(record: &mut serde_json::Map<String, Value>) {
+    if let Some(launch) = record.get("launch").cloned() {
+        match sanitize_persisted_launch(launch) {
+            Some(launch) => {
+                record.insert(
+                    "launch".to_string(),
+                    serde_json::to_value(launch).unwrap_or(Value::Null),
+                );
+            }
+            None => {
+                record.remove("launch");
+            }
+        }
+    }
+    retain_typed_persisted_field::<AppSessionTty>(record, "tty");
+    retain_typed_persisted_field::<AppSessionDisplay>(record, "display");
+    retain_typed_persisted_field::<AppSessionVnc>(record, "vnc");
+    retain_typed_persisted_field::<AppSessionWeb>(record, "web");
+    retain_typed_persisted_field::<AppSessionAutomation>(record, "automation");
+    retain_typed_persisted_field::<AppSessionProcess>(record, "process");
+    if let Some(bindings) = record.get("bindings").cloned() {
+        let Some(bindings) = bindings.as_array() else {
+            record.remove("bindings");
+            return;
+        };
+        let bindings = bindings
+            .iter()
+            .filter_map(|binding| serde_json::from_value::<AppSessionBinding>(binding.clone()).ok())
+            .collect::<Vec<_>>();
+        record.insert(
+            "bindings".to_string(),
+            serde_json::to_value(bindings).unwrap_or_else(|_| json!([])),
+        );
+    }
+}
+
+fn retain_typed_persisted_field<T>(record: &mut serde_json::Map<String, Value>, key: &str)
+where
+    T: serde::de::DeserializeOwned + Serialize,
+{
+    let Some(value) = record.get(key).cloned() else {
+        return;
+    };
+    match serde_json::from_value::<T>(value) {
+        Ok(value) => {
+            record.insert(
+                key.to_string(),
+                serde_json::to_value(value).unwrap_or(Value::Null),
+            );
+        }
+        Err(_) => {
+            record.remove(key);
+        }
+    }
+}
+
+fn sanitize_persisted_launch(value: Value) -> Option<AppLaunchOptions> {
+    let mut launch = value.as_object()?.clone();
+    for key in ["title", "cwd", "profileId"] {
+        if launch.get(key).is_some_and(|value| !value.is_string()) {
+            launch.remove(key);
+        }
+    }
+    if let Some(args) = launch.get("args").cloned() {
+        let Some(args) = args.as_array() else {
+            launch.remove("args");
+            return serde_json::from_value(Value::Object(launch)).ok();
+        };
+        let args = args
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        launch.insert("args".to_string(), json!(args));
+    }
+    if let Some(env) = launch.get("env").cloned() {
+        let Some(env) = env.as_object() else {
+            launch.remove("env");
+            return serde_json::from_value(Value::Object(launch)).ok();
+        };
+        let env = env
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .as_str()
+                    .map(|value| (key.trim().to_string(), value.to_string()))
+            })
+            .filter(|(key, _)| !key.is_empty())
+            .collect::<BTreeMap<_, _>>();
+        launch.insert("env".to_string(), json!(env));
+    }
+    retain_typed_persisted_field::<AppDisplayOptions>(&mut launch, "display");
+    retain_typed_persisted_field::<AppDisplayTarget>(&mut launch, "displayTarget");
+    retain_typed_persisted_field::<controlled_instance_protocol::AppAiSessionResume>(
+        &mut launch,
+        "aiSessionResume",
+    );
+    serde_json::from_value(Value::Object(launch)).ok()
 }
 
 fn normalize_display_target(target: Option<AppDisplayTarget>) -> Option<AppDisplayTarget> {
@@ -4435,17 +4903,6 @@ fn normalize_display_target(target: Option<AppDisplayTarget>) -> Option<AppDispl
                 .map(|id| id.trim().to_string())
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| "main".to_string());
-            if id.chars().count() > 80
-                || !id
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_ascii_alphanumeric())
-                || id.chars().any(|character| {
-                    !(character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
-                })
-            {
-                return None;
-            }
             Some(AppDisplayTarget {
                 mode: AppDisplayMode::Shared,
                 id: Some(id),
@@ -4483,12 +4940,76 @@ fn chromium_extension_dirs() -> Vec<PathBuf> {
     paths
 }
 
+fn decode_utf8_stream(pending: &mut Vec<u8>, bytes: &[u8]) -> String {
+    pending.extend_from_slice(bytes);
+    let mut output = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(text) => {
+                output.push_str(text);
+                pending.clear();
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if valid > 0 {
+                    output.push_str(std::str::from_utf8(&pending[..valid]).unwrap_or_default());
+                    pending.drain(..valid);
+                }
+                match error.error_len() {
+                    Some(invalid) => {
+                        output.push('\u{fffd}');
+                        pending.drain(..invalid);
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+    output
+}
+
 fn gui_scale_from_env(env: &BTreeMap<String, String>) -> f64 {
     env.get("TASK_HANDOFF_GUI_SCALE")
-        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| {
+            std::env::var("TASK_HANDOFF_GUI_SCALE")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .as_deref()
+        .and_then(parse_js_number)
         .filter(|value| value.is_finite())
         .unwrap_or(1.0)
         .clamp(1.0, 3.0)
+}
+
+fn parse_js_number(value: &str) -> Option<f64> {
+    let value =
+        value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
+    if value.is_empty() {
+        return Some(0.0);
+    }
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0b", 2),
+        ("0B", 2),
+        ("0o", 8),
+        ("0O", 8),
+    ] {
+        if let Some(digits) = value.strip_prefix(prefix) {
+            return i64::from_str_radix(digits, radix)
+                .ok()
+                .map(|value| value as f64);
+        }
+    }
+    match value {
+        "Infinity" | "+Infinity" => Some(f64::INFINITY),
+        "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => value.parse::<f64>().ok().or(Some(f64::NAN)),
+    }
 }
 
 fn format_gui_scale(scale: f64) -> String {
@@ -4805,6 +5326,10 @@ fn allocate_available_port(
     )))
 }
 
+fn parse_display_number(value: &str) -> Option<u32> {
+    value.strip_prefix(':').unwrap_or(value).parse().ok()
+}
+
 fn read_tail(path: &Path, start: u64) -> std::io::Result<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path)?;
@@ -4818,13 +5343,115 @@ fn signal_name(status: std::process::ExitStatus) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
-        status.signal().map(|signal| signal.to_string())
+        status.signal().map(|signal| {
+            signal_number_name(signal)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| signal.to_string())
+        })
     }
     #[cfg(not(unix))]
     {
         let _ = status;
         None
     }
+}
+
+#[cfg(target_os = "linux")]
+fn signal_number_name(signal: i32) -> Option<&'static str> {
+    Some(match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        10 => "SIGUSR1",
+        11 => "SIGSEGV",
+        12 => "SIGUSR2",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        16 => "SIGSTKFLT",
+        17 => "SIGCHLD",
+        18 => "SIGCONT",
+        19 => "SIGSTOP",
+        20 => "SIGTSTP",
+        21 => "SIGTTIN",
+        22 => "SIGTTOU",
+        23 => "SIGURG",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        26 => "SIGVTALRM",
+        27 => "SIGPROF",
+        28 => "SIGWINCH",
+        29 => "SIGIO",
+        30 => "SIGPWR",
+        31 => "SIGSYS",
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn signal_number_name(signal: i32) -> Option<&'static str> {
+    Some(match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        10 => "SIGUSR1",
+        11 => "SIGSEGV",
+        12 => "SIGUSR2",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        16 => "SIGURG",
+        17 => "SIGSTOP",
+        18 => "SIGTSTP",
+        19 => "SIGCONT",
+        20 => "SIGCHLD",
+        21 => "SIGTTIN",
+        22 => "SIGTTOU",
+        23 => "SIGIO",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        26 => "SIGVTALRM",
+        27 => "SIGPROF",
+        28 => "SIGWINCH",
+        29 => "SIGINFO",
+        30 => "SIGUSR1",
+        31 => "SIGUSR2",
+        _ => return None,
+    })
+}
+
+#[cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))]
+fn signal_number_name(signal: i32) -> Option<&'static str> {
+    Some(match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        10 => "SIGUSR1",
+        11 => "SIGSEGV",
+        12 => "SIGUSR2",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        _ => return None,
+    })
 }
 
 fn app_server_exit_fields(
@@ -4843,8 +5470,40 @@ fn app_server_exit_fields(
 fn env_flag(name: &str) -> bool {
     std::env::var(name)
         .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .is_some_and(|value| parse_env_flag(&value))
+}
+
+fn parse_env_flag(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn claude_background_timeout() -> std::time::Duration {
+    claude_background_timeout_from_value(
+        std::env::var("TASK_HANDOFF_CLAUDE_BG_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn claude_background_timeout_from_value(value: Option<&str>) -> std::time::Duration {
+    let milliseconds = value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(15_000.0);
+    std::time::Duration::from_secs_f64(milliseconds / 1000.0)
+}
+
+fn render_gui_argument(argument: &str, session_dir: &Path, cdp_port: u16) -> String {
+    argument
+        .replace("{sessionDir}", &session_dir.display().to_string())
+        .replace("{cdpPort}", &cdp_port.to_string())
+}
+
+fn codex_upstream_is_live(upstream: &CodexAppServerUpstream) -> bool {
+    upstream.socket_path().is_none_or(Path::exists)
 }
 
 fn now_iso() -> String {
@@ -4852,9 +5511,16 @@ fn now_iso() -> String {
 }
 
 fn session_retention_days() -> f64 {
-    std::env::var("TASK_HANDOFF_APP_SESSION_RETENTION_DAYS")
-        .ok()
-        .and_then(|value| value.trim().parse::<f64>().ok())
+    session_retention_days_from(
+        std::env::var("TASK_HANDOFF_APP_SESSION_RETENTION_DAYS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn session_retention_days_from(raw: Option<&str>) -> f64 {
+    raw.filter(|value| !value.is_empty())
+        .and_then(parse_js_number)
         .filter(|days| days.is_finite() && *days > 0.0)
         .unwrap_or(DEFAULT_SESSION_RETENTION_DAYS)
 }
@@ -4865,15 +5531,40 @@ fn session_timestamp(session: &AppSession) -> Option<f64> {
     } else {
         session.updated_at.as_str()
     };
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|timestamp| timestamp.timestamp_millis() as f64)
+    parse_javascript_date(value)
 }
 
-fn prepare_web_app_session(app: &AppCatalogItem, session_dir: &Path) {
-    if app.id != "vscode-web" {
-        return;
+fn parse_javascript_date(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
     }
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(value) {
+        return Some(timestamp.timestamp_millis() as f64);
+    }
+    if let Ok(timestamp) = DateTime::parse_from_rfc2822(value) {
+        return Some(timestamp.timestamp_millis() as f64);
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis() as f64);
+    }
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        let Ok(naive) = NaiveDateTime::parse_from_str(value, format) else {
+            continue;
+        };
+        if let Some(timestamp) = Local.from_local_datetime(&naive).single() {
+            return Some(timestamp.timestamp_millis() as f64);
+        }
+    }
+    None
+}
+
+fn prepare_vscode_web_session(session_dir: &Path) {
     let settings_path = session_dir
         .join("user-data")
         .join("User")
@@ -4997,6 +5688,281 @@ mod tests {
             web_without_managed_term.get("TERM").map(String::as_str),
             Some("app-term")
         );
+    }
+
+    #[test]
+    fn gui_argument_rendering_matches_the_node_placeholders() {
+        assert_eq!(
+            render_gui_argument(
+                "{sessionDir}/profile:{cwd}:{cdpPort}:{port}",
+                Path::new("/tmp/session"),
+                9222
+            ),
+            "/tmp/session/profile:{cwd}:9222:{port}"
+        );
+    }
+
+    #[test]
+    fn custom_xterm_apps_receive_the_terminal_gui_extension() {
+        let mut app = crate::builtin_app_catalog()
+            .into_iter()
+            .find(|app| app.id == "terminal-gui")
+            .expect("terminal gui");
+        app.id = "custom-xterm".to_string();
+        app.command = Some("/usr/local/bin/xterm".to_string());
+        assert_eq!(
+            managed_app_runtime_provider(&app).map(|provider| provider.gui_runtime),
+            Some(ManagedAppGuiRuntime::TerminalGui)
+        );
+
+        app.command = Some("/usr/local/bin/other-terminal".to_string());
+        assert_eq!(
+            managed_app_runtime_provider(&app).map(|provider| provider.gui_runtime),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_background_timeout_uses_javascript_number_parsing() {
+        assert_eq!(
+            claude_background_timeout_from_value(Some(" 2500 ")).as_millis(),
+            2_500
+        );
+        assert_eq!(
+            claude_background_timeout_from_value(Some("2.5e3")).as_millis(),
+            2_500
+        );
+        assert_eq!(
+            claude_background_timeout_from_value(Some("0")).as_millis(),
+            15_000
+        );
+    }
+
+    #[test]
+    fn environment_flags_do_not_trim_values() {
+        assert!(parse_env_flag("TRUE"));
+        assert!(!parse_env_flag(" true"));
+        assert!(!parse_env_flag("true "));
+        assert!(!parse_env_flag(""));
+    }
+
+    #[test]
+    fn persisted_sessions_tolerate_old_optional_shapes_and_missing_workspace() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let value = json!({
+            "id": "app_legacy",
+            "appId": "terminal-tty",
+            "title": "Legacy",
+            "kind": "tty",
+            "status": "exited",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "launch": { "title": "Legacy", "args": null, "cwd": root.path() },
+            "process": { "command": "shell", "exitCode": null, "signal": null },
+            "paths": { "sessionDir": "/old/session", "logDir": "/old/log" }
+        });
+
+        let session = runtime
+            .sanitize_persisted_session(value, "app_legacy")
+            .expect("legacy session");
+        assert_eq!(session.workspace.cwd, root.path().display().to_string());
+        assert!(session
+            .launch
+            .as_ref()
+            .is_some_and(|launch| launch.args.is_empty()));
+        assert_eq!(
+            session.paths.session_dir,
+            root.path()
+                .join("app-sessions/app_legacy")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn restored_running_sessions_expose_explicit_null_process_fields() {
+        let runtime = AppRuntime::new(storage(Path::new("/tmp")), Path::new("/tmp"));
+        let session = serde_json::from_value(json!({
+            "id": "app_running",
+            "appId": "terminal-tty",
+            "title": "Running",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "workspace": { "cwd": "/tmp" },
+            "process": { "command": "shell" },
+            "paths": { "sessionDir": "/tmp/session", "logDir": "/tmp/log" }
+        }))
+        .expect("session");
+
+        let recovered = runtime.recover_persisted_session(session);
+        let serialized = serde_json::to_value(recovered).expect("serialize recovered session");
+        assert_eq!(serialized["status"], "exited");
+        assert_eq!(serialized["process"]["exitCode"], Value::Null);
+        assert_eq!(serialized["process"]["signal"], Value::Null);
+    }
+
+    #[test]
+    fn display_allocation_exhausts_the_configured_range_instead_of_reusing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let catalog = crate::builtin_app_catalog();
+        let app = catalog
+            .iter()
+            .find(|app| app.id == "terminal-gui")
+            .expect("terminal gui");
+        for number in DISPLAY_START..=DISPLAY_END {
+            let mut metadata = session_with_allocated_ports();
+            metadata.id = format!("app_display_{number}");
+            metadata.app_id = app.id.clone();
+            metadata.display = Some(AppSessionDisplay {
+                display: format!(":{number}"),
+                mode: Some("isolated".to_string()),
+                display_session_id: None,
+                width: 800,
+                height: 600,
+                depth: 24,
+                x_pid: None,
+                wm_pid: None,
+                compositor_pid: None,
+                xauthority: None,
+            });
+            runtime
+                .inner
+                .sessions
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(metadata.id.clone(), Arc::new(SessionEntry::new(metadata)));
+        }
+
+        let error = runtime.allocate_display().expect_err("exhausted displays");
+        assert_eq!(error.code(), "APP_RESOURCE_EXHAUSTED");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_reads_ignore_symlinks_and_preserve_fractional_number_failures() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let log_dir = root.path().join("logs/app-sessions/app_logs");
+        std::fs::create_dir_all(&log_dir).expect("log directory");
+        std::fs::write(log_dir.join("app.log"), "x".repeat(2048)).expect("log file");
+        let outside = root.path().join("outside.log");
+        std::fs::write(&outside, "secret").expect("outside log");
+        symlink(&outside, log_dir.join("linked.log")).expect("log symlink");
+        let mut session = session_with_allocated_ports();
+        session.id = "app_logs".to_string();
+        session.paths.log_dir = log_dir.display().to_string();
+        runtime
+            .inner
+            .persisted_sessions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(session.id.clone(), session);
+
+        let logs = runtime.read_logs("app_logs", 4096.0).expect("read logs");
+        assert_eq!(logs["files"].as_array().map(Vec::len), Some(1));
+        assert_eq!(logs["files"][0]["name"], "app.log");
+
+        let error = runtime
+            .read_logs("app_logs", 1024.5)
+            .expect_err("fractional log limit");
+        assert_eq!(error.code(), "APP_LOGS_FAILED");
+    }
+
+    #[test]
+    fn ai_session_resume_arguments_are_owned_by_managed_app_providers() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let catalog = crate::builtin_app_catalog();
+        let codex = catalog.iter().find(|app| app.id == "codex").expect("codex");
+        let terminal = catalog
+            .iter()
+            .find(|app| app.id == "terminal-tty")
+            .expect("terminal");
+        let resume = AppLaunchOptions {
+            ai_session_resume: Some(controlled_instance_protocol::AppAiSessionResume {
+                ai_session_id: "ai-session".to_string(),
+                provider_session_id: "provider-session".to_string(),
+            }),
+            ..AppLaunchOptions::default()
+        };
+
+        assert_eq!(
+            runtime
+                .ai_session_resume_args(codex, &resume)
+                .expect("codex resume"),
+            vec!["resume".to_string(), "provider-session".to_string()]
+        );
+        let error = runtime
+            .ai_session_resume_args(terminal, &resume)
+            .expect_err("unsupported terminal resume");
+        assert_eq!(error.code(), "APP_RESUME_UNSUPPORTED");
+        assert_eq!(
+            error.to_string(),
+            "terminal-tty does not support AI session resume."
+        );
+    }
+
+    #[test]
+    fn invalid_ai_session_resume_identity_uses_the_node_error_code() {
+        let error = normalize_launch_options(AppLaunchOptions {
+            ai_session_resume: Some(controlled_instance_protocol::AppAiSessionResume {
+                ai_session_id: " ".to_string(),
+                provider_session_id: "provider-session".to_string(),
+            }),
+            ..AppLaunchOptions::default()
+        })
+        .expect_err("invalid resume");
+        assert_eq!(error.code(), "APP_RESUME_INVALID");
+
+        let normalized = normalize_launch_options(AppLaunchOptions {
+            ai_session_resume: Some(controlled_instance_protocol::AppAiSessionResume {
+                ai_session_id: " ai-session ".to_string(),
+                provider_session_id: " provider-session ".to_string(),
+            }),
+            ..AppLaunchOptions::default()
+        })
+        .expect("valid resume");
+        assert_eq!(
+            normalized.ai_session_resume,
+            Some(controlled_instance_protocol::AppAiSessionResume {
+                ai_session_id: "ai-session".to_string(),
+                provider_session_id: "provider-session".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn start_resume_rejects_apps_without_resume_capability() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let error = runtime
+            .start_resume(
+                "terminal-tty",
+                root.path().to_str().expect("root"),
+                "ai-session",
+                "provider-session",
+            )
+            .await
+            .expect_err("unsupported resume");
+        assert_eq!(error.code(), "APP_RESUME_UNSUPPORTED");
+    }
+
+    #[test]
+    fn unix_codex_upstream_requires_the_socket_to_exist() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let socket = root.path().join("app-server.sock");
+        let upstream = CodexAppServerUpstream::Unix {
+            socket_path: socket.clone(),
+        };
+        assert!(!codex_upstream_is_live(&upstream));
+        std::fs::write(&socket, b"socket").expect("socket fixture");
+        assert!(codex_upstream_is_live(&upstream));
     }
 
     #[test]
@@ -5130,6 +6096,23 @@ mod tests {
         assert!(CLEANABLE_SESSION_STATUSES.contains(&"exited"));
         assert!(CLEANABLE_SESSION_STATUSES.contains(&"stopped"));
         assert!(CLEANABLE_SESSION_STATUSES.contains(&"failed"));
+        assert_eq!(session_retention_days_from(None), 7.0);
+        assert_eq!(session_retention_days_from(Some("0x10")), 16.0);
+        assert_eq!(session_retention_days_from(Some("0b10")), 2.0);
+        assert_eq!(session_retention_days_from(Some("17.5")), 17.5);
+        assert_eq!(session_retention_days_from(Some("not-a-number")), 7.0);
+        assert_eq!(session_retention_days_from(Some("Infinity")), 7.0);
+    }
+
+    #[test]
+    fn session_timestamps_accept_javascript_date_parse_formats() {
+        assert_eq!(
+            parse_javascript_date("2026-11-02"),
+            Some(1_793_577_600_000.0)
+        );
+        assert!(parse_javascript_date("2026-11-02 03:04:05").is_some());
+        assert!(parse_javascript_date("2026-11-02T03:04:05Z").is_some());
+        assert!(parse_javascript_date("not-a-date").is_none());
     }
 
     #[test]
@@ -5259,21 +6242,7 @@ mod tests {
             r#"{"editor.fontSize":15,"workbench.colorTheme":"Custom"}"#,
         )
         .expect("existing settings");
-        let app = AppCatalogItem {
-            id: "vscode-web".to_string(),
-            name: "VS Code Web".to_string(),
-            kind: AppKind::Web,
-            description: None,
-            command: None,
-            args: None,
-            cwd: None,
-            env: None,
-            display: None,
-            default_display_target: None,
-            automation: None,
-            web: None,
-        };
-        prepare_web_app_session(&app, root.path());
+        prepare_vscode_web_session(root.path());
         let value: Value = read_json(&settings).expect("settings json");
         assert_eq!(value["editor.fontSize"], 15);
         assert_eq!(value["workbench.colorTheme"], "Custom");
@@ -5338,6 +6307,87 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn stop_session_requests_stop_then_escalates_the_whole_session_after_the_grace_period() {
+        use std::time::{Duration, Instant};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let ready = root.path().join("ready");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let session = runtime
+            .start(
+                "terminal-tty",
+                AppLaunchOptions {
+                    env: BTreeMap::from([("SHELL".to_string(), "/bin/sh".to_string())]),
+                    args: vec![
+                        "-c".to_string(),
+                        format!(
+                            "trap '' TERM; : > '{}'; while :; do sleep 1; done",
+                            ready.display()
+                        ),
+                    ],
+                    ..AppLaunchOptions::default()
+                },
+            )
+            .await
+            .expect("tty session");
+        let entry = runtime
+            .inner
+            .sessions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&session.id)
+            .cloned()
+            .expect("session entry");
+        assert!(!entry.all_process_pids().is_empty());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(ready.exists(), "shell did not install its TERM trap");
+
+        let started = Instant::now();
+        let stopped = runtime.stop_session(&session.id).await.expect("stop");
+        assert_eq!(stopped.status, "stopped");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "stop_session must return without waiting for escalation"
+        );
+
+        let remaining = entry.wait_for_stop_escalation().await;
+        assert!(
+            remaining.is_empty(),
+            "process groups still remain: {remaining:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_secs(4),
+            "SIGKILL was sent before the five-second grace period: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn vnc_and_tty_targets_do_not_add_the_node_runtime_restrictions() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+
+        let mut vnc = session_with_allocated_ports();
+        vnc.id = "app_vnc_stopped".to_string();
+        vnc.status = "stopped".to_string();
+        runtime.insert_session(vnc);
+        assert_eq!(
+            runtime.vnc_target("app_vnc_stopped"),
+            Some(("127.0.0.1".to_string(), 6102))
+        );
+
+        let mut tty = session_with_allocated_ports();
+        tty.id = "app_tty_without_metadata".to_string();
+        tty.tty = None;
+        runtime.insert_session(tty);
+        assert!(runtime.tty_attachment("app_tty_without_metadata").is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn tty_attachments_include_the_current_screen_snapshot() {
         let root = tempfile::tempdir().expect("tempdir");
         let runtime = AppRuntime::new(storage(root.path()), root.path());
@@ -5379,7 +6429,7 @@ mod tests {
         assert_eq!(restart.code(), "APP_SESSION_NOT_FOUND");
         let delete = runtime.delete("missing").await.expect_err("delete");
         assert_eq!(delete.code(), "APP_SESSION_NOT_FOUND");
-        let logs = runtime.read_logs("missing", 4096).expect_err("read logs");
+        let logs = runtime.read_logs("missing", 4096.0).expect_err("read logs");
         assert_eq!(logs.code(), "APP_SESSION_NOT_FOUND");
         let screenshot = runtime.screenshot("missing").await.expect_err("screenshot");
         assert_eq!(screenshot.code(), "APP_SESSION_NOT_FOUND");
@@ -5415,5 +6465,26 @@ mod tests {
             ("failed", Some(7), None)
         );
         assert_eq!(app_server_exit_fields(None), ("failed", None, None));
+    }
+    #[test]
+    fn utf8_stream_decoder_preserves_codepoints_split_across_chunks() {
+        let mut pending = Vec::new();
+        assert_eq!(decode_utf8_stream(&mut pending, &[0xe4, 0xb8]), "");
+        assert_eq!(decode_utf8_stream(&mut pending, &[0xad]), "中");
+        assert_eq!(decode_utf8_stream(&mut pending, b"ok"), "ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_names_match_node_exit_signal_strings() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            signal_name(std::process::ExitStatus::from_raw(15)),
+            Some("SIGTERM".to_string())
+        );
+        assert_eq!(
+            signal_name(std::process::ExitStatus::from_raw(9)),
+            Some("SIGKILL".to_string())
+        );
     }
 }

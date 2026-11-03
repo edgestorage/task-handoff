@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use controlled_instance_core::text::truncate_utf16;
 use controlled_instance_protocol::{
     AppInstallPrivilege, AppInstaller, AppInstallerAccess, AppKind, FinalComputerArch,
     FinalComputerCapabilities, FinalComputerPlatform, ManagedAppActionReason,
@@ -688,7 +689,7 @@ fn little_version(
         return None;
     }
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then(|| value.chars().take(120).collect())
+    (!value.is_empty()).then(|| truncate_utf16(&value, 120))
 }
 
 fn privilege_rank(privilege: AppInstallPrivilege) -> u8 {

@@ -21,6 +21,7 @@ use std::{
 pub struct RepositorySessionTarget {
     pub kind: RepositorySessionKind,
     pub id: String,
+    pub session_found: bool,
     pub cwd: Option<String>,
     pub status: Option<String>,
 }
@@ -32,6 +33,7 @@ pub struct ResolvedRepository {
     pub worktree_root: Option<PathBuf>,
     pub git_dir: Option<PathBuf>,
     pub git_common_dir: Option<PathBuf>,
+    pub internal_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,9 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
     let observed_at = now_iso();
     let unavailable =
         |availability| unavailable_repository(target, observed_at.clone(), availability);
+    if !target.session_found {
+        return unavailable(RepositoryAvailability::SessionNotFound);
+    }
     if target
         .status
         .as_deref()
@@ -82,7 +87,7 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
         return unavailable(RepositoryAvailability::CwdMissing);
     };
     let cwd = match fs::canonicalize(cwd) {
-        Ok(path) if path.is_dir() => path,
+        Ok(path) if path.is_dir() && fs::read_dir(&path).is_ok() => path,
         _ => return unavailable(RepositoryAvailability::CwdInaccessible),
     };
 
@@ -124,19 +129,18 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
     let prefix_output = lines.next().unwrap_or_default();
     let worktree_root = match fs::canonicalize(root_output) {
         Ok(path) => path,
-        Err(_) => {
-            return directory_workspace(
-                RepositoryAvailability::NotWorktree,
-                target,
-                observed_at,
-                cwd,
-            )
-        }
+        Err(error) => return git_state_failure(target, observed_at, error),
     };
-    let git_dir = canonical_git_path(git_dir_output, &cwd);
-    let git_common_dir = canonical_git_path(common_dir_output, &cwd);
+    let git_dir = match canonical_git_path(git_dir_output, &cwd) {
+        Ok(path) => path,
+        Err(error) => return git_state_failure(target, observed_at, error),
+    };
+    let git_common_dir = match canonical_git_path(common_dir_output, &cwd) {
+        Ok(path) => path,
+        Err(error) => return git_state_failure(target, observed_at, error),
+    };
 
-    let Ok(status_result) = git
+    let status_result = git
         .run(
             "status",
             &[
@@ -146,25 +150,20 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
                 "--untracked-files=all".to_string(),
             ],
         )
-        .await
-    else {
-        return directory_workspace(
-            RepositoryAvailability::NotWorktree,
-            target,
-            observed_at,
-            cwd,
-        );
+        .await;
+    let status_result = match status_result {
+        Ok(result) => result,
+        Err(error) => return git_state_failure(target, observed_at, error),
     };
     let parsed = parse_porcelain_v2(&status_result.stdout);
-    let index = git
+    let index = match git
         .run("ls-files", &["--stage".to_string(), "-z".to_string()])
         .await
-        .unwrap_or_else(|_| crate::git::GitProcessResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        });
-    let refs = git
+    {
+        Ok(result) => result,
+        Err(error) => return git_state_failure(target, observed_at, error),
+    };
+    let refs = match git
         .run(
             "for-each-ref",
             &[
@@ -174,11 +173,10 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
             ],
         )
         .await
-        .unwrap_or_else(|_| crate::git::GitProcessResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        });
+    {
+        Ok(result) => result,
+        Err(error) => return git_state_failure(target, observed_at, error),
+    };
     let versions = changed_path_versions(&worktree_root, &parsed.records, &index.stdout);
     let head = match parsed.branch.as_deref() {
         Some("(detached)") => RepositoryHead {
@@ -211,7 +209,10 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
     }
     let snapshot_id = hash_id("snapshot", &snapshot_parts);
     let changes = repository_changes(&parsed, &versions, snapshot_id.clone());
-    let remotes = repository_remotes(&git).await;
+    let remotes = match repository_remotes(&git).await {
+        Ok(remotes) => remotes,
+        Err(error) => return git_state_failure(target, observed_at, error),
+    };
     let upstream = parsed.upstream_ref.as_deref().map(|reference| {
         let separator = reference.find('/');
         RepositoryUpstream {
@@ -296,6 +297,7 @@ pub async fn resolve_repository(target: &RepositorySessionTarget) -> ResolvedRep
         worktree_root: Some(worktree_root),
         git_dir: Some(git_dir),
         git_common_dir: Some(git_common_dir),
+        internal_error: None,
     }
 }
 
@@ -327,6 +329,7 @@ pub fn unavailable_repository(
         worktree_root: None,
         git_dir: None,
         git_common_dir: None,
+        internal_error: None,
     }
 }
 
@@ -345,14 +348,43 @@ pub fn repository_availability_code(availability: RepositoryAvailability) -> &'s
 pub fn require_repository(
     resolved: ResolvedRepository,
 ) -> Result<ResolvedRepository, RepositoryOperationError> {
+    if resolved.internal_error.is_some() {
+        return Err(RepositoryOperationError::new(
+            "REPOSITORY_OPERATION_FAILED",
+            "Repository operation failed.",
+        ));
+    }
     if resolved.context.availability != RepositoryAvailability::Available
         || resolved.worktree_root.is_none()
         || resolved.git_common_dir.is_none()
         || resolved.changes.is_none()
     {
         return Err(RepositoryOperationError::with_current(
-            repository_availability_code(resolved.context.availability),
+            repository_requirement_code(&resolved),
             "Repository is unavailable for this session.",
+            &resolved,
+        ));
+    }
+    Ok(resolved)
+}
+
+pub fn require_operation_repository(
+    resolved: ResolvedRepository,
+) -> Result<ResolvedRepository, RepositoryOperationError> {
+    if resolved.internal_error.is_some() {
+        return Err(RepositoryOperationError::new(
+            "REPOSITORY_OPERATION_FAILED",
+            "Repository operation failed.",
+        ));
+    }
+    if resolved.context.availability != RepositoryAvailability::Available
+        || resolved.worktree_root.is_none()
+        || resolved.git_common_dir.is_none()
+        || resolved.changes.is_none()
+    {
+        return Err(RepositoryOperationError::with_current(
+            "REPOSITORY_NOT_WORKTREE",
+            "Repository is unavailable.",
             &resolved,
         ));
     }
@@ -362,14 +394,43 @@ pub fn require_repository(
 pub fn require_workspace(
     resolved: ResolvedRepository,
 ) -> Result<ResolvedRepository, RepositoryOperationError> {
+    if resolved.internal_error.is_some() {
+        return Err(RepositoryOperationError::new(
+            "REPOSITORY_OPERATION_FAILED",
+            "Repository operation failed.",
+        ));
+    }
     if resolved.worktree_root.is_none() || resolved.changes.is_none() {
         return Err(RepositoryOperationError::with_current(
-            repository_availability_code(resolved.context.availability),
+            repository_requirement_code(&resolved),
             "Workspace is unavailable for this session.",
             &resolved,
         ));
     }
     Ok(resolved)
+}
+
+fn repository_requirement_code(resolved: &ResolvedRepository) -> &'static str {
+    if resolved.context.availability == RepositoryAvailability::NotWorktree
+        && resolved.worktree_root.is_none()
+        && resolved.git_common_dir.is_none()
+        && resolved.changes.is_none()
+    {
+        return "REPOSITORY_OPERATION_FAILED";
+    }
+    repository_availability_code(resolved.context.availability)
+}
+
+fn git_state_failure(
+    target: &RepositorySessionTarget,
+    observed_at: String,
+    error: impl std::fmt::Display,
+) -> ResolvedRepository {
+    tracing::warn!(%error, "repository Git state could not be resolved");
+    let mut resolved =
+        unavailable_repository(target, observed_at, RepositoryAvailability::NotWorktree);
+    resolved.internal_error = Some("Repository operation failed.".to_string());
+    resolved
 }
 
 fn directory_workspace(
@@ -415,6 +476,7 @@ fn directory_workspace(
         worktree_root: Some(root),
         git_dir: None,
         git_common_dir: None,
+        internal_error: None,
     }
 }
 
@@ -672,10 +734,8 @@ fn change_status(record: &ParsedStatusRecord) -> RepositoryFileStatus {
     }
 }
 
-async fn repository_remotes(git: &GitProcess) -> Vec<RepositoryRemote> {
-    let Ok(names) = git.run("remote", &[]).await else {
-        return Vec::new();
-    };
+async fn repository_remotes(git: &GitProcess) -> Result<Vec<RepositoryRemote>, GitError> {
+    let names = git.run("remote", &[]).await?;
     let mut remotes = Vec::new();
     for name in names
         .stdout
@@ -685,9 +745,7 @@ async fn repository_remotes(git: &GitProcess) -> Vec<RepositoryRemote> {
     {
         let fetch_url = git
             .run("remote", &["get-url".to_string(), name.to_string()])
-            .await
-            .ok()
-            .map(|result| redact_remote_url(result.stdout.trim()));
+            .await?;
         let push_url = git
             .run(
                 "remote",
@@ -697,16 +755,14 @@ async fn repository_remotes(git: &GitProcess) -> Vec<RepositoryRemote> {
                     name.to_string(),
                 ],
             )
-            .await
-            .ok()
-            .map(|result| redact_remote_url(result.stdout.trim()));
+            .await?;
         remotes.push(RepositoryRemote {
             name: name.to_string(),
-            fetch_url,
-            push_url,
+            fetch_url: Some(redact_remote_url(fetch_url.stdout.trim())),
+            push_url: Some(redact_remote_url(push_url.stdout.trim())),
         });
     }
-    remotes
+    Ok(remotes)
 }
 
 pub fn primary_repository_action(
@@ -751,8 +807,8 @@ pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn canonical_git_path(value: &str, cwd: &Path) -> PathBuf {
-    fs::canonicalize(cwd.join(value)).unwrap_or_else(|_| cwd.join(value))
+fn canonical_git_path(value: &str, cwd: &Path) -> std::io::Result<PathBuf> {
+    fs::canonicalize(cwd.join(value))
 }
 
 fn session_kind_wire(kind: RepositorySessionKind) -> &'static str {
@@ -780,4 +836,44 @@ fn file_mode_bits(metadata: &fs::Metadata) -> u32 {
 #[cfg(not(unix))]
 fn file_mode_bits(_metadata: &fs::Metadata) -> u32 {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> RepositorySessionTarget {
+        RepositorySessionTarget {
+            kind: RepositorySessionKind::AiSession,
+            id: "session-test".to_string(),
+            session_found: true,
+            cwd: Some("/workspace".to_string()),
+            status: Some("idle".to_string()),
+        }
+    }
+
+    #[test]
+    fn git_state_failures_are_not_reported_as_plain_not_worktree() {
+        let failed = git_state_failure(
+            &target(),
+            "2026-11-02T00:00:00.000Z".to_string(),
+            "git status failed",
+        );
+        let error = require_repository(failed).expect_err("failure");
+        assert_eq!(error.code, "REPOSITORY_OPERATION_FAILED");
+        assert!(error.current.is_none());
+    }
+
+    #[test]
+    fn plain_directories_keep_the_node_not_worktree_availability() {
+        let directory = tempfile::tempdir().expect("directory");
+        let resolved = directory_workspace(
+            RepositoryAvailability::NotWorktree,
+            &target(),
+            "2026-11-02T00:00:00.000Z".to_string(),
+            directory.path().to_path_buf(),
+        );
+        let error = require_repository(resolved).expect_err("not worktree");
+        assert_eq!(error.code, "REPOSITORY_NOT_WORKTREE");
+    }
 }

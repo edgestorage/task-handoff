@@ -108,6 +108,7 @@ function runtimeEnvironment({ dataDir, workspace, port }) {
     TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION: "0.0.46",
     TASK_HANDOFF_INSTANCE_ID: "inst_differential",
     TASK_HANDOFF_INSTANCE_NAME: "differential-instance",
+    TASK_HANDOFF_REGISTRATION_TOKEN: "test-registration-token",
     TASK_HANDOFF_DATA_DIR: dataDir,
     TASK_HANDOFF_WORKSPACE: workspace,
     TASK_HANDOFF_WEB_HOST: "127.0.0.1",
@@ -219,10 +220,15 @@ async function request(base, roots, specification) {
   const spec = typeof specification === "function" ? specification() : specification;
   const headers = { ...(spec.headers || {}) };
   if (spec.body !== undefined) headers["content-type"] ||= "application/json";
+  const requestBody = spec.rawBody !== undefined
+    ? spec.rawBody
+    : spec.body === undefined
+      ? undefined
+      : JSON.stringify(spec.body);
   const response = await fetch(`${base}${spec.path}`, {
     method: spec.method || "GET",
     headers,
-    body: spec.body === undefined ? undefined : JSON.stringify(spec.body),
+    body: requestBody,
     signal: AbortSignal.timeout(15_000),
   });
   const text = await response.text();
@@ -326,7 +332,7 @@ async function main() {
         name,
         status: difference ? "mismatch" : "match",
         request: forState(state.node),
-        ...(difference ? { difference } : {}),
+        ...(difference ? { difference, node: nodeResult.canonical, rust: rustResult.canonical } : {}),
       });
       if (difference) {
         console.error(`MISMATCH ${name}: ${JSON.stringify(difference)}`);
@@ -367,6 +373,119 @@ async function main() {
     await compare("instance-capabilities-after-warmup", { path: "/api/instance/capabilities" });
 
     await compare("status-method-not-allowed", { method: "POST", path: "/api/status", body: {} });
+    await compare("unknown-route-invalid-json", {
+      method: "POST",
+      path: "/api/does-not-exist",
+      headers: { "content-type": "application/json" },
+      rawBody: "{",
+    });
+    await compare("method-not-allowed-invalid-json", {
+      method: "POST",
+      path: "/api/status",
+      headers: { "content-type": "application/json" },
+      rawBody: "{",
+    });
+    await compare("empty-body-without-content-type", {
+      method: "POST",
+      path: "/api/ai-sessions",
+    });
+    await compare("typed-empty-body-without-content-type", {
+      method: "POST",
+      path: "/api/apps/browser/install",
+    });
+    await compare("draft-stream-null-body", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      headers: { "content-type": "application/json" },
+      rawBody: "null",
+    });
+    await compare("draft-stream-empty-body-without-content-type", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+    });
+    await compare("empty-json-body", {
+      method: "POST",
+      path: "/api/ai-sessions",
+      headers: { "content-type": "application/json" },
+      rawBody: "",
+    });
+    await compare("invalid-json-body", {
+      method: "POST",
+      path: "/api/ai-sessions",
+      headers: { "content-type": "application/json" },
+      rawBody: "{",
+    });
+    await compare("text-plain-body", {
+      method: "POST",
+      path: "/api/ai-sessions",
+      headers: { "content-type": "text/plain" },
+      rawBody: "hello",
+    });
+    await compare("empty-text-plain-body", {
+      method: "POST",
+      path: "/api/ai-sessions",
+      headers: { "content-type": "text/plain" },
+      rawBody: "",
+    });
+    for (const [name, rawBody] of [
+      ["json-null-body", "null"],
+      ["json-false-body", "false"],
+      ["json-zero-body", "0"],
+      ["json-empty-string-body", '""'],
+      ["json-array-body", "[]"],
+    ]) {
+      await compare(name, {
+        method: "POST",
+        path: "/api/ai-sessions",
+        headers: { "content-type": "application/json" },
+        rawBody,
+      });
+    }
+    for (const [name, rawBody] of [
+      ["typed-json-null-body", "null"],
+      ["typed-json-false-body", "false"],
+      ["typed-json-zero-body", "0"],
+      ["typed-json-empty-string-body", '""'],
+    ]) {
+      await compare(name, {
+        method: "POST",
+        path: "/api/apps/browser/install",
+        headers: { "content-type": "application/json" },
+        rawBody,
+      });
+    }
+    await compare("unsupported-json-media-type", {
+      method: "POST",
+      path: "/api/ai-sessions",
+      headers: { "content-type": "application/xml" },
+      rawBody: "<session />",
+    });
+    for (const [name, suffix, rawBody] of [
+      ["story-content-get-null", "/get", "null"],
+      ["story-content-get-primitive", "/get", '"value"'],
+      ["story-content-set-null", "/set", "null"],
+      ["story-content-set-array", "/set", "[]"],
+    ]) {
+      await compare(name, {
+        method: "POST",
+        path: `/api/ai-sessions/ses_missing/story-content${suffix}`,
+        headers: { "content-type": "application/json" },
+        rawBody,
+      });
+    }
+    await compare("story-content-get-empty-body-without-content-type", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/story-content/get",
+    });
+    await compare("story-content-set-empty-body-without-content-type", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/story-content/set",
+    });
+    await compare("oversized-json-body", {
+      method: "POST",
+      path: "/api/triggers",
+      body: { padding: "x".repeat(1024 * 1024) },
+    });
     await compare("invalid-trigger-body", {
       method: "POST",
       path: "/api/triggers",
@@ -376,6 +495,184 @@ async function main() {
         action: { promptTemplate: "Run" },
         deployment: { target: { type: "ai-session", aiSessionId: "ses_missing" } },
       },
+    });
+    await compare("invalid-trigger-empty-create", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {},
+    });
+    await compare("invalid-trigger-unknown-field", {
+      method: "POST",
+      path: "/api/triggers",
+      body: { future: true },
+    });
+    await compare("invalid-trigger-name", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "   ",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-description", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        description: 1,
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-source-missing", {
+      method: "POST",
+      path: "/api/triggers",
+      body: { name: "Trigger", action: { promptTemplate: "Run" } },
+    });
+    await compare("invalid-trigger-source-type", {
+      method: "POST",
+      path: "/api/triggers",
+      body: { name: "Trigger", source: { type: "future" }, action: { promptTemplate: "Run" } },
+    });
+    await compare("invalid-trigger-schedule-interval", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 999 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-schedule-interval-unsafe", {
+      method: "POST",
+      path: "/api/triggers",
+      headers: { "content-type": "application/json" },
+      rawBody: '{"name":"Unsafe","source":{"type":"schedule","scheduleKind":"interval","intervalMs":9007199254740992},"action":{"promptTemplate":"Run"}}',
+    });
+    await compare("valid-trigger-schedule-interval-exponent", {
+      method: "POST",
+      path: "/api/triggers",
+      headers: { "content-type": "application/json" },
+      rawBody: '{"name":"Exponent Trigger","source":{"type":"schedule","scheduleKind":"interval","intervalMs":6e4},"action":{"promptTemplate":"Run"},"deployment":{"target":{"type":"ai-session","aiSessionId":"ses_missing"}}}',
+    });
+    await compare("invalid-trigger-schedule-daily", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "daily", timeOfDay: "24:00", timezone: "" },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-schedule-weekly", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "weekly", weekdays: [], timeOfDay: "12:00", timezone: "UTC" },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-file-roots", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "file-change", roots: [], globs: ["**/*"], debounceMs: 1500 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-file-globs", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "file-change", roots: ["."], globs: [""], debounceMs: 1500 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-file-debounce", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "file-change", roots: ["."], globs: ["**/*"], debounceMs: 99 },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-ai-status", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "ai-session", statuses: ["future"] },
+        action: { promptTemplate: "Run" },
+      },
+    });
+    await compare("invalid-trigger-action", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: {},
+      },
+    });
+    await compare("invalid-trigger-policy", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: { promptTemplate: "Run" },
+        policy: { maxConcurrentRuns: 0, whenBusy: "future", future: true },
+      },
+    });
+    await compare("invalid-trigger-deployment-target", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: { promptTemplate: "Run" },
+        deployment: { target: {} },
+      },
+    });
+    await compare("invalid-trigger-deployment-unknown", {
+      method: "POST",
+      path: "/api/triggers",
+      body: {
+        name: "Trigger",
+        source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000 },
+        action: { promptTemplate: "Run" },
+        deployment: { target: { type: "ai-session", aiSessionId: "ses_missing" }, future: true },
+      },
+    });
+    await compare("invalid-trigger-patch-unknown", {
+      method: "PATCH",
+      path: "/api/triggers/trg_missing",
+      body: { future: true },
+    });
+    await compare("invalid-trigger-patch-name", {
+      method: "PATCH",
+      path: "/api/triggers/trg_missing",
+      body: { name: "   " },
+    });
+    await compare("invalid-trigger-patch-description-type", {
+      method: "PATCH",
+      path: "/api/triggers/trg_missing",
+      body: { description: 1 },
+    });
+    await compare("missing-trigger-patch-null-description", {
+      method: "PATCH",
+      path: "/api/triggers/trg_missing",
+      body: { description: null },
+    });
+    await compare("invalid-trigger-run-unknown", {
+      method: "POST",
+      path: "/api/triggers/trg_missing/run",
+      body: { future: true },
     });
     await compare("missing-trigger", { path: "/api/triggers/config_missing" });
     await compare("invalid-ai-session-create", { method: "POST", path: "/api/ai-sessions", body: { agent: "unknown" } });
@@ -507,6 +804,164 @@ async function main() {
       path: "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567/complete",
       body: { unexpected: true },
     });
+    await compare("invalid-attachment-upload-query-empty", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts",
+      rawBody: "",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-query-unknown", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=1&future=1",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-query-size", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=1.5",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-query-zero-size", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=0",
+      rawBody: "",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-session-order", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=session&scopeId=ses_missing&kind=file&name=file.txt&mime=text/plain&size=1",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-image-mime", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=image&name=file.txt&mime=text/plain&size=1",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-content-size", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=2",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-upload-media-type", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=1",
+      rawBody: "x",
+      headers: { "content-type": "application/pdf" },
+    });
+    await compare("invalid-attachment-upload-missing-media-type", {
+      method: "POST",
+      path: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=scope&kind=file&name=file.txt&mime=text/plain&size=1",
+      rawBody: "x",
+      headers: { "content-type": "" },
+    });
+    await compare("invalid-attachment-stream-begin-empty", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      body: {},
+    });
+    await compare("invalid-attachment-stream-begin-id", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      body: {
+        attachmentId: "bad",
+        scopeType: "session",
+        scopeId: "ses_missing",
+        kind: "file",
+        name: "file.txt",
+        mime: "text/plain",
+        size: 1,
+      },
+    });
+    await compare("invalid-attachment-stream-begin-unknown", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      body: {
+        attachmentId: "cia_0123456789abcdef01234567",
+        scopeType: "session",
+        scopeId: "ses_missing",
+        kind: "file",
+        name: "file.txt",
+        mime: "text/plain",
+        size: 1,
+        future: true,
+      },
+    });
+    await compare("invalid-attachment-stream-begin-size-null", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      body: {
+        attachmentId: "cia_0123456789abcdef01234567",
+        scopeType: "session",
+        scopeId: "ses_missing",
+        kind: "file",
+        name: "file.txt",
+        mime: "text/plain",
+        size: null,
+      },
+    });
+    await compare("missing-attachment-stream-begin-session", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams",
+      body: {
+        attachmentId: "cia_0123456789abcdef01234567",
+        scopeType: "session",
+        scopeId: "ses_missing",
+        kind: "file",
+        name: "file.txt",
+        mime: "text/plain",
+        size: 1,
+      },
+    });
+    await compare("invalid-attachment-stream-append-id", {
+      method: "PUT",
+      path: "/api/ai-session-attachments/draft-streams/bad?offset=0",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-stream-append-offset-missing", {
+      method: "PUT",
+      path: "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-stream-append-offset-unknown", {
+      method: "PUT",
+      path: "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=0&future=1",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-stream-append-offset-negative", {
+      method: "PUT",
+      path: "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=-1",
+      rawBody: "x",
+      headers: { "content-type": "application/octet-stream" },
+    });
+    await compare("invalid-attachment-stream-complete-id", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams/bad/complete",
+      body: {},
+    });
+    await compare("invalid-attachment-stream-complete-body-order", {
+      method: "POST",
+      path: "/api/ai-session-attachments/draft-streams/bad/complete",
+      body: { future: true },
+    });
+    await compare("invalid-attachment-stream-cancel-id", {
+      method: "DELETE",
+      path: "/api/ai-session-attachments/draft-streams/bad",
+    });
+    await compare("invalid-attachment-draft-cancel-query", {
+      method: "DELETE",
+      path: "/api/ai-session-attachments/drafts/att_0123456789abcdef01234567?scopeType=session",
+    });
+    await compare("missing-attachment-draft-cancel", {
+      method: "DELETE",
+      path: "/api/ai-session-attachments/drafts/att_0123456789abcdef01234567?scopeType=session&scopeId=ses_missing",
+    });
     await compare("invalid-app-profile-create-field", {
       method: "POST",
       path: "/api/apps/browser/profiles",
@@ -517,10 +972,318 @@ async function main() {
       path: "/api/apps/browser/profiles/brp_missing",
       body: { name: "Differential", unexpected: true },
     });
+    await compare("invalid-app-profile-name-utf16", {
+      method: "POST",
+      path: "/api/apps/browser/profiles",
+      body: { name: "😀".repeat(31) },
+    });
     await compare("invalid-app-session-rename-field", {
       method: "PATCH",
       path: "/api/apps/sessions/aps_missing",
       body: { title: "Differential", unexpected: true },
+    });
+    await compare("invalid-app-session-rename-missing-title", {
+      method: "PATCH",
+      path: "/api/apps/sessions/aps_missing",
+      body: {},
+    });
+    await compare("invalid-app-session-rename-utf16", {
+      method: "PATCH",
+      path: "/api/apps/sessions/aps_missing",
+      body: { title: "😀".repeat(61) },
+    });
+    await compare("valid-app-session-rename-utf16-boundary", {
+      method: "PATCH",
+      path: "/api/apps/sessions/aps_missing",
+      body: { title: "😀".repeat(60) },
+    });
+    await compare("invalid-app-session-display-width", {
+      method: "POST",
+      path: "/api/apps/sessions/aps_missing/display",
+      body: { width: 319 },
+    });
+    await compare("invalid-app-session-display-type", {
+      method: "POST",
+      path: "/api/apps/sessions/aps_missing/display",
+      body: { height: "1080" },
+    });
+    await compare("app-session-display-integral-float", {
+      method: "POST",
+      path: "/api/apps/sessions/aps_missing/display",
+      body: { width: 320.0 },
+    });
+    await compare("app-session-display-strips-unknown-field", {
+      method: "POST",
+      path: "/api/apps/sessions/aps_missing/display",
+      body: { width: 1280, future: true },
+    });
+    await compare("invalid-app-management-request-id", {
+      method: "POST",
+      path: "/api/apps/browser/install",
+      body: { requestId: 1 },
+    });
+    await compare("invalid-app-management-unknown-field", {
+      method: "POST",
+      path: "/api/apps/browser/install",
+      body: { unexpected: true },
+    });
+    await compare("invalid-model-environment-null-key", {
+      method: "PUT",
+      path: "/api/internal/model-environment",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { OPENAI_API_KEY: null },
+    });
+    await compare("invalid-model-environment-key-type", {
+      method: "PUT",
+      path: "/api/internal/model-environment",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { OPENAI_BASE_URL: 42 },
+    });
+    await compare("model-environment-strips-unknown-key", {
+      method: "PUT",
+      path: "/api/internal/model-environment",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { OPENAI_BASE_URL: "https://models.example/v1", future: true },
+    });
+    await compare("invalid-model-catalog-empty", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: {},
+    });
+    await compare("invalid-model-catalog-null", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: null,
+    });
+    await compare("invalid-model-catalog-array", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: [],
+    });
+    await compare("invalid-model-catalog-version", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { protocolVersion: "future", instanceId: "inst_differential", entities: [], updatedAt: "2026-11-03T00:00:00.000Z" },
+    });
+    await compare("invalid-model-catalog-instance", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { protocolVersion: "2026-08-27", entities: [], updatedAt: "2026-11-03T00:00:00.000Z" },
+    });
+    await compare("invalid-model-catalog-updated-at", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { protocolVersion: "2026-08-27", instanceId: "inst_differential", entities: [], updatedAt: "2026-11-03 00:00:00" },
+    });
+    const catalogUpdatedAt = "2026-11-03T00:00:00.000Z";
+    const directCatalogEntity = (overrides = {}) => ({
+      id: "entity-differential",
+      protocols: ["openai-responses"],
+      modelNames: [{ upstreamName: "upstream-differential", name: "Differential Model", order: 0 }],
+      endpoint: "https://models.example.test/v1",
+      key: "differential-key",
+      ...overrides,
+    });
+    const relayCatalogEntity = (overrides = {}) => ({
+      id: "entity-differential",
+      protocols: ["openai-responses"],
+      modelNames: [{ upstreamName: "upstream-differential", name: "Differential Model", order: 0 }],
+      routes: [{ protocol: "openai-responses", baseUrl: "https://relay.example.test/v1" }],
+      ...overrides,
+    });
+    const directCatalog = (overrides = {}) => ({
+      protocolVersion: "2026-08-27",
+      instanceId: "inst_differential",
+      entities: [directCatalogEntity()],
+      updatedAt: catalogUpdatedAt,
+      ...overrides,
+    });
+    const relayCatalog = (overrides = {}) => ({
+      protocolVersion: "2026-10-02",
+      instanceId: "inst_differential",
+      entities: [relayCatalogEntity()],
+      updatedAt: catalogUpdatedAt,
+      ...overrides,
+    });
+    for (const [name, body] of [
+      ["invalid-model-catalog-missing-entities", directCatalog({ entities: undefined })],
+      ["invalid-model-catalog-entities-null", directCatalog({ entities: null })],
+      ["invalid-model-catalog-entity-primitive", directCatalog({ entities: [1] })],
+      ["invalid-model-catalog-entity-missing-id", directCatalog({ entities: [directCatalogEntity({ id: undefined })] })],
+      ["invalid-model-catalog-entity-blank-id", directCatalog({ entities: [directCatalogEntity({ id: "   " })] })],
+      ["invalid-model-catalog-protocols-missing", directCatalog({ entities: [directCatalogEntity({ protocols: undefined })] })],
+      ["invalid-model-catalog-protocols-empty", directCatalog({ entities: [directCatalogEntity({ protocols: [] })] })],
+      ["invalid-model-catalog-protocol-unknown", directCatalog({ entities: [directCatalogEntity({ protocols: ["future"] })] })],
+      ["invalid-model-catalog-model-names-missing", directCatalog({ entities: [directCatalogEntity({ modelNames: undefined })] })],
+      ["invalid-model-catalog-model-names-empty", directCatalog({ entities: [directCatalogEntity({ modelNames: [] })] })],
+      ["invalid-model-catalog-model-entry-primitive", directCatalog({ entities: [directCatalogEntity({ modelNames: [1] })] })],
+      ["invalid-model-catalog-model-name-missing", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ order: 0 }] })] })],
+      ["invalid-model-catalog-model-name-blank", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "   ", order: 0 }] })] })],
+      ["invalid-model-catalog-upstream-null", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ upstreamName: null, name: "Model", order: 0 }] })] })],
+      ["invalid-model-catalog-order-missing", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "Model" }] })] })],
+      ["invalid-model-catalog-order-fractional", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "Model", order: 1.5 }] })] })],
+      ["invalid-model-catalog-order-too-big", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "Model", order: 1000001 }] })] })],
+      ["invalid-model-catalog-order-unsafe", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "Model", order: 9007199254740992 }] })] })],
+      ["invalid-model-catalog-order-negative-unsafe", directCatalog({ entities: [directCatalogEntity({ modelNames: [{ name: "Model", order: -9007199254740992 }] })] })],
+      ["invalid-model-catalog-endpoint-missing", directCatalog({ entities: [directCatalogEntity({ endpoint: undefined })] })],
+      ["invalid-model-catalog-key-null", directCatalog({ entities: [directCatalogEntity({ key: null })] })],
+      ["invalid-model-catalog-missing-updated-at", directCatalog({ updatedAt: undefined })],
+      ["invalid-model-catalog-updated-at-offset", directCatalog({ updatedAt: "2026-11-03T00:00:00+00:00" })],
+      ["invalid-model-catalog-updated-at-spaced", directCatalog({ updatedAt: " 2026-11-03T00:00:00.000Z" })],
+      ["invalid-model-catalog-relay-routes-missing", relayCatalog({ entities: [relayCatalogEntity({ routes: undefined })] })],
+      ["invalid-model-catalog-relay-routes-empty", relayCatalog({ entities: [relayCatalogEntity({ routes: [] })] })],
+      ["invalid-model-catalog-relay-route-primitive", relayCatalog({ entities: [relayCatalogEntity({ routes: [1] })] })],
+      ["invalid-model-catalog-relay-route-unknown-protocol", relayCatalog({ entities: [relayCatalogEntity({ routes: [{ protocol: "future", baseUrl: "https://relay.example.test/v1" }] })] })],
+      ["invalid-model-catalog-relay-route-duplicate", relayCatalog({ entities: [relayCatalogEntity({ routes: [
+        { protocol: "openai-responses", baseUrl: "https://relay.example.test/v1" },
+        { protocol: "openai-responses", baseUrl: "https://relay.example.test/v2" },
+      ] })] })],
+      ["invalid-model-catalog-relay-base-url-null", relayCatalog({ entities: [relayCatalogEntity({ routes: [{ protocol: "openai-responses", baseUrl: null }] })] })],
+    ]) {
+      await compare(name, {
+        method: "PUT",
+        path: "/api/internal/model-catalog",
+        headers: { authorization: "Bearer test-registration-token" },
+        body,
+      });
+    }
+    await compare("valid-model-catalog-direct-normalization", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: directCatalog({
+        instanceId: "  inst_differential  ",
+        future: true,
+        entities: [directCatalogEntity({
+          id: "  entity-differential  ",
+          future: true,
+          modelNames: [{
+            upstreamName: "  upstream-differential  ",
+            name: "  Differential Model  ",
+            order: 6e4,
+            future: true,
+          }],
+          endpoint: "  https://models.example.test/v1  ",
+          key: "  differential-key  ",
+        })],
+      }),
+    });
+    await compare("valid-model-catalog-direct-state", {
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+    });
+    await compare("valid-model-catalog-bom-normalization", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: directCatalog({
+        instanceId: "\uFEFFinst_differential\uFEFF",
+        entities: [directCatalogEntity({
+          id: "\uFEFFentity-bom\uFEFF",
+          modelNames: [{
+            upstreamName: "\uFEFFupstream-bom\uFEFF",
+            name: "\uFEFFBOM Model\uFEFF",
+            order: 0,
+          }],
+          endpoint: "\uFEFFhttps://models.example.test/bom\uFEFF",
+          key: "\uFEFFbom-key\uFEFF",
+        })],
+      }),
+    });
+    await compare("valid-model-catalog-bom-state", {
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+    });
+    await compare("valid-model-catalog-order-exponent", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: {
+        authorization: "Bearer test-registration-token",
+        "content-type": "application/json",
+      },
+      rawBody: JSON.stringify(directCatalog()).replace('"order":0', '"order":6e4'),
+    });
+    await compare("valid-model-catalog-relay-normalization", {
+      method: "PUT",
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: relayCatalog({
+        future: true,
+        entities: [relayCatalogEntity({
+          id: "  relay-entity  ",
+          protocols: ["openai-responses", "anthropic-messages"],
+          modelNames: [{ upstreamName: "  relay-upstream  ", name: "  Relay Model  ", order: 320.0, future: true }],
+          routes: [
+            { protocol: "openai-responses", baseUrl: "  https://relay.example.test/responses  ", future: true },
+            { protocol: "anthropic-messages", baseUrl: "https://relay.example.test/anthropic" },
+          ],
+          future: true,
+        })],
+      }),
+    });
+    await compare("valid-model-catalog-relay-state", {
+      path: "/api/internal/model-catalog",
+      headers: { authorization: "Bearer test-registration-token" },
+    });
+    await compare("invalid-codex-settings-unknown-field", {
+      method: "PUT",
+      path: "/api/internal/codex-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { future: true },
+    });
+    await compare("invalid-codex-settings-verbosity", {
+      method: "PUT",
+      path: "/api/internal/codex-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { modelVerbosity: "bogus" },
+    });
+    await compare("invalid-codex-settings-multi-agent-field", {
+      method: "PUT",
+      path: "/api/internal/codex-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { multiAgent: { enabled: true, future: true } },
+    });
+    await compare("invalid-codex-settings-concurrency", {
+      method: "PUT",
+      path: "/api/internal/codex-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { multiAgent: { enabled: true, maxConcurrentThreads: 65 } },
+    });
+    await compare("invalid-node-agent-connection-url", {
+      method: "PUT",
+      path: "/api/internal/node-agent-connection",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { nodeAgentUrl: "not a url" },
+    });
+    await compare("invalid-node-agent-connection-unknown-field", {
+      method: "PUT",
+      path: "/api/internal/node-agent-connection",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { nodeAgentUrl: "http://127.0.0.1:1234", future: true },
+    });
+    await compare("invalid-ai-session-persistence-settings-missing-limit", {
+      method: "PUT",
+      path: "/api/internal/ai-session-persistence-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: {},
+    });
+    await compare("invalid-ai-session-persistence-settings-limit", {
+      method: "PUT",
+      path: "/api/internal/ai-session-persistence-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { historyLimit: 0 },
+    });
+    await compare("invalid-ai-session-persistence-settings-unknown-field", {
+      method: "PUT",
+      path: "/api/internal/ai-session-persistence-settings",
+      headers: { authorization: "Bearer test-registration-token" },
+      body: { historyLimit: 10, future: true },
     });
     await compare("missing-ai-session", { path: "/api/ai-sessions/ses_missing" });
     await compare("invalid-config-sync-batch", { method: "POST", path: "/api/config-sync", body: { programs: [] } });
@@ -550,6 +1313,346 @@ async function main() {
       body: { direction: "import", programIds: ["codex"], workspaceFolder: ".", unexpected: true },
     });
     await compare("invalid-config-sync-direction", { method: "POST", path: "/api/config-sync/copy/codex", body: {} });
+    await compare("invalid-config-sync-folders-depth-too-big", {
+      path: "/api/config-sync/folders?depth=3",
+    });
+    await compare("invalid-config-sync-folders-depth-type", {
+      path: "/api/config-sync/folders?depth=abc",
+    });
+    await compare("invalid-config-sync-folders-unknown-query", {
+      path: "/api/config-sync/folders?unexpected=1",
+    });
+
+    await compare("invalid-repository-context-query", {
+      path: "/api/ai-sessions/ses_missing/repository/context?unexpected=1",
+    });
+    await compare("invalid-repository-directories-query", {
+      path: "/api/ai-sessions/ses_missing/repository/directories?path=" + "x".repeat(4097),
+    });
+    await compare("invalid-repository-file-search-query", {
+      path: "/api/ai-sessions/ses_missing/repository/files/search?query=%20&limit=0",
+    });
+    await compare("invalid-repository-diff-query", {
+      path: "/api/ai-sessions/ses_missing/repository/diff?path=a&scope=bogus",
+    });
+    await compare("invalid-repository-worktree-create", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+      body: {},
+    });
+    await compare("invalid-repository-worktree-remove", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees/remove",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-worktrees-list", {
+      method: "POST",
+      path: "/api/repository/workspace/worktrees/list",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-worktree-create", {
+      method: "POST",
+      path: "/api/repository/workspace/worktrees",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-worktree-remove", {
+      method: "POST",
+      path: "/api/repository/workspace/worktrees/remove",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-move-preflight", {
+      method: "POST",
+      path: "/api/repository/workspace/worktrees/move-to-main/preflight",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-move", {
+      method: "POST",
+      path: "/api/repository/workspace/worktrees/move-to-main",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-inspect", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/inspect",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-checkout", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/checkout",
+      body: {},
+    });
+    await compare("invalid-repository-file-create", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: {},
+    });
+    await compare("invalid-repository-file-write", {
+      method: "PUT",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: {},
+    });
+    await compare("invalid-repository-file-rename", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/files/rename",
+      body: {},
+    });
+    await compare("invalid-repository-file-delete", {
+      method: "DELETE",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: {},
+    });
+    await compare("invalid-repository-stage", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/index/stage",
+      body: {},
+    });
+    await compare("invalid-repository-commit", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/commits",
+      body: {},
+    });
+    await compare("invalid-repository-branch-create", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/branches/create",
+      body: {},
+    });
+    await compare("invalid-repository-publish-confirmation", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/delivery/publish",
+      body: {
+        expectedSnapshotId: "snapshot",
+        remote: "origin",
+        sourceBranch: "feature",
+        targetBranch: "feature",
+        setUpstream: true,
+      },
+    });
+    await compare("invalid-repository-start-ai-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/ai-sessions",
+      body: {},
+    });
+    await compare("invalid-repository-create-worktree-ai-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees/ai-sessions",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-create-ai-session", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/create",
+      body: {},
+    });
+    await compare("invalid-repository-workspace-cwd-null", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/inspect",
+      body: { cwd: null },
+    });
+    await compare("invalid-repository-workspace-cwd-relative", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/inspect",
+      body: { cwd: { type: "runtime-path", path: "relative" } },
+    });
+    await compare("invalid-repository-workspace-cwd-unknown", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/inspect",
+      body: { cwd: { type: "runtime-path", path: "/tmp", future: true } },
+    });
+    await compare("invalid-repository-worktree-discriminator", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+      body: { mode: "future" },
+    });
+    await compare("invalid-repository-worktree-fields", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+      body: {
+        mode: "new-branch",
+        branchName: "bad name",
+        startRef: "main",
+        expectedSnapshotId: "snapshot",
+        future: true,
+      },
+    });
+    await compare("invalid-repository-worktree-remove-confirm", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees/remove",
+      body: { expectedSnapshotId: "snapshot", worktreeId: "worktree", confirm: false },
+    });
+    await compare("invalid-repository-stage-empty-paths", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/index/stage",
+      body: { expectedSnapshotId: "snapshot", paths: [] },
+    });
+    await compare("invalid-repository-stage-path-entry", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/index/stage",
+      body: { expectedSnapshotId: "snapshot", paths: [{}] },
+    });
+    await compare("invalid-repository-stage-unknown", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/index/stage",
+      body: { expectedSnapshotId: "snapshot", paths: [{ path: "a", expectedVersion: "0123456789abcdef" }], future: true },
+    });
+    await compare("invalid-repository-discard-confirm", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/discard/worktree",
+      body: { expectedSnapshotId: "snapshot", paths: [{ path: "a", expectedVersion: "0123456789abcdef" }] },
+    });
+    await compare("invalid-repository-file-create-unknown", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: { path: "a", content: "", expectedAbsent: true, expectedSnapshotId: "snapshot", future: true },
+    });
+    await compare("invalid-repository-file-write-fields", {
+      method: "PUT",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: { path: "../a", content: 1, expectedVersion: "short", expectedSnapshotId: "" },
+    });
+    await compare("invalid-repository-file-rename-fields", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/files/rename",
+      body: {
+        path: "a",
+        destination: "../b",
+        expectedVersion: "short",
+        expectedDestinationAbsent: false,
+        expectedSnapshotId: "snapshot",
+      },
+    });
+    await compare("invalid-repository-file-delete-confirm", {
+      method: "DELETE",
+      path: "/api/ai-sessions/ses_missing/repository/files",
+      body: { path: "a", expectedVersion: "0123456789abcdef", expectedSnapshotId: "snapshot", confirm: false },
+    });
+    await compare("invalid-repository-branch-create-name", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/branches/create",
+      body: { expectedSnapshotId: "snapshot", name: "bad name" },
+    });
+    await compare("invalid-repository-fetch-remote", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/delivery/fetch",
+      body: { expectedSnapshotId: "snapshot", remote: "bad name" },
+    });
+    await compare("repository-publish-valid-body-missing-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/delivery/publish",
+      body: {
+        expectedSnapshotId: "snapshot",
+        remote: "origin",
+        sourceBranch: "feature",
+        targetBranch: "feature",
+        setUpstream: false,
+      },
+    });
+    await compare("invalid-repository-start-ai-session-agent", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/ai-sessions",
+      body: { agent: "future" },
+    });
+    await compare("invalid-repository-start-ai-session-selection", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/ai-sessions",
+      body: { agent: "codex", workspaceSelection: { type: "future" } },
+    });
+    await compare("invalid-repository-start-ai-session-permission", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/ai-sessions",
+      body: { agent: "codex", permissionMode: "future" },
+    });
+    await compare("invalid-repository-create-worktree-ai-session-worktree", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees/ai-sessions",
+      body: { agent: "codex", worktree: {} },
+    });
+    await compare("invalid-repository-workspace-create-no-selection", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/create",
+      body: {
+        agent: "codex",
+        cwd: { type: "runtime-path", path: "/tmp" },
+        message: "hello",
+        clientRequestId: "differential-workspace",
+      },
+    });
+    await compare("invalid-repository-workspace-create-both-selections", {
+      method: "POST",
+      path: "/api/repository/ai-session-workspace/create",
+      body: {
+        agent: "codex",
+        cwd: { type: "runtime-path", path: "/tmp" },
+        message: "hello",
+        clientRequestId: "differential-workspace",
+        gitSelection: { mode: "current-folder", branch: "main" },
+        workspaceSelection: { type: "current-folder", branch: "main" },
+      },
+    });
+    await compare("invalid-repository-file-read-query", {
+      path: "/api/ai-sessions/ses_missing/repository/files",
+    });
+    await compare("invalid-repository-file-search-limit-type", {
+      path: "/api/ai-sessions/ses_missing/repository/files/search?query=test&limit=bogus",
+    });
+    await compare("invalid-repository-diff-include-context", {
+      path: "/api/ai-sessions/ses_missing/repository/diff?path=a&scope=unstaged&includeContext=yes",
+    });
+    await compare("invalid-repository-worktree-array-body", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+      body: [],
+    });
+    await compare("invalid-repository-worktree-empty-body", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+      headers: { "content-type": "application/json" },
+      rawBody: "",
+    });
+    await compare("repository-context-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/context",
+    });
+    await compare("repository-changes-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/changes",
+    });
+    await compare("repository-worktrees-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/worktrees",
+    });
+    await compare("repository-branches-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/branches",
+    });
+    await compare("repository-remotes-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/remotes",
+    });
+    await compare("repository-diff-missing-session", {
+      path: "/api/ai-sessions/ses_missing/repository/diff?path=a&scope=unstaged",
+    });
+    await compare("repository-stage-missing-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/index/stage",
+      body: { expectedSnapshotId: "snapshot", paths: [{ path: "a", expectedVersion: "0123456789abcdef" }] },
+    });
+    await compare("repository-commit-missing-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/commits",
+      body: { expectedSnapshotId: "snapshot", message: "message" },
+    });
+    await compare("repository-branch-create-missing-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/branches/create",
+      body: { expectedSnapshotId: "snapshot", name: "feature" },
+    });
+    await compare("repository-pull-missing-session", {
+      method: "POST",
+      path: "/api/ai-sessions/ses_missing/repository/delivery/pull",
+      body: { expectedSnapshotId: "snapshot" },
+    });
+    await compare("repository-app-session-context-missing", {
+      path: "/api/apps/sessions/aps_missing/repository/context",
+    });
+    await compare("repository-app-session-files-missing", {
+      path: "/api/apps/sessions/aps_missing/repository/directories",
+    });
+    await compare("repository-app-session-worktrees-missing", {
+      path: "/api/apps/sessions/aps_missing/repository/worktrees",
+    });
 
     const customCatalog = {
       items: [{
@@ -561,6 +1664,13 @@ async function main() {
       }],
     };
     await compare("custom-catalog-write", { method: "PATCH", path: "/api/apps/catalog/custom", body: customCatalog });
+    await compare("custom-catalog-codepoint-name", {
+      method: "PATCH",
+      path: "/api/apps/catalog/custom",
+      body: {
+        items: [{ ...customCatalog.items[0], name: "😀".repeat(61) }],
+      },
+    });
     await compare("custom-catalog-read-back", { path: "/api/apps/catalog/custom" });
     await compare("catalog-includes-custom-app", { path: "/api/apps/catalog" });
 
@@ -581,6 +1691,11 @@ async function main() {
     }
     if (state.node.appSessionId && state.rust.appSessionId) {
       await compare("read-app-session", (runtimeState) => ({ path: `/api/apps/sessions/${runtimeState.appSessionId}` }));
+      await compare("invalid-app-session-rename-codepoint-utf16", (runtimeState) => ({
+        method: "PATCH",
+        path: `/api/apps/sessions/${runtimeState.appSessionId}`,
+        body: { title: "😀".repeat(61) },
+      }));
       await compare("rename-app-session", (runtimeState) => ({
         method: "PATCH",
         path: `/api/apps/sessions/${runtimeState.appSessionId}`,

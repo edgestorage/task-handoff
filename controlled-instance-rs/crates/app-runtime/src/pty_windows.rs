@@ -12,7 +12,6 @@ use std::{
     process::Stdio,
     ptr,
     sync::{Arc, Mutex, OnceLock},
-    time::Duration,
 };
 
 use tokio::process::Command;
@@ -43,10 +42,8 @@ use windows_sys::Win32::{
     },
 };
 
-use super::PtySpawn;
+use super::{PtySpawn, PROCESS_KILL_TIMEOUT, PROCESS_STOP_TIMEOUT};
 use crate::AppRuntimeError;
-
-const FORCE_KILL_TIMEOUT: Duration = Duration::from_millis(150);
 
 static RESIZE_TARGETS: OnceLock<Mutex<HashMap<usize, HPCON>>> = OnceLock::new();
 
@@ -343,16 +340,14 @@ pub fn resize_pty(master: &File, cols: u16, rows: u16) -> Result<(), AppRuntimeE
     }
 }
 
-pub fn terminate_process_group(pid: u32) {
+pub fn terminate_process_group(pid: u32) -> Vec<u32> {
     if pid == 0 {
-        return;
+        return Vec::new();
     }
-    run_taskkill(pid, false);
-    std::thread::sleep(FORCE_KILL_TIMEOUT);
-    run_taskkill(pid, true);
+    terminate_process_groups(&[pid])
 }
 
-pub fn terminate_process_groups(pids: &[u32]) {
+pub fn terminate_process_groups(pids: &[u32]) -> Vec<u32> {
     let pids = pids
         .iter()
         .copied()
@@ -362,11 +357,42 @@ pub fn terminate_process_groups(pids: &[u32]) {
         run_taskkill(*pid, false);
     }
     if pids.is_empty() {
+        return Vec::new();
+    }
+    let mut remaining = wait_for_process_groups(&pids, PROCESS_STOP_TIMEOUT);
+    if remaining.is_empty() {
+        return remaining;
+    }
+    for pid in &remaining {
+        run_taskkill(*pid, true);
+    }
+    remaining = wait_for_process_groups(&remaining, PROCESS_KILL_TIMEOUT);
+    remaining
+}
+
+pub fn request_stop_process_group(pid: u32) {
+    if pid == 0 {
         return;
     }
-    std::thread::sleep(FORCE_KILL_TIMEOUT);
+    run_taskkill(pid, false);
+}
+
+pub fn request_stop_process_groups(pids: &[u32]) {
     for pid in pids {
-        run_taskkill(pid, true);
+        request_stop_process_group(*pid);
+    }
+}
+
+pub fn wait_process_groups(pids: &[u32], timeout: std::time::Duration) -> Vec<u32> {
+    wait_for_process_groups(pids, timeout)
+}
+
+pub fn kill_process_groups(pids: &[u32]) {
+    for pid in pids {
+        if *pid == 0 {
+            continue;
+        }
+        run_taskkill(*pid, true);
     }
 }
 
@@ -374,13 +400,12 @@ pub fn process_group_exists(pid: u32) -> bool {
     process_exists(pid)
 }
 
-pub fn terminate_pid(pid: u32) {
-    terminate_process_group(pid);
-}
-
 fn terminate_owned_process_tree(target: &TargetProcess) {
     run_taskkill(target.pid, false);
-    std::thread::sleep(FORCE_KILL_TIMEOUT);
+    let remaining = wait_for_process_groups(&[target.pid], PROCESS_STOP_TIMEOUT);
+    if remaining.is_empty() {
+        return;
+    }
     if let Some(job) = target.job.as_ref() {
         unsafe {
             TerminateJobObject(job.as_raw_handle() as HANDLE, 1);
@@ -394,6 +419,21 @@ fn terminate_owned_process_tree(target: &TargetProcess) {
         }
         run_taskkill(target.pid, true);
     }
+    let _ = wait_for_process_groups(&remaining, PROCESS_KILL_TIMEOUT);
+}
+
+fn wait_for_process_groups(pids: &[u32], timeout: std::time::Duration) -> Vec<u32> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut remaining = pids
+        .iter()
+        .copied()
+        .filter(|pid| process_group_exists(*pid))
+        .collect::<Vec<_>>();
+    while !remaining.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        remaining.retain(|pid| process_group_exists(*pid));
+    }
+    remaining
 }
 
 fn process_exists(pid: u32) -> bool {

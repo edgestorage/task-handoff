@@ -665,7 +665,6 @@ pub fn sanitize_stored_trigger_index(input: Value) -> TriggerIndex {
                 .ok()
                 .and_then(|run| normalize_run(run).ok())
         })
-        .take(MAX_TRIGGER_RECENT_RUNS)
         .collect::<Vec<_>>();
     let known = [
         "schemaVersion",
@@ -1174,7 +1173,18 @@ fn runtime_for(deployment: &TriggerDeployment) -> TriggerRuntimeState {
 }
 
 fn prompt_preview(value: &str) -> String {
-    value.trim().chars().take(500).collect()
+    let value = value.trim();
+    let mut units = 0;
+    let mut end = 0;
+    for (index, character) in value.char_indices() {
+        let width = character.len_utf16();
+        if units + width > 500 {
+            break;
+        }
+        units += width;
+        end = index + character.len_utf8();
+    }
+    value[..end].to_string()
 }
 
 fn normalize_time_of_day(value: Option<String>) -> Result<String, TriggerStoreError> {
@@ -1261,16 +1271,18 @@ pub fn source_matches_ai_session(
         return false;
     }
     if statuses.as_ref().is_some_and(|values| {
-        !values
-            .iter()
-            .any(|value| ai_status_matches(*value, &session.status))
+        !values.is_empty()
+            && !values
+                .iter()
+                .any(|value| ai_status_matches(*value, &session.status))
     }) {
         return false;
     }
     if phases.as_ref().is_some_and(|values| {
-        !values
-            .iter()
-            .any(|value| ai_phase_matches(*value, &session.phase))
+        !values.is_empty()
+            && !values
+                .iter()
+                .any(|value| ai_phase_matches(*value, &session.phase))
     }) {
         return false;
     }

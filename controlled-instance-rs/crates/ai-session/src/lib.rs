@@ -3,6 +3,7 @@ mod claude_control_sock;
 mod codex_app_server;
 mod history;
 mod opencode;
+mod persistence;
 mod persistence_settings;
 mod provider;
 mod timeline;
@@ -12,8 +13,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_core::atomic::write_atomic;
 use controlled_instance_protocol::{
-    AiSessionCounters, AiSessionLatestTurnRef, AiSessionQueue, AiSessionSummary,
-    AiSessionsSnapshot, AI_SESSION_SNAPSHOT_LIMIT,
+    AiSessionCounters, AiSessionHistoryItem, AiSessionLatestTurnRef, AiSessionQueue,
+    AiSessionSummary, AiSessionsSnapshot, AI_SESSION_SNAPSHOT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -33,7 +34,7 @@ pub use attachments::{
     AiSessionAttachmentContent, AiSessionAttachmentDraftInput, AiSessionAttachmentDraftStreamBegin,
     AiSessionAttachmentDraftStreams, AiSessionAttachmentError,
     AiSessionConversationAttachmentStore, AiSessionMessageAttachmentInput,
-    RetainedAiSessionMessageAttachment, StageMessageAttachmentsInput,
+    ProviderAttachmentSource, RetainedAiSessionMessageAttachment, StageMessageAttachmentsInput,
     StagedAiSessionMessageAttachments,
 };
 pub use claude_control_sock::{
@@ -46,8 +47,8 @@ pub use codex_app_server::{
 };
 pub use history::{AiSessionHistoryError, AiSessionHistoryRetentionResult, AiSessionHistoryStore};
 pub use opencode::{
-    OpenCodeConnection, OpenCodeConnectionProvider, OpenCodeModelSelectionProjector,
-    OpenCodeSessionProvider,
+    OpenCodeClosedSessionIds, OpenCodeConnection, OpenCodeConnectionProvider,
+    OpenCodeModelSelectionProjector, OpenCodeSessionProvider, OpenCodeTrackedSession,
 };
 pub use persistence_settings::{
     AiSessionPersistenceSettingsError, AiSessionPersistenceSettingsStore,
@@ -59,8 +60,8 @@ pub use provider::{
     AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
     AiSessionPermissionMode, AiSessionReference, AiSessionResumeResult, AiSessionRuntimePathInput,
     AiSessionSendMode, AiSessionStoryAgentToolResolver, ProviderAction, ProviderAttachment,
-    ProviderCreateInput, ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkInput,
-    ProviderMessage, ProviderMessageInput, ProviderResumeResult,
+    ProviderCreateInput, ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkCreation,
+    ProviderForkInput, ProviderMessage, ProviderMessageInput, ProviderResumeResult,
 };
 pub use timeline::{
     ai_session_timeline_item_revision, ai_session_timeline_revision,
@@ -91,6 +92,8 @@ pub enum AiSessionStoreError {
     QueueOrderInvalid,
     #[error("AI Session persistence failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("AI Session data is invalid.")]
+    InvalidSession,
     #[error("AI Session serialization failed: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -171,6 +174,60 @@ pub struct AiSession {
 }
 
 impl AiSession {
+    pub fn from_history_item(
+        item: &AiSessionHistoryItem,
+        previous: Option<&AiSession>,
+        model_selection: Option<Value>,
+        reasoning_effort: Option<String>,
+    ) -> Self {
+        let started_at = previous
+            .map(|session| session.started_at.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| item.last_active_at.clone());
+        Self {
+            id: item.id.clone(),
+            agent: item.agent.clone(),
+            creation_source: item.creation_source.clone(),
+            app_session_id: None,
+            app_id: Some(item.agent.clone()),
+            provider_session_id: Some(item.provider_session_id.clone()),
+            lineage: item.lineage.clone(),
+            provider_meta: None,
+            model_selection,
+            reasoning_effort,
+            story_id: item.story_id.clone(),
+            app_binding_keys: None,
+            actions: None,
+            active_turn_id: None,
+            title: item.title.clone(),
+            cwd: Some(item.cwd.clone()),
+            cwd_folder_id: item.cwd_folder_id.clone(),
+            user_prompt: item.user_prompt.clone(),
+            turns: previous.and_then(|session| session.turns.clone()),
+            status: "idle".to_string(),
+            phase: "unknown".to_string(),
+            summary: None,
+            last_message: item.last_message.clone(),
+            last_message_item_id: None,
+            current_tool: None,
+            tool_calls_since_last_message: 0,
+            sub_agents: Vec::new(),
+            transcript_path: None,
+            transcript_size: None,
+            started_at,
+            updated_at: now_iso(),
+            completed_at: None,
+            error: None,
+            counters: previous
+                .map(|session| session.counters.clone())
+                .unwrap_or_default(),
+            queue: previous
+                .map(|session| session.queue.clone())
+                .unwrap_or_default(),
+            unread: previous.is_some_and(|session| session.unread),
+        }
+    }
+
     fn summary_actions(&self) -> Value {
         let configured = self.actions.as_ref().and_then(Value::as_object);
         let configured_bool = |field: &str| {
@@ -310,12 +367,6 @@ impl AiSession {
         insert_optional(&mut detail, "cwd", self.cwd.clone());
         insert_optional(&mut detail, "error", self.error.clone());
         insert_optional(&mut detail, "providerMeta", self.provider_meta.clone());
-        insert_optional(&mut detail, "modelSelection", self.model_selection.clone());
-        insert_optional(
-            &mut detail,
-            "reasoningEffort",
-            self.reasoning_effort.clone(),
-        );
         detail.insert(
             "queue".to_string(),
             serde_json::to_value(&self.queue).unwrap_or(Value::Null),
@@ -328,7 +379,12 @@ impl AiSession {
     }
 
     pub fn detail_revision(&self) -> String {
-        revision_hash(&self.detail())
+        let mut detail = self.detail();
+        if let Some(object) = detail.as_object_mut() {
+            insert_optional(object, "modelSelection", self.model_selection.clone());
+            insert_optional(object, "reasoningEffort", self.reasoning_effort.clone());
+        }
+        revision_hash(&detail)
     }
 
     pub fn conversation_turns(&self) -> Vec<&Value> {
@@ -356,39 +412,6 @@ impl AiSession {
             })
             .collect::<Vec<_>>();
         revision_hash(&Value::Array(index))
-    }
-
-    fn sanitize(mut self) -> Self {
-        self.creation_source = if self.creation_source == "ai-session" {
-            "ai-session"
-        } else {
-            "app-session"
-        }
-        .to_string();
-        self.status = normalize_status(&self.status);
-        self.phase = normalize_phase(&self.phase);
-        self.queue.pending_count = self
-            .queue
-            .items
-            .iter()
-            .filter(|item| {
-                matches!(
-                    item.get("status").and_then(Value::as_str),
-                    Some("queued" | "sending")
-                )
-            })
-            .count() as u64;
-        if self.queue.paused == Some(false) {
-            self.queue.paused = None;
-        }
-        if self
-            .provider_meta
-            .as_ref()
-            .is_some_and(|value| !value.is_object())
-        {
-            self.provider_meta = None;
-        }
-        self
     }
 }
 
@@ -480,19 +503,25 @@ impl AiSessionRuntime {
     }
 
     pub fn list(&self) -> Vec<AiSession> {
-        let mut sessions = self
+        let sessions = self
             .sessions
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        sessions.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
+        let mut by_identity = BTreeMap::<String, AiSession>::new();
+        for session in sessions {
+            let key = session_identity_key(&session);
+            match by_identity.get(&key) {
+                Some(existing) if !better_canonical_session(&session, existing) => {}
+                _ => {
+                    by_identity.insert(key, session);
+                }
+            }
+        }
+        let mut sessions = by_identity.into_values().collect::<Vec<_>>();
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         sessions
     }
 
@@ -514,7 +543,9 @@ impl AiSessionRuntime {
         if session.updated_at.is_empty() {
             session.updated_at = now_iso();
         }
-        let sanitized = session.clone().sanitize();
+        let sanitized =
+            persistence::sanitize_runtime_session(&serde_json::to_value(session.clone())?)
+                .ok_or(AiSessionStoreError::InvalidSession)?;
         *session = sanitized;
         self.write_session(session)?;
         self.sessions
@@ -576,7 +607,7 @@ impl AiSessionRuntime {
         if expected_title.is_some_and(|expected| current_title != expected) {
             return Err(AiSessionStoreError::TitleConflict);
         }
-        let title = title.trim().chars().take(120).collect::<String>();
+        let title = title.trim().to_string();
         if current_title == title {
             return Ok((session, false));
         }
@@ -700,7 +731,10 @@ impl AiSessionRuntime {
             object.insert("status".to_string(), Value::String(status.to_string()));
             match error {
                 Some(error) => {
-                    object.insert("error".to_string(), Value::String(error.to_string()));
+                    object.insert(
+                        "error".to_string(),
+                        Value::String(compact_text(error, 4000)),
+                    );
                 }
                 None => {
                     object.remove("error");
@@ -737,20 +771,23 @@ impl AiSessionRuntime {
         queue_id: &str,
     ) -> Result<AiSession, AiSessionStoreError> {
         self.update(id, |session| {
-            let Some(item) = session
+            let Some(position) = session
                 .queue
                 .items
-                .iter_mut()
-                .find(|item| item.get("id").and_then(Value::as_str) == Some(queue_id))
+                .iter()
+                .position(|item| item.get("id").and_then(Value::as_str) == Some(queue_id))
             else {
                 return Err(AiSessionStoreError::QueueItemNotFound);
             };
-            let Some(object) = item.as_object_mut() else {
+            if !session.queue.items[position].is_object() {
                 return Err(AiSessionStoreError::QueueItemNotFound);
-            };
+            }
+            let mut item = session.queue.items.remove(position);
+            let object = item.as_object_mut().expect("checked queue item object");
             object.insert("status".to_string(), Value::String("queued".to_string()));
             object.remove("error");
             object.insert("updatedAt".to_string(), Value::String(now_iso()));
+            session.queue.items.push(item);
             self.bump_queue(session, None);
             Ok(true)
         })
@@ -997,14 +1034,17 @@ impl AiSessionRuntime {
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let Ok(session) = serde_json::from_slice::<AiSession>(&bytes) else {
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                tracing::warn!(path = %path.display(), "ignoring invalid persisted AI Session");
+                continue;
+            };
+            let Some(session) = persistence::decode_persisted_session(&value) else {
                 tracing::warn!(path = %path.display(), "ignoring invalid persisted AI Session");
                 continue;
             };
             if session.id != expected_id || !is_safe_session_id(&session.id) {
                 continue;
             }
-            let session = session.sanitize();
             sessions.insert(session.id.clone(), session);
         }
     }
@@ -1018,13 +1058,38 @@ fn insert_optional(map: &mut Map<String, Value>, key: &str, value: Option<impl S
     }
 }
 
+fn session_identity_key(session: &AiSession) -> String {
+    if let Some(provider_session_id) = session.provider_session_id.as_deref() {
+        return format!("{}:provider:{provider_session_id}", session.agent);
+    }
+    if let Some(app_session_id) = session.app_session_id.as_deref() {
+        return format!("{}:app:{app_session_id}", session.agent);
+    }
+    if let Some(transcript_path) = session.transcript_path.as_deref() {
+        return format!("{}:transcript:{transcript_path}", session.agent);
+    }
+    format!("{}:id:{}", session.agent, session.id)
+}
+
+fn better_canonical_session(candidate: &AiSession, existing: &AiSession) -> bool {
+    let score = |session: &AiSession| {
+        u64::from(session.user_prompt.is_some())
+            + u64::from(session.summary.is_some())
+            + u64::from(session.last_message.is_some())
+            + session.turns.as_ref().map(Vec::len).unwrap_or_default() as u64
+    };
+    let candidate_score = score(candidate);
+    let existing_score = score(existing);
+    if candidate_score != existing_score {
+        return candidate_score > existing_score;
+    }
+    candidate.updated_at >= existing.updated_at
+}
+
 fn normalize_queue(session: &mut AiSession) {
     session.queue.items.retain(queue_item_is_valid);
     session.queue.items.truncate(100);
-    session
-        .queue
-        .items
-        .sort_by_key(|item| queue_status_rank(item));
+    session.queue.items.sort_by_key(queue_status_rank);
 }
 
 fn queue_item_is_valid(item: &Value) -> bool {
@@ -1045,12 +1110,22 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn compact_text(value: &str, max: usize) -> String {
+pub(crate) fn compact_text(value: &str, max: usize) -> String {
     let text = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= max {
+    if text.encode_utf16().count() <= max {
         return text;
     }
-    let mut truncated = text.chars().take(max.saturating_sub(3)).collect::<String>();
+    let budget = max.saturating_sub(3);
+    let mut used = 0;
+    let mut truncated = String::new();
+    for character in text.chars() {
+        let width = character.len_utf16();
+        if used + width > budget {
+            break;
+        }
+        used += width;
+        truncated.push(character);
+    }
     truncated.push_str("...");
     truncated
 }
@@ -1097,24 +1172,6 @@ fn canonical_value(value: &Value) -> Value {
     }
 }
 
-fn normalize_status(value: &str) -> String {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "waiting" => "waiting",
-        "failed" => "failed",
-        "idle" | "completed" | "stale" | "stopped" | "exited" => "idle",
-        _ => "running",
-    }
-    .to_string()
-}
-
-fn normalize_phase(value: &str) -> String {
-    match value {
-        "thinking" | "tool" | "editing" | "approval" | "responding" => value,
-        _ => "unknown",
-    }
-    .to_string()
-}
-
 fn default_creation_source() -> String {
     "app-session".to_string()
 }
@@ -1140,6 +1197,13 @@ fn is_safe_session_id(id: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compact_text_uses_utf16_code_unit_limits() {
+        let compacted = compact_text("😀😀😀", 5);
+        assert_eq!(compacted, "😀...");
+        assert_eq!(compacted.encode_utf16().count(), 5);
+    }
 
     fn session(id: &str, app_session_id: Option<&str>, status: &str) -> AiSession {
         AiSession {

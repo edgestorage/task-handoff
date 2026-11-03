@@ -1,11 +1,12 @@
 use crate::{
     ai_session_title_output_schema, ai_session_title_prompt, parse_ai_session_title, AiSession,
     AiSessionControlProvider, AiSessionModelSelection, AiSessionPermissionMode,
-    AiSessionTitleGenerator, AiSessionTitleInput, ProviderAction, ProviderCreateInput,
-    ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkInput, ProviderMessage,
-    ProviderResumeResult,
+    AiSessionTitleGenerator, AiSessionTitleInput, ProviderAction, ProviderAttachmentSource,
+    ProviderCreateInput, ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkInput,
+    ProviderMessage, ProviderResumeResult,
 };
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use controlled_instance_protocol::{
     AiSessionAttachmentKind, AiSessionConversationAttachment, AiSessionHierarchyCapabilities,
@@ -21,7 +22,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, RwLock, Weak,
     },
     time::Duration,
@@ -44,6 +45,22 @@ pub struct OpenCodeConnection {
     pub headers: BTreeMap<String, String>,
 }
 
+/// Returns provider session ids that were explicitly closed by this instance.
+/// OpenCode cannot unarchive a session, so discovery must not re-adopt ids that
+/// are already recorded as closed history.
+pub type OpenCodeClosedSessionIds = Arc<dyn Fn() -> HashSet<String> + Send + Sync>;
+
+/// Active AI Sessions that already own a provider session. Discovery uses this
+/// source to converge sessions persisted across an instance restart, before the
+/// provider has rebuilt any in-memory projection for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodeTrackedSession {
+    pub provider_session_id: String,
+    pub cwd: String,
+}
+
+pub type OpenCodeTrackedSessions = Arc<dyn Fn() -> Vec<OpenCodeTrackedSession> + Send + Sync>;
+
 pub trait OpenCodeModelSelectionProjector: Send + Sync {
     fn project_model_selection(
         &self,
@@ -63,6 +80,7 @@ pub trait OpenCodeConnectionProvider: Send + Sync {
 pub struct OpenCodeClient {
     connections: Arc<dyn OpenCodeConnectionProvider>,
     http: Client,
+    event_http: Client,
 }
 
 impl OpenCodeClient {
@@ -73,6 +91,9 @@ impl OpenCodeClient {
                 .timeout(OPENCODE_REQUEST_TIMEOUT)
                 .build()
                 .expect("OpenCode HTTP client"),
+            event_http: Client::builder()
+                .build()
+                .expect("OpenCode event stream client"),
         }
     }
 
@@ -148,6 +169,22 @@ impl OpenCodeClient {
                 .map(ToString::to_string)
         });
         Ok((sessions, next_cursor))
+    }
+
+    async fn list_sessions(&self, directory: &str) -> Result<Vec<Value>, ProviderError> {
+        let value = self
+            .request(
+                Method::GET,
+                "/session",
+                Some(directory),
+                &[
+                    ("scope".to_string(), "project".to_string()),
+                    ("limit".to_string(), "100".to_string()),
+                ],
+                None,
+            )
+            .await?;
+        Ok(value.as_array().cloned().unwrap_or_default())
     }
 
     async fn create_session(
@@ -347,13 +384,10 @@ impl OpenCodeClient {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request.send().await.map_err(|error| {
-            ProviderError::new(
-                "OPENCODE_SERVER_UNAVAILABLE",
-                format!("OpenCode request failed: {error}"),
-                503,
-            )
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| opencode_request_error(format!("OpenCode request failed: {error}")))?;
         let status = response.status();
         let next_cursor = response
             .headers()
@@ -370,28 +404,24 @@ impl OpenCodeClient {
         serde_json::from_str::<Value>(&text)
             .map(|value| (value, next_cursor))
             .map_err(|error| {
-                ProviderError::bad_gateway(
-                    "OPENCODE_INVALID_RESPONSE",
+                ProviderError::new(
+                    "AI_SESSION_CONTROL_FAILED",
                     format!("OpenCode returned malformed JSON for {path}: {error}"),
+                    400,
                 )
             })
     }
 }
 
-fn http_error(method: &str, path: &str, status: StatusCode, text: &str) -> ProviderError {
-    let message = bounded(text.trim(), 4000).unwrap_or_else(|| {
-        format!(
-            "OpenCode returned HTTP {} for {method} {path}.",
-            status.as_u16()
-        )
-    });
-    if status == StatusCode::NOT_FOUND {
-        ProviderError::new("AI_SESSION_NOT_FOUND", message, 404)
-    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        ProviderError::new("OPENCODE_SERVER_UNAUTHORIZED", message, 503)
-    } else {
-        ProviderError::new("OPENCODE_HTTP_ERROR", message, 502)
-    }
+fn http_error(_method: &str, _path: &str, status: StatusCode, text: &str) -> ProviderError {
+    let message = raw_bounded(text, 4000)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("OpenCode returned HTTP {}.", status.as_u16()));
+    ProviderError::new("AI_SESSION_CONTROL_FAILED", message, status.as_u16())
+}
+
+fn opencode_request_error(message: String) -> ProviderError {
+    ProviderError::new("AI_SESSION_CONTROL_FAILED", message, 400)
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +466,8 @@ struct OpenCodeProjection {
     pending_permission_id: Option<String>,
     parent_provider_session_id: Option<String>,
     timeline: Vec<AiSessionTimelineItem>,
+    turns: Vec<Value>,
+    current_tool: Option<Value>,
     part_turns: HashMap<String, (String, String, String)>,
     message_turns: HashMap<String, String>,
     assistant_message_ids: HashSet<String>,
@@ -488,10 +520,14 @@ pub struct OpenCodeSessionProvider {
     aux: RwLock<OpenCodeAuxState>,
     model_selection_projector: RwLock<Option<Arc<dyn OpenCodeModelSelectionProjector>>>,
     title_generator: RwLock<Option<Arc<dyn AiSessionTitleGenerator>>>,
+    closed_session_ids: RwLock<Option<OpenCodeClosedSessionIds>>,
+    tracked_sessions: RwLock<Option<OpenCodeTrackedSessions>>,
     reconcile_tx: mpsc::UnboundedSender<(String, String)>,
     closed: AtomicBool,
     event_source_started: AtomicBool,
+    reconnect_attempt: AtomicU32,
     event_source: std::sync::Mutex<Option<JoinHandle<()>>>,
+    refresh_lock: tokio::sync::Mutex<()>,
     self_ref: std::sync::Mutex<Weak<Self>>,
 }
 
@@ -509,10 +545,14 @@ impl OpenCodeSessionProvider {
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
             title_generator: RwLock::new(None),
+            closed_session_ids: RwLock::new(None),
+            tracked_sessions: RwLock::new(None),
             reconcile_tx,
             closed: AtomicBool::new(false),
             event_source_started: AtomicBool::new(false),
+            reconnect_attempt: AtomicU32::new(0),
             event_source: std::sync::Mutex::new(None),
+            refresh_lock: tokio::sync::Mutex::new(()),
             self_ref: std::sync::Mutex::new(Weak::new()),
         });
         *provider
@@ -541,6 +581,20 @@ impl OpenCodeSessionProvider {
             .title_generator
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(generator);
+    }
+
+    pub fn set_closed_session_ids(&self, source: OpenCodeClosedSessionIds) {
+        *self
+            .closed_session_ids
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    pub fn set_tracked_sessions(&self, source: OpenCodeTrackedSessions) {
+        *self
+            .tracked_sessions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
     }
 
     async fn ensure_ready(&self) -> Result<(), ProviderError> {
@@ -584,10 +638,11 @@ impl OpenCodeSessionProvider {
     }
 
     async fn event_loop(self: Arc<Self>) {
-        let mut attempt = 0_u32;
         while !self.closed.load(Ordering::SeqCst) {
             match self.consume_events().await {
-                Ok(()) => attempt = 0,
+                Ok(()) => {
+                    tracing::debug!("OpenCode event stream ended");
+                }
                 Err(error) => {
                     tracing::debug!(%error, "OpenCode event stream disconnected");
                 }
@@ -598,10 +653,10 @@ impl OpenCodeSessionProvider {
             if self.closed.load(Ordering::SeqCst) {
                 break;
             }
-            let delay = OPENCODE_RECONNECT_BASE
-                .saturating_mul(1_u32 << attempt.min(6))
-                .min(OPENCODE_RECONNECT_MAX);
-            attempt = attempt.saturating_add(1);
+            let attempt = self.reconnect_attempt.load(Ordering::Acquire);
+            let delay = opencode_reconnect_delay(attempt);
+            self.reconnect_attempt
+                .store(attempt.saturating_add(1), Ordering::Release);
             tokio::time::sleep(delay).await;
         }
     }
@@ -610,7 +665,7 @@ impl OpenCodeSessionProvider {
         let connection = self.client.connections.connection().await?;
         let mut request = self
             .client
-            .http
+            .event_http
             .get(format!(
                 "{}/global/event",
                 connection.endpoint.trim_end_matches('/')
@@ -620,11 +675,7 @@ impl OpenCodeSessionProvider {
             request = request.header(name, value);
         }
         let response = request.send().await.map_err(|error| {
-            ProviderError::new(
-                "OPENCODE_SERVER_UNAVAILABLE",
-                format!("OpenCode event stream failed: {error}"),
-                503,
-            )
+            opencode_request_error(format!("OpenCode event stream failed: {error}"))
         })?;
         if !response.status().is_success() {
             let status = response.status();
@@ -651,31 +702,24 @@ impl OpenCodeSessionProvider {
                 if data.is_empty() {
                     continue;
                 }
-                if let Ok(event) = serde_json::from_str::<Value>(&data) {
-                    self.handle_global_event(event).await;
-                }
+                let event = parse_global_event(&data)?;
+                self.handle_global_event(event).await;
             }
         }
-        Err(ProviderError::new(
-            "OPENCODE_EVENT_STREAM_CLOSED",
-            "OpenCode event stream ended.",
-            503,
-        ))
+        Ok(())
     }
 
     async fn handle_global_event(self: &Arc<Self>, event: Value) {
+        self.reconnect_attempt.store(0, Ordering::Release);
         let payload = event.get("payload").unwrap_or(&Value::Null);
         let event_type = payload
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
         if event_type == "server.connected" {
-            let provider = self.clone();
-            tokio::spawn(async move {
-                if let Err(error) = provider.refresh_all().await {
-                    tracing::debug!(%error, "OpenCode discovery failed");
-                }
-            });
+            if let Err(error) = self.refresh().await {
+                tracing::debug!(%error, "OpenCode discovery failed");
+            }
             return;
         }
         if event_type == "sync" {
@@ -709,15 +753,12 @@ impl OpenCodeSessionProvider {
             return;
         };
         if event_type == "session.deleted" {
+            self.emit_provider_lifecycle(&session_id, "cleared");
             self.forget(&session_id);
             return;
         }
-        if event_type == "session.updated"
-            && info
-                .get("time")
-                .and_then(|time| time.get("archived"))
-                .is_some_and(|value| !value.is_null())
-        {
+        if event_type == "session.updated" && info.get("time").is_some_and(archived_time) {
+            self.emit_provider_lifecycle(&session_id, "closed");
             self.forget(&session_id);
             return;
         }
@@ -743,6 +784,7 @@ impl OpenCodeSessionProvider {
             });
         if let Some(directory) = directory.as_deref() {
             if !within_roots(directory, &self.client.connections.workspace_roots()) {
+                self.forget(&session_id);
                 return;
             }
             self.directories
@@ -773,11 +815,7 @@ impl OpenCodeSessionProvider {
                         .and_then(Value::as_str)
                         .unwrap_or("OpenCode is retrying the request.");
                     if let Some(projection) = self.projection_for_provider(&session_id) {
-                        if let Some(turn_id) = projection
-                            .active_turn_id
-                            .clone()
-                            .or_else(|| projection.last_turn_id.clone())
-                        {
+                        if let Some(turn_id) = projection.active_turn_id.clone() {
                             self.record_retry_activity(&session_id, &turn_id, message);
                             self.aux
                                 .write()
@@ -817,14 +855,20 @@ impl OpenCodeSessionProvider {
                     });
                 }
                 if let Some(session) = self.projection_for_provider(&session_id) {
-                    let turn_id = session.active_turn_id.clone();
-                    let _ = self.events.send(ProviderEvent::TurnCompleted {
-                        provider_session_id: session_id.clone(),
-                        turn_id,
-                        status: Some("failed".to_string()),
-                        error: Some(error),
-                        completed_at: Some(now_iso()),
-                    });
+                    if let Some(turn_id) = session.active_turn_id.clone() {
+                        let _ = self.events.send(ProviderEvent::TurnCompleted {
+                            provider_session_id: session_id.clone(),
+                            turn_id: Some(turn_id),
+                            status: Some("failed".to_string()),
+                            error: Some(error),
+                            completed_at: Some(now_iso()),
+                        });
+                    } else {
+                        let _ = self.events.send(ProviderEvent::SessionError {
+                            provider_session_id: session_id.clone(),
+                            error,
+                        });
+                    }
                 }
             }
         }
@@ -1215,38 +1259,163 @@ impl OpenCodeSessionProvider {
         }
     }
 
+    pub async fn refresh(self: &Arc<Self>) -> Result<(), ProviderError> {
+        let _guard = self.refresh_lock.lock().await;
+        self.refresh_all().await
+    }
+
     async fn refresh_all(self: &Arc<Self>) -> Result<(), ProviderError> {
         self.ensure_ready().await?;
         let roots = self.client.connections.workspace_roots();
-        let mut cursor = None;
-        loop {
-            let (sessions, next) = self.client.list_global_sessions(cursor.as_deref()).await?;
-            for session in sessions {
-                let Some(id) = session.get("id").and_then(Value::as_str) else {
-                    continue;
-                };
-                let Some(directory) = session.get("directory").and_then(Value::as_str) else {
-                    continue;
-                };
-                let archived = session
-                    .get("time")
-                    .and_then(|time| time.get("archived"))
-                    .is_some_and(|value| !value.is_null());
-                if archived || !within_roots(directory, &roots) {
-                    continue;
+        let sessions = match self.list_all_global_sessions().await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::debug!(%error, "OpenCode global discovery failed; falling back to project discovery");
+                let mut sessions = Vec::new();
+                for root in &roots {
+                    sessions.extend(
+                        self.client
+                            .list_sessions(root.to_str().unwrap_or_default())
+                            .await?,
+                    );
                 }
-                self.directories
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(id.to_string(), directory.to_string());
-                let _ = self.reconcile_and_emit(id, directory).await;
+                sessions
             }
-            cursor = next;
-            if cursor.is_none() {
-                break;
+        };
+        let closed = self.closed_provider_session_ids();
+        let tracked = self.tracked_sessions_by_id();
+        let mut active = HashSet::new();
+        for session in sessions {
+            let Some(id) = session.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(directory) = session.get("directory").and_then(Value::as_str) else {
+                continue;
+            };
+            if session_archived(&session) || !within_roots(directory, &roots) {
+                continue;
+            }
+            if !active.insert(id.to_string())
+                || self.is_closed_without_tracked_session(id, &closed, &tracked)
+            {
+                continue;
+            }
+            self.directories
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(id.to_string(), directory.to_string());
+            self.reconcile_and_emit(id, directory).await?;
+        }
+
+        let mut known = HashMap::new();
+        for (id, session) in &tracked {
+            if within_roots(&session.cwd, &roots) {
+                known.insert(id.clone(), session.cwd.clone());
+            }
+        }
+        for (id, directory) in self
+            .directories
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+        {
+            if !tracked.contains_key(id) {
+                known.insert(id.clone(), directory.clone());
+            }
+        }
+        for (id, projection) in self
+            .projections
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+        {
+            if !tracked.contains_key(id) {
+                known.insert(id.clone(), projection.cwd.clone());
+            }
+        }
+        for (id, directory) in known {
+            if active.contains(&id) {
+                continue;
+            }
+            match self.client.get_session(&id, &directory).await {
+                Ok(session) => {
+                    let directory = session
+                        .get("directory")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&directory);
+                    if session_archived(&session) || !within_roots(directory, &roots) {
+                        self.emit_provider_lifecycle(&id, "closed");
+                        self.forget(&id);
+                        continue;
+                    }
+                    self.directories
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(id.clone(), directory.to_string());
+                    self.reconcile_and_emit(&id, directory).await?;
+                }
+                Err(error) if error.status_code == 404 => {
+                    self.emit_provider_lifecycle(&id, "cleared");
+                    self.forget(&id);
+                }
+                Err(error) => {
+                    tracing::debug!(provider_session_id = %id, %error, "OpenCode session convergence failed");
+                }
             }
         }
         Ok(())
+    }
+
+    async fn list_all_global_sessions(&self) -> Result<Vec<Value>, ProviderError> {
+        let mut sessions = Vec::new();
+        let mut cursor = None;
+        loop {
+            let (mut page, next) = self.client.list_global_sessions(cursor.as_deref()).await?;
+            sessions.append(&mut page);
+            cursor = next;
+            if cursor.is_none() {
+                return Ok(sessions);
+            }
+        }
+    }
+
+    fn closed_provider_session_ids(&self) -> HashSet<String> {
+        self.closed_session_ids
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|source| source())
+            .unwrap_or_default()
+    }
+
+    fn tracked_sessions_by_id(&self) -> HashMap<String, OpenCodeTrackedSession> {
+        self.tracked_sessions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|source| {
+                source()
+                    .into_iter()
+                    .map(|session| (session.provider_session_id.clone(), session))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn is_closed_without_tracked_session(
+        &self,
+        id: &str,
+        closed: &HashSet<String>,
+        tracked: &HashMap<String, OpenCodeTrackedSession>,
+    ) -> bool {
+        closed.contains(id) && !tracked.contains_key(id)
+    }
+
+    fn emit_provider_lifecycle(&self, provider_session_id: &str, disposition: &str) {
+        let _ = self.events.send(ProviderEvent::ProviderSessionLifecycle {
+            provider_session_id: provider_session_id.to_string(),
+            disposition: disposition.to_string(),
+        });
     }
 
     async fn reconcile_and_emit(
@@ -1254,6 +1423,30 @@ impl OpenCodeSessionProvider {
         provider_session_id: &str,
         directory: &str,
     ) -> Result<(), ProviderError> {
+        self.reconcile_and_emit_inner(provider_session_id, directory, true)
+            .await
+    }
+
+    async fn reconcile_and_emit_existing(
+        &self,
+        provider_session_id: &str,
+        directory: &str,
+    ) -> Result<(), ProviderError> {
+        self.reconcile_and_emit_inner(provider_session_id, directory, false)
+            .await
+    }
+
+    async fn reconcile_and_emit_inner(
+        &self,
+        provider_session_id: &str,
+        directory: &str,
+        announce_discovery: bool,
+    ) -> Result<(), ProviderError> {
+        let closed = self.closed_provider_session_ids();
+        let tracked = self.tracked_sessions_by_id();
+        if self.is_closed_without_tracked_session(provider_session_id, &closed, &tracked) {
+            return Ok(());
+        }
         let projection = self
             .refresh_projection(provider_session_id, directory)
             .await?;
@@ -1282,6 +1475,19 @@ impl OpenCodeSessionProvider {
             last_message: projection.last_message.clone(),
             activities: HashMap::new(),
         };
+        if announce_discovery {
+            let _ = self.events.send(ProviderEvent::ThreadDiscovered {
+                provider_session_id: provider_session_id.to_string(),
+                cwd: projection.cwd.clone(),
+                name: (!projection.title.trim().is_empty()).then(|| projection.title.clone()),
+                model_selection: projection.model_selection.clone(),
+                reasoning_effort: projection.reasoning_effort.clone(),
+                status: projection.lifecycle.clone(),
+                phase: Some(projection.phase.clone()),
+                active_turn_id: projection.active_turn_id.clone(),
+                parent_provider_session_id: projection.parent_provider_session_id.clone(),
+            });
+        }
         let _ = self.events.send(ProviderEvent::ThreadSnapshot {
             provider_session_id: provider_session_id.to_string(),
             cwd: Some(projection.cwd.clone()),
@@ -1294,10 +1500,12 @@ impl OpenCodeSessionProvider {
                 .model_selection
                 .as_ref()
                 .map(opencode_provider_id),
+            model_selection: projection.model_selection.clone(),
             reasoning_effort: projection.reasoning_effort.clone(),
             status: projection.lifecycle.clone(),
             phase: Some(projection.phase.clone()),
         });
+        self.emit_history_snapshot(provider_session_id, &projection);
         if projection.parent_provider_session_id.is_none() {
             if let Some(prompt) = projection.timeline.iter().find_map(|item| match item {
                 AiSessionTimelineItem::UserMessage { text, .. } if !text.trim().is_empty() => {
@@ -1332,6 +1540,7 @@ impl OpenCodeSessionProvider {
                         item_id,
                         text,
                         observed_at: Some(now_iso()),
+                        completed: true,
                     });
                 }
             }
@@ -1512,9 +1721,6 @@ impl OpenCodeSessionProvider {
             status: &status,
             messages: &messages,
             permissions: &permissions,
-            pending_selection: pending
-                .as_ref()
-                .and_then(|settings| settings.model_selection.as_ref()),
             retry_activities: &retry_activities,
             terminal_error: terminal_error.as_deref(),
             model_selection_projector: projector.as_deref(),
@@ -1554,10 +1760,39 @@ impl OpenCodeSessionProvider {
             .cloned()
     }
 
+    fn emit_history_snapshot(&self, provider_session_id: &str, projection: &OpenCodeProjection) {
+        let turns = projection
+            .turns
+            .iter()
+            .rev()
+            .take(50)
+            .rev()
+            .cloned()
+            .collect::<Vec<_>>();
+        let user_prompt = projection
+            .turns
+            .last()
+            .and_then(|turn| turn.get("userPrompt"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let _ = self.events.send(ProviderEvent::ThreadHistorySnapshot {
+            provider_session_id: provider_session_id.to_string(),
+            turns,
+            active_turn_id: projection.active_turn_id.clone(),
+            user_prompt,
+            last_message: projection.last_message.clone(),
+            last_message_item_id: projection.last_message_item_id.clone(),
+            summary: projection.summary.clone(),
+            error: projection.error.clone(),
+            current_tool: projection.current_tool.clone(),
+        });
+    }
+
     fn publish_projection_snapshot(&self, provider_session_id: &str, status: &str, phase: &str) {
         let Some(projection) = self.projection_for_provider(provider_session_id) else {
             return;
         };
+        self.emit_history_snapshot(provider_session_id, &projection);
         let _ = self.events.send(ProviderEvent::ThreadSnapshot {
             provider_session_id: provider_session_id.to_string(),
             cwd: Some(projection.cwd),
@@ -1570,6 +1805,7 @@ impl OpenCodeSessionProvider {
                 .model_selection
                 .as_ref()
                 .map(opencode_provider_id),
+            model_selection: projection.model_selection,
             reasoning_effort: projection.reasoning_effort,
             status: status.to_string(),
             phase: Some(phase.to_string()),
@@ -1810,6 +2046,17 @@ impl OpenCodeSessionProvider {
         {
             return Ok(directory);
         }
+        if let Some(directory) = self
+            .tracked_sessions_by_id()
+            .get(provider_session_id)
+            .map(|session| session.cwd.clone())
+        {
+            self.directories
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(provider_session_id.to_string(), directory.clone());
+            return Ok(directory);
+        }
         let mut cursor = None;
         loop {
             let (sessions, next) = self.client.list_global_sessions(cursor.as_deref()).await?;
@@ -1869,35 +2116,79 @@ impl OpenCodeSessionProvider {
                 || mime.starts_with("text/")
                 || mime == "application/pdf")
             {
-                path_references.push((attachment.meta.kind, attachment.path.clone()));
+                let path = attachment
+                    .runtime_path
+                    .clone()
+                    .unwrap_or_else(|| attachment.path.clone());
+                path_references.push((attachment.meta.kind, path));
                 continue;
             }
-            let path = attachment.path.canonicalize().map_err(|_| {
-                ProviderError::new(
-                    "AI_SESSION_ATTACHMENT_PATH_INVALID",
-                    "OpenCode attachment path is unavailable.",
-                    400,
-                )
-            })?;
-            if !within_roots(&path.display().to_string(), std::slice::from_ref(&cwd)) {
-                return Err(ProviderError::new(
-                    "AI_SESSION_ATTACHMENT_PATH_INVALID",
-                    "OpenCode runtime-path attachments must remain inside the session workspace.",
-                    400,
-                ));
-            }
-            let url = Url::from_file_path(&path).map_err(|_| {
-                ProviderError::new(
-                    "AI_SESSION_ATTACHMENT_PATH_INVALID",
-                    "OpenCode attachment path is invalid.",
-                    400,
-                )
-            })?;
+            let url = match attachment.source {
+                ProviderAttachmentSource::Inline => {
+                    let data = std::fs::read(&attachment.path).map_err(|_| {
+                        ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_CONTENT_MISSING",
+                            "Inline attachment content is unavailable.",
+                            400,
+                        )
+                    })?;
+                    format!("data:{mime};base64,{}", STANDARD.encode(data))
+                }
+                ProviderAttachmentSource::Retained => {
+                    let url = Url::from_file_path(&attachment.path).map_err(|_| {
+                        ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                            "OpenCode attachment path is invalid.",
+                            400,
+                        )
+                    })?;
+                    url.to_string()
+                }
+                ProviderAttachmentSource::RuntimePath => {
+                    let source_path = attachment.runtime_path.as_ref().ok_or_else(|| {
+                        ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                            "OpenCode runtime-path attachments must be absolute.",
+                            400,
+                        )
+                    })?;
+                    if !source_path.is_absolute() {
+                        return Err(ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                            "OpenCode runtime-path attachments must be absolute.",
+                            400,
+                        ));
+                    }
+                    let path = source_path.canonicalize().map_err(|_| {
+                        ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                            "OpenCode attachment path is unavailable.",
+                            400,
+                        )
+                    })?;
+                    if !within_roots(&path.display().to_string(), std::slice::from_ref(&cwd)) {
+                        return Err(ProviderError::new(
+                            "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                            "OpenCode runtime-path attachments must remain inside the session workspace.",
+                            400,
+                        ));
+                    }
+                    Url::from_file_path(&path)
+                        .map_err(|_| {
+                            ProviderError::new(
+                                "AI_SESSION_ATTACHMENT_PATH_INVALID",
+                                "OpenCode attachment path is invalid.",
+                                400,
+                            )
+                        })?
+                        .to_string()
+                }
+            };
             parts.push(json!({
                 "type": "file",
                 "mime": mime,
                 "filename": attachment.meta.name,
-                "url": url.to_string()
+                "url": url
             }));
         }
         let image_count = path_references
@@ -2120,7 +2411,7 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
             .to_string();
         self.arm_title_generation(&provider_session_id);
         let _ = self
-            .reconcile_and_emit(&provider_session_id, &directory)
+            .reconcile_and_emit_existing(&provider_session_id, &directory)
             .await;
         Ok(ProviderCreateResult {
             provider_session_id,
@@ -2128,6 +2419,20 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
             model_selection: input.model_selection,
             reasoning_effort: input.reasoning_effort,
         })
+    }
+
+    async fn read_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+        self.ensure_ready().await?;
+        let directory = self.resolve_directory(provider_session_id).await?;
+        let projection = self
+            .refresh_projection(provider_session_id, &directory)
+            .await?;
+        self.publish_projection_snapshot(
+            provider_session_id,
+            &projection.lifecycle,
+            &projection.phase,
+        );
+        Ok(())
     }
 
     async fn start_message(
@@ -2176,6 +2481,9 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         })?;
         let directory = self.resolve_directory(provider_session_id).await?;
         self.client.abort(provider_session_id, &directory).await?;
+        let _ = self
+            .reconcile_tx
+            .send((provider_session_id.to_string(), directory));
         Ok(ProviderAction::simple("interrupt"))
     }
 
@@ -2253,26 +2561,41 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 409,
             )
         })?;
+        self.cancel_title_generation(provider_session_id);
         let directory = self.resolve_directory(provider_session_id).await?;
-        let updated = self
+        let _ = self
             .client
             .rename_session(provider_session_id, &directory, title)
             .await?;
-        if updated.get("title").and_then(Value::as_str) != Some(title) {
+        let _ = self
+            .reconcile_and_emit(provider_session_id, &directory)
+            .await;
+        let actual = self
+            .projections
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(provider_session_id)
+            .map(|projection| projection.title.clone());
+        if actual.as_deref() != Some(title) {
             return Err(ProviderError::bad_gateway(
                 "AI_SESSION_RENAME_NOT_CONFIRMED",
                 "OpenCode did not confirm the requested session title.",
             ));
         }
-        let _ = self
-            .reconcile_and_emit(provider_session_id, &directory)
-            .await;
         Ok(())
     }
 
     async fn resume_session(
         &self,
         session: &AiSession,
+    ) -> Result<ProviderResumeResult, ProviderError> {
+        self.resume_session_with_story_tools(session, None).await
+    }
+
+    async fn resume_session_with_story_tools(
+        &self,
+        session: &AiSession,
+        story_agent_tools: Option<Vec<String>>,
     ) -> Result<ProviderResumeResult, ProviderError> {
         let provider_session_id = session.provider_session_id.as_deref().ok_or_else(|| {
             ProviderError::new(
@@ -2287,16 +2610,28 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
             .client
             .get_session(provider_session_id, &directory)
             .await?;
-        if current
-            .get("time")
-            .and_then(|value| value.get("archived"))
-            .is_some_and(|value| !value.is_null())
-        {
+        if session_archived(&current) {
             return Err(ProviderError::new(
                 "AI_SESSION_RESUME_UNAVAILABLE",
                 "OpenCode cannot restore an archived session.",
                 409,
             ));
+        }
+        if let Some(tools) = story_agent_tools.as_deref() {
+            let current_permission = current
+                .get("permission")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(rules) = permission_rules(None, Some(tools), &current_permission) {
+                self.client
+                    .update_session(
+                        provider_session_id,
+                        &directory,
+                        json!({ "permission": rules }),
+                    )
+                    .await?;
+            }
         }
         let projection = self
             .refresh_projection(provider_session_id, &directory)
@@ -2304,20 +2639,9 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         if projection.parent_provider_session_id.is_none()
             && is_default_opencode_session_title(&projection.title)
         {
+            // Node only arms title generation on resume; it must not mutate an
+            // existing session title before the next user message.
             self.arm_title_generation(provider_session_id);
-            if let Some(prompt) = projection.timeline.iter().find_map(|item| match item {
-                AiSessionTimelineItem::UserMessage { text, .. } if !text.trim().is_empty() => {
-                    Some(text.trim().to_string())
-                }
-                _ => None,
-            }) {
-                self.maybe_generate_title(
-                    provider_session_id,
-                    &directory,
-                    &prompt,
-                    &projection.title,
-                );
-            }
         }
         Ok(ProviderResumeResult {
             model_selection: projection.model_selection,
@@ -2344,21 +2668,24 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 None => self.resolve_directory(provider_session_id).await?,
             },
         };
+        // A managed-worktree Fork changes the target directory, but the source
+        // transcript and provider permission configuration still live under the
+        // source session directory.
+        let source_directory = source.cwd.clone().unwrap_or_else(|| directory.clone());
         let messages = self
             .client
-            .messages(provider_session_id, &directory)
+            .messages(provider_session_id, &source_directory)
             .await?;
-        let message_id = input
-            .through_turn_id
-            .as_deref()
-            .and_then(|turn_id| next_user_message_id(&messages, turn_id));
-        if input.through_turn_id.is_some() && message_id.is_none() {
-            return Err(ProviderError::new(
-                "AI_SESSION_FORK_TURN_NOT_FOUND",
-                "OpenCode Fork boundary was not found.",
-                404,
-            ));
-        }
+        let message_id = match input.through_turn_id.as_deref() {
+            Some(turn_id) => next_user_message_id(&messages, turn_id).ok_or_else(|| {
+                ProviderError::new(
+                    "AI_SESSION_FORK_TURN_NOT_FOUND",
+                    "OpenCode Fork boundary was not found.",
+                    404,
+                )
+            })?,
+            None => None,
+        };
         let forked = self
             .client
             .fork_session(provider_session_id, &directory, message_id.as_deref())
@@ -2378,8 +2705,30 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
             .and_then(Value::as_str)
             .unwrap_or(&directory)
             .to_string();
+        if let Some(tools) = input.story_agent_tools.as_deref() {
+            let source_session = self
+                .client
+                .get_session(provider_session_id, &source_directory)
+                .await?;
+            let current_permission = source_session
+                .get("permission")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(rules) = permission_rules(None, Some(tools), &current_permission) {
+                self.client
+                    .update_session(
+                        &forked_id,
+                        &forked_directory,
+                        json!({ "permission": rules }),
+                    )
+                    .await?;
+            }
+        }
         self.arm_title_generation(&forked_id);
-        let _ = self.reconcile_and_emit(&forked_id, &forked_directory).await;
+        let _ = self
+            .reconcile_and_emit_existing(&forked_id, &forked_directory)
+            .await;
         Ok(ProviderCreateResult {
             provider_session_id: forked_id,
             cwd: PathBuf::from(forked_directory),
@@ -2492,6 +2841,23 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         Ok(())
     }
 
+    async fn active_session_exists(
+        &self,
+        provider_session_id: &str,
+    ) -> Result<Option<bool>, ProviderError> {
+        self.ensure_ready().await?;
+        let directory = self.resolve_directory(provider_session_id).await?;
+        match self
+            .client
+            .get_session(provider_session_id, &directory)
+            .await
+        {
+            Ok(session) => Ok(Some(!session_archived(&session))),
+            Err(error) if error.status_code == 404 => Ok(Some(false)),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn unsubscribe_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
         self.forget(provider_session_id);
         Ok(())
@@ -2574,7 +2940,6 @@ struct OpenCodeProjectionInput<'a> {
     status: &'a Value,
     messages: &'a [Value],
     permissions: &'a [Value],
-    pending_selection: Option<&'a AiSessionModelSelection>,
     retry_activities: &'a [RetryActivity],
     terminal_error: Option<&'a str>,
     model_selection_projector: Option<&'a dyn OpenCodeModelSelectionProjector>,
@@ -2586,7 +2951,6 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         status,
         messages,
         permissions,
-        pending_selection,
         retry_activities,
         terminal_error,
         model_selection_projector,
@@ -2613,13 +2977,14 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         .iter()
         .filter(|message| message_role(message) == Some("user"))
         .collect::<Vec<_>>();
-    let latest_user_id = users
+    let last_user_turn_id = users
         .last()
-        .and_then(|message| message_id(message))
+        .and_then(|user| message_id(user))
         .map(ToString::to_string);
+    let session_updated_ms = session.pointer("/time/updated").and_then(Value::as_f64);
     let status_type = status.get("type").and_then(Value::as_str).unwrap_or("idle");
-    let active = status_type != "idle";
     let mut timeline = Vec::new();
+    let mut turns = Vec::new();
     let mut part_turns = HashMap::new();
     let mut message_turns = HashMap::new();
     let mut assistant_message_ids = HashSet::new();
@@ -2678,8 +3043,8 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         timeline.push(AiSessionTimelineItem::UserMessage {
             id: turn_id.to_string(),
             turn_id: turn_id.to_string(),
-            text,
-            attachments: (!attachments.is_empty()).then_some(attachments),
+            text: text.clone(),
+            attachments: Some(attachments.clone()),
         });
         for assistant in &assistants {
             let Some(message_id) = message_id(assistant) else {
@@ -2710,17 +3075,82 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
                 .rev()
                 .find(|part| is_visible_text_part(part))
             {
-                if let Some(value) = part.get("text").and_then(Value::as_str) {
-                    if !value.trim().is_empty() {
-                        last_message = Some(value.trim().to_string());
-                        last_message_item_id = part
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string);
-                    }
-                }
+                let value = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                last_message = (!value.is_empty()).then(|| value.to_string());
+                last_message_item_id = part
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
             }
         }
+        let assistant_text_part = assistants
+            .iter()
+            .flat_map(|assistant| message_parts(assistant).iter().rev())
+            .find(|part| is_visible_text_part(part));
+        let assistant_text = assistant_text_part
+            .and_then(|part| part.get("text").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string);
+        let assistant_text_id = assistant_text_part
+            .and_then(|part| part.get("id").and_then(Value::as_str))
+            .map(ToString::to_string);
+        let turn_error = assistants.iter().find_map(|assistant| {
+            assistant
+                .pointer("/info/error")
+                .and_then(opencode_error_text)
+        });
+        let completed_ms = assistants
+            .iter()
+            .filter_map(|assistant| {
+                assistant
+                    .pointer("/info/time/completed")
+                    .and_then(Value::as_f64)
+            })
+            .next_back();
+        let created_ms = user
+            .pointer("/info/time/created")
+            .and_then(Value::as_f64)
+            .unwrap_or_else(|| session_updated_ms.unwrap_or(0.0));
+        let is_active = status_type != "idle" && last_user_turn_id.as_deref() == Some(turn_id);
+        let is_waiting = pending_permission.is_some() && is_active;
+        let turn_status = if turn_error.is_some() {
+            "failed"
+        } else if is_waiting {
+            "waiting"
+        } else if is_active {
+            "running"
+        } else {
+            "completed"
+        };
+        let turn_phase = if is_waiting {
+            "approval"
+        } else if is_active {
+            active_phase(&assistants.into_iter().cloned().collect::<Vec<_>>())
+        } else {
+            "unknown"
+        };
+        let updated_ms = completed_ms.or(session_updated_ms).unwrap_or(created_ms);
+        turns.push(json!({
+            "id": turn_id,
+            "providerTurnId": turn_id,
+            "source": "adapter-snapshot",
+            "userPrompt": (!text.is_empty()).then_some(text.clone()),
+            "userMessages": [{ "id": turn_id, "text": text, "attachments": attachments }],
+            "status": turn_status,
+            "phase": turn_phase,
+            "lastMessage": assistant_text,
+            "lastMessageItemId": assistant_text_id,
+            "revision": 0,
+            "observedAt": session_updated_ms.map(iso_from_millis),
+            "startedAt": Some(iso_from_millis(created_ms)),
+            "updatedAt": Some(iso_from_millis(updated_ms)),
+            "completedAt": (!is_active && completed_ms.is_some()).then(|| iso_from_millis(completed_ms.unwrap_or(updated_ms))),
+        }));
         last_turn_id = Some(turn_id.to_string());
     }
     let mut projected_retries = retry_activities.to_vec();
@@ -2748,15 +3178,13 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
             retry.completed,
         ));
     }
-    let waiting = pending_permission.is_some()
-        && active
-        && latest_user_id.as_deref() == last_turn_id.as_deref();
+    let waiting = pending_permission.is_some();
     let lifecycle = if waiting {
         "waiting"
+    } else if matches!(status_type, "busy" | "retry") {
+        "running"
     } else if error.is_some() {
         "failed"
-    } else if active {
-        "running"
     } else {
         "idle"
     };
@@ -2764,7 +3192,7 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         "approval"
     } else if status_type == "retry" {
         "thinking"
-    } else if active {
+    } else if status_type == "busy" {
         active_phase(&messages)
     } else {
         "unknown"
@@ -2786,15 +3214,31 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         .and_then(|(provider_id, model_id, _)| {
             model_selection_projector
                 .and_then(|projector| projector.project_model_selection(provider_id, model_id))
-                .or_else(|| project_model_selection(provider_id, model_id, pending_selection))
-        })
-        .or_else(|| pending_selection.cloned());
+        });
     let reasoning_effort = actual_model
         .as_ref()
         .and_then(|(_, _, variant)| variant.as_deref())
         .filter(|value| is_reasoning_effort(value))
         .map(ToString::to_string);
     let permission_summary = pending_permission.as_ref().map(permission_summary);
+    let current_tool = timeline.iter().rev().find_map(|item| match item {
+        AiSessionTimelineItem::Activity {
+            id,
+            activity_kind,
+            title,
+            status: Some(AiSessionTimelineActivityStatus::Running),
+            input,
+            ..
+        } if !matches!(activity_kind.as_str(), "reasoning" | "contextCompaction" | "retry") => {
+            Some(json!({
+                "id": id,
+                "kind": activity_kind,
+                "name": title,
+                "inputPreview": input.as_deref().map(|value| value.chars().take(500).collect::<String>()),
+            }))
+        }
+        _ => None,
+    });
     OpenCodeProjection {
         title: session
             .get("title")
@@ -2828,6 +3272,8 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
             .and_then(Value::as_str)
             .map(ToString::to_string),
         timeline,
+        turns,
+        current_tool,
         part_turns,
         message_turns,
         assistant_message_ids,
@@ -3272,7 +3718,7 @@ fn retry_activity(turn_id: &str, message: &str, completed: bool) -> AiSessionTim
         } else {
             AiSessionTimelineActivityStatus::Waiting
         }),
-        Some(bounded(message, 4000).unwrap_or_default()),
+        Some(raw_bounded(message, 4000).unwrap_or_default()),
         None,
         None,
         None,
@@ -3328,28 +3774,6 @@ fn permission_rules(
     Some(rules)
 }
 
-fn project_model_selection(
-    provider_id: &str,
-    model_id: &str,
-    existing: Option<&AiSessionModelSelection>,
-) -> Option<AiSessionModelSelection> {
-    let entity_id = provider_id
-        .strip_prefix("task-handoff-")
-        .unwrap_or(provider_id);
-    if let Some(existing) = existing {
-        if existing.model_entity_id == entity_id {
-            let mut selection = existing.clone();
-            selection.model_upstream_name = Some(model_id.to_string());
-            return Some(selection);
-        }
-    }
-    Some(AiSessionModelSelection {
-        model_entity_id: entity_id.to_string(),
-        model_name: model_id.to_string(),
-        model_upstream_name: Some(model_id.to_string()),
-    })
-}
-
 fn same_model_selection(left: &AiSessionModelSelection, right: &AiSessionModelSelection) -> bool {
     left.model_entity_id == right.model_entity_id
         && (left.upstream_name() == right.upstream_name() || left.model_name == right.model_name)
@@ -3359,7 +3783,7 @@ fn opencode_provider_id(selection: &AiSessionModelSelection) -> String {
     format!("task-handoff-{}", selection.model_entity_id)
 }
 
-fn next_user_message_id(messages: &[Value], through_turn_id: &str) -> Option<String> {
+fn next_user_message_id(messages: &[Value], through_turn_id: &str) -> Option<Option<String>> {
     let mut messages = messages.to_vec();
     messages.sort_by(|left, right| {
         message_created(left)
@@ -3369,11 +3793,13 @@ fn next_user_message_id(messages: &[Value], through_turn_id: &str) -> Option<Str
     let index = messages.iter().position(|message| {
         message_role(message) == Some("user") && message_id(message) == Some(through_turn_id)
     })?;
-    messages[index + 1..]
-        .iter()
-        .find(|message| message_role(message) == Some("user"))
-        .and_then(message_id)
-        .map(ToString::to_string)
+    Some(
+        messages[index + 1..]
+            .iter()
+            .find(|message| message_role(message) == Some("user"))
+            .and_then(message_id)
+            .map(ToString::to_string),
+    )
 }
 
 fn conversation_attachments(parts: &[Value]) -> Vec<AiSessionConversationAttachment> {
@@ -3441,11 +3867,12 @@ fn permission_summary(permission: &Value) -> String {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    if resources.is_empty() {
+    let summary = if resources.is_empty() {
         action.to_string()
     } else {
         format!("{action}: {resources}")
-    }
+    };
+    controlled_instance_core::text::truncate_utf16(&summary, 1000)
 }
 
 fn opencode_error_text(value: &Value) -> Option<String> {
@@ -3453,19 +3880,23 @@ fn opencode_error_text(value: &Value) -> Option<String> {
         return None;
     }
     if let Some(value) = value.as_str() {
-        return bounded(value, 4000);
+        return (!value.is_empty())
+            .then(|| controlled_instance_core::text::truncate_utf16(value, 4000));
     }
     let name = value.get("name").and_then(Value::as_str);
     if name == Some("MessageAbortedError") {
         return None;
     }
-    value
+    let message = value
         .get("data")
         .and_then(|data| data.get("message"))
         .and_then(Value::as_str)
         .or_else(|| value.get("message").and_then(Value::as_str))
-        .map(|message| bounded(message, 4000).unwrap_or_default())
-        .or_else(|| bounded(&value.to_string(), 4000))
+        .filter(|message| !message.is_empty());
+    Some(match message {
+        Some(message) => controlled_instance_core::text::truncate_utf16(message, 4000),
+        None => controlled_instance_core::text::truncate_utf16(&value.to_string(), 4000),
+    })
 }
 
 fn message_role(message: &Value) -> Option<&str> {
@@ -3559,6 +3990,89 @@ fn within_roots(directory: &str, roots: &[PathBuf]) -> bool {
     })
 }
 
+fn opencode_reconnect_delay(attempt: u32) -> Duration {
+    OPENCODE_RECONNECT_BASE
+        .saturating_mul(1_u32 << attempt.min(6))
+        .min(OPENCODE_RECONNECT_MAX)
+}
+
+fn parse_global_event(data: &str) -> Result<Value, ProviderError> {
+    let mut event = serde_json::from_str::<Value>(data).map_err(|error| {
+        ProviderError::new(
+            "OPENCODE_EVENT_STREAM_INVALID",
+            format!("OpenCode returned malformed SSE JSON: {error}"),
+            502,
+        )
+    })?;
+    if !event.is_object() {
+        return Err(ProviderError::new(
+            "OPENCODE_EVENT_STREAM_INVALID",
+            "OpenCode SSE event must be an object.",
+            502,
+        ));
+    }
+    if let Some(directory) = event.get("directory") {
+        let Some(directory) = directory.as_str() else {
+            return Err(ProviderError::new(
+                "OPENCODE_EVENT_STREAM_INVALID",
+                "OpenCode SSE directory must be a string.",
+                502,
+            ));
+        };
+        if directory.chars().count() > 4096 {
+            return Err(ProviderError::new(
+                "OPENCODE_EVENT_STREAM_INVALID",
+                "OpenCode SSE directory exceeds 4096 characters.",
+                502,
+            ));
+        }
+    }
+    {
+        let payload = event
+            .get_mut("payload")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ProviderError::new(
+                    "OPENCODE_EVENT_STREAM_INVALID",
+                    "OpenCode SSE payload must be an object.",
+                    502,
+                )
+            })?;
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ProviderError::new(
+                    "OPENCODE_EVENT_STREAM_INVALID",
+                    "OpenCode SSE payload type must be a non-empty string.",
+                    502,
+                )
+            })?
+            .to_string();
+        payload.insert("type".to_string(), Value::String(event_type));
+        if let Some(properties) = payload.get("properties") {
+            if !properties.is_object() {
+                return Err(ProviderError::new(
+                    "OPENCODE_EVENT_STREAM_INVALID",
+                    "OpenCode SSE payload properties must be an object.",
+                    502,
+                ));
+            }
+        } else {
+            payload.insert("properties".to_string(), Value::Object(Map::new()));
+        }
+    }
+    if event.get("directory").is_none() {
+        event
+            .as_object_mut()
+            .expect("validated SSE event object")
+            .insert("directory".to_string(), Value::String(String::new()));
+    }
+    Ok(event)
+}
+
 fn next_sse_frame(buffer: &mut String) -> Option<String> {
     let lf = buffer.find("\n\n");
     let crlf = buffer.find("\r\n\r\n");
@@ -3590,6 +4104,14 @@ fn is_default_opencode_session_title(title: &str) -> bool {
         })
 }
 
+fn session_archived(session: &Value) -> bool {
+    session.get("time").is_some_and(archived_time)
+}
+
+fn archived_time(time: &Value) -> bool {
+    time.get("archived").and_then(Value::as_f64).is_some()
+}
+
 fn encode_path(value: &str) -> String {
     let mut url = String::new();
     for byte in value.bytes() {
@@ -3602,21 +4124,8 @@ fn encode_path(value: &str) -> String {
     url
 }
 
-fn bounded(value: &str, limit: usize) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if value.chars().count() <= limit {
-        return Some(value.to_string());
-    }
-    Some(
-        value
-            .chars()
-            .take(limit.saturating_sub(1))
-            .collect::<String>()
-            + "…",
-    )
+fn raw_bounded(value: &str, limit: usize) -> Option<String> {
+    (!value.is_empty()).then(|| controlled_instance_core::text::truncate_utf16(value, limit))
 }
 
 fn now_iso() -> String {
@@ -3634,17 +4143,25 @@ fn iso_from_millis(value: f64) -> String {
 mod tests {
     use super::*;
     use axum::{
-        body::to_bytes,
+        body::{to_bytes, Body},
         extract::State,
         response::{IntoResponse, Response},
         routing::any,
         Json, Router,
     };
-    use std::sync::Mutex as StdMutex;
+    use std::{
+        collections::VecDeque,
+        convert::Infallible,
+        sync::{atomic::AtomicUsize, Mutex as StdMutex},
+    };
 
     #[derive(Clone)]
     struct FakeOpenCode {
         session: Value,
+        global_sessions: Vec<Value>,
+        project_sessions: Vec<Value>,
+        global_discovery_fails: bool,
+        delete_missing: bool,
         status: Value,
         messages: Value,
         permissions: Value,
@@ -3702,12 +4219,28 @@ mod tests {
             });
         let value = match (method.as_str(), path.as_str()) {
             ("GET", "/global/health") => json!({ "healthy": true, "version": "1.0.0-test" }),
+            ("GET", "/experimental/session") if state.global_discovery_fails => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "global discovery unavailable",
+                )
+                    .into_response()
+            }
+            ("GET", "/experimental/session") => {
+                json!({ "data": state.global_sessions, "nextCursor": Value::Null })
+            }
+            ("GET", "/session") => json!(state.project_sessions),
             ("GET", "/session/s1") => state.session.clone(),
             ("GET", "/session/status") => state.status.clone(),
             ("GET", "/session/s1/message") => state.messages.clone(),
             ("GET", "/permission") => state.permissions.clone(),
+            ("DELETE", "/session/s1") if state.delete_missing => {
+                return (StatusCode::NOT_FOUND, "session not found").into_response()
+            }
             ("POST", "/session")
             | ("PATCH", "/session/s1")
+            | ("PATCH", "/session/forked")
+            | ("POST", "/session/s1/fork")
             | ("POST", "/session/s1/prompt_async")
             | ("POST", "/session/s1/abort")
             | ("POST", "/permission/p1/reply") => state.response.clone(),
@@ -3750,6 +4283,10 @@ mod tests {
                 },
                 "time": { "created": 1, "updated": 10 }
             }),
+            global_sessions: Vec::new(),
+            project_sessions: Vec::new(),
+            global_discovery_fails: false,
+            delete_missing: false,
             status: json!({ "s1": { "type": "busy" } }),
             messages: json!([
                 {
@@ -3818,7 +4355,6 @@ mod tests {
             status: &fixture.status["s1"],
             messages: fixture.messages.as_array().expect("messages"),
             permissions: fixture.permissions.as_array().expect("permissions"),
-            pending_selection: None,
             retry_activities: &[],
             terminal_error: None,
             model_selection_projector: None,
@@ -3831,14 +4367,17 @@ mod tests {
             projection.last_message_item_id.as_deref(),
             Some("assistant-text")
         );
-        assert_eq!(
-            projection
-                .model_selection
-                .as_ref()
-                .map(|selection| selection.model_entity_id.as_str()),
-            Some("model_entity_1")
+        assert!(
+            projection.model_selection.is_none(),
+            "Unknown OpenCode models must remain unprojected like Node."
         );
         assert_eq!(projection.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(projection.turns.len(), 1);
+        assert_eq!(projection.turns[0]["id"], "u1");
+        assert_eq!(projection.turns[0]["status"], "waiting");
+        assert_eq!(projection.turns[0]["phase"], "approval");
+        assert_eq!(projection.turns[0]["lastMessage"], "working");
+        assert_eq!(projection.turns[0]["userPrompt"], "hello");
         assert!(projection.timeline.iter().any(|item| matches!(
             item,
             AiSessionTimelineItem::Activity {
@@ -3999,10 +4538,14 @@ mod tests {
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
             title_generator: RwLock::new(None),
+            closed_session_ids: RwLock::new(None),
+            tracked_sessions: RwLock::new(None),
             reconcile_tx,
             closed: AtomicBool::new(false),
             event_source_started: AtomicBool::new(false),
+            reconnect_attempt: AtomicU32::new(0),
             event_source: std::sync::Mutex::new(None),
+            refresh_lock: tokio::sync::Mutex::new(()),
             self_ref: std::sync::Mutex::new(Weak::new()),
         });
         *provider
@@ -4122,18 +4665,20 @@ mod tests {
             "info": { "id": "u1", "sessionID": "s1", "role": "user", "time": { "created": 1 } },
             "parts": [{ "id": "user-text", "messageID": "u1", "type": "text", "text": "Run it" }]
         }]);
-        for status in [json!({ "type": "busy" }), json!({ "type": "idle" })] {
+        for (status, lifecycle) in [
+            (json!({ "type": "busy" }), "running"),
+            (json!({ "type": "idle" }), "failed"),
+        ] {
             let projection = project_session(OpenCodeProjectionInput {
                 session: &session,
                 status: &status,
                 messages: messages.as_array().expect("messages"),
                 permissions: &[],
-                pending_selection: None,
                 retry_activities: &[],
                 terminal_error: Some("Provider failed"),
                 model_selection_projector: None,
             });
-            assert_eq!(projection.lifecycle, "failed");
+            assert_eq!(projection.lifecycle, lifecycle);
             assert_eq!(projection.error.as_deref(), Some("Provider failed"));
         }
 
@@ -4152,6 +4697,31 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .terminal_errors
             .contains_key("s1"));
+    }
+
+    #[tokio::test]
+    async fn session_error_without_an_active_turn_projects_a_session_error() {
+        let mut projection = running_projection();
+        projection.active_turn_id = None;
+        projection.lifecycle = "idle".to_string();
+        let (provider, mut events) = live_provider(projection);
+
+        provider
+            .handle_global_event(live_event(
+                "session.error",
+                json!({
+                    "sessionID": "s1",
+                    "error": { "name": "APIError", "data": { "message": "Provider failed" } }
+                }),
+            ))
+            .await;
+
+        assert!(drain_events(&mut events).iter().any(|event| matches!(
+            event,
+            ProviderEvent::SessionError { provider_session_id, error }
+                if provider_session_id == "s1" && error == "Provider failed"
+        )));
+        provider.close();
     }
 
     #[tokio::test]
@@ -4252,5 +4822,796 @@ mod tests {
         assert!(!aux.armed_title_sessions.contains("s1"));
         assert!(aux.attempted_title_sessions.contains("s1"));
         assert_eq!(aux.title_generations.get("s1"), Some(&5));
+    }
+
+    #[tokio::test]
+    async fn global_discovery_falls_back_to_project_listing() {
+        let root = std::env::temp_dir().join(format!(
+            "opencode-discovery-fallback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("discovery root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.to_string_lossy());
+        fixture.project_sessions = vec![fixture.session.clone()];
+        fixture.global_discovery_fails = true;
+        let endpoint = start_fake(fixture.clone()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.clone()],
+        }));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.refresh().await.expect("refresh");
+
+        let discovered = drain_events(&mut events).into_iter().any(|event| {
+            matches!(event, ProviderEvent::ThreadDiscovered { provider_session_id, .. } if provider_session_id == "s1")
+        });
+        assert!(discovered);
+        let requests = fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(requests.iter().any(|request| {
+            request.method == "GET"
+                && request.path == "/session"
+                && request
+                    .query
+                    .as_deref()
+                    .is_some_and(|query| query.contains("scope=project"))
+        }));
+        drop(requests);
+        provider.close();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn closed_provider_sessions_are_not_rediscovered() {
+        let root =
+            std::env::temp_dir().join(format!("opencode-closed-discovery-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("discovery root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.to_string_lossy());
+        fixture.global_sessions = vec![fixture.session.clone()];
+        let endpoint = start_fake(fixture.clone()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.clone()],
+        }));
+        provider.set_closed_session_ids(Arc::new(|| HashSet::from(["s1".to_string()])));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.refresh().await.expect("refresh");
+
+        assert!(!drain_events(&mut events).into_iter().any(|event| {
+            matches!(event, ProviderEvent::ThreadDiscovered { provider_session_id, .. } if provider_session_id == "s1")
+        }));
+        provider.close();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn discovery_converges_a_tracked_session_that_became_archived() {
+        let root = std::env::temp_dir().join(format!(
+            "opencode-archived-reconcile-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("discovery root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.to_string_lossy());
+        fixture.session["time"]["archived"] = json!(1_760_000_000_000_f64);
+        let endpoint = start_fake(fixture).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.clone()],
+        }));
+        provider
+            .directories
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert("s1".to_string(), root.to_string_lossy().to_string());
+        provider
+            .projections
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert("s1".to_string(), running_projection());
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.refresh().await.expect("refresh");
+
+        assert!(drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ProviderSessionLifecycle { provider_session_id, disposition }
+                if provider_session_id == "s1" && disposition == "closed"
+        )));
+        assert!(!provider
+            .projections
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key("s1"));
+        provider.close();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn archived_and_deleted_events_publish_provider_lifecycle() {
+        let (provider, mut events) = live_provider(running_projection());
+        provider
+            .handle_global_event(live_event(
+                "session.updated",
+                json!({
+                    "sessionID": "s1",
+                    "info": {
+                        "id": "s1",
+                        "sessionID": "s1",
+                        "time": { "archived": 1_760_000_000_000_f64 }
+                    }
+                }),
+            ))
+            .await;
+        assert!(drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ProviderSessionLifecycle { provider_session_id, disposition }
+                if provider_session_id == "s1" && disposition == "closed"
+        )));
+
+        let (provider, mut events) = live_provider(running_projection());
+        provider
+            .handle_global_event(live_event(
+                "session.deleted",
+                json!({ "sessionID": "s1", "info": { "id": "s1", "sessionID": "s1" } }),
+            ))
+            .await;
+        assert!(drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ProviderSessionLifecycle { provider_session_id, disposition }
+                if provider_session_id == "s1" && disposition == "cleared"
+        )));
+    }
+
+    #[test]
+    fn latest_user_turn_fork_boundary_omits_message_id() {
+        let messages = vec![
+            json!({ "info": { "id": "u1", "role": "user", "time": { "created": 1 } } }),
+            json!({ "info": { "id": "a1", "role": "assistant", "parentID": "u1", "time": { "created": 2 } } }),
+            json!({ "info": { "id": "u2", "role": "user", "time": { "created": 3 } } }),
+        ];
+        assert_eq!(
+            next_user_message_id(&messages, "u2"),
+            Some(None),
+            "the latest user turn has no next boundary and must fork without messageID"
+        );
+        assert_eq!(
+            next_user_message_id(&messages, "u1"),
+            Some(Some("u2".into()))
+        );
+        assert_eq!(next_user_message_id(&messages, "missing"), None);
+    }
+
+    #[test]
+    fn archived_detection_matches_open_code_numeric_timestamp() {
+        assert!(session_archived(&json!({ "time": { "archived": 1 } })));
+        assert!(!session_archived(&json!({ "time": { "archived": null } })));
+        assert!(!session_archived(&json!({ "time": { "archived": "1" } })));
+    }
+
+    fn opencode_session(provider_session_id: &str, cwd: &str) -> AiSession {
+        serde_json::from_value(json!({
+            "id": "ses_0000000000001",
+            "agent": "opencode",
+            "creationSource": "ai-session",
+            "providerSessionId": provider_session_id,
+            "cwd": cwd,
+            "status": "idle"
+        }))
+        .expect("OpenCode session fixture")
+    }
+
+    fn query_parameter(query: &Option<String>, name: &str) -> Option<String> {
+        Url::parse(&format!("http://localhost/?{}", query.as_deref()?))
+            .ok()?
+            .query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    }
+
+    #[tokio::test]
+    async fn discovery_reconciles_a_tracked_session_absent_from_the_global_list() {
+        let root = tempfile::tempdir().expect("discovery root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.path().to_string_lossy());
+        fixture.session["time"]["archived"] = json!(1_760_000_000_000_f64);
+        let endpoint = start_fake(fixture).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        let tracked_cwd = root.path().to_string_lossy().to_string();
+        provider.set_tracked_sessions(Arc::new(move || {
+            vec![OpenCodeTrackedSession {
+                provider_session_id: "s1".to_string(),
+                cwd: tracked_cwd.clone(),
+            }]
+        }));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.refresh().await.expect("refresh");
+
+        assert!(drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ProviderSessionLifecycle { provider_session_id, disposition }
+                if provider_session_id == "s1" && disposition == "closed"
+        )));
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn closed_sessions_cannot_be_readopted_by_event_reconciliation() {
+        let root = tempfile::tempdir().expect("discovery root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.path().to_string_lossy());
+        let endpoint = start_fake(fixture).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        provider.set_closed_session_ids(Arc::new(|| HashSet::from(["s1".to_string()])));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider
+            .reconcile_and_emit("s1", &root.path().to_string_lossy())
+            .await
+            .expect("closed reconcile");
+        assert!(!drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ThreadDiscovered { provider_session_id, .. }
+                if provider_session_id == "s1"
+        )));
+
+        provider.set_tracked_sessions(Arc::new(|| {
+            vec![OpenCodeTrackedSession {
+                provider_session_id: "s1".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            }]
+        }));
+        provider
+            .reconcile_and_emit("s1", &root.path().to_string_lossy())
+            .await
+            .expect("tracked reconcile");
+        assert!(drain_events(&mut events).into_iter().any(|event| matches!(
+            event,
+            ProviderEvent::ThreadDiscovered { provider_session_id, .. }
+                if provider_session_id == "s1"
+        )));
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn fork_uses_the_source_transcript_and_applies_story_tool_permissions() {
+        let root = tempfile::tempdir().expect("fork root");
+        let source_directory = root.path().join("source");
+        let target_directory = root.path().join("target");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(source_directory.to_string_lossy());
+        fixture.session["permission"] = json!([
+            { "permission": "bash", "pattern": "*", "action": "ask" }
+        ]);
+        fixture.response = json!({
+            "id": "forked",
+            "directory": target_directory.to_string_lossy(),
+            "title": "OpenCode fixture",
+            "time": { "created": 1, "updated": 10 }
+        });
+        let endpoint = start_fake(fixture.clone()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        let source = opencode_session("s1", &source_directory.to_string_lossy());
+        let enabled_tool = AI_SESSION_AGENT_TOOL_NAMES[0].to_string();
+
+        let created = provider
+            .fork_session(
+                &source,
+                ProviderForkInput {
+                    through_turn_id: Some("u1".to_string()),
+                    cwd: Some(target_directory.clone()),
+                    story_agent_tools: Some(vec![enabled_tool.clone()]),
+                },
+            )
+            .await
+            .expect("fork");
+
+        assert_eq!(created.provider_session_id, "forked");
+        let requests = fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let messages = requests
+            .iter()
+            .find(|request| request.method == "GET" && request.path == "/session/s1/message")
+            .expect("source message request");
+        assert_eq!(
+            query_parameter(&messages.query, "directory"),
+            Some(source_directory.to_string_lossy().to_string())
+        );
+        let fork = requests
+            .iter()
+            .find(|request| request.method == "POST" && request.path == "/session/s1/fork")
+            .expect("fork request");
+        assert_eq!(
+            query_parameter(&fork.query, "directory"),
+            Some(target_directory.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            fork.body,
+            json!({}),
+            "a latest-turn fork must omit messageID"
+        );
+        let permission = requests
+            .iter()
+            .find(|request| request.method == "PATCH" && request.path == "/session/forked")
+            .expect("fork permission request");
+        let rules = permission.body["permission"]
+            .as_array()
+            .expect("permission rules");
+        assert!(rules.iter().any(|rule| rule["permission"] == "bash"));
+        assert!(rules.iter().any(|rule| {
+            rule["permission"] == enabled_tool.as_str() && rule["action"] == "allow"
+        }));
+        drop(requests);
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn resume_reapplies_story_tool_permissions() {
+        let root = tempfile::tempdir().expect("resume root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.path().to_string_lossy());
+        fixture.session["permission"] = json!([
+            { "permission": "bash", "pattern": "*", "action": "ask" }
+        ]);
+        let endpoint = start_fake(fixture.clone()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        provider
+            .directories
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert("s1".to_string(), root.path().to_string_lossy().to_string());
+        let session = opencode_session("s1", &root.path().to_string_lossy());
+        let enabled_tool = AI_SESSION_AGENT_TOOL_NAMES[0].to_string();
+
+        provider
+            .resume_session_with_story_tools(&session, Some(vec![enabled_tool.clone()]))
+            .await
+            .expect("resume");
+
+        let requests = fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let permission = requests
+            .iter()
+            .find(|request| request.method == "PATCH" && request.path == "/session/s1")
+            .expect("resume permission request");
+        let rules = permission.body["permission"]
+            .as_array()
+            .expect("permission rules");
+        assert!(rules.iter().any(|rule| rule["permission"] == "bash"));
+        assert!(rules.iter().any(|rule| {
+            rule["permission"] == enabled_tool.as_str() && rule["action"] == "allow"
+        }));
+        drop(requests);
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn deleting_an_already_absent_provider_session_propagates_like_node() {
+        let root = tempfile::tempdir().expect("delete root");
+        let mut fixture = fixture();
+        fixture.delete_missing = true;
+        let endpoint = start_fake(fixture).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        provider
+            .directories
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert("s1".to_string(), root.path().to_string_lossy().to_string());
+        provider
+            .projections
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert("s1".to_string(), running_projection());
+
+        let error = provider
+            .delete_session("s1")
+            .await
+            .expect_err("missing provider session propagates");
+        assert_eq!(error.status_code, 404);
+
+        assert!(provider
+            .projections
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key("s1"));
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn event_stream_disconnect_publishes_connection_loss() {
+        let root = tempfile::tempdir().expect("event stream root");
+        let endpoint = start_fake(fixture()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.ensure_ready().await.expect("ready");
+
+        let mut saw_connected = false;
+        let mut saw_disconnected = false;
+        for _ in 0..4 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+                .await
+                .expect("provider event")
+                .expect("provider event channel");
+            match event {
+                ProviderEvent::ConnectionChanged { connected: true } => saw_connected = true,
+                ProviderEvent::ConnectionChanged { connected: false } => {
+                    saw_disconnected = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_connected);
+        assert!(saw_disconnected);
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn manual_rename_cancels_title_generation_at_the_provider_boundary() {
+        let root = tempfile::tempdir().expect("rename root");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(root.path().to_string_lossy());
+        fixture.global_sessions = vec![fixture.session.clone()];
+        fixture.response = json!({
+            "id": "s1",
+            "directory": root.path().to_string_lossy(),
+            "title": "Manual title",
+            "time": { "created": 1, "updated": 10 }
+        });
+        let endpoint = start_fake(fixture).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        }));
+        provider.arm_title_generation("s1");
+        let session = opencode_session("s1", &root.path().to_string_lossy());
+
+        let error = provider
+            .rename_session(&session, "Manual title")
+            .await
+            .expect_err("reconcile must confirm the title");
+        assert_eq!(error.code, "AI_SESSION_RENAME_NOT_CONFIRMED");
+
+        let aux = provider
+            .aux
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!aux.armed_title_sessions.contains("s1"));
+        assert!(aux.attempted_title_sessions.contains("s1"));
+        drop(aux);
+        provider.close();
+    }
+
+    #[derive(Debug, Clone)]
+    enum ScriptedEventBody {
+        Complete(String),
+        Hanging(String),
+    }
+
+    #[derive(Clone)]
+    struct ScriptedOpenCode {
+        event_bodies: Arc<StdMutex<VecDeque<ScriptedEventBody>>>,
+        event_connections: Arc<AtomicUsize>,
+        event_connections_tx: mpsc::UnboundedSender<usize>,
+        discovery_tx: mpsc::UnboundedSender<()>,
+        slow_started_tx: mpsc::UnboundedSender<()>,
+    }
+
+    async fn scripted_opencode(
+        State(state): State<ScriptedOpenCode>,
+        request: axum::extract::Request,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        if path == "/global/health" {
+            return Json(json!({ "healthy": true, "version": "1.0.0-test" })).into_response();
+        }
+        if path == "/global/event" {
+            let connection = state.event_connections.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ = state.event_connections_tx.send(connection);
+            let body = state
+                .event_bodies
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .unwrap_or_else(|| {
+                    ScriptedEventBody::Complete(
+                        "data: {\"payload\":{\"type\":\"sync\",\"properties\":{}}}\n\n".to_string(),
+                    )
+                });
+            let headers = [(axum::http::header::CONTENT_TYPE, "text/event-stream")];
+            return match body {
+                ScriptedEventBody::Complete(frame) => (headers, frame).into_response(),
+                ScriptedEventBody::Hanging(frame) => {
+                    let stream = futures_util::stream::once(async move {
+                        Ok::<_, Infallible>(frame.into_bytes())
+                    })
+                    .chain(futures_util::stream::pending());
+                    (headers, Body::from_stream(stream)).into_response()
+                }
+            };
+        }
+        if path == "/experimental/session" {
+            let _ = state.discovery_tx.send(());
+            return Json(json!({ "data": [], "nextCursor": Value::Null })).into_response();
+        }
+        if path == "/session" {
+            return Json(json!([])).into_response();
+        }
+        if path == "/slow" {
+            let _ = state.slow_started_tx.send(());
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            return Json(Value::Null).into_response();
+        }
+        if let Some(status) = path
+            .strip_prefix("/http/")
+            .and_then(|value| value.parse::<u16>().ok())
+        {
+            return (
+                StatusCode::from_u16(status).expect("test status"),
+                format!("OpenCode HTTP {status}"),
+            )
+                .into_response();
+        }
+        (StatusCode::NOT_FOUND, path).into_response()
+    }
+
+    async fn start_scripted(state: ScriptedOpenCode) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let app = Router::new()
+            .fallback(any(scripted_opencode))
+            .with_state(state);
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("scripted OpenCode server");
+        });
+        format!("http://{address}")
+    }
+
+    fn scripted_open_code() -> (
+        ScriptedOpenCode,
+        mpsc::UnboundedReceiver<usize>,
+        mpsc::UnboundedReceiver<()>,
+        mpsc::UnboundedReceiver<()>,
+    ) {
+        let (event_connections_tx, event_connections_rx) = mpsc::unbounded_channel();
+        let (discovery_tx, discovery_rx) = mpsc::unbounded_channel();
+        let (slow_started_tx, slow_started_rx) = mpsc::unbounded_channel();
+        (
+            ScriptedOpenCode {
+                event_bodies: Arc::new(StdMutex::new(VecDeque::new())),
+                event_connections: Arc::new(AtomicUsize::new(0)),
+                event_connections_tx,
+                discovery_tx,
+                slow_started_tx,
+            },
+            event_connections_rx,
+            discovery_rx,
+            slow_started_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn sse_event_stream_is_not_cut_off_by_the_request_timeout() {
+        let (state, mut connections, _discovery, _slow) = scripted_open_code();
+        state
+            .event_bodies
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(ScriptedEventBody::Hanging(
+                "data: {\"payload\":{\"type\":\"sync\",\"properties\":{}}}\n\n".to_string(),
+            ));
+        let endpoint = start_scripted(state.clone()).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![PathBuf::from("/tmp")],
+        }));
+        let mut events = provider.subscribe_events().expect("events");
+
+        provider.start_event_stream();
+        tokio::time::timeout(Duration::from_secs(2), connections.recv())
+            .await
+            .expect("event connection")
+            .expect("connection notice");
+
+        tokio::time::sleep(Duration::from_millis(16_250)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(state.event_connections.load(Ordering::SeqCst), 1);
+        assert!(!drain_events(&mut events)
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::ConnectionChanged { connected: false })));
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn valid_sse_event_resets_reconnect_attempt_to_the_base_delay() {
+        let (provider, _events) = live_provider(running_projection());
+        provider.reconnect_attempt.store(7, Ordering::Release);
+
+        provider
+            .handle_global_event(json!({
+                "payload": { "type": "sync", "properties": {} }
+            }))
+            .await;
+
+        assert_eq!(provider.reconnect_attempt.load(Ordering::Acquire), 0);
+        assert_eq!(opencode_reconnect_delay(0), OPENCODE_RECONNECT_BASE);
+    }
+
+    #[tokio::test]
+    async fn malformed_sse_frame_reconnects_and_server_connected_refreshes_discovery() {
+        let (state, mut connections, mut discovery, _slow) = scripted_open_code();
+        {
+            let mut bodies = state
+                .event_bodies
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            bodies.push_back(ScriptedEventBody::Hanging(
+                "data: {not-json}\n\n".to_string(),
+            ));
+            bodies.push_back(ScriptedEventBody::Hanging(
+                "data: {\"payload\":{\"type\":\"server.connected\",\"properties\":{}}}\n\n"
+                    .to_string(),
+            ));
+        }
+        let endpoint = start_scripted(state).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![PathBuf::from("/tmp")],
+        }));
+
+        provider.start_event_stream();
+        tokio::time::timeout(Duration::from_secs(2), connections.recv())
+            .await
+            .expect("first event connection")
+            .expect("first connection notice");
+        tokio::time::timeout(Duration::from_secs(2), connections.recv())
+            .await
+            .expect("reconnected event stream")
+            .expect("second connection notice");
+        tokio::time::timeout(Duration::from_secs(2), discovery.recv())
+            .await
+            .expect("authoritative discovery refresh")
+            .expect("discovery notice");
+        provider.close();
+    }
+
+    #[tokio::test]
+    async fn normal_sse_eof_is_returned_separately_from_a_stream_failure() {
+        let (state, _connections, _discovery, _slow) = scripted_open_code();
+        state
+            .event_bodies
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(ScriptedEventBody::Complete(String::new()));
+        let endpoint = start_scripted(state).await;
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![PathBuf::from("/tmp")],
+        }));
+
+        provider
+            .consume_events()
+            .await
+            .expect("normal EOF is not a stream failure");
+    }
+
+    #[tokio::test]
+    async fn opencode_http_errors_keep_their_status_with_the_route_fallback_code() {
+        let (state, _connections, _discovery, _slow) = scripted_open_code();
+        let endpoint = start_scripted(state).await;
+        let client = OpenCodeClient::new(Arc::new(TestConnection {
+            endpoint,
+            roots: vec![PathBuf::from("/tmp")],
+        }));
+
+        for status in [401_u16, 403, 404, 500] {
+            let error = client
+                .request(Method::GET, &format!("/http/{status}"), None, &[], None)
+                .await
+                .expect_err("provider HTTP error");
+            assert_eq!(error.code, "AI_SESSION_CONTROL_FAILED");
+            assert_eq!(error.status_code, status);
+            assert_ne!(error.code, "AI_SESSION_NOT_FOUND");
+        }
+    }
+
+    #[tokio::test]
+    async fn opencode_request_timeout_uses_the_route_fallback_error() {
+        let (state, _connections, _discovery, mut slow_started) = scripted_open_code();
+        let endpoint = start_scripted(state).await;
+        let client = OpenCodeClient {
+            connections: Arc::new(TestConnection {
+                endpoint,
+                roots: vec![PathBuf::from("/tmp")],
+            }),
+            http: Client::builder()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .expect("test HTTP client"),
+            event_http: Client::builder().build().expect("test event stream client"),
+        };
+        let request =
+            tokio::spawn(
+                async move { client.request(Method::GET, "/slow", None, &[], None).await },
+            );
+
+        tokio::time::timeout(Duration::from_secs(2), slow_started.recv())
+            .await
+            .expect("slow request started")
+            .expect("slow request notice");
+        let error = tokio::time::timeout(Duration::from_secs(2), request)
+            .await
+            .expect("request timeout completed")
+            .expect("request task")
+            .expect_err("request timeout");
+        assert_eq!(error.code, "AI_SESSION_CONTROL_FAILED");
+        assert_eq!(error.status_code, 400);
+        assert!(!error.message.is_empty());
+    }
+
+    #[test]
+    fn sse_global_event_schema_matches_the_node_contract() {
+        let normalized =
+            parse_global_event("{\"payload\":{\"type\":\" sync \"}}").expect("normalized event");
+        assert_eq!(normalized["directory"], "");
+        assert_eq!(normalized["payload"]["type"], "sync");
+        assert_eq!(normalized["payload"]["properties"], json!({}));
+        assert!(parse_global_event(
+            "{\"directory\":\"/tmp\",\"payload\":{\"type\":\"sync\",\"properties\":{}}}"
+        )
+        .is_ok());
+        for invalid in [
+            "{not-json}",
+            "[]",
+            "{}",
+            "{\"payload\":[]}",
+            "{\"payload\":{\"type\":\"\"}}",
+            "{\"payload\":{\"type\":\"sync\",\"properties\":[]}}",
+            "{\"directory\":null,\"payload\":{\"type\":\"sync\"}}",
+        ] {
+            assert!(parse_global_event(invalid).is_err(), "{invalid}");
+        }
+        let oversized = json!({
+            "directory": "x".repeat(4097),
+            "payload": { "type": "sync", "properties": {} }
+        });
+        assert!(parse_global_event(&oversized.to_string()).is_err());
     }
 }

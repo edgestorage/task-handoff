@@ -10,10 +10,12 @@ chrono-tz.workspace = true
 controlled-instance-ai-session = { path = "../ai-session" }
 controlled-instance-core = { path = "../core" }
 controlled-instance-protocol = { path = "../protocol" }
-globset.workspace = true
 hex.workspace = true
+icu_collator.workspace = true
+icu_locale_core.workspace = true
 libc.workspace = true
 notify.workspace = true
+picomatch-rs.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

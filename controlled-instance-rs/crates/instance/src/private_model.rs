@@ -6,7 +6,9 @@ use controlled_instance_ai_session::{
 use controlled_instance_app_runtime::AppRuntime;
 use controlled_instance_core::{
     atomic::{write_atomic, write_json_atomic},
+    fs_permissions::restrict_path,
     managed_backup::{create_managed_backup, prune_managed_backups, DEFAULT_MANAGED_BACKUP_LIMIT},
+    text::truncate_utf16,
 };
 use controlled_instance_protocol::{
     codex_model_provider_id, parse_codex_instance_settings, parse_instance_private_model_catalog,
@@ -133,7 +135,6 @@ struct ModelConfigState {
 /// point of view.
 #[derive(Debug)]
 pub struct ControlledModelConfig {
-    instance_id: String,
     control_mode: crate::config::ControlMode,
     default_codex_home: PathBuf,
     default_claude_home: PathBuf,
@@ -142,7 +143,7 @@ pub struct ControlledModelConfig {
 
 impl ControlledModelConfig {
     pub fn load(
-        instance_id: &str,
+        _instance_id: &str,
         control_mode: crate::config::ControlMode,
         environment: &ConfigSyncEnvironment,
         process_environment: BTreeMap<String, String>,
@@ -153,7 +154,6 @@ impl ControlledModelConfig {
         let codex_settings = read_codex_settings(&process_environment)?;
         let managed_environment = managed_environment_from_process(&process_environment);
         let config = Self {
-            instance_id: instance_id.to_string(),
             control_mode,
             default_codex_home: environment.codex_home.clone(),
             default_claude_home: environment.claude_home.clone(),
@@ -212,8 +212,7 @@ impl ControlledModelConfig {
         &self,
         value: Value,
     ) -> Result<ManagedModelConfigApplyResult, ManagedModelError> {
-        let expected_instance_id = self.expected_instance_id();
-        let catalog = parse_instance_private_model_catalog(value, expected_instance_id.as_deref())
+        let catalog = parse_instance_private_model_catalog(value, None)
             .map_err(|error| ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error))?;
         let mut state = self.lock();
         state.catalog = Some(catalog);
@@ -375,19 +374,6 @@ impl ControlledModelConfig {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn expected_instance_id(&self) -> Option<String> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .base_environment
-            .get("TASK_HANDOFF_INSTANCE_ID")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                (!self.instance_id.trim().is_empty()).then(|| self.instance_id.trim().to_string())
-            })
-    }
-
     fn current_environment(&self, state: &ModelConfigState) -> BTreeMap<String, String> {
         let mut environment = state.base_environment.clone();
         environment.extend(state.managed_environment.clone());
@@ -431,6 +417,7 @@ impl ControlledModelConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_codex_home.clone());
         fs::create_dir_all(&home)?;
+        restrict_path(&home, 0o700)?;
         let config_path = home.join("config.toml");
         let auth_path = home.join("auth.json");
         prune_managed_backups(&config_path, DEFAULT_MANAGED_BACKUP_LIMIT)?;
@@ -451,7 +438,7 @@ impl ControlledModelConfig {
             }
         }
 
-        let current = read_codex_config(&config_path)?;
+        let (current_contents, current) = read_codex_config_source(&config_path)?;
         let mut next = current.clone();
         let model_provider = default_entity
             .as_ref()
@@ -504,7 +491,7 @@ impl ControlledModelConfig {
             apply_codex_settings_to_toml(&mut next, settings, state.catalog.as_ref())?;
         }
         if next != current {
-            if !current.is_empty() {
+            if !current_contents.is_empty() {
                 create_managed_backup(&config_path)?;
             }
             let contents = toml::to_string(&next)
@@ -539,6 +526,7 @@ impl ControlledModelConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_claude_home.clone());
         fs::create_dir_all(&claude_home)?;
+        restrict_path(&claude_home, 0o700)?;
         let settings_path = claude_home.join("settings.json");
         prune_managed_backups(&settings_path, DEFAULT_MANAGED_BACKUP_LIMIT)?;
         let (current_contents, mut settings) = read_claude_settings(&settings_path)?;
@@ -927,7 +915,7 @@ fn title_response_text(protocol: PrivateModelProtocol, value: &Value) -> Option<
 }
 
 fn bounded_text(value: &str, limit: usize) -> String {
-    value.chars().take(limit).collect()
+    truncate_utf16(value, limit)
 }
 
 fn private_model_protocol_for_agent(agent: &str) -> Option<PrivateModelProtocol> {
@@ -1255,23 +1243,32 @@ fn env_trimmed(environment: &BTreeMap<String, String>, key: &str) -> Option<Stri
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 fn read_codex_config(path: &Path) -> Result<toml::Table, ManagedModelError> {
+    read_codex_config_source(path).map(|(_, config)| config)
+}
+
+fn read_codex_config_source(path: &Path) -> Result<(String, toml::Table), ManagedModelError> {
     match fs::read_to_string(path) {
         Ok(contents) => {
             if contents.trim().is_empty() {
-                return Ok(toml::Table::new());
+                return Ok((contents, toml::Table::new()));
             }
-            toml::from_str(&contents).map_err(|error| {
-                ManagedModelError::failed(
-                    "CODEX_MODEL_CONFIG_INVALID",
-                    format!(
-                        "Codex config could not be read or parsed at {}: {error}",
-                        path.display()
-                    ),
-                )
-            })
+            toml::from_str(&contents)
+                .map(|config| (contents, config))
+                .map_err(|error| {
+                    ManagedModelError::failed(
+                        "CODEX_MODEL_CONFIG_INVALID",
+                        format!(
+                            "Codex config could not be read or parsed at {}: {error}",
+                            path.display()
+                        ),
+                    )
+                })
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(toml::Table::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok((String::new(), toml::Table::new()))
+        }
         Err(error) => Err(ManagedModelError::failed(
             "CODEX_MODEL_CONFIG_INVALID",
             format!(

@@ -6,6 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
+icu_collator.workspace = true
+icu_locale_core.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
 serde.workspace = true

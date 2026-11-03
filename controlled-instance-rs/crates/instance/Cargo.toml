@@ -18,10 +18,13 @@ controlled-instance-workspace = { path = "../workspace" }
 futures-util.workspace = true
 hex.workspace = true
 http.workspace = true
+http-body-util.workspace = true
+jsonschema.workspace = true
 libc.workspace = true
 mime_guess.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -39,6 +42,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 hex.workspace = true
-http-body-util.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

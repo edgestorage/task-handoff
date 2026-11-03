@@ -1,7 +1,8 @@
+use crate::codex_app_server::CodexSubAgentTracker;
 use crate::{
     AiSession, AiSessionAttachmentDraftStreams, AiSessionConversationAttachmentStore,
     AiSessionMessageAttachmentInput, AiSessionRuntime, AiSessionStoreError,
-    RetainedAiSessionMessageAttachment, StageMessageAttachmentsInput,
+    ProviderAttachmentSource, RetainedAiSessionMessageAttachment, StageMessageAttachmentsInput,
     StagedAiSessionMessageAttachments,
 };
 use async_trait::async_trait;
@@ -67,6 +68,17 @@ impl std::fmt::Display for ProviderError {
 }
 
 impl std::error::Error for ProviderError {}
+
+fn materialization_failed(message: impl Into<String>) -> ProviderError {
+    ProviderError::bad_gateway("AI_SESSION_MATERIALIZATION_FAILED", message)
+}
+
+fn send_request_conflict() -> ProviderError {
+    ProviderError::conflict(
+        "AI_SESSION_SEND_REQUEST_CONFLICT",
+        "The clientRequestId was already used for a different message.",
+    )
+}
 
 impl From<AiSessionStoreError> for ProviderError {
     fn from(error: AiSessionStoreError) -> Self {
@@ -299,6 +311,8 @@ pub struct ProviderResumeResult {
 pub struct ProviderAttachment {
     pub meta: AiSessionMessageAttachmentMeta,
     pub path: PathBuf,
+    pub source: ProviderAttachmentSource,
+    pub runtime_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +367,7 @@ pub struct AiSessionCreateResult {
 pub struct AiSessionManagedCreateOptions {
     pub runtime_workspace_roots: Vec<PathBuf>,
     pub agent_tools: Option<Vec<String>>,
+    pub materialization_timeout: Option<std::time::Duration>,
 }
 
 #[async_trait::async_trait]
@@ -366,6 +381,8 @@ pub struct AiSessionResumeResult {
     pub disposition: String,
     pub ai_session_id: String,
     pub provider_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_session_id: Option<String>,
     pub creation_source: String,
 }
 
@@ -379,16 +396,46 @@ pub struct AiSessionForkResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProviderForkCreation {
+    pub source: AiSession,
+    pub through_turn_id: Option<String>,
+    pub created: ProviderCreateResult,
+}
+
+#[derive(Debug, Clone)]
 pub enum ProviderEvent {
+    ThreadDiscovered {
+        provider_session_id: String,
+        cwd: String,
+        name: Option<String>,
+        model_selection: Option<AiSessionModelSelection>,
+        reasoning_effort: Option<String>,
+        status: String,
+        phase: Option<String>,
+        active_turn_id: Option<String>,
+        parent_provider_session_id: Option<String>,
+    },
     ThreadSnapshot {
         provider_session_id: String,
         cwd: Option<String>,
         name: Option<String>,
         model: Option<String>,
         model_provider: Option<String>,
+        model_selection: Option<AiSessionModelSelection>,
         reasoning_effort: Option<String>,
         status: String,
         phase: Option<String>,
+    },
+    ThreadHistorySnapshot {
+        provider_session_id: String,
+        turns: Vec<Value>,
+        active_turn_id: Option<String>,
+        user_prompt: Option<String>,
+        last_message: Option<String>,
+        last_message_item_id: Option<String>,
+        summary: Option<String>,
+        error: Option<String>,
+        current_tool: Option<Value>,
     },
     TurnStarted {
         provider_session_id: String,
@@ -416,12 +463,17 @@ pub enum ProviderEvent {
     ThreadClosed {
         provider_session_id: String,
     },
+    ProviderSessionLifecycle {
+        provider_session_id: String,
+        disposition: String,
+    },
     UserMessage {
         provider_session_id: String,
         turn_id: String,
         item_id: String,
         text: String,
         observed_at: Option<String>,
+        completed: bool,
     },
     AgentMessageDelta {
         provider_session_id: String,
@@ -446,6 +498,14 @@ pub enum ProviderEvent {
         item_id: String,
         field: String,
         delta: String,
+    },
+    SubAgentSnapshot {
+        provider_session_id: String,
+        sub_agents: Vec<Value>,
+    },
+    SubAgentActivity {
+        provider_session_id: String,
+        updates: Vec<Value>,
     },
     ToolActivity {
         provider_session_id: String,
@@ -476,6 +536,10 @@ pub trait AiSessionControlProvider: Send + Sync {
 
     fn capability(&self) -> AiSessionProviderCapability;
 
+    fn session_actions(&self, status: Option<&str>) -> Value {
+        default_provider_actions(status)
+    }
+
     fn timeline_capabilities(&self) -> AiSessionProviderTimelineCapabilities {
         self.capability().timeline
     }
@@ -502,6 +566,10 @@ pub trait AiSessionControlProvider: Send + Sync {
             "{} does not support direct AI session creation.",
             self.agent()
         )))
+    }
+
+    async fn read_session(&self, _provider_session_id: &str) -> Result<(), ProviderError> {
+        Ok(())
     }
 
     async fn start_message(
@@ -565,6 +633,14 @@ pub trait AiSessionControlProvider: Send + Sync {
         )))
     }
 
+    async fn resume_session_with_story_tools(
+        &self,
+        session: &AiSession,
+        _story_agent_tools: Option<Vec<String>>,
+    ) -> Result<ProviderResumeResult, ProviderError> {
+        self.resume_session(session).await
+    }
+
     async fn fork_session(
         &self,
         _source: &AiSession,
@@ -610,6 +686,13 @@ pub trait AiSessionControlProvider: Send + Sync {
             "{} sessions do not support deletion.",
             self.agent()
         )))
+    }
+
+    async fn active_session_exists(
+        &self,
+        _provider_session_id: &str,
+    ) -> Result<Option<bool>, ProviderError> {
+        Ok(None)
     }
 
     async fn unsubscribe_session(&self, _provider_session_id: &str) -> Result<(), ProviderError> {
@@ -671,7 +754,8 @@ pub trait AiSessionControlProvider: Send + Sync {
 #[serde(rename_all = "camelCase")]
 struct CompletedCreateOperation {
     client_request_id: String,
-    fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
     result: AiSessionCreateResult,
 }
 
@@ -701,12 +785,16 @@ pub struct AiSessionController {
     changes: broadcast::Sender<()>,
     create_lock: Mutex<()>,
     completed_creates: Mutex<HashMap<String, CompletedCreateOperation>>,
+    pending_creates: Mutex<HashMap<String, (String, SharedOperation<AiSessionCreateResult>)>>,
     create_store_path: Option<PathBuf>,
     session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     completed_sends: Mutex<HashMap<String, (String, AiSessionActionResult)>>,
     pending_sends: Mutex<HashMap<String, (String, SharedOperation<AiSessionActionResult>)>>,
     pending_settings: Mutex<HashSet<String>>,
+    draining_queues: Mutex<HashSet<String>>,
     tool_activity: Mutex<HashMap<String, ToolActivityTracker>>,
+    sub_agents: Mutex<HashMap<String, CodexSubAgentTracker>>,
+    sub_agent_lifecycles: Mutex<HashMap<String, Value>>,
 }
 
 #[derive(Default)]
@@ -838,12 +926,16 @@ impl AiSessionController {
             changes,
             create_lock: Mutex::new(()),
             completed_creates: Mutex::new(HashMap::new()),
+            pending_creates: Mutex::new(HashMap::new()),
             create_store_path,
             session_locks: Mutex::new(HashMap::new()),
             completed_sends: Mutex::new(HashMap::new()),
             pending_sends: Mutex::new(HashMap::new()),
             pending_settings: Mutex::new(HashSet::new()),
+            draining_queues: Mutex::new(HashSet::new()),
             tool_activity: Mutex::new(HashMap::new()),
+            sub_agents: Mutex::new(HashMap::new()),
+            sub_agent_lifecycles: Mutex::new(HashMap::new()),
         });
         controller.restore_completed_creates();
         controller
@@ -945,6 +1037,7 @@ impl AiSessionController {
             };
             let controller = Arc::downgrade(self);
             let drain_runtime = runtime.clone();
+            let event_agent = agent.clone();
             runtime.spawn(async move {
                 while let Ok(event) = events.recv().await {
                     let Some(controller) = controller.upgrade() else {
@@ -963,11 +1056,14 @@ impl AiSessionController {
                     if let Some(provider_session_id) = completed_provider_session_id {
                         if let Some(session) =
                             controller.runtime.list().into_iter().find(|session| {
-                                session.agent == "codex"
+                                session.agent == event_agent
                                     && session.provider_session_id.as_deref()
                                         == Some(provider_session_id.as_str())
                             })
                         {
+                            if session.status != "idle" {
+                                continue;
+                            }
                             let controller = controller.clone();
                             drain_runtime.spawn(async move {
                                 controller.drain_queue(&session.id).await;
@@ -1005,6 +1101,16 @@ impl AiSessionController {
             .collect::<Vec<_>>();
         capabilities.sort_by_key(|provider| provider_order(&provider.agent));
         capabilities
+    }
+
+    fn session_actions_for(&self, session: &AiSession, status: Option<&str>) -> Value {
+        self.actions_for_agent(&session.agent, status)
+    }
+
+    fn actions_for_agent(&self, agent: &str, status: Option<&str>) -> Value {
+        self.provider(agent)
+            .map(|provider| provider.session_actions(status))
+            .unwrap_or_else(|_| default_provider_actions(status))
     }
 
     pub fn timeline_capabilities(
@@ -1059,7 +1165,6 @@ impl AiSessionController {
         input: AiSessionCreateInput,
         mut options: AiSessionManagedCreateOptions,
     ) -> Result<AiSessionCreateResult, ProviderError> {
-        let _guard = self.create_lock.lock().await;
         if input.message.message.trim().is_empty() {
             return Err(ProviderError::new(
                 "AI_SESSION_MESSAGE_EMPTY",
@@ -1090,20 +1195,85 @@ impl AiSessionController {
                 .collect::<Result<Vec<_>, _>>()?
         };
         let fingerprint = create_fingerprint(&input, &options)?;
-        if let Some(client_request_id) = input.message.client_request_id.as_deref() {
-            if let Some(completed) = self.completed_creates.lock().await.get(client_request_id) {
-                if completed.fingerprint != fingerprint {
-                    return Err(ProviderError::conflict(
-                        "AI_SESSION_CREATE_REQUEST_CONFLICT",
-                        "The client request ID was already used with different session creation input.",
-                    ));
-                }
-                return Ok(AiSessionCreateResult {
-                    disposition: "already-created".to_string(),
-                    ..completed.result.clone()
-                });
+        let Some(client_request_id) = input.message.client_request_id.clone() else {
+            return self
+                .perform_create(input, options, cwd, runtime_workspace_roots)
+                .await;
+        };
+        let mut pending_creates = self.pending_creates.lock().await;
+        if let Some(completed) = self
+            .completed_creates
+            .lock()
+            .await
+            .get(client_request_id.as_str())
+        {
+            if completed
+                .fingerprint
+                .as_deref()
+                .is_some_and(|expected| expected != fingerprint)
+            {
+                return Err(ProviderError::conflict(
+                    "AI_SESSION_CREATE_REQUEST_CONFLICT",
+                    "The client request ID was already used with different session creation input.",
+                ));
             }
+            return Ok(AiSessionCreateResult {
+                disposition: "already-created".to_string(),
+                ..completed.result.clone()
+            });
         }
+        if let Some((known_fingerprint, operation)) =
+            pending_creates.get(client_request_id.as_str()).cloned()
+        {
+            if known_fingerprint != fingerprint {
+                return Err(ProviderError::conflict(
+                    "AI_SESSION_CREATE_REQUEST_CONFLICT",
+                    "The client request ID was already used with different session creation input.",
+                ));
+            }
+            drop(pending_creates);
+            return operation.await;
+        }
+        let controller = self.clone();
+        let operation_client_request_id = client_request_id.clone();
+        let operation_fingerprint = fingerprint.clone();
+        let operation = async move {
+            let result = controller
+                .perform_create(input, options, cwd, runtime_workspace_roots)
+                .await;
+            if let Ok(created) = &result {
+                controller.completed_creates.lock().await.insert(
+                    operation_client_request_id.clone(),
+                    CompletedCreateOperation {
+                        client_request_id: operation_client_request_id.clone(),
+                        fingerprint: Some(operation_fingerprint),
+                        result: created.clone(),
+                    },
+                );
+                controller.persist_completed_creates().await;
+            }
+            controller
+                .pending_creates
+                .lock()
+                .await
+                .remove(&operation_client_request_id);
+            result
+        }
+        .boxed()
+        .shared();
+        pending_creates.insert(client_request_id, (fingerprint, operation.clone()));
+        drop(pending_creates);
+        operation.await
+    }
+
+    async fn perform_create(
+        self: &Arc<Self>,
+        input: AiSessionCreateInput,
+        options: AiSessionManagedCreateOptions,
+        cwd: PathBuf,
+        runtime_workspace_roots: Vec<PathBuf>,
+    ) -> Result<AiSessionCreateResult, ProviderError> {
+        let _guard = self.create_lock.lock().await;
         let provider = self.provider(&input.agent)?;
         let model_selection = self.resolve_model_selection(
             &input.agent,
@@ -1138,9 +1308,55 @@ impl AiSessionController {
                 && session.provider_session_id.as_deref()
                     == Some(created.provider_session_id.as_str())
         });
+        if let Some(session) = existing.as_ref() {
+            if session.creation_source != "ai-session" {
+                self.compensate_created_session(
+                    provider.as_ref(),
+                    &created.provider_session_id,
+                    Some(&session.id),
+                )
+                .await;
+                return Err(materialization_failed(
+                    "Direct AI session could not be projected.",
+                ));
+            }
+            let model_selection_value = created
+                .model_selection
+                .clone()
+                .or(model_selection.clone())
+                .and_then(|selection| serde_json::to_value(selection).ok());
+            let reasoning_effort = created
+                .reasoning_effort
+                .clone()
+                .or_else(|| input.reasoning_effort.clone());
+            existing = Some(self.runtime.update(&session.id, |session| {
+                if let Some(cwd_folder_id) = input.cwd_folder_id.as_ref() {
+                    if session.cwd_folder_id.as_ref() != Some(cwd_folder_id) {
+                        session.cwd_folder_id = Some(cwd_folder_id.clone());
+                    }
+                }
+                if let Some(story_id) = input.story_id.as_ref() {
+                    if session.story_id.as_ref() != Some(story_id) {
+                        session.story_id = Some(story_id.clone());
+                    }
+                }
+                if let Some(selection) = model_selection_value.as_ref() {
+                    if session.model_selection.as_ref() != Some(selection) {
+                        session.model_selection = Some(selection.clone());
+                    }
+                }
+                if let Some(effort) = reasoning_effort.as_ref() {
+                    if session.reasoning_effort.as_ref() != Some(effort) {
+                        session.reasoning_effort = Some(effort.clone());
+                    }
+                }
+                Ok(true)
+            })?);
+        }
         if existing.is_none() {
             let id = mint_entity_id("ses");
             let started_at = now_iso();
+            let actions = self.actions_for_agent(&input.agent, None);
             let session = AiSession {
                 id,
                 agent: input.agent.clone(),
@@ -1165,7 +1381,7 @@ impl AiSessionController {
                     .or(input.reasoning_effort.clone()),
                 story_id: input.story_id.clone(),
                 app_binding_keys: None,
-                actions: Some(default_provider_actions(None)),
+                actions: Some(actions),
                 active_turn_id: None,
                 title: None,
                 cwd: Some(created.cwd.display().to_string()),
@@ -1193,28 +1409,40 @@ impl AiSessionController {
             existing = Some(self.runtime.save(session)?);
         }
         let session = existing.expect("created session");
-        let send_result = match self
-            .send_prepared(
+        let timeout = options
+            .materialization_timeout
+            .unwrap_or(std::time::Duration::from_secs(15));
+        let send_result = match tokio::time::timeout(
+            timeout,
+            self.send_prepared(
                 &session,
                 ProviderMessageInput::from_wire(&input.message),
                 false,
-            )
-            .await
+            ),
+        )
+        .await
         {
-            Ok(result) => result,
-            Err(error) => {
-                let _ = self.runtime.remove(&session.id);
-                if provider
-                    .delete_session(&created.provider_session_id)
-                    .await
-                    .is_err()
-                {
-                    let _ = provider.archive_session(&created.provider_session_id).await;
-                }
-                let _ = provider
-                    .unsubscribe_session(&created.provider_session_id)
-                    .await;
-                return Err(error);
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                self.compensate_created_session(
+                    provider.as_ref(),
+                    &created.provider_session_id,
+                    Some(&session.id),
+                )
+                .await;
+                return Err(materialization_failed(error.message));
+            }
+            Err(_) => {
+                self.compensate_created_session(
+                    provider.as_ref(),
+                    &created.provider_session_id,
+                    Some(&session.id),
+                )
+                .await;
+                return Err(materialization_failed(format!(
+                    "Provider materialization timed out after {}ms.",
+                    timeout.as_millis()
+                )));
             }
         };
         let result = AiSessionCreateResult {
@@ -1223,20 +1451,23 @@ impl AiSessionController {
             provider_session_id: created.provider_session_id.clone(),
             creation_source: "ai-session".to_string(),
         };
-        if let Some(client_request_id) = input.message.client_request_id.clone() {
-            let operation = CompletedCreateOperation {
-                client_request_id: client_request_id.clone(),
-                fingerprint,
-                result: result.clone(),
-            };
-            self.completed_creates
-                .lock()
-                .await
-                .insert(client_request_id, operation);
-            self.persist_completed_creates();
-        }
         self.notify_change();
         Ok(result)
+    }
+
+    async fn compensate_created_session(
+        &self,
+        provider: &dyn AiSessionControlProvider,
+        provider_session_id: &str,
+        session_id: Option<&str>,
+    ) {
+        if let Some(session_id) = session_id {
+            let _ = self.runtime.remove(session_id);
+        }
+        if provider.delete_session(provider_session_id).await.is_err() {
+            let _ = provider.archive_session(provider_session_id).await;
+        }
+        let _ = provider.unsubscribe_session(provider_session_id).await;
     }
 
     pub async fn send_message(
@@ -1245,182 +1476,142 @@ impl AiSessionController {
         input: ProviderMessageInput,
     ) -> Result<AiSessionActionResult, ProviderError> {
         let session = self.require_session(session_id)?;
-        let request_key = input.message.client_request_id.clone();
-        let fingerprint = request_key
-            .as_ref()
-            .map(|_| send_fingerprint(session_id, &input.message));
-        if let (Some(client_request_id), Some(fingerprint)) =
-            (request_key.as_deref(), fingerprint.as_deref())
+        let Some(client_request_id) = input.message.client_request_id.clone() else {
+            let session_lock = self.lock_for_session(session_id).await;
+            let _guard = session_lock.lock().await;
+            let result = self.send_prepared(&session, input, true).await?;
+            self.notify_change();
+            return Ok(result);
+        };
+        let fingerprint = send_fingerprint(session_id, &input.message);
+        let mut pending_sends = self.pending_sends.lock().await;
+        if let Some((known_fingerprint, result)) = self
+            .completed_sends
+            .lock()
+            .await
+            .get(client_request_id.as_str())
         {
-            if let Some((known_fingerprint, result)) =
-                self.completed_sends.lock().await.get(client_request_id)
-            {
-                if known_fingerprint != fingerprint {
-                    return Err(ProviderError::conflict(
-                        "AI_SESSION_SEND_REQUEST_CONFLICT",
-                        "The clientRequestId was already used for a different message.",
-                    ));
-                }
-                return Ok(result.clone());
+            if known_fingerprint != &fingerprint {
+                return Err(send_request_conflict());
             }
+            return Ok(result.clone());
         }
-        let session_lock = self.lock_for_session(session_id).await;
-        let _guard = session_lock.lock().await;
-        if let (Some(client_request_id), Some(fingerprint)) =
-            (request_key.as_deref(), fingerprint.as_deref())
+        if let Some((known_fingerprint, operation)) =
+            pending_sends.get(client_request_id.as_str()).cloned()
         {
-            if let Some((known_fingerprint, result)) =
-                self.completed_sends.lock().await.get(client_request_id)
-            {
-                if known_fingerprint != fingerprint {
-                    return Err(ProviderError::conflict(
-                        "AI_SESSION_SEND_REQUEST_CONFLICT",
-                        "The clientRequestId was already used for a different message.",
-                    ));
-                }
-                return Ok(result.clone());
+            if known_fingerprint != fingerprint {
+                return Err(send_request_conflict());
             }
-            if let Some((known_fingerprint, pending)) = self
+            drop(pending_sends);
+            return operation.await;
+        }
+        let controller = self.clone();
+        let operation_session_id = session_id.to_string();
+        let current_session = session.clone();
+        let operation_client_request_id = client_request_id.clone();
+        let operation_fingerprint = fingerprint.clone();
+        let owned_input = input;
+        let operation = async move {
+            let session_lock = controller.lock_for_session(&operation_session_id).await;
+            let _guard = session_lock.lock().await;
+            let result = controller
+                .send_prepared(&current_session, owned_input, true)
+                .await;
+            if let Ok(sent) = &result {
+                controller.completed_sends.lock().await.insert(
+                    operation_client_request_id.clone(),
+                    (operation_fingerprint, sent.clone()),
+                );
+            }
+            controller
                 .pending_sends
                 .lock()
                 .await
-                .get(client_request_id)
-                .cloned()
-            {
-                if known_fingerprint != fingerprint {
-                    return Err(ProviderError::conflict(
-                        "AI_SESSION_SEND_REQUEST_CONFLICT",
-                        "The clientRequestId was already used for a different message.",
-                    ));
-                }
-                return pending.await;
-            }
-        }
-        let controller = self.clone();
-        let current_session = session.clone();
-        let owned_input = input.clone();
-        let operation = async move {
-            controller
-                .send_prepared(&current_session, owned_input, true)
-                .await
+                .remove(&operation_client_request_id);
+            controller.notify_change();
+            result
         }
         .boxed()
         .shared();
-        if let (Some(client_request_id), Some(fingerprint)) =
-            (request_key.clone(), fingerprint.clone())
-        {
-            self.pending_sends.lock().await.insert(
-                client_request_id.clone(),
-                (fingerprint.clone(), operation.clone()),
-            );
-            let controller = self.clone();
-            let completion_operation = operation.clone();
-            let pending_id = client_request_id.clone();
-            let pending_fingerprint = fingerprint.clone();
-            tokio::spawn(async move {
-                let result = completion_operation.await;
-                if let Ok(result) = &result {
-                    controller
-                        .completed_sends
-                        .lock()
-                        .await
-                        .insert(pending_id.clone(), (pending_fingerprint, result.clone()));
-                }
-                controller.pending_sends.lock().await.remove(&pending_id);
-                controller.notify_change();
-            });
-        }
-        let result = operation.await?;
-        self.notify_change();
-        Ok(result)
+        pending_sends.insert(client_request_id, (fingerprint, operation.clone()));
+        drop(pending_sends);
+        operation.await
+    }
+
+    pub async fn read_session(
+        &self,
+        agent: &str,
+        provider_session_id: &str,
+    ) -> Result<(), ProviderError> {
+        self.provider(agent)?
+            .read_session(provider_session_id)
+            .await
     }
 
     pub async fn resume_archived(
         &self,
         item: AiSessionHistoryItem,
-        turns: Vec<Value>,
+        previous: Option<&AiSession>,
         model_selection: Option<AiSessionModelSelection>,
         model_selection_intent: AiSessionModelSelectionIntent,
         reasoning_effort: Option<String>,
     ) -> Result<AiSessionResumeResult, ProviderError> {
-        if let Some(existing) = self.runtime.list().into_iter().find(|session| {
-            session.id == item.id
-                || (session.agent == item.agent
-                    && session.provider_session_id.as_deref()
-                        == Some(item.provider_session_id.as_str()))
-        }) {
-            return Ok(AiSessionResumeResult {
-                disposition: "already-open".to_string(),
-                ai_session_id: existing.id,
-                provider_session_id: item.provider_session_id,
-                creation_source: item.creation_source,
-            });
-        }
         let model_selection = match model_selection.as_ref() {
             Some(selection) => {
                 self.resolve_model_selection(&item.agent, Some(selection), model_selection_intent)?
             }
             None => None,
         };
+        if model_selection_intent == AiSessionModelSelectionIntent::Target
+            && model_selection.is_none()
+        {
+            return Err(ProviderError::new(
+                "AI_SESSION_MODEL_SELECTION_UNAVAILABLE",
+                "Model selection is unavailable.",
+                409,
+            ));
+        }
         let provider = self.provider(&item.agent)?;
-        let started_at = now_iso();
-        let session = AiSession {
-            id: item.id.clone(),
-            agent: item.agent.clone(),
-            creation_source: item.creation_source.clone(),
-            app_session_id: None,
-            app_id: Some(if item.agent == "codex" {
-                "codex-app-server".to_string()
-            } else {
-                item.agent.clone()
-            }),
-            provider_session_id: Some(item.provider_session_id.clone()),
-            lineage: item.lineage.clone(),
-            provider_meta: None,
-            model_selection: model_selection
-                .clone()
-                .or_else(|| {
-                    item.model_selection
-                        .clone()
-                        .and_then(|value| serde_json::from_value(value).ok())
-                })
-                .and_then(|value| serde_json::to_value(value).ok()),
-            reasoning_effort: reasoning_effort.clone().or(item.reasoning_effort.clone()),
-            story_id: item.story_id.clone(),
-            app_binding_keys: None,
-            actions: Some(default_provider_actions(None)),
-            active_turn_id: None,
-            title: item.title.clone(),
-            cwd: Some(item.cwd.clone()),
-            cwd_folder_id: item.cwd_folder_id.clone(),
-            user_prompt: item.user_prompt.clone(),
-            turns: (!turns.is_empty()).then_some(turns),
-            status: "idle".to_string(),
-            phase: "unknown".to_string(),
-            summary: None,
-            last_message: item.last_message.clone(),
-            last_message_item_id: None,
-            current_tool: None,
-            tool_calls_since_last_message: 0,
-            sub_agents: Vec::new(),
-            transcript_path: None,
-            transcript_size: None,
-            started_at,
-            updated_at: now_iso(),
-            completed_at: None,
-            error: None,
-            counters: Default::default(),
-            queue: AiSessionQueue::default(),
-            unread: false,
-        };
+        let restored_model_selection = model_selection
+            .clone()
+            .or_else(|| {
+                item.model_selection
+                    .clone()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
+            .and_then(|value| serde_json::to_value(value).ok());
+        let restored_reasoning_effort = reasoning_effort.clone().or(item.reasoning_effort.clone());
+        let session = AiSession::from_history_item(
+            &item,
+            previous,
+            restored_model_selection,
+            restored_reasoning_effort,
+        );
         let saved = self.runtime.save(session)?;
-        let resumed = match provider.resume_session(&saved).await {
+        let story_agent_tools = self
+            .resolve_story_agent_tools(item.story_id.as_deref())
+            .await;
+        let resumed = match provider
+            .resume_session_with_story_tools(&saved, story_agent_tools)
+            .await
+        {
             Ok(result) => result,
             Err(error) => {
                 let _ = self.runtime.remove(&saved.id);
                 return Err(error);
             }
         };
+        if model_selection_intent == AiSessionModelSelectionIntent::Target
+            && model_selection.is_some()
+            && resumed.model_selection.as_ref() != model_selection.as_ref()
+        {
+            let _ = self.runtime.remove(&saved.id);
+            return Err(ProviderError::new(
+                "AI_SESSION_RESUME_UNAVAILABLE",
+                "Provider resumed the session with a different model selection.",
+                409,
+            ));
+        }
         let updated = self.runtime.update(&saved.id, |session| {
             if let Some(selection) = resumed.model_selection {
                 session.model_selection = serde_json::to_value(selection).ok();
@@ -1430,7 +1621,7 @@ impl AiSessionController {
             }
             session.status = "idle".to_string();
             session.phase = "unknown".to_string();
-            session.actions = Some(default_provider_actions(None));
+            session.actions = Some(self.session_actions_for(session, None));
             Ok(true)
         })?;
         self.notify_change();
@@ -1440,17 +1631,17 @@ impl AiSessionController {
             provider_session_id: updated
                 .provider_session_id
                 .unwrap_or(item.provider_session_id),
+            app_session_id: None,
             creation_source: updated.creation_source,
         })
     }
 
-    pub async fn fork_session(
+    pub async fn fork_provider_session(
         &self,
         source_session_id: &str,
         input: ProviderForkInput,
-    ) -> Result<AiSessionForkResult, ProviderError> {
+    ) -> Result<ProviderForkCreation, ProviderError> {
         let source = self.require_session(source_session_id)?;
-        let provider = self.provider(&source.agent)?;
         let source_selection = source
             .model_selection
             .clone()
@@ -1473,7 +1664,7 @@ impl AiSessionController {
             .as_ref()
             .and_then(|actions| actions.get("fork"))
             .and_then(Value::as_bool)
-            == Some(false)
+            != Some(true)
         {
             return Err(ProviderError::conflict(
                 "AI_SESSION_FORK_UNSUPPORTED",
@@ -1535,10 +1726,11 @@ impl AiSessionController {
             }
         };
         let provider_input = ProviderForkInput {
-            through_turn_id: provider_through_turn_id.clone(),
+            through_turn_id: provider_through_turn_id,
             cwd: input.cwd,
             story_agent_tools,
         };
+        let provider = self.provider(&source.agent)?;
         let created = provider.fork_session(source, provider_input).await?;
         if created.provider_session_id == source.provider_session_id.as_deref().unwrap_or_default()
         {
@@ -1547,15 +1739,38 @@ impl AiSessionController {
                 "Fork did not create an independent provider session.",
             ));
         }
+        Ok(ProviderForkCreation {
+            source: source.clone(),
+            through_turn_id: input.through_turn_id,
+            created,
+        })
+    }
+
+    pub fn materialize_fork_session(
+        &self,
+        creation: &ProviderForkCreation,
+    ) -> Result<AiSessionForkResult, ProviderError> {
+        let source = &creation.source;
+        let created = &creation.created;
         if let Some(existing) = self.runtime.list().into_iter().find(|session| {
             session.agent == source.agent
                 && session.provider_session_id.as_deref()
                     == Some(created.provider_session_id.as_str())
         }) {
+            if existing.creation_source != "ai-session"
+                || existing.app_session_id.is_some()
+                || source.provider_session_id.as_deref()
+                    == Some(created.provider_session_id.as_str())
+            {
+                return Err(ProviderError::bad_gateway(
+                    "AI_SESSION_FORK_INVALID_RESPONSE",
+                    "Fork did not materialize as an independent Direct AI Session.",
+                ));
+            }
             return Ok(AiSessionForkResult {
                 disposition: "already-created".to_string(),
                 ai_session_id: existing.id,
-                provider_session_id: created.provider_session_id,
+                provider_session_id: created.provider_session_id.clone(),
                 creation_source: "ai-session".to_string(),
             });
         }
@@ -1574,11 +1789,12 @@ impl AiSessionController {
             lineage: Some(json!({
                 "kind": "fork",
                 "parentProviderSessionId": source.provider_session_id,
-                "throughTurnId": input.through_turn_id,
+                "throughTurnId": creation.through_turn_id,
             })),
             provider_meta: None,
             model_selection: created
                 .model_selection
+                .clone()
                 .or_else(|| {
                     source
                         .model_selection
@@ -1588,10 +1804,11 @@ impl AiSessionController {
                 .and_then(|selection| serde_json::to_value(selection).ok()),
             reasoning_effort: created
                 .reasoning_effort
+                .clone()
                 .or_else(|| source.reasoning_effort.clone()),
             story_id: source.story_id.clone(),
             app_binding_keys: None,
-            actions: Some(default_provider_actions(None)),
+            actions: Some(self.actions_for_agent(&source.agent, None)),
             active_turn_id: None,
             title: None,
             cwd: Some(created.cwd.display().to_string()),
@@ -1621,9 +1838,44 @@ impl AiSessionController {
         Ok(AiSessionForkResult {
             disposition: "created".to_string(),
             ai_session_id: id,
-            provider_session_id: created.provider_session_id,
+            provider_session_id: created.provider_session_id.clone(),
             creation_source: "ai-session".to_string(),
         })
+    }
+
+    pub fn materialize_forked_provider_session(
+        &self,
+        source_session_id: &str,
+        provider_session_id: &str,
+        through_turn_id: Option<String>,
+        cwd: PathBuf,
+    ) -> Result<AiSessionForkResult, ProviderError> {
+        let source = self.require_session(source_session_id)?;
+        let model_selection = source
+            .model_selection
+            .clone()
+            .and_then(|value| serde_json::from_value(value).ok());
+        let reasoning_effort = source.reasoning_effort.clone();
+        let creation = ProviderForkCreation {
+            source,
+            through_turn_id,
+            created: ProviderCreateResult {
+                provider_session_id: provider_session_id.to_string(),
+                cwd,
+                model_selection,
+                reasoning_effort,
+            },
+        };
+        self.materialize_fork_session(&creation)
+    }
+
+    pub async fn fork_session(
+        &self,
+        source_session_id: &str,
+        input: ProviderForkInput,
+    ) -> Result<AiSessionForkResult, ProviderError> {
+        let creation = self.fork_provider_session(source_session_id, input).await?;
+        self.materialize_fork_session(&creation)
     }
 
     pub async fn update_model_selection(
@@ -1889,9 +2141,10 @@ impl AiSessionController {
         input: &ProviderMessageInput,
         staged: &StagedAiSessionMessageAttachments,
     ) -> Result<AiSessionActionResult, ProviderError> {
-        let attachments = staged
+        let attachments = self
             .attachments
-            .iter()
+            .message_attachment_metas(&session.id, &staged.message_id)
+            .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
@@ -1942,6 +2195,9 @@ impl AiSessionController {
         input: &ProviderMessageInput,
         staged: &StagedAiSessionMessageAttachments,
     ) -> Result<AiSessionActionResult, ProviderError> {
+        let references = self
+            .validate_references(session, &input.message.references)
+            .await?;
         let provider = self.provider(&session.agent)?;
         let requested_selection = session
             .model_selection
@@ -1960,7 +2216,8 @@ impl AiSessionController {
             normalized_session.model_selection = serde_json::to_value(selection).ok();
         }
         let session = &normalized_session;
-        let message = provider_message(input, staged);
+        let mut message = provider_message(input, staged);
+        message.references = references;
         let action = provider.start_message(session, message).await?;
         self.attachments.commit_message(
             &session.id,
@@ -1993,8 +2250,12 @@ impl AiSessionController {
                 "AI session is not active.",
             ));
         }
+        let references = self
+            .validate_references(session, &input.message.references)
+            .await?;
         let provider = self.provider(&session.agent)?;
-        let message = provider_message(input, staged);
+        let mut message = provider_message(input, staged);
+        message.references = references;
         let action = provider.steer_message(session, message).await?;
         self.attachments.commit_message(
             &session.id,
@@ -2016,6 +2277,45 @@ impl AiSessionController {
             provider: session.agent.clone(),
             action,
         })
+    }
+
+    async fn validate_references(
+        &self,
+        session: &AiSession,
+        references: &[AiSessionReference],
+    ) -> Result<Vec<AiSessionReference>, ProviderError> {
+        if references.is_empty() {
+            return Ok(Vec::new());
+        }
+        let catalog = self
+            .provider(&session.agent)?
+            .mention_catalog(session)
+            .await?;
+        let available = catalog
+            .candidates
+            .iter()
+            .filter(|candidate| matches!(candidate.kind.as_str(), "skill" | "app" | "plugin"))
+            .map(|candidate| format!("{}:{}", candidate.kind.as_str(), candidate.path))
+            .collect::<HashSet<_>>();
+        let mut seen = HashSet::new();
+        let mut validated = Vec::new();
+        for reference in references {
+            let key = format!("{}:{}", reference.kind, reference.path);
+            if !available.contains(&key) {
+                return Err(ProviderError::new(
+                    "AI_SESSION_REFERENCE_UNAVAILABLE",
+                    format!(
+                        "{} reference is not available in the current Codex session: {}",
+                        reference.kind, reference.name
+                    ),
+                    409,
+                ));
+            }
+            if seen.insert(key) {
+                validated.push(reference.clone());
+            }
+        }
+        Ok(validated)
     }
 
     pub async fn steer_queued_message(
@@ -2113,12 +2413,20 @@ impl AiSessionController {
         session: &AiSession,
         input: &ProviderMessageInput,
     ) -> Result<StagedAiSessionMessageAttachments, ProviderError> {
-        let message_id = format!("msg_{}", &Uuid::new_v4().simple().to_string()[..24]);
         let retained_attachment_ids = input
             .attachments
             .iter()
             .map(|attachment| attachment.meta.id.clone())
-            .collect();
+            .collect::<Vec<_>>();
+        let message_id = input
+            .message_id
+            .clone()
+            .or_else(|| {
+                self.attachments
+                    .message_id_for_attachments(&session.id, &retained_attachment_ids)
+            })
+            .unwrap_or_else(|| format!("msg_{}", &Uuid::new_v4().simple().to_string()[..24]));
+        let retained_attachment_ids = retained_attachment_ids.into_iter().collect();
         self.attachments
             .stage_message(StageMessageAttachmentsInput {
                 session_id: session.id.clone(),
@@ -2157,7 +2465,7 @@ impl AiSessionController {
             if preserves_turn {
                 session.status = "running".to_string();
                 session.phase = "unknown".to_string();
-                session.actions = Some(default_provider_actions(Some("running")));
+                session.actions = Some(self.session_actions_for(session, Some("running")));
                 return Ok(true);
             }
             session.status = "idle".to_string();
@@ -2172,7 +2480,7 @@ impl AiSessionController {
                     bump_turn_revision(object);
                 }
             }
-            session.actions = Some(default_provider_actions(None));
+            session.actions = Some(self.session_actions_for(session, None));
             Ok(true)
         })?;
         self.notify_change();
@@ -2209,8 +2517,6 @@ impl AiSessionController {
             } else {
                 "thinking".to_string()
             };
-            session.summary = None;
-            session.actions = Some(default_provider_actions(Some(session.status.as_str())));
             Ok(true)
         })?;
         self.notify_change();
@@ -2317,6 +2623,9 @@ impl AiSessionController {
             } else if provider.close_detaches_provider_session() {
                 // The provider has no restore operation for an archived session.
             } else {
+                if session.agent == "codex" {
+                    self.assert_no_pending_settings(&session.id).await?;
+                }
                 provider.archive_session(provider_session_id).await?;
             }
             let _ = provider.unsubscribe_session(provider_session_id).await;
@@ -2343,6 +2652,18 @@ impl AiSessionController {
     }
 
     pub async fn drain_queue(self: &Arc<Self>, session_id: &str) {
+        let Some(session) = self.runtime.get(session_id) else {
+            return;
+        };
+        if session.status != "idle" || session.queue.paused.unwrap_or(false) {
+            return;
+        }
+        {
+            let mut draining = self.draining_queues.lock().await;
+            if !draining.insert(session_id.to_string()) {
+                return;
+            }
+        }
         loop {
             match self.send_next_queued_message(session_id).await {
                 Ok(Some(_)) => {}
@@ -2350,6 +2671,7 @@ impl AiSessionController {
                 Err(_) => break,
             }
         }
+        self.draining_queues.lock().await.remove(session_id);
     }
 
     fn require_session(&self, session_id: &str) -> Result<AiSession, ProviderError> {
@@ -2379,7 +2701,7 @@ impl AiSessionController {
                 session.completed_at = None;
                 session.error = None;
                 session.user_prompt = Some(message.to_string());
-                session.actions = Some(default_provider_actions(Some("running")));
+                session.actions = Some(self.session_actions_for(session, Some("running")));
                 if let Some(turn_id) = turn_id.as_deref() {
                     session.active_turn_id = Some(turn_id.to_string());
                     let turns = session.turns.get_or_insert_with(Vec::new);
@@ -2412,67 +2734,192 @@ impl AiSessionController {
 
     async fn apply_provider_event(&self, event: ProviderEvent) -> bool {
         let changed = match event {
+            ProviderEvent::ThreadDiscovered {
+                provider_session_id,
+                cwd,
+                name,
+                model_selection,
+                reasoning_effort,
+                status,
+                phase,
+                active_turn_id,
+                parent_provider_session_id,
+            } => {
+                if self.runtime.list().iter().any(|session| {
+                    session.agent == "opencode"
+                        && session.provider_session_id.as_deref()
+                            == Some(provider_session_id.as_str())
+                }) {
+                    return false;
+                }
+                let timestamp = now_iso();
+                let session = AiSession {
+                    id: mint_entity_id("ses"),
+                    agent: "opencode".to_string(),
+                    creation_source: "ai-session".to_string(),
+                    app_session_id: None,
+                    app_id: Some("opencode".to_string()),
+                    provider_session_id: Some(provider_session_id),
+                    lineage: parent_provider_session_id.map(|parent| {
+                        json!({
+                            "kind": "subagent",
+                            "parentProviderSessionId": parent,
+                        })
+                    }),
+                    provider_meta: None,
+                    model_selection: model_selection
+                        .and_then(|selection| serde_json::to_value(selection).ok()),
+                    reasoning_effort,
+                    story_id: None,
+                    app_binding_keys: None,
+                    actions: Some(self.actions_for_agent("opencode", Some(&status))),
+                    active_turn_id,
+                    title: name,
+                    cwd: Some(cwd),
+                    cwd_folder_id: None,
+                    user_prompt: None,
+                    turns: None,
+                    status,
+                    phase: phase.unwrap_or_else(|| "unknown".to_string()),
+                    summary: None,
+                    last_message: None,
+                    last_message_item_id: None,
+                    current_tool: None,
+                    tool_calls_since_last_message: 0,
+                    sub_agents: Vec::new(),
+                    transcript_path: None,
+                    transcript_size: None,
+                    started_at: timestamp.clone(),
+                    updated_at: timestamp,
+                    completed_at: None,
+                    error: None,
+                    counters: Default::default(),
+                    queue: AiSessionQueue::default(),
+                    unread: false,
+                };
+                self.runtime.save(session).is_ok()
+            }
             ProviderEvent::ThreadSnapshot {
                 provider_session_id,
                 cwd,
                 name,
                 model,
                 model_provider,
+                model_selection,
                 reasoning_effort,
                 status,
                 phase,
-            } => self.update_by_provider_id(&provider_session_id, |session| {
-                let observed_model = model
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .zip(
-                        model_provider
+            } => {
+                let lifecycle_changed = match status.as_str() {
+                    "running" | "waiting" => {
+                        self.record_sub_agent_lifecycle(&provider_session_id, "running", None)
+                            .await
+                    }
+                    "failed" => {
+                        self.record_sub_agent_lifecycle(&provider_session_id, "errored", None)
+                            .await
+                    }
+                    "idle" => {
+                        self.record_sub_agent_lifecycle(&provider_session_id, "completed", None)
+                            .await
+                    }
+                    _ => false,
+                };
+                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
+                    let observed_model = match model_selection {
+                        Some(selection) => Some(Some(selection)),
+                        None => model
                             .as_deref()
-                            .filter(|value| !value.trim().is_empty()),
-                    )
-                    .and_then(|(model, model_provider)| {
-                        self.project_observed_model_selection("codex", model_provider, model)
-                    });
-                if let Some(cwd) = cwd.as_deref().filter(|value| !value.trim().is_empty()) {
-                    session.cwd = Some(cwd.to_string());
-                }
-                if let Some(name) = name.as_deref().filter(|value| !value.trim().is_empty()) {
-                    session.title = Some(name.to_string());
-                }
-                if let Some(selection) = observed_model {
-                    session.model_selection = selection
-                        .as_ref()
-                        .and_then(|selection| serde_json::to_value(selection).ok());
-                }
-                if let Some(effort) = reasoning_effort.as_deref() {
-                    session.reasoning_effort = Some(effort.to_string());
-                }
-                apply_lifecycle(session, &status);
-                if let Some(phase) = phase.as_deref().filter(|value| !value.trim().is_empty()) {
-                    session.phase = phase.to_string();
-                }
-                true
-            }),
+                            .filter(|value| !value.trim().is_empty())
+                            .zip(
+                                model_provider
+                                    .as_deref()
+                                    .filter(|value| !value.trim().is_empty()),
+                            )
+                            .and_then(|(model, model_provider)| {
+                                self.project_observed_model_selection(
+                                    "codex",
+                                    model_provider,
+                                    model,
+                                )
+                            }),
+                    };
+                    if let Some(cwd) = cwd.as_deref().filter(|value| !value.trim().is_empty()) {
+                        session.cwd = Some(cwd.to_string());
+                    }
+                    if let Some(name) = name.as_deref().filter(|value| !value.trim().is_empty()) {
+                        session.title = Some(name.to_string());
+                    }
+                    if let Some(selection) = observed_model {
+                        session.model_selection = selection
+                            .as_ref()
+                            .and_then(|selection| serde_json::to_value(selection).ok());
+                    }
+                    if let Some(effort) = reasoning_effort.as_deref() {
+                        session.reasoning_effort = Some(effort.to_string());
+                    }
+                    if apply_lifecycle(session, &status) {
+                        if let Some(phase) =
+                            phase.as_deref().filter(|value| !value.trim().is_empty())
+                        {
+                            session.phase = phase.to_string();
+                        }
+                        session.actions = Some(self.session_actions_for(session, Some(&status)));
+                    }
+                    true
+                });
+                lifecycle_changed || session_changed
+            }
+            ProviderEvent::ThreadHistorySnapshot {
+                provider_session_id,
+                turns,
+                active_turn_id,
+                user_prompt,
+                last_message,
+                last_message_item_id,
+                summary,
+                error,
+                current_tool,
+            } => {
+                let turns = turns.into_iter().take(50).collect::<Vec<_>>();
+                self.update_by_provider_id(&provider_session_id, |session| {
+                    session.turns = Some(turns);
+                    session.active_turn_id = active_turn_id;
+                    session.user_prompt = user_prompt;
+                    session.last_message = last_message;
+                    session.last_message_item_id = last_message_item_id;
+                    session.summary = summary;
+                    session.error = error;
+                    session.current_tool = current_tool;
+                    true
+                })
+            }
             ProviderEvent::TurnStarted {
                 provider_session_id,
                 turn_id,
                 started_at,
-            } => self.update_by_provider_id(&provider_session_id, |session| {
-                let timestamp = started_at.unwrap_or_else(now_iso);
-                session.active_turn_id = Some(turn_id.clone());
-                session.status = "running".to_string();
-                session.phase = "thinking".to_string();
-                session.actions = Some(default_provider_actions(Some("running")));
-                let turns = session.turns.get_or_insert_with(Vec::new);
-                let turn = ensure_turn(turns, &turn_id, &timestamp);
-                let object = turn.as_object_mut().expect("turn object");
-                object.insert("status".to_string(), json!("running"));
-                object.insert("phase".to_string(), json!("thinking"));
-                object.insert("startedAt".to_string(), json!(timestamp));
-                object.insert("updatedAt".to_string(), json!(now_iso()));
-                bump_turn_revision(object);
-                true
-            }),
+            } => {
+                let lifecycle_changed = self
+                    .record_sub_agent_lifecycle(&provider_session_id, "running", None)
+                    .await;
+                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
+                    let timestamp = started_at.unwrap_or_else(now_iso);
+                    session.active_turn_id = Some(turn_id.clone());
+                    session.status = "running".to_string();
+                    session.phase = "thinking".to_string();
+                    session.actions = Some(self.session_actions_for(session, Some("running")));
+                    let turns = session.turns.get_or_insert_with(Vec::new);
+                    let turn = ensure_turn(turns, &turn_id, &timestamp);
+                    let object = turn.as_object_mut().expect("turn object");
+                    object.insert("status".to_string(), json!("running"));
+                    object.insert("phase".to_string(), json!("thinking"));
+                    object.insert("startedAt".to_string(), json!(timestamp));
+                    object.insert("updatedAt".to_string(), json!(now_iso()));
+                    bump_turn_revision(object);
+                    true
+                });
+                lifecycle_changed || session_changed
+            }
             ProviderEvent::TurnCompleted {
                 provider_session_id,
                 turn_id,
@@ -2480,13 +2927,25 @@ impl AiSessionController {
                 error,
                 completed_at,
             } => {
+                let lifecycle_status = match status.as_deref() {
+                    Some("failed") => "errored",
+                    Some("interrupted") => "interrupted",
+                    _ => "completed",
+                };
+                let lifecycle_changed = self
+                    .record_sub_agent_lifecycle(
+                        &provider_session_id,
+                        lifecycle_status,
+                        error.as_deref(),
+                    )
+                    .await;
                 let _ = self
                     .tool_activity
                     .lock()
                     .await
                     .get_mut(&provider_session_id)
                     .map(ToolActivityTracker::clear_active_tools);
-                self.update_by_provider_id(&provider_session_id, |session| {
+                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
                     let completed_at = completed_at.unwrap_or_else(now_iso);
                     let turn_id = turn_id.or_else(|| session.active_turn_id.clone());
                     let had_completed_turn = turn_id.as_deref().is_some_and(|turn_id| {
@@ -2507,7 +2966,7 @@ impl AiSessionController {
                     session.completed_at = Some(completed_at.clone());
                     session.error = error.clone();
                     session.current_tool = None;
-                    session.actions = Some(default_provider_actions(None));
+                    session.actions = Some(self.session_actions_for(session, None));
                     if !had_completed_turn {
                         session.summary = None;
                         session.last_message = None;
@@ -2536,7 +2995,8 @@ impl AiSessionController {
                         }
                     }
                     true
-                })
+                });
+                lifecycle_changed || session_changed
             }
             ProviderEvent::SessionError {
                 provider_session_id,
@@ -2589,8 +3049,12 @@ impl AiSessionController {
             ProviderEvent::ThreadClosed {
                 provider_session_id,
             } => {
+                let lifecycle_changed = self
+                    .record_sub_agent_lifecycle(&provider_session_id, "shutdown", None)
+                    .await;
                 self.tool_activity.lock().await.remove(&provider_session_id);
-                self.update_by_provider_id(&provider_session_id, |session| {
+                self.sub_agents.lock().await.remove(&provider_session_id);
+                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
                     let timestamp = now_iso();
                     let active_turn_id = session.active_turn_id.take();
                     session.status = "idle".to_string();
@@ -2600,7 +3064,7 @@ impl AiSessionController {
                     session.summary = Some("Codex thread closed.".to_string());
                     session.last_message = Some("Codex thread closed.".to_string());
                     session.current_tool = None;
-                    session.actions = Some(default_provider_actions(None));
+                    session.actions = Some(self.session_actions_for(session, None));
                     if let (Some(turn_id), Some(turns)) = (active_turn_id, session.turns.as_mut()) {
                         if let Some(turn) = find_turn_mut(turns, &turn_id) {
                             let object = turn.as_object_mut().expect("turn object");
@@ -2612,14 +3076,17 @@ impl AiSessionController {
                         }
                     }
                     true
-                })
+                });
+                lifecycle_changed || session_changed
             }
+            ProviderEvent::ProviderSessionLifecycle { .. } => false,
             ProviderEvent::UserMessage {
                 provider_session_id,
                 turn_id,
                 item_id,
                 text,
                 observed_at,
+                ..
             } => self.update_by_provider_id(&provider_session_id, |session| {
                 let timestamp = observed_at.unwrap_or_else(now_iso);
                 session.user_prompt = Some(text.clone());
@@ -2685,6 +3152,20 @@ impl AiSessionController {
                 })
             }
             ProviderEvent::TimelineItem { .. } | ProviderEvent::TimelineItemDelta { .. } => false,
+            ProviderEvent::SubAgentSnapshot {
+                provider_session_id,
+                sub_agents,
+            } => {
+                self.replace_sub_agents(&provider_session_id, &sub_agents)
+                    .await
+            }
+            ProviderEvent::SubAgentActivity {
+                provider_session_id,
+                updates,
+            } => {
+                self.apply_sub_agent_updates(&provider_session_id, &updates)
+                    .await
+            }
             ProviderEvent::ToolActivity {
                 provider_session_id,
                 turn_id,
@@ -2750,7 +3231,7 @@ impl AiSessionController {
                 session.status = "waiting".to_string();
                 session.phase = "approval".to_string();
                 session.summary = Some(summary);
-                session.actions = Some(default_provider_actions(Some("waiting")));
+                session.actions = Some(self.session_actions_for(session, Some("waiting")));
                 session.counters.approvals = session.counters.approvals.saturating_add(1);
                 true
             }),
@@ -2768,17 +3249,108 @@ impl AiSessionController {
                 } else {
                     "thinking".to_string()
                 };
-                session.summary = None;
-                session.actions = Some(default_provider_actions(Some(session.status.as_str())));
                 true
             }),
             ProviderEvent::ConnectionChanged { connected } => {
                 if !connected {
                     self.tool_activity.lock().await.clear();
+                    self.sub_agents.lock().await.clear();
+                    self.sub_agent_lifecycles.lock().await.clear();
                 }
                 false
             }
         };
+        changed
+    }
+
+    async fn replace_sub_agents(&self, provider_session_id: &str, sub_agents: &[Value]) -> bool {
+        let lifecycles = self
+            .sub_agent_lifecycles
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let sub_agents = {
+            let mut trackers = self.sub_agents.lock().await;
+            let tracker = trackers.entry(provider_session_id.to_string()).or_default();
+            let values = tracker.replace(sub_agents);
+            replay_sub_agent_lifecycles(tracker, values, &lifecycles)
+        };
+        self.update_by_provider_id(provider_session_id, |session| {
+            if session.sub_agents == sub_agents {
+                return false;
+            }
+            session.sub_agents = sub_agents;
+            true
+        })
+    }
+
+    async fn apply_sub_agent_updates(&self, provider_session_id: &str, updates: &[Value]) -> bool {
+        let lifecycles = self
+            .sub_agent_lifecycles
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let sub_agents = {
+            let mut trackers = self.sub_agents.lock().await;
+            let tracker = trackers.entry(provider_session_id.to_string()).or_default();
+            let values = tracker.apply(updates, &now_iso());
+            replay_sub_agent_lifecycles(tracker, values, &lifecycles)
+        };
+        self.update_by_provider_id(provider_session_id, |session| {
+            if session.sub_agents == sub_agents {
+                return false;
+            }
+            session.sub_agents = sub_agents;
+            true
+        })
+    }
+
+    async fn record_sub_agent_lifecycle(
+        &self,
+        provider_session_id: &str,
+        status: &str,
+        message: Option<&str>,
+    ) -> bool {
+        let observed_at = now_iso();
+        let mut update = json!({
+            "threadId": provider_session_id,
+            "status": status,
+            "observation": "state",
+            "observedAt": observed_at,
+        });
+        if let Some(message) = message.map(str::trim).filter(|value| !value.is_empty()) {
+            update["message"] = json!(message);
+        }
+        self.sub_agent_lifecycles
+            .lock()
+            .await
+            .insert(provider_session_id.to_string(), update.clone());
+
+        let parent_updates = {
+            let mut trackers = self.sub_agents.lock().await;
+            trackers
+                .iter_mut()
+                .filter(|(_, tracker)| tracker.contains(provider_session_id))
+                .map(|(parent_session_id, tracker)| {
+                    let sub_agents = tracker.apply(&[update.clone()], &observed_at);
+                    (parent_session_id.clone(), sub_agents)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut changed = false;
+        for (parent_session_id, sub_agents) in parent_updates {
+            changed |= self.update_by_provider_id(&parent_session_id, |session| {
+                if session.sub_agents == sub_agents {
+                    return false;
+                }
+                session.sub_agents = sub_agents;
+                true
+            });
+        }
         changed
     }
 
@@ -2805,7 +3377,7 @@ impl AiSessionController {
         let Ok(bytes) = std::fs::read(path) else {
             return;
         };
-        let Ok(store) = serde_json::from_slice::<CreateOperationStore>(&bytes) else {
+        let Ok(store) = serde_json::from_slice::<Value>(&bytes) else {
             tracing::warn!(path = %path.display(), "ignoring invalid AI session create operation store");
             return;
         };
@@ -2813,19 +3385,47 @@ impl AiSessionController {
             .completed_creates
             .try_lock()
             .expect("controller construction");
-        for operation in store.completed {
-            completed.insert(operation.client_request_id.clone(), operation);
+        for record in store
+            .get("completed")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(client_request_id) = record
+                .get("clientRequestId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+            else {
+                continue;
+            };
+            let Some(result) = record
+                .get("result")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<AiSessionCreateResult>(value).ok())
+            else {
+                continue;
+            };
+            let fingerprint = record
+                .get("fingerprint")
+                .and_then(Value::as_str)
+                .filter(|value| is_create_fingerprint(value))
+                .map(ToString::to_string);
+            completed.insert(
+                client_request_id.clone(),
+                CompletedCreateOperation {
+                    client_request_id,
+                    fingerprint,
+                    result,
+                },
+            );
         }
     }
 
-    fn persist_completed_creates(&self) {
+    async fn persist_completed_creates(&self) {
         let Some(path) = self.create_store_path.as_deref() else {
             return;
         };
-        let completed = self.completed_creates.try_lock();
-        let Ok(completed) = completed else {
-            return;
-        };
+        let completed = self.completed_creates.lock().await;
         let store = CreateOperationStore {
             version: 2,
             completed: completed.values().cloned().collect(),
@@ -2844,6 +3444,36 @@ impl AiSessionController {
     }
 }
 
+fn replay_sub_agent_lifecycles(
+    tracker: &mut CodexSubAgentTracker,
+    sub_agents: Vec<Value>,
+    lifecycles: &[Value],
+) -> Vec<Value> {
+    let observed_at = now_iso();
+    let updates = sub_agents
+        .iter()
+        .filter_map(|sub_agent| {
+            let thread_id = sub_agent.get("threadId").and_then(Value::as_str)?;
+            let lifecycle = lifecycles.iter().find(|lifecycle| {
+                lifecycle.get("threadId").and_then(Value::as_str) == Some(thread_id)
+            })?;
+            let status = lifecycle.get("status").and_then(Value::as_str)?;
+            let message = lifecycle.get("message").and_then(Value::as_str);
+            let differs = sub_agent.get("status").and_then(Value::as_str) != Some(status)
+                || message.is_some() && sub_agent.get("message").and_then(Value::as_str) != message;
+            differs.then(|| {
+                let mut update = lifecycle.clone();
+                update["observedAt"] = json!(observed_at);
+                update
+            })
+        })
+        .collect::<Vec<_>>();
+    if updates.is_empty() {
+        return sub_agents;
+    }
+    tracker.apply(&updates, &observed_at)
+}
+
 fn provider_order(agent: &str) -> usize {
     match agent {
         "codex" => 0,
@@ -2857,6 +3487,7 @@ fn provider_order(agent: &str) -> usize {
 pub struct ProviderMessageInput {
     pub message: AiSessionMessageInput,
     pub attachments: Vec<ProviderAttachment>,
+    pub message_id: Option<String>,
 }
 
 impl ProviderMessageInput {
@@ -2864,6 +3495,7 @@ impl ProviderMessageInput {
         Self {
             message: message.clone(),
             attachments: Vec::new(),
+            message_id: None,
         }
     }
 
@@ -2888,6 +3520,8 @@ impl ProviderMessageInput {
                 Some(ProviderAttachment {
                     meta: serde_json::from_value(attachment.clone()).ok()?,
                     path: PathBuf::new(),
+                    source: ProviderAttachmentSource::Retained,
+                    runtime_path: None,
                 })
             })
             .collect();
@@ -2910,6 +3544,10 @@ impl ProviderMessageInput {
                 permission_mode,
             },
             attachments,
+            message_id: item
+                .get("messageId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
         })
     }
 }
@@ -2937,6 +3575,8 @@ fn provider_attachment(attachment: &RetainedAiSessionMessageAttachment) -> Provi
     ProviderAttachment {
         meta: attachment.meta.clone(),
         path: attachment.retained_path.clone(),
+        source: attachment.source,
+        runtime_path: attachment.runtime_path.clone(),
     }
 }
 
@@ -3048,7 +3688,7 @@ fn has_active_codex_descendants(session: &AiSession, sessions: &[AiSession]) -> 
         })
 }
 
-fn default_provider_actions(status: Option<&str>) -> Value {
+pub(crate) fn default_provider_actions(status: Option<&str>) -> Value {
     let active = status.is_some_and(|status| matches!(status, "running" | "waiting"));
     json!({
         "send": true,
@@ -3056,27 +3696,26 @@ fn default_provider_actions(status: Option<&str>) -> Value {
         "approval": status == Some("waiting"),
         "fork": true,
         "rename": true,
-        "openApp": false,
         "close": true,
     })
 }
 
-fn apply_lifecycle(session: &mut AiSession, status: &str) {
+fn apply_lifecycle(session: &mut AiSession, status: &str) -> bool {
     match status {
         "idle" => {
             session.status = "idle".to_string();
             session.phase = "unknown".to_string();
             session.active_turn_id = None;
-            session.actions = Some(default_provider_actions(None));
+            true
         }
         "running" | "waiting" | "failed" => {
             session.status = status.to_string();
             if status == "failed" {
                 session.phase = "unknown".to_string();
             }
-            session.actions = Some(default_provider_actions(Some(status)));
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
 
@@ -3156,17 +3795,46 @@ fn create_fingerprint(
             );
         }
     }
+    strip_null_object_fields(&mut value);
     Ok(hex::encode(Sha256::digest(canonical_json_bytes(&value))))
+}
+
+fn is_create_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn strip_null_object_fields(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                strip_null_object_fields(item);
+            }
+        }
+        Value::Object(object) => {
+            object.retain(|_, value| !value.is_null());
+            for value in object.values_mut() {
+                strip_null_object_fields(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn send_fingerprint(session_id: &str, input: &AiSessionMessageInput) -> String {
     let value = json!({
         "sessionId": session_id,
         "message": input.message,
-        "mode": input.mode,
+        "mode": input.mode.unwrap_or(AiSessionSendMode::Auto),
         "permissionMode": input.permission_mode,
         "references": input.references,
-        "attachments": input.attachments,
+        "attachments": input
+            .attachments
+            .iter()
+            .map(|attachment| attachment.id.as_str())
+            .collect::<Vec<_>>(),
     });
     hex::encode(Sha256::digest(canonical_json_bytes(&value)))
 }
@@ -3262,7 +3930,168 @@ mod tests {
         (runtime, controller, directory)
     }
 
+    #[derive(Default)]
+    struct MaterializationProvider {
+        create_calls: std::sync::atomic::AtomicUsize,
+        start_calls: std::sync::atomic::AtomicUsize,
+        delete_calls: std::sync::atomic::AtomicUsize,
+        start_delay: std::time::Duration,
+        start_error: bool,
+    }
+
+    #[async_trait]
+    impl AiSessionControlProvider for MaterializationProvider {
+        fn agent(&self) -> &str {
+            "codex"
+        }
+
+        fn capability(&self) -> AiSessionProviderCapability {
+            AiSessionProviderCapability {
+                agent: "codex".to_string(),
+                actions: AiSessionProviderActions::default(),
+                permission_modes: Vec::new(),
+                timeline: AiSessionProviderTimelineCapabilities::default(),
+                model_selection: None,
+                reasoning_effort: None,
+                hierarchy: None,
+            }
+        }
+
+        async fn create_session(
+            &self,
+            input: ProviderCreateInput,
+        ) -> Result<ProviderCreateResult, ProviderError> {
+            self.create_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(ProviderCreateResult {
+                provider_session_id: "thread-reused".to_string(),
+                cwd: input.cwd,
+                model_selection: input.model_selection,
+                reasoning_effort: input.reasoning_effort,
+            })
+        }
+
+        async fn start_message(
+            &self,
+            _session: &AiSession,
+            _input: ProviderMessage,
+        ) -> Result<ProviderAction, ProviderError> {
+            self.start_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if !self.start_delay.is_zero() {
+                tokio::time::sleep(self.start_delay).await;
+            }
+            if self.start_error {
+                return Err(ProviderError::new(
+                    "UPSTREAM_FAILED",
+                    "provider start failed",
+                    500,
+                ));
+            }
+            Ok(ProviderAction::simple("send"))
+        }
+
+        async fn delete_session(&self, _provider_session_id: &str) -> Result<(), ProviderError> {
+            self.delete_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn create_input(
+        cwd: &std::path::Path,
+        client_request_id: Option<&str>,
+    ) -> AiSessionCreateInput {
+        AiSessionCreateInput {
+            agent: "codex".to_string(),
+            cwd: AiSessionRuntimePathInput {
+                runtime_path_type: "runtime-path".to_string(),
+                path: cwd.display().to_string(),
+            },
+            cwd_folder_id: Some("folder-new".to_string()),
+            git_selection: None,
+            workspace_selection: None,
+            model_selection: Some(AiSessionModelSelection {
+                model_entity_id: "model-new".to_string(),
+                model_name: "New model".to_string(),
+                model_upstream_name: Some("new-upstream".to_string()),
+            }),
+            reasoning_effort: Some("high".to_string()),
+            story_id: Some("story-new".to_string()),
+            message: AiSessionMessageInput {
+                message: "hello".to_string(),
+                client_request_id: client_request_id.map(str::to_string),
+                ..Default::default()
+            },
+        }
+    }
+
     struct PreserveInterruptProvider;
+
+    #[derive(Default)]
+    struct RecordingForkProvider {
+        through_turn_ids: std::sync::Mutex<Vec<Option<String>>>,
+        read_sessions: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AiSessionControlProvider for RecordingForkProvider {
+        fn agent(&self) -> &str {
+            "codex"
+        }
+
+        fn capability(&self) -> AiSessionProviderCapability {
+            AiSessionProviderCapability {
+                agent: "codex".to_string(),
+                actions: AiSessionProviderActions::default(),
+                permission_modes: Vec::new(),
+                timeline: AiSessionProviderTimelineCapabilities::default(),
+                model_selection: None,
+                reasoning_effort: None,
+                hierarchy: None,
+            }
+        }
+
+        async fn fork_session(
+            &self,
+            _source: &AiSession,
+            input: ProviderForkInput,
+        ) -> Result<ProviderCreateResult, ProviderError> {
+            self.through_turn_ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(input.through_turn_id);
+            Ok(ProviderCreateResult {
+                provider_session_id: "forked-provider-session".to_string(),
+                cwd: input.cwd.unwrap_or_else(|| PathBuf::from("/workspace")),
+                model_selection: None,
+                reasoning_effort: None,
+            })
+        }
+
+        async fn read_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+            assert_eq!(provider_session_id, "forked-provider-session");
+            self.read_sessions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn forkable_session() -> AiSession {
+        let mut session = test_session();
+        session.status = "idle".to_string();
+        session.phase = "unknown".to_string();
+        session.active_turn_id = None;
+        session.actions = Some(json!({ "fork": true }));
+        session.turns = Some(vec![json!({
+            "id": "turn-public",
+            "providerTurnId": "provider-turn-1",
+            "userPrompt": "fork this turn",
+            "status": "completed",
+            "phase": "unknown",
+        })]);
+        session
+    }
 
     #[async_trait]
     impl AiSessionControlProvider for PreserveInterruptProvider {
@@ -3301,6 +4130,7 @@ mod tests {
         session.turns = Some(vec![json!({
             "id": "turn-1",
             "providerTurnId": "provider-turn-1",
+            "userPrompt": "preserve this turn",
             "status": "running",
             "phase": "responding",
         })]);
@@ -3323,6 +4153,178 @@ mod tests {
             result.session.actions.as_ref().expect("actions")["interrupt"],
             true
         );
+    }
+
+    #[tokio::test]
+    async fn fork_rejects_an_unknown_public_turn_before_provider_dispatch() {
+        let (runtime, controller, _directory) = test_controller();
+        let provider = Arc::new(RecordingForkProvider::default());
+        controller.register_provider(provider.clone());
+        runtime
+            .save(forkable_session())
+            .expect("save forkable session");
+
+        let error = controller
+            .fork_session(
+                "ses_0000000000001",
+                ProviderForkInput {
+                    through_turn_id: Some("turn-unknown".to_string()),
+                    cwd: None,
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect_err("unknown public turn must fail");
+
+        assert_eq!(error.code, "AI_SESSION_FORK_TURN_NOT_FOUND");
+        assert_eq!(error.status_code, 404);
+        assert!(provider
+            .through_turn_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn fork_maps_the_public_turn_to_the_provider_turn_id() {
+        let (runtime, controller, _directory) = test_controller();
+        let provider = Arc::new(RecordingForkProvider::default());
+        controller.register_provider(provider.clone());
+        runtime
+            .save(forkable_session())
+            .expect("save forkable session");
+
+        let result = controller
+            .fork_session(
+                "ses_0000000000001",
+                ProviderForkInput {
+                    through_turn_id: Some("turn-public".to_string()),
+                    cwd: None,
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect("fork session");
+
+        assert_eq!(result.provider_session_id, "forked-provider-session");
+        assert_eq!(
+            provider
+                .through_turn_ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_slice(),
+            &[Some("provider-turn-1".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_rejects_a_reused_provider_session_without_direct_session_identity() {
+        let (runtime, controller, _directory) = test_controller();
+        controller.register_provider(Arc::new(RecordingForkProvider::default()));
+        runtime
+            .save(forkable_session())
+            .expect("save forkable session");
+        let mut existing = test_session();
+        existing.id = "ses_0000000000002".to_string();
+        existing.creation_source = "app-session".to_string();
+        existing.app_session_id = Some("aps_0000000000001".to_string());
+        existing.provider_session_id = Some("forked-provider-session".to_string());
+        runtime.save(existing).expect("save existing session");
+
+        let error = controller
+            .fork_session(
+                "ses_0000000000001",
+                ProviderForkInput {
+                    through_turn_id: None,
+                    cwd: None,
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect_err("non-independent fork target");
+
+        assert_eq!(error.code, "AI_SESSION_FORK_INVALID_RESPONSE");
+        assert_eq!(error.status_code, 502);
+    }
+
+    #[tokio::test]
+    async fn fork_recovery_reads_the_provider_session_before_materializing() {
+        let (_runtime, controller, _directory) = test_controller();
+        let provider = Arc::new(RecordingForkProvider::default());
+        controller.register_provider(provider.clone());
+
+        controller
+            .read_session("codex", "forked-provider-session")
+            .await
+            .expect("read provider session");
+
+        assert_eq!(
+            provider
+                .read_sessions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn sub_agent_snapshot_and_child_lifecycle_update_the_parent_session() {
+        let (runtime, controller, _directory) = test_controller();
+        assert!(
+            controller
+                .apply_provider_event(ProviderEvent::SubAgentSnapshot {
+                    provider_session_id: "thread-1".to_string(),
+                    sub_agents: vec![json!({
+                        "threadId": "sub-1",
+                        "path": "researcher",
+                        "status": "running",
+                        "updatedAt": "2026-11-02T00:00:00.000Z"
+                    })],
+                })
+                .await
+        );
+        let session = runtime.get("ses_0000000000001").expect("session");
+        assert_eq!(session.sub_agents[0]["threadId"], "sub-1");
+        assert_eq!(session.sub_agents[0]["status"], "running");
+
+        controller
+            .apply_provider_event(ProviderEvent::ThreadSnapshot {
+                provider_session_id: "sub-1".to_string(),
+                cwd: None,
+                name: None,
+                model: None,
+                model_provider: None,
+                model_selection: None,
+                reasoning_effort: None,
+                status: "failed".to_string(),
+                phase: None,
+            })
+            .await;
+        let session = runtime.get("ses_0000000000001").expect("session");
+        assert_eq!(session.sub_agents[0]["status"], "errored");
+
+        controller
+            .apply_provider_event(ProviderEvent::SubAgentActivity {
+                provider_session_id: "thread-1".to_string(),
+                updates: vec![json!({
+                    "threadId": "sub-1",
+                    "status": "running",
+                    "path": "researcher",
+                    "activity": "interacted",
+                    "observation": "activity"
+                })],
+            })
+            .await;
+        let session = runtime.get("ses_0000000000001").expect("session");
+        assert_eq!(session.sub_agents[0]["status"], "errored");
+        assert_eq!(session.sub_agents[0]["activity"], "interacted");
+
+        controller
+            .apply_provider_event(ProviderEvent::ThreadClosed {
+                provider_session_id: "sub-1".to_string(),
+            })
+            .await;
+        let session = runtime.get("ses_0000000000001").expect("session");
+        assert_eq!(session.sub_agents[0]["status"], "shutdown");
     }
 
     #[test]
@@ -3359,6 +4361,156 @@ mod tests {
             create_fingerprint(&input, &AiSessionManagedCreateOptions::default())
                 .expect("fingerprint")
         );
+    }
+
+    #[tokio::test]
+    async fn create_reconciles_a_reused_provider_session_with_the_requested_metadata() {
+        let (runtime, controller, directory) = test_controller();
+        let provider = Arc::new(MaterializationProvider::default());
+        controller.register_provider(provider.clone());
+        let mut reused = test_session();
+        reused.id = "ses_0000000000002".to_string();
+        reused.provider_session_id = Some("thread-reused".to_string());
+        reused.status = "idle".to_string();
+        reused.phase = "unknown".to_string();
+        reused.active_turn_id = None;
+        reused.cwd_folder_id = Some("folder-old".to_string());
+        reused.story_id = Some("story-old".to_string());
+        reused.model_selection = Some(json!({
+            "modelEntityId": "model-old",
+            "modelName": "Old model"
+        }));
+        reused.reasoning_effort = Some("low".to_string());
+        runtime.save(reused).expect("save reused session");
+
+        let result = controller
+            .create_managed_session(
+                create_input(directory.path(), None),
+                AiSessionManagedCreateOptions::default(),
+            )
+            .await
+            .expect("create with reused provider session");
+
+        assert_eq!(result.ai_session_id, "ses_0000000000002");
+        let session = runtime.get("ses_0000000000002").expect("reused session");
+        assert_eq!(session.cwd_folder_id.as_deref(), Some("folder-new"));
+        assert_eq!(session.story_id.as_deref(), Some("story-new"));
+        assert_eq!(session.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            session.model_selection,
+            Some(json!({
+                "modelEntityId": "model-new",
+                "modelName": "New model",
+                "modelUpstreamName": "new-upstream"
+            }))
+        );
+        assert_eq!(
+            provider
+                .create_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn create_maps_first_turn_timeout_to_materialization_failed_and_compensates() {
+        let (runtime, controller, directory) = test_controller();
+        let provider = Arc::new(MaterializationProvider {
+            start_delay: std::time::Duration::from_millis(200),
+            ..Default::default()
+        });
+        controller.register_provider(provider.clone());
+
+        let error = controller
+            .create_managed_session(
+                create_input(directory.path(), None),
+                AiSessionManagedCreateOptions {
+                    materialization_timeout: Some(std::time::Duration::from_millis(10)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("materialization must time out");
+
+        assert_eq!(error.code, "AI_SESSION_MATERIALIZATION_FAILED");
+        assert_eq!(error.status_code, 502);
+        assert_eq!(
+            error.message,
+            "Provider materialization timed out after 10ms."
+        );
+        assert_eq!(
+            provider
+                .delete_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert!(!runtime
+            .list()
+            .iter()
+            .any(|session| session.provider_session_id.as_deref() == Some("thread-reused")));
+    }
+
+    #[tokio::test]
+    async fn concurrent_sends_with_the_same_client_request_share_the_failed_operation() {
+        let (runtime, controller, _directory) = test_controller();
+        let mut session = test_session();
+        session.status = "idle".to_string();
+        session.phase = "unknown".to_string();
+        session.active_turn_id = None;
+        runtime.save(session).expect("save idle session");
+        let provider = Arc::new(MaterializationProvider {
+            start_delay: std::time::Duration::from_millis(50),
+            start_error: true,
+            ..Default::default()
+        });
+        controller.register_provider(provider.clone());
+        let input = ProviderMessageInput {
+            message_id: None,
+            message: AiSessionMessageInput {
+                message: "hello".to_string(),
+                client_request_id: Some("request-1".to_string()),
+                ..Default::default()
+            },
+            attachments: Vec::new(),
+        };
+
+        let first = controller.send_message("ses_0000000000001", input.clone());
+        let second = controller.send_message("ses_0000000000001", input);
+        let (first, second) = tokio::join!(first, second);
+
+        assert_eq!(
+            first.expect_err("first send").message,
+            "provider start failed"
+        );
+        assert_eq!(
+            second.expect_err("second send").message,
+            "provider start failed"
+        );
+        assert_eq!(
+            provider
+                .start_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_requires_an_explicit_provider_capability_before_dispatch() {
+        let (_runtime, controller, _directory) = test_controller();
+
+        let error = controller
+            .fork_session(
+                "ses_0000000000001",
+                ProviderForkInput {
+                    through_turn_id: None,
+                    cwd: None,
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect_err("missing capability must fail closed");
+
+        assert_eq!(error.code, "AI_SESSION_FORK_UNSUPPORTED");
     }
 
     #[test]
@@ -3434,6 +4586,7 @@ mod tests {
                 name: Some("Renamed in Codex".to_string()),
                 model: None,
                 model_provider: None,
+                model_selection: None,
                 reasoning_effort: Some("high".to_string()),
                 status: "idle".to_string(),
                 phase: Some("unknown".to_string()),
@@ -3446,6 +4599,62 @@ mod tests {
         assert_eq!(updated.title.as_deref(), Some("Renamed in Codex"));
         assert_eq!(updated.status, "idle");
         assert_eq!(updated.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn open_code_discovery_adopts_an_unknown_provider_session_once() {
+        let (runtime, controller, _directory) = test_controller();
+        let event = || ProviderEvent::ThreadDiscovered {
+            provider_session_id: "opencode-1".to_string(),
+            cwd: "/workspace".to_string(),
+            name: Some("External OpenCode session".to_string()),
+            model_selection: Some(AiSessionModelSelection {
+                model_entity_id: "model_entity_1".to_string(),
+                model_name: "GPT 5.1".to_string(),
+                model_upstream_name: Some("gpt-5.1".to_string()),
+            }),
+            reasoning_effort: Some("high".to_string()),
+            status: "running".to_string(),
+            phase: Some("responding".to_string()),
+            active_turn_id: Some("turn-opencode-1".to_string()),
+            parent_provider_session_id: Some("opencode-parent".to_string()),
+        };
+
+        assert!(controller.apply_provider_event(event()).await);
+        assert!(!controller.apply_provider_event(event()).await);
+
+        let sessions = runtime
+            .list()
+            .into_iter()
+            .filter(|session| session.provider_session_id.as_deref() == Some("opencode-1"))
+            .collect::<Vec<_>>();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent, "opencode");
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("External OpenCode session")
+        );
+        assert_eq!(sessions[0].status, "running");
+        assert_eq!(
+            sessions[0].active_turn_id.as_deref(),
+            Some("turn-opencode-1")
+        );
+        assert_eq!(
+            sessions[0]
+                .model_selection
+                .as_ref()
+                .and_then(|selection| selection.get("modelEntityId"))
+                .and_then(Value::as_str),
+            Some("model_entity_1")
+        );
+        assert_eq!(
+            sessions[0].lineage.as_ref().and_then(|lineage| {
+                lineage
+                    .get("parentProviderSessionId")
+                    .and_then(Value::as_str)
+            }),
+            Some("opencode-parent")
+        );
     }
 
     struct TestObservedModelResolver;
@@ -3502,6 +4711,7 @@ mod tests {
                 name: None,
                 model: Some("upstream-primary".to_string()),
                 model_provider: Some("task-handoff-model-primary".to_string()),
+                model_selection: None,
                 reasoning_effort: None,
                 status: "idle".to_string(),
                 phase: None,
@@ -3531,6 +4741,7 @@ mod tests {
                 session.turns = Some(vec![json!({
                     "id": "turn-1",
                     "providerTurnId": "turn-1",
+                    "userPrompt": "complete this turn",
                     "status": "running",
                     "phase": "thinking",
                     "revision": 1,

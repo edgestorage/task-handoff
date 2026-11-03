@@ -468,8 +468,11 @@ fn executable_file(path: &Path, platform: Platform) -> bool {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
     }
     #[cfg(not(unix))]
     {

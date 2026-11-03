@@ -76,16 +76,20 @@ pub fn resolve_web_auth(paths: &StoragePaths) -> std::io::Result<WebAuthState> {
             token: Some(token),
         });
     }
-    if let Ok(token) = std::fs::read_to_string(&paths.web_token_path) {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            return Ok(WebAuthState {
-                enabled: true,
-                source: Some(AuthSource::File),
-                token_file: Some(paths.web_token_path.clone()),
-                token: Some(token),
-            });
+    match std::fs::read_to_string(&paths.web_token_path) {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            if !token.is_empty() {
+                return Ok(WebAuthState {
+                    enabled: true,
+                    source: Some(AuthSource::File),
+                    token_file: Some(paths.web_token_path.clone()),
+                    token: Some(token),
+                });
+            }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     if std::env::var("TASK_HANDOFF_WEB_AUTH").ok().as_deref() == Some("required") {
         let token = generate_token();

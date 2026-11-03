@@ -4,13 +4,134 @@ use controlled_instance_core::{paths::StoragePaths, process::hostname};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use crate::{
     ai_session_authority::AiSessionAuthority, app_session_authority::AppSessionAuthority,
-    InstanceConfig,
+    state::StreamDiagnostics, InstanceConfig,
 };
+
+pub(crate) fn log_controlled_instance_start(paths: &StoragePaths) {
+    if !env_flag("TASK_HANDOFF_DIAGNOSTIC_LOGS") {
+        return;
+    }
+    let _ = append_start_diagnostic(&paths.log_dir, &paths.data_dir);
+}
+
+fn append_start_diagnostic(log_dir: &Path, data_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(log_dir)?;
+    let log_path = log_dir.join("controlled-instance.log");
+    let entry = json!({
+        "time": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "event": "controlled_instance_start",
+        "component": "controlled-instance",
+        "controlMode": std::env::var("TASK_HANDOFF_CONTROL_MODE").ok(),
+        "diagnosticLogs": std::env::var("TASK_HANDOFF_DIAGNOSTIC_LOGS").ok(),
+        "dataDir": data_dir,
+        "logDir": log_dir,
+        "logPath": log_path,
+        "process": process_snapshot(),
+    });
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(log_path)?;
+    let encoded = serde_json::to_string(&entry)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    writeln!(file, "{encoded}")
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .is_some_and(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn process_snapshot() -> Value {
+    let pid = std::process::id();
+    let ppid = parent_process_id();
+    json!({
+        "pid": pid,
+        "ppid": ppid,
+        "cwd": std::env::current_dir().ok(),
+        "argv": std::env::args().collect::<Vec<_>>(),
+        "parent": parent_process(ppid),
+        "env": relevant_env(),
+    })
+}
+
+fn relevant_env() -> Value {
+    let entries = std::env::vars()
+        .filter(|(key, _)| {
+            key.starts_with("TASK_HANDOFF")
+                || key.starts_with("CODEX")
+                || key.starts_with("CLAUDE")
+                || matches!(key.as_str(), "PWD" | "OLDPWD" | "SHELL" | "TERM")
+        })
+        .map(|(key, value)| {
+            let secret = [
+                "TOKEN",
+                "KEY",
+                "SECRET",
+                "AUTH",
+                "PASSWORD",
+                "COOKIE",
+                "CONFIG_CONTENT",
+            ]
+            .iter()
+            .any(|needle| key.to_ascii_uppercase().contains(needle));
+            (
+                key,
+                Value::String(if secret {
+                    "[redacted]".to_string()
+                } else {
+                    value
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    Value::Object(entries.into_iter().collect())
+}
+
+fn parent_process(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let pid = pid.to_string();
+    let output = std::process::Command::new("ps")
+        .args(["-p", pid.as_str(), "-o", "pid=,ppid=,comm=,args="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn parent_process_id() -> u32 {
+    #[cfg(unix)]
+    {
+        std::os::unix::process::parent_id()
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
 
 pub(crate) fn instance_diagnostics(
     config: &InstanceConfig,
@@ -18,6 +139,7 @@ pub(crate) fn instance_diagnostics(
     ai_sessions: &AiSessionAuthority,
     app_sessions: &AppSessionAuthority,
     message_delta_coalescing: Value,
+    stream_diagnostics: &StreamDiagnostics,
 ) -> Value {
     let no_vnc_root = resolve_novnc_root();
     let profile = env_optional("TASK_HANDOFF_IMAGE_PROFILE");
@@ -119,15 +241,15 @@ pub(crate) fn instance_diagnostics(
                 "streamId": ai_sessions.stream_id(),
                 "revision": ai_sessions.revision(),
                 "retainedEventCount": ai_sessions.retained_event_count(),
-                "discoveryUnchanged": 0,
-                "discoveryCorrections": 0,
+                "discoveryUnchanged": stream_diagnostics.ai_discovery_unchanged.load(std::sync::atomic::Ordering::Relaxed),
+                "discoveryCorrections": stream_diagnostics.ai_discovery_corrections.load(std::sync::atomic::Ordering::Relaxed),
                 "messageDeltaCoalescing": message_delta_coalescing,
             },
             "app": {
                 "streamId": app_sessions.stream_id(),
                 "revision": app_sessions.revision(),
                 "retainedEventCount": app_sessions.retained_event_count(),
-                "unchangedRefreshes": 0,
+                "unchangedRefreshes": stream_diagnostics.app_unchanged_refreshes.load(std::sync::atomic::Ordering::Relaxed),
             },
         },
     })
@@ -359,12 +481,11 @@ fn is_writable(path: &Path, file: bool) -> bool {
 fn uptime_seconds(started_at: &str) -> u64 {
     DateTime::parse_from_rfc3339(started_at)
         .ok()
-        .and_then(|started| {
-            Utc::now()
+        .map(|started| {
+            let milliseconds = Utc::now()
                 .signed_duration_since(started.with_timezone(&Utc))
-                .num_seconds()
-                .try_into()
-                .ok()
+                .num_milliseconds();
+            (milliseconds.max(0) as f64 / 1_000.0).round() as u64
         })
         .unwrap_or(0)
 }
@@ -485,6 +606,7 @@ mod tests {
                 "totalFirstBatchWaitMs": 0,
                 "maxFirstBatchWaitMs": 0,
             }),
+            &StreamDiagnostics::default(),
         );
         assert!(value.get("ok").is_some());
         assert!(value["image"].is_object());
@@ -492,5 +614,33 @@ mod tests {
         assert!(value["noVnc"]["available"].is_boolean());
         assert_eq!(value["sessionStreams"]["ai"]["streamId"], "ais_test");
         assert_eq!(value["sessionStreams"]["app"]["streamId"], "aps_test");
+    }
+
+    #[test]
+    fn startup_diagnostic_writes_jsonl_with_private_permissions() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let log_dir = root.path().join("logs");
+        let data_dir = root.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("data dir");
+        append_start_diagnostic(&log_dir, &data_dir).expect("diagnostic");
+
+        let log_path = log_dir.join("controlled-instance.log");
+        let content = std::fs::read_to_string(&log_path).expect("diagnostic log");
+        let line: Value = serde_json::from_str(content.trim()).expect("jsonl");
+        assert_eq!(line["event"], "controlled_instance_start");
+        assert_eq!(line["component"], "controlled-instance");
+        assert_eq!(line["process"]["pid"], std::process::id());
+        assert!(line.get("time").and_then(Value::as_str).is_some());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(log_path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 }

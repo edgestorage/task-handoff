@@ -57,6 +57,7 @@ done
 
 if [ "$is_app_server" = "1" ]; then
   printf '%s\n' "$$" >> "$test_dir/app-server-pids"
+  printf '%s\n' "${FAKE_CODEX_LAUNCH_ENV_MARKER:-}" > "$test_dir/app-server-launch-env"
   previous=""
   for arg in "$@"; do
     if [ "$previous" = "--listen" ]; then
@@ -65,7 +66,8 @@ if [ "$is_app_server" = "1" ]; then
         unix://*)
           socket_path="${arg#unix://}"
           mkdir -p "$(dirname "$socket_path")"
-          : > "$socket_path"
+          rm -f "$socket_path"
+          python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(86400)' "$socket_path" &
           ;;
       esac
     fi
@@ -133,6 +135,7 @@ impl TestEnvironment {
             "TASK_HANDOFF_AGENT_TOOLS_ENDPOINT",
             "TASK_HANDOFF_AGENT_TOOLS_TOKEN",
             "FAKE_CODEX_TEST_DIR",
+            "FAKE_CODEX_LAUNCH_ENV_MARKER",
         ];
         let previous = names
             .iter()
@@ -161,6 +164,7 @@ impl TestEnvironment {
             "CODEX_MODEL",
             "TASK_HANDOFF_AGENT_TOOLS_ENDPOINT",
             "TASK_HANDOFF_AGENT_TOOLS_TOKEN",
+            "FAKE_CODEX_LAUNCH_ENV_MARKER",
         ] {
             std::env::remove_var(name);
         }
@@ -945,7 +949,13 @@ async fn codex_tty_new_and_resume_preserve_remote_argument_order_and_environment
         &runtime,
         &workspace,
         vec!["--option".to_string(), "value".to_string()],
-        BTreeMap::from([("FAKE_CODEX_MARKER".to_string(), "new".to_string())]),
+        BTreeMap::from([
+            ("FAKE_CODEX_MARKER".to_string(), "new".to_string()),
+            (
+                "FAKE_CODEX_LAUNCH_ENV_MARKER".to_string(),
+                "launch-env".to_string(),
+            ),
+        ]),
     )
     .await;
     let new_record = wait_for_record(&state_dir.join(format!("tty-{}", new_session.id))).await;
@@ -971,9 +981,20 @@ async fn codex_tty_new_and_resume_preserve_remote_argument_order_and_environment
     assert_eq!(record_value(&new_record, "proxyUrl"), new_proxy);
     assert_eq!(record_value(&new_record, "socket"), new_socket);
     assert_eq!(record_value(&new_record, "marker"), "new");
+    assert_eq!(
+        wait_for_record(&state_dir.join("app-server-launch-env"))
+            .await
+            .trim(),
+        "launch-env"
+    );
 
     let resumed = runtime
-        .start_resume("codex", workspace_arg, "provider-session-123")
+        .start_resume(
+            "codex",
+            workspace_arg,
+            "ai-session-123",
+            "provider-session-123",
+        )
         .await
         .expect("resume Codex session");
     let resume_record = wait_for_record(&state_dir.join(format!("tty-{}", resumed.id))).await;
@@ -992,6 +1013,17 @@ async fn codex_tty_new_and_resume_preserve_remote_argument_order_and_environment
         ]
     );
     assert_eq!(record_value(&resume_record, "appSessionId"), resumed.id);
+    assert_eq!(
+        resumed.launch.as_ref().and_then(|launch| {
+            launch.ai_session_resume.as_ref().map(|resume| {
+                (
+                    resume.ai_session_id.as_str(),
+                    resume.provider_session_id.as_str(),
+                )
+            })
+        }),
+        Some(("ai-session-123", "provider-session-123"))
+    );
     assert_eq!(
         record_value(&resume_record, "appServerUrl"),
         metadata_str(&resumed, "endpoint")

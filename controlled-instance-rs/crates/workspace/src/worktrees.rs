@@ -1,7 +1,7 @@
 use crate::{
     context::{
         display_path, hash_id, now_iso, read_worktree_status, repository_worktree_id,
-        require_repository, ResolvedRepository,
+        require_operation_repository as require_repository, ResolvedRepository,
     },
     error::RepositoryOperationError,
     git::{GitError, GitProcess},
@@ -800,7 +800,7 @@ impl RepositoryService {
             ));
         }
         let initial = require_repository(self.resolve(session_target).await)?;
-        let _initial_target = self
+        let initial_target = self
             .list_worktrees_internal(&initial, sessions)
             .await?
             .into_iter()
@@ -812,7 +812,9 @@ impl RepositoryService {
                     &initial,
                 )
             })?;
-        let _guard = self.lock(&initial).await;
+        let _guards = self
+            .lock_repository_and_worktree_path(&initial, &initial_target.canonical_path)
+            .await;
         let state = require_repository(self.resolve(session_target).await)?;
         let list = self.list_worktrees_from_state(&state, sessions).await?;
         if list.snapshot_id != request.expected_snapshot_id {
@@ -951,7 +953,7 @@ impl RepositoryService {
         }
         let initial = require_repository(self.resolve(session_target).await)?;
         let initial_internal = self.list_worktrees_internal(&initial, sessions).await?;
-        let _initial_target = initial_internal
+        let initial_target = initial_internal
             .iter()
             .find(|item| item.worktree.summary.id == request.worktree_id)
             .ok_or_else(|| {
@@ -972,7 +974,15 @@ impl RepositoryService {
                 )
             })?;
         let initial_main_path = initial_main.canonical_path.clone();
-        let _guard = self.lock(&initial).await;
+        let _guards = self
+            .lock_repository_and_worktrees(
+                &initial,
+                [
+                    initial_target.canonical_path.clone(),
+                    initial_main_path.clone(),
+                ],
+            )
+            .await;
         let state = require_repository(self.resolve(session_target).await)?;
         let list = self.list_worktrees_from_state(&state, sessions).await?;
         if list.snapshot_id != request.expected_snapshot_id {
@@ -1273,7 +1283,9 @@ impl RepositoryService {
                 read_worktree_status(&canonical_path)
                     .await
                     .map(|status| summary_total(&status.summary) > 0)
-                    .unwrap_or(false)
+                    .map_err(|error| {
+                        git_operation_error(error, state, "Git worktree status is unavailable.")
+                    })?
             } else {
                 false
             };
@@ -1548,7 +1560,7 @@ fn sanitize_managed_intent(value: &Value) -> Option<ManagedWorktreeIntent> {
         _ => return None,
     };
     let request_id = match object.get("requestId") {
-        Some(Value::Null) | None => None,
+        None => None,
         Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
         _ => return None,
     };
@@ -1825,9 +1837,12 @@ where
             let Some(value) = cwd(session).filter(|value| !value.trim().is_empty()) else {
                 return false;
             };
-            let candidate =
-                fs::canonicalize(value).unwrap_or_else(|_| absolute_path(Path::new(value)));
-            Path::new(value).is_absolute() && within_root(&candidate, worktree_path)
+            let candidate = match fs::canonicalize(value) {
+                Ok(path) => path,
+                Err(_) if Path::new(value).is_absolute() => absolute_path(Path::new(value)),
+                Err(_) => return false,
+            };
+            within_root(&candidate, worktree_path)
         })
         .collect()
 }
@@ -1932,6 +1947,11 @@ fn git_operation_error(
             "Git operation exceeded its output limit.",
             state,
         ),
+        GitError::Aborted => RepositoryOperationError::with_current(
+            "REPOSITORY_OPERATION_ABORTED",
+            "Git operation was aborted.",
+            state,
+        ),
         other => RepositoryOperationError::with_current(
             "REPOSITORY_OPERATION_FAILED",
             git_error_message(other, message),
@@ -2005,7 +2025,17 @@ fn normalize_path(value: &Path) -> PathBuf {
 fn within_root(candidate: &Path, root: &Path) -> bool {
     let candidate = absolute_path(candidate);
     let root = absolute_path(root);
-    candidate == root || candidate.starts_with(&root)
+    if candidate == root {
+        return true;
+    }
+    let Ok(relative) = candidate.strip_prefix(&root) else {
+        return false;
+    };
+    match relative.components().next() {
+        Some(Component::Normal(value)) => !value.to_string_lossy().starts_with(".."),
+        Some(Component::ParentDir) => false,
+        _ => true,
+    }
 }
 
 fn is_generation_id(value: &str) -> bool {
@@ -2055,6 +2085,7 @@ mod tests {
         RepositorySessionTarget {
             kind: controlled_instance_protocol::RepositorySessionKind::AiSession,
             id: "ses_0000000000001".to_string(),
+            session_found: true,
             cwd: Some(root.display().to_string()),
             status: Some("idle".to_string()),
         }
@@ -2078,6 +2109,116 @@ mod tests {
         assert!(records[1].locked);
         assert_eq!(records[1].lock_reason.as_deref(), Some("maintenance"));
         assert!(records[1].prunable);
+    }
+
+    #[test]
+    fn managed_intent_rejects_null_and_empty_request_ids_like_node() {
+        let valid = json!({
+            "ref": { "type": "head" },
+            "resolvedOid": "a".repeat(40),
+            "checkout": "attached"
+        });
+        assert!(sanitize_managed_intent(&valid).is_some());
+
+        let mut null_request_id = valid.clone();
+        null_request_id["requestId"] = Value::Null;
+        assert!(sanitize_managed_intent(&null_request_id).is_none());
+
+        let mut empty_request_id = valid;
+        empty_request_id["requestId"] = Value::String(String::new());
+        assert!(sanitize_managed_intent(&empty_request_id).is_none());
+    }
+
+    #[test]
+    fn within_root_rejects_relative_paths_that_start_with_two_dots() {
+        let root = tempfile::tempdir().expect("root");
+        let root = fs::canonicalize(root.path()).expect("canonical root");
+        assert!(within_root(&root.join("nested"), &root));
+        assert!(!within_root(&root.join("..foo"), &root));
+    }
+
+    #[test]
+    fn sessions_in_worktree_canonicalizes_relative_cwds_before_containment() {
+        let current = std::env::current_dir().expect("current directory");
+        let current = fs::canonicalize(&current).unwrap_or(current);
+        let root = tempfile::Builder::new()
+            .prefix(".controlled-instance-worktree-")
+            .tempdir_in(&current)
+            .expect("temporary worktree");
+        let worktree = fs::canonicalize(root.path()).expect("canonical worktree");
+        fs::create_dir_all(worktree.join("project")).expect("project directory");
+        let relative_cwd = worktree
+            .strip_prefix(&current)
+            .expect("relative worktree path")
+            .join("project")
+            .display()
+            .to_string();
+        let sessions = vec![RepositoryAiSessionPresence {
+            id: "ses_relative".to_string(),
+            app_session_id: None,
+            cwd: Some(relative_cwd),
+            status: Some("idle".to_string()),
+        }];
+
+        let matched = sessions_in_worktree(&sessions, &worktree, |session| session.cwd.as_deref());
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].id, "ses_relative");
+    }
+
+    #[tokio::test]
+    async fn worktree_status_failures_are_propagated_instead_of_treated_as_clean() {
+        let repository = repository();
+        let managed = tempfile::tempdir().expect("managed root");
+        let service = make_service(repository.path(), managed.path());
+        let target = target(repository.path());
+        let sessions = empty_inventory();
+        let resolved = require_repository(service.resolve(&target).await).expect("resolved");
+        let snapshot = resolved.context.snapshot_id.clone().expect("snapshot");
+        service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::NewBranch {
+                    branch_name: "broken-status".to_string(),
+                    start_ref: "HEAD".to_string(),
+                    expected_snapshot_id: snapshot,
+                },
+            )
+            .await
+            .expect("create worktree");
+        let repository_directory = managed.path().join(
+            resolved
+                .context
+                .repository_id
+                .as_deref()
+                .expect("repository id")
+                .trim_start_matches("repo:"),
+        );
+        let linked_path = fs::read_dir(repository_directory)
+            .expect("managed repository directory")
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("broken-status-")
+            })
+            .expect("linked worktree")
+            .path();
+        let index_path = run_git(&linked_path, &["rev-parse", "--git-path", "index"]);
+        let index_path = PathBuf::from(index_path);
+        let index_path = if index_path.is_absolute() {
+            index_path
+        } else {
+            linked_path.join(index_path)
+        };
+        fs::write(index_path, b"not a git index").expect("corrupt worktree index");
+
+        let error = service
+            .list_worktrees(&target, &sessions)
+            .await
+            .expect_err("status failure must be returned");
+        assert_eq!(error.code, "REPOSITORY_OPERATION_FAILED");
     }
 
     #[tokio::test]

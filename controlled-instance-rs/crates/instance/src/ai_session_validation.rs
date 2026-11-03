@@ -107,6 +107,234 @@ pub fn normalize_empty_object_body(body: &Value) -> Result<Value, Vec<String>> {
     }
 }
 
+pub fn normalize_story_automation_create_body(body: &Value) -> Result<Value, Vec<String>> {
+    validate_story_automation_create(body).map_err(render_issues)
+}
+
+pub fn normalize_agent_run_member_create_body(body: &Value) -> Result<Value, Vec<String>> {
+    validate_agent_run_member_create(body).map_err(render_issues)
+}
+
+fn validate_story_automation_create(body: &Value) -> Result<Value, Vec<Issue>> {
+    let Some(object) = body.as_object() else {
+        return Err(vec![invalid_type(vec![], "object", received_type(body))]);
+    };
+    let mut issues = Vec::new();
+    let mut normalized = Map::new();
+
+    if let Some(value) = required_text(object, "agent", &["agent"], 1, 80, &mut issues) {
+        normalized.insert("agent".to_string(), Value::String(value));
+    }
+    if let Some(value) = cwd(object.get("cwd"), &mut issues) {
+        normalized.insert("cwd".to_string(), value);
+    }
+    if let Some(value) = optional_text(object, "cwdFolderId", &["cwdFolderId"], 1, 120, &mut issues)
+    {
+        normalized.insert("cwdFolderId".to_string(), Value::String(value));
+    }
+    if let Some(value) = git_selection(object.get("gitSelection"), &mut issues) {
+        normalized.insert("gitSelection".to_string(), value);
+    }
+    if let Some(value) = workspace_selection(object.get("workspaceSelection"), &mut issues) {
+        normalized.insert("workspaceSelection".to_string(), value);
+    }
+    if let Some(value) = required_text(object, "message", &["message"], 1, 32_000, &mut issues) {
+        normalized.insert("message".to_string(), Value::String(value));
+    }
+    if let Some(value) = optional_enum(
+        object,
+        "permissionMode",
+        &["permissionMode"],
+        &["ask", "auto-review", "full-access"],
+        &mut issues,
+    ) {
+        normalized.insert("permissionMode".to_string(), Value::String(value));
+    }
+    if let Some(value) = required_text(
+        object,
+        "clientRequestId",
+        &["clientRequestId"],
+        1,
+        160,
+        &mut issues,
+    ) {
+        normalized.insert("clientRequestId".to_string(), Value::String(value));
+    }
+    if let Some(value) = model_selection(object.get("modelSelection"), &mut issues) {
+        normalized.insert("modelSelection".to_string(), value);
+    }
+    if let Some(value) = optional_enum(
+        object,
+        "reasoningEffort",
+        &["reasoningEffort"],
+        REASONING_EFFORTS,
+        &mut issues,
+    ) {
+        normalized.insert("reasoningEffort".to_string(), Value::String(value));
+    }
+    if let Some(value) = required_text(object, "storyId", &["storyId"], 1, 120, &mut issues) {
+        normalized.insert("storyId".to_string(), Value::String(value));
+    }
+    unsupported_keys(
+        object,
+        &[
+            "agent",
+            "cwd",
+            "cwdFolderId",
+            "gitSelection",
+            "workspaceSelection",
+            "message",
+            "permissionMode",
+            "clientRequestId",
+            "modelSelection",
+            "reasoningEffort",
+            "storyId",
+        ],
+        &mut issues,
+        &[] as &[&str],
+    );
+    if issues.is_empty()
+        && normalized.contains_key("gitSelection")
+        && normalized.contains_key("workspaceSelection")
+    {
+        issues.push(Issue::new(
+            path(&["workspaceSelection"]),
+            "gitSelection and workspaceSelection are mutually exclusive.",
+        ));
+    }
+    if issues.is_empty() {
+        Ok(Value::Object(normalized))
+    } else {
+        Err(issues)
+    }
+}
+
+fn validate_agent_run_member_create(body: &Value) -> Result<Value, Vec<Issue>> {
+    let Some(object) = body.as_object() else {
+        return Err(vec![invalid_type(vec![], "object", received_type(body))]);
+    };
+    let mut issues = Vec::new();
+    let mut normalized = Map::new();
+
+    for key in ["runId", "memberId"] {
+        if let Some(value) = stable_agent_run_id(object, key, &[key], &mut issues) {
+            normalized.insert(key.to_string(), Value::String(value));
+        }
+    }
+    if let Some(value) = required_text(
+        object,
+        "clientRequestId",
+        &["clientRequestId"],
+        1,
+        160,
+        &mut issues,
+    ) {
+        normalized.insert("clientRequestId".to_string(), Value::String(value));
+    }
+    if let Some(value) = required_text(object, "providerId", &["providerId"], 1, 80, &mut issues) {
+        normalized.insert("providerId".to_string(), Value::String(value));
+    }
+    if let Some(value) = runtime_root(
+        object.get("cwd"),
+        &path(&["cwd"]),
+        "Agent Run runtime paths must be absolute POSIX paths.",
+        &mut issues,
+    ) {
+        normalized.insert("cwd".to_string(), value);
+    }
+    if let Some(value) = writable_roots(object.get("writableRoots"), &mut issues) {
+        normalized.insert("writableRoots".to_string(), value);
+    }
+    if let Some(value) = required_text(object, "prompt", &["prompt"], 1, 128_000, &mut issues) {
+        normalized.insert("prompt".to_string(), Value::String(value));
+    }
+    if let Some(value) = required_text_without_trim(
+        object,
+        "appendedPrompt",
+        &["appendedPrompt"],
+        32_000,
+        &mut issues,
+    ) {
+        normalized.insert("appendedPrompt".to_string(), Value::String(value));
+    }
+    if let Some(value) = optional_enum(
+        object,
+        "permissionMode",
+        &["permissionMode"],
+        &["ask", "auto-review", "full-access"],
+        &mut issues,
+    ) {
+        normalized.insert("permissionMode".to_string(), Value::String(value));
+    }
+    if let Some(value) = model_selection(object.get("modelSelection"), &mut issues) {
+        normalized.insert("modelSelection".to_string(), value);
+    }
+    if let Some(value) = optional_enum(
+        object,
+        "reasoningEffort",
+        &["reasoningEffort"],
+        REASONING_EFFORTS,
+        &mut issues,
+    ) {
+        normalized.insert("reasoningEffort".to_string(), Value::String(value));
+    }
+    if let Some(value) = enabled_tools(object.get("enabledTools"), &mut issues) {
+        normalized.insert("enabledTools".to_string(), Value::Array(value));
+    }
+    unsupported_keys(
+        object,
+        &[
+            "runId",
+            "memberId",
+            "clientRequestId",
+            "providerId",
+            "cwd",
+            "writableRoots",
+            "prompt",
+            "appendedPrompt",
+            "permissionMode",
+            "modelSelection",
+            "reasoningEffort",
+            "enabledTools",
+        ],
+        &mut issues,
+        &[] as &[&str],
+    );
+    if issues.is_empty() {
+        let cwd_path = normalized
+            .get("cwd")
+            .and_then(|value| value.get("path"))
+            .and_then(Value::as_str);
+        let workspace_path = normalized
+            .get("writableRoots")
+            .and_then(|value| value.get("workspace"))
+            .and_then(|value| value.get("path"))
+            .and_then(Value::as_str);
+        let shared_path = normalized
+            .get("writableRoots")
+            .and_then(|value| value.get("shared"))
+            .and_then(|value| value.get("path"))
+            .and_then(Value::as_str);
+        if cwd_path != workspace_path {
+            issues.push(Issue::new(
+                path(&["writableRoots", "workspace"]),
+                "The workspace writable root must be the member cwd.",
+            ));
+        }
+        if workspace_path == shared_path {
+            issues.push(Issue::new(
+                path(&["writableRoots"]),
+                "Workspace and shared roots must be distinct.",
+            ));
+        }
+    }
+    if issues.is_empty() {
+        Ok(Value::Object(normalized))
+    } else {
+        Err(issues)
+    }
+}
+
 fn render_issues(issues: Vec<Issue>) -> Vec<String> {
     issues.iter().map(Issue::rendered).collect()
 }
@@ -1380,6 +1608,178 @@ fn required_text<P: AsRef<str>>(
     }
 }
 
+fn required_text_without_trim<P: AsRef<str>>(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &[P],
+    maximum: usize,
+    issues: &mut Vec<Issue>,
+) -> Option<String> {
+    let Some(value) = object.get(key) else {
+        issues.push(invalid_type(owned_path(path), "string", "undefined"));
+        return None;
+    };
+    let Some(value) = value.as_str() else {
+        issues.push(invalid_type(
+            owned_path(path),
+            "string",
+            received_type(value),
+        ));
+        return None;
+    };
+    let length = zod_string_len(value);
+    if length > maximum {
+        issues.push(too_big(
+            owned_path(path),
+            "string",
+            maximum,
+            format!("Too big: expected string to have <={maximum} characters"),
+        ));
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn stable_agent_run_id<P: AsRef<str>>(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &[P],
+    issues: &mut Vec<Issue>,
+) -> Option<String> {
+    let value = required_text(object, key, path, 1, 120, issues)?;
+    let mut bytes = value.bytes();
+    let valid = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'));
+    if !valid {
+        issues.push(Issue::new(
+            owned_path(path),
+            "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/",
+        ));
+        return None;
+    }
+    Some(value)
+}
+
+fn runtime_root(
+    value: Option<&Value>,
+    base: &[String],
+    absolute_message: &str,
+    issues: &mut Vec<Issue>,
+) -> Option<Value> {
+    let value = match value {
+        Some(value) => required_object(Some(value), base, issues)?,
+        None => {
+            issues.push(invalid_type(base.to_vec(), "object", "undefined"));
+            return None;
+        }
+    };
+    let mut local = Vec::new();
+    let mut normalized = Map::new();
+    if let Some(kind) = required_literal(
+        value.get("type"),
+        &append_path(base, "type"),
+        "runtime-path",
+        &mut local,
+    ) {
+        normalized.insert("type".to_string(), Value::String(kind));
+    }
+    if let Some(path) = required_text(
+        value,
+        "path",
+        &append_path(base, "path"),
+        1,
+        4096,
+        &mut local,
+    ) {
+        if !path.starts_with('/') {
+            local.push(Issue::new(append_path(base, "path"), absolute_message));
+        } else {
+            normalized.insert("path".to_string(), Value::String(path));
+        }
+    }
+    unsupported_keys(value, &["type", "path"], &mut local, base);
+    extend_nested(issues, local, Some(normalized))
+}
+
+fn writable_roots(value: Option<&Value>, issues: &mut Vec<Issue>) -> Option<Value> {
+    let base = path(&["writableRoots"]);
+    let value = runtime_roots_object(value, &base, issues)?;
+    let mut local = Vec::new();
+    let mut normalized = Map::new();
+    for key in ["workspace", "shared"] {
+        if let Some(root) = runtime_root(
+            value.get(key),
+            &append_path(&base, key),
+            "Agent Run runtime paths must be absolute POSIX paths.",
+            &mut local,
+        ) {
+            normalized.insert(key.to_string(), root);
+        }
+    }
+    unsupported_keys(value, &["workspace", "shared"], &mut local, &base);
+    extend_nested(issues, local, Some(normalized))
+}
+
+fn runtime_roots_object<'a>(
+    value: Option<&'a Value>,
+    base: &[String],
+    issues: &mut Vec<Issue>,
+) -> Option<&'a Map<String, Value>> {
+    match value {
+        Some(value) => match value.as_object() {
+            Some(value) => Some(value),
+            None => {
+                issues.push(invalid_type(base.to_vec(), "object", received_type(value)));
+                None
+            }
+        },
+        None => {
+            issues.push(invalid_type(base.to_vec(), "object", "undefined"));
+            None
+        }
+    }
+}
+
+fn enabled_tools(value: Option<&Value>, issues: &mut Vec<Issue>) -> Option<Vec<Value>> {
+    let Some(value) = value else {
+        return Some(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        issues.push(invalid_type(
+            path(&["enabledTools"]),
+            "array",
+            received_type(value),
+        ));
+        return None;
+    };
+    if values.len() > 100 {
+        issues.push(too_big(
+            path(&["enabledTools"]),
+            "array",
+            100,
+            "Too big: expected array to have <=100 items".to_string(),
+        ));
+        return None;
+    }
+    let mut normalized = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let item_path = indexed_path(&["enabledTools"], index);
+        let Some(tool) = value.as_str() else {
+            issues.push(invalid_type(item_path, "string", received_type(value)));
+            continue;
+        };
+        if !controlled_instance_protocol::AI_SESSION_AGENT_TOOL_NAMES.contains(&tool) {
+            issues.push(invalid_value(item_path, &["agent_run"]));
+            continue;
+        }
+        normalized.push(Value::String(tool.to_string()));
+    }
+    Some(normalized)
+}
+
 fn optional_text<P: AsRef<str>>(
     object: &Map<String, Value>,
     key: &str,
@@ -1936,6 +2336,64 @@ mod tests {
             "clientRequestId": "req-1"
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn internal_story_and_agent_run_bodies_follow_their_protocol_zod_contracts() {
+        let story = json!({
+            "agent": "codex",
+            "cwd": { "type": "runtime-path", "path": " /workspace " },
+            "cwdFolderId": " folder ",
+            "message": " run ",
+            "clientRequestId": "😀".repeat(160),
+            "storyId": "😀".repeat(120),
+            "gitSelection": { "mode": "current-folder", "branch": " main " }
+        });
+        let normalized = normalize_story_automation_create_body(&story).expect("story body");
+        assert_eq!(normalized["cwd"]["path"], "/workspace");
+        assert_eq!(normalized["cwdFolderId"], "folder");
+        assert_eq!(normalized["message"], "run");
+        assert_eq!(normalized["gitSelection"]["branch"], "main");
+
+        let mut oversized_story = story.clone();
+        oversized_story["storyId"] = json!("😀".repeat(121));
+        assert_eq!(
+            normalize_story_automation_create_body(&oversized_story)
+                .expect_err("storyId must use the Node 120 character limit"),
+            vec!["storyId: Too big: expected string to have <=120 characters"]
+        );
+        let mut exclusive = story;
+        exclusive["workspaceSelection"] = json!({ "type": "current-folder", "branch": "main" });
+        assert_eq!(
+            normalize_story_automation_create_body(&exclusive).expect_err("exclusive selections"),
+            vec!["workspaceSelection: gitSelection and workspaceSelection are mutually exclusive."]
+        );
+
+        let agent_run = json!({
+            "runId": "run_1",
+            "memberId": "member_1",
+            "clientRequestId": "😀".repeat(160),
+            "providerId": "codex",
+            "cwd": { "type": "runtime-path", "path": "/workspace" },
+            "writableRoots": {
+                "workspace": { "type": "runtime-path", "path": "/workspace" },
+                "shared": { "type": "runtime-path", "path": "/shared" }
+            },
+            "prompt": "  do work  ",
+            "appendedPrompt": "  preserve spaces  "
+        });
+        let normalized =
+            normalize_agent_run_member_create_body(&agent_run).expect("agent run body");
+        assert_eq!(normalized["prompt"], "do work");
+        assert_eq!(normalized["appendedPrompt"], "  preserve spaces  ");
+        assert_eq!(normalized["enabledTools"], json!([]));
+
+        let mut invalid = agent_run;
+        invalid["runId"] = json!("🦀");
+        assert_eq!(
+            normalize_agent_run_member_create_body(&invalid).expect_err("stable id"),
+            vec!["runId: Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/"]
+        );
     }
 
     #[test]

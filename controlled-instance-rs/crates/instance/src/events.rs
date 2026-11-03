@@ -4,13 +4,13 @@ use controlled_instance_protocol::{
 };
 use serde_json::Value;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
     },
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 const MAX_TRANSIENT_REPLAY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TRANSIENT_REPLAY_EVENTS: usize = 20_000;
@@ -44,8 +44,31 @@ struct TransientEventIdentity {
 #[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<EventEnvelope<Value>>,
+    clients: Arc<RwLock<HashMap<u64, mpsc::UnboundedSender<EventEnvelope<Value>>>>>,
+    next_client: Arc<AtomicU64>,
     sequence: Arc<AtomicU64>,
     replay: Arc<RwLock<ReplayState>>,
+}
+
+pub struct EventClientSubscription {
+    id: u64,
+    clients: Arc<RwLock<HashMap<u64, mpsc::UnboundedSender<EventEnvelope<Value>>>>>,
+    receiver: mpsc::UnboundedReceiver<EventEnvelope<Value>>,
+}
+
+impl EventClientSubscription {
+    pub async fn recv(&mut self) -> Option<EventEnvelope<Value>> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for EventClientSubscription {
+    fn drop(&mut self) {
+        self.clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.id);
+    }
 }
 
 impl Default for EventBus {
@@ -59,6 +82,8 @@ impl EventBus {
         let (sender, _) = broadcast::channel(capacity);
         Self {
             sender,
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            next_client: Arc::new(AtomicU64::new(0)),
             sequence: Arc::new(AtomicU64::new(0)),
             replay: Arc::new(RwLock::new(ReplayState::default())),
         }
@@ -74,11 +99,29 @@ impl EventBus {
         self.prune_settled_transient_replay(&event);
         self.retain_transient(&event);
         let _ = self.sender.send(event.clone());
+        self.clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, sender| sender.send(event.clone()).is_ok());
         event
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope<Value>> {
         self.sender.subscribe()
+    }
+
+    pub fn subscribe_client(&self) -> EventClientSubscription {
+        let id = self.next_client.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, sender);
+        EventClientSubscription {
+            id,
+            clients: self.clients.clone(),
+            receiver,
+        }
     }
 
     pub fn latest_revision(&self) -> u64 {
@@ -333,10 +376,13 @@ fn drop_superseded_item_snapshots(replay: &mut ReplayState, item_key: &str) {
             last_delta = Some(index);
         }
     }
-    let (Some(last_snapshot), Some(last_delta)) = (last_snapshot, last_delta) else {
+    let Some(last_snapshot) = last_snapshot else {
         return;
     };
-    if last_snapshot <= last_delta {
+    // Node treats a missing delta as index -1, so a snapshot-only replay is
+    // still allowed to drop its older snapshots.
+    let last_delta = last_delta.map(|index| index as isize).unwrap_or(-1);
+    if last_snapshot as isize <= last_delta {
         return;
     }
     replay.events = replay
@@ -344,7 +390,7 @@ fn drop_superseded_item_snapshots(replay: &mut ReplayState, item_key: &str) {
         .drain(..)
         .enumerate()
         .filter_map(|(index, retained)| {
-            let superseded_snapshot = index > last_delta
+            let superseded_snapshot = index as isize > last_delta
                 && index < last_snapshot
                 && retained.event.r#type == "ai-session.timeline-item"
                 && item_key_for_event(&retained.event).as_deref() == Some(item_key);

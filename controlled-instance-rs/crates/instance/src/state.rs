@@ -5,7 +5,8 @@ use controlled_instance_ai_session::{
     AiSessionPersistenceSettingsStore, AiSessionRuntime, AiSessionTimelineStore,
     ClaudeControlClient, ClaudeControlSockProvider, CodexAppServerClient, CodexAppServerProvider,
     CodexAppServerTarget, CodexAppServerTargetResolver, OpenCodeConnection,
-    OpenCodeConnectionProvider, OpenCodeSessionProvider, ProviderError, ProviderEvent,
+    OpenCodeConnectionProvider, OpenCodeSessionProvider, OpenCodeTrackedSession, ProviderError,
+    ProviderEvent,
 };
 use controlled_instance_app_runtime::{
     AppManagementManager, AppManagementSession, AppRuntime, AppRuntimeError,
@@ -26,7 +27,7 @@ use std::{
     collections::HashSet,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -36,13 +37,18 @@ use tokio::sync::watch;
 use crate::{
     agent_run_bindings::AgentRunMemberBindingStore,
     ai_session_authority::AiSessionAuthority,
+    ai_session_coordination::{
+        AiSessionCloseCoordinator, AiSessionForkCoordinator, AiSessionResumeCoordinator,
+    },
     ai_session_delta_coalescer::{AiSessionDeltaCoalescer, AiSessionDeltaKey, FlushReason},
     ai_session_hierarchy::{
         derive_retention_candidates, derive_subtree, AiSessionHierarchyRecord,
         AiSessionRetentionCandidate,
     },
+    ai_session_open_app::AiSessionOpenAppCoordinator,
     app_session_authority::AppSessionAuthority,
     auth::WebAuthState,
+    claude_discovery::{apply_claude_subscribe_message, refresh_claude_sessions},
     codex_discovery::{
         app_thread_bindings, merge_codex_session, project_new_codex_session,
         recoverable_session_threads,
@@ -52,8 +58,15 @@ use crate::{
     instance_shell::InstanceShellRuntime,
     node_agent_client::NodeAgentClient,
     private_model::ControlledModelConfig,
+    session_titles::SessionTitleCoordinator,
     story_tools::StoryToolService,
 };
+
+#[derive(Clone)]
+struct ClaudeSubscriptionHandle {
+    control_sock: PathBuf,
+    abort: tokio::task::AbortHandle,
+}
 
 #[derive(Clone)]
 struct AppRuntimeOpenCodeConnectionProvider {
@@ -115,6 +128,41 @@ fn opencode_story_plugin_path() -> Option<PathBuf> {
     None
 }
 
+fn env_flag(name: &str, fallback: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        _ => fallback,
+    }
+}
+
+fn retain_codex_timeline_history(
+    sessions: &AiSessionRuntime,
+    history: &AiSessionHistoryStore,
+    timeline: &AiSessionTimelineStore,
+) {
+    let retained = sessions
+        .list()
+        .into_iter()
+        .filter(|session| session.agent == "codex")
+        .filter_map(|session| session.provider_session_id)
+        .chain(
+            history
+                .list(None)
+                .into_iter()
+                .filter(|session| session.agent == "codex")
+                .map(|session| session.provider_session_id),
+        )
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<HashSet<_>>();
+    if let Err(error) = timeline.retain(&retained) {
+        tracing::warn!(%error, "Codex Timeline persistence cleanup failed");
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<InstanceConfig>,
@@ -126,6 +174,12 @@ pub struct AppState {
     app_session_authority: Arc<Mutex<AppSessionAuthority>>,
     pub ai_sessions: Arc<AiSessionRuntime>,
     pub ai_session_controller: Arc<AiSessionController>,
+    pub ai_session_resume: Arc<AiSessionResumeCoordinator>,
+    pub ai_session_fork: Arc<AiSessionForkCoordinator>,
+    pub(crate) ai_session_open_app: Arc<AiSessionOpenAppCoordinator>,
+    pub ai_session_close: Arc<AiSessionCloseCoordinator>,
+    pub ai_session_refresh: Arc<AiSessionRefreshScheduler>,
+    pub session_titles: Arc<SessionTitleCoordinator>,
     pub ai_session_codex: Arc<CodexAppServerProvider>,
     pub ai_session_claude: Arc<ClaudeControlSockProvider>,
     pub ai_session_opencode: Arc<OpenCodeSessionProvider>,
@@ -136,6 +190,7 @@ pub struct AppState {
     pub ai_session_attachment_streams: Arc<AiSessionAttachmentDraftStreams>,
     pub ai_session_message_deltas: Arc<AiSessionDeltaCoalescer>,
     pub ai_session_timeline_item_deltas: Arc<AiSessionDeltaCoalescer>,
+    stream_diagnostics: Arc<StreamDiagnostics>,
     ai_session_authority: Arc<Mutex<AiSessionAuthority>>,
     pub node_agent_client: NodeAgentClient,
     pub story_tools: StoryToolService,
@@ -147,8 +202,9 @@ pub struct AppState {
     pub trigger_manager: Arc<TriggerManager>,
     pub config_sync_environment: ConfigSyncEnvironment,
     pub controlled_models: Arc<ControlledModelConfig>,
-    pub open_app_operations: Arc<tokio::sync::Mutex<()>>,
     codex_discovery_lock: Arc<tokio::sync::Mutex<()>>,
+    claude_discovery_lock: Arc<tokio::sync::Mutex<()>>,
+    claude_subscriptions: Arc<Mutex<BTreeMap<String, ClaudeSubscriptionHandle>>>,
     ai_session_orphaned_app_sessions: Arc<Mutex<BTreeMap<String, Instant>>>,
     ai_session_orphan_retention: Duration,
     git_credential_broker_installed: Arc<AtomicBool>,
@@ -156,6 +212,80 @@ pub struct AppState {
     draining: Arc<AtomicBool>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+}
+
+#[derive(Default)]
+pub(crate) struct StreamDiagnostics {
+    pub(crate) ai_discovery_unchanged: AtomicU64,
+    pub(crate) ai_discovery_corrections: AtomicU64,
+    pub(crate) app_unchanged_refreshes: AtomicU64,
+}
+
+pub struct AiSessionRefreshScheduler {
+    requested: AtomicU64,
+    completed: AtomicU64,
+    latest_reason: Mutex<String>,
+    running: AtomicBool,
+}
+
+impl Default for AiSessionRefreshScheduler {
+    fn default() -> Self {
+        Self {
+            requested: AtomicU64::new(0),
+            completed: AtomicU64::new(0),
+            latest_reason: Mutex::new("discovery-scan".to_string()),
+            running: AtomicBool::new(false),
+        }
+    }
+}
+
+impl AiSessionRefreshScheduler {
+    fn request(self: &Arc<Self>, state: AppState, reason: &str) {
+        self.requested.fetch_add(1, Ordering::SeqCst);
+        *self
+            .latest_reason
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = reason.to_string();
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        let scheduler = self.clone();
+        tokio::spawn(async move {
+            scheduler.drain(state).await;
+        });
+    }
+
+    async fn drain(&self, state: AppState) {
+        loop {
+            let target = self.requested.load(Ordering::SeqCst);
+            if self.completed.load(Ordering::SeqCst) >= target {
+                self.running.store(false, Ordering::SeqCst);
+                if self.completed.load(Ordering::SeqCst) >= self.requested.load(Ordering::SeqCst)
+                    || self
+                        .running
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            let reason = self
+                .latest_reason
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if let Err(error) = state.refresh_all_ai_sessions().await {
+                tracing::warn!(%error, "AI Session discovery refresh failed");
+            }
+            state.publish_ai_session_snapshot(&reason);
+            self.completed.store(target, Ordering::SeqCst);
+        }
+    }
 }
 
 impl AppState {
@@ -210,6 +340,7 @@ impl AppState {
         ));
         let ai_session_timeline =
             Arc::new(AiSessionTimelineStore::new(&config.storage_paths.data_dir));
+        retain_codex_timeline_history(&ai_sessions, &ai_session_history, &ai_session_timeline);
         let ai_session_attachments = Arc::new(AiSessionConversationAttachmentStore::new(
             &config.storage_paths.data_dir,
         ));
@@ -264,6 +395,29 @@ impl AppState {
                 repository_service: repository_service.clone(),
                 fallback_root: config.workspace_path.clone(),
             }));
+        let closed_opencode_history = ai_session_history.clone();
+        ai_session_opencode.set_closed_session_ids(Arc::new(move || {
+            let agents = HashSet::from(["opencode".to_string()]);
+            closed_opencode_history
+                .list(Some(&agents))
+                .into_iter()
+                .map(|item| item.provider_session_id)
+                .collect()
+        }));
+        let tracked_opencode_sessions = ai_sessions.clone();
+        ai_session_opencode.set_tracked_sessions(Arc::new(move || {
+            tracked_opencode_sessions
+                .list()
+                .into_iter()
+                .filter(|session| session.agent == "opencode")
+                .filter_map(|session| {
+                    Some(OpenCodeTrackedSession {
+                        provider_session_id: session.provider_session_id?,
+                        cwd: session.cwd?,
+                    })
+                })
+                .collect()
+        }));
         let ai_session_controller = AiSessionController::new(
             ai_sessions.clone(),
             ai_session_attachments.clone(),
@@ -279,6 +433,21 @@ impl AppState {
         ai_session_controller.register_provider(ai_session_claude.clone());
         ai_session_controller.register_provider(ai_session_opencode.clone());
         ai_session_controller.set_story_agent_tool_resolver(Arc::new(story_tools.clone()));
+        let ai_session_resume = Arc::new(AiSessionResumeCoordinator::default());
+        let ai_session_fork = Arc::new(AiSessionForkCoordinator::new(
+            config
+                .storage_paths
+                .runtime_dir
+                .join("ai-session-fork-operations.json"),
+        ));
+        let ai_session_close = Arc::new(AiSessionCloseCoordinator::default());
+        let ai_session_refresh = Arc::new(AiSessionRefreshScheduler::default());
+        let session_titles = SessionTitleCoordinator::new(
+            &config.storage_paths.data_dir,
+            ai_sessions.clone(),
+            ai_session_controller.clone(),
+            app_runtime.clone(),
+        );
         let events = EventBus::default();
         let delta_window_ms = std::env::var("TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS")
             .ok()
@@ -410,6 +579,12 @@ impl AppState {
             app_session_authority,
             ai_sessions,
             ai_session_controller,
+            ai_session_resume,
+            ai_session_fork,
+            ai_session_open_app: Arc::new(AiSessionOpenAppCoordinator::default()),
+            ai_session_close,
+            ai_session_refresh,
+            session_titles,
             ai_session_codex,
             ai_session_claude,
             ai_session_opencode,
@@ -420,6 +595,7 @@ impl AppState {
             ai_session_attachment_streams,
             ai_session_message_deltas,
             ai_session_timeline_item_deltas,
+            stream_diagnostics: Arc::new(StreamDiagnostics::default()),
             ai_session_authority,
             node_agent_client,
             story_tools,
@@ -431,8 +607,9 @@ impl AppState {
             trigger_manager,
             config_sync_environment,
             controlled_models,
-            open_app_operations: Arc::new(tokio::sync::Mutex::new(())),
             codex_discovery_lock: Arc::new(tokio::sync::Mutex::new(())),
+            claude_discovery_lock: Arc::new(tokio::sync::Mutex::new(())),
+            claude_subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
             ai_session_orphaned_app_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             ai_session_orphan_retention,
             git_credential_broker_installed: Arc::new(AtomicBool::new(false)),
@@ -465,14 +642,6 @@ impl AppState {
         if let Err(error) = self.trigger_manager.set_draining(draining) {
             tracing::warn!(%error, draining, "failed to update trigger runtime drain state");
         }
-        let _ = self.events.publish(
-            if draining {
-                "instance.draining"
-            } else {
-                "instance.resumed"
-            },
-            json!({ "instanceId": self.config.instance_id, "draining": draining }),
-        );
     }
 
     pub fn request_shutdown(&self) {
@@ -494,6 +663,7 @@ impl AppState {
             &ai_sessions,
             &app_sessions,
             self.ai_session_message_deltas.diagnostic_value(),
+            &self.stream_diagnostics,
         )
     }
 
@@ -563,7 +733,8 @@ impl AppState {
                 state.publish_ai_session_snapshot("provider-event");
             }
         });
-        self.refresh_codex_ai_sessions_in_background();
+        self.ai_session_refresh
+            .request(self.clone(), "discovery-scan");
         let state = self.clone();
         tokio::spawn(async move {
             let configured = std::env::var("TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS")
@@ -576,21 +747,146 @@ impl AppState {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                state.refresh_codex_ai_sessions_in_background();
+                state
+                    .ai_session_refresh
+                    .request(state.clone(), "discovery-scan");
             }
         });
     }
 
-    fn refresh_codex_ai_sessions_in_background(&self) {
-        let state = self.clone();
-        tokio::spawn(async move {
-            if let Err(error) = state.refresh_codex_ai_sessions().await {
-                tracing::warn!(%error, "Codex AI Session discovery failed");
+    pub async fn refresh_claude_ai_sessions(&self) -> Result<usize, ProviderError> {
+        let changed = self.refresh_claude_ai_sessions_inner().await?;
+        if changed > 0 {
+            self.publish_ai_session_snapshot("discovery-scan");
+            self.observe_provider_titles_in_background();
+        }
+        Ok(changed)
+    }
+
+    async fn refresh_claude_ai_sessions_inner(&self) -> Result<usize, ProviderError> {
+        if !env_flag("TASK_HANDOFF_AI_SESSION_SCAN", true)
+            || !env_flag("TASK_HANDOFF_CLAUDE_CONTROL_SCAN", true)
+        {
+            return Ok(0);
+        }
+        let _guard = self.claude_discovery_lock.lock().await;
+        let app_sessions = self.app_runtime.list_sessions();
+        let jobs = match self.ai_session_claude.client().list_jobs().await {
+            Ok(jobs) => jobs,
+            Err(error) => {
+                tracing::warn!(%error, "Claude control socket discovery failed");
+                Vec::new()
             }
-        });
+        };
+        let refresh = refresh_claude_sessions(&self.ai_sessions, &jobs, &app_sessions)?;
+        self.sync_claude_subscriptions(refresh.subscriptions).await;
+        let active_app_session_ids = self
+            .running_app_session_ids()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        self.activate_history_for_running_sessions(&active_app_session_ids);
+        Ok(refresh.changed)
+    }
+
+    async fn sync_claude_subscriptions(&self, targets: BTreeMap<String, PathBuf>) {
+        {
+            let mut subscriptions = self
+                .claude_subscriptions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stale = subscriptions
+                .iter()
+                .filter(|(short, handle)| targets.get(*short) != Some(&handle.control_sock))
+                .map(|(short, _)| short.clone())
+                .collect::<Vec<_>>();
+            for short in stale {
+                if let Some(handle) = subscriptions.remove(&short) {
+                    handle.abort.abort();
+                }
+            }
+        }
+
+        let tail = std::env::var("TASK_HANDOFF_CLAUDE_SUBSCRIBE_TAIL_BYTES")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(4096);
+        for (short, control_sock) in targets {
+            if self
+                .claude_subscriptions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(&short)
+            {
+                continue;
+            }
+            let subscription = match self
+                .ai_session_claude
+                .client()
+                .subscribe(&short, &control_sock, Some(tail))
+                .await
+            {
+                Ok(subscription) => subscription,
+                Err(error) => {
+                    tracing::warn!(
+                        short = %short,
+                        socket = %control_sock.display(),
+                        %error,
+                        "failed to subscribe to Claude control socket"
+                    );
+                    continue;
+                }
+            };
+            let abort = subscription.abort_handle();
+            let state = self.clone();
+            let subscription_short = short.clone();
+            let subscription_socket = control_sock.clone();
+            tokio::spawn(async move {
+                let mut subscription = subscription;
+                while let Ok(message) = subscription.messages.recv().await {
+                    match apply_claude_subscribe_message(
+                        &state.ai_sessions,
+                        &subscription_short,
+                        &subscription_socket,
+                        &message,
+                    ) {
+                        Ok(true) => {
+                            state.publish_ai_session_snapshot("provider-event");
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                short = %subscription_short,
+                                %error,
+                                "failed to apply Claude control socket event"
+                            );
+                        }
+                    }
+                }
+            });
+            self.claude_subscriptions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(
+                    short,
+                    ClaudeSubscriptionHandle {
+                        control_sock,
+                        abort,
+                    },
+                );
+        }
     }
 
     pub async fn refresh_codex_ai_sessions(&self) -> Result<usize, ProviderError> {
+        let changed = self.refresh_codex_ai_sessions_inner().await?;
+        if changed > 0 {
+            self.publish_ai_session_snapshot("discovery-scan");
+            self.observe_provider_titles_in_background();
+        }
+        Ok(changed)
+    }
+
+    async fn refresh_codex_ai_sessions_inner(&self) -> Result<usize, ProviderError> {
         let _guard = self.codex_discovery_lock.lock().await;
         let app_sessions = self.app_runtime.list_sessions();
         let active_app_session_ids = self
@@ -687,15 +983,115 @@ impl AppState {
             }
         }
         self.activate_history_for_running_sessions(&active_app_session_ids);
+        Ok(changed)
+    }
+
+    pub async fn refresh_all_ai_sessions(&self) -> Result<usize, ProviderError> {
+        let mut changed = self.close_lost_app_session_ai_sessions().await;
+        match self.refresh_codex_ai_sessions_inner().await {
+            Ok(count) => changed += count,
+            Err(error) => tracing::warn!(%error, "Codex AI Session discovery failed"),
+        }
+        match self.refresh_claude_ai_sessions_inner().await {
+            Ok(count) => changed += count,
+            Err(error) => tracing::warn!(%error, "Claude AI Session discovery failed"),
+        }
+        if self
+            .app_runtime
+            .catalog()
+            .iter()
+            .any(|app| app.id == "opencode")
+        {
+            if let Err(error) = self.ai_session_opencode.refresh().await {
+                tracing::warn!(%error, "OpenCode AI Session discovery failed");
+            }
+        }
+        let active_app_session_ids = self
+            .running_app_session_ids()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        self.activate_history_for_running_sessions(&active_app_session_ids);
+        retain_codex_timeline_history(
+            &self.ai_sessions,
+            &self.ai_session_history,
+            &self.ai_session_timeline,
+        );
         if changed > 0 {
-            self.publish_ai_session_snapshot("discovery-scan");
+            self.observe_provider_titles_in_background();
         }
         Ok(changed)
     }
 
+    pub async fn close_lost_app_session_ai_sessions(&self) -> usize {
+        let active_app_session_ids = self
+            .running_app_session_ids()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let lost = self
+            .ai_sessions
+            .list()
+            .into_iter()
+            .filter(|session| {
+                session.creation_source == "app-session"
+                    && session
+                        .app_session_id
+                        .as_deref()
+                        .is_some_and(|id| !active_app_session_ids.contains(id))
+            })
+            .collect::<Vec<_>>();
+        let mut changed = 0;
+        for session in lost {
+            match self.close_ai_session_subtree(&session.id).await {
+                Ok(Some(_)) => {
+                    changed += 1;
+                    self.ai_session_orphaned_app_sessions
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&session.id);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        ai_session_id = %session.id,
+                        app_session_id = ?session.app_session_id,
+                        %error,
+                        "failed to close AI Session after App exit"
+                    );
+                }
+            }
+        }
+        changed
+    }
+
+    fn observe_provider_titles_in_background(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            for session in state.ai_sessions.list() {
+                if let Err(error) = state
+                    .session_titles
+                    .observe_provider_title(&session.id)
+                    .await
+                {
+                    tracing::warn!(
+                        ai_session_id = %session.id,
+                        code = error.code(),
+                        %error,
+                        "failed to converge provider session title"
+                    );
+                }
+            }
+        });
+    }
+
     fn activate_history_for_running_sessions(&self, active_app_session_ids: &HashSet<String>) {
+        let resumable_agents = self
+            .ai_session_controller
+            .provider_capabilities()
+            .into_iter()
+            .map(|provider| provider.agent)
+            .collect::<HashSet<_>>();
         for session in self.ai_sessions.list() {
-            if !matches!(session.agent.as_str(), "codex" | "claude")
+            if !resumable_agents.contains(&session.agent)
                 || session.provider_session_id.is_none()
                 || !session
                     .app_session_id
@@ -802,7 +1198,51 @@ impl AppState {
             let state = self.clone();
             tokio::spawn(async move {
                 while let Ok(event) = events.recv().await {
-                    state.publish_ai_session_transient_event(event);
+                    match event {
+                        ProviderEvent::ConnectionChanged { connected: false } => {
+                            state
+                                .ai_session_message_deltas
+                                .flush_all(FlushReason::EventSourceClose);
+                            state
+                                .ai_session_timeline_item_deltas
+                                .flush_all(FlushReason::EventSourceClose);
+                        }
+                        ProviderEvent::ProviderSessionLifecycle {
+                            provider_session_id,
+                            disposition,
+                        } if agent == "opencode" => {
+                            state
+                                .converge_provider_session_lifecycle(
+                                    &provider_session_id,
+                                    &disposition,
+                                )
+                                .await;
+                        }
+                        event => {
+                            let title_prompt = if agent == "codex" {
+                                match &event {
+                                    ProviderEvent::UserMessage {
+                                        provider_session_id,
+                                        text,
+                                        completed: true,
+                                        ..
+                                    } => Some((provider_session_id.clone(), text.clone())),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            state.publish_ai_session_transient_event(event);
+                            if let Some((provider_session_id, text)) = title_prompt {
+                                let state = state.clone();
+                                tokio::spawn(async move {
+                                    state
+                                        .maybe_generate_codex_title(&provider_session_id, &text)
+                                        .await;
+                                });
+                            }
+                        }
+                    }
                 }
                 state
                     .ai_session_message_deltas
@@ -903,6 +1343,119 @@ impl AppState {
         }
     }
 
+    async fn converge_provider_session_lifecycle(
+        &self,
+        provider_session_id: &str,
+        disposition: &str,
+    ) {
+        let Some(session) = self.ai_session_for_provider(provider_session_id) else {
+            return;
+        };
+        let result = if disposition == "cleared" {
+            self.clear_ai_session_subtree_after_provider_exit(&session.id)
+                .await
+                .map(|_| ())
+        } else {
+            self.close_ai_session_subtree_after_provider_exit(&session.id)
+                .await
+                .map(|_| ())
+        };
+        if let Err(error) = result {
+            tracing::warn!(
+                ai_session_id = %session.id,
+                provider_session_id,
+                disposition,
+                %error,
+                "failed to converge AI Session after provider lifecycle transition"
+            );
+            return;
+        }
+        self.publish_ai_session_snapshot("provider-lifecycle");
+    }
+
+    async fn maybe_generate_codex_title(&self, provider_session_id: &str, user_prompt: &str) {
+        if !self
+            .ai_session_codex
+            .take_armed_title_generation(provider_session_id)
+        {
+            return;
+        }
+        let Some(session) = self.ai_session_for_provider(provider_session_id) else {
+            return;
+        };
+        if session
+            .title
+            .as_deref()
+            .is_some_and(|title| !title.trim().is_empty())
+        {
+            return;
+        }
+        if self.ai_session_codex.client().ensure_ready().await.is_err() {
+            return;
+        }
+        let Ok(snapshot) = self
+            .ai_session_codex
+            .client()
+            .read_thread(provider_session_id)
+            .await
+        else {
+            return;
+        };
+        let cwd = snapshot.cwd.trim().to_string();
+        let cwd = if cwd.is_empty() {
+            session.cwd.clone().unwrap_or_default()
+        } else {
+            cwd
+        };
+        let (Some(model), Some(model_provider)) = (
+            snapshot
+                .model
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
+            snapshot
+                .model_provider
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
+        ) else {
+            return;
+        };
+        if cwd.trim().is_empty() {
+            return;
+        }
+        let prompt = controlled_instance_ai_session::ai_session_title_prompt(user_prompt);
+        let Ok(response) = self
+            .ai_session_codex
+            .client()
+            .run_ephemeral_structured_turn(
+                &cwd,
+                model,
+                model_provider,
+                &prompt,
+                controlled_instance_ai_session::ai_session_title_output_schema(),
+                session.reasoning_effort.as_deref(),
+            )
+            .await
+        else {
+            return;
+        };
+        let Some(title) = controlled_instance_ai_session::parse_ai_session_title(&response) else {
+            return;
+        };
+        let Some(latest) = self.ai_session_for_provider(provider_session_id) else {
+            return;
+        };
+        if latest
+            .title
+            .as_deref()
+            .is_some_and(|title| !title.trim().is_empty())
+        {
+            return;
+        }
+        if self.ai_sessions.rename(&latest.id, &title, None).is_ok() {
+            self.publish_ai_session_snapshot("provider-event");
+        }
+    }
+
     fn ai_session_for_provider(&self, provider_session_id: &str) -> Option<AiSession> {
         self.ai_sessions
             .list()
@@ -925,7 +1478,19 @@ impl AppState {
 
     pub fn start_app_session_services(&self) {
         let mut changes = self.app_runtime.subscribe();
+        let mut title_changes = self.session_titles.subscribe();
         let state = self.clone();
+        let title_state = self.clone();
+        let recovery_state = self.clone();
+        tokio::spawn(async move {
+            recovery_state.session_titles.recover().await;
+            recovery_state.publish_ai_session_snapshot("control-action");
+        });
+        tokio::spawn(async move {
+            while title_changes.recv().await.is_ok() {
+                title_state.publish_ai_session_snapshot("control-action");
+            }
+        });
         tokio::spawn(async move {
             while let Ok(change) = changes.recv().await {
                 let reason = match change.kind {
@@ -940,14 +1505,33 @@ impl AppState {
                     }
                 };
                 state.publish_app_session_snapshot(reason);
-                if change.session.app_id == "codex" {
-                    state.refresh_codex_ai_sessions_in_background();
+                if let Err(error) = state
+                    .session_titles
+                    .observe_app_session_title(&change.session.id)
+                    .await
+                {
+                    tracing::warn!(
+                        app_session_id = %change.session.id,
+                        code = error.code(),
+                        %error,
+                        "failed to converge App Session title"
+                    );
                 }
+                state.ai_session_refresh.request(state.clone(), reason);
             }
         });
     }
 
     pub async fn stop_ai_session_services(&self) {
+        let subscriptions = std::mem::take(
+            &mut *self
+                .claude_subscriptions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for handle in subscriptions.values() {
+            handle.abort.abort();
+        }
         self.ai_session_codex.client().stop().await;
         self.ai_session_opencode.close();
         self.app_runtime.stop_shared_opencode();
@@ -991,7 +1575,7 @@ impl AppState {
             .state(snapshot)
     }
 
-    pub fn app_sessions_delta(&self, stream_id: &str, since_revision: u64) -> Value {
+    pub fn app_sessions_delta(&self, stream_id: &str, since_revision: f64) -> Value {
         self.app_session_authority
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1016,7 +1600,13 @@ impl AppState {
             .app_session_authority
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .prepare(snapshot, reason)?;
+            .prepare(snapshot, reason);
+        let Some(prepared) = prepared else {
+            self.stream_diagnostics
+                .app_unchanged_refreshes
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
         Some(self.events.publish(prepared.event_type, prepared.payload))
     }
 
@@ -1116,14 +1706,18 @@ impl AppState {
     }
 
     pub fn ai_sessions_state(&self) -> AiSessionsState {
-        let snapshot = self.ai_sessions_snapshot();
-        self.ai_session_authority
+        let authority = self
+            .ai_session_authority
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .state(snapshot)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let snapshot = authority
+            .published_snapshot()
+            .cloned()
+            .unwrap_or_else(|| self.ai_sessions_snapshot());
+        authority.state(snapshot)
     }
 
-    pub fn ai_sessions_delta(&self, stream_id: &str, since_revision: u64) -> serde_json::Value {
+    pub fn ai_sessions_delta(&self, stream_id: &str, since_revision: f64) -> serde_json::Value {
         self.ai_session_authority
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1153,7 +1747,19 @@ impl AppState {
             .ai_session_authority
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .prepare(snapshot.clone(), reason)?;
+            .prepare(snapshot.clone(), reason);
+        if reason == "discovery-scan" {
+            if prepared.is_some() {
+                self.stream_diagnostics
+                    .ai_discovery_corrections
+                    .fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.stream_diagnostics
+                    .ai_discovery_unchanged
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let prepared = prepared?;
         self.trigger_manager.handle_ai_sessions(&snapshot);
         Some(self.events.publish(prepared.event_type, prepared.payload))
     }
@@ -1179,6 +1785,47 @@ impl AppState {
     pub async fn close_ai_session_subtree(
         &self,
         target_id: &str,
+    ) -> Result<Option<controlled_instance_ai_session::AiSession>, ProviderError> {
+        self.ai_session_close.close(self.clone(), target_id).await
+    }
+
+    pub(crate) fn ai_session_close_scope(
+        &self,
+        target_id: &str,
+    ) -> Option<(HashSet<String>, Vec<String>)> {
+        let sessions = self.ai_sessions.list();
+        let records = sessions
+            .iter()
+            .map(hierarchy_record_for_session)
+            .collect::<Vec<_>>();
+        let subtree = derive_subtree(&records, target_id)?;
+        let session_ids = subtree.postorder.into_iter().collect::<HashSet<_>>();
+        let mut keys = Vec::with_capacity(session_ids.len() * 2);
+        for session in sessions
+            .iter()
+            .filter(|session| session_ids.contains(&session.id))
+        {
+            keys.push(format!("ai:{}", session.id));
+            keys.push(format!(
+                "provider:{}:{}",
+                session.agent,
+                session.provider_session_id.as_deref().unwrap_or("missing")
+            ));
+        }
+        Some((session_ids, keys))
+    }
+
+    async fn close_ai_session_subtree_after_provider_exit(
+        &self,
+        target_id: &str,
+    ) -> Result<Option<controlled_instance_ai_session::AiSession>, ProviderError> {
+        self.close_ai_session_subtree_inner(target_id, true).await
+    }
+
+    pub(crate) async fn close_ai_session_subtree_inner(
+        &self,
+        target_id: &str,
+        provider_already_absent: bool,
     ) -> Result<Option<controlled_instance_ai_session::AiSession>, ProviderError> {
         let sessions = self.ai_sessions.list();
         let records = sessions
@@ -1219,7 +1866,10 @@ impl AppState {
             let Some(original) = originals.get(session_id).cloned() else {
                 continue;
             };
-            match self.archive_one_ai_session(&original, false).await {
+            match self
+                .archive_one_ai_session(&original, false, provider_already_absent)
+                .await
+            {
                 Ok(()) => {
                     if session_id == target_id {
                         removed_target = Some(original);
@@ -1284,6 +1934,21 @@ impl AppState {
         &self,
         target_id: &str,
     ) -> Result<Vec<String>, ProviderError> {
+        self.clear_ai_session_subtree_inner(target_id, false).await
+    }
+
+    async fn clear_ai_session_subtree_after_provider_exit(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<String>, ProviderError> {
+        self.clear_ai_session_subtree_inner(target_id, true).await
+    }
+
+    async fn clear_ai_session_subtree_inner(
+        &self,
+        target_id: &str,
+        provider_already_absent: bool,
+    ) -> Result<Vec<String>, ProviderError> {
         let sessions = self.ai_sessions.list();
         let live_ids = sessions
             .iter()
@@ -1325,7 +1990,7 @@ impl AppState {
             let active = originals.get(session_id).cloned();
             let archived = history_by_id.get(session_id).cloned();
             match self
-                .delete_one_ai_session(active.as_ref(), archived.as_ref())
+                .delete_one_ai_session(active.as_ref(), archived.as_ref(), provider_already_absent)
                 .await
             {
                 Ok(()) => cleared.push(session_id.clone()),
@@ -1351,6 +2016,7 @@ impl AppState {
         &self,
         original: &controlled_instance_ai_session::AiSession,
         delete: bool,
+        provider_already_absent: bool,
     ) -> Result<(), ProviderError> {
         let provider_session_id = original.provider_session_id.clone().ok_or_else(|| {
             ProviderError::new(
@@ -1366,22 +2032,54 @@ impl AppState {
         let provider = self.ai_session_controller.provider(&original.agent)?;
         let mut provider_touched = false;
         let result = async {
-            if is_ai_session_busy(original) && original.active_turn_id.is_some() {
-                self.ai_session_controller.interrupt(&original.id).await?;
-            }
-            provider_touched = true;
-            if delete {
-                provider.delete_session(&provider_session_id).await?;
-            } else if provider.close_detaches_provider_session() {
-                // OpenCode cannot restore an archived session, so closing only
-                // detaches it from this instance and keeps it resumable.
-            } else {
-                provider.archive_session(&provider_session_id).await?;
+            if !provider_already_absent {
+                if is_ai_session_busy(original) && original.active_turn_id.is_some() {
+                    self.ai_session_controller.interrupt(&original.id).await?;
+                }
+                provider_touched = true;
+                if delete {
+                    if let Err(error) = provider.delete_session(&provider_session_id).await {
+                        let still_exists = provider
+                            .active_session_exists(&provider_session_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or(true);
+                        if still_exists {
+                            return Err(error);
+                        }
+                        tracing::warn!(
+                            ai_session_id = %original.id,
+                            provider_session_id = %provider_session_id,
+                            "AI Session delete converged after the provider session was already absent"
+                        );
+                    }
+                } else if provider.close_detaches_provider_session() {
+                    // OpenCode cannot restore an archived session, so closing only
+                    // detaches it from this instance and keeps it resumable.
+                } else if let Err(error) = provider.archive_session(&provider_session_id).await {
+                    let still_active = provider
+                        .active_session_exists(&provider_session_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or(true);
+                    if still_active {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        ai_session_id = %original.id,
+                        provider_session_id = %provider_session_id,
+                        "AI Session close converged after the provider session was already absent"
+                    );
+                }
             }
             if let Some(app_session_id) = original.app_session_id.as_deref() {
                 self.app_runtime.stop_session(app_session_id).await;
             }
-            provider.unsubscribe_session(&provider_session_id).await?;
+            if !provider_already_absent {
+                provider.unsubscribe_session(&provider_session_id).await?;
+            }
             if delete {
                 self.ai_session_history
                     .remove(&original.id)
@@ -1423,12 +2121,13 @@ impl AppState {
         &self,
         active: Option<&controlled_instance_ai_session::AiSession>,
         archived: Option<&AiSessionHistoryItem>,
+        provider_already_absent: bool,
     ) -> Result<(), ProviderError> {
         let session_id = active
             .map(|session| session.id.as_str())
             .or_else(|| archived.map(|item| item.id.as_str()))
             .ok_or_else(|| {
-                ProviderError::new("AI_SESSION_NOT_FOUND", "AI Session was not found.", 404)
+                ProviderError::new("AI_SESSION_NOT_FOUND", "AI session not found.", 404)
             })?;
         let agent = active
             .map(|session| session.agent.as_str())
@@ -1446,18 +2145,37 @@ impl AppState {
             })?;
         let provider = self.ai_session_controller.provider(agent)?;
         let result = async {
-            if let Some(active) = active {
-                if is_ai_session_busy(active) && active.active_turn_id.is_some() {
-                    self.ai_session_controller.interrupt(&active.id).await?;
+            if !provider_already_absent {
+                if let Some(active) = active {
+                    if is_ai_session_busy(active) && active.active_turn_id.is_some() {
+                        self.ai_session_controller.interrupt(&active.id).await?;
+                    }
+                }
+                if let Err(error) = provider.delete_session(&provider_session_id).await {
+                    let still_exists = provider
+                        .active_session_exists(&provider_session_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or(true);
+                    if still_exists {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        ai_session_id = %session_id,
+                        provider_session_id = %provider_session_id,
+                        "AI Session clear converged after the provider session was already absent"
+                    );
                 }
             }
-            provider.delete_session(&provider_session_id).await?;
             if let Some(app_session_id) =
                 active.and_then(|session| session.app_session_id.as_deref())
             {
                 self.app_runtime.stop_session(app_session_id).await;
             }
-            provider.unsubscribe_session(&provider_session_id).await?;
+            if !provider_already_absent {
+                provider.unsubscribe_session(&provider_session_id).await?;
+            }
             if let Some(active) = active {
                 self.ai_sessions.remove(&active.id).map_err(|error| {
                     ProviderError::new("AI_SESSION_STORE_FAILED", error.to_string(), 500)
@@ -1637,30 +2355,7 @@ fn controlled_instance_capabilities(
         "opencode" => 2,
         _ => 3,
     });
-    // Timeline reads depend on the live provider connection, not only on the
-    // provider's declared capability document. Node projects the controller's
-    // current capability set here so a disconnected Codex app-server does not
-    // advertise reads the UI cannot perform.
-    let timeline = ai_session_controller.timeline_capabilities();
-    let available_agent = |agent: &str| available_ids.contains(agent);
-    capabilities.features.ai_session_timeline =
-        controlled_instance_protocol::AiSessionTimelineCapabilities {
-            session_read_agents: timeline
-                .session_read_agents
-                .into_iter()
-                .filter(|agent| available_agent(agent))
-                .collect(),
-            turn_read_agents: timeline
-                .turn_read_agents
-                .into_iter()
-                .filter(|agent| available_agent(agent))
-                .collect(),
-            live_item_agents: timeline
-                .live_item_agents
-                .into_iter()
-                .filter(|agent| available_agent(agent))
-                .collect(),
-        };
+    capabilities.features.ai_session_timeline = ai_session_controller.timeline_capabilities();
     capabilities.features.ai_session_providers = providers;
     let agents = capabilities
         .features
@@ -1700,7 +2395,7 @@ fn workspace_status(config: &InstanceConfig) -> WorkspaceStatus {
     WorkspaceStatus {
         mode: std::env::var("TASK_HANDOFF_WORKSPACE_MODE")
             .ok()
-            .filter(|value| !value.trim().is_empty())
+            .filter(|value| !value.is_empty())
             .unwrap_or_else(|| {
                 if git_url.is_some() {
                     "git-clone"
@@ -1725,18 +2420,18 @@ fn workspace_status(config: &InstanceConfig) -> WorkspaceStatus {
 }
 
 fn target_status() -> serde_json::Value {
-    let web = env_optional("TASK_HANDOFF_INSTANCE_WEB_URL")
-        .or_else(|| env_optional("TASK_HANDOFF_PUBLIC_WEB_URL"));
-    let api = env_optional("TASK_HANDOFF_INSTANCE_API_URL").or_else(|| {
+    let web = env_raw_nonempty("TASK_HANDOFF_INSTANCE_WEB_URL")
+        .or_else(|| env_raw_nonempty("TASK_HANDOFF_PUBLIC_WEB_URL"));
+    let api = env_raw_nonempty("TASK_HANDOFF_INSTANCE_API_URL").or_else(|| {
         web.as_ref()
-            .map(|web| format!("{}/api", web.trim_end_matches('/')))
+            .map(|web| format!("{}/api", web.strip_suffix('/').unwrap_or(web)))
     });
     let reachable = web.is_some() || api.is_some();
     let mut target = serde_json::Map::new();
     target.insert(
         "strategy".to_string(),
         Value::String(
-            env_optional("TASK_HANDOFF_INSTANCE_ENDPOINT_STRATEGY")
+            env_raw_nonempty("TASK_HANDOFF_INSTANCE_ENDPOINT_STRATEGY")
                 .unwrap_or_else(|| "direct-port".to_string()),
         ),
     );
@@ -1764,6 +2459,10 @@ fn env_optional(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn env_raw_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 #[derive(Clone)]
 struct AppRuntimeCodexTargetResolver {
     app_runtime: Arc<AppRuntime>,
@@ -1772,6 +2471,15 @@ struct AppRuntimeCodexTargetResolver {
 #[async_trait::async_trait]
 impl CodexAppServerTargetResolver for AppRuntimeCodexTargetResolver {
     async fn resolve_codex_app_server_target(
+        &self,
+    ) -> Result<Option<CodexAppServerTarget>, ProviderError> {
+        Ok(self
+            .app_runtime
+            .shared_codex_connection()
+            .map(codex_app_server_target))
+    }
+
+    async fn ensure_codex_app_server_target(
         &self,
     ) -> Result<Option<CodexAppServerTarget>, ProviderError> {
         let connection = self
@@ -1785,17 +2493,27 @@ impl CodexAppServerTargetResolver for AppRuntimeCodexTargetResolver {
                     503,
                 )
             })?;
-        Ok(Some(match connection.upstream {
-            controlled_instance_app_runtime::codex_app_server::CodexAppServerUpstream::Unix {
-                socket_path,
-            } => CodexAppServerTarget::Unix { socket_path },
-            controlled_instance_app_runtime::codex_app_server::CodexAppServerUpstream::WebSocket {
-                endpoint,
-                token_file,
-            } => CodexAppServerTarget::WebSocket {
-                endpoint,
-                token_file,
-            },
-        }))
+        Ok(Some(codex_app_server_target(connection)))
+    }
+
+    fn allows_private_codex_app_server(&self) -> bool {
+        false
+    }
+}
+
+fn codex_app_server_target(
+    connection: controlled_instance_app_runtime::SharedCodexConnection,
+) -> CodexAppServerTarget {
+    match connection.upstream {
+        controlled_instance_app_runtime::codex_app_server::CodexAppServerUpstream::Unix {
+            socket_path,
+        } => CodexAppServerTarget::Unix { socket_path },
+        controlled_instance_app_runtime::codex_app_server::CodexAppServerUpstream::WebSocket {
+            endpoint,
+            token_file,
+        } => CodexAppServerTarget::WebSocket {
+            endpoint,
+            token_file,
+        },
     }
 }

@@ -5,7 +5,7 @@ use controlled_instance_ai_session::{
 use controlled_instance_protocol::{
     TriggerConfig, TriggerDeployment, TriggerEventType, TriggerExecutionResult,
 };
-use serde_json::{json, Value};
+use serde_json::{Map, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -93,14 +93,18 @@ impl TriggerExecutor {
             input.event_type,
             input.event_summary.clone(),
         )?;
-        let text = input.prompt_override.clone().unwrap_or_else(|| {
-            render_prompt(
-                &input.config.action.prompt_template,
-                &input.config,
-                input.event_type,
-                input.event_summary.as_deref().unwrap_or_default(),
-            )
-        });
+        let text = input
+            .prompt_override
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                render_prompt(
+                    &input.config.action.prompt_template,
+                    &input.config,
+                    input.event_type,
+                    input.event_summary.as_deref().unwrap_or_default(),
+                )
+            });
         let message = AiSessionMessageInput {
             message: text,
             ..AiSessionMessageInput::default()
@@ -152,14 +156,30 @@ pub fn render_prompt(
 }
 
 fn trigger_action_result(result: &controlled_instance_ai_session::AiSessionActionResult) -> Value {
-    json!({
-        "session": result.session,
-        "provider": result.provider,
-        "action": result.action.action,
-        "turnId": result.action.turn_id,
-        "providerTurnId": result.action.provider_turn_id,
-        "queueId": result.action.queue_id,
-    })
+    let mut object = Map::new();
+    object.insert(
+        "session".to_string(),
+        serde_json::to_value(&result.session).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "provider".to_string(),
+        Value::String(result.provider.clone()),
+    );
+    object.insert(
+        "action".to_string(),
+        Value::String(result.action.action.clone()),
+    );
+    for (key, value) in [
+        ("decision", result.action.decision.as_ref()),
+        ("turnId", result.action.turn_id.as_ref()),
+        ("providerTurnId", result.action.provider_turn_id.as_ref()),
+        ("queueId", result.action.queue_id.as_ref()),
+    ] {
+        if let Some(value) = value {
+            object.insert(key.to_string(), Value::String(value.clone()));
+        }
+    }
+    Value::Object(object)
 }
 
 pub fn trigger_event_type_name(value: TriggerEventType) -> &'static str {
@@ -174,6 +194,8 @@ pub fn trigger_event_type_name(value: TriggerEventType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use controlled_instance_ai_session::{AiSession, AiSessionActionResult, ProviderAction};
+    use serde_json::json;
 
     #[test]
     fn prompt_rendering_replaces_placeholders_in_node_order() {
@@ -196,5 +218,49 @@ mod tests {
             ),
             "trg_12345678 manual watcher manual summary"
         );
+    }
+
+    #[test]
+    fn action_result_matches_the_node_shape_and_omits_absent_optional_fields() {
+        let session: AiSession = serde_json::from_value(json!({
+            "id": "session-trigger",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "status": "idle",
+            "phase": "unknown",
+            "startedAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:00:00.000Z"
+        }))
+        .expect("session");
+        let complete = trigger_action_result(&AiSessionActionResult {
+            session: session.clone(),
+            provider: "codex".to_string(),
+            action: ProviderAction {
+                action: "approval".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                provider_turn_id: Some("provider-turn-1".to_string()),
+                decision: Some("allow".to_string()),
+                queue_id: Some("queue-1".to_string()),
+            },
+        });
+        assert_eq!(complete["decision"], "allow");
+        assert_eq!(complete["turnId"], "turn-1");
+        assert_eq!(complete["providerTurnId"], "provider-turn-1");
+        assert_eq!(complete["queueId"], "queue-1");
+
+        let minimal = trigger_action_result(&AiSessionActionResult {
+            session,
+            provider: "codex".to_string(),
+            action: ProviderAction::simple("interrupt"),
+        });
+        let keys = minimal
+            .as_object()
+            .expect("object")
+            .keys()
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&&"action".to_string()));
+        assert!(keys.contains(&&"provider".to_string()));
+        assert!(keys.contains(&&"session".to_string()));
     }
 }

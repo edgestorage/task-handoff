@@ -19,7 +19,10 @@ pub use config_sync::*;
 pub use context::*;
 pub use error::*;
 pub use files::*;
-pub use git::{redact_git_diagnostic, GitError, GitProcess, GitProcessOptions, GitProcessResult};
+pub use git::{
+    redact_git_diagnostic, GitCancellation, GitError, GitProcess, GitProcessOptions,
+    GitProcessResult,
+};
 pub use service::*;
 pub use worktrees::*;
 

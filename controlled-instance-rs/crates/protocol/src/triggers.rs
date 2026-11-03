@@ -77,7 +77,10 @@ struct TriggerScheduleWire {
     source_type: String,
     #[serde(default)]
     schedule_kind: TriggerScheduleKind,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::json_number::deserialize_optional_u64"
+    )]
     interval_ms: Option<u64>,
     #[serde(default)]
     time_of_day: Option<String>,
@@ -96,7 +99,10 @@ struct TriggerFileChangeWire {
     globs: Vec<String>,
     #[serde(default)]
     ignore: Option<Vec<String>>,
-    #[serde(default = "default_file_debounce_ms")]
+    #[serde(
+        default = "default_file_debounce_ms",
+        deserialize_with = "crate::json_number::deserialize_u64"
+    )]
     debounce_ms: u64,
 }
 

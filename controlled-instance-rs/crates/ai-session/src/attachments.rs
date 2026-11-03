@@ -26,7 +26,7 @@ use uuid::Uuid;
 const DEFAULT_MAX_STORAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error("{message}")]
 pub struct AiSessionAttachmentError {
     pub code: String,
@@ -92,6 +92,15 @@ pub struct StageMessageAttachmentsInput {
 pub struct RetainedAiSessionMessageAttachment {
     pub meta: AiSessionMessageAttachmentMeta,
     pub retained_path: PathBuf,
+    pub source: ProviderAttachmentSource,
+    pub runtime_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAttachmentSource {
+    Inline,
+    RuntimePath,
+    Retained,
 }
 
 #[derive(Debug, Clone)]
@@ -465,6 +474,7 @@ impl AiSessionConversationAttachmentStore {
         }
         self.assert_capacity(&snapshots)?;
         let mut created = Vec::<AttachmentManifest>::new();
+        let mut provider_sources = Vec::<(ProviderAttachmentSource, Option<PathBuf>)>::new();
         let staged = (|| -> Result<(), AiSessionAttachmentError> {
             for source in retained {
                 let manifest = AttachmentManifest {
@@ -488,6 +498,7 @@ impl AiSessionConversationAttachmentStore {
                     content_deletion_reason: None,
                 };
                 self.save_manifest(&manifest)?;
+                provider_sources.push((ProviderAttachmentSource::Retained, None));
                 created.push(manifest);
             }
             for draft in &drafts {
@@ -515,9 +526,19 @@ impl AiSessionConversationAttachmentStore {
                     content_deletion_reason: None,
                 };
                 self.save_manifest(&manifest)?;
+                provider_sources.push((ProviderAttachmentSource::Retained, None));
                 created.push(manifest);
             }
             for snapshot in snapshots {
+                let provider_source = match snapshot.source_type {
+                    AiSessionMessageAttachmentSourceType::Inline => {
+                        ProviderAttachmentSource::Inline
+                    }
+                    AiSessionMessageAttachmentSourceType::RuntimePath => {
+                        ProviderAttachmentSource::RuntimePath
+                    }
+                };
+                let runtime_path = snapshot.runtime_path.clone();
                 let blob_hash = hex::encode(Sha256::digest(&snapshot.content));
                 self.write_blob(&blob_hash, &snapshot.content)?;
                 let manifest = AttachmentManifest {
@@ -541,6 +562,7 @@ impl AiSessionConversationAttachmentStore {
                     content_deletion_reason: None,
                 };
                 self.save_manifest(&manifest)?;
+                provider_sources.push((provider_source, runtime_path));
                 created.push(manifest);
             }
             Ok(())
@@ -555,7 +577,12 @@ impl AiSessionConversationAttachmentStore {
         for draft in &drafts {
             self.remove_draft_owner(&draft.id);
         }
-        Ok(staged_from_manifests(&input.message_id, &created, self))
+        Ok(staged_from_manifests_with_sources(
+            &input.message_id,
+            &created,
+            &provider_sources,
+            self,
+        ))
     }
 
     pub fn commit_message(&self, session_id: &str, message_id: &str, turn_id: Option<&str>) {
@@ -571,6 +598,24 @@ impl AiSessionConversationAttachmentStore {
             let _ = self.save_manifest(&manifest);
         }
         self.gc();
+    }
+
+    pub fn message_attachment_metas(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Vec<AiSessionMessageAttachmentMeta> {
+        self.message_manifests(session_id, message_id)
+            .into_iter()
+            .map(|manifest| AiSessionMessageAttachmentMeta {
+                id: manifest.id,
+                kind: manifest.kind,
+                name: manifest.name,
+                mime: manifest.mime,
+                size: manifest.size,
+                source_type: manifest.source_type,
+            })
+            .collect()
     }
 
     pub fn rollback_message(&self, session_id: &str, message_id: &str) -> usize {
@@ -854,8 +899,8 @@ impl AiSessionConversationAttachmentStore {
                 }
                 if data.len() as u64 != *size {
                     return Err(AiSessionAttachmentError::new(
-                        "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
-                        "Attachment content did not match its declared size.",
+                        "AI_SESSION_ATTACHMENT_INVALID",
+                        "AI session attachment has an invalid size.",
                         400,
                     ));
                 }
@@ -867,6 +912,7 @@ impl AiSessionConversationAttachmentStore {
                     source_type: AiSessionMessageAttachmentSourceType::Inline,
                     size: data.len() as u64,
                     content: data.clone(),
+                    runtime_path: None,
                 })
             }
             AiSessionMessageAttachmentInput::RuntimePath {
@@ -978,6 +1024,7 @@ impl AiSessionConversationAttachmentStore {
                     source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
                     size: *size,
                     content,
+                    runtime_path: Some(canonical_path),
                 })
             }
         }
@@ -1036,6 +1083,34 @@ impl AiSessionConversationAttachmentStore {
                 "AI_SESSION_ATTACHMENT_STORAGE_FULL",
                 "AI session attachment storage is full.",
                 507,
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_stream_begin(
+        &self,
+        input: &AiSessionAttachmentDraftStreamBegin,
+    ) -> Result<(), AiSessionAttachmentError> {
+        self.gc();
+        self.validate_draft_size(input.kind, input.size)?;
+        self.assert_uploaded_file_size(input.kind, input.size)?;
+        let state = self.lock();
+        if self.used_bytes(&state) + input.size > self.max_bytes {
+            return Err(AiSessionAttachmentError::new(
+                "AI_SESSION_ATTACHMENT_STORAGE_FULL",
+                "AI session attachment storage is full.",
+                507,
+            ));
+        }
+        if !valid_stream_id(&input.attachment_id)
+            || state.drafts.contains_key(&input.attachment_id)
+            || state.manifests.contains_key(&input.attachment_id)
+        {
+            return Err(AiSessionAttachmentError::new(
+                "AI_SESSION_ATTACHMENT_INVALID",
+                "AI session attachment id is invalid or already exists.",
+                409,
             ));
         }
         Ok(())
@@ -1164,6 +1239,15 @@ impl AiSessionConversationAttachmentStore {
         &self,
         manifest: &AttachmentManifest,
     ) -> RetainedAiSessionMessageAttachment {
+        self.provider_attachment_with_source(manifest, ProviderAttachmentSource::Retained, None)
+    }
+
+    fn provider_attachment_with_source(
+        &self,
+        manifest: &AttachmentManifest,
+        source: ProviderAttachmentSource,
+        runtime_path: Option<PathBuf>,
+    ) -> RetainedAiSessionMessageAttachment {
         RetainedAiSessionMessageAttachment {
             meta: AiSessionMessageAttachmentMeta {
                 id: manifest.id.clone(),
@@ -1174,6 +1258,8 @@ impl AiSessionConversationAttachmentStore {
                 source_type: manifest.source_type,
             },
             retained_path: self.blob_path(&manifest.blob_hash),
+            source,
+            runtime_path,
         }
     }
 
@@ -1295,6 +1381,7 @@ struct AttachmentSnapshot {
     source_type: AiSessionMessageAttachmentSourceType,
     size: u64,
     content: Vec<u8>,
+    runtime_path: Option<PathBuf>,
 }
 
 fn staged_from_manifests(
@@ -1315,6 +1402,28 @@ fn staged_from_manifests(
     }
 }
 
+fn staged_from_manifests_with_sources(
+    message_id: &str,
+    manifests: &[AttachmentManifest],
+    sources: &[(ProviderAttachmentSource, Option<PathBuf>)],
+    store: &AiSessionConversationAttachmentStore,
+) -> StagedAiSessionMessageAttachments {
+    StagedAiSessionMessageAttachments {
+        message_id: message_id.to_string(),
+        attachments: manifests
+            .iter()
+            .map(|manifest| store.public_attachment(manifest))
+            .collect(),
+        provider_attachments: manifests
+            .iter()
+            .zip(sources)
+            .map(|(manifest, (source, runtime_path))| {
+                store.provider_attachment_with_source(manifest, *source, runtime_path.clone())
+            })
+            .collect(),
+    }
+}
+
 pub struct AiSessionAttachmentDraftStreamBegin {
     pub attachment_id: String,
     pub scope_type: AiSessionAttachmentScopeType,
@@ -1328,6 +1437,7 @@ pub struct AiSessionAttachmentDraftStreamBegin {
 struct DraftStream {
     input: AiSessionAttachmentDraftStreamBegin,
     written: u64,
+    failure: Option<AiSessionAttachmentError>,
     path: PathBuf,
     expires_at: i64,
 }
@@ -1354,14 +1464,6 @@ impl AiSessionAttachmentDraftStreams {
         &self,
         input: AiSessionAttachmentDraftStreamBegin,
     ) -> Result<Value, AiSessionAttachmentError> {
-        if !valid_stream_id(&input.attachment_id) {
-            return Err(AiSessionAttachmentError::new(
-                "AI_SESSION_ATTACHMENT_INVALID",
-                "AI session attachment id is invalid or already exists.",
-                409,
-            ));
-        }
-        self.store().validate_draft_size(input.kind, input.size)?;
         let mut streams = self
             .streams
             .lock()
@@ -1374,6 +1476,7 @@ impl AiSessionAttachmentDraftStreams {
                 409,
             ));
         }
+        self.store().validate_stream_begin(&input)?;
         let path = self
             .upload_dir
             .join(format!("{}.upload", input.attachment_id));
@@ -1385,6 +1488,7 @@ impl AiSessionAttachmentDraftStreams {
             DraftStream {
                 input,
                 written: 0,
+                failure: None,
                 path,
                 expires_at: (now_millis)() + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS,
             },
@@ -1410,6 +1514,9 @@ impl AiSessionAttachmentDraftStreams {
                 404,
             )
         })?;
+        if let Some(failure) = stream.failure.as_ref() {
+            return Err(failure.clone());
+        }
         if offset != stream.written {
             return Err(AiSessionAttachmentError::new(
                 "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH",
@@ -1419,18 +1526,26 @@ impl AiSessionAttachmentDraftStreams {
         }
         let next = stream.written.saturating_add(chunk.len() as u64);
         if next > stream.input.size || chunk.len() > 512 * 1024 {
-            return Err(AiSessionAttachmentError::new(
+            let error = AiSessionAttachmentError::new(
                 "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
                 "Attachment content exceeded its declared size.",
                 400,
-            ));
+            );
+            stream.failure = Some(error.clone());
+            let _ = std::fs::remove_file(&stream.path);
+            return Err(error);
         }
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&stream.path)
             .map_err(io_error)?;
-        file.write_all(chunk).map_err(io_error)?;
+        if let Err(error) = file.write_all(chunk) {
+            let error = io_error(error);
+            stream.failure = Some(error.clone());
+            let _ = std::fs::remove_file(&stream.path);
+            return Err(error);
+        }
         stream.written = next;
         Ok(serde_json::json!({ "attachmentId": attachment_id, "offset": next }))
     }
@@ -1444,6 +1559,14 @@ impl AiSessionAttachmentDraftStreams {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.cleanup_expired(&mut streams);
+        if let Some(stream) = streams.get(attachment_id) {
+            if let Some(failure) = stream.failure.clone() {
+                let path = stream.path.clone();
+                streams.remove(attachment_id);
+                let _ = std::fs::remove_file(path);
+                return Err(failure);
+            }
+        }
         let stream = streams.remove(attachment_id).ok_or_else(|| {
             AiSessionAttachmentError::new(
                 "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
@@ -1811,6 +1934,32 @@ mod tests {
             .expect_err("size mismatch");
         assert_eq!(error.code, "AI_SESSION_ATTACHMENT_SIZE_MISMATCH");
         assert_eq!(error.status_code, 409);
+    }
+
+    #[test]
+    fn inline_declared_size_mismatch_uses_the_node_invalid_error() {
+        let (store, _root) = test_store();
+        let error = store
+            .stage_message(StageMessageAttachmentsInput {
+                session_id: "ses_1".to_string(),
+                message_id: "msg_1".to_string(),
+                attachments: vec![AiSessionMessageAttachmentInput::Inline {
+                    id: "att_inline".to_string(),
+                    kind: AiSessionAttachmentKind::File,
+                    name: "inline.txt".to_string(),
+                    mime: "text/plain".to_string(),
+                    size: 4,
+                    data: b"hello".to_vec(),
+                }],
+                retained_attachment_ids: Vec::new(),
+                runtime_path_root: None,
+                draft_scope_type: None,
+                draft_scope_id: None,
+                draft_attachment_ids: Vec::new(),
+            })
+            .expect_err("inline size mismatch");
+        assert_eq!(error.code, "AI_SESSION_ATTACHMENT_INVALID");
+        assert_eq!(error.status_code, 400);
     }
 
     #[test]

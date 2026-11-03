@@ -67,6 +67,7 @@ impl RepositoryService {
         self.resolve(RepositorySessionTarget {
             kind: controlled_instance_protocol::RepositorySessionKind::AiSession,
             id: "workspace-inspection".to_string(),
+            session_found: true,
             cwd: Some(display_path(&cwd.into())),
             status: Some("idle".to_string()),
         })
@@ -125,6 +126,15 @@ impl RepositoryService {
     ) -> Vec<OwnedMutexGuard<()>> {
         let worktrees = resolved.worktree_root.iter().cloned().collect::<Vec<_>>();
         self.lock_repository_and_worktrees(resolved, worktrees)
+            .await
+    }
+
+    pub async fn lock_repository_and_worktree_path(
+        &self,
+        resolved: &ResolvedRepository,
+        worktree: &std::path::Path,
+    ) -> Vec<OwnedMutexGuard<()>> {
+        self.lock_repository_and_worktrees(resolved, [worktree.to_path_buf()])
             .await
     }
 
@@ -207,6 +217,7 @@ mod tests {
             worktree_root: Some(PathBuf::from(worktree)),
             git_dir: Some(PathBuf::from(common).join(".git/worktrees/current")),
             git_common_dir: Some(PathBuf::from(common)),
+            internal_error: None,
         }
     }
 
@@ -267,6 +278,11 @@ mod tests {
         let state = resolved("/worktrees/first", "/repository");
         let first = PathBuf::from("/worktrees/first");
         let second = PathBuf::from("/worktrees/second");
+        let guards = service
+            .lock_repository_and_worktrees(&state, [first.clone(), second.clone(), first.clone()])
+            .await;
+        assert_eq!(guards.len(), 3);
+        drop(guards);
 
         let (forward_done, mut forward_received) = oneshot::channel();
         let forward_service = service.clone();
@@ -295,5 +311,30 @@ mod tests {
 
         assert!(receives(&mut forward_received, Duration::from_secs(1)).await);
         assert!(receives(&mut reverse_received, Duration::from_secs(1)).await);
+    }
+
+    #[tokio::test]
+    async fn overlapping_combined_lanes_are_mutually_exclusive() {
+        let service = RepositoryService::new_with_managed_root(Vec::new(), std::env::temp_dir());
+        let state = resolved("/worktrees/first", "/repository");
+        let first = PathBuf::from("/worktrees/first");
+        let second = PathBuf::from("/worktrees/second");
+        let guards = service
+            .lock_repository_and_worktrees(&state, [first.clone(), second.clone()])
+            .await;
+
+        let (released, mut received) = oneshot::channel();
+        let waiting_service = service.clone();
+        let waiting_state = state.clone();
+        tokio::spawn(async move {
+            let _guards = waiting_service
+                .lock_repository_and_worktrees(&waiting_state, [second, first])
+                .await;
+            let _ = released.send(());
+        });
+        assert!(!receives(&mut received, Duration::from_millis(50)).await);
+
+        drop(guards);
+        assert!(receives(&mut received, Duration::from_secs(1)).await);
     }
 }

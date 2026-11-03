@@ -75,13 +75,11 @@ impl TerminalScreenState {
                 data.push_str("\r\n");
             }
         }
-        data.push_str("\x1b[0m");
         let cursor = self.terminal.cursor();
         if let Some((col, row)) = cursor.position() {
-            data.push_str("\x1b[?25h");
-            data.push_str(&format!("\x1b[{};{}H", row + 1, col + 1));
-        } else {
-            data.push_str("\x1b[?25l");
+            if col < usize::from(self.cols) && row < usize::from(self.rows) {
+                data.push_str(&format!("\x1b[{};{}H", row + 1, col + 1));
+            }
         }
         TerminalScreenSnapshot {
             data,
@@ -240,7 +238,7 @@ mod tests {
         assert!(snapshot.data.contains("second"));
         assert!(snapshot.data.contains("fifth"));
         assert!(snapshot.data.contains('\u{1b}'));
-        assert!(snapshot.data.ends_with("\x1b[0m\x1b[?25h\x1b[4;6H"));
+        assert!(snapshot.data.ends_with("\x1b[4;6H"));
         assert_eq!(snapshot.pending_escape, "");
         assert_eq!((snapshot.cols, snapshot.rows), (20, 4));
     }

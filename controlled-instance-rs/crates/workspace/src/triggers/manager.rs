@@ -1,26 +1,32 @@
 use super::{
     executor::{trigger_event_type_name, TriggerExecuteInput, TriggerExecutor},
-    matcher::{
-        normalize_lexical, root_within_workspace, workspace_relative_path, FileTriggerMatcher,
-    },
+    matcher::{resolve_path, root_within_workspace, workspace_relative_path, FileTriggerMatcher},
     schedule::{delay_until, next_schedule_time},
     scheduler::{Scheduler, SchedulerSkipReason, SubmitDecision},
     store::{source_matches_ai_session, TriggerStore, TriggerStoreError},
 };
+use controlled_instance_core::text::cmp_utf16;
 use controlled_instance_protocol::{
     AiSessionsSnapshot, TriggerConfig, TriggerDeployment, TriggerEventType, TriggerSource,
 };
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
+    Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use serde_json::{Map, Value};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    path::PathBuf,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
 
 pub type TriggerPublisher = Arc<dyn Fn(&str, Value) + Send + Sync>;
+
+const AWAIT_WRITE_FINISH_MAX_STABILITY: Duration = Duration::from_millis(500);
+const AWAIT_WRITE_FINISH_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const IDLE_WATCH_WAIT: Duration = Duration::from_secs(3_600);
 
 #[derive(Debug, Clone)]
 pub struct TriggerExecutionEvent {
@@ -33,6 +39,145 @@ pub struct TriggerExecutionEvent {
 struct WatchHandle {
     _watcher: RecommendedWatcher,
     task: JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservedFileEvent {
+    Add,
+    Change,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingWriteKind {
+    Add,
+    Change,
+}
+
+#[derive(Debug, Clone)]
+struct PendingWrite {
+    kind: PendingWriteKind,
+    last_change: Instant,
+    previous_size: Option<u64>,
+}
+
+#[derive(Debug)]
+struct FileChangeBatch {
+    debounce: Duration,
+    stability_threshold: Duration,
+    changed: BTreeSet<String>,
+    pending: BTreeMap<String, PendingWrite>,
+    deadline: Option<Instant>,
+    poll_at: Option<Instant>,
+}
+
+impl FileChangeBatch {
+    fn new(debounce_ms: u64) -> Self {
+        Self {
+            debounce: Duration::from_millis(debounce_ms),
+            stability_threshold: Duration::from_millis(debounce_ms)
+                .min(AWAIT_WRITE_FINISH_MAX_STABILITY),
+            changed: BTreeSet::new(),
+            pending: BTreeMap::new(),
+            deadline: None,
+            poll_at: None,
+        }
+    }
+
+    fn observe_write(&mut self, path: String, kind: PendingWriteKind, now: Instant) {
+        match self.pending.get_mut(&path) {
+            Some(pending) => pending.last_change = now,
+            None => {
+                self.pending.insert(
+                    path,
+                    PendingWrite {
+                        kind,
+                        last_change: now,
+                        previous_size: None,
+                    },
+                );
+            }
+        }
+        if self.poll_at.is_none() {
+            self.poll_at = Some(now + AWAIT_WRITE_FINISH_POLL_INTERVAL);
+        }
+    }
+
+    fn observe_remove(&mut self, path: String, now: Instant) {
+        let pending_kind = self.pending.remove(&path).map(|pending| pending.kind);
+        if pending_kind != Some(PendingWriteKind::Add) {
+            self.changed.insert(path);
+            self.deadline = Some(now + self.debounce);
+        }
+        if self.pending.is_empty() {
+            self.poll_at = None;
+        }
+    }
+
+    fn pending_paths_due(&mut self, now: Instant) -> Vec<String> {
+        if self.pending.is_empty() {
+            self.poll_at = None;
+            return Vec::new();
+        }
+        if self.poll_at.is_some_and(|poll_at| poll_at <= now) {
+            self.poll_at = Some(now + AWAIT_WRITE_FINISH_POLL_INTERVAL);
+            self.pending.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn poll_path(&mut self, path: &str, size: Option<u64>, now: Instant) {
+        let Some(pending) = self.pending.get_mut(path) else {
+            return;
+        };
+        let Some(size) = size else {
+            self.pending.remove(path);
+            if self.pending.is_empty() {
+                self.poll_at = None;
+            }
+            return;
+        };
+        if pending
+            .previous_size
+            .is_some_and(|previous| previous != size)
+        {
+            pending.last_change = now;
+        }
+        pending.previous_size = Some(size);
+        if now.saturating_duration_since(pending.last_change) >= self.stability_threshold {
+            self.pending.remove(path);
+            self.changed.insert(path.to_string());
+            self.deadline = Some(now + self.debounce);
+            if self.pending.is_empty() {
+                self.poll_at = None;
+            }
+        }
+    }
+
+    fn wait_duration(&self, now: Instant) -> Duration {
+        self.deadline
+            .into_iter()
+            .chain(self.poll_at.filter(|_| !self.pending.is_empty()))
+            .min()
+            .map(|wake| wake.saturating_duration_since(now))
+            .unwrap_or(IDLE_WATCH_WAIT)
+    }
+
+    fn take_due(&mut self, now: Instant) -> Option<Vec<String>> {
+        if self.deadline.is_none_or(|deadline| deadline > now) {
+            return None;
+        }
+        self.deadline = None;
+        if self.changed.is_empty() {
+            return None;
+        }
+        let mut changed = std::mem::take(&mut self.changed)
+            .into_iter()
+            .collect::<Vec<_>>();
+        changed.sort_by(|left, right| cmp_utf16(left, right));
+        Some(changed)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +205,7 @@ impl TriggerManager {
         publish: TriggerPublisher,
     ) -> Arc<Self> {
         let workspace = workspace.into();
-        let workspace = std::fs::canonicalize(&workspace).unwrap_or(workspace);
+        let workspace = resolve_path(&workspace).unwrap_or(workspace);
         Arc::new(Self {
             store,
             executor,
@@ -88,7 +233,7 @@ impl TriggerManager {
             };
             match config.source {
                 TriggerSource::Schedule { .. } => {
-                    self.start_schedule(config, deployment.clone());
+                    self.start_schedule(config, deployment.clone())?;
                 }
                 TriggerSource::FileChange { .. } => {
                     self.start_file_watch(config, deployment.clone());
@@ -216,7 +361,11 @@ impl TriggerManager {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
     }
 
-    fn start_schedule(self: &Arc<Self>, config: TriggerConfig, deployment: TriggerDeployment) {
+    fn start_schedule(
+        self: &Arc<Self>,
+        config: TriggerConfig,
+        deployment: TriggerDeployment,
+    ) -> Result<(), TriggerStoreError> {
         let key = deployment.key().to_string();
         let manager = Arc::downgrade(self);
         let task = match config.source.clone() {
@@ -224,7 +373,7 @@ impl TriggerManager {
                 interval_ms: Some(interval_ms),
                 ..
             } if interval_ms > 0 => tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+                let mut interval = interval_schedule(interval_ms);
                 interval.tick().await;
                 loop {
                     interval.tick().await;
@@ -239,32 +388,43 @@ impl TriggerManager {
                     });
                 }
             }),
-            source @ TriggerSource::Schedule { .. } => tokio::spawn(async move {
-                loop {
-                    let Some(next) = next_schedule_time(&source, chrono::Utc::now()) else {
-                        tracing::warn!(
-                            "trigger schedule timezone could not be resolved; timer stopped"
-                        );
-                        break;
-                    };
-                    tokio::time::sleep(delay_until(next, chrono::Utc::now())).await;
-                    let Some(manager) = manager.upgrade() else {
-                        break;
-                    };
-                    manager.submit(TriggerExecutionEvent {
-                        config: config.clone(),
-                        deployment: deployment.clone(),
-                        event_type: TriggerEventType::Schedule,
-                        event_summary: source.schedule_summary(),
-                    });
-                }
-            }),
-            _ => return,
+            source @ TriggerSource::Schedule { .. } => {
+                let mut next =
+                    next_schedule_time(&source, chrono::Utc::now()).map_err(|error| {
+                        TriggerStoreError::Invalid(format!(
+                            "Invalid trigger schedule {}: {error}",
+                            config.config_hash
+                        ))
+                    })?;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(delay_until(next, chrono::Utc::now())).await;
+                        let Some(manager) = manager.upgrade() else {
+                            break;
+                        };
+                        manager.submit(TriggerExecutionEvent {
+                            config: config.clone(),
+                            deployment: deployment.clone(),
+                            event_type: TriggerEventType::Schedule,
+                            event_summary: source.schedule_summary(),
+                        });
+                        next = match next_schedule_time(&source, chrono::Utc::now()) {
+                            Ok(next) => next,
+                            Err(error) => {
+                                tracing::error!(%error, "trigger schedule became invalid; timer stopped");
+                                break;
+                            }
+                        };
+                    }
+                })
+            }
+            _ => return Ok(()),
         };
         self.timers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(key, task);
+        Ok(())
     }
 
     fn start_file_watch(self: &Arc<Self>, config: TriggerConfig, deployment: TriggerDeployment) {
@@ -284,6 +444,18 @@ impl TriggerManager {
         if roots.is_empty() {
             return;
         }
+        // notify may report canonical backend paths (for example /private/var) while
+        // Node/chokidar keeps the path.resolve root spelling. Translate only at this
+        // adapter boundary; root acceptance above remains lexical/pathWithin.
+        let root_aliases = roots
+            .iter()
+            .map(|root| {
+                (
+                    std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()),
+                    root.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         let matcher = match FileTriggerMatcher::new(&globs, ignore.as_deref().unwrap_or_default()) {
             Ok(matcher) => matcher,
             Err(error) => {
@@ -304,39 +476,53 @@ impl TriggerManager {
         };
         for root in roots {
             if let Err(error) = watcher.watch(&root, RecursiveMode::Recursive) {
+                // Node's chokidar reports a per-root watch error and keeps the
+                // remaining roots active instead of failing the deployment.
                 self.publish_watch_failed(&config, &deployment, &error.to_string());
-                return;
             }
         }
-        let workspace = normalize_lexical(&self.workspace);
+        let workspace = self.workspace.clone();
         let manager = Arc::downgrade(self);
         let watch_key = deployment.key().to_string();
         let task = tokio::spawn(async move {
-            let mut changed = BTreeSet::new();
-            let mut deadline: Option<Instant> = None;
+            let mut batch = FileChangeBatch::new(debounce_ms);
             loop {
-                let wait = deadline
-                    .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-                    .unwrap_or_else(|| Duration::from_secs(3_600));
+                let wait = batch.wait_duration(Instant::now());
                 match tokio::time::timeout(wait, receiver.recv()).await {
                     Ok(Some(Ok(event))) => {
-                        for path in event.paths {
+                        for (path, observed) in observed_file_events(&event) {
+                            let path = remap_watched_path(&root_aliases, path);
                             let Some(relative) = workspace_relative_path(&workspace, &path) else {
                                 continue;
                             };
-                            if !matches!(
-                                event.kind,
-                                notify::EventKind::Create(_)
-                                    | notify::EventKind::Modify(_)
-                                    | notify::EventKind::Remove(_)
-                            ) || !matcher.matches(&relative)
-                            {
+                            if path_is_directory(&path).await {
                                 continue;
                             }
-                            changed.insert(relative);
-                        }
-                        if !changed.is_empty() {
-                            deadline = Some(Instant::now() + Duration::from_millis(debounce_ms));
+                            match matcher.matches(&relative) {
+                                Ok(true) => {}
+                                Ok(false) => continue,
+                                Err(error) => {
+                                    if let Some(manager) = manager.upgrade() {
+                                        manager.publish_watch_failed(&config, &deployment, &error);
+                                    }
+                                    continue;
+                                }
+                            }
+                            match observed {
+                                ObservedFileEvent::Add => batch.observe_write(
+                                    relative,
+                                    PendingWriteKind::Add,
+                                    Instant::now(),
+                                ),
+                                ObservedFileEvent::Change => batch.observe_write(
+                                    relative,
+                                    PendingWriteKind::Change,
+                                    Instant::now(),
+                                ),
+                                ObservedFileEvent::Remove => {
+                                    batch.observe_remove(relative, Instant::now())
+                                }
+                            }
                         }
                     }
                     Ok(Some(Err(error))) => {
@@ -345,21 +531,27 @@ impl TriggerManager {
                         }
                     }
                     Ok(None) => break,
-                    Err(_) if !changed.is_empty() => {
-                        let files = changed.iter().cloned().collect::<Vec<_>>();
-                        changed.clear();
-                        deadline = None;
-                        let Some(manager) = manager.upgrade() else {
-                            break;
-                        };
-                        manager.submit(TriggerExecutionEvent {
-                            config: config.clone(),
-                            deployment: deployment.clone(),
-                            event_type: TriggerEventType::FileChange,
-                            event_summary: Some(format!("Changed files:\n{}", files.join("\n"))),
-                        });
-                    }
                     Err(_) => {}
+                }
+                let now = Instant::now();
+                for relative in batch.pending_paths_due(now) {
+                    let size = tokio::fs::metadata(workspace.join(&relative))
+                        .await
+                        .ok()
+                        .filter(|metadata| metadata.is_file())
+                        .map(|metadata| metadata.len());
+                    batch.poll_path(&relative, size, Instant::now());
+                }
+                if let Some(files) = batch.take_due(Instant::now()) {
+                    let Some(manager) = manager.upgrade() else {
+                        break;
+                    };
+                    manager.submit(TriggerExecutionEvent {
+                        config: config.clone(),
+                        deployment: deployment.clone(),
+                        event_type: TriggerEventType::FileChange,
+                        event_summary: Some(format!("Changed files:\n{}", files.join("\n"))),
+                    });
                 }
             }
         });
@@ -502,6 +694,67 @@ impl TriggerManager {
     }
 }
 
+fn observed_file_events(event: &Event) -> Vec<(PathBuf, ObservedFileEvent)> {
+    let kind = match &event.kind {
+        EventKind::Create(CreateKind::Folder) => return Vec::new(),
+        EventKind::Create(_) => ObservedFileEvent::Add,
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => ObservedFileEvent::Remove,
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => ObservedFileEvent::Add,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+            return event
+                .paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    (
+                        path.clone(),
+                        if index == 0 {
+                            ObservedFileEvent::Remove
+                        } else {
+                            ObservedFileEvent::Add
+                        },
+                    )
+                })
+                .collect();
+        }
+        EventKind::Modify(_) => ObservedFileEvent::Change,
+        EventKind::Remove(RemoveKind::Folder) => return Vec::new(),
+        EventKind::Remove(_) => ObservedFileEvent::Remove,
+        _ => return Vec::new(),
+    };
+    event
+        .paths
+        .iter()
+        .cloned()
+        .map(|path| (path, kind))
+        .collect()
+}
+
+fn remap_watched_path(root_aliases: &[(PathBuf, PathBuf)], path: PathBuf) -> PathBuf {
+    root_aliases
+        .iter()
+        .filter(|(physical, _)| path.starts_with(physical))
+        .max_by_key(|(physical, _)| physical.components().count())
+        .and_then(|(physical, lexical)| {
+            path.strip_prefix(physical)
+                .ok()
+                .map(|relative| lexical.join(relative))
+        })
+        .unwrap_or(path)
+}
+
+fn interval_schedule(interval_ms: u64) -> tokio::time::Interval {
+    let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    interval
+}
+
+async fn path_is_directory(path: &Path) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +770,15 @@ mod tests {
         TriggerTarget,
     };
     use std::{path::Path, sync::Mutex as StdMutex};
+
+    #[tokio::test]
+    async fn interval_schedules_delay_instead_of_bursting_missed_ticks() {
+        let interval = interval_schedule(1_000);
+        assert_eq!(
+            interval.missed_tick_behavior(),
+            tokio::time::MissedTickBehavior::Delay
+        );
+    }
 
     #[derive(Clone)]
     struct RecordingProvider {
@@ -716,6 +978,30 @@ mod tests {
         fixture.manager.stop();
     }
 
+    #[tokio::test]
+    async fn invalid_schedule_timezone_surfaces_an_error_and_does_not_start_a_fallback_timer() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fixture = fixture(workspace.path()).await;
+        fixture
+            .store
+            .create(create_input(
+                TriggerSource::Schedule {
+                    schedule_kind: controlled_instance_protocol::TriggerScheduleKind::Daily,
+                    interval_ms: None,
+                    time_of_day: Some("09:00".to_string()),
+                    timezone: Some("Not/A_Timezone".to_string()),
+                    weekdays: None,
+                },
+                "ses_0000000000001",
+                "Scheduled run",
+            ))
+            .expect("create trigger");
+        let error = fixture.manager.restart().expect_err("invalid timezone");
+        assert!(error.to_string().contains("unknown timezone"));
+        assert!(fixture.store.load().expect("store").recent_runs.is_empty());
+        fixture.manager.stop();
+    }
+
     fn snapshot(session: &AiSession) -> AiSessionsSnapshot {
         AiSessionsSnapshot {
             running_count: u64::from(session.status == "running"),
@@ -724,6 +1010,146 @@ mod tests {
             sessions: vec![session.summary()],
             updated_at: "2026-11-02T00:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn await_write_finish_waits_for_size_stability_before_debouncing() {
+        let now = Instant::now();
+        let mut batch = FileChangeBatch::new(1_500);
+        assert_eq!(batch.stability_threshold, AWAIT_WRITE_FINISH_MAX_STABILITY);
+        batch.observe_write("src/main.rs".to_string(), PendingWriteKind::Add, now);
+        assert!(batch.take_due(now + Duration::from_secs(10)).is_none());
+
+        assert!(batch
+            .pending_paths_due(now + Duration::from_millis(49))
+            .is_empty());
+        assert_eq!(
+            batch.pending_paths_due(now + Duration::from_millis(50)),
+            ["src/main.rs"]
+        );
+        batch.poll_path("src/main.rs", Some(10), now + Duration::from_millis(50));
+        batch.poll_path("src/main.rs", Some(10), now + Duration::from_millis(100));
+        batch.poll_path("src/main.rs", Some(20), now + Duration::from_millis(150));
+        batch.poll_path("src/main.rs", Some(20), now + Duration::from_millis(600));
+        assert!(batch.take_due(now + Duration::from_millis(649)).is_none());
+
+        batch.poll_path("src/main.rs", Some(20), now + Duration::from_millis(650));
+        assert!(batch.take_due(now + Duration::from_millis(2_149)).is_none());
+        assert_eq!(
+            batch.take_due(now + Duration::from_millis(2_150)),
+            Some(vec!["src/main.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn await_write_finish_uses_short_debounce_as_the_stability_threshold() {
+        let now = Instant::now();
+        let mut batch = FileChangeBatch::new(100);
+        assert_eq!(batch.stability_threshold, Duration::from_millis(100));
+        batch.observe_write("quick.txt".to_string(), PendingWriteKind::Change, now);
+        batch.poll_path("quick.txt", Some(1), now + Duration::from_millis(50));
+        batch.poll_path("quick.txt", Some(1), now + Duration::from_millis(100));
+        assert_eq!(
+            batch.take_due(now + Duration::from_millis(200)),
+            Some(vec!["quick.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn due_paths_follow_javascript_utf16_sort_order() {
+        let now = Instant::now();
+        let mut batch = FileChangeBatch::new(0);
+        for path in ["😀.txt", "\u{e000}.txt", "z.txt", "a.txt"] {
+            batch.observe_write(path.to_string(), PendingWriteKind::Change, now);
+        }
+        for path in ["😀.txt", "\u{e000}.txt", "z.txt", "a.txt"] {
+            batch.poll_path(path, Some(1), now);
+        }
+        assert_eq!(
+            batch.take_due(now),
+            Some(vec![
+                "a.txt".to_string(),
+                "z.txt".to_string(),
+                "😀.txt".to_string(),
+                "\u{e000}.txt".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn unlink_cancels_pending_add_but_emits_for_pending_change() {
+        let now = Instant::now();
+        let mut added = FileChangeBatch::new(100);
+        added.observe_write("new.txt".to_string(), PendingWriteKind::Add, now);
+        added.observe_remove("new.txt".to_string(), now + Duration::from_millis(10));
+        assert!(added.take_due(now + Duration::from_secs(10)).is_none());
+
+        let mut changed = FileChangeBatch::new(100);
+        changed.observe_write("old.txt".to_string(), PendingWriteKind::Change, now);
+        changed.observe_remove("old.txt".to_string(), now + Duration::from_millis(10));
+        assert_eq!(
+            changed.take_due(now + Duration::from_millis(110)),
+            Some(vec!["old.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn notify_events_match_chokidar_add_change_unlink_filtering() {
+        let path = PathBuf::from("/workspace/src/main.rs");
+        let add = Event::new(EventKind::Create(CreateKind::File)).add_path(path.clone());
+        assert_eq!(
+            observed_file_events(&add),
+            [(path.clone(), ObservedFileEvent::Add)]
+        );
+        let folder = Event::new(EventKind::Create(CreateKind::Folder)).add_path(path.clone());
+        assert!(observed_file_events(&folder).is_empty());
+        let unlink = Event::new(EventKind::Remove(RemoveKind::File)).add_path(path.clone());
+        assert_eq!(
+            observed_file_events(&unlink),
+            [(path.clone(), ObservedFileEvent::Remove)]
+        );
+        let access =
+            Event::new(EventKind::Access(notify::event::AccessKind::Any)).add_path(path.clone());
+        assert!(observed_file_events(&access).is_empty());
+
+        let renamed = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(path.clone())
+            .add_path(PathBuf::from("/workspace/src/renamed.rs"));
+        assert_eq!(
+            observed_file_events(&renamed),
+            [
+                (path, ObservedFileEvent::Remove),
+                (
+                    PathBuf::from("/workspace/src/renamed.rs"),
+                    ObservedFileEvent::Add
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn canonical_watcher_paths_are_remapped_to_the_longest_lexical_root() {
+        let aliases = [
+            (
+                PathBuf::from("/private/workspace"),
+                PathBuf::from("/workspace"),
+            ),
+            (
+                PathBuf::from("/private/workspace/project"),
+                PathBuf::from("/workspace/project"),
+            ),
+        ];
+        assert_eq!(
+            remap_watched_path(
+                &aliases,
+                PathBuf::from("/private/workspace/project/src/main.rs")
+            ),
+            PathBuf::from("/workspace/project/src/main.rs")
+        );
+        assert_eq!(
+            remap_watched_path(&aliases, PathBuf::from("/physical/other/main.rs")),
+            PathBuf::from("/physical/other/main.rs")
+        );
     }
 
     #[test]

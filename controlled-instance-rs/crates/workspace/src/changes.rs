@@ -1,5 +1,8 @@
 use crate::{
-    context::{display_path, hash_id, now_iso, require_repository, scope_wire},
+    context::{
+        display_path, hash_id, now_iso, require_operation_repository as require_repository,
+        scope_wire,
+    },
     error::RepositoryOperationError,
     files::validate_repository_relative_path,
     git::{GitError, GitProcess, GitProcessOptions},
@@ -864,6 +867,10 @@ fn repository_git_error(error: GitError, current: &ResolvedRepository) -> Reposi
             "REPOSITORY_OUTPUT_LIMIT",
             "Git operation exceeded its output limit.".to_string(),
         ),
+        GitError::Aborted => (
+            "REPOSITORY_OPERATION_ABORTED",
+            "Git operation was aborted.".to_string(),
+        ),
         GitError::NotFound => (
             "REPOSITORY_GIT_UNAVAILABLE",
             "Git executable is unavailable.".to_string(),
@@ -871,10 +878,10 @@ fn repository_git_error(error: GitError, current: &ResolvedRepository) -> Reposi
         GitError::Exit {
             message, stderr, ..
         } => {
-            let diagnostic = format!("{message}\n{stderr}");
-            if diagnostic.contains("Author identity unknown")
+            let diagnostic = format!("{message}\n{stderr}").to_lowercase();
+            if diagnostic.contains("author identity unknown")
                 || diagnostic.contains("unable to auto-detect email address")
-                || diagnostic.contains("Please tell me who you are")
+                || diagnostic.contains("please tell me who you are")
             {
                 (
                     "REPOSITORY_IDENTITY_MISSING",
@@ -889,6 +896,7 @@ fn repository_git_error(error: GitError, current: &ResolvedRepository) -> Reposi
                     "Git could not sign the commit.".to_string(),
                 )
             } else if diagnostic.contains("hook declined")
+                || (diagnostic.contains("hook") && diagnostic.contains("failed"))
                 || diagnostic.contains("pre-commit")
                 || diagnostic.contains("commit-msg")
             {
@@ -951,6 +959,30 @@ pub fn observed_at_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::unavailable_repository;
+    use controlled_instance_protocol::{RepositoryAvailability, RepositorySessionKind};
+
+    fn repository_state() -> ResolvedRepository {
+        unavailable_repository(
+            &crate::RepositorySessionTarget {
+                kind: RepositorySessionKind::AiSession,
+                id: "session-test".to_string(),
+                session_found: true,
+                cwd: None,
+                status: None,
+            },
+            "2026-11-02T00:00:00.000Z".to_string(),
+            RepositoryAvailability::NotWorktree,
+        )
+    }
+
+    fn git_exit(stderr: &str) -> GitError {
+        GitError::Exit {
+            message: String::new(),
+            exit_code: Some(1),
+            stderr: stderr.to_string(),
+        }
+    }
 
     #[test]
     fn diff_parser_tracks_old_and_new_lines_and_hunk_ids() {
@@ -974,5 +1006,18 @@ mod tests {
                 && line.content == "added"
                 && line.new_line == Some(2)
         }));
+    }
+
+    #[test]
+    fn git_diagnostics_are_classified_case_insensitively() {
+        let state = repository_state();
+        let hook = repository_git_error(git_exit("COMMIT HOOK FAILED"), &state);
+        assert_eq!(hook.code, "REPOSITORY_HOOK_FAILED");
+
+        let identity = repository_git_error(git_exit("AUTHOR IDENTITY UNKNOWN"), &state);
+        assert_eq!(identity.code, "REPOSITORY_IDENTITY_MISSING");
+
+        let signing = repository_git_error(git_exit("GPG FAILED TO SIGN"), &state);
+        assert_eq!(signing.code, "REPOSITORY_SIGNING_FAILED");
     }
 }

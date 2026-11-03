@@ -18,7 +18,7 @@ impl AgentRunRuntimePath {
     pub fn validate(&self) -> bool {
         self.runtime_path_type == "runtime-path"
             && !self.path.trim().is_empty()
-            && self.path.len() <= 4096
+            && self.path.chars().count() <= 4096
             && is_absolute_runtime_path(&self.path)
     }
 }
@@ -64,7 +64,7 @@ impl AgentRunMemberInstanceCreateInput {
     pub fn validate(&self) -> Result<(), String> {
         for (field, value) in [("runId", &self.run_id), ("memberId", &self.member_id)] {
             if value.is_empty()
-                || value.len() > 120
+                || value.chars().count() > 120
                 || !value
                     .bytes()
                     .next()
@@ -76,7 +76,9 @@ impl AgentRunMemberInstanceCreateInput {
                 return Err(format!("{field} is invalid."));
             }
         }
-        if self.client_request_id.trim().is_empty() || self.client_request_id.len() > 160 {
+        if self.client_request_id.trim().is_empty()
+            || self.client_request_id.trim().chars().count() > 160
+        {
             return Err("clientRequestId must be between 1 and 160 characters.".to_string());
         }
         if !self.cwd.validate()
@@ -108,13 +110,15 @@ impl AgentRunMemberInstanceCreateInput {
         }
         if let Some(selection) = &self.model_selection {
             if selection.model_entity_id.trim().is_empty()
-                || selection.model_entity_id.len() > 120
+                || selection.model_entity_id.chars().count() > 120
                 || selection.model_name.trim().is_empty()
-                || selection.model_name.len() > 240
+                || selection.model_name.chars().count() > 240
                 || selection
                     .model_upstream_name
                     .as_deref()
-                    .is_some_and(|value| value.trim().is_empty() || value.len() > 240)
+                    .is_some_and(|value| {
+                        value.trim().is_empty() || value.trim().chars().count() > 240
+                    })
             {
                 return Err("modelSelection is invalid.".to_string());
             }
@@ -232,6 +236,25 @@ mod tests {
         let mut invalid = input;
         invalid.writable_roots.shared.path = "/workspace".to_string();
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn agent_run_protocol_limits_count_unicode_code_points() {
+        let mut input = valid_input();
+        input.client_request_id = "😀".repeat(160);
+        input.model_selection = Some(AgentRunModelSelection {
+            model_entity_id: "😀".repeat(120),
+            model_name: "😀".repeat(240),
+            model_upstream_name: Some("😀".repeat(240)),
+        });
+        assert_eq!(input.validate(), Ok(()));
+
+        input.model_selection = Some(AgentRunModelSelection {
+            model_entity_id: "😀".repeat(121),
+            model_name: "model".to_string(),
+            model_upstream_name: None,
+        });
+        assert!(input.validate().is_err());
     }
 
     #[test]

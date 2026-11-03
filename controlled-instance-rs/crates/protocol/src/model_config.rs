@@ -1,3 +1,5 @@
+use icu_collator::{options::CollatorOptions, Collator, CollatorBorrowed};
+use icu_locale_core::Locale;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -8,20 +10,20 @@ pub const MANAGED_MODEL_PROVIDER_PREFIX: &str = "task-handoff-";
 /// Codex persists the provider id with each thread. Derive it from the stable
 /// model entity identity so display-name changes never alter the provider.
 pub fn codex_model_provider_id(model_entity_id: &str) -> String {
-    let normalized = model_entity_id
-        .to_lowercase()
-        .chars()
-        .map(|character| {
-            if character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || matches!(character, '_' | '-')
-            {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
+    let mut normalized = String::new();
+    let mut previous_was_invalid = false;
+    for character in model_entity_id.to_lowercase().chars() {
+        if character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '_' | '-')
+        {
+            normalized.push(character);
+            previous_was_invalid = false;
+        } else if !previous_was_invalid {
+            normalized.push('-');
+            previous_was_invalid = true;
+        }
+    }
     format!("{MANAGED_MODEL_PROVIDER_PREFIX}{normalized}")
 }
 
@@ -38,9 +40,14 @@ pub enum PrivateModelProtocol {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivateModelNameEntry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_non_null_string"
+    )]
     pub upstream_name: Option<String>,
     pub name: String,
+    #[serde(deserialize_with = "crate::json_number::deserialize_u32")]
     pub order: u32,
 }
 
@@ -71,12 +78,45 @@ pub fn select_model_name_entry<'a>(
 
 pub fn sorted_model_name_entries(entries: &[PrivateModelNameEntry]) -> Vec<PrivateModelNameEntry> {
     let mut entries = entries.to_vec();
+    let collator = model_name_collator();
     entries.sort_by(|left, right| {
-        left.order
-            .cmp(&right.order)
-            .then(left.name.cmp(&right.name))
+        left.order.cmp(&right.order).then_with(|| {
+            collator
+                .as_ref()
+                .map(|collator| collator.compare(&left.name, &right.name))
+                .unwrap_or_else(|| left.name.cmp(&right.name))
+        })
     });
     entries
+}
+
+fn model_name_collator() -> Option<CollatorBorrowed<'static>> {
+    Collator::try_new(node_default_locale().into(), CollatorOptions::default()).ok()
+}
+
+fn node_default_locale() -> Locale {
+    let configured = ["LC_ALL", "LC_COLLATE", "LANG"]
+        .into_iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "en-US".to_string());
+    let language = configured
+        .trim()
+        .split(['.', '@'])
+        .next()
+        .unwrap_or_default();
+    if language.is_empty()
+        || language.eq_ignore_ascii_case("C")
+        || language.eq_ignore_ascii_case("POSIX")
+    {
+        Locale::try_from_str("en-US").expect("built-in locale")
+    } else {
+        Locale::try_from_str(&language.replace('_', "-"))
+            .unwrap_or_else(|_| Locale::try_from_str("en-US").expect("built-in locale"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -282,12 +322,11 @@ fn normalize_catalog(catalog: &mut InstancePrivateModelCatalog) -> Result<(), St
 
 fn normalize_common(
     instance_id: &mut String,
-    updated_at: &mut String,
+    updated_at: &str,
     entity_count: usize,
 ) -> Result<(), String> {
     trim_bounded(instance_id, 120, "Private model catalog instanceId")?;
-    trim_bounded(updated_at, 120, "Private model catalog updatedAt")?;
-    if chrono::DateTime::parse_from_rfc3339(updated_at).is_err() {
+    if !updated_at.ends_with('Z') || chrono::DateTime::parse_from_rfc3339(updated_at).is_err() {
         return Err("Private model catalog updatedAt must be an RFC3339 datetime.".to_string());
     }
     if entity_count > 64 {
@@ -321,11 +360,43 @@ fn normalize_entity(
 }
 
 fn trim_bounded(value: &mut String, max: usize, field: &str) -> Result<(), String> {
-    *value = value.trim().to_string();
+    *value = value
+        .trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
+        .to_string();
     if value.is_empty() || value.chars().count() > max {
         return Err(format!("{field} is invalid."));
     }
     Ok(())
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        Value::Null => Err(serde::de::Error::custom(
+            "Managed model environment values must be strings.",
+        )),
+        _ => Err(serde::de::Error::custom(
+            "Managed model environment values must be strings.",
+        )),
+    }
+}
+
+fn deserialize_optional_non_null_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        Value::Null => Err(serde::de::Error::custom(
+            "Private model upstreamName cannot be null.",
+        )),
+        _ => Err(serde::de::Error::custom(
+            "Private model upstreamName must be a string.",
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -333,54 +404,63 @@ pub struct ManagedModelEnvironment {
     #[serde(
         rename = "CODEX_HOME",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub codex_home: Option<String>,
     #[serde(
         rename = "OPENAI_API_KEY",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub openai_api_key: Option<String>,
     #[serde(
         rename = "OPENAI_BASE_URL",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub openai_base_url: Option<String>,
     #[serde(
         rename = "TASK_HANDOFF_CODEX_BASE_URL",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub codex_base_url: Option<String>,
     #[serde(
         rename = "TASK_HANDOFF_CODEX_MODEL",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub codex_model: Option<String>,
     #[serde(
         rename = "ANTHROPIC_API_KEY",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub anthropic_api_key: Option<String>,
     #[serde(
         rename = "ANTHROPIC_BASE_URL",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub anthropic_base_url: Option<String>,
     #[serde(
         rename = "TASK_HANDOFF_CLAUDE_MODEL",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub claude_model: Option<String>,
     #[serde(
         rename = "TASK_HANDOFF_OPENCODE_CONFIG_CONTENT",
         default,
+        deserialize_with = "deserialize_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub opencode_config_content: Option<String>,
@@ -419,7 +499,7 @@ impl ManagedModelEnvironment {
                 1_048_576,
             ),
         ] {
-            if value.is_some_and(|value| value.len() > max) {
+            if value.is_some_and(|value| value.chars().count() > max) {
                 return Err(format!("{field} is too long."));
             }
         }
@@ -568,9 +648,17 @@ pub fn sanitize_codex_instance_settings(value: Value) -> Value {
 }
 
 pub fn parse_codex_instance_settings(value: Value) -> Result<CodexInstanceSettings, String> {
-    let settings =
-        serde_json::from_value::<CodexInstanceSettings>(sanitize_codex_instance_settings(value))
-            .map_err(|error| format!("Codex instance settings are invalid: {error}"))?;
+    let sanitized = sanitize_codex_instance_settings(value);
+    if sanitized
+        .get("multiAgent")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("defaultModel"))
+        .is_some_and(Value::is_null)
+    {
+        return Err("Codex defaultModel must be an object when provided.".to_string());
+    }
+    let mut settings = serde_json::from_value::<CodexInstanceSettings>(sanitized)
+        .map_err(|error| format!("Codex instance settings are invalid: {error}"))?;
     if settings
         .multi_agent
         .max_concurrent_threads
@@ -586,8 +674,21 @@ pub fn parse_codex_instance_settings(value: Value) -> Result<CodexInstanceSettin
             return Err("Codex defaultReasoningEffort is invalid.".to_string());
         }
     }
-    if let Some(model) = &settings.multi_agent.default_model {
-        if model.model_entity_id.trim().is_empty() || model.model_name.trim().is_empty() {
+    if let Some(model) = &mut settings.multi_agent.default_model {
+        model.model_entity_id = model.model_entity_id.trim().to_string();
+        model.model_name = model.model_name.trim().to_string();
+        if let Some(upstream_name) = &mut model.model_upstream_name {
+            *upstream_name = upstream_name.trim().to_string();
+        }
+        if model.model_entity_id.is_empty()
+            || model.model_name.is_empty()
+            || model.model_entity_id.chars().count() > 120
+            || model.model_name.chars().count() > 240
+            || model
+                .model_upstream_name
+                .as_deref()
+                .is_some_and(|value| value.is_empty() || value.chars().count() > 240)
+        {
             return Err("Codex default subagent model is invalid.".to_string());
         }
     }

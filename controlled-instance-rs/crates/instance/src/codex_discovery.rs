@@ -11,13 +11,55 @@ pub(crate) struct CodexAppThreadBinding {
     pub cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexAppServerTargetKey {
+    Unix(String),
+    WebSocket {
+        endpoint: String,
+        token_file: Option<String>,
+    },
+}
+
+fn non_empty_string(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn app_server_target_key(session: &AppSession) -> Option<CodexAppServerTargetKey> {
+    if session.app_id != "codex" || session.status != "running" {
+        return None;
+    }
+    let app_server = session
+        .ai
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|ai| ai.get("appServer"))
+        .and_then(Value::as_object)?;
+    let socket_path = non_empty_string(app_server.get("socketPath"));
+    let endpoint = non_empty_string(app_server.get("endpoint"));
+    let transport = non_empty_string(app_server.get("transport"))
+        .or_else(|| socket_path.map(|_| "unix"))
+        .or_else(|| endpoint.map(|_| "ws"))?;
+    if transport == "ws" {
+        return endpoint.map(|endpoint| CodexAppServerTargetKey::WebSocket {
+            endpoint: endpoint.to_string(),
+            token_file: non_empty_string(app_server.get("tokenFile")).map(ToString::to_string),
+        });
+    }
+    socket_path.map(|path| CodexAppServerTargetKey::Unix(path.to_string()))
+}
+
 pub(crate) fn app_thread_bindings(
     sessions: &[AppSession],
 ) -> (HashMap<String, CodexAppThreadBinding>, Vec<String>) {
     let mut bindings = HashMap::new();
     let mut recoverable = Vec::new();
+    let Some(target_key) = sessions.iter().find_map(app_server_target_key) else {
+        return (bindings, recoverable);
+    };
     for session in sessions {
-        if session.app_id != "codex" || session.status != "running" {
+        if app_server_target_key(session).as_ref() != Some(&target_key) {
             continue;
         }
         let Some(ai) = session.ai.as_ref().and_then(Value::as_object) else {
@@ -26,7 +68,6 @@ pub(crate) fn app_thread_bindings(
         let active = ai
             .get("activeThreadId")
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty());
         let thread_ids = ai
             .get("threadIds")
@@ -34,7 +75,6 @@ pub(crate) fn app_thread_bindings(
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty());
         let binding = CodexAppThreadBinding {
             app_session_id: session.id.clone(),
@@ -100,9 +140,13 @@ pub(crate) fn project_new_codex_session(
         reasoning_effort: valid_reasoning_effort(snapshot.reasoning_effort.as_deref()),
         story_id: None,
         app_binding_keys: Some(vec![format!("app:{}", binding.app_session_id)]),
-        actions: Some(codex_actions(&snapshot.status, &snapshot.phase)),
+        actions: Some(codex_actions(
+            &snapshot.status,
+            &snapshot.phase,
+            snapshot.fork_supported,
+        )),
         active_turn_id: summary.active_turn_id.clone(),
-        title: binding.title.clone().or_else(|| snapshot.name.clone()),
+        title: binding.title.clone(),
         cwd: Some(snapshot.cwd.trim())
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
@@ -117,7 +161,7 @@ pub(crate) fn project_new_codex_session(
         last_message_item_id: summary.last_message_item_id.clone(),
         current_tool: None,
         tool_calls_since_last_message: 0,
-        sub_agents: Vec::new(),
+        sub_agents: summary.sub_agents.clone(),
         transcript_path: None,
         transcript_size: None,
         started_at,
@@ -157,12 +201,6 @@ pub(crate) fn merge_codex_session(
         session.cwd = Some(snapshot.cwd.clone());
         changed = true;
     }
-    if let Some(name) = snapshot.name.as_deref().filter(|value| !value.is_empty()) {
-        if session.title.as_deref() != Some(name) {
-            session.title = Some(name.to_string());
-            changed = true;
-        }
-    }
     if snapshot
         .model
         .as_deref()
@@ -193,7 +231,7 @@ pub(crate) fn merge_codex_session(
         session.phase = snapshot.phase.clone();
         changed = true;
     }
-    let actions = codex_actions(&snapshot.status, &snapshot.phase);
+    let actions = codex_actions(&snapshot.status, &snapshot.phase, snapshot.fork_supported);
     if session.actions.as_ref() != Some(&actions) {
         session.actions = Some(actions);
         changed = true;
@@ -221,6 +259,10 @@ pub(crate) fn merge_codex_session(
         }
         if session.last_message_item_id != summary.last_message_item_id {
             session.last_message_item_id = summary.last_message_item_id.clone();
+            changed = true;
+        }
+        if session.sub_agents != summary.sub_agents {
+            session.sub_agents = summary.sub_agents.clone();
             changed = true;
         }
         if session.error != summary.error {
@@ -280,12 +322,16 @@ struct ThreadSummary {
     last_message: Option<String>,
     last_message_item_id: Option<String>,
     error: Option<String>,
+    sub_agents: Vec<Value>,
 }
 
 impl ThreadSummary {
     fn from_snapshot(snapshot: &CodexThreadSnapshot) -> Self {
         let turns = snapshot.turns.as_array().cloned().unwrap_or_default();
-        let mut summary = Self::default();
+        let mut summary = Self {
+            sub_agents: snapshot.sub_agents.clone(),
+            ..Self::default()
+        };
         for (index, turn) in turns.iter().enumerate() {
             let Some(record) = turn.as_object() else {
                 continue;
@@ -409,12 +455,12 @@ impl ThreadSummary {
     }
 }
 
-fn codex_actions(status: &str, phase: &str) -> Value {
+fn codex_actions(status: &str, phase: &str, fork_supported: bool) -> Value {
     json!({
         "send": true,
         "interrupt": matches!(status, "running" | "waiting"),
         "approval": status == "waiting" && phase == "approval",
-        "fork": true,
+        "fork": fork_supported,
         "rename": true,
     })
 }
@@ -422,7 +468,12 @@ fn codex_actions(status: &str, phase: &str) -> Value {
 fn valid_reasoning_effort(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
-        .filter(|value| matches!(*value, "low" | "medium" | "high" | "xhigh"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+            )
+        })
         .map(ToString::to_string)
 }
 
@@ -552,9 +603,52 @@ mod tests {
                     { "type": "agentMessage", "id": "item-1", "text": "Working on it" }
                 ]
             }]),
+            sub_agents: Vec::new(),
             paginated_history: false,
+            fork_supported: true,
             lineage: None,
             turns_authoritative: true,
+        }
+    }
+
+    fn app_session(
+        id: &str,
+        socket_path: &str,
+        active_thread_id: &str,
+        thread_ids: &[&str],
+    ) -> AppSession {
+        AppSession {
+            id: id.to_string(),
+            app_id: "codex".to_string(),
+            title: "Codex".to_string(),
+            kind: "tty".to_string(),
+            status: "running".to_string(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            workspace: controlled_instance_protocol::AppSessionWorkspace {
+                cwd: "/workspace".to_string(),
+            },
+            launch: None,
+            tty: None,
+            display: None,
+            vnc: None,
+            web: None,
+            automation: None,
+            process: None,
+            ai: Some(json!({
+                "activeThreadId": active_thread_id,
+                "threadIds": thread_ids,
+                "appServer": {
+                    "transport": "unix",
+                    "socketPath": socket_path
+                }
+            })),
+            paths: controlled_instance_protocol::AppSessionPaths {
+                session_dir: "/tmp/app".to_string(),
+                log_dir: "/tmp/log".to_string(),
+            },
+            bindings: Vec::new(),
+            extra: Default::default(),
         }
     }
 
@@ -583,39 +677,93 @@ mod tests {
     }
 
     #[test]
-    fn bindings_and_recovery_are_derived_from_running_app_sessions() {
-        let mut session = AppSession {
-            id: "app_0000000000001".to_string(),
-            app_id: "codex".to_string(),
-            title: "Codex".to_string(),
-            kind: "tty".to_string(),
-            status: "running".to_string(),
-            created_at: now_iso(),
-            updated_at: now_iso(),
-            workspace: controlled_instance_protocol::AppSessionWorkspace {
-                cwd: "/workspace".to_string(),
-            },
-            launch: None,
-            tty: None,
-            display: None,
-            vnc: None,
-            web: None,
-            automation: None,
-            process: None,
-            ai: Some(json!({ "activeThreadId": "thread-1", "threadIds": ["thread-2"] })),
-            paths: controlled_instance_protocol::AppSessionPaths {
-                session_dir: "/tmp/app".to_string(),
-                log_dir: "/tmp/log".to_string(),
-            },
-            bindings: Vec::new(),
-            extra: Default::default(),
+    fn discovery_summary_updates_metadata_without_replacing_authoritative_turns() {
+        let binding = CodexAppThreadBinding {
+            app_session_id: "app_0000000000001".to_string(),
+            title: Some("Codex TUI".to_string()),
+            cwd: Some("/workspace".to_string()),
         };
+        let mut session = project_new_codex_session(&snapshot(), &binding, None);
+        let authoritative_turns = session.turns.clone();
+        let mut summary = snapshot();
+        summary.turns_authoritative = false;
+        summary.turns = json!([]);
+        summary.name = Some("Renamed".to_string());
+        summary.status = "idle".to_string();
+        summary.phase = "idle".to_string();
+
+        assert!(merge_codex_session(&mut session, &summary, None, None));
+        assert_eq!(session.title.as_deref(), Some("Codex TUI"));
+        assert_eq!(session.status, "idle");
+        assert_eq!(session.phase, "idle");
+        assert_eq!(session.turns, authoritative_turns);
+    }
+
+    #[test]
+    fn app_thread_projection_includes_codex_sub_agents() {
+        let binding = CodexAppThreadBinding {
+            app_session_id: "app_0000000000001".to_string(),
+            title: None,
+            cwd: None,
+        };
+        let mut snapshot = snapshot();
+        snapshot.sub_agents = vec![json!({
+            "threadId": "sub-1",
+            "path": "researcher",
+            "status": "running",
+            "updatedAt": "2026-11-02T00:00:00.000Z"
+        })];
+        let session = project_new_codex_session(&snapshot, &binding, None);
+        assert_eq!(session.sub_agents.len(), 1);
+        assert_eq!(session.sub_agents[0]["threadId"], "sub-1");
+        assert_eq!(session.sub_agents[0]["path"], "researcher");
+    }
+
+    #[test]
+    fn bindings_and_recovery_are_derived_from_running_app_sessions() {
+        let mut session = app_session(
+            "app_0000000000001",
+            "/tmp/codex-one.sock",
+            "thread-1",
+            &["thread-2"],
+        );
         let (bindings, recoverable) = app_thread_bindings(std::slice::from_ref(&session));
         assert_eq!(bindings["thread-1"].app_session_id, session.id);
         assert!(bindings.contains_key("thread-2"));
         assert_eq!(recoverable, vec!["thread-1", "thread-2"]);
 
         session.status = "stopped".to_string();
+        let (bindings, recoverable) = app_thread_bindings(&[session]);
+        assert!(bindings.is_empty());
+        assert!(recoverable.is_empty());
+    }
+
+    #[test]
+    fn bindings_are_isolated_to_the_active_app_server_target() {
+        let primary = app_session(
+            "app_0000000000001",
+            "/tmp/codex-one.sock",
+            "thread-1",
+            &["thread-2"],
+        );
+        let other = app_session(
+            "app_0000000000002",
+            "/tmp/codex-two.sock",
+            "thread-3",
+            &["thread-4"],
+        );
+        let (bindings, recoverable) = app_thread_bindings(&[primary, other]);
+        assert_eq!(bindings["thread-1"].app_session_id, "app_0000000000001");
+        assert_eq!(bindings["thread-2"].app_session_id, "app_0000000000001");
+        assert!(!bindings.contains_key("thread-3"));
+        assert!(!bindings.contains_key("thread-4"));
+        assert_eq!(recoverable, vec!["thread-1", "thread-2"]);
+    }
+
+    #[test]
+    fn app_sessions_without_an_app_server_target_do_not_bind_threads() {
+        let mut session = app_session("app_0000000000001", "/tmp/codex-one.sock", "thread-1", &[]);
+        session.ai = Some(json!({ "activeThreadId": "thread-1" }));
         let (bindings, recoverable) = app_thread_bindings(&[session]);
         assert!(bindings.is_empty());
         assert!(recoverable.is_empty());

@@ -4,7 +4,6 @@ use controlled_instance_protocol::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
-use uuid::Uuid;
 
 const EVENT_RETENTION_MS: i64 = 60 * 60 * 1000;
 
@@ -94,11 +93,11 @@ impl AppSessionAuthority {
             "streamId": self.stream_id,
             "instanceId": self.instance_id,
             "revision": self.revision,
-            "traceId": format!("aps_evt_{}_{}", Utc::now().timestamp_millis(), Uuid::new_v4().simple()),
+            "traceId": crate::ai_session_authority::event_trace_id("aps_evt"),
             "generatedAt": generated_at,
             "reason": reason,
         });
-        if self.revision > 1 {
+        if self.revision > 0 {
             meta.as_object_mut().expect("meta object").insert(
                 "previousRevision".to_string(),
                 json!(self.revision.saturating_sub(1)),
@@ -151,14 +150,14 @@ impl AppSessionAuthority {
         })
     }
 
-    pub fn delta(&self, stream_id: &str, since_revision: u64) -> Value {
+    pub fn delta(&self, stream_id: &str, since_revision: f64) -> Value {
         let latest_revision = self.revision;
         let earliest_retained_revision = self
             .history
             .front()
             .map(|event| event.revision)
             .unwrap_or(latest_revision.saturating_add(1));
-        if stream_id != self.stream_id || since_revision > latest_revision {
+        if stream_id != self.stream_id || since_revision > latest_revision as f64 {
             return delta_response(
                 &self.stream_id,
                 &self.instance_id,
@@ -169,7 +168,7 @@ impl AppSessionAuthority {
                 Vec::new(),
             );
         }
-        if since_revision == latest_revision {
+        if since_revision == latest_revision as f64 {
             return delta_response(
                 &self.stream_id,
                 &self.instance_id,
@@ -183,11 +182,11 @@ impl AppSessionAuthority {
         let events = self
             .history
             .iter()
-            .filter(|event| event.revision > since_revision)
+            .filter(|event| event.revision as f64 > since_revision)
             .collect::<Vec<_>>();
         let sync_required = events
             .first()
-            .is_none_or(|event| event.revision != since_revision.saturating_add(1));
+            .is_none_or(|event| event.revision as f64 != since_revision + 1.0);
         let events = if sync_required {
             Vec::new()
         } else {
@@ -279,7 +278,7 @@ fn snapshot_changes(
 fn delta_response(
     stream_id: &str,
     instance_id: &str,
-    since_revision: u64,
+    since_revision: f64,
     latest_revision: u64,
     earliest_retained_revision: u64,
     sync_required: bool,
@@ -288,12 +287,20 @@ fn delta_response(
     json!({
         "streamId": stream_id,
         "instanceId": instance_id,
-        "sinceRevision": since_revision,
+        "sinceRevision": js_number_value(since_revision),
         "latestRevision": latest_revision,
         "earliestRetainedRevision": earliest_retained_revision,
         "syncRequired": sync_required,
         "events": events,
     })
+}
+
+fn js_number_value(number: f64) -> Value {
+    if number >= 0.0 && number <= u64::MAX as f64 && number.fract() == 0.0 {
+        json!(number as u64)
+    } else {
+        json!(number)
+    }
 }
 
 fn now_iso() -> String {
@@ -345,7 +352,7 @@ mod tests {
             )
             .expect("snapshot");
         assert_eq!(first.event_type, "app-session.snapshot");
-        assert!(first.payload["meta"].get("previousRevision").is_none());
+        assert_eq!(first.payload["meta"]["previousRevision"], 0);
         assert!(authority
             .prepare(
                 snapshot(

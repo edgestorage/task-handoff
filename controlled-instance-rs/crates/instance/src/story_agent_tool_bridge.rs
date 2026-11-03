@@ -4,10 +4,16 @@ use crate::{
 };
 use controlled_instance_ai_session::{AiSession, AiSessionRuntime};
 use controlled_instance_protocol::AiSessionAgentToolName;
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Deserializer};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use uuid::Uuid;
+
+static TOOL_DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("story_agent_tool_definitions.json"))
+        .expect("the MCP tool definitions are valid JSON")
+});
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -17,7 +23,7 @@ pub struct AgentToolInvocationInput {
     pub tool: AiSessionAgentToolName,
     #[serde(default)]
     pub arguments: Value,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_option")]
     pub call_id: Option<String>,
 }
 
@@ -130,15 +136,23 @@ pub fn invocation_request_id(
     format!("agent_tool_{}", hex::encode(Sha256::digest(source)))
 }
 
-pub fn required_thread_id(meta: Option<&Value>) -> Result<&str, StoryToolError> {
+pub fn required_thread_id_for(
+    tool: AiSessionAgentToolName,
+    meta: Option<&Value>,
+) -> Result<&str, StoryToolError> {
     meta.and_then(Value::as_object)
         .and_then(|meta| meta.get("threadId"))
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
+            let target = if tool == AiSessionAgentToolName::AgentRun {
+                "Agent"
+            } else {
+                "Story"
+            };
             StoryToolError::new(
                 "AI_SESSION_IDENTITY_REQUIRED",
-                "Codex did not provide a thread identity for the Story tool call.",
+                format!("Codex did not provide a thread identity for the {target} tool call."),
                 400,
             )
         })
@@ -153,22 +167,33 @@ pub fn optional_call_id(meta: Option<&Value>) -> Option<&str> {
 }
 
 pub fn tool_definitions() -> Vec<Value> {
-    AiSessionAgentToolName::ALL
+    TOOL_DEFINITIONS.clone()
+}
+
+pub fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
+    let schema = tool_schema(name, "inputSchema")?;
+    let validator = jsonschema::validator_for(schema).map_err(|error| error.to_string())?;
+    validator
+        .validate(arguments)
+        .map_err(|error| error.to_string())
+}
+
+pub fn validate_tool_output(name: &str, output: &Value) -> Result<(), String> {
+    let schema = tool_schema(name, "outputSchema")?;
+    let validator = jsonschema::validator_for(schema).map_err(|error| error.to_string())?;
+    validator
+        .validate(output)
+        .map_err(|error| error.to_string())
+}
+
+fn tool_schema<'a>(name: &str, key: &str) -> Result<&'a Value, String> {
+    let definition = TOOL_DEFINITIONS
         .iter()
-        .copied()
-        .map(|tool| {
-            let mut definition = Map::from_iter([
-                ("name".to_string(), json!(tool.as_str())),
-                ("description".to_string(), json!(description(tool))),
-                ("inputSchema".to_string(), input_schema(tool)),
-                ("outputSchema".to_string(), json!({"type": "object"})),
-            ]);
-            if is_read_only(tool) {
-                definition.insert("annotations".to_string(), json!({"readOnlyHint": true}));
-            }
-            Value::Object(definition)
-        })
-        .collect()
+        .find(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
+        .ok_or_else(|| format!("Tool {name} not found"))?;
+    definition
+        .get(key)
+        .ok_or_else(|| format!("Tool {name} has no {key}"))
 }
 
 fn validate_provider_session_id(value: &str) -> Result<(), StoryToolError> {
@@ -184,275 +209,18 @@ fn invalid_request(message: &str) -> StoryToolError {
     StoryToolError::new("STORY_TOOL_FAILED", message, 400)
 }
 
-fn description(tool: AiSessionAgentToolName) -> &'static str {
-    match tool {
-        AiSessionAgentToolName::StoryListContent => "List indexed documents in the current Story, ordered newest to oldest. Start with page 1 and continue with pagination.nextPage when present.",
-        AiSessionAgentToolName::StoryGetContent => "Copy documents selected from story_list_content into the current AI Session workspace.",
-        AiSessionAgentToolName::StorySetContent => "Create or replace one indexed Story document from a workspace file; use expectedRevision to prevent overwriting a newer version.",
-        AiSessionAgentToolName::StoryListActions => "List preset Actions in the Story assigned to the current AI Session.",
-        AiSessionAgentToolName::StoryRunAction => "Run one preset Story Action using its configured target instance and session preset.",
-        AiSessionAgentToolName::StoryListAutomations => "List Automations and their effective status for the current Story.",
-        AiSessionAgentToolName::StoryCreateAutomation => "Create a long-lived Automation using an existing preset Action in the current Story.",
-        AiSessionAgentToolName::StoryUpdateAutomation => "Update or enable an Automation in the current Story with optimistic concurrency.",
-        AiSessionAgentToolName::StoryDeleteAutomation => "Delete an Automation in the current Story with optimistic concurrency.",
-        AiSessionAgentToolName::StoryRunAutomation => "Run an Automation in the current Story immediately.",
-        AiSessionAgentToolName::StoryListAutomationRuns => "List recent runs for an Automation in the current Story.",
-        AiSessionAgentToolName::StoryListAiSessions => "List other active root AI Sessions assigned to the current Story.",
-        AiSessionAgentToolName::StoryGetAiSession => "Read compact session details and Turn summaries for another active root AI Session in the current Story.",
-        AiSessionAgentToolName::StoryGetAiSessionTurn => "Read one Turn's conversation and tool items from another active root AI Session in the current Story.",
-        AiSessionAgentToolName::StoryRequestDecision => "Ask the operator for a decision. Use this when progress depends on a human choice, missing context, or approval that cannot be derived from the workspace.",
-        AiSessionAgentToolName::AgentRun => "Run an Agent authorized for this Story and wait for its bounded final result.",
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom("expected a value, not null"));
     }
-}
-
-fn is_read_only(tool: AiSessionAgentToolName) -> bool {
-    matches!(
-        tool,
-        AiSessionAgentToolName::StoryListContent
-            | AiSessionAgentToolName::StoryListActions
-            | AiSessionAgentToolName::StoryListAutomations
-            | AiSessionAgentToolName::StoryListAutomationRuns
-            | AiSessionAgentToolName::StoryListAiSessions
-            | AiSessionAgentToolName::StoryGetAiSession
-            | AiSessionAgentToolName::StoryGetAiSessionTurn
-    )
-}
-
-fn input_schema(tool: AiSessionAgentToolName) -> Value {
-    let page = || {
-        json!({
-            "page": {"type": "integer", "minimum": 1, "maximum": 500, "default": 1},
-            "pageSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
-        })
-    };
-    let object = |properties: Value, required: &[&str]| {
-        json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false
-        })
-    };
-    match tool {
-        AiSessionAgentToolName::StoryListContent
-        | AiSessionAgentToolName::StoryListActions
-        | AiSessionAgentToolName::StoryListAutomations
-        | AiSessionAgentToolName::StoryListAiSessions => object(page(), &[]),
-        AiSessionAgentToolName::StoryGetContent => object(
-            json!({
-                "storyPaths": {
-                    "type": "array",
-                    "items": story_path_schema(),
-                    "minItems": 1,
-                    "maxItems": 20
-                },
-                "destinationPath": {"type": "string", "minLength": 1, "maxLength": 4096}
-            }),
-            &["storyPaths", "destinationPath"],
-        ),
-        AiSessionAgentToolName::StorySetContent => object(
-            json!({
-                "storyPath": story_path_schema(),
-                "title": {"type": "string", "minLength": 1, "maxLength": 240},
-                "sourcePath": {"type": "string", "minLength": 1, "maxLength": 4096},
-                "expectedRevision": revision_schema()
-            }),
-            &["storyPath", "sourcePath"],
-        ),
-        AiSessionAgentToolName::StoryRunAction => object(
-            json!({
-                "actionId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "clientRequestId": {"type": "string", "minLength": 1, "maxLength": 160}
-            }),
-            &["actionId", "clientRequestId"],
-        ),
-        AiSessionAgentToolName::StoryCreateAutomation => object(
-            json!({
-                "actionId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "schedule": schedule_schema(),
-                "enabled": {"type": "boolean", "default": true},
-                "policy": automation_policy_schema()
-            }),
-            &["actionId", "schedule"],
-        ),
-        AiSessionAgentToolName::StoryUpdateAutomation => object(
-            json!({
-                "automationId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "expectedUpdatedAt": {"type": "string", "format": "date-time"},
-                "actionId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "schedule": schedule_schema(),
-                "enabled": {"type": "boolean"},
-                "policy": automation_policy_schema()
-            }),
-            &["automationId", "expectedUpdatedAt"],
-        ),
-        AiSessionAgentToolName::StoryDeleteAutomation => object(
-            json!({
-                "automationId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "expectedUpdatedAt": {"type": "string", "format": "date-time"}
-            }),
-            &["automationId", "expectedUpdatedAt"],
-        ),
-        AiSessionAgentToolName::StoryRunAutomation => object(
-            json!({
-                "automationId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "clientRequestId": {"type": "string", "minLength": 1, "maxLength": 160}
-            }),
-            &["automationId", "clientRequestId"],
-        ),
-        AiSessionAgentToolName::StoryListAutomationRuns => object(
-            json!({
-                "automationId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "page": {"type": "integer", "minimum": 1, "maximum": 500, "default": 1},
-                "pageSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
-            }),
-            &["automationId"],
-        ),
-        AiSessionAgentToolName::StoryGetAiSession => object(
-            json!({
-                "instanceId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "sessionId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "page": {"type": "integer", "minimum": 1, "maximum": 500, "default": 1},
-                "pageSize": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
-            }),
-            &["instanceId", "sessionId"],
-        ),
-        AiSessionAgentToolName::StoryGetAiSessionTurn => object(
-            json!({
-                "instanceId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "sessionId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "turnId": {"type": "string", "minLength": 1, "maxLength": 240},
-                "page": {"type": "integer", "minimum": 1, "maximum": 500, "default": 1},
-                "pageSize": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-                "maxTextChars": {"type": "integer", "minimum": 256, "maximum": 32000, "default": 8000}
-            }),
-            &["instanceId", "sessionId", "turnId"],
-        ),
-        AiSessionAgentToolName::StoryRequestDecision => object(
-            json!({
-                "question": {"type": "string", "minLength": 1, "maxLength": 32000},
-                "options": {
-                    "type": "array",
-                    "maxItems": 20,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string", "minLength": 1, "maxLength": 120},
-                            "label": {"type": "string", "minLength": 1, "maxLength": 240},
-                            "description": {"type": "string", "maxLength": 2000}
-                        },
-                        "required": ["id", "label"],
-                        "additionalProperties": false
-                    }
-                },
-                "allowFreeText": {"type": "boolean"},
-                "context": {"type": "string", "maxLength": 8000}
-            }),
-            &["question"],
-        ),
-        AiSessionAgentToolName::AgentRun => object(
-            json!({
-                "agentId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "orchestrationId": {"type": "string", "minLength": 1, "maxLength": 120},
-                "prompt": {"type": "string", "minLength": 1, "maxLength": 128000},
-                "budget": {
-                    "type": "object",
-                    "properties": {
-                        "maxMembers": {"type": "integer", "minimum": 1},
-                        "maxDepth": {"type": "integer", "minimum": 0},
-                        "maxConcurrency": {"type": "integer", "minimum": 1}
-                    },
-                    "required": ["maxMembers", "maxDepth", "maxConcurrency"],
-                    "additionalProperties": false
-                }
-            }),
-            &["agentId", "prompt"],
-        ),
-    }
-}
-
-fn story_path_schema() -> Value {
-    json!({
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 1024,
-        "pattern": "^(?!/)(?!.*\\\\).*(?:^|/)(?:(?!\\.{1,2}(?:/|$)).)*$"
-    })
-}
-
-fn revision_schema() -> Value {
-    json!({"type": "string", "pattern": "^[a-f0-9]{64}$"})
-}
-
-fn schedule_schema() -> Value {
-    json!({
-        "oneOf": [
-            {
-                "type": "object",
-                "properties": {
-                    "scheduleKind": {"const": "interval"},
-                    "intervalMs": {"type": "integer", "minimum": 60000}
-                },
-                "required": ["scheduleKind", "intervalMs"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "scheduleKind": {"const": "daily"},
-                    "timeOfDay": {"type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"},
-                    "timezone": {"type": "string", "minLength": 1, "maxLength": 120}
-                },
-                "required": ["scheduleKind", "timeOfDay", "timezone"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "scheduleKind": {"const": "weekly"},
-                    "weekdays": {
-                        "type": "array",
-                        "items": {"type": "integer", "minimum": 0, "maximum": 6},
-                        "minItems": 1,
-                        "maxItems": 7,
-                        "uniqueItems": true
-                    },
-                    "timeOfDay": {"type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"},
-                    "timezone": {"type": "string", "minLength": 1, "maxLength": 120}
-                },
-                "required": ["scheduleKind", "weekdays", "timeOfDay", "timezone"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "scheduleKind": {"const": "monthly"},
-                    "dayOfMonth": {
-                        "type": "integer",
-                        "minimum": -3,
-                        "maximum": 31,
-                        "not": {"const": 0}
-                    },
-                    "timeOfDay": {"type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"},
-                    "timezone": {"type": "string", "minLength": 1, "maxLength": 120}
-                },
-                "required": ["scheduleKind", "dayOfMonth", "timeOfDay", "timezone"],
-                "additionalProperties": false
-            }
-        ]
-    })
-}
-
-fn automation_policy_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "cooldownMs": {"type": "integer", "minimum": 0, "maximum": 86400000},
-            "maxConcurrentRuns": {"type": "integer", "minimum": 1, "maximum": 20, "default": 1},
-            "whenBusy": {"type": "string", "enum": ["skip", "queue"], "default": "skip"}
-        },
-        "additionalProperties": false
-    })
+    T::deserialize(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]
@@ -478,6 +246,8 @@ mod tests {
             let properties = definition["inputSchema"]["properties"]
                 .as_object()
                 .expect("properties");
+            assert_eq!(definition["execution"]["taskSupport"], "forbidden");
+            assert!(definition["outputSchema"]["properties"].is_object());
             assert!(!properties.contains_key("storyId"));
             assert!(!properties.contains_key("providerSessionId"));
             assert!(

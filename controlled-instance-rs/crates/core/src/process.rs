@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "linux"))]
 use std::process::Command;
 
 #[cfg(target_os = "linux")]

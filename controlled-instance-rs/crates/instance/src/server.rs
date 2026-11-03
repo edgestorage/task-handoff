@@ -1,10 +1,10 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::{to_bytes, Body, Bytes},
     extract::{
-        rejection::JsonRejection,
-        rejection::QueryRejection,
+        rejection::{JsonRejection, MissingJsonContentType},
         ws::{Message, WebSocket, WebSocketUpgrade},
-        DefaultBodyLimit, FromRequestParts, OriginalUri, Path, Query, Request, State,
+        DefaultBodyLimit, FromRequest, FromRequestParts, OriginalUri, Path, Query, RawQuery,
+        Request, State,
     },
     http::{header, HeaderMap, Method, StatusCode, Uri},
     middleware::{self, Next},
@@ -19,22 +19,25 @@ use controlled_instance_protocol::{
     project_ai_session_stream_event_payload_for_consumer,
     project_ai_sessions_snapshot_for_consumer, AgentRunError, AgentRunMemberInstanceCloseResult,
     AgentRunMemberInstanceCreateResult, AgentRunMemberInstanceStatus, AgentRunResult,
-    AiSessionTransientSubscription, AiSessionWorkspaceSelection, ApiEnvelope, ApiError,
-    ApiErrorEnvelope, AppDisplayOptions, AppLaunchRequest, AppManagementOperation,
-    AppManagementOperationRequest, ConfigSyncDirection, ConfigSyncPreset, ConfigSyncRequest,
-    ManagedModelEnvironment, RepositoryAiSessionLaunchResult, RepositoryAiSessionWorkspace,
-    RepositoryAiSessionWorkspaceBranch, RepositoryAiSessionWorkspaceBranchKind,
-    RepositoryAiSessionWorkspaceCheckout, RepositoryAiSessionWorkspaceCheckoutRequest,
-    RepositoryAiSessionWorkspaceInspectRequest, RepositoryAvailability, RepositoryChangeScope,
-    RepositoryCheckoutBranchRequest, RepositoryCommitRequest, RepositoryCreateBranchRequest,
-    RepositoryCreateFileRequest, RepositoryCreateTrackingBranchRequest,
-    RepositoryCreateWorktreeAiSessionRequest, RepositoryCreateWorktreeRequest,
-    RepositoryDeleteBranchRequest, RepositoryDeleteFileRequest, RepositoryFetchRequest,
-    RepositoryMoveWorktreePreflightRequest, RepositoryMoveWorktreeRequest,
+    AiSessionConversationAttachment, AiSessionTransientSubscription, AiSessionWorkspaceSelection,
+    ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions, AppLaunchRequest,
+    AppManagementOperation, AppManagementOperationRequest, ConfigSyncDirection, ConfigSyncPreset,
+    ConfigSyncRequest, ManagedModelEnvironment, RepositoryAiSessionLaunchResult,
+    RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch,
+    RepositoryAiSessionWorkspaceBranchKind, RepositoryAiSessionWorkspaceCheckout,
+    RepositoryAiSessionWorkspaceCheckoutRequest, RepositoryAiSessionWorkspaceInspectRequest,
+    RepositoryAvailability, RepositoryChangeScope, RepositoryCheckoutBranchRequest,
+    RepositoryCommitRequest, RepositoryCreateBranchRequest, RepositoryCreateFileRequest,
+    RepositoryCreateTrackingBranchRequest, RepositoryCreateWorktreeAiSessionRequest,
+    RepositoryCreateWorktreeRequest, RepositoryDeleteBranchRequest, RepositoryDeleteFileRequest,
+    RepositoryFetchRequest, RepositoryMoveWorktreePreflightRequest, RepositoryMoveWorktreeRequest,
     RepositoryPublishRequest, RepositoryPullRequest, RepositoryPushRequest,
     RepositoryRemoveWorktreeRequest, RepositoryRenameFileRequest, RepositoryRuntimePathInput,
     RepositorySessionKind, RepositoryStartAiSessionRequest, RepositoryWriteFileRequest,
-    StoryAutomationInstanceCreateResult, TriggerCreateInput, TriggerPatchInput, TriggerRunInput,
+    StoryAutomationInstanceCreateResult, TriggerAction, TriggerAiSessionPhase,
+    TriggerAiSessionStatus, TriggerCreateInput, TriggerDeploymentCreateInput,
+    TriggerDeploymentOrigin, TriggerPatchInput, TriggerPolicyInput, TriggerRunInput,
+    TriggerScheduleKind, TriggerSource, TriggerTarget, TriggerWhenBusy,
     COMPACT_EVENT_ENVELOPE_VERSION, SESSION_STREAM_PROTOCOL_VERSION, TTY_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
@@ -47,11 +50,14 @@ use controlled_instance_workspace::{
     RepositoryOperationError, RepositorySessionInventory, RepositorySessionTarget,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    convert::Infallible,
+    io,
     net::SocketAddr,
     path::PathBuf,
+    sync::OnceLock,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -61,19 +67,154 @@ use subtle::ConstantTimeEq;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    time::{Duration as TokioDuration, Instant as TokioInstant},
 };
 use tower::ServiceExt;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeFile;
 use tracing::{info, warn};
 
+const MCP_LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    MCP_LATEST_PROTOCOL_VERSION,
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+    "2024-10-07",
+];
+const MCP_KEEPALIVE_INTERVAL: TokioDuration = TokioDuration::from_secs(15);
+const MCP_BODY_LIMIT: usize = 256 * 1024;
+const DEFAULT_JSON_BODY_LIMIT: usize = 1024 * 1024;
+
+fn ai_session_open_app_binding_timeout() -> TokioDuration {
+    #[cfg(test)]
+    {
+        TokioDuration::from_secs(1)
+    }
+    #[cfg(not(test))]
+    {
+        TokioDuration::from_secs(8)
+    }
+}
+
+struct JsonValueBody(Value);
+
+struct RawJsonValueBody(Value);
+
+async fn parse_json_value_body<S>(request: Request, state: &S) -> Result<Value, JsonRejection>
+where
+    S: Send + Sync,
+{
+    let json_content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            let essence = value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            essence == "application/json" || essence.ends_with("+json")
+        })
+        .unwrap_or(false);
+    let bytes = Bytes::from_request(request, state)
+        .await
+        .map_err(JsonRejection::from)?;
+    if bytes.is_empty() && !json_content_type {
+        return Ok(json!({}));
+    }
+    if !json_content_type {
+        return Err(JsonRejection::MissingJsonContentType(
+            MissingJsonContentType::default(),
+        ));
+    }
+    Json::<Value>::from_bytes(&bytes).map(|Json(value)| value)
+}
+
+fn js_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
+}
+
+fn parse_js_number(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some(0.0);
+    }
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0b", 2),
+        ("0B", 2),
+        ("0o", 8),
+        ("0O", 8),
+    ] {
+        if let Some(digits) = value.strip_prefix(prefix) {
+            return u128::from_str_radix(digits, radix)
+                .ok()
+                .map(|value| value as f64);
+        }
+    }
+    match value {
+        "Infinity" | "+Infinity" => Some(f64::INFINITY),
+        "-Infinity" => Some(f64::NEG_INFINITY),
+        _ if [
+            "inf",
+            "+inf",
+            "-inf",
+            "infinity",
+            "+infinity",
+            "-infinity",
+            "nan",
+        ]
+        .iter()
+        .any(|alias| value.eq_ignore_ascii_case(alias)) =>
+        {
+            None
+        }
+        _ => value.parse::<f64>().ok(),
+    }
+}
+
+impl<S> FromRequest<S> for JsonValueBody
+where
+    S: Send + Sync,
+{
+    type Rejection = JsonRejection;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let value = parse_json_value_body(request, state).await?;
+        Ok(Self(if js_truthy(&value) { value } else { json!({}) }))
+    }
+}
+
+impl<S> FromRequest<S> for RawJsonValueBody
+where
+    S: Send + Sync,
+{
+    type Rejection = JsonRejection;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        parse_json_value_body(request, state).await.map(Self)
+    }
+}
+
 use crate::{
+    ai_session_open_app::AiSessionOpenAppOutcome,
     ai_session_validation::{
-        normalize_ai_session_command_body, normalize_ai_session_create_body,
-        normalize_ai_session_fork_body, normalize_ai_session_message_body,
-        normalize_ai_session_model_selection_body, normalize_ai_session_queue_edit_body,
-        normalize_ai_session_queue_reorder_body, normalize_ai_session_reasoning_effort_body,
-        normalize_ai_session_rename_body, normalize_ai_session_resume_body,
-        normalize_ai_session_timeline_sync_body, normalize_empty_object_body,
+        normalize_agent_run_member_create_body, normalize_ai_session_command_body,
+        normalize_ai_session_create_body, normalize_ai_session_fork_body,
+        normalize_ai_session_message_body, normalize_ai_session_model_selection_body,
+        normalize_ai_session_queue_edit_body, normalize_ai_session_queue_reorder_body,
+        normalize_ai_session_reasoning_effort_body, normalize_ai_session_rename_body,
+        normalize_ai_session_resume_body, normalize_ai_session_timeline_sync_body,
+        normalize_empty_object_body, normalize_story_automation_create_body,
     },
     auth::resolve_web_auth,
     config::{ControlMode, InstanceConfig, ServerOptions},
@@ -82,8 +223,9 @@ use crate::{
     },
     state::AppState,
     story_agent_tool_bridge::{
-        invoke_for_provider_session, optional_call_id, required_thread_id, tool_definitions,
-        AgentToolInvocationInput, StoryToolInvocation,
+        invoke_for_provider_session, optional_call_id, required_thread_id_for, tool_definitions,
+        validate_tool_arguments, validate_tool_output, AgentToolInvocationInput,
+        StoryToolInvocation,
     },
 };
 
@@ -129,6 +271,7 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/internal/agent-tools/mcp",
             get(agent_tool_mcp_get)
+                .head(agent_tool_mcp_head)
                 .post(agent_tool_mcp_post)
                 .delete(agent_tool_mcp_delete)
                 .layer(DefaultBodyLimit::max(256 * 1024)),
@@ -197,7 +340,8 @@ pub fn router(state: AppState) -> Router {
                 .put(app_session_web_root)
                 .patch(app_session_web_root)
                 .delete(app_session_web_root)
-                .options(app_session_web_root),
+                .options(app_session_web_root)
+                .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
         )
         .route(
             "/api/apps/sessions/{id}/web/{*rest}",
@@ -269,7 +413,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai-sessions/{id}/story", put(update_ai_session_story))
         .route(
             "/api/ai-session-attachments/drafts",
-            post(upload_ai_session_attachment_draft),
+            post(upload_ai_session_attachment_draft).layer(DefaultBodyLimit::max(
+                controlled_instance_protocol::AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT,
+            )),
         )
         .route(
             "/api/ai-session-attachments/drafts/{attachment_id}",
@@ -282,7 +428,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/ai-session-attachments/draft-streams/{attachment_id}",
             put(append_ai_session_attachment_draft_stream)
-                .delete(cancel_ai_session_attachment_draft_stream),
+                .delete(cancel_ai_session_attachment_draft_stream)
+                .layer(DefaultBodyLimit::max(
+                    controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT,
+                )),
         )
         .route(
             "/api/ai-session-attachments/draft-streams/{attachment_id}/complete",
@@ -368,7 +517,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/internal/node-agent/ai-sessions/{id}/messages",
-            post(send_private_ai_session_message).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+            post(send_private_ai_session_message),
         )
         .route(
             "/api/internal/node-agent/story-automation/ai-sessions",
@@ -439,8 +588,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/repository/ai-session-workspace/create",
-            post(repository_ai_session_workspace_create)
-                .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+            post(repository_ai_session_workspace_create),
         )
         .route(
             "/api/repository/ai-session-workspace/checkout",
@@ -472,16 +620,27 @@ pub fn router(state: AppState) -> Router {
         .merge(repository_routes("/api/apps/sessions/{id}/repository"))
         .route("/api/{*rest}", any(api_not_found))
         .fallback(static_ui_fallback)
-        .method_not_allowed_fallback(static_ui_fallback)
+        .method_not_allowed_fallback(api_not_found)
+        .layer(DefaultBodyLimit::max(DEFAULT_JSON_BODY_LIMIT))
+        .layer(middleware::map_response(normalize_body_limit_response))
         .layer(middleware::map_response(normalize_json_content_type))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
+        .layer(middleware::map_response(normalize_json_content_type))
+        .layer(middleware::from_fn(fastify_body_parser))
         .with_state(state)
 }
 
 async fn normalize_json_content_type(mut response: Response) -> Response {
+    if response
+        .extensions()
+        .get::<PreserveJsonContentType>()
+        .is_some()
+    {
+        return response;
+    }
     if response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -496,64 +655,25 @@ async fn normalize_json_content_type(mut response: Response) -> Response {
     response
 }
 
-async fn static_ui_fallback(State(state): State<AppState>, request: Request) -> Response {
-    if request.uri().path().starts_with("/api/") {
-        return api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found.");
-    }
-    let method = request.method().clone();
-    if !matches!(method, Method::GET | Method::HEAD) {
-        return spa_index_response(&state.config.static_dir, Method::GET).await;
-    }
-    let static_dir = ServeDir::new(state.config.static_dir.clone());
-    match static_dir.oneshot(request).await {
-        Ok(response) if response.status() != StatusCode::NOT_FOUND => response.into_response(),
-        Ok(_) => spa_index_response(&state.config.static_dir, method).await,
-        Err(error) => {
-            warn!(%error, "failed to serve frozen UI assets");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
+#[derive(Clone)]
+struct PreserveJsonContentType;
 
-async fn spa_index_response(static_dir: &std::path::Path, method: Method) -> Response {
-    let index_path = static_dir.join("index.html");
-    match tokio::fs::metadata(&index_path).await {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut response = (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                "TaskHandoff Web UI has not been built yet. Run pnpm web:build.",
-            )
-                .into_response();
-            if method == Method::HEAD {
-                *response.body_mut() = Body::empty();
-            }
-            return response;
+fn raw_json_web_proxy_error(error: &reqwest::Error) -> Response {
+    let body = serde_json::to_vec(&json!({
+        "error": {
+            "code": "WEB_PROXY_FAILED",
+            "message": error.to_string(),
         }
-        Err(error) => {
-            warn!(%error, "failed to inspect the frozen UI index");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }
-    let request = Request::builder()
-        .method(method)
-        .uri("/")
-        .body(Body::empty())
-        .expect("static UI index request");
-    match ServeFile::new(index_path).oneshot(request).await {
-        Ok(mut response) => {
-            // Node's not-found handler serves the SPA shell with HTTP 200 so
-            // Vue history routes survive a full-page refresh.
-            *response.status_mut() = StatusCode::OK;
-            response.into_response()
-        }
-        Err(error) => {
-            warn!(%error, "failed to serve the frozen UI index");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+    }))
+    .unwrap_or_default();
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::BAD_GATEWAY;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    response.extensions_mut().insert(PreserveJsonContentType);
+    response
 }
 
 fn repository_routes(prefix: &str) -> Router<AppState> {
@@ -680,6 +800,7 @@ fn repository_target(state: &AppState, uri: &Uri, id: &str) -> RepositorySession
         return RepositorySessionTarget {
             kind: RepositorySessionKind::AppSession,
             id: id.to_string(),
+            session_found: app.is_some(),
             cwd: state.app_runtime.get_session_cwd(id),
             status: app.map(|session| session.status),
         };
@@ -688,6 +809,7 @@ fn repository_target(state: &AppState, uri: &Uri, id: &str) -> RepositorySession
     RepositorySessionTarget {
         kind: RepositorySessionKind::AiSession,
         id: id.to_string(),
+        session_found: session.is_some(),
         cwd: session.as_ref().and_then(|session| session.cwd.clone()),
         status: session.map(|session| session.status),
     }
@@ -820,9 +942,53 @@ fn workspace_repository_target(cwd: &std::path::Path) -> RepositorySessionTarget
     RepositorySessionTarget {
         kind: RepositorySessionKind::AiSession,
         id: "workspace-inspection".to_string(),
+        session_found: true,
         cwd: Some(cwd.display().to_string()),
         status: Some("idle".to_string()),
     }
+}
+
+fn parse_js_non_negative_integer(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let number = if value.is_empty() {
+        0.0
+    } else if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        parse_js_radix_number(hex, 16.0)?
+    } else if let Some(binary) = value
+        .strip_prefix("0b")
+        .or_else(|| value.strip_prefix("0B"))
+    {
+        parse_js_radix_number(binary, 2.0)?
+    } else if let Some(octal) = value
+        .strip_prefix("0o")
+        .or_else(|| value.strip_prefix("0O"))
+    {
+        parse_js_radix_number(octal, 8.0)?
+    } else {
+        value.parse::<f64>().ok()?
+    };
+    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+        return None;
+    }
+    Some(number)
+}
+
+fn parse_js_radix_number(value: &str, radix: f64) -> Option<f64> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut number = 0.0;
+    for character in value.chars() {
+        let digit = character.to_digit(radix as u32)? as f64;
+        number = number * radix + digit;
+        if !number.is_finite() {
+            return None;
+        }
+    }
+    Some(number)
 }
 
 async fn inspect_ai_session_workspace(
@@ -919,7 +1085,11 @@ async fn repository_worktrees(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    if let Some(response) = repository_empty_query_error(&query) {
+        return response;
+    }
     let target = repository_target(&state, &uri, &id);
     let sessions = repository_session_inventory(&state);
     match state
@@ -936,12 +1106,17 @@ async fn repository_worktree_create(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCreateWorktreeRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryCreateWorktreeRequest =
+        match parse_repository_body(value, validate_repository_create_worktree) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let target = repository_target(&state, &uri, &id);
     let sessions = repository_session_inventory(&state);
     match state
@@ -958,12 +1133,17 @@ async fn repository_worktree_remove(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryRemoveWorktreeRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryRemoveWorktreeRequest =
+        match parse_repository_body(value, validate_repository_remove_worktree) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let target = repository_target(&state, &uri, &id);
     let sessions = repository_session_inventory(&state);
     match state
@@ -978,12 +1158,17 @@ async fn repository_worktree_remove(
 
 async fn repository_workspace_worktrees_list(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceCwdRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceCwdRequest =
+        match parse_repository_body(value, validate_repository_workspace_cwd) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1002,12 +1187,17 @@ async fn repository_workspace_worktrees_list(
 
 async fn repository_workspace_worktree_create(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceWorktreeCreateRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceWorktreeCreateRequest =
+        match parse_repository_body(value, validate_repository_workspace_worktree_create) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1026,12 +1216,17 @@ async fn repository_workspace_worktree_create(
 
 async fn repository_workspace_worktree_remove(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceWorktreeRemoveRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceWorktreeRemoveRequest =
+        match parse_repository_body(value, validate_repository_workspace_remove_worktree) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1050,12 +1245,17 @@ async fn repository_workspace_worktree_remove(
 
 async fn repository_workspace_worktree_move_preflight(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceWorktreeMovePreflightRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceWorktreeMovePreflightRequest =
+        match parse_repository_body(value, validate_repository_workspace_move_preflight) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1074,12 +1274,17 @@ async fn repository_workspace_worktree_move_preflight(
 
 async fn repository_workspace_worktree_move(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceWorktreeMoveRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceWorktreeMoveRequest =
+        match parse_repository_body(value, validate_repository_workspace_move) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1098,12 +1303,17 @@ async fn repository_workspace_worktree_move(
 
 async fn repository_workspace_branches_list(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryWorkspaceCwdRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryWorkspaceCwdRequest =
+        match parse_repository_body(value, validate_repository_workspace_cwd) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1118,12 +1328,17 @@ async fn repository_workspace_branches_list(
 
 async fn repository_ai_session_workspace_inspect(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryAiSessionWorkspaceInspectRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryAiSessionWorkspaceInspectRequest =
+        match parse_repository_body(value, validate_repository_workspace_cwd) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1136,12 +1351,17 @@ async fn repository_ai_session_workspace_inspect(
 
 async fn repository_ai_session_workspace_checkout(
     State(state): State<AppState>,
-    payload: Result<Json<RepositoryAiSessionWorkspaceCheckoutRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Json(body)) => body,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let body: RepositoryAiSessionWorkspaceCheckoutRequest =
+        match parse_repository_body(value, validate_repository_workspace_checkout) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
     let cwd = match authorized_workspace_cwd(&state, &body.cwd) {
         Ok(cwd) => cwd,
         Err(error) => return repository_error(error),
@@ -1178,7 +1398,10 @@ async fn repository_ai_session_workspace_checkout(
             Ok(initial) => initial,
             Err(response) => return response,
         };
-        let _guard = state.repository_service.lock(&initial).await;
+        let _guard = state
+            .repository_service
+            .lock_repository_and_worktree(&initial)
+            .await;
         let resolved = state
             .repository_service
             .resolve(workspace_repository_target(&cwd))
@@ -1434,7 +1657,7 @@ async fn create_workspace_ai_session(
                 "A workspace selection is required.",
                 &source,
             )
-            .into())
+            .into());
         }
     };
     let mut created_worktree_id = None;
@@ -1477,7 +1700,10 @@ async fn create_workspace_ai_session(
                     }
                     let initial =
                         require_repository(state.repository_service.resolve(&source_target).await)?;
-                    let _guard = state.repository_service.lock(&initial).await;
+                    let _guard = state
+                        .repository_service
+                        .lock_repository_and_worktree(&initial)
+                        .await;
                     let resolved = state.repository_service.resolve(&source_target).await;
                     checkout_branch_for_ai_session(&resolved, &selected.name).await?;
                 }
@@ -1617,12 +1843,17 @@ impl From<RepositoryOperationError> for WorkspaceAiSessionCreateError {
 
 async fn repository_ai_session_workspace_create(
     State(state): State<AppState>,
-    payload: Result<Json<controlled_instance_ai_session::AiSessionCreateInput>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let input = match payload {
-        Ok(Json(input)) => input,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let input: controlled_instance_ai_session::AiSessionCreateInput =
+        match parse_repository_body(value, validate_repository_workspace_create_ai_session) {
+            Ok(input) => input,
+            Err(response) => return response,
+        };
     match create_workspace_ai_session(&state, input).await {
         Ok(result) => repository_data(result),
         Err(WorkspaceAiSessionCreateError::Repository(error)) => repository_error(error),
@@ -1634,12 +1865,17 @@ async fn repository_start_ai_session(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryStartAiSessionRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryStartAiSessionRequest =
+        match parse_repository_body(value, validate_repository_start_ai_session) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let permission_mode = match permission_mode_from_wire(request.permission_mode.as_deref()) {
         Ok(permission_mode) => permission_mode,
         Err(error) => return repository_error(error),
@@ -1667,7 +1903,7 @@ async fn repository_start_ai_session(
                         "REPOSITORY_WORKTREE_NOT_FOUND",
                         "Current worktree no longer exists.",
                         &source,
-                    ))
+                    ));
                 }
             };
             (
@@ -1738,12 +1974,17 @@ async fn repository_create_worktree_ai_session(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCreateWorktreeAiSessionRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryCreateWorktreeAiSessionRequest =
+        match parse_repository_body(value, validate_repository_create_worktree_ai_session) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let permission_mode = match permission_mode_from_wire(request.permission_mode.as_deref()) {
         Ok(permission_mode) => permission_mode,
         Err(error) => return repository_error(error),
@@ -1838,10 +2079,20 @@ fn repository_data<T: serde::Serialize>(data: T) -> Response {
 
 fn repository_error(error: RepositoryOperationError) -> Response {
     let status = repository_http_status(&error.code);
-    let current = error
-        .current
-        .as_ref()
-        .map(|resolved| json!({ "context": resolved.context, "changes": resolved.changes }));
+    let current = error.current.as_ref().map(|resolved| {
+        let mut current = serde_json::Map::new();
+        current.insert(
+            "context".to_string(),
+            serde_json::to_value(&resolved.context).unwrap_or(Value::Null),
+        );
+        if let Some(changes) = &resolved.changes {
+            current.insert(
+                "changes".to_string(),
+                serde_json::to_value(changes).unwrap_or(Value::Null),
+            );
+        }
+        Value::Object(current)
+    });
     let mut body = json!({
         "error": {
             "code": error.code,
@@ -1884,19 +2135,1169 @@ fn repository_query_error(error: impl std::fmt::Display) -> Response {
     ))
 }
 
+fn repository_empty_query_error(
+    query: &std::collections::HashMap<String, String>,
+) -> Option<Response> {
+    query.keys().next().map(|key| {
+        repository_error(RepositoryOperationError::new(
+            "REPOSITORY_REQUEST_INVALID",
+            format!("Unrecognized key: \"{key}\""),
+        ))
+    })
+}
+
+fn repository_query_value(query: &std::collections::HashMap<String, String>) -> Value {
+    Value::Object(
+        query
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect(),
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_repository_query<T>(
+    query: &std::collections::HashMap<String, String>,
+    validate: impl FnOnce(&mut serde_json::Map<String, Value>, &mut Vec<ZodIssue>),
+) -> Result<T, Response>
+where
+    T: DeserializeOwned,
+{
+    parse_repository_body(repository_query_value(query), |value| {
+        repository_validate_object(value, validate)
+    })
+}
+
+fn repository_coerced_integer_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    default: Option<i64>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    let Some(raw) = object.get(field).cloned() else {
+        if let Some(default) = default {
+            object.insert(field.to_string(), json!(default));
+        }
+        return default;
+    };
+    let Some(raw) = raw.as_str() else {
+        issues.push(zod_invalid_type(
+            "number",
+            vec![json!(field)],
+            zod_received_type(&raw),
+        ));
+        return None;
+    };
+    let text = raw.trim();
+    let number = if text.is_empty() {
+        Some(0.0)
+    } else {
+        text.parse::<f64>().ok()
+    };
+    let Some(number) = number else {
+        issues.push(ZodIssue::InvalidType {
+            expected: "number".to_string(),
+            format: None,
+            code: "invalid_type",
+            path: vec![json!(field)],
+            message: "Invalid input: expected number, received NaN".to_string(),
+        });
+        return None;
+    };
+    if !number.is_finite() || number.fract() != 0.0 {
+        issues.push(zod_invalid_int(vec![json!(field)]));
+        return None;
+    }
+    let value = number as i64;
+    if value < minimum {
+        issues.push(zod_too_small(
+            "number",
+            vec![json!(field)],
+            usize::try_from(minimum).unwrap_or_default(),
+        ));
+    }
+    if value > maximum {
+        issues.push(zod_too_big(
+            "number",
+            vec![json!(field)],
+            usize::try_from(maximum).unwrap_or_default(),
+        ));
+    }
+    object.insert(field.to_string(), json!(value));
+    Some(value)
+}
+
+fn validate_repository_directory_query(
+    object: &mut serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    if !object.contains_key("path") {
+        object.insert("path".to_string(), json!(""));
+    }
+    repository_string_field(object, "path", 0, 4096, false, &[], issues);
+    zod_unknown_object_keys(object, &["path"], Vec::new(), issues);
+}
+
+fn validate_repository_file_query(
+    object: &mut serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    repository_string_field(object, "path", 1, 4096, false, &[], issues);
+    zod_unknown_object_keys(object, &["path"], Vec::new(), issues);
+}
+
+fn validate_repository_file_search_query(
+    object: &mut serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    repository_string_field(object, "query", 1, 256, true, &[], issues);
+    repository_coerced_integer_field(object, "limit", 1, 200, Some(100), issues);
+    zod_unknown_object_keys(object, &["query", "limit"], Vec::new(), issues);
+}
+
+fn validate_repository_diff_query(
+    object: &mut serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    repository_string_field(object, "path", 1, 4096, false, &[], issues);
+    repository_enum_field(
+        object,
+        "scope",
+        &["conflict", "staged", "unstaged", "untracked"],
+        false,
+        &[],
+        issues,
+    );
+    repository_coerced_integer_field(
+        object,
+        "byteLimit",
+        1,
+        2 * 1024 * 1024,
+        Some(512 * 1024),
+        issues,
+    );
+    let include_context = repository_enum_field(
+        object,
+        "includeContext",
+        &["true", "false"],
+        true,
+        &[],
+        issues,
+    );
+    if include_context.is_some() {
+        object.insert(
+            "includeContext".to_string(),
+            json!(include_context.as_deref() == Some("true")),
+        );
+    } else if !object.contains_key("includeContext") {
+        object.insert("includeContext".to_string(), json!(false));
+    }
+    repository_coerced_integer_field(object, "contextLines", 1, 3000, Some(20), issues);
+    zod_unknown_object_keys(
+        object,
+        &[
+            "path",
+            "scope",
+            "byteLimit",
+            "includeContext",
+            "contextLines",
+        ],
+        Vec::new(),
+        issues,
+    );
+}
+
+fn body_too_large_response() -> Response {
+    mcp_body_too_large_error()
+}
+
+async fn normalize_body_limit_response(mut response: Response) -> Response {
+    if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        let is_json = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(';').next().unwrap_or_default().trim() == "application/json"
+            });
+        return if is_json {
+            response
+        } else {
+            body_too_large_response()
+        };
+    }
+    if response.status() != StatusCode::BAD_REQUEST
+        || response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_none_or(|value| {
+                value.split(';').next().unwrap_or_default().trim() != "application/json"
+            })
+    {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let bytes = match to_bytes(body, 64 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+    let body_limit_error = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .is_some_and(|message| {
+            message.contains("Failed to buffer the request body")
+                || message.contains("length limit exceeded")
+        });
+    if body_limit_error {
+        return body_too_large_response();
+    }
+    response = Response::from_parts(parts, Body::from(bytes));
+    response
+}
+
 fn repository_body_error(error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     repository_error(RepositoryOperationError::new(
         "REPOSITORY_REQUEST_INVALID",
         error.body_text(),
     ))
 }
 
+fn repository_validation_error(issues: &[ZodIssue]) -> Response {
+    repository_error(RepositoryOperationError::new(
+        "REPOSITORY_REQUEST_INVALID",
+        issues
+            .iter()
+            .map(ZodIssue::message)
+            .collect::<Vec<_>>()
+            .join("; "),
+    ))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_repository_body<T>(
+    mut value: Value,
+    validate: impl FnOnce(&mut Value) -> Result<(), Vec<ZodIssue>>,
+) -> Result<T, Response>
+where
+    T: DeserializeOwned,
+{
+    if let Err(issues) = validate(&mut value) {
+        return Err(repository_validation_error(&issues));
+    }
+    serde_json::from_value(value).map_err(|error| {
+        repository_validation_error(&[zod_custom(Vec::new(), format!("Invalid input: {error}"))])
+    })
+}
+
+fn repository_validate_object(
+    body: &mut Value,
+    validate: impl FnOnce(&mut serde_json::Map<String, Value>, &mut Vec<ZodIssue>),
+) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = body.as_object_mut() else {
+        issues.push(zod_invalid_type(
+            "object",
+            Vec::new(),
+            zod_received_type(body),
+        ));
+        return Err(issues);
+    };
+    validate(object, &mut issues);
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn repository_string_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+    trim: bool,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let path = zod_field_path(parent_path, field);
+    let raw = match object.get(field) {
+        Some(value) => value.clone(),
+        None => {
+            issues.push(zod_invalid_type("string", path, "undefined"));
+            return None;
+        }
+    };
+    let Some(raw) = raw.as_str() else {
+        issues.push(zod_invalid_type("string", path, zod_received_type(&raw)));
+        return None;
+    };
+    let value = if trim { trim_js_whitespace(raw) } else { raw };
+    let length = value.chars().count();
+    if length < minimum {
+        issues.push(zod_too_small("string", path.clone(), minimum));
+    }
+    if length > maximum {
+        issues.push(zod_too_big("string", path, maximum));
+    }
+    object.insert(field.to_string(), json!(value));
+    Some(value.to_string())
+}
+
+fn repository_id_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = repository_string_field(object, field, 1, 160, true, parent_path, issues)?;
+    if !valid_request_id(&value) {
+        issues.push(ZodIssue::InvalidFormat {
+            origin: "string",
+            code: "invalid_format",
+            format: "regex",
+            pattern: "/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/",
+            path: zod_field_path(parent_path, field),
+            message: "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/"
+                .to_string(),
+        });
+    }
+    Some(value)
+}
+
+fn repository_git_name_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = repository_string_field(object, field, 1, 255, true, parent_path, issues)?;
+    if invalid_git_name(&value) {
+        issues.push(zod_custom(
+            zod_field_path(parent_path, field),
+            "Invalid Git name.",
+        ));
+    }
+    Some(value)
+}
+
+fn repository_relative_path_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = repository_string_field(object, field, 1, 4096, false, parent_path, issues)?;
+    if !valid_repository_relative_path(&value) {
+        issues.push(zod_custom(
+            zod_field_path(parent_path, field),
+            "Path must be a safe repository-relative path.",
+        ));
+    }
+    Some(value)
+}
+
+fn repository_file_version_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = repository_string_field(object, field, 16, 160, false, parent_path, issues)?;
+    if !valid_file_version(&value) {
+        issues.push(ZodIssue::InvalidFormat {
+            origin: "string",
+            code: "invalid_format",
+            format: "regex",
+            pattern: "/^[a-zA-Z0-9_.:-]+$/",
+            path: zod_field_path(parent_path, field),
+            message: "Invalid string: must match pattern /^[a-zA-Z0-9_.:-]+$/".to_string(),
+        });
+    }
+    Some(value)
+}
+
+fn repository_branch_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    repository_string_field(object, field, 1, 2048, true, parent_path, issues)
+}
+
+fn repository_boolean_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<bool> {
+    let Some(value) = object.get(field) else {
+        issues.push(zod_invalid_type(
+            "boolean",
+            zod_field_path(parent_path, field),
+            "undefined",
+        ));
+        return None;
+    };
+    let Some(value) = value.as_bool() else {
+        issues.push(zod_invalid_type(
+            "boolean",
+            zod_field_path(parent_path, field),
+            zod_received_type(value),
+        ));
+        return None;
+    };
+    Some(value)
+}
+
+fn repository_optional_boolean_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<bool> {
+    if !object.contains_key(field) {
+        return None;
+    }
+    repository_boolean_field(object, field, parent_path, issues)
+}
+
+fn repository_literal_true_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    if object.get(field).and_then(Value::as_bool) != Some(true) {
+        issues.push(zod_invalid_value(
+            zod_field_path(parent_path, field),
+            &["true"],
+            "Invalid input: expected true".to_string(),
+        ));
+    }
+}
+
+fn repository_enum_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[&str],
+    optional: bool,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let Some(value) = object.get(field) else {
+        if !optional {
+            let listed = values
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<_>>()
+                .join("|");
+            issues.push(zod_invalid_value(
+                zod_field_path(parent_path, field),
+                values,
+                format!("Invalid option: expected one of {listed}"),
+            ));
+        }
+        return None;
+    };
+    let value = value.as_str().unwrap_or_default();
+    if values.contains(&value) {
+        return Some(value.to_string());
+    }
+    let listed = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join("|");
+    issues.push(zod_invalid_value(
+        zod_field_path(parent_path, field),
+        values,
+        format!("Invalid option: expected one of {listed}"),
+    ));
+    None
+}
+
+fn repository_runtime_path_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    let path = zod_field_path(parent_path, field);
+    let Some(value) = object.get_mut(field) else {
+        issues.push(zod_invalid_type("object", path, "undefined"));
+        return;
+    };
+    let Some(runtime_path) = value.as_object_mut() else {
+        issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+        return;
+    };
+    if runtime_path.get("type").and_then(Value::as_str) != Some("runtime-path") {
+        issues.push(zod_invalid_value(
+            zod_field_path(&path, "type"),
+            &["runtime-path"],
+            "Invalid input: expected \"runtime-path\"".to_string(),
+        ));
+    }
+    let value = repository_string_field(runtime_path, "path", 1, 4096, true, &path, issues);
+    if value
+        .as_deref()
+        .is_some_and(|value| !is_absolute_runtime_path(value))
+    {
+        issues.push(zod_custom(
+            zod_field_path(&path, "path"),
+            "Runtime paths must be absolute in the target controlled instance.",
+        ));
+    }
+    zod_unknown_object_keys(runtime_path, &["type", "path"], path, issues);
+}
+
+fn validate_repository_workspace_cwd(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        zod_unknown_object_keys(object, &["cwd"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_create_worktree_value(value: &mut Value, issues: &mut Vec<ZodIssue>) {
+    let Some(object) = value.as_object_mut() else {
+        issues.push(zod_invalid_type(
+            "object",
+            Vec::new(),
+            zod_received_type(value),
+        ));
+        return;
+    };
+    match object.get("mode").and_then(Value::as_str) {
+        Some("new-branch") => {
+            repository_git_name_field(object, "branchName", &[], issues);
+            repository_string_field(object, "startRef", 1, 2048, true, &[], issues);
+            repository_id_field(object, "expectedSnapshotId", &[], issues);
+            zod_unknown_object_keys(
+                object,
+                &["mode", "branchName", "startRef", "expectedSnapshotId"],
+                Vec::new(),
+                issues,
+            );
+        }
+        Some("existing-branch") => {
+            repository_git_name_field(object, "branchName", &[], issues);
+            repository_id_field(object, "expectedSnapshotId", &[], issues);
+            zod_unknown_object_keys(
+                object,
+                &["mode", "branchName", "expectedSnapshotId"],
+                Vec::new(),
+                issues,
+            );
+        }
+        _ => issues.push(zod_invalid_value(
+            vec![json!("mode")],
+            &["new-branch", "existing-branch"],
+            "Invalid discriminator value. Expected 'new-branch' | 'existing-branch'".to_string(),
+        )),
+    }
+}
+
+fn validate_repository_create_worktree(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    validate_repository_create_worktree_value(body, &mut issues);
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn validate_repository_remove_worktree(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_id_field(object, "worktreeId", &[], issues);
+        repository_literal_true_field(object, "confirm", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "worktreeId", "confirm"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_workspace_worktree_create(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        match object.get_mut("worktree") {
+            None => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("worktree")],
+                "undefined",
+            )),
+            Some(value) if value.is_object() => {
+                validate_repository_create_worktree_value(value, issues)
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("worktree")],
+                zod_received_type(value),
+            )),
+        }
+        zod_unknown_object_keys(object, &["cwd", "worktree"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_workspace_remove_worktree(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        match object.get_mut("removal") {
+            None => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("removal")],
+                "undefined",
+            )),
+            Some(value) if value.is_object() => {
+                let value = value.as_object_mut().expect("checked object");
+                repository_id_field(value, "expectedSnapshotId", &[json!("removal")], issues);
+                repository_id_field(value, "worktreeId", &[json!("removal")], issues);
+                repository_literal_true_field(value, "confirm", &[json!("removal")], issues);
+                zod_unknown_object_keys(
+                    value,
+                    &["expectedSnapshotId", "worktreeId", "confirm"],
+                    vec![json!("removal")],
+                    issues,
+                );
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("removal")],
+                zod_received_type(value),
+            )),
+        }
+        zod_unknown_object_keys(object, &["cwd", "removal"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_workspace_move_preflight(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        match object.get_mut("preflight") {
+            None => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("preflight")],
+                "undefined",
+            )),
+            Some(value) if value.is_object() => {
+                let value = value.as_object_mut().expect("checked object");
+                repository_id_field(value, "worktreeId", &[json!("preflight")], issues);
+                zod_unknown_object_keys(value, &["worktreeId"], vec![json!("preflight")], issues);
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("preflight")],
+                zod_received_type(value),
+            )),
+        }
+        zod_unknown_object_keys(object, &["cwd", "preflight"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_workspace_move(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        match object.get_mut("move") {
+            None => issues.push(zod_invalid_type("object", vec![json!("move")], "undefined")),
+            Some(value) if value.is_object() => {
+                let value = value.as_object_mut().expect("checked object");
+                repository_id_field(value, "expectedSnapshotId", &[json!("move")], issues);
+                repository_id_field(value, "worktreeId", &[json!("move")], issues);
+                repository_literal_true_field(value, "confirm", &[json!("move")], issues);
+                zod_unknown_object_keys(
+                    value,
+                    &["expectedSnapshotId", "worktreeId", "confirm"],
+                    vec![json!("move")],
+                    issues,
+                );
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("move")],
+                zod_received_type(value),
+            )),
+        }
+        zod_unknown_object_keys(object, &["cwd", "move"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_workspace_checkout(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_runtime_path_field(object, "cwd", &[], issues);
+        repository_branch_field(object, "branch", &[], issues);
+        zod_unknown_object_keys(object, &["cwd", "branch"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_workspace_create_ai_session(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    let union_failure = || vec![zod_custom(Vec::new(), "Invalid input")];
+    let Some(object) = body.as_object() else {
+        return Err(union_failure());
+    };
+    let has_git_selection = object.contains_key("gitSelection");
+    let has_workspace_selection = object.contains_key("workspaceSelection");
+    if has_git_selection == has_workspace_selection {
+        return Err(union_failure());
+    }
+    match normalize_ai_session_create_body(body) {
+        Ok(normalized) => {
+            *body = normalized;
+            Ok(())
+        }
+        Err(_) => Err(union_failure()),
+    }
+}
+
+fn validate_repository_create_file(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_relative_path_field(object, "path", &[], issues);
+        repository_string_field(object, "content", 0, 4 * 1024 * 1024, false, &[], issues);
+        repository_literal_true_field(object, "expectedAbsent", &[], issues);
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["path", "content", "expectedAbsent", "expectedSnapshotId"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_write_file(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_relative_path_field(object, "path", &[], issues);
+        repository_string_field(object, "content", 0, 4 * 1024 * 1024, false, &[], issues);
+        repository_file_version_field(object, "expectedVersion", &[], issues);
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["path", "content", "expectedVersion", "expectedSnapshotId"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_rename_file(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_relative_path_field(object, "path", &[], issues);
+        repository_relative_path_field(object, "destination", &[], issues);
+        repository_file_version_field(object, "expectedVersion", &[], issues);
+        repository_literal_true_field(object, "expectedDestinationAbsent", &[], issues);
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &[
+                "path",
+                "destination",
+                "expectedVersion",
+                "expectedDestinationAbsent",
+                "expectedSnapshotId",
+            ],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_delete_file(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_relative_path_field(object, "path", &[], issues);
+        repository_file_version_field(object, "expectedVersion", &[], issues);
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_literal_true_field(object, "confirm", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["path", "expectedVersion", "expectedSnapshotId", "confirm"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_path_mutation(
+    body: &mut Value,
+    require_confirm: bool,
+) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        match object.get_mut("paths") {
+            None => issues.push(zod_invalid_type("array", vec![json!("paths")], "undefined")),
+            Some(Value::Array(paths)) => {
+                if paths.is_empty() {
+                    issues.push(zod_too_small("array", vec![json!("paths")], 1));
+                }
+                if paths.len() > 1000 {
+                    issues.push(zod_too_big("array", vec![json!("paths")], 1000));
+                }
+                for (index, entry) in paths.iter_mut().enumerate() {
+                    let parent = vec![json!("paths"), json!(index)];
+                    let Some(entry) = entry.as_object_mut() else {
+                        issues.push(zod_invalid_type("object", parent, zod_received_type(entry)));
+                        continue;
+                    };
+                    repository_relative_path_field(entry, "path", &parent, issues);
+                    repository_file_version_field(entry, "expectedVersion", &parent, issues);
+                    zod_unknown_object_keys(entry, &["path", "expectedVersion"], parent, issues);
+                }
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "array",
+                vec![json!("paths")],
+                zod_received_type(value),
+            )),
+        }
+        if require_confirm {
+            repository_literal_true_field(object, "confirm", &[], issues);
+        }
+        let allowed: &[&str] = if require_confirm {
+            &["expectedSnapshotId", "paths", "confirm"]
+        } else {
+            &["expectedSnapshotId", "paths"]
+        };
+        zod_unknown_object_keys(object, allowed, Vec::new(), issues);
+    })
+}
+
+fn validate_repository_commit(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_string_field(object, "message", 1, 64 * 1024, true, &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "message"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_create_branch(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_git_name_field(object, "name", &[], issues);
+        zod_unknown_object_keys(object, &["expectedSnapshotId", "name"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_checkout_branch(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_branch_field(object, "branch", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "branch"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_create_tracking_branch(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_git_name_field(object, "name", &[], issues);
+        repository_string_field(object, "remoteTrackingRef", 1, 2048, true, &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "name", "remoteTrackingRef"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_delete_branch(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_git_name_field(object, "name", &[], issues);
+        repository_literal_true_field(object, "confirm", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "name", "confirm"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_fetch(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_git_name_field(object, "remote", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &["expectedSnapshotId", "remote"],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_pull(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        zod_unknown_object_keys(object, &["expectedSnapshotId"], Vec::new(), issues);
+    })
+}
+
+fn validate_repository_push(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_id_field(object, "expectedSnapshotId", &[], issues);
+        repository_git_name_field(object, "remote", &[], issues);
+        repository_git_name_field(object, "sourceBranch", &[], issues);
+        repository_git_name_field(object, "targetBranch", &[], issues);
+        zod_unknown_object_keys(
+            object,
+            &[
+                "expectedSnapshotId",
+                "remote",
+                "sourceBranch",
+                "targetBranch",
+            ],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_publish(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    if let Some(object) = body.as_object_mut() {
+        repository_id_field(object, "expectedSnapshotId", &[], &mut issues);
+        repository_git_name_field(object, "remote", &[], &mut issues);
+        repository_git_name_field(object, "sourceBranch", &[], &mut issues);
+        repository_git_name_field(object, "targetBranch", &[], &mut issues);
+        let set_upstream = repository_boolean_field(object, "setUpstream", &[], &mut issues);
+        let confirm =
+            repository_optional_boolean_field(object, "confirmSetUpstream", &[], &mut issues);
+        zod_unknown_object_keys(
+            object,
+            &[
+                "expectedSnapshotId",
+                "remote",
+                "sourceBranch",
+                "targetBranch",
+                "setUpstream",
+                "confirmSetUpstream",
+            ],
+            Vec::new(),
+            &mut issues,
+        );
+        if set_upstream == Some(true) && confirm != Some(true) {
+            issues.push(zod_custom(
+                vec![json!("confirmSetUpstream")],
+                "Setting an upstream requires explicit confirmation.",
+            ));
+        }
+    } else {
+        issues.push(zod_invalid_type(
+            "object",
+            Vec::new(),
+            zod_received_type(body),
+        ));
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn validate_repository_workspace_selection(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    issues: &mut Vec<ZodIssue>,
+) {
+    let parent = vec![json!(field)];
+    let Some(value) = object.get_mut(field) else {
+        issues.push(zod_invalid_type("object", parent, "undefined"));
+        return;
+    };
+    let Some(selection) = value.as_object_mut() else {
+        issues.push(zod_invalid_type("object", parent, zod_received_type(value)));
+        return;
+    };
+    match selection.get("type").and_then(Value::as_str) {
+        Some("current") => {
+            zod_unknown_object_keys(selection, &["type"], parent, issues);
+        }
+        Some("worktree") => {
+            repository_id_field(selection, "repositoryContextId", &parent, issues);
+            repository_id_field(selection, "worktreeId", &parent, issues);
+            zod_unknown_object_keys(
+                selection,
+                &["type", "repositoryContextId", "worktreeId"],
+                parent,
+                issues,
+            );
+        }
+        _ => issues.push(zod_invalid_value(
+            zod_field_path(&parent, "type"),
+            &["current", "worktree"],
+            "Invalid discriminator value. Expected 'current' | 'worktree'".to_string(),
+        )),
+    }
+}
+
+fn validate_repository_start_ai_session(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_enum_field(
+            object,
+            "agent",
+            &["codex", "claude", "opencode"],
+            false,
+            &[],
+            issues,
+        );
+        validate_repository_workspace_selection(object, "workspaceSelection", issues);
+        repository_string_field(object, "message", 1, 20_000, true, &[], issues);
+        repository_string_field(object, "clientRequestId", 1, 160, true, &[], issues);
+        repository_enum_field(
+            object,
+            "permissionMode",
+            &["ask", "auto-review", "full-access"],
+            true,
+            &[],
+            issues,
+        );
+        zod_unknown_object_keys(
+            object,
+            &[
+                "agent",
+                "workspaceSelection",
+                "message",
+                "clientRequestId",
+                "permissionMode",
+            ],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn validate_repository_create_worktree_ai_session(body: &mut Value) -> Result<(), Vec<ZodIssue>> {
+    repository_validate_object(body, |object, issues| {
+        repository_enum_field(
+            object,
+            "agent",
+            &["codex", "claude", "opencode"],
+            false,
+            &[],
+            issues,
+        );
+        match object.get_mut("worktree") {
+            None => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("worktree")],
+                "undefined",
+            )),
+            Some(value) if value.is_object() => {
+                validate_repository_create_worktree_value(value, issues)
+            }
+            Some(value) => issues.push(zod_invalid_type(
+                "object",
+                vec![json!("worktree")],
+                zod_received_type(value),
+            )),
+        }
+        repository_string_field(object, "message", 1, 20_000, true, &[], issues);
+        repository_string_field(object, "clientRequestId", 1, 160, true, &[], issues);
+        repository_enum_field(
+            object,
+            "permissionMode",
+            &["ask", "auto-review", "full-access"],
+            true,
+            &[],
+            issues,
+        );
+        zod_unknown_object_keys(
+            object,
+            &[
+                "agent",
+                "worktree",
+                "message",
+                "clientRequestId",
+                "permissionMode",
+            ],
+            Vec::new(),
+            issues,
+        );
+    })
+}
+
+fn invalid_git_name(value: &str) -> bool {
+    value.chars().any(|character| {
+        character <= '\u{1f}'
+            || character == '\u{7f}'
+            || matches!(character, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+    }) || value.contains("..")
+        || value.ends_with('.')
+        || value.ends_with('/')
+}
+
+fn valid_repository_relative_path(value: &str) -> bool {
+    if value.contains('\0')
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+            && matches!(value.as_bytes().get(2), Some(b'/') | Some(b'\\'))
+    {
+        return false;
+    }
+    value.split('/').all(|segment| {
+        !segment.is_empty() && segment != "." && segment != ".." && segment != ".git"
+    })
+}
+
+fn valid_file_version(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_.:-".contains(character))
+}
+
+fn is_absolute_runtime_path(value: &str) -> bool {
+    value.starts_with('/')
+        || (value.len() >= 3
+            && value.as_bytes()[0].is_ascii_alphabetic()
+            && value.as_bytes()[1] == b':'
+            && matches!(value.as_bytes()[2], b'/' | b'\\'))
+}
+
 async fn repository_context(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    if let Some(response) = repository_empty_query_error(&query) {
+        return response;
+    }
     let resolved = resolve_repository_target(&state, &uri, &id).await;
+    if resolved.internal_error.is_some() {
+        return repository_error(RepositoryOperationError::new(
+            "REPOSITORY_OPERATION_FAILED",
+            "Repository operation failed.",
+        ));
+    }
     repository_data(resolved.context)
 }
 
@@ -1904,9 +3305,13 @@ async fn repository_remotes(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    if let Some(response) = repository_empty_query_error(&query) {
+        return response;
+    }
     let resolved = resolve_repository_target(&state, &uri, &id).await;
-    let resolved = match require_workspace(resolved) {
+    let resolved = match require_repository(resolved) {
         Ok(resolved) => resolved,
         Err(error) => return repository_error(error),
     };
@@ -1920,12 +3325,13 @@ async fn repository_directories(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    query: Result<Query<RepositoryDirectoryQuery>, axum::extract::rejection::QueryRejection>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let query = match query {
-        Ok(Query(query)) => query,
-        Err(error) => return repository_query_error(error.body_text()),
-    };
+    let query: RepositoryDirectoryQuery =
+        match parse_repository_query(&query, validate_repository_directory_query) {
+            Ok(query) => query,
+            Err(response) => return response,
+        };
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -1945,18 +3351,13 @@ async fn repository_file_search(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    query: Result<Query<RepositoryFileSearchQuery>, axum::extract::rejection::QueryRejection>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let query = match query {
-        Ok(Query(query)) => query,
-        Err(error) => return repository_query_error(error.body_text()),
-    };
-    if query.query.trim().is_empty() || query.query.chars().count() > 256 {
-        return repository_query_error("query must contain 1 to 256 characters.");
-    }
-    if query.limit == 0 || query.limit > 200 {
-        return repository_query_error("limit must be between 1 and 200.");
-    }
+    let query: RepositoryFileSearchQuery =
+        match parse_repository_query(&query, validate_repository_file_search_query) {
+            Ok(query) => query,
+            Err(response) => return response,
+        };
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -1976,12 +3377,13 @@ async fn repository_file_read(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    query: Result<Query<RepositoryFileQuery>, axum::extract::rejection::QueryRejection>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let query = match query {
-        Ok(Query(query)) => query,
-        Err(error) => return repository_query_error(error.body_text()),
-    };
+    let query: RepositoryFileQuery =
+        match parse_repository_query(&query, validate_repository_file_query) {
+            Ok(query) => query,
+            Err(response) => return response,
+        };
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -2001,15 +3403,17 @@ async fn repository_file_create(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCreateFileRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.expected_absent {
-        return repository_query_error("expectedAbsent must be true.");
-    }
+    let request: RepositoryCreateFileRequest =
+        match parse_repository_body(value, validate_repository_create_file) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_file_mutation(
         &state,
         &uri,
@@ -2024,12 +3428,17 @@ async fn repository_file_write(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryWriteFileRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryWriteFileRequest =
+        match parse_repository_body(value, validate_repository_write_file) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_file_mutation(
         &state,
         &uri,
@@ -2044,15 +3453,17 @@ async fn repository_file_rename(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryRenameFileRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.expected_destination_absent {
-        return repository_query_error("expectedDestinationAbsent must be true.");
-    }
+    let request: RepositoryRenameFileRequest =
+        match parse_repository_body(value, validate_repository_rename_file) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_file_mutation(
         &state,
         &uri,
@@ -2073,17 +3484,19 @@ async fn repository_file_delete(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryDeleteFileRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.confirm {
-        return repository_query_error("confirm must be true.");
-    }
+    let request: RepositoryDeleteFileRequest =
+        match parse_repository_body(value, validate_repository_delete_file) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -2132,7 +3545,7 @@ where
     T: serde::Serialize,
 {
     let initial = resolve_repository_target(state, uri, id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(state, uri, id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -2160,7 +3573,7 @@ where
             return repository_error(RepositoryOperationError::new(
                 "REPOSITORY_OPERATION_FAILED",
                 error.to_string(),
-            ))
+            ));
         }
     };
     repository_data(json!({
@@ -2179,7 +3592,11 @@ async fn repository_changes(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    if let Some(response) = repository_empty_query_error(&query) {
+        return response;
+    }
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let resolved = match require_workspace(resolved) {
         Ok(resolved) => resolved,
@@ -2192,12 +3609,13 @@ async fn repository_diff_route(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    query: Result<Query<RepositoryDiffQuery>, axum::extract::rejection::QueryRejection>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let query = match query {
-        Ok(Query(query)) => query,
-        Err(error) => return repository_query_error(error.body_text()),
-    };
+    let query: RepositoryDiffQuery =
+        match parse_repository_query(&query, validate_repository_diff_query) {
+            Ok(query) => query,
+            Err(response) => return response,
+        };
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     match repository_diff(
         &resolved,
@@ -2218,17 +3636,19 @@ async fn repository_stage(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<
-        Json<controlled_instance_protocol::RepositoryPathMutationRequest>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: controlled_instance_protocol::RepositoryPathMutationRequest =
+        match parse_repository_body(value, |body| validate_repository_path_mutation(body, false)) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     if let Err(error) = stage_paths(&resolved, &request.expected_snapshot_id, &request.paths).await
     {
@@ -2242,17 +3662,19 @@ async fn repository_unstage(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<
-        Json<controlled_instance_protocol::RepositoryPathMutationRequest>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: controlled_instance_protocol::RepositoryPathMutationRequest =
+        match parse_repository_body(value, |body| validate_repository_path_mutation(body, false)) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     if let Err(error) =
         unstage_paths(&resolved, &request.expected_snapshot_id, &request.paths).await
@@ -2267,20 +3689,19 @@ async fn repository_discard_worktree(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<
-        Json<controlled_instance_protocol::RepositoryPathMutationRequest>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.confirm {
-        return repository_query_error("confirm must be true.");
-    }
+    let request: controlled_instance_protocol::RepositoryPathMutationRequest =
+        match parse_repository_body(value, |body| validate_repository_path_mutation(body, true)) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     if let Err(error) =
         discard_worktree_paths(&resolved, &request.expected_snapshot_id, &request.paths).await
@@ -2295,20 +3716,19 @@ async fn repository_discard_all_tracked(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<
-        Json<controlled_instance_protocol::RepositoryPathMutationRequest>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.confirm {
-        return repository_query_error("confirm must be true.");
-    }
+    let request: controlled_instance_protocol::RepositoryPathMutationRequest =
+        match parse_repository_body(value, |body| validate_repository_path_mutation(body, true)) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     if let Err(error) =
         discard_all_tracked_paths(&resolved, &request.expected_snapshot_id, &request.paths).await
@@ -2323,14 +3743,19 @@ async fn repository_commit(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCommitRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryCommitRequest =
+        match parse_repository_body(value, validate_repository_commit) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     let initial = resolve_repository_target(&state, &uri, &id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guard = state.repository_service.lock_worktree(&initial).await;
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     let message = match normalize_repository_commit_message(&request.message) {
         Ok(message) => message,
@@ -2350,7 +3775,7 @@ fn normalize_repository_commit_message(message: &str) -> Result<&str, String> {
     if message.is_empty() {
         return Err("message: Too small: expected string to have >=1 characters".to_string());
     }
-    if utf16_len(message) > 64 * 1024 {
+    if message.chars().count() > 64 * 1024 {
         return Err("message: Too big: expected string to have <=65536 characters".to_string());
     }
     Ok(message)
@@ -2360,7 +3785,11 @@ async fn repository_branches(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    if let Some(response) = repository_empty_query_error(&query) {
+        return response;
+    }
     let resolved = resolve_repository_target(&state, &uri, &id).await;
     match list_branches(&resolved).await {
         Ok(branches) => repository_data(branches),
@@ -2372,13 +3801,18 @@ async fn repository_branch_create(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCreateBranchRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    repository_branch_mutation(&state, &uri, &id, |resolved| async move {
+    let request: RepositoryCreateBranchRequest =
+        match parse_repository_body(value, validate_repository_create_branch) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+    repository_branch_and_worktree_mutation(&state, &uri, &id, |resolved| async move {
         create_branch(&resolved, &request.expected_snapshot_id, &request.name).await
     })
     .await
@@ -2388,13 +3822,18 @@ async fn repository_branch_checkout(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCheckoutBranchRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    repository_branch_mutation(&state, &uri, &id, |resolved| async move {
+    let request: RepositoryCheckoutBranchRequest =
+        match parse_repository_body(value, validate_repository_checkout_branch) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+    repository_branch_and_worktree_mutation(&state, &uri, &id, |resolved| async move {
         checkout_branch(&resolved, &request.expected_snapshot_id, &request.branch).await
     })
     .await
@@ -2404,13 +3843,18 @@ async fn repository_branch_tracking(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryCreateTrackingBranchRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    repository_branch_mutation(&state, &uri, &id, |resolved| async move {
+    let request: RepositoryCreateTrackingBranchRequest =
+        match parse_repository_body(value, validate_repository_create_tracking_branch) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+    repository_branch_and_worktree_mutation(&state, &uri, &id, |resolved| async move {
         create_tracking_branch(
             &resolved,
             &request.expected_snapshot_id,
@@ -2426,15 +3870,17 @@ async fn repository_branch_delete(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryDeleteBranchRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if !request.confirm {
-        return repository_query_error("confirm must be true.");
-    }
+    let request: RepositoryDeleteBranchRequest =
+        match parse_repository_body(value, validate_repository_delete_branch) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_branch_mutation(&state, &uri, &id, |resolved| async move {
         delete_branch(&resolved, &request.expected_snapshot_id, &request.name).await
     })
@@ -2445,12 +3891,17 @@ async fn repository_fetch(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryFetchRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryFetchRequest =
+        match parse_repository_body(value, validate_repository_fetch) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_branch_mutation(&state, &uri, &id, |resolved| async move {
         fetch_remote(&resolved, &request.expected_snapshot_id, &request.remote).await
     })
@@ -2461,13 +3912,18 @@ async fn repository_pull(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryPullRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    repository_branch_mutation(&state, &uri, &id, |resolved| async move {
+    let request: RepositoryPullRequest =
+        match parse_repository_body(value, validate_repository_pull) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+    repository_branch_and_worktree_mutation(&state, &uri, &id, |resolved| async move {
         pull_branch(&resolved, &request.expected_snapshot_id).await
     })
     .await
@@ -2477,15 +3933,17 @@ async fn repository_publish(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryPublishRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
-    if request.set_upstream && !request.confirm_set_upstream {
-        return repository_query_error("Setting upstream requires explicit confirmation.");
-    }
+    let request: RepositoryPublishRequest =
+        match parse_repository_body(value, validate_repository_publish) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_branch_mutation(&state, &uri, &id, |resolved| async move {
         publish_branch(
             &resolved,
@@ -2505,12 +3963,17 @@ async fn repository_push(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    payload: Result<Json<RepositoryPushRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let request = match payload {
-        Ok(Json(request)) => request,
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
         Err(error) => return repository_body_error(error),
     };
+    let request: RepositoryPushRequest =
+        match parse_repository_body(value, validate_repository_push) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
     repository_branch_mutation(&state, &uri, &id, |resolved| async move {
         push_branch(
             &resolved,
@@ -2534,8 +3997,42 @@ where
     F: FnOnce(controlled_instance_workspace::ResolvedRepository) -> Fut,
     Fut: std::future::Future<Output = Result<(), RepositoryOperationError>>,
 {
+    repository_branch_mutation_with_lanes(state, uri, id, false, operation).await
+}
+
+async fn repository_branch_and_worktree_mutation<F, Fut>(
+    state: &AppState,
+    uri: &Uri,
+    id: &str,
+    operation: F,
+) -> Response
+where
+    F: FnOnce(controlled_instance_workspace::ResolvedRepository) -> Fut,
+    Fut: std::future::Future<Output = Result<(), RepositoryOperationError>>,
+{
+    repository_branch_mutation_with_lanes(state, uri, id, true, operation).await
+}
+
+async fn repository_branch_mutation_with_lanes<F, Fut>(
+    state: &AppState,
+    uri: &Uri,
+    id: &str,
+    repository_and_worktree: bool,
+    operation: F,
+) -> Response
+where
+    F: FnOnce(controlled_instance_workspace::ResolvedRepository) -> Fut,
+    Fut: std::future::Future<Output = Result<(), RepositoryOperationError>>,
+{
     let initial = resolve_repository_target(state, uri, id).await;
-    let _guard = state.repository_service.lock(&initial).await;
+    let _guards = if repository_and_worktree {
+        state
+            .repository_service
+            .lock_repository_and_worktree(&initial)
+            .await
+    } else {
+        vec![state.repository_service.lock_repository(&initial).await]
+    };
     let resolved = resolve_repository_target(state, uri, id).await;
     if let Err(error) = operation(resolved).await {
         return repository_error(error);
@@ -2550,6 +4047,7 @@ where
 pub async fn run_web(options: ServerOptions) -> anyhow::Result<()> {
     let config = InstanceConfig::from_env(options);
     config.storage_paths.ensure_directories()?;
+    crate::diagnostics::log_controlled_instance_start(&config.storage_paths);
     let auth = resolve_web_auth(&config.storage_paths)?;
     let bind_host = config.host.clone();
     let bind_port = config.port;
@@ -2583,13 +4081,16 @@ pub async fn run_web(options: ServerOptions) -> anyhow::Result<()> {
     info!(address = %local, draining = state.is_draining(), "controlled instance HTTP server listening");
     state.start_node_agent();
     let server_state = state.clone();
-    let shutdown = shutdown_signal(state.shutdown_receiver());
+    let shutdown_state = state.clone();
+    let shutdown = async move {
+        shutdown_signal(shutdown_state.shutdown_receiver()).await;
+        shutdown_state
+            .instance_shell
+            .shutdown(1001, "Controlled instance is shutting down.")
+            .await;
+    };
     let serve_result = axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown)
-        .await;
-    server_state
-        .instance_shell
-        .shutdown(1001, "Controlled instance is shutting down.")
         .await;
     server_state.stop_node_agent().await;
     server_state.stop_ai_session_services().await;
@@ -2627,11 +4128,15 @@ async fn trigger_get(State(state): State<AppState>, Path(config_hash): Path<Stri
 
 async fn trigger_create(
     State(state): State<AppState>,
-    payload: Result<Json<TriggerCreateInput>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(input) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return trigger_invalid(error.body_text()),
+    };
+    let input = match parse_trigger_create_input(&body) {
+        Ok(input) => input,
+        Err(issues) => return trigger_invalid(zod_issue_message(&issues)),
     };
     match state.trigger_store.create(input) {
         Ok(created) => {
@@ -2652,11 +4157,15 @@ async fn trigger_create(
 async fn trigger_patch(
     State(state): State<AppState>,
     Path(config_hash): Path<String>,
-    payload: Result<Json<TriggerPatchInput>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(input) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return trigger_invalid(error.body_text()),
+    };
+    let input = match parse_trigger_patch_input(&body) {
+        Ok(input) => input,
+        Err(issues) => return trigger_invalid(zod_issue_message(&issues)),
     };
     match state.trigger_store.patch(&config_hash, input) {
         Ok(Some(updated)) => {
@@ -2771,11 +4280,10 @@ async fn set_trigger_enabled(state: AppState, config_hash: String, enabled: bool
 async fn trigger_run(
     State(state): State<AppState>,
     Path(config_hash): Path<String>,
-    payload: Result<Option<Json<Value>>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let body = match payload {
-        Ok(Some(Json(body))) => body,
-        Ok(None) => Value::Null,
+    let JsonValueBody(body) = match payload {
+        Ok(payload) => payload,
         Err(error) => return trigger_invalid(error.body_text()),
     };
     state
@@ -2783,7 +4291,8 @@ async fn trigger_run(
         .publish("trigger.run.started", json!({ "configHash": config_hash }));
     let input = match parse_trigger_run_input(&body) {
         Ok(input) => input,
-        Err(message) => {
+        Err(issues) => {
+            let message = zod_issue_message(&issues);
             state.events.publish(
                 "trigger.run.failed",
                 json!({ "configHash": config_hash, "error": message }),
@@ -2863,99 +4372,711 @@ async fn trigger_run(
     }
 }
 
-fn parse_trigger_run_input(body: &Value) -> Result<TriggerRunInput, String> {
+fn parse_trigger_create_input(body: &Value) -> Result<TriggerCreateInput, Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let name = zod_required_string_field_at(object, "name", 1, 160, &[], &mut issues);
+    let description =
+        zod_optional_string_field_at(object, "description", 0, 1_000, &[], &mut issues);
+    let source = parse_trigger_source_field(object.get("source"), &mut issues);
+    let action = parse_trigger_action_field(object.get("action"), &mut issues);
+    let policy = parse_trigger_policy_field(object.get("policy"), &mut issues);
+    let deployment = parse_trigger_deployment_field(object.get("deployment"), &mut issues);
+    zod_unknown_object_keys(
+        object,
+        &[
+            "name",
+            "description",
+            "source",
+            "action",
+            "policy",
+            "deployment",
+        ],
+        Vec::new(),
+        &mut issues,
+    );
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(TriggerCreateInput {
+        name: name.unwrap_or_default(),
+        description,
+        source: source.expect("validated trigger source"),
+        action: action.expect("validated trigger action"),
+        policy,
+        deployment,
+    })
+}
+
+fn parse_trigger_patch_input(body: &Value) -> Result<TriggerPatchInput, Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let name = zod_optional_string_field_at(object, "name", 1, 160, &[], &mut issues);
+    let description = match object.get("description") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(_) => zod_optional_string_field_at(object, "description", 0, 1_000, &[], &mut issues)
+            .map(Some),
+    };
+    zod_unknown_object_keys(object, &["name", "description"], Vec::new(), &mut issues);
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(TriggerPatchInput { name, description })
+}
+
+fn parse_trigger_source_field(
+    value: Option<&Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerSource> {
+    let Some(value) = value else {
+        issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+        return None;
+    };
+    let Some(object) = value.as_object() else {
+        issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+        return None;
+    };
+    let source_type = object.get("type").and_then(Value::as_str);
+    match source_type {
+        Some("schedule") => parse_trigger_schedule_source(object, issues),
+        Some("file-change") => parse_trigger_file_change_source(object, issues),
+        Some("ai-session") => parse_trigger_ai_session_source(object, issues),
+        _ => {
+            issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+            None
+        }
+    }
+}
+
+fn parse_trigger_schedule_source(
+    object: &serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerSource> {
+    let schedule_kind = match object.get("scheduleKind") {
+        None => "interval",
+        Some(Value::String(value)) => value.as_str(),
+        Some(_) => {
+            issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+            return None;
+        }
+    };
+    let source_path = vec![json!("source")];
+    match schedule_kind {
+        "interval" => {
+            let interval_ms = zod_required_integer_field_at(
+                object,
+                "intervalMs",
+                1_000,
+                i64::MAX,
+                &source_path,
+                issues,
+            );
+            zod_unknown_object_keys(
+                object,
+                &["type", "scheduleKind", "intervalMs"],
+                source_path,
+                issues,
+            );
+            if !issues.is_empty() {
+                return None;
+            }
+            Some(TriggerSource::Schedule {
+                schedule_kind: TriggerScheduleKind::Interval,
+                interval_ms: interval_ms.map(|value| value as u64),
+                time_of_day: None,
+                timezone: None,
+                weekdays: None,
+            })
+        }
+        "daily" => {
+            let time_of_day = zod_required_time_of_day(object, &source_path, issues);
+            let timezone =
+                zod_required_string_field_at(object, "timezone", 1, 120, &source_path, issues);
+            zod_unknown_object_keys(
+                object,
+                &["type", "scheduleKind", "timeOfDay", "timezone"],
+                source_path,
+                issues,
+            );
+            if !issues.is_empty() {
+                return None;
+            }
+            Some(TriggerSource::Schedule {
+                schedule_kind: TriggerScheduleKind::Daily,
+                interval_ms: None,
+                time_of_day,
+                timezone,
+                weekdays: None,
+            })
+        }
+        "weekly" => {
+            let weekdays = zod_optional_integer_array_field_at(
+                object,
+                "weekdays",
+                true,
+                1,
+                7,
+                0,
+                6,
+                &source_path,
+                issues,
+            )
+            .map(|values| values.into_iter().map(|value| value as u8).collect());
+            let time_of_day = zod_required_time_of_day(object, &source_path, issues);
+            let timezone =
+                zod_required_string_field_at(object, "timezone", 1, 120, &source_path, issues);
+            zod_unknown_object_keys(
+                object,
+                &["type", "scheduleKind", "weekdays", "timeOfDay", "timezone"],
+                source_path,
+                issues,
+            );
+            if !issues.is_empty() {
+                return None;
+            }
+            Some(TriggerSource::Schedule {
+                schedule_kind: TriggerScheduleKind::Weekly,
+                interval_ms: None,
+                time_of_day,
+                timezone,
+                weekdays,
+            })
+        }
+        _ => {
+            issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+            None
+        }
+    }
+}
+
+fn parse_trigger_file_change_source(
+    object: &serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerSource> {
+    let source_path = vec![json!("source")];
+    let roots =
+        zod_string_array_field_at(object, "roots", true, 1, 50, 1, 4_096, &source_path, issues);
+    let globs =
+        zod_string_array_field_at(object, "globs", true, 1, 100, 1, 500, &source_path, issues);
+    let ignore = zod_string_array_field_at(
+        object,
+        "ignore",
+        false,
+        0,
+        100,
+        1,
+        500,
+        &source_path,
+        issues,
+    );
+    let debounce_ms = if object.contains_key("debounceMs") {
+        zod_optional_integer_field_at(object, "debounceMs", 100, 60_000, &source_path, issues)
+    } else {
+        Some(1_500)
+    };
+    zod_unknown_object_keys(
+        object,
+        &["type", "roots", "globs", "ignore", "debounceMs"],
+        source_path,
+        issues,
+    );
+    if !issues.is_empty() {
+        return None;
+    }
+    Some(TriggerSource::FileChange {
+        roots: roots.unwrap_or_default(),
+        globs: globs.unwrap_or_default(),
+        ignore,
+        debounce_ms: debounce_ms.unwrap_or(1_500) as u64,
+    })
+}
+
+fn parse_trigger_ai_session_source(
+    object: &serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerSource> {
+    let source_path = vec![json!("source")];
+    let mut branch_issues = Vec::new();
+    let agent =
+        zod_optional_string_field_at(object, "agent", 1, 80, &source_path, &mut branch_issues);
+    let statuses = zod_enum_array_field_at(
+        object,
+        "statuses",
+        &["running", "waiting", "idle", "failed"],
+        |value| match value {
+            "running" => Some(TriggerAiSessionStatus::Running),
+            "waiting" => Some(TriggerAiSessionStatus::Waiting),
+            "idle" => Some(TriggerAiSessionStatus::Idle),
+            "failed" => Some(TriggerAiSessionStatus::Failed),
+            _ => None,
+        },
+        &source_path,
+        &mut branch_issues,
+    );
+    let phases = zod_enum_array_field_at(
+        object,
+        "phases",
+        &[
+            "thinking",
+            "tool",
+            "editing",
+            "approval",
+            "responding",
+            "unknown",
+        ],
+        |value| match value {
+            "thinking" => Some(TriggerAiSessionPhase::Thinking),
+            "tool" => Some(TriggerAiSessionPhase::Tool),
+            "editing" => Some(TriggerAiSessionPhase::Editing),
+            "approval" => Some(TriggerAiSessionPhase::Approval),
+            "responding" => Some(TriggerAiSessionPhase::Responding),
+            "unknown" => Some(TriggerAiSessionPhase::Unknown),
+            _ => None,
+        },
+        &source_path,
+        &mut branch_issues,
+    );
+    zod_unknown_object_keys(
+        object,
+        &["type", "agent", "statuses", "phases"],
+        source_path,
+        &mut branch_issues,
+    );
+    if !branch_issues.is_empty() {
+        issues.push(zod_custom(vec![json!("source")], "Invalid input"));
+        return None;
+    }
+    Some(TriggerSource::AiSession {
+        agent,
+        statuses,
+        phases,
+    })
+}
+
+fn parse_trigger_action_field(
+    value: Option<&Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerAction> {
+    let path = vec![json!("action")];
+    let Some(value) = value else {
+        issues.push(zod_invalid_type("object", path, "undefined"));
+        return None;
+    };
+    let Some(object) = value.as_object() else {
+        issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+        return None;
+    };
+    let prompt_template =
+        zod_required_string_field_at(object, "promptTemplate", 1, 20_000, &path, issues);
+    zod_unknown_object_keys(object, &["promptTemplate"], path, issues);
+    prompt_template.map(|prompt_template| TriggerAction { prompt_template })
+}
+
+fn parse_trigger_policy_field(
+    value: Option<&Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerPolicyInput> {
+    let path = vec![json!("policy")];
+    let value = value?;
+    let Some(object) = value.as_object() else {
+        issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+        return None;
+    };
+    let cooldown_ms =
+        zod_optional_integer_field_at(object, "cooldownMs", 0, 86_400_000, &path, issues);
+    let max_concurrent_runs =
+        zod_optional_integer_field_at(object, "maxConcurrentRuns", 1, 20, &path, issues);
+    let when_busy =
+        zod_enum_field_at(object, "whenBusy", &["skip", "queue"], &path, issues).map(|value| {
+            match value.as_str() {
+                "queue" => TriggerWhenBusy::Queue,
+                _ => TriggerWhenBusy::Skip,
+            }
+        });
+    zod_unknown_object_keys(
+        object,
+        &["cooldownMs", "maxConcurrentRuns", "whenBusy"],
+        path,
+        issues,
+    );
+    Some(TriggerPolicyInput {
+        cooldown_ms: cooldown_ms.map(|value| value as u64),
+        max_concurrent_runs: max_concurrent_runs.map(|value| value as u8),
+        when_busy,
+    })
+}
+
+fn parse_trigger_deployment_field(
+    value: Option<&Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerDeploymentCreateInput> {
+    let path = vec![json!("deployment")];
+    let value = value?;
+    let Some(object) = value.as_object() else {
+        issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+        return None;
+    };
+    let deployment_id = zod_optional_string_field_at(object, "deploymentId", 1, 240, &path, issues);
+    let origin = zod_enum_field_at(
+        object,
+        "origin",
+        &["control-plane", "controlled-instance"],
+        &path,
+        issues,
+    )
+    .map(|value| match value.as_str() {
+        "control-plane" => TriggerDeploymentOrigin::ControlPlane,
+        _ => TriggerDeploymentOrigin::ControlledInstance,
+    });
+    let enabled = zod_optional_boolean_field_at(object, "enabled", &path, issues);
+    let target = parse_trigger_target_field(object.get("target"), issues);
+    let local_name = zod_optional_string_field_at(object, "localName", 1, 160, &path, issues);
+    zod_unknown_object_keys(
+        object,
+        &["deploymentId", "origin", "enabled", "target", "localName"],
+        path,
+        issues,
+    );
+    target.map(|target| TriggerDeploymentCreateInput {
+        deployment_id,
+        origin,
+        enabled,
+        target,
+        local_name,
+    })
+}
+
+fn parse_trigger_target_field(
+    value: Option<&Value>,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<TriggerTarget> {
+    let path = vec![json!("deployment"), json!("target")];
+    let Some(value) = value else {
+        issues.push(zod_invalid_type("object", path, "undefined"));
+        return None;
+    };
+    let Some(object) = value.as_object() else {
+        issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+        return None;
+    };
+    zod_required_literal_field_at(object, "type", "ai-session", &path, issues);
+    let ai_session_id = zod_required_string_field_at(object, "aiSessionId", 1, 160, &path, issues);
+    zod_unknown_object_keys(object, &["type", "aiSessionId"], path, issues);
+    ai_session_id.map(TriggerTarget::ai_session)
+}
+
+fn zod_required_time_of_day(
+    object: &serde_json::Map<String, Value>,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value =
+        zod_required_string_field_at(object, "timeOfDay", 0, usize::MAX, parent_path, issues)?;
+    if !valid_time_of_day(&value) {
+        issues.push(ZodIssue::InvalidFormat {
+            origin: "string",
+            code: "invalid_format",
+            format: "regex",
+            pattern: r"/^([01]\d|2[0-3]):[0-5]\d$/",
+            path: zod_field_path(parent_path, "timeOfDay"),
+            message: r"Invalid string: must match pattern /^([01]\d|2[0-3]):[0-5]\d$/".to_string(),
+        });
+        return None;
+    }
+    Some(value)
+}
+
+fn valid_time_of_day(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 5
+        && matches!(bytes[0], b'0' | b'1' | b'2')
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b':'
+        && matches!(bytes[3], b'0'..=b'5')
+        && bytes[4].is_ascii_digit()
+        && (bytes[0] != b'2' || bytes[1] <= b'3')
+}
+
+fn zod_required_literal_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    literal: &'static str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    if object.get(field).and_then(Value::as_str) == Some(literal) {
+        return;
+    }
+    issues.push(ZodIssue::InvalidValue {
+        code: "invalid_value",
+        values: vec![literal.to_string()],
+        path: zod_field_path(parent_path, field),
+        message: format!("Invalid input: expected \"{literal}\""),
+    });
+}
+
+fn zod_optional_boolean_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<bool> {
+    let value = object.get(field)?;
+    match value.as_bool() {
+        Some(value) => Some(value),
+        None => {
+            issues.push(zod_invalid_type(
+                "boolean",
+                zod_field_path(parent_path, field),
+                zod_received_type(value),
+            ));
+            None
+        }
+    }
+}
+
+fn zod_enum_array_field_at<T>(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[&str],
+    parse: impl Fn(&str) -> Option<T>,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<Vec<T>> {
+    let value = object.get(field)?;
+    let field_path = zod_field_path(parent_path, field);
+    let Some(items) = value.as_array() else {
+        issues.push(zod_invalid_type(
+            "array",
+            field_path,
+            zod_received_type(value),
+        ));
+        return None;
+    };
+    if items.len() > 20 {
+        issues.push(zod_too_big("array", field_path.clone(), 20));
+    }
+    let listed = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join("|");
+    let mut parsed = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let item_path = field_path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(item) = item.as_str() else {
+            issues.push(zod_invalid_type(
+                "string",
+                item_path,
+                zod_received_type(item),
+            ));
+            continue;
+        };
+        match parse(item) {
+            Some(value) => parsed.push(value),
+            None => issues.push(zod_invalid_value(
+                item_path,
+                values,
+                format!("Invalid option: expected one of {listed}"),
+            )),
+        }
+    }
+    Some(parsed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn zod_string_array_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    required: bool,
+    minimum_items: usize,
+    maximum_items: usize,
+    minimum_length: usize,
+    maximum_length: usize,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<Vec<String>> {
+    let Some(value) = object.get(field) else {
+        if required {
+            issues.push(zod_invalid_type(
+                "array",
+                zod_field_path(parent_path, field),
+                "undefined",
+            ));
+        }
+        return None;
+    };
+    let field_path = zod_field_path(parent_path, field);
+    let Some(items) = value.as_array() else {
+        issues.push(zod_invalid_type(
+            "array",
+            field_path,
+            zod_received_type(value),
+        ));
+        return None;
+    };
+    if items.len() < minimum_items {
+        issues.push(zod_too_small("array", field_path.clone(), minimum_items));
+    }
+    if items.len() > maximum_items {
+        issues.push(zod_too_big("array", field_path.clone(), maximum_items));
+    }
+    let mut values = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let item_path = field_path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(item) = item.as_str() else {
+            issues.push(zod_invalid_type(
+                "string",
+                item_path,
+                zod_received_type(item),
+            ));
+            continue;
+        };
+        let item = trim_js_whitespace(item);
+        let length = item.chars().count();
+        if length < minimum_length {
+            issues.push(zod_too_small("string", item_path.clone(), minimum_length));
+        }
+        if length > maximum_length {
+            issues.push(zod_too_big("string", item_path, maximum_length));
+        }
+        values.push(item.to_string());
+    }
+    Some(values)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn zod_optional_integer_array_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    required: bool,
+    minimum_items: usize,
+    maximum_items: usize,
+    minimum: i64,
+    maximum: i64,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<Vec<i64>> {
+    let Some(value) = object.get(field) else {
+        if required {
+            issues.push(zod_invalid_type(
+                "array",
+                zod_field_path(parent_path, field),
+                "undefined",
+            ));
+        }
+        return None;
+    };
+    let field_path = zod_field_path(parent_path, field);
+    let Some(items) = value.as_array() else {
+        issues.push(zod_invalid_type(
+            "array",
+            field_path,
+            zod_received_type(value),
+        ));
+        return None;
+    };
+    if items.len() < minimum_items {
+        issues.push(zod_too_small("array", field_path.clone(), minimum_items));
+    }
+    if items.len() > maximum_items {
+        issues.push(zod_too_big("array", field_path.clone(), maximum_items));
+    }
+    let mut values = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let item_path = field_path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(item) = zod_integer_value(item) else {
+            if item.is_number() {
+                issues.push(zod_invalid_int(item_path));
+            } else {
+                issues.push(zod_invalid_type(
+                    "number",
+                    item_path,
+                    zod_received_type(item),
+                ));
+            }
+            continue;
+        };
+        if item < minimum {
+            issues.push(zod_too_small(
+                "number",
+                item_path.clone(),
+                usize::try_from(minimum).unwrap_or_default(),
+            ));
+        }
+        if item > maximum {
+            issues.push(zod_too_big(
+                "number",
+                item_path,
+                usize::try_from(maximum).unwrap_or_default(),
+            ));
+        }
+        values.push(item);
+    }
+    Some(values)
+}
+
+fn zod_integer_value(value: &Value) -> Option<i64> {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .filter(|value| value.abs() <= MAX_SAFE_INTEGER)
+        .or_else(|| {
+            value.as_f64().and_then(|value| {
+                (value.is_finite()
+                    && value.fract() == 0.0
+                    && value.abs() <= MAX_SAFE_INTEGER as f64)
+                    .then_some(value as i64)
+            })
+        })
+}
+
+fn parse_trigger_run_input(body: &Value) -> Result<TriggerRunInput, Vec<ZodIssue>> {
     if body.is_null() {
         return Ok(TriggerRunInput::default());
     }
-    let Some(object) = body.as_object() else {
-        return Err(format!(
-            "body: Invalid input: expected object, received {}",
-            zod_received_type(body)
-        ));
-    };
     let mut issues = Vec::new();
-    let prompt_override = trigger_run_string(
-        object.get("promptOverride"),
-        "promptOverride",
-        1,
-        20_000,
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let prompt_override =
+        zod_optional_string_field_at(object, "promptOverride", 1, 20_000, &[], &mut issues);
+    let event_summary =
+        zod_optional_string_field_at(object, "eventSummary", 0, 1_000, &[], &mut issues);
+    let deployment_id =
+        zod_optional_string_field_at(object, "deploymentId", 1, 240, &[], &mut issues);
+    zod_unknown_object_keys(
+        object,
+        &["promptOverride", "eventSummary", "deploymentId"],
+        Vec::new(),
         &mut issues,
     );
-    let event_summary = trigger_run_string(
-        object.get("eventSummary"),
-        "eventSummary",
-        0,
-        1_000,
-        &mut issues,
-    );
-    let deployment_id = trigger_run_string(
-        object.get("deploymentId"),
-        "deploymentId",
-        1,
-        240,
-        &mut issues,
-    );
-    let unknown = object
-        .keys()
-        .filter(|key| {
-            !matches!(
-                key.as_str(),
-                "promptOverride" | "eventSummary" | "deploymentId"
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        let listed = unknown
-            .iter()
-            .map(|key| format!("\"{key}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        issues.push(format!(
-            "body: Unrecognized key{}: {listed}",
-            if unknown.len() == 1 { "" } else { "s" }
-        ));
-    }
     if !issues.is_empty() {
-        return Err(issues.join("; "));
+        return Err(issues);
     }
     Ok(TriggerRunInput {
         prompt_override,
         event_summary,
         deployment_id,
     })
-}
-
-fn trigger_run_string(
-    value: Option<&Value>,
-    path: &str,
-    minimum: usize,
-    maximum: usize,
-    issues: &mut Vec<String>,
-) -> Option<String> {
-    let value = value?;
-    let Some(value) = value.as_str() else {
-        issues.push(format!(
-            "{path}: Invalid input: expected string, received {}",
-            zod_received_type(value)
-        ));
-        return None;
-    };
-    let value = trim_js_whitespace(value);
-    let length = utf16_len(value);
-    if length < minimum {
-        issues.push(format!(
-            "{path}: Too small: expected string to have >={minimum} characters"
-        ));
-        return None;
-    }
-    if length > maximum {
-        issues.push(format!(
-            "{path}: Too big: expected string to have <={maximum} characters"
-        ));
-        return None;
-    }
-    Some(value.to_string())
 }
 
 async fn trigger_runs(State(state): State<AppState>) -> Response {
@@ -3085,7 +5206,7 @@ async fn app_management(State(state): State<AppState>) -> Json<ApiEnvelope<Value
 async fn app_management_install(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
-    payload: Result<Json<AppManagementOperationRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
     app_management_request(state, app_id, AppManagementOperation::Install, payload).await
 }
@@ -3093,7 +5214,7 @@ async fn app_management_install(
 async fn app_management_uninstall(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
-    payload: Result<Json<AppManagementOperationRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
     app_management_request(state, app_id, AppManagementOperation::Uninstall, payload).await
 }
@@ -3101,7 +5222,7 @@ async fn app_management_uninstall(
 async fn app_management_update(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
-    payload: Result<Json<AppManagementOperationRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
     app_management_request(state, app_id, AppManagementOperation::Update, payload).await
 }
@@ -3110,11 +5231,21 @@ async fn app_management_request(
     state: AppState,
     app_id: String,
     operation: AppManagementOperation,
-    payload: Result<Json<AppManagementOperationRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(value) = match payload {
         Ok(payload) => payload,
         Err(error) => return app_management_body_error(error),
+    };
+    let body = match parse_app_management_operation(&value) {
+        Ok(body) => body,
+        Err(issues) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "app_management_input_invalid",
+                &zod_issue_message(&issues),
+            )
+        }
     };
     match state.app_management.request(&app_id, operation, body).await {
         Ok(job) => (
@@ -3131,10 +5262,18 @@ async fn app_management_request(
 async fn app_management_update_check(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
-    payload: Result<Json<AppManagementOperationRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    if let Err(error) = payload {
-        return app_management_body_error(error);
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
+        Err(error) => return app_management_body_error(error),
+    };
+    if let Err(issues) = parse_app_management_operation(&value) {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "app_management_input_invalid",
+            &zod_issue_message(&issues),
+        );
     }
     match state.app_management.check_for_update(&app_id).await {
         Ok(check) => Json(ApiEnvelope {
@@ -3157,12 +5296,15 @@ async fn app_management_job(State(state): State<AppState>, Path(job_id): Path<St
 
 async fn update_managed_model_environment(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(value) = match payload {
+    let JsonValueBody(value) = match payload {
         Ok(payload) => payload,
         Err(error) => return managed_model_body_error("MANAGED_MODEL_ENVIRONMENT_INVALID", error),
     };
+    if let Err(issues) = validate_managed_model_environment(&value) {
+        return fastify_zod_error(issues);
+    }
     let next = match serde_json::from_value::<ManagedModelEnvironment>(value) {
         Ok(next) => next,
         Err(error) => {
@@ -3203,12 +5345,16 @@ async fn managed_model_catalog(State(state): State<AppState>) -> Response {
 
 async fn update_managed_model_catalog(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<RawJsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(value) = match payload {
+    let RawJsonValueBody(value) = match payload {
         Ok(payload) => payload,
         Err(error) => return managed_model_body_error("MANAGED_MODEL_CATALOG_INVALID", error),
     };
+    let issues = validate_private_model_catalog_body(&value);
+    if !issues.is_empty() {
+        return fastify_catalog_zod_error(issues);
+    }
     match state.controlled_models.apply_catalog(value) {
         Ok(result) => {
             state.refresh_managed_model_environment().await;
@@ -3226,12 +5372,15 @@ async fn update_managed_model_catalog(
 
 async fn update_codex_settings(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(value) = match payload {
+    let JsonValueBody(value) = match payload {
         Ok(payload) => payload,
         Err(error) => return managed_model_body_error("CODEX_SETTINGS_INVALID", error),
     };
+    if let Err(issues) = validate_codex_instance_settings(&value) {
+        return fastify_zod_error(issues);
+    }
     match state.controlled_models.apply_codex_settings(value) {
         Ok(result) => Json(ApiEnvelope {
             data: json!({
@@ -3246,19 +5395,28 @@ async fn update_codex_settings(
 
 async fn update_ai_session_persistence_settings(
     State(state): State<AppState>,
-    payload: Result<
-        Json<controlled_instance_protocol::AiSessionPersistenceSettingsInput>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(input) = match payload {
+    let JsonValueBody(value) = match payload {
         Ok(payload) => payload,
         Err(error) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "AI_SESSION_PERSISTENCE_SETTINGS_INVALID",
-                &error.body_text(),
-            );
+            return managed_model_body_error("AI_SESSION_PERSISTENCE_SETTINGS_INVALID", error)
+        }
+    };
+    if let Err(issues) = validate_ai_session_persistence_settings(&value) {
+        return fastify_zod_error(issues);
+    }
+    let input = match serde_json::from_value::<
+        controlled_instance_protocol::AiSessionPersistenceSettingsInput,
+    >(value)
+    {
+        Ok(input) => input,
+        Err(error) => {
+            return fastify_zod_error(vec![zod_invalid_type(
+                "object",
+                Vec::new(),
+                &error.to_string(),
+            )])
         }
     };
     let settings = match state.ai_session_persistence_settings.put(input) {
@@ -3310,6 +5468,9 @@ async fn update_ai_session_persistence_settings(
 }
 
 fn managed_model_body_error(code: &str, error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     api_error(StatusCode::BAD_REQUEST, code, &error.body_text())
 }
 
@@ -3319,13 +5480,6 @@ fn managed_model_error(error: crate::ManagedModelError) -> Response {
         &error.code,
         &error.message,
     )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ConfigSyncFoldersQuery {
-    path: Option<String>,
-    depth: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3346,36 +5500,12 @@ async fn config_sync_programs() -> Json<ApiEnvelope<Value>> {
     })
 }
 
-async fn config_sync_folders(
-    State(state): State<AppState>,
-    query: Result<Query<ConfigSyncFoldersQuery>, QueryRejection>,
-) -> Response {
-    let Query(query) = match query {
+async fn config_sync_folders(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let (path, depth) = match parse_config_sync_folders_query(raw.as_deref().unwrap_or_default()) {
         Ok(query) => query,
-        Err(error) => {
-            return config_sync_error(ConfigSyncError::new(
-                "CONFIG_SYNC_FOLDER_LIST_FAILED",
-                error.body_text(),
-                400,
-            ));
-        }
+        Err(issues) => return fastify_zod_error(issues),
     };
-    if query.path.as_ref().is_some_and(|path| path.len() > 1000) {
-        return config_sync_error(ConfigSyncError::new(
-            "CONFIG_SYNC_FOLDER_LIST_FAILED",
-            "Config sync folder path is too long.",
-            400,
-        ));
-    }
-    let depth = query.depth.unwrap_or(0);
-    if depth > 2 {
-        return config_sync_error(ConfigSyncError::new(
-            "CONFIG_SYNC_FOLDER_LIST_FAILED",
-            "Config sync folder depth must be between 0 and 2.",
-            400,
-        ));
-    }
-    match config_sync_service(&state).list_folders(query.path.as_deref(), depth) {
+    match config_sync_service(&state).list_folders(path.as_deref(), depth) {
         Ok(folders) => Json(ApiEnvelope {
             data: serde_json::to_value(folders).unwrap_or(Value::Null),
         })
@@ -3384,11 +5514,136 @@ async fn config_sync_folders(
     }
 }
 
+fn parse_config_sync_folders_query(raw: &str) -> Result<(Option<String>, u32), Vec<ZodIssue>> {
+    let mut values = serde_json::Map::new();
+    for (key, value) in url::form_urlencoded::parse(raw.as_bytes()) {
+        match values.get_mut(key.as_ref()) {
+            None => {
+                values.insert(key.into_owned(), Value::String(value.into_owned()));
+            }
+            Some(Value::Array(items)) => items.push(Value::String(value.into_owned())),
+            Some(existing) => {
+                let first = std::mem::replace(existing, Value::Null);
+                *existing = Value::Array(vec![first, Value::String(value.into_owned())]);
+            }
+        }
+    }
+    let mut issues = Vec::new();
+    let unknown = values
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "path" | "depth"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        issues.push(zod_unrecognized_keys(Vec::new(), unknown));
+    }
+    let path = match values.get("path") {
+        None => None,
+        Some(Value::String(value)) => {
+            let value = trim_js_whitespace(value);
+            let length = value.chars().count();
+            if length > 1_000 {
+                issues.push(zod_too_big("string", vec![json!("path")], 1_000));
+            }
+            Some(value.to_string())
+        }
+        Some(value) => {
+            issues.push(zod_invalid_type(
+                "string",
+                vec![json!("path")],
+                zod_received_type(value),
+            ));
+            None
+        }
+    };
+    let depth = match values.get("depth") {
+        None => 0,
+        Some(Value::String(value)) => match js_number_from_string(value) {
+            Some(number) if number.is_nan() => {
+                issues.push(zod_invalid_type_with_received(
+                    "number",
+                    vec![json!("depth")],
+                    "NaN",
+                ));
+                0
+            }
+            Some(number) if !number.is_finite() || number.fract() != 0.0 => {
+                issues.push(zod_invalid_int(vec![json!("depth")]));
+                0
+            }
+            Some(number) if number < 0.0 => {
+                issues.push(zod_too_small("number", vec![json!("depth")], 0));
+                0
+            }
+            Some(number) if number > 2.0 => {
+                issues.push(zod_too_big("number", vec![json!("depth")], 2));
+                0
+            }
+            Some(number) => number as u32,
+            None => {
+                issues.push(zod_invalid_type_with_received(
+                    "number",
+                    vec![json!("depth")],
+                    "NaN",
+                ));
+                0
+            }
+        },
+        Some(value) => {
+            issues.push(zod_invalid_type_with_received(
+                "number",
+                vec![json!("depth")],
+                "NaN",
+            ));
+            let _ = value;
+            0
+        }
+    };
+    if issues.is_empty() {
+        Ok((path, depth))
+    } else {
+        Err(issues)
+    }
+}
+
+fn js_number_from_string(value: &str) -> Option<f64> {
+    let value =
+        value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
+    if value.is_empty() {
+        return Some(0.0);
+    }
+    if let Some(value) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return i64::from_str_radix(value, 16)
+            .ok()
+            .map(|value| value as f64);
+    }
+    if let Some(value) = value
+        .strip_prefix("0o")
+        .or_else(|| value.strip_prefix("0O"))
+    {
+        return i64::from_str_radix(value, 8).ok().map(|value| value as f64);
+    }
+    if let Some(value) = value
+        .strip_prefix("0b")
+        .or_else(|| value.strip_prefix("0B"))
+    {
+        return i64::from_str_radix(value, 2).ok().map(|value| value as f64);
+    }
+    match value {
+        "Infinity" | "+Infinity" => Some(f64::INFINITY),
+        "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => value.parse::<f64>().ok().or(Some(f64::NAN)),
+    }
+}
+
 async fn config_sync_batch(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return config_sync_json_error(error),
     };
@@ -3635,7 +5890,7 @@ fn config_sync_batch_request(
                         message: "Too small: expected string to have >=1 characters".to_string(),
                     });
                     valid = false;
-                } else if utf16_len(value) > 120 {
+                } else if value.chars().count() > 120 {
                     issues.push(ConfigSyncValidationIssue::TooBig {
                         origin: "string",
                         code: "too_big",
@@ -3718,7 +5973,7 @@ fn config_sync_batch_request(
                     message: "Too small: expected string to have >=1 characters".to_string(),
                 });
                 None
-            } else if utf16_len(value) > 1000 {
+            } else if value.chars().count() > 1000 {
                 issues.push(ConfigSyncValidationIssue::TooBig {
                     origin: "string",
                     code: "too_big",
@@ -3786,6 +6041,9 @@ fn config_sync_error(error: ConfigSyncError) -> Response {
 }
 
 fn app_management_body_error(error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     api_error(
         StatusCode::BAD_REQUEST,
         "app_management_input_invalid",
@@ -3822,16 +6080,16 @@ async fn app_custom_catalog(State(state): State<AppState>) -> Response {
 
 async fn save_app_custom_catalog(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(body) => body,
         Err(error) => {
             return api_error(
                 StatusCode::BAD_REQUEST,
                 "APP_CATALOG_INVALID",
                 &error.body_text(),
-            )
+            );
         }
     };
     let value = json!({
@@ -3853,6 +6111,10 @@ async fn save_app_custom_catalog(
 
 async fn app_profiles(State(state): State<AppState>, Path(app_id): Path<String>) -> Response {
     match state.app_runtime.list_app_profiles(&app_id) {
+        Ok(profiles) if profiles.profiles.len() > 200 => app_text_validation_error(
+            vec!["profiles: Too big: expected array to have <=200 items".to_string()],
+            "APP_PROFILES_FAILED",
+        ),
         Ok(profiles) => Json(ApiEnvelope { data: profiles }).into_response(),
         Err(error) => app_runtime_error(error),
     }
@@ -3861,9 +6123,9 @@ async fn app_profiles(State(state): State<AppState>, Path(app_id): Path<String>)
 async fn app_profile_create(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return app_profile_body_error(error, "APP_PROFILE_CREATE_FAILED"),
     };
@@ -3880,9 +6142,9 @@ async fn app_profile_create(
 async fn app_profile_rename(
     State(state): State<AppState>,
     Path((app_id, profile_id)): Path<(String, String)>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return app_profile_body_error(error, "APP_PROFILE_RENAME_FAILED"),
     };
@@ -3930,14 +6192,14 @@ async fn app_sessions(
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     if let Some(raw_revision) = query.get("sinceRevision") {
-        let since_revision = match raw_revision.parse::<u64>() {
-            Ok(value) => value,
-            Err(_) => {
+        let since_revision = match parse_js_non_negative_integer(raw_revision) {
+            Some(value) => value,
+            None => {
                 return api_error(
                     StatusCode::BAD_REQUEST,
                     "APP_SESSION_DELTA_INVALID",
                     "sinceRevision must be a non-negative integer.",
-                )
+                );
             }
         };
         let Some(stream_id) = query.get("streamId") else {
@@ -3998,88 +6260,36 @@ async fn app_session_detail(State(state): State<AppState>, Path(id): Path<String
 async fn app_session_rename(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => {
             return api_error(
                 StatusCode::BAD_REQUEST,
                 "APP_SESSION_UPDATE_INVALID",
                 &error.body_text(),
-            )
+            );
         }
     };
     let title = match normalize_app_text_body(&body, "title", 120) {
         Ok(title) => title,
         Err(issues) => return app_text_validation_error(issues, "APP_SESSION_UPDATE_INVALID"),
     };
-    let linked = state
-        .ai_sessions
-        .list()
-        .into_iter()
-        .filter(|session| session.app_session_id.as_deref() == Some(id.as_str()))
-        .collect::<Vec<_>>();
-    if linked.len() > 1 {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "AI_SESSION_RENAME_BINDING_CONFLICT",
-            "App session is associated with multiple AI sessions.",
-        );
-    }
-    let Some(linked) = linked.into_iter().next() else {
-        return match state.app_runtime.rename(&id, &title) {
-            Ok(session) => app_session_record_response(session),
-            Err(error) => app_runtime_error(error),
-        };
-    };
-    if linked.agent == "codex" {
-        return match state.app_runtime.rename(&id, &title) {
-            Ok(session) => app_session_record_response(session),
-            Err(error) => app_runtime_error(error),
-        };
-    }
-    if linked.creation_source == "app-session" {
-        if let Err(error) = state.app_runtime.rename(&id, &title) {
-            return app_runtime_error(error);
+    match state
+        .session_titles
+        .rename_app_session(&id, &title, None)
+        .await
+    {
+        Ok(session) => Json(ApiEnvelope { data: session }).into_response(),
+        Err(error) => {
+            let status = if error.code() == "APP_SESSION_NOT_FOUND" {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            api_error(status, error.code(), error.message())
         }
-        match state
-            .ai_sessions
-            .rename_with_disposition(&linked.id, &title, None)
-        {
-            Ok((_session, changed)) => {
-                if changed {
-                    state.publish_ai_session_snapshot("control-action");
-                }
-            }
-            Err(error) => {
-                return api_error(
-                    StatusCode::BAD_REQUEST,
-                    "AI_SESSION_RENAME_FAILED",
-                    &error.to_string(),
-                );
-            }
-        }
-    } else {
-        if let Err(error) = state.ai_session_controller.rename(&linked.id, &title).await {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "AI_SESSION_RENAME_FAILED",
-                &error.message,
-            );
-        }
-        if let Err(error) = state.app_runtime.rename(&id, &title) {
-            return app_runtime_error(error);
-        }
-        state.publish_ai_session_snapshot("control-action");
-    }
-    match state.app_runtime.get_session(&id) {
-        Some(session) => app_session_record_response(session),
-        None => api_error(
-            StatusCode::NOT_FOUND,
-            "APP_SESSION_NOT_FOUND",
-            "App session not found.",
-        ),
     }
 }
 
@@ -4091,7 +6301,7 @@ async fn app_session_stop(State(state): State<AppState>, Path(id): Path<String>)
                 StatusCode::NOT_FOUND,
                 "APP_SESSION_NOT_FOUND",
                 &error.message,
-            )
+            );
         }
     };
     if closed {
@@ -4132,15 +6342,19 @@ async fn app_session_restart(State(state): State<AppState>, Path(id): Path<Strin
 async fn app_session_display(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<AppDisplayOptions>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(display) = match payload {
+    let JsonValueBody(value) = match payload {
         Ok(payload) => payload,
-        Err(error) => {
+        Err(error) => return ai_session_body_error(error),
+    };
+    let display = match parse_app_display_options(&value) {
+        Ok(display) => display,
+        Err(issues) => {
             return api_error(
                 StatusCode::BAD_REQUEST,
                 "APP_DISPLAY_INVALID",
-                &error.body_text(),
+                &zod_issue_message(&issues),
             )
         }
     };
@@ -4195,14 +6409,35 @@ async fn app_session_logs(
     Path(id): Path<String>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let max_bytes = query
-        .get("maxBytes")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(64 * 1024)
-        .clamp(1024, 512 * 1024);
+    let max_bytes = app_logs_max_bytes(query.get("maxBytes").map(String::as_str));
     match state.app_runtime.read_logs(&id, max_bytes) {
-        Ok(logs) => Json(ApiEnvelope { data: logs }).into_response(),
+        Ok(mut logs) => {
+            if let Some(object) = logs.as_object_mut() {
+                object.insert("maxBytes".to_string(), json_js_number(max_bytes));
+            }
+            Json(ApiEnvelope { data: logs }).into_response()
+        }
         Err(error) => app_runtime_error(error),
+    }
+}
+
+fn app_logs_max_bytes(value: Option<&str>) -> f64 {
+    let requested = value
+        .filter(|value| !value.is_empty())
+        .and_then(parse_js_number)
+        .unwrap_or(f64::NAN);
+    if requested.is_finite() {
+        requested.clamp(1024.0, 512.0 * 1024.0)
+    } else {
+        64.0 * 1024.0
+    }
+}
+
+fn json_js_number(value: f64) -> Value {
+    if value.fract() == 0.0 {
+        json!(value as i64)
+    } else {
+        json!(value)
     }
 }
 
@@ -4245,49 +6480,74 @@ async fn app_session_novnc(
 async fn app_session_tty(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Some(attachment) = state.app_runtime.tty_attachment(&id) else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            "TTY_SESSION_NOT_FOUND",
-            "TTY session not found.",
-        );
-    };
-    ws.on_upgrade(move |socket| app_session_tty_socket(socket, attachment))
+    let shutdown = state.shutdown_receiver();
+    websocket_upgrade_with_client_subprotocol(ws, &headers)
+        .on_upgrade(move |socket| app_session_tty_lookup_socket(socket, state, id, shutdown))
         .into_response()
+}
+
+async fn app_session_tty_lookup_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    id: String,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let Some(attachment) = state.app_runtime.tty_attachment(&id) else {
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "error", "message": "TTY session not found." })
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        let _ = socket.close().await;
+        return;
+    };
+    app_session_tty_socket(socket, attachment, shutdown).await;
 }
 
 async fn app_session_vnc(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Some(target) = state.app_runtime.vnc_target(&id) else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            "VNC_SESSION_NOT_FOUND",
-            "VNC session not found.",
-        );
-    };
-    ws.on_upgrade(move |socket| app_session_vnc_socket(socket, target.0, target.1))
-        .into_response()
+    let shutdown = state.shutdown_receiver();
+    let ws = websocket_upgrade_with_client_subprotocol(ws, &headers);
+    match state.app_runtime.vnc_target(&id) {
+        Some((host, port)) => ws
+            .on_upgrade(move |socket| app_session_vnc_socket(socket, host, port, shutdown))
+            .into_response(),
+        None => ws
+            .on_upgrade(|mut socket| async move {
+                let _ = socket
+                    .send(Message::Text(
+                        json!({
+                            "error": {
+                                "code": "VNC_SESSION_NOT_FOUND",
+                                "message": "VNC session not found.",
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
+                let _ = socket.close().await;
+            })
+            .into_response(),
+    }
 }
 
-async fn app_session_vnc_socket(mut socket: WebSocket, host: String, port: u16) {
+async fn app_session_vnc_socket(
+    mut socket: WebSocket,
+    host: String,
+    port: u16,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     let Ok(stream) = TcpStream::connect((host.as_str(), port)).await else {
-        let _ = socket
-            .send(Message::Text(
-                json!({
-                    "error": {
-                        "code": "VNC_CONNECT_FAILED",
-                        "message": "VNC upstream connection failed.",
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await;
         let _ = socket.close().await;
         return;
     };
@@ -4295,6 +6555,12 @@ async fn app_session_vnc_socket(mut socket: WebSocket, host: String, port: u16) 
     let mut buffer = vec![0u8; 16 * 1024];
     loop {
         tokio::select! {
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    let _ = socket.close().await;
+                }
+                break;
+            }
             read = upstream_reader.read(&mut buffer) => match read {
                 Ok(0) | Err(_) => break,
                 Ok(size) => {
@@ -4327,7 +6593,8 @@ async fn app_session_vnc_socket(mut socket: WebSocket, host: String, port: u16) 
 
 async fn app_session_tty_socket(
     mut socket: WebSocket,
-    attachment: controlled_instance_app_runtime::TtyAttachment,
+    mut attachment: controlled_instance_app_runtime::TtyAttachment,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let dimensions = attachment.dimensions;
     let snapshot = attachment.snapshot().map(|snapshot| {
@@ -4362,11 +6629,28 @@ async fn app_session_tty_socket(
             return;
         }
     }
-    let mut events = attachment.events.resubscribe();
+    let Some(mut events) = attachment.take_events() else {
+        return;
+    };
     loop {
         tokio::select! {
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    let _ = socket.close().await;
+                }
+                break;
+            }
             event = events.recv() => match event {
                 Ok(event) => {
+                    if matches!(
+                        &event,
+                        controlled_instance_app_runtime::TtyEvent::Resize {
+                            source_client_id,
+                            ..
+                        } if *source_client_id == attachment.client_id
+                    ) {
+                        continue;
+                    }
                     let Ok(encoded) = serde_json::to_string(&event) else { continue };
                     if socket.send(Message::Text(encoded.into())).await.is_err() {
                         break;
@@ -4391,7 +6675,23 @@ async fn app_session_tty_socket(
                                         value.get("cols").and_then(Value::as_u64),
                                         value.get("rows").and_then(Value::as_u64),
                                     ) {
-                                        let _ = attachment.resize(cols as u16, rows as u16);
+                                        if !(1..=u16::MAX as u64).contains(&cols)
+                                            || !(1..=u16::MAX as u64).contains(&rows)
+                                        {
+                                            continue;
+                                        }
+                                        if let Ok(snapshot) = attachment.resize(cols as u16, rows as u16) {
+                                            if let Some(snapshot) = snapshot {
+                                                let mut value = serde_json::to_value(snapshot).unwrap_or_else(|_| json!({}));
+                                                if let Some(object) = value.as_object_mut() {
+                                                    object.insert("type".to_string(), json!("snapshot"));
+                                                }
+                                                if socket.send(Message::Text(value.to_string().into())).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                            attachment.notify_resize(cols as u16, rows as u16);
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -4455,88 +6755,264 @@ async fn app_session_web_proxy_with_rest(
         .and_then(|vnc| vnc.backend)
         .as_deref()
         == Some("kasmvnc");
-    let method = request.method().clone();
-    let query = request.uri().query().unwrap_or_default().to_string();
-    let headers = request.headers().clone();
-    let body = match to_bytes(request.into_body(), 64 * 1024 * 1024).await {
-        Ok(body) => body,
-        Err(error) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "WEB_PROXY_FAILED",
-                &error.to_string(),
-            )
+    let (parts, incoming_body) = request.into_parts();
+    let method = parts.method;
+    let query = parts.uri.query().unwrap_or_default().to_string();
+    let headers = parts.headers;
+    let buffer_request_body = matches!(method, Method::GET | Method::HEAD | Method::OPTIONS)
+        || headers.contains_key(header::CONTENT_TYPE);
+    let (body, mut streamed_body) = if buffer_request_body {
+        match to_bytes(incoming_body, 64 * 1024 * 1024).await {
+            Ok(body) => (Some(body), None),
+            Err(error) => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "WEB_PROXY_FAILED",
+                    &error.to_string(),
+                );
+            }
         }
+    } else {
+        (
+            None,
+            Some(reqwest::Body::wrap_stream(incoming_body.into_data_stream())),
+        )
     };
     let target_path = if rest.is_empty() {
         "/".to_string()
     } else {
         format!("/{rest}")
     };
-    let mut upstream = reqwest::Client::new().request(
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-        format!(
-            "http://{host}:{port}{target_path}{}",
-            if query.is_empty() {
-                String::new()
-            } else {
-                format!("?{query}")
-            }
-        ),
+    let upstream_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    let upstream_url = format!(
+        "http://{host}:{port}{target_path}{}",
+        if query.is_empty() {
+            String::new()
+        } else {
+            format!("?{query}")
+        }
     );
-    for (name, value) in &headers {
-        if is_hop_by_hop(name.as_str())
-            || name == header::HOST
-            || name == header::CONTENT_LENGTH
-            || (kasm_vnc && name == header::AUTHORIZATION)
-        {
-            continue;
-        }
-        if let Ok(value) = value.to_str() {
-            upstream = upstream.header(name.as_str(), value);
-        }
-    }
-    if kasm_vnc {
-        upstream = upstream.header(header::AUTHORIZATION, kasm_vnc_authorization_header());
-    }
-    if !body.is_empty() {
-        upstream = upstream.body(body);
-    }
-    match upstream.send().await {
-        Ok(response) => {
-            let status =
-                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut outgoing = Response::builder().status(status);
-            for (name, value) in response.headers() {
-                if is_hop_by_hop(name.as_str()) {
-                    continue;
-                }
-                outgoing = outgoing.header(name.as_str(), value.as_bytes());
+    let can_retry =
+        matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) || body.is_some();
+    let started = tokio::time::Instant::now();
+    let client = reqwest::Client::new();
+    loop {
+        let mut upstream = client.request(upstream_method.clone(), &upstream_url);
+        for (name, value) in &headers {
+            if is_blocked_proxy_request_header(name.as_str(), kasm_vnc) {
+                continue;
             }
-            let bytes = match response.bytes().await {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    return api_error(
-                        StatusCode::BAD_GATEWAY,
-                        "WEB_PROXY_FAILED",
-                        &error.to_string(),
-                    )
-                }
-            };
-            outgoing.body(Body::from(bytes)).unwrap_or_else(|_| {
-                api_error(
+            if let Ok(value) = value.to_str() {
+                upstream = upstream.header(name.as_str(), value);
+            }
+        }
+        if kasm_vnc {
+            upstream = upstream.header(header::AUTHORIZATION, kasm_vnc_authorization_header());
+        }
+        if let Some(body) = body.as_ref() {
+            upstream = upstream.body(body.clone());
+        } else if let Some(body) = streamed_body.take() {
+            upstream = upstream.body(body);
+        }
+        match upstream.send().await {
+            Ok(response) => {
+                return proxy_http_response(response, kasm_vnc, method == Method::HEAD).await;
+            }
+            Err(error)
+                if can_retry
+                    && is_retryable_proxy_error(&error)
+                    && started.elapsed() < WEB_PROXY_STARTUP_RETRY =>
+            {
+                tokio::time::sleep(WEB_PROXY_STARTUP_RETRY_INTERVAL).await;
+            }
+            Err(error) => {
+                return raw_json_web_proxy_error(&error);
+            }
+        }
+    }
+}
+
+const WEB_PROXY_STARTUP_RETRY: std::time::Duration = std::time::Duration::from_millis(8_000);
+const WEB_PROXY_STARTUP_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+async fn proxy_http_response(
+    response: reqwest::Response,
+    kasm_vnc: bool,
+    head_request: bool,
+) -> Response {
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let response_headers = response.headers().clone();
+    let themed = !head_request && kasm_vnc && should_theme_kasm_vnc_response(&response_headers);
+    if themed {
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return api_error(
                     StatusCode::BAD_GATEWAY,
                     "WEB_PROXY_FAILED",
-                    "Proxy response failed.",
-                )
-            })
+                    &error.to_string(),
+                );
+            }
+        };
+        let body = theme_kasm_vnc_response_body(&bytes, &response_headers);
+        let mut outgoing = Response::builder().status(status);
+        for (name, value) in &response_headers {
+            if is_hop_by_hop(name.as_str())
+                || name == header::CONTENT_LENGTH
+                || name == header::ETAG
+            {
+                continue;
+            }
+            outgoing = outgoing.header(name.as_str(), value.as_bytes());
         }
-        Err(error) => api_error(
-            StatusCode::BAD_GATEWAY,
-            "WEB_PROXY_FAILED",
-            &error.to_string(),
-        ),
+        outgoing = outgoing.header(header::CONTENT_LENGTH, body.len());
+        return outgoing.body(Body::from(body)).unwrap_or_else(|_| {
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "WEB_PROXY_FAILED",
+                "Proxy response failed.",
+            )
+        });
     }
+
+    let mut outgoing = Response::builder().status(status);
+    for (name, value) in &response_headers {
+        if is_hop_by_hop(name.as_str()) {
+            continue;
+        }
+        outgoing = outgoing.header(name.as_str(), value.as_bytes());
+    }
+    if head_request {
+        return outgoing.body(Body::empty()).unwrap_or_else(|_| {
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "WEB_PROXY_FAILED",
+                "Proxy response failed.",
+            )
+        });
+    }
+    let stream = response
+        .bytes_stream()
+        .map(|result| result.map_err(|error| io::Error::other(error.to_string())));
+    outgoing
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| {
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "WEB_PROXY_FAILED",
+                "Proxy response failed.",
+            )
+        })
+}
+
+fn is_blocked_proxy_request_header(name: &str, kasm_vnc: bool) -> bool {
+    let lower = name.to_ascii_lowercase();
+    is_hop_by_hop(&lower)
+        || matches!(
+            lower.as_str(),
+            "host" | "content-length" | "referer" | "referrer"
+        )
+        || lower.starts_with("sec-ch-")
+        || lower.starts_with("sec-fetch-")
+        || (kasm_vnc && lower == "authorization")
+}
+
+fn is_retryable_proxy_error(error: &reqwest::Error) -> bool {
+    error.is_connect() || error_chain_has_retryable_io(error)
+}
+
+fn error_chain_has_retryable_io(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(io) = error.downcast_ref::<io::Error>() {
+            if matches!(
+                io.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::HostUnreachable
+            ) {
+                return true;
+            }
+        }
+        current = error.source();
+    }
+    false
+}
+
+fn response_header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+}
+
+fn should_theme_kasm_vnc_response(headers: &HeaderMap) -> bool {
+    if !response_header_value(headers, "content-encoding").is_empty() {
+        return false;
+    }
+    let content_type = response_header_value(headers, "content-type").to_ascii_lowercase();
+    content_type.contains("text/css") || content_type.contains("text/html")
+}
+
+fn theme_kasm_vnc_response_body(body: &[u8], headers: &HeaderMap) -> Vec<u8> {
+    static BACKGROUND_URL: OnceLock<regex::Regex> = OnceLock::new();
+    static BACKGROUND_COLOR: OnceLock<regex::Regex> = OnceLock::new();
+    let content_type = response_header_value(headers, "content-type").to_ascii_lowercase();
+    let text = String::from_utf8_lossy(body);
+    if content_type.contains("text/css") {
+        let background_url = BACKGROUND_URL.get_or_init(|| {
+            regex::Regex::new(r"(?s)(#noVNC_transition\s*\{.*?background\s*:\s*)#fff(\s+url\()")
+                .expect("kasm background URL regex")
+        });
+        let background_color = BACKGROUND_COLOR.get_or_init(|| {
+            regex::Regex::new(r"(?s)(#noVNC_transition\s*\{.*?background-color\s*:\s*)#fff\b")
+                .expect("kasm background color regex")
+        });
+        let replaced = background_url.replace_all(&text, "${1}#05090b${2}");
+        return background_color
+            .replace_all(&replaced, "${1}#05090b")
+            .into_owned()
+            .into_bytes();
+    }
+    if content_type.contains("text/html") {
+        let style = kasm_vnc_loading_theme_style();
+        let themed = if text.contains("</head>") {
+            text.replacen("</head>", &format!("{style}</head>"), 1)
+        } else {
+            format!("{style}{text}")
+        };
+        return themed.into_bytes();
+    }
+    body.to_vec()
+}
+
+fn kasm_vnc_loading_theme_style() -> &'static str {
+    concat!(
+        "<style id=\"task-handoff-kasm-loading-theme\">",
+        "html,body{background:#05090b!important;}",
+        "#noVNC_transition{background-color:#05090b!important;color:#31c6b6!important;}",
+        "#noVNC_transition::after{color:#9fb4bc!important;}",
+        "html.task-handoff-kasm-quiet-start #noVNC_control_bar{transition:none!important;}",
+        "html.task-handoff-kasm-quiet-start #noVNC_control_bar.noVNC_open{left:-100%!important;}",
+        "html.task-handoff-kasm-quiet-start.noVNC_right #noVNC_control_bar.noVNC_open{left:100%!important;}",
+        "html.task-handoff-kasm-quiet-start #noVNC_control_bar_handle::after,html.task-handoff-kasm-quiet-start .noVNC_panel{transition:none!important;}",
+        "</style>",
+        "<script id=\"task-handoff-kasm-quiet-start\">",
+        "(function(){",
+        "var root=document.documentElement;",
+        "root.classList.add('task-handoff-kasm-quiet-start');",
+        "var attempts=0;",
+        "var timer=window.setInterval(function(){",
+        "var bar=document.getElementById('noVNC_control_bar');",
+        "if(bar){bar.classList.remove('noVNC_open');}",
+        "attempts+=1;",
+        "if(attempts>=20){window.clearInterval(timer);root.classList.remove('task-handoff-kasm-quiet-start');}",
+        "},100);",
+        "})();",
+        "</script>",
+    )
 }
 
 async fn app_session_web_websocket(
@@ -4545,12 +7021,30 @@ async fn app_session_web_websocket(
     rest: String,
     request: Request,
 ) -> Response {
+    let query = request.uri().query().unwrap_or_default().to_string();
+    let (mut parts, _body) = request.into_parts();
+    let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+        Ok(upgrade) => upgrade,
+        Err(error) => return error.into_response(),
+    };
     let Some((host, port)) = state.app_runtime.web_target(&id) else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            "WEB_SESSION_NOT_FOUND",
-            "Web session not found.",
-        );
+        return upgrade
+            .on_upgrade(|mut socket| async move {
+                let _ = socket
+                    .send(Message::Text(
+                        json!({
+                            "error": {
+                                "code": "WEB_SESSION_NOT_FOUND",
+                                "message": "Web session not found.",
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
+                let _ = socket.close().await;
+            })
+            .into_response();
     };
     let kasm_vnc = state
         .app_runtime
@@ -4559,13 +7053,13 @@ async fn app_session_web_websocket(
         .and_then(|vnc| vnc.backend)
         .as_deref()
         == Some("kasmvnc");
-    let query = request.uri().query().unwrap_or_default().to_string();
-    let (mut parts, _body) = request.into_parts();
     let forwarded_headers = parts.headers.clone();
-    let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
-        Ok(upgrade) => upgrade,
-        Err(error) => return error.into_response(),
-    };
+    let client_origin = parts
+        .headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let has_client_protocols = parts.headers.contains_key(header::SEC_WEBSOCKET_PROTOCOL);
     let path = format!(
         "/{rest}{}",
         if query.is_empty() {
@@ -4575,113 +7069,582 @@ async fn app_session_web_websocket(
         }
     );
     let url = format!("ws://{host}:{port}{path}");
-    let upgrade = if kasm_vnc {
+    let upgrade = if kasm_vnc && !has_client_protocols {
         upgrade.protocols(["binary"])
     } else {
-        upgrade
+        websocket_upgrade_with_client_subprotocol(upgrade, &parts.headers)
     };
     let authorization = kasm_vnc.then(kasm_vnc_authorization_header);
     upgrade
         .on_upgrade(move |socket| {
-            bridge_app_websocket(socket, url, forwarded_headers, authorization)
+            bridge_app_websocket(
+                socket,
+                AppWebSocketUpstream {
+                    url,
+                    host,
+                    port,
+                    headers: forwarded_headers,
+                    authorization,
+                    kasm_vnc,
+                    client_origin,
+                },
+                state.shutdown_receiver(),
+            )
         })
         .into_response()
 }
 
-async fn bridge_app_websocket(
-    mut client: WebSocket,
+struct AppWebSocketUpstream {
     url: String,
+    host: String,
+    port: u16,
     headers: HeaderMap,
     authorization: Option<String>,
+    kasm_vnc: bool,
+    client_origin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BridgeClose {
+    code: Option<u16>,
+    reason: String,
+}
+
+impl BridgeClose {
+    fn traffic_limit() -> Self {
+        Self::with_code(1009, "WebSocket bridge traffic limit exceeded.")
+    }
+
+    fn slow_consumer() -> Self {
+        Self::with_code(1013, "WebSocket bridge consumer is too slow.")
+    }
+
+    fn pending_frame_limit() -> Self {
+        Self::with_code(1011, "WebSocket bridge pending frame limit exceeded.")
+    }
+
+    fn send_failed() -> Self {
+        Self::with_code(1011, "WebSocket bridge send failed.")
+    }
+
+    fn client_failed() -> Self {
+        Self::with_code(1011, "WebSocket bridge client failed.")
+    }
+
+    fn peer_closed() -> Self {
+        Self::with_code(1000, "WebSocket bridge peer closed.")
+    }
+
+    fn from_peer(code: Option<u16>, reason: &str) -> Self {
+        Self {
+            code: code.filter(|code| is_sendable_bridge_close_code(*code)),
+            reason: normalize_bridge_close_reason(reason),
+        }
+    }
+
+    fn with_code(code: u16, reason: &str) -> Self {
+        Self {
+            code: Some(code),
+            reason: normalize_bridge_close_reason(reason),
+        }
+    }
+
+    fn into_axum(self) -> Message {
+        match self.code {
+            Some(code) => Message::Close(Some(axum::extract::ws::CloseFrame {
+                code,
+                reason: self.reason.into(),
+            })),
+            None => Message::Close(None),
+        }
+    }
+
+    fn into_upstream(self) -> tokio_tungstenite::tungstenite::Message {
+        use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as UpstreamMessage};
+        UpstreamMessage::Close(self.code.map(|code| CloseFrame {
+            code: code.into(),
+            reason: self.reason.into(),
+        }))
+    }
+}
+
+fn normalize_bridge_close_reason(reason: &str) -> String {
+    let mut truncated = String::new();
+    for character in reason.chars() {
+        let mut next = truncated.clone();
+        next.push(character);
+        if next.len() > 123 {
+            break;
+        }
+        truncated = next;
+    }
+    truncated
+}
+
+fn is_sendable_bridge_close_code(code: u16) -> bool {
+    (1000..=1014).contains(&code) && !matches!(code, 1004..=1006) || (3000..=4999).contains(&code)
+}
+
+fn request_bridge_close(
+    sender: &tokio::sync::watch::Sender<Option<BridgeClose>>,
+    close: BridgeClose,
 ) {
-    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as UpstreamMessage};
-    let mut request = match url.into_client_request() {
-        Ok(request) => request,
-        Err(_) => return,
+    if sender.borrow().is_some() {
+        return;
+    }
+    let _ = sender.send(Some(close));
+}
+
+fn release_pending_bridge_frame(
+    close: Option<BridgeClose>,
+    counter: &AtomicUsize,
+    bytes: usize,
+    sender: &tokio::sync::watch::Sender<Option<BridgeClose>>,
+) {
+    release_bridge_bytes(counter, bytes);
+    if let Some(close) = close {
+        request_bridge_close(sender, close);
+    }
+}
+
+async fn bridge_app_websocket(
+    client: WebSocket,
+    upstream: AppWebSocketUpstream,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+    let request = match websocket_upstream_request(
+        &upstream.url,
+        &upstream.host,
+        upstream.port,
+        &upstream.headers,
+        upstream.authorization.as_deref(),
+        upstream.kasm_vnc,
+        upstream.client_origin.as_deref(),
+    ) {
+        Some(request) => request,
+        None => return,
     };
-    for (name, value) in &headers {
-        if is_hop_by_hop(name.as_str())
+
+    const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+    const MAX_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
+    const PENDING_FRAME_LIMIT: usize = 256;
+
+    let (mut client_sink, client_stream) = client.split();
+    let (client_to_upstream, mut client_frames) = tokio::sync::mpsc::channel(PENDING_FRAME_LIMIT);
+    let (upstream_to_client, mut upstream_frames) = tokio::sync::mpsc::channel(PENDING_FRAME_LIMIT);
+    let (close_tx, close_rx) = tokio::sync::watch::channel::<Option<BridgeClose>>(None);
+    let total_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let client_to_upstream_bytes = Arc::new(AtomicUsize::new(0));
+    let upstream_to_client_bytes = Arc::new(AtomicUsize::new(0));
+    let mut tasks = tokio::task::JoinSet::new();
+    {
+        let close_tx = close_tx.clone();
+        tasks.spawn(async move {
+            if shutdown.changed().await.is_ok() && *shutdown.borrow() {
+                request_bridge_close(
+                    &close_tx,
+                    BridgeClose::with_code(1001, "Controlled instance is shutting down."),
+                );
+            }
+        });
+    }
+    {
+        let total_bytes = total_bytes.clone();
+        let pending_bytes = client_to_upstream_bytes.clone();
+        let close_tx = close_tx.clone();
+        let mut close_rx = close_rx.clone();
+        tasks.spawn(async move {
+            let mut client_stream = client_stream;
+            loop {
+                tokio::select! {
+                    biased;
+                    changed = close_rx.changed() => {
+                        if changed.is_err() || close_rx.borrow().is_some() {
+                            break;
+                        }
+                    }
+                    message = client_stream.next() => {
+                        let Some(message) = message else {
+                            request_bridge_close(&close_tx, BridgeClose::peer_closed());
+                            break;
+                        };
+                        let message = match message {
+                            Ok(Message::Close(frame)) => {
+                                request_bridge_close(
+                                    &close_tx,
+                                    BridgeClose::from_peer(
+                                        frame.as_ref().map(|frame| frame.code),
+                                        frame.as_ref().map(|frame| frame.reason.as_str()).unwrap_or_default(),
+                                    ),
+                                );
+                                break;
+                            }
+                            Ok(Message::Text(text)) => UpstreamMessage::Text(text.to_string().into()),
+                            Ok(Message::Binary(bytes)) => UpstreamMessage::Binary(bytes),
+                            Ok(Message::Ping(bytes)) => UpstreamMessage::Ping(bytes),
+                            Ok(Message::Pong(bytes)) => UpstreamMessage::Pong(bytes),
+                            Err(_) => {
+                                request_bridge_close(&close_tx, BridgeClose::client_failed());
+                                break;
+                            }
+                        };
+                        let bytes = match accept_bridge_frame(
+                            &message,
+                            MAX_FRAME_BYTES,
+                            MAX_TOTAL_BYTES,
+                            &total_bytes,
+                            MAX_BUFFERED_BYTES,
+                            &pending_bytes,
+                        ) {
+                            Ok(bytes) => bytes,
+                            Err(close) => {
+                                request_bridge_close(&close_tx, close);
+                                break;
+                            }
+                        };
+                        match client_to_upstream.try_send(message) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(message)) => {
+                                release_pending_bridge_frame(
+                                    Some(BridgeClose::pending_frame_limit()),
+                                    &pending_bytes,
+                                    bytes,
+                                    &close_tx,
+                                );
+                                drop(message);
+                                break;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                release_pending_bridge_frame(
+                                    Some(BridgeClose::peer_closed()),
+                                    &pending_bytes,
+                                    bytes,
+                                    &close_tx,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let started = tokio::time::Instant::now();
+    let upstream = loop {
+        match tokio_tungstenite::connect_async(request.clone()).await {
+            Ok((upstream, _response)) => break upstream,
+            Err(error)
+                if is_retryable_websocket_error(&error)
+                    && started.elapsed() < WEB_PROXY_STARTUP_RETRY =>
+            {
+                tokio::time::sleep(WEB_PROXY_STARTUP_RETRY_INTERVAL).await;
+            }
+            Err(_) => {
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                let _ = client_sink.close().await;
+                return;
+            }
+        }
+    };
+    let (mut upstream_sink, mut upstream_stream) = upstream.split();
+    {
+        let pending_bytes = client_to_upstream_bytes.clone();
+        let close_tx = close_tx.clone();
+        let mut close_rx = close_rx.clone();
+        tasks.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    changed = close_rx.changed() => {
+                        if changed.is_err() || close_rx.borrow().is_some() {
+                            let close = close_rx.borrow().clone();
+                            if let Some(close) = close {
+                                let _ = upstream_sink.send(close.into_upstream()).await;
+                            }
+                            break;
+                        }
+                    }
+                    message = client_frames.recv() => {
+                        let Some(message) = message else {
+                            request_bridge_close(&close_tx, BridgeClose::peer_closed());
+                            break;
+                        };
+                        let bytes = bridge_frame_bytes(&message);
+                        let result = upstream_sink.send(message).await;
+                        release_bridge_bytes(&pending_bytes, bytes);
+                        if result.is_err() {
+                            request_bridge_close(&close_tx, BridgeClose::send_failed());
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    {
+        let total_bytes = total_bytes.clone();
+        let pending_bytes = upstream_to_client_bytes.clone();
+        let close_tx = close_tx.clone();
+        let mut close_rx = close_rx.clone();
+        tasks.spawn(async move {
+            loop {
+                let message = tokio::select! {
+                    biased;
+                    changed = close_rx.changed() => {
+                        if changed.is_err() || close_rx.borrow().is_some() {
+                            break;
+                        }
+                        continue;
+                    }
+                    message = upstream_stream.next() => {
+                        let Some(message) = message else {
+                            request_bridge_close(&close_tx, BridgeClose::peer_closed());
+                            break;
+                        };
+                        message
+                    }
+                };
+                let message = match message {
+                    Ok(UpstreamMessage::Close(frame)) => {
+                        request_bridge_close(
+                            &close_tx,
+                            BridgeClose::from_peer(
+                                frame.as_ref().map(|frame| u16::from(frame.code)),
+                                frame
+                                    .as_ref()
+                                    .map(|frame| frame.reason.as_str())
+                                    .unwrap_or_default(),
+                            ),
+                        );
+                        break;
+                    }
+                    Ok(message) => message,
+                    Err(_) => {
+                        request_bridge_close(&close_tx, BridgeClose::from_peer(None, ""));
+                        break;
+                    }
+                };
+                let bytes = match accept_bridge_frame(
+                    &message,
+                    MAX_FRAME_BYTES,
+                    MAX_TOTAL_BYTES,
+                    &total_bytes,
+                    MAX_BUFFERED_BYTES,
+                    &pending_bytes,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(close) => {
+                        request_bridge_close(&close_tx, close);
+                        break;
+                    }
+                };
+                match upstream_to_client.try_send(message) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(message)) => {
+                        release_pending_bridge_frame(
+                            Some(BridgeClose::pending_frame_limit()),
+                            &pending_bytes,
+                            bytes,
+                            &close_tx,
+                        );
+                        drop(message);
+                        break;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        release_pending_bridge_frame(
+                            Some(BridgeClose::peer_closed()),
+                            &pending_bytes,
+                            bytes,
+                            &close_tx,
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    {
+        let pending_bytes = upstream_to_client_bytes.clone();
+        let close_tx = close_tx.clone();
+        let mut close_rx = close_rx.clone();
+        tasks.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    changed = close_rx.changed() => {
+                        if changed.is_err() || close_rx.borrow().is_some() {
+                            let close = close_rx.borrow().clone();
+                            if let Some(close) = close {
+                                let _ = client_sink.send(close.into_axum()).await;
+                            }
+                            break;
+                        }
+                    }
+                    message = upstream_frames.recv() => {
+                        let Some(message) = message else {
+                            request_bridge_close(&close_tx, BridgeClose::peer_closed());
+                            break;
+                        };
+                        let bytes = bridge_frame_bytes(&message);
+                        let message = match message {
+                            UpstreamMessage::Text(text) => Message::Text(text.to_string().into()),
+                            UpstreamMessage::Binary(bytes) => Message::Binary(bytes),
+                            UpstreamMessage::Ping(bytes) => Message::Ping(bytes),
+                            UpstreamMessage::Pong(bytes) => Message::Pong(bytes),
+                            UpstreamMessage::Close(_) | UpstreamMessage::Frame(_) => {
+                                release_bridge_bytes(&pending_bytes, bytes);
+                                continue;
+                            }
+                        };
+                        let result = client_sink.send(message).await;
+                        release_bridge_bytes(&pending_bytes, bytes);
+                        if result.is_err() {
+                            request_bridge_close(&close_tx, BridgeClose::send_failed());
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    while tasks.join_next().await.is_some() {
+        if close_tx.borrow().is_none() {
+            request_bridge_close(&close_tx, BridgeClose::peer_closed());
+        }
+    }
+}
+
+fn bridge_frame_bytes(message: &tokio_tungstenite::tungstenite::Message) -> usize {
+    use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+    match message {
+        UpstreamMessage::Text(text) => text.len(),
+        UpstreamMessage::Binary(bytes) => bytes.len(),
+        UpstreamMessage::Ping(bytes) | UpstreamMessage::Pong(bytes) => bytes.len(),
+        UpstreamMessage::Close(_) | UpstreamMessage::Frame(_) => 0,
+    }
+}
+
+fn accept_bridge_frame(
+    message: &tokio_tungstenite::tungstenite::Message,
+    max_frame_bytes: usize,
+    max_total_bytes: u64,
+    total_bytes: &std::sync::atomic::AtomicU64,
+    max_buffered_bytes: usize,
+    pending_bytes: &AtomicUsize,
+) -> Result<usize, BridgeClose> {
+    let bytes = bridge_frame_bytes(message);
+    let total = total_bytes.fetch_add(bytes as u64, Ordering::SeqCst) + bytes as u64;
+    if bytes > max_frame_bytes || total > max_total_bytes {
+        return Err(BridgeClose::traffic_limit());
+    }
+    if !reserve_bridge_bytes(pending_bytes, bytes, max_buffered_bytes) {
+        return Err(BridgeClose::slow_consumer());
+    }
+    Ok(bytes)
+}
+
+fn reserve_bridge_bytes(counter: &AtomicUsize, bytes: usize, maximum: usize) -> bool {
+    let mut current = counter.load(Ordering::SeqCst);
+    loop {
+        let Some(next) = current.checked_add(bytes) else {
+            return false;
+        };
+        if next > maximum {
+            return false;
+        }
+        match counter.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+fn release_bridge_bytes(counter: &AtomicUsize, bytes: usize) {
+    let _ = counter.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        Some(current.saturating_sub(bytes))
+    });
+}
+
+fn websocket_upstream_request(
+    url: &str,
+    host: &str,
+    port: u16,
+    headers: &HeaderMap,
+    authorization: Option<&str>,
+    kasm_vnc: bool,
+    client_origin: Option<&str>,
+) -> Option<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url.to_string().into_client_request().ok()?;
+    let client_protocols = headers.get(header::SEC_WEBSOCKET_PROTOCOL).cloned();
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        if is_blocked_proxy_request_header(name.as_str(), false)
             || name == header::SEC_WEBSOCKET_KEY
             || name == header::SEC_WEBSOCKET_VERSION
-            || name == header::HOST
+            || (lower.starts_with("sec-websocket-") && lower != "sec-websocket-origin")
         {
             continue;
         }
         request.headers_mut().insert(name.clone(), value.clone());
     }
+    let upstream_origin = format!("http://{host}:{port}");
+    if let Ok(value) = upstream_origin.parse() {
+        request.headers_mut().insert(header::ORIGIN, value);
+    }
+    if kasm_vnc {
+        if let Ok(value) = client_origin.unwrap_or(upstream_origin.as_str()).parse() {
+            request.headers_mut().insert(
+                axum::http::HeaderName::from_static("sec-websocket-origin"),
+                value,
+            );
+        }
+    }
+    if let Some(protocols) = client_protocols {
+        request
+            .headers_mut()
+            .insert(header::SEC_WEBSOCKET_PROTOCOL, protocols);
+    } else if kasm_vnc {
+        if let Ok(value) = "binary".parse() {
+            request
+                .headers_mut()
+                .insert(header::SEC_WEBSOCKET_PROTOCOL, value);
+        }
+    }
     if let Some(authorization) = authorization {
         if let Ok(value) = authorization.parse() {
             request.headers_mut().insert(header::AUTHORIZATION, value);
         }
-        if !request
-            .headers()
-            .contains_key(header::SEC_WEBSOCKET_PROTOCOL)
-        {
-            if let Ok(value) = "binary".parse() {
-                request
-                    .headers_mut()
-                    .insert(header::SEC_WEBSOCKET_PROTOCOL, value);
-            }
-        }
     }
-    let Ok((mut upstream, _response)) = tokio_tungstenite::connect_async(request).await else {
-        let _ = client
-            .send(Message::Text(
-                json!({"error": {"code": "WEB_PROXY_FAILED", "message": "WebSocket proxy failed."}})
-                    .to_string()
-                    .into(),
-            ))
-            .await;
-        return;
-    };
-    loop {
-        tokio::select! {
-            message = client.recv() => {
-                let Some(message) = message else { break };
-                let message = match message {
-                    Ok(Message::Text(text)) => UpstreamMessage::Text(text.to_string().into()),
-                    Ok(Message::Binary(bytes)) => UpstreamMessage::Binary(bytes),
-                    Ok(Message::Ping(bytes)) => UpstreamMessage::Ping(bytes),
-                    Ok(Message::Pong(bytes)) => UpstreamMessage::Pong(bytes),
-                    Ok(Message::Close(frame)) => UpstreamMessage::Close(frame.map(|frame| tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                        code: frame.code.into(),
-                        reason: frame.reason.to_string().into(),
-                    })),
-                    Err(_) => break,
-                };
-                if upstream.send(message).await.is_err() {
-                    break;
-                }
-            }
-            message = upstream.next() => {
-                let Some(message) = message else { break };
-                let message = match message {
-                    Ok(UpstreamMessage::Text(text)) => Message::Text(text.to_string().into()),
-                    Ok(UpstreamMessage::Binary(bytes)) => Message::Binary(bytes),
-                    Ok(UpstreamMessage::Ping(bytes)) => Message::Ping(bytes),
-                    Ok(UpstreamMessage::Pong(bytes)) => Message::Pong(bytes),
-                    Ok(UpstreamMessage::Close(_)) | Err(_) => break,
-                    Ok(UpstreamMessage::Frame(_)) => continue,
-                };
-                if client.send(message).await.is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    let _ = client.close().await;
-    let _ = upstream.close(None).await;
+    Some(request)
+}
+
+fn is_retryable_websocket_error(error: &tokio_tungstenite::tungstenite::Error) -> bool {
+    error_chain_has_retryable_io(error)
 }
 
 fn kasm_vnc_authorization_header() -> String {
-    let username = std::env::var("TASK_HANDOFF_KASMVNC_USERNAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "agent".to_string());
-    let password = std::env::var("TASK_HANDOFF_KASMVNC_PASSWORD")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "taskhandoff".to_string());
+    kasm_vnc_authorization_header_from(
+        std::env::var("TASK_HANDOFF_KASMVNC_USERNAME")
+            .ok()
+            .as_deref(),
+        std::env::var("TASK_HANDOFF_KASMVNC_PASSWORD")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn kasm_vnc_authorization_header_from(username: Option<&str>, password: Option<&str>) -> String {
+    let username = username
+        .filter(|value| !value.is_empty())
+        .unwrap_or("agent");
+    let password = password
+        .filter(|value| !value.is_empty())
+        .unwrap_or("taskhandoff");
     use base64::Engine;
     format!(
         "Basic {}",
@@ -4704,6 +7667,9 @@ fn is_hop_by_hop(name: &str) -> bool {
 }
 
 fn app_launch_body_error(error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     api_error(
         StatusCode::BAD_REQUEST,
         "APP_LAUNCH_INVALID",
@@ -4736,7 +7702,7 @@ fn parse_app_launch_request(body: &Value) -> Result<AppLaunchRequest, Vec<String
     let app_id = app_launch_optional_string(
         object.get("appId"),
         "appId",
-        true,
+        false,
         1,
         80,
         Some(AppLaunchStringPattern::AppId),
@@ -4770,7 +7736,7 @@ fn parse_app_launch_request(body: &Value) -> Result<AppLaunchRequest, Vec<String
             }
             for (index, value) in values.iter().enumerate() {
                 match value.as_str() {
-                    Some(value) if utf16_len(value) <= 4096 => args.push(value.to_string()),
+                    Some(value) if value.chars().count() <= 4096 => args.push(value.to_string()),
                     Some(_) => issues.push(format!(
                         "args.{index}: Too big: expected string to have <=4096 characters"
                     )),
@@ -4803,7 +7769,7 @@ fn parse_app_launch_request(body: &Value) -> Result<AppLaunchRequest, Vec<String
                     ));
                     continue;
                 };
-                if utf16_len(value) > 4096 {
+                if value.chars().count() > 4096 {
                     issues.push(format!(
                         "env.{key}: Too big: expected string to have <=4096 characters"
                     ));
@@ -4893,7 +7859,7 @@ fn app_launch_optional_string(
     } else {
         value
     };
-    let length = utf16_len(value);
+    let length = value.chars().count();
     if length < minimum {
         issues.push(format!(
             "{path}: Too small: expected string to have >={minimum} characters"
@@ -5091,6 +8057,9 @@ fn valid_app_env_key(value: &str) -> bool {
 }
 
 fn app_profile_body_error(error: JsonRejection, code: &str) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     api_error(StatusCode::BAD_REQUEST, code, &error.body_text())
 }
 
@@ -5171,7 +8140,14 @@ fn app_runtime_error(error: controlled_instance_app_runtime::AppRuntimeError) ->
         "APP_SCREENSHOT_UNAVAILABLE" | "APP_AUTOMATION_UNAVAILABLE" => StatusCode::CONFLICT,
         _ => StatusCode::BAD_REQUEST,
     };
-    api_error(status, error.code(), &error.to_string())
+    let mut payload = json!({
+        "code": error.code(),
+        "message": error.to_string(),
+    });
+    if let (Some(object), Some(details)) = (payload.as_object_mut(), error.details()) {
+        object.insert("details".to_string(), details);
+    }
+    (status, Json(json!({ "error": payload }))).into_response()
 }
 
 async fn ai_sessions(
@@ -5182,7 +8158,7 @@ async fn ai_sessions(
     let since_revision = query
         .since_revision
         .as_deref()
-        .and_then(|value| value.parse::<u64>().ok());
+        .and_then(parse_js_non_negative_integer);
     if let Some(since_revision) = since_revision {
         let Some(stream_id) = query.stream_id.as_deref() else {
             return api_error(
@@ -5280,6 +8256,11 @@ async fn ai_session_history_detail(
                 detail.item,
                 query.hierarchy.as_deref() == Some("subagents"),
             );
+            detail.turns = project_history_attachment_turns(
+                &detail.item.id,
+                detail.turns,
+                &state.ai_session_attachments,
+            );
             Json(ApiEnvelope { data: detail }).into_response()
         }
         None => api_error(
@@ -5288,6 +8269,51 @@ async fn ai_session_history_detail(
             "AI session history entry not found.",
         ),
     }
+}
+
+fn project_history_attachment_turns(
+    session_id: &str,
+    turns: Vec<Value>,
+    store: &controlled_instance_ai_session::AiSessionConversationAttachmentStore,
+) -> Vec<Value> {
+    turns
+        .into_iter()
+        .map(|mut turn| {
+            let Some(messages) = turn
+                .as_object_mut()
+                .and_then(|turn| turn.get_mut("userMessages"))
+                .and_then(Value::as_array_mut)
+            else {
+                return turn;
+            };
+            for message in messages {
+                let Some(record) = message.as_object_mut() else {
+                    continue;
+                };
+                let Some(message_id) = record
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                else {
+                    continue;
+                };
+                let Some(attachments) = record.get("attachments").cloned() else {
+                    continue;
+                };
+                let Ok(attachments) =
+                    serde_json::from_value::<Vec<AiSessionConversationAttachment>>(attachments)
+                else {
+                    continue;
+                };
+                let resolved =
+                    store.resolve_message_attachments(session_id, &message_id, &attachments);
+                if let Ok(resolved) = serde_json::to_value(resolved) {
+                    record.insert("attachments".to_string(), resolved);
+                }
+            }
+            turn
+        })
+        .collect()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -5336,9 +8362,9 @@ struct RenameAiSessionRequest {
 async fn rename_ai_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => {
             return ai_session_body_error(error);
@@ -5361,37 +8387,24 @@ async fn rename_ai_session(
             "clientRequestId must be between 1 and 160 characters.",
         );
     }
-    match state.ai_sessions.rename_with_disposition(
-        &id,
-        &request.title,
-        request.expected_title.as_deref(),
-    ) {
-        Ok((session, changed)) => {
-            if changed {
-                state.publish_ai_session_snapshot("control-action");
-            }
-            Json(ApiEnvelope {
-                data: json!({
-                    "disposition": if changed { "renamed" } else { "already-named" },
-                    "aiSessionId": session.id,
-                    "appSessionId": session.app_session_id,
-                    "title": session.title.unwrap_or_default(),
-                }),
-            })
-            .into_response()
-        }
-        Err(controlled_instance_ai_session::AiSessionStoreError::NotFound) => {
-            ai_session_not_found()
-        }
-        Err(controlled_instance_ai_session::AiSessionStoreError::TitleConflict) => api_error(
-            StatusCode::CONFLICT,
-            "AI_SESSION_RENAME_CONFLICT",
-            "The session title changed before the rename was applied.",
-        ),
+    match state
+        .session_titles
+        .rename_ai_session(
+            &id,
+            &request.title,
+            request.expected_title.as_deref(),
+            &request.client_request_id,
+        )
+        .await
+    {
+        Ok(result) => Json(ApiEnvelope {
+            data: serde_json::to_value(result).unwrap_or(Value::Null),
+        })
+        .into_response(),
         Err(error) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AI_SESSION_PERSISTENCE_FAILED",
-            &error.to_string(),
+            StatusCode::from_u16(error.status_code()).unwrap_or(StatusCode::BAD_REQUEST),
+            error.code(),
+            error.message(),
         ),
     }
 }
@@ -5412,7 +8425,7 @@ async fn read_ai_session(State(state): State<AppState>, Path(id): Path<String>) 
             .into_response()
         }
         Err(controlled_instance_ai_session::AiSessionStoreError::NotFound) => {
-            ai_session_not_found()
+            ai_session_was_not_found()
         }
         Err(error) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5454,7 +8467,23 @@ fn ai_session_not_found() -> Response {
     api_error(
         StatusCode::NOT_FOUND,
         "AI_SESSION_NOT_FOUND",
+        "AI session not found.",
+    )
+}
+
+fn ai_session_was_not_found() -> Response {
+    api_error(
+        StatusCode::NOT_FOUND,
+        "AI_SESSION_NOT_FOUND",
         "AI Session was not found.",
+    )
+}
+
+fn attachment_ai_session_not_found() -> Response {
+    api_error(
+        StatusCode::NOT_FOUND,
+        "AI_SESSION_NOT_FOUND",
+        "AI session not found.",
     )
 }
 
@@ -5500,6 +8529,12 @@ fn ai_session_launch_error(error: controlled_instance_ai_session::ProviderError)
 }
 
 fn story_tool_error(error: crate::story_tools::StoryToolError) -> Response {
+    if error.uses_fastify_default() {
+        return fastify_error(
+            StatusCode::from_u16(error.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &error.message,
+        );
+    }
     api_error(
         StatusCode::from_u16(error.status_code).unwrap_or(StatusCode::BAD_REQUEST),
         &error.code,
@@ -5507,10 +8542,1173 @@ fn story_tool_error(error: crate::story_tools::StoryToolError) -> Response {
     )
 }
 
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ZodIssue {
+    InvalidType {
+        expected: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<&'static str>,
+        code: &'static str,
+        path: Vec<Value>,
+        message: String,
+    },
+    InvalidTypeWithReceived {
+        expected: String,
+        code: &'static str,
+        received: &'static str,
+        path: Vec<Value>,
+        message: String,
+    },
+    InvalidValue {
+        code: &'static str,
+        values: Vec<String>,
+        path: Vec<Value>,
+        message: String,
+    },
+    TooSmall {
+        origin: &'static str,
+        code: &'static str,
+        minimum: usize,
+        inclusive: bool,
+        path: Vec<Value>,
+        message: String,
+    },
+    TooBig {
+        origin: &'static str,
+        code: &'static str,
+        maximum: usize,
+        inclusive: bool,
+        path: Vec<Value>,
+        message: String,
+    },
+    UnsafeIntegerTooSmall {
+        code: &'static str,
+        minimum: i64,
+        note: &'static str,
+        origin: &'static str,
+        inclusive: bool,
+        path: Vec<Value>,
+        message: String,
+    },
+    UnsafeIntegerTooBig {
+        code: &'static str,
+        maximum: i64,
+        note: &'static str,
+        origin: &'static str,
+        inclusive: bool,
+        path: Vec<Value>,
+        message: String,
+    },
+    UnrecognizedKeys {
+        code: &'static str,
+        keys: Vec<String>,
+        path: Vec<Value>,
+        message: String,
+    },
+    InvalidFormat {
+        origin: &'static str,
+        code: &'static str,
+        format: &'static str,
+        pattern: &'static str,
+        path: Vec<Value>,
+        message: String,
+    },
+    Custom {
+        code: &'static str,
+        path: Vec<Value>,
+        message: String,
+    },
+}
+
+impl ZodIssue {
+    fn path(&self) -> &[Value] {
+        match self {
+            Self::InvalidType { path, .. }
+            | Self::InvalidTypeWithReceived { path, .. }
+            | Self::InvalidValue { path, .. }
+            | Self::TooSmall { path, .. }
+            | Self::TooBig { path, .. }
+            | Self::UnsafeIntegerTooSmall { path, .. }
+            | Self::UnsafeIntegerTooBig { path, .. }
+            | Self::UnrecognizedKeys { path, .. }
+            | Self::InvalidFormat { path, .. }
+            | Self::Custom { path, .. } => path,
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::InvalidType { message, .. }
+            | Self::InvalidTypeWithReceived { message, .. }
+            | Self::InvalidValue { message, .. }
+            | Self::TooSmall { message, .. }
+            | Self::TooBig { message, .. }
+            | Self::UnsafeIntegerTooSmall { message, .. }
+            | Self::UnsafeIntegerTooBig { message, .. }
+            | Self::UnrecognizedKeys { message, .. }
+            | Self::InvalidFormat { message, .. }
+            | Self::Custom { message, .. } => message,
+        }
+    }
+}
+
+fn zod_invalid_type(expected: &str, path: Vec<Value>, received: &str) -> ZodIssue {
+    ZodIssue::InvalidType {
+        expected: expected.to_string(),
+        format: None,
+        code: "invalid_type",
+        path,
+        message: format!("Invalid input: expected {expected}, received {received}"),
+    }
+}
+
+fn zod_invalid_type_with_received(
+    expected: &str,
+    path: Vec<Value>,
+    received: &'static str,
+) -> ZodIssue {
+    ZodIssue::InvalidTypeWithReceived {
+        expected: expected.to_string(),
+        code: "invalid_type",
+        received,
+        path,
+        message: format!("Invalid input: expected {expected}, received {received}"),
+    }
+}
+
+fn zod_invalid_int(path: Vec<Value>) -> ZodIssue {
+    ZodIssue::InvalidType {
+        expected: "int".to_string(),
+        format: Some("safeint"),
+        code: "invalid_type",
+        path,
+        message: "Invalid input: expected int, received number".to_string(),
+    }
+}
+
+fn zod_invalid_value(path: Vec<Value>, values: &[&str], message: String) -> ZodIssue {
+    ZodIssue::InvalidValue {
+        code: "invalid_value",
+        values: values.iter().map(|value| (*value).to_string()).collect(),
+        path,
+        message,
+    }
+}
+
+fn zod_custom(path: Vec<Value>, message: impl Into<String>) -> ZodIssue {
+    ZodIssue::Custom {
+        code: "custom",
+        path,
+        message: message.into(),
+    }
+}
+
+fn zod_too_small(origin: &'static str, path: Vec<Value>, minimum: usize) -> ZodIssue {
+    ZodIssue::TooSmall {
+        origin,
+        code: "too_small",
+        minimum,
+        inclusive: true,
+        path,
+        message: match origin {
+            "array" => format!("Too small: expected array to have >={minimum} items"),
+            "number" => format!("Too small: expected number to be >={minimum}"),
+            _ => format!("Too small: expected string to have >={minimum} characters"),
+        },
+    }
+}
+
+fn zod_too_big(origin: &'static str, path: Vec<Value>, maximum: usize) -> ZodIssue {
+    ZodIssue::TooBig {
+        origin,
+        code: "too_big",
+        maximum,
+        inclusive: true,
+        path,
+        message: match origin {
+            "array" => format!("Too big: expected array to have <={maximum} items"),
+            "int" => format!("Too big: expected int to be <={maximum}"),
+            "number" => format!("Too big: expected number to be <={maximum}"),
+            _ => format!("Too big: expected string to have <={maximum} characters"),
+        },
+    }
+}
+
+fn zod_unsafe_integer_too_small(path: Vec<Value>) -> ZodIssue {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    ZodIssue::UnsafeIntegerTooSmall {
+        code: "too_small",
+        minimum: -MAX_SAFE_INTEGER,
+        note: "Integers must be within the safe integer range.",
+        origin: "int",
+        inclusive: true,
+        path,
+        message: "Too small: expected int to be >=-9007199254740991".to_string(),
+    }
+}
+
+fn zod_unsafe_integer_too_big(path: Vec<Value>) -> ZodIssue {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    ZodIssue::UnsafeIntegerTooBig {
+        code: "too_big",
+        maximum: MAX_SAFE_INTEGER,
+        note: "Integers must be within the safe integer range.",
+        origin: "int",
+        inclusive: true,
+        path,
+        message: "Too big: expected int to be <=9007199254740991".to_string(),
+    }
+}
+
+fn zod_unrecognized_keys(path: Vec<Value>, keys: Vec<String>) -> ZodIssue {
+    let count = keys.len();
+    let listed = keys
+        .iter()
+        .map(|key| format!("\"{key}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    ZodIssue::UnrecognizedKeys {
+        code: "unrecognized_keys",
+        keys,
+        path,
+        message: format!(
+            "Unrecognized key{}: {listed}",
+            if count == 1 { "" } else { "s" }
+        ),
+    }
+}
+
+fn zod_issue_path(path: &[Value]) -> String {
+    if path.is_empty() {
+        return "body".to_string();
+    }
+    path.iter()
+        .map(|segment| match segment {
+            Value::String(value) => value.clone(),
+            Value::Number(value) => value.to_string(),
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn zod_issue_message(issues: &[ZodIssue]) -> String {
+    issues
+        .iter()
+        .map(|issue| format!("{}: {}", zod_issue_path(issue.path()), issue.message()))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn fastify_zod_error(issues: Vec<ZodIssue>) -> Response {
+    fastify_serialized_zod_error(&issues)
+}
+
+fn fastify_serialized_zod_error<T: Serialize>(issues: &T) -> Response {
+    let message = serde_json::to_string_pretty(issues)
+        .unwrap_or_else(|error| format!("Failed to serialize Zod issues: {error}"));
+    fastify_error(StatusCode::INTERNAL_SERVER_ERROR, &message)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum CatalogZodIssue {
+    Zod(ZodIssue),
+    InvalidType {
+        code: &'static str,
+        expected: &'static str,
+        path: Vec<Value>,
+        message: String,
+    },
+    InvalidUnionDiscriminator {
+        code: &'static str,
+        errors: Vec<Value>,
+        note: &'static str,
+        discriminator: &'static str,
+        options: [&'static str; 2],
+        path: Vec<Value>,
+        message: &'static str,
+    },
+}
+
+fn fastify_catalog_zod_error(issues: Vec<CatalogZodIssue>) -> Response {
+    fastify_serialized_zod_error(&issues)
+}
+
+fn catalog_invalid_type(
+    expected: &'static str,
+    path: Vec<Value>,
+    received: &str,
+) -> CatalogZodIssue {
+    CatalogZodIssue::InvalidType {
+        code: "invalid_type",
+        expected,
+        path,
+        message: format!("Invalid input: expected {expected}, received {received}"),
+    }
+}
+
+fn catalog_discriminator_issue() -> CatalogZodIssue {
+    CatalogZodIssue::InvalidUnionDiscriminator {
+        code: "invalid_union",
+        errors: Vec::new(),
+        note: "No matching discriminator",
+        discriminator: "protocolVersion",
+        options: [
+            controlled_instance_protocol::INSTANCE_PRIVATE_MODEL_CATALOG_DIRECT_PROTOCOL_VERSION,
+            controlled_instance_protocol::INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION,
+        ],
+        path: vec![json!("protocolVersion")],
+        message: "Invalid discriminator value. Expected '2026-08-27' | '2026-10-02'",
+    }
+}
+
+fn validate_private_model_catalog_body(value: &Value) -> Vec<CatalogZodIssue> {
+    let Some(object) = value.as_object() else {
+        return vec![catalog_invalid_type(
+            "object",
+            Vec::new(),
+            zod_received_type(value),
+        )];
+    };
+    let protocol = object.get("protocolVersion").and_then(Value::as_str);
+    let direct = protocol
+        == Some(
+            controlled_instance_protocol::INSTANCE_PRIVATE_MODEL_CATALOG_DIRECT_PROTOCOL_VERSION,
+        );
+    let relay = protocol
+        == Some(
+            controlled_instance_protocol::INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION,
+        );
+    if !direct && !relay {
+        return vec![catalog_discriminator_issue()];
+    }
+
+    let mut issues = Vec::new();
+    zod_required_string_field_at(object, "instanceId", 1, 120, &[], &mut issues);
+    validate_private_catalog_entities(object, direct, &mut issues);
+    validate_private_catalog_updated_at(object, &mut issues);
+    issues.into_iter().map(CatalogZodIssue::Zod).collect()
+}
+
+fn validate_private_catalog_entities(
+    object: &serde_json::Map<String, Value>,
+    direct: bool,
+    issues: &mut Vec<ZodIssue>,
+) {
+    let Some(value) = object.get("entities") else {
+        issues.push(zod_invalid_type(
+            "array",
+            vec![json!("entities")],
+            "undefined",
+        ));
+        return;
+    };
+    let entity_path = vec![json!("entities")];
+    let Some(entities) = value.as_array() else {
+        issues.push(zod_invalid_type(
+            "array",
+            entity_path,
+            zod_received_type(value),
+        ));
+        return;
+    };
+    if entities.len() > 64 {
+        issues.push(zod_too_big("array", entity_path, 64));
+    }
+    for (index, entity) in entities.iter().enumerate() {
+        let path = vec![json!("entities"), json!(index)];
+        let Some(entity) = entity.as_object() else {
+            issues.push(zod_invalid_type("object", path, zod_received_type(entity)));
+            continue;
+        };
+        zod_required_string_field_at(entity, "id", 1, 120, &path, issues);
+        validate_private_catalog_protocols(entity, &path, issues);
+        validate_private_catalog_model_names(entity, &path, issues);
+        if direct {
+            zod_required_string_field_at(entity, "endpoint", 1, 2_048, &path, issues);
+            zod_required_string_field_at(entity, "key", 1, 4_096, &path, issues);
+        } else {
+            validate_private_catalog_routes(entity, &path, issues);
+        }
+    }
+}
+
+fn validate_private_catalog_protocols(
+    object: &serde_json::Map<String, Value>,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    let path = zod_field_path(parent_path, "protocols");
+    let Some(value) = object.get("protocols") else {
+        issues.push(zod_invalid_type("array", path, "undefined"));
+        return;
+    };
+    let Some(values) = value.as_array() else {
+        issues.push(zod_invalid_type("array", path, zod_received_type(value)));
+        return;
+    };
+    if values.is_empty() {
+        issues.push(zod_too_small("array", path.clone(), 1));
+    }
+    if values.len() > 3 {
+        issues.push(zod_too_big("array", path.clone(), 3));
+    }
+    let allowed = [
+        "openai-responses",
+        "openai-chat-completions",
+        "anthropic-messages",
+    ];
+    for (index, value) in values.iter().enumerate() {
+        let path = path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(value) = value.as_str() else {
+            issues.push(zod_invalid_type("string", path, zod_received_type(value)));
+            continue;
+        };
+        if !allowed.contains(&value) {
+            issues.push(zod_invalid_value(
+                path,
+                &allowed,
+                "Invalid option: expected one of \"openai-responses\"|\"openai-chat-completions\"|\"anthropic-messages\""
+                    .to_string(),
+            ));
+        }
+    }
+}
+
+fn validate_private_catalog_model_names(
+    object: &serde_json::Map<String, Value>,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    let path = zod_field_path(parent_path, "modelNames");
+    let Some(value) = object.get("modelNames") else {
+        issues.push(zod_invalid_type("array", path, "undefined"));
+        return;
+    };
+    let Some(values) = value.as_array() else {
+        issues.push(zod_invalid_type("array", path, zod_received_type(value)));
+        return;
+    };
+    if values.is_empty() {
+        issues.push(zod_too_small("array", path.clone(), 1));
+    }
+    if values.len() > 256 {
+        issues.push(zod_too_big("array", path.clone(), 256));
+    }
+    for (index, value) in values.iter().enumerate() {
+        let path = path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(value) = value.as_object() else {
+            issues.push(zod_invalid_type("object", path, zod_received_type(value)));
+            continue;
+        };
+        zod_optional_string_field_at(value, "upstreamName", 1, 240, &path, issues);
+        zod_required_string_field_at(value, "name", 1, 240, &path, issues);
+        zod_required_integer_field_at(value, "order", 0, 1_000_000, &path, issues);
+    }
+}
+
+fn validate_private_catalog_routes(
+    object: &serde_json::Map<String, Value>,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) {
+    let path = zod_field_path(parent_path, "routes");
+    let Some(value) = object.get("routes") else {
+        issues.push(zod_invalid_type("array", path, "undefined"));
+        return;
+    };
+    let Some(values) = value.as_array() else {
+        issues.push(zod_invalid_type("array", path, zod_received_type(value)));
+        return;
+    };
+    if values.is_empty() {
+        issues.push(zod_too_small("array", path.clone(), 1));
+    }
+    if values.len() > 3 {
+        issues.push(zod_too_big("array", path.clone(), 3));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, value) in values.iter().enumerate() {
+        let route_path = path
+            .iter()
+            .cloned()
+            .chain(std::iter::once(json!(index)))
+            .collect::<Vec<_>>();
+        let Some(value) = value.as_object() else {
+            issues.push(zod_invalid_type(
+                "object",
+                route_path,
+                zod_received_type(value),
+            ));
+            continue;
+        };
+        let protocol = zod_required_enum_field_at(
+            value,
+            "protocol",
+            &[
+                "openai-responses",
+                "openai-chat-completions",
+                "anthropic-messages",
+            ],
+            &route_path,
+            issues,
+        );
+        zod_required_string_field_at(value, "baseUrl", 1, 2_048, &route_path, issues);
+        if let Some(protocol) = protocol {
+            if !seen.insert(protocol.clone()) {
+                issues.push(zod_custom(
+                    zod_field_path(&route_path, "protocol"),
+                    format!("Duplicate relay route for {protocol}."),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_private_catalog_updated_at(
+    object: &serde_json::Map<String, Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    let path = vec![json!("updatedAt")];
+    let Some(value) = object.get("updatedAt") else {
+        issues.push(zod_invalid_type("string", path, "undefined"));
+        return;
+    };
+    let Some(value) = value.as_str() else {
+        issues.push(zod_invalid_type("string", path, zod_received_type(value)));
+        return;
+    };
+    if value.ends_with('Z') && chrono::DateTime::parse_from_rfc3339(value).is_ok() {
+        return;
+    }
+    issues.push(ZodIssue::InvalidFormat {
+        origin: "string",
+        code: "invalid_format",
+        format: "datetime",
+        pattern: r"/^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$/",
+        path,
+        message: "Invalid ISO datetime".to_string(),
+    });
+}
+
+fn zod_object<'a>(
+    body: &'a Value,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    match body.as_object() {
+        Some(object) => Some(object),
+        None => {
+            issues.push(zod_invalid_type(
+                "object",
+                Vec::new(),
+                zod_received_type(body),
+            ));
+            None
+        }
+    }
+}
+
+fn zod_unknown_object_keys(
+    object: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    path: Vec<Value>,
+    issues: &mut Vec<ZodIssue>,
+) {
+    let keys = object
+        .keys()
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !keys.is_empty() {
+        issues.push(zod_unrecognized_keys(path, keys));
+    }
+}
+
+fn zod_optional_string_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = object.get(field)?;
+    let path = zod_field_path(parent_path, field);
+    let Some(value) = value.as_str() else {
+        issues.push(zod_invalid_type("string", path, zod_received_type(value)));
+        return None;
+    };
+    let value = trim_js_whitespace(value);
+    let length = value.chars().count();
+    if length < minimum {
+        issues.push(zod_too_small("string", path.clone(), minimum));
+    }
+    if length > maximum {
+        issues.push(zod_too_big("string", path, maximum));
+    }
+    Some(value.to_string())
+}
+
+fn zod_required_string_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    if !object.contains_key(field) {
+        issues.push(zod_invalid_type(
+            "string",
+            zod_field_path(parent_path, field),
+            "undefined",
+        ));
+        return None;
+    }
+    zod_optional_string_field_at(object, field, minimum, maximum, parent_path, issues)
+}
+
+fn zod_optional_integer_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    zod_optional_integer_field_at(object, field, minimum, maximum, &[], issues)
+}
+
+fn zod_optional_integer_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    let value = object.get(field)?;
+    let path = zod_field_path(parent_path, field);
+    let Some(value) = zod_integer_value(value) else {
+        if value.is_number() {
+            const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+            let number = value.as_f64().unwrap_or(f64::NAN);
+            if number.is_finite() && number.fract() == 0.0 {
+                if number > MAX_SAFE_INTEGER as f64 {
+                    issues.push(zod_unsafe_integer_too_big(path.clone()));
+                    if number > maximum as f64 {
+                        issues.push(zod_too_big(
+                            "number",
+                            path,
+                            usize::try_from(maximum).unwrap_or_default(),
+                        ));
+                    }
+                } else if number < -(MAX_SAFE_INTEGER as f64) {
+                    issues.push(zod_unsafe_integer_too_small(path.clone()));
+                    if number < minimum as f64 {
+                        issues.push(zod_too_small(
+                            "number",
+                            path,
+                            usize::try_from(minimum).unwrap_or_default(),
+                        ));
+                    }
+                } else {
+                    issues.push(zod_invalid_int(path));
+                }
+            } else {
+                issues.push(zod_invalid_int(path));
+            }
+        } else {
+            issues.push(zod_invalid_type("number", path, zod_received_type(value)));
+        }
+        return None;
+    };
+    if value < minimum {
+        issues.push(zod_too_small(
+            "number",
+            path.clone(),
+            usize::try_from(minimum).unwrap_or_default(),
+        ));
+    }
+    if value > maximum {
+        issues.push(zod_too_big(
+            "number",
+            path,
+            usize::try_from(maximum).unwrap_or_default(),
+        ));
+    }
+    Some(value)
+}
+
+fn zod_required_integer_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    zod_required_integer_field_at(object, field, minimum, maximum, &[], issues)
+}
+
+fn zod_required_integer_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    if !object.contains_key(field) {
+        issues.push(zod_invalid_type(
+            "number",
+            zod_field_path(parent_path, field),
+            "undefined",
+        ));
+        return None;
+    }
+    zod_optional_integer_field_at(object, field, minimum, maximum, parent_path, issues)
+}
+
+fn zod_enum_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[&str],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    zod_enum_field_at(object, field, values, &[], issues)
+}
+
+fn zod_enum_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[&str],
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    let value = object.get(field)?;
+    let value = value.as_str().unwrap_or_default();
+    if values.contains(&value) {
+        return Some(value.to_string());
+    }
+    let listed = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join("|");
+    issues.push(zod_invalid_value(
+        zod_field_path(parent_path, field),
+        values,
+        format!("Invalid option: expected one of {listed}"),
+    ));
+    None
+}
+
+fn zod_required_enum_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[&str],
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<String> {
+    if object.contains_key(field) {
+        return zod_enum_field_at(object, field, values, parent_path, issues);
+    }
+    let listed = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join("|");
+    issues.push(zod_invalid_value(
+        zod_field_path(parent_path, field),
+        values,
+        format!("Invalid option: expected one of {listed}"),
+    ));
+    None
+}
+
+fn zod_required_coerced_integer_field_at(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    minimum: i64,
+    maximum: i64,
+    parent_path: &[Value],
+    issues: &mut Vec<ZodIssue>,
+) -> Option<i64> {
+    let path = zod_field_path(parent_path, field);
+    let Some(raw) = object.get(field) else {
+        issues.push(ZodIssue::InvalidType {
+            expected: "number".to_string(),
+            format: None,
+            code: "invalid_type",
+            path,
+            message: "Invalid input: expected number, received NaN".to_string(),
+        });
+        return None;
+    };
+    let raw = raw.as_str().unwrap_or_default().trim();
+    let number = if raw.is_empty() {
+        0.0
+    } else {
+        raw.parse::<f64>().unwrap_or(f64::NAN)
+    };
+    if !number.is_finite() {
+        issues.push(ZodIssue::InvalidType {
+            expected: "number".to_string(),
+            format: None,
+            code: "invalid_type",
+            path,
+            message: "Invalid input: expected number, received NaN".to_string(),
+        });
+        return None;
+    }
+    if number.fract() != 0.0 {
+        issues.push(zod_invalid_int(path));
+        return None;
+    }
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    if number.abs() > MAX_SAFE_INTEGER as f64 {
+        issues.push(zod_too_big(
+            "int",
+            path,
+            usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
+        ));
+        return None;
+    }
+    let value = number as i64;
+    if value < minimum {
+        issues.push(zod_too_small(
+            "number",
+            path,
+            usize::try_from(minimum).unwrap_or_default(),
+        ));
+        return None;
+    }
+    if value > maximum {
+        issues.push(zod_too_big(
+            "number",
+            path,
+            usize::try_from(maximum).unwrap_or(usize::MAX),
+        ));
+        return None;
+    }
+    Some(value)
+}
+
+fn zod_field_path(parent_path: &[Value], field: &str) -> Vec<Value> {
+    parent_path
+        .iter()
+        .cloned()
+        .chain(std::iter::once(json!(field)))
+        .collect()
+}
+
+fn valid_request_id(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(
+        characters.next(),
+        Some(character) if character.is_ascii_alphanumeric()
+    ) && characters.all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | ':' | '-')
+    })
+}
+
+fn parse_app_display_options(body: &Value) -> Result<AppDisplayOptions, Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let width = zod_optional_integer_field(object, "width", 320, 7680, &mut issues);
+    let height = zod_optional_integer_field(object, "height", 240, 4320, &mut issues);
+    let depth = zod_optional_integer_field(object, "depth", 8, 32, &mut issues);
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AppDisplayOptions {
+        width: width.map(|value| value as u32),
+        height: height.map(|value| value as u32),
+        depth: depth.map(|value| value as u32),
+    })
+}
+
+fn parse_app_management_operation(
+    body: &Value,
+) -> Result<AppManagementOperationRequest, Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let request_id = match object.get("requestId") {
+        None => None,
+        Some(value) => match value.as_str() {
+            None => {
+                issues.push(zod_invalid_type(
+                    "string",
+                    vec![json!("requestId")],
+                    zod_received_type(value),
+                ));
+                None
+            }
+            Some(value) => {
+                let value = trim_js_whitespace(value);
+                let length = value.chars().count();
+                if length < 1 {
+                    issues.push(zod_too_small("string", vec![json!("requestId")], 1));
+                }
+                if length > 120 {
+                    issues.push(zod_too_big("string", vec![json!("requestId")], 120));
+                }
+                if !valid_request_id(value) {
+                    issues.push(ZodIssue::InvalidFormat {
+                        origin: "string",
+                        code: "invalid_format",
+                        format: "regex",
+                        pattern: "/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/",
+                        path: vec![json!("requestId")],
+                        message:
+                            "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/"
+                                .to_string(),
+                    });
+                }
+                Some(value.to_string())
+            }
+        },
+    };
+    zod_unknown_object_keys(object, &["requestId"], Vec::new(), &mut issues);
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AppManagementOperationRequest { request_id })
+}
+
+fn validate_managed_model_environment(body: &Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    for (field, maximum) in [
+        ("CODEX_HOME", 4096),
+        ("OPENAI_API_KEY", 4096),
+        ("OPENAI_BASE_URL", 4096),
+        ("TASK_HANDOFF_CODEX_BASE_URL", 4096),
+        ("TASK_HANDOFF_CODEX_MODEL", 4096),
+        ("ANTHROPIC_API_KEY", 4096),
+        ("ANTHROPIC_BASE_URL", 4096),
+        ("TASK_HANDOFF_CLAUDE_MODEL", 4096),
+        ("TASK_HANDOFF_OPENCODE_CONFIG_CONTENT", 1_048_576),
+    ] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let Some(value) = value.as_str() else {
+            issues.push(zod_invalid_type(
+                "string",
+                vec![json!(field)],
+                zod_received_type(value),
+            ));
+            continue;
+        };
+        if value.chars().count() > maximum {
+            issues.push(zod_too_big("string", vec![json!(field)], maximum));
+        }
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn validate_codex_instance_settings(body: &Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    zod_enum_field(
+        object,
+        "modelVerbosity",
+        &["low", "medium", "high"],
+        &mut issues,
+    );
+    zod_enum_field(
+        object,
+        "personality",
+        &["none", "friendly", "pragmatic"],
+        &mut issues,
+    );
+    if let Some(value) = object.get("multiAgent") {
+        if let Some(multi_agent) = value.as_object() {
+            if let Some(enabled) = multi_agent.get("enabled") {
+                if !enabled.is_boolean() {
+                    issues.push(zod_invalid_type(
+                        "boolean",
+                        vec![json!("multiAgent"), json!("enabled")],
+                        zod_received_type(enabled),
+                    ));
+                }
+            }
+            zod_optional_integer_field_at(
+                multi_agent,
+                "maxConcurrentThreads",
+                1,
+                64,
+                &[json!("multiAgent")],
+                &mut issues,
+            );
+            if let Some(default_model) = multi_agent.get("defaultModel") {
+                if let Some(default_model) = default_model.as_object() {
+                    let model_path = [json!("multiAgent"), json!("defaultModel")];
+                    zod_required_string_field_at(
+                        default_model,
+                        "modelEntityId",
+                        1,
+                        120,
+                        &model_path,
+                        &mut issues,
+                    );
+                    zod_required_string_field_at(
+                        default_model,
+                        "modelName",
+                        1,
+                        240,
+                        &model_path,
+                        &mut issues,
+                    );
+                    zod_optional_string_field_at(
+                        default_model,
+                        "modelUpstreamName",
+                        1,
+                        240,
+                        &model_path,
+                        &mut issues,
+                    );
+                    zod_unknown_object_keys(
+                        default_model,
+                        &["modelEntityId", "modelName", "modelUpstreamName"],
+                        vec![json!("multiAgent"), json!("defaultModel")],
+                        &mut issues,
+                    );
+                } else {
+                    issues.push(zod_invalid_type(
+                        "object",
+                        vec![json!("multiAgent"), json!("defaultModel")],
+                        zod_received_type(default_model),
+                    ));
+                }
+            }
+            zod_enum_field_at(
+                multi_agent,
+                "defaultReasoningEffort",
+                &[
+                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                ],
+                &[json!("multiAgent")],
+                &mut issues,
+            );
+            zod_unknown_object_keys(
+                multi_agent,
+                &[
+                    "enabled",
+                    "maxConcurrentThreads",
+                    "defaultModel",
+                    "defaultReasoningEffort",
+                ],
+                vec![json!("multiAgent")],
+                &mut issues,
+            );
+        } else {
+            issues.push(zod_invalid_type(
+                "object",
+                vec![json!("multiAgent")],
+                zod_received_type(value),
+            ));
+        }
+    }
+    zod_unknown_object_keys(
+        object,
+        &["modelVerbosity", "personality", "multiAgent"],
+        Vec::new(),
+        &mut issues,
+    );
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn validate_ai_session_persistence_settings(body: &Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    zod_required_integer_field(
+        object,
+        "historyLimit",
+        1,
+        controlled_instance_protocol::AI_SESSION_HISTORY_MAX_LIMIT as i64,
+        &mut issues,
+    );
+    zod_optional_integer_field(
+        object,
+        "attachmentRetentionDays",
+        0,
+        controlled_instance_protocol::AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS as i64,
+        &mut issues,
+    );
+    zod_optional_integer_field(
+        object,
+        "maxFileAttachmentBytes",
+        1,
+        controlled_instance_protocol::AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES as i64,
+        &mut issues,
+    );
+    zod_unknown_object_keys(
+        object,
+        &[
+            "historyLimit",
+            "attachmentRetentionDays",
+            "maxFileAttachmentBytes",
+        ],
+        Vec::new(),
+        &mut issues,
+    );
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+fn fastify_error(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(json!({
+            "statusCode": status.as_u16(),
+            "error": status.canonical_reason().unwrap_or("Internal Server Error"),
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
 async fn invoke_agent_tool(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
     payload: Result<Json<AgentToolInvocationInput>, JsonRejection>,
 ) -> Response {
+    if !state.node_agent_client.enabled() {
+        return api_not_found().await;
+    }
     let Json(input) = match payload {
         Ok(payload) => payload,
         Err(error) => {
@@ -5518,9 +9716,12 @@ async fn invoke_agent_tool(
                 StatusCode::BAD_REQUEST,
                 "STORY_TOOL_FAILED",
                 &error.body_text(),
-            )
+            );
         }
     };
+    if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
+        return response;
+    }
     if let Err(error) = input.validate() {
         return story_tool_error(error);
     }
@@ -5544,62 +9745,684 @@ async fn invoke_agent_tool(
     }
 }
 
-async fn agent_tool_mcp_get() -> Response {
-    (
+async fn agent_tool_mcp_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.node_agent_client.enabled() {
+        return api_not_found().await;
+    }
+    if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
+        return response;
+    }
+    if !mcp_accepts(&headers, "text/event-stream") {
+        return mcp_json_error(
+            StatusCode::NOT_ACCEPTABLE,
+            -32000,
+            "Not Acceptable: Client must accept text/event-stream",
+        );
+    }
+    if let Some(response) = mcp_protocol_version_error(&headers) {
+        return response;
+    }
+
+    let interval = tokio::time::interval_at(
+        TokioInstant::now() + MCP_KEEPALIVE_INTERVAL,
+        MCP_KEEPALIVE_INTERVAL,
+    );
+    let stream = futures_util::stream::unfold(interval, |mut interval| async move {
+        interval.tick().await;
+        Some((
+            Ok::<Bytes, Infallible>(Bytes::from_static(b": keepalive\n\n")),
+            interval,
+        ))
+    });
+    mcp_sse_response(Body::from_stream(stream))
+}
+
+async fn agent_tool_mcp_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    request: Request,
+) -> Response {
+    if !state.node_agent_client.enabled() {
+        return api_not_found().await;
+    }
+    if let Err(response) = mcp_fastify_body(request).await {
+        return response;
+    }
+    if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
+        return response;
+    }
+    if let Some(response) = mcp_protocol_version_error(&headers) {
+        return response;
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn agent_tool_mcp_head(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.node_agent_client.enabled() {
+        return api_not_found().await;
+    }
+    if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
+        return response;
+    }
+    let mut response = mcp_json_error(
         StatusCode::METHOD_NOT_ALLOWED,
-        [(header::ALLOW, "POST, DELETE")],
-        Json(json!({
-            "error": {
-                "code": "METHOD_NOT_ALLOWED",
-                "message": "The Story MCP bridge is stateless and only accepts POST requests."
+        -32000,
+        "Method not allowed.",
+    );
+    response.headers_mut().insert(
+        header::ALLOW,
+        "GET, POST, DELETE".parse().expect("valid Allow"),
+    );
+    response
+}
+
+async fn agent_tool_mcp_post(State(state): State<AppState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let uri = request.uri().clone();
+    if !state.node_agent_client.enabled() {
+        return api_not_found().await;
+    }
+    let input = match mcp_fastify_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
+        return response;
+    }
+    if !mcp_accepts(&headers, "application/json") || !mcp_accepts(&headers, "text/event-stream") {
+        return mcp_json_error(
+            StatusCode::NOT_ACCEPTABLE,
+            -32000,
+            "Not Acceptable: Client must accept both application/json and text/event-stream",
+        );
+    }
+    if !mcp_is_json_content_type(headers.get(header::CONTENT_TYPE)) {
+        return mcp_json_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            -32000,
+            "Unsupported Media Type: Content-Type must be application/json",
+        );
+    }
+    let Some(input) = input else {
+        return mcp_json_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            -32000,
+            "Unsupported Media Type: Content-Type must be application/json",
+        );
+    };
+    let messages = match input {
+        Value::Array(messages) => messages,
+        message @ Value::Object(_) => vec![message],
+        _ => {
+            return mcp_json_error(
+                StatusCode::BAD_REQUEST,
+                -32700,
+                "Parse error: Invalid JSON-RPC message",
+            )
+        }
+    };
+    if messages
+        .iter()
+        .any(|message| !is_valid_mcp_jsonrpc_message(message))
+    {
+        return mcp_json_error(
+            StatusCode::BAD_REQUEST,
+            -32700,
+            "Parse error: Invalid JSON-RPC message",
+        );
+    }
+    let initializes = messages
+        .iter()
+        .filter(|message| mcp_message_method(message) == Some("initialize"))
+        .count();
+    if initializes > 0 && messages.len() > 1 {
+        return mcp_json_error(
+            StatusCode::BAD_REQUEST,
+            -32600,
+            "Invalid Request: Only one initialization request is allowed",
+        );
+    }
+    if initializes == 0 {
+        if let Some(response) = mcp_protocol_version_error(&headers) {
+            return response;
+        }
+    }
+    if !messages.iter().any(is_mcp_request) {
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    let mut request_indexes = std::collections::HashMap::new();
+    let mut cancelled = std::collections::HashSet::new();
+    let mut requests = Vec::new();
+    for (index, message) in messages.into_iter().enumerate() {
+        if is_mcp_request(&message) {
+            if let Some(identity) = mcp_request_identity(&message) {
+                request_indexes.insert(identity, index);
             }
+            requests.push((index, message));
+        } else if mcp_message_method(&message) == Some("notifications/cancelled") {
+            let request_id = message
+                .get("params")
+                .and_then(|params| params.get("requestId"));
+            if let Some(index) = request_id
+                .and_then(mcp_request_identity_for_id)
+                .and_then(|identity| request_indexes.remove(&identity))
+            {
+                cancelled.insert(index);
+            }
+        }
+    }
+
+    let mut pending = futures_util::stream::FuturesUnordered::new();
+    for (index, request) in requests {
+        if cancelled.contains(&index) {
+            continue;
+        }
+        let state = state.clone();
+        pending.push(async move { process_mcp_request(&state, request).await });
+    }
+    let mut responses = Vec::new();
+    while let Some(response) = pending.next().await {
+        if let Some(response) = response {
+            responses.push(format!("event: message\ndata: {response}\n\n"));
+        }
+    }
+    mcp_sse_response(Body::from(responses.concat()))
+}
+
+fn mcp_accepts(headers: &HeaderMap, value: &str) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|header| header.to_str().ok())
+        .is_some_and(|header| header.contains(value))
+}
+
+fn mcp_is_json_content_type(value: Option<&header::HeaderValue>) -> bool {
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    if value == "application/json" {
+        return true;
+    }
+    let essence = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if essence.is_empty() || value[essence.len().min(value.len())..].contains(',') {
+        return false;
+    }
+    essence == "application/json"
+}
+
+fn mcp_json_error(status: StatusCode, code: i64, message: &str) -> Response {
+    (status, Json(mcp_error(Value::Null, code, message))).into_response()
+}
+
+fn mcp_sse_response(body: Body) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache, no-transform")
+        .header(header::CONNECTION, "keep-alive")
+        .header("x-accel-buffering", "no")
+        .body(body)
+        .expect("valid MCP SSE response")
+}
+
+fn mcp_protocol_version_error(headers: &HeaderMap) -> Option<Response> {
+    let value = headers.get("mcp-protocol-version")?;
+    let value = value.to_str().unwrap_or_default();
+    MCP_SUPPORTED_PROTOCOL_VERSIONS
+        .contains(&value)
+        .then_some(())
+        .map_or_else(
+            || {
+                Some(mcp_json_error(
+                    StatusCode::BAD_REQUEST,
+                    -32000,
+                    &format!(
+                        "Bad Request: Unsupported protocol version: {value} (supported versions: {})",
+                        MCP_SUPPORTED_PROTOCOL_VERSIONS.join(", ")
+                    ),
+                ))
+            },
+            |_| None,
+        )
+}
+
+async fn mcp_fastify_body(request: Request) -> Result<Option<Value>, Response> {
+    let json_content_type = mcp_is_json_content_type(request.headers().get(header::CONTENT_TYPE));
+    let bytes = match to_bytes(request.into_body(), MCP_BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(mcp_body_error(error)),
+    };
+    if bytes.is_empty() {
+        return if json_content_type {
+            Err(mcp_fastify_body_error(
+                "FST_ERR_CTP_EMPTY_JSON_BODY",
+                "Body cannot be empty when content-type is set to 'application/json'",
+            ))
+        } else {
+            Ok(None)
+        };
+    }
+    if !json_content_type {
+        return Ok(None);
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| {
+        mcp_fastify_body_error(
+            "FST_ERR_CTP_INVALID_JSON_BODY",
+            "Body is not valid JSON but content-type is set to 'application/json'",
+        )
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FastifyBodyMediaType {
+    Json,
+    Text,
+    OctetStream,
+    Unsupported,
+}
+
+fn fastify_body_media_type(headers: &HeaderMap) -> Option<FastifyBodyMediaType> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    Some(match essence.as_str() {
+        "application/json" => FastifyBodyMediaType::Json,
+        "text/plain" => FastifyBodyMediaType::Text,
+        "application/octet-stream" => FastifyBodyMediaType::OctetStream,
+        _ => FastifyBodyMediaType::Unsupported,
+    })
+}
+
+fn fastify_body_limit(method: &Method, path: &str) -> Option<usize> {
+    if !path.starts_with("/api/")
+        || matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        || path == "/api/internal/agent-tools/mcp"
+    {
+        return None;
+    }
+    let segments = path.split('/').collect::<Vec<_>>();
+    if segments.len() > 5
+        && segments[1] == "api"
+        && segments[2] == "apps"
+        && segments[3] == "sessions"
+        && segments[5] == "web"
+    {
+        return None;
+    }
+    if *method == Method::POST && path == "/api/ai-session-attachments/drafts" {
+        return Some(controlled_instance_protocol::AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT);
+    }
+    if *method == Method::PUT
+        && path.starts_with("/api/ai-session-attachments/draft-streams/")
+        && !path.ends_with("/complete")
+    {
+        return Some(controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT);
+    }
+    if path == "/api/internal/agent-tools/invoke" {
+        return Some(256 * 1024);
+    }
+    if method == Method::POST && path == "/api/ai-sessions" {
+        return Some(64 * 1024 * 1024);
+    }
+    if method == Method::POST
+        && path.starts_with("/api/ai-sessions/")
+        && path.ends_with("/messages")
+    {
+        return Some(64 * 1024 * 1024);
+    }
+    if matches!(*method, Method::POST | Method::PUT)
+        && (path.starts_with("/api/ai-sessions/") || path.starts_with("/api/apps/sessions/"))
+        && path.ends_with("/repository/files")
+    {
+        return Some(5 * 1024 * 1024);
+    }
+    Some(DEFAULT_JSON_BODY_LIMIT)
+}
+
+fn fastify_body_defaults_to_empty_object(method: &Method, path: &str) -> bool {
+    !((method == Method::PUT && path == "/api/internal/model-catalog")
+        || (method == Method::POST && path == "/api/ai-session-attachments/draft-streams"))
+        && path != "/api/internal/node-agent/story-agent-tools/invalidate"
+        && !path.ends_with("/story-content")
+}
+
+fn fastify_raw_body_route(method: &Method, path: &str) -> bool {
+    (*method == Method::POST && path == "/api/ai-session-attachments/drafts")
+        || (*method == Method::PUT
+            && path.starts_with("/api/ai-session-attachments/draft-streams/")
+            && !path.ends_with("/complete"))
+}
+
+async fn fastify_body_parser(request: Request, next: Next) -> Response {
+    let Some(limit) = fastify_body_limit(request.method(), request.uri().path()) else {
+        return next.run(request).await;
+    };
+    let defaults_to_empty_object =
+        fastify_body_defaults_to_empty_object(request.method(), request.uri().path());
+    let raw_body = fastify_raw_body_route(request.method(), request.uri().path());
+    let media_type = fastify_body_media_type(request.headers());
+    let (mut parts, body) = request.into_parts();
+    let mut bytes = match to_bytes(body, limit).await {
+        Ok(bytes) => bytes,
+        Err(_) => return mcp_body_too_large_error(),
+    };
+    if raw_body {
+        match media_type {
+            Some(FastifyBodyMediaType::Json) => {
+                if bytes.is_empty() {
+                    return fastify_body_error(
+                        StatusCode::BAD_REQUEST,
+                        "FST_ERR_CTP_EMPTY_JSON_BODY",
+                        "Body cannot be empty when content-type is set to 'application/json'",
+                    );
+                }
+                if serde_json::from_slice::<Value>(&bytes).is_err() {
+                    return fastify_body_error(
+                        StatusCode::BAD_REQUEST,
+                        "FST_ERR_CTP_INVALID_JSON_BODY",
+                        "Body is not valid JSON but content-type is set to 'application/json'",
+                    );
+                }
+            }
+            Some(FastifyBodyMediaType::Unsupported) => {
+                return fastify_body_error(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+                    "Unsupported Media Type",
+                );
+            }
+            None if !bytes.is_empty() => {
+                return fastify_body_error(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+                    "Unsupported Media Type",
+                );
+            }
+            _ => {}
+        }
+        return next
+            .run(Request::from_parts(parts, Body::from(bytes)))
+            .await;
+    }
+    match media_type {
+        Some(FastifyBodyMediaType::Json) => {
+            if bytes.is_empty() {
+                return fastify_body_error(
+                    StatusCode::BAD_REQUEST,
+                    "FST_ERR_CTP_EMPTY_JSON_BODY",
+                    "Body cannot be empty when content-type is set to 'application/json'",
+                );
+            }
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(value) if defaults_to_empty_object && !js_truthy(&value) => {
+                    bytes = Bytes::from_static(b"{}");
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return fastify_body_error(
+                        StatusCode::BAD_REQUEST,
+                        "FST_ERR_CTP_INVALID_JSON_BODY",
+                        "Body is not valid JSON but content-type is set to 'application/json'",
+                    );
+                }
+            }
+        }
+        Some(FastifyBodyMediaType::Text) => {
+            let value = Value::String(String::from_utf8_lossy(&bytes).into_owned());
+            let value = if defaults_to_empty_object && !js_truthy(&value) {
+                json!({})
+            } else {
+                value
+            };
+            bytes = serde_json::to_vec(&value)
+                .expect("JSON string serialization")
+                .into();
+            parts.headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            );
+            parts.headers.insert(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_str(&bytes.len().to_string())
+                    .expect("body length header"),
+            );
+        }
+        Some(FastifyBodyMediaType::OctetStream) => {}
+        Some(FastifyBodyMediaType::Unsupported) => {
+            return fastify_body_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+                "Unsupported Media Type",
+            );
+        }
+        None if !bytes.is_empty() => {
+            return fastify_body_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+                "Unsupported Media Type",
+            );
+        }
+        None if defaults_to_empty_object => {
+            bytes = Bytes::from_static(b"{}");
+            parts.headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            );
+            parts.headers.insert(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("2"),
+            );
+        }
+        None => {}
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
+}
+
+async fn fastify_request_body(request: Request) -> Result<Option<Value>, Response> {
+    let media_type = fastify_body_media_type(request.headers());
+    let bytes = match to_bytes(request.into_body(), DEFAULT_JSON_BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(mcp_body_too_large_error()),
+    };
+    match media_type {
+        Some(FastifyBodyMediaType::Json) => {
+            if bytes.is_empty() {
+                return Err(fastify_body_error(
+                    StatusCode::BAD_REQUEST,
+                    "FST_ERR_CTP_EMPTY_JSON_BODY",
+                    "Body cannot be empty when content-type is set to 'application/json'",
+                ));
+            }
+            serde_json::from_slice(&bytes).map(Some).map_err(|_| {
+                fastify_body_error(
+                    StatusCode::BAD_REQUEST,
+                    "FST_ERR_CTP_INVALID_JSON_BODY",
+                    "Body is not valid JSON but content-type is set to 'application/json'",
+                )
+            })
+        }
+        Some(FastifyBodyMediaType::Text) => Ok(Some(Value::String(
+            String::from_utf8_lossy(&bytes).into_owned(),
+        ))),
+        Some(FastifyBodyMediaType::OctetStream) => Ok(Some(Value::String(
+            String::from_utf8_lossy(&bytes).into_owned(),
+        ))),
+        Some(FastifyBodyMediaType::Unsupported) => Err(fastify_body_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+            "Unsupported Media Type",
+        )),
+        None if bytes.is_empty() => Ok(None),
+        None => Err(fastify_body_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+            "Unsupported Media Type",
+        )),
+    }
+}
+
+fn agent_tool_auth_error(state: &AppState, headers: &HeaderMap, _uri: &Uri) -> Option<Response> {
+    let authorized = bearer_token(headers)
+        .as_deref()
+        .map(|token| tokens_match(state.story_tools.token(), token))
+        .unwrap_or(false);
+    (!authorized).then(|| {
+        api_error(
+            StatusCode::FORBIDDEN,
+            "AGENT_TOOL_FORBIDDEN",
+            "Agent tool token is required.",
+        )
+    })
+}
+
+fn mcp_fastify_body_error(code: &str, message: &str) -> Response {
+    fastify_body_error(StatusCode::BAD_REQUEST, code, message)
+}
+
+fn fastify_body_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        Json(json!({
+            "statusCode": status.as_u16(),
+            "code": code,
+            "error": status.canonical_reason().unwrap_or("Bad Request"),
+            "message": message
         })),
     )
         .into_response()
 }
 
-async fn agent_tool_mcp_delete() -> StatusCode {
-    StatusCode::OK
+fn mcp_body_error(error: axum::Error) -> Response {
+    if mcp_body_is_too_large(error) {
+        mcp_body_too_large_error()
+    } else {
+        mcp_fastify_body_error(
+            "FST_ERR_CTP_INVALID_JSON_BODY",
+            "Body is not valid JSON but content-type is set to 'application/json'",
+        )
+    }
 }
 
-async fn agent_tool_mcp_post(
-    State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
-) -> Response {
-    let Json(input) = match payload {
-        Ok(payload) => payload,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(mcp_error(Value::Null, -32700, &error.body_text())),
-            )
-                .into_response()
+fn mcp_body_is_too_large(error: axum::Error) -> bool {
+    error
+        .into_inner()
+        .downcast::<http_body_util::LengthLimitError>()
+        .is_ok()
+}
+
+fn mcp_body_too_large_error() -> Response {
+    let mut response = (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        Json(json!({
+            "statusCode": 413,
+            "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+            "error": "Payload Too Large",
+            "message": "Request body is too large"
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONNECTION,
+        header::HeaderValue::from_static("close"),
+    );
+    response
+}
+
+fn mcp_message_method(message: &Value) -> Option<&str> {
+    message.get("method").and_then(Value::as_str)
+}
+
+fn is_mcp_request(message: &Value) -> bool {
+    mcp_message_method(message).is_some()
+        && message
+            .get("id")
+            .is_some_and(|id| id.is_string() || id.as_i64().is_some() || id.as_u64().is_some())
+}
+
+fn mcp_request_identity(message: &Value) -> Option<String> {
+    message.get("id").and_then(mcp_request_identity_for_id)
+}
+
+fn mcp_request_identity_for_id(id: &Value) -> Option<String> {
+    match id {
+        Value::String(id) => Some(format!("string:{id}")),
+        Value::Number(id) if id.as_i64().is_some() || id.as_u64().is_some() => {
+            Some(format!("number:{id}"))
         }
-    };
-    match input {
-        Value::Array(requests) => {
-            let mut responses = Vec::new();
-            for request in requests {
-                if let Some(response) = process_mcp_request(&state, request).await {
-                    responses.push(response);
-                }
-            }
-            if responses.is_empty() {
-                StatusCode::ACCEPTED.into_response()
-            } else {
-                Json(Value::Array(responses)).into_response()
-            }
-        }
-        request @ Value::Object(_) => match process_mcp_request(&state, request).await {
-            Some(response) => Json(response).into_response(),
-            None => StatusCode::ACCEPTED.into_response(),
-        },
-        _ => (
-            StatusCode::BAD_REQUEST,
-            Json(mcp_error(Value::Null, -32600, "Invalid JSON-RPC request.")),
-        )
-            .into_response(),
+        _ => None,
     }
+}
+
+fn is_valid_mcp_jsonrpc_message(message: &Value) -> bool {
+    let Some(object) = message.as_object() else {
+        return false;
+    };
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return false;
+    }
+    let id_valid = object
+        .get("id")
+        .is_none_or(|id| id.is_string() || id.as_i64().is_some() || id.as_u64().is_some());
+    if !id_valid {
+        return false;
+    }
+    if let Some(method) = object.get("method") {
+        if !method.is_string()
+            || object
+                .get("params")
+                .is_some_and(|params| !params.is_object())
+        {
+            return false;
+        }
+        return object
+            .keys()
+            .all(|key| matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"));
+    }
+    if let Some(result) = object.get("result") {
+        return object.get("id").is_some()
+            && result.is_object()
+            && object
+                .keys()
+                .all(|key| matches!(key.as_str(), "jsonrpc" | "id" | "result"));
+    }
+    if let Some(error) = object.get("error").and_then(Value::as_object) {
+        return error
+            .get("code")
+            .is_some_and(|code| code.as_i64().is_some() || code.as_u64().is_some())
+            && error.get("message").is_some_and(Value::is_string)
+            && error
+                .keys()
+                .all(|key| matches!(key.as_str(), "code" | "message" | "data"))
+            && object
+                .keys()
+                .all(|key| matches!(key.as_str(), "jsonrpc" | "id" | "error"));
+    }
+    false
 }
 
 async fn process_mcp_request(state: &AppState, request: Value) -> Option<Value> {
@@ -5620,19 +10443,21 @@ async fn process_mcp_request(state: &AppState, request: Value) -> Option<Value> 
     let params = object.get("params");
     let response_id = id.clone().unwrap_or(Value::Null);
     let result = match method {
-        "initialize" => Some(json!({
-            "protocolVersion": params
+        "initialize" => {
+            let requested = params
                 .and_then(Value::as_object)
                 .and_then(|params| params.get("protocolVersion"))
-                .and_then(Value::as_str)
-                .unwrap_or("2025-06-18"),
-            "capabilities": {"tools": {"listChanged": false}},
-            "serverInfo": {"name": "task-handoff-story", "version": "1.0.0"}
-        })),
-        "ping" => Some(json!({})),
-        "notifications/initialized" | "notifications/cancelled" => {
-            return id.map(|id| mcp_error(id, -32601, "Notification ids are not supported."));
+                .and_then(Value::as_str);
+            let protocol_version = requested
+                .filter(|version| MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+                .unwrap_or(MCP_LATEST_PROTOCOL_VERSION);
+            Some(json!({
+                "protocolVersion": protocol_version,
+                "capabilities": {"tools": {"listChanged": true}},
+                "serverInfo": {"name": "task-handoff-story", "version": "1.0.0"}
+            }))
         }
+        "ping" => Some(json!({})),
         "tools/list" => Some(json!({"tools": tool_definitions()})),
         "tools/call" => match call_mcp_tool(state, params).await {
             Ok(result) => Some(result),
@@ -5641,11 +10466,7 @@ async fn process_mcp_request(state: &AppState, request: Value) -> Option<Value> 
             }
         },
         _ => {
-            return Some(mcp_error(
-                response_id,
-                -32601,
-                &format!("Method not found: {method}"),
-            ))
+            return Some(mcp_error(response_id, -32601, "Method not found"));
         }
     };
     id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result}))
@@ -5659,17 +10480,22 @@ async fn call_mcp_tool(state: &AppState, params: Option<&Value>) -> Result<Value
         return Err((-32602, "Tool name is required.".to_string()));
     };
     let Ok(tool) = name.parse::<controlled_instance_protocol::AiSessionAgentToolName>() else {
-        return Err((-32602, format!("Unknown Story tool: {name}")));
+        return Ok(mcp_tool_error_text(&format!(
+            "MCP error -32602: Tool {name} not found"
+        )));
     };
+    let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+    if let Err(error) = validate_tool_arguments(name, &arguments) {
+        return Ok(mcp_tool_error_text(&format!(
+            "MCP error -32602: Input validation error: Invalid arguments for tool {name}: {error}"
+        )));
+    }
     let meta = params.get("_meta");
-    let thread_id = match required_thread_id(meta) {
+    let thread_id = match required_thread_id_for(tool, meta) {
         Ok(thread_id) => thread_id,
         Err(error) => return Ok(mcp_tool_error(error)),
     };
-    let call_id = optional_call_id(meta)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let call_id = optional_call_id(meta);
     match invoke_for_provider_session(
         &state.story_tools,
         &state.agent_run_bindings,
@@ -5684,17 +10510,26 @@ async fn call_mcp_tool(state: &AppState, params: Option<&Value>) -> Result<Value
     )
     .await
     {
-        Ok(value) => Ok(json!({
-            "content": [{"type": "text", "text": value.to_string()}],
-            "structuredContent": value
-        })),
+        Ok(value) => match validate_tool_output(name, &value) {
+            Ok(()) => Ok(json!({
+                "content": [{"type": "text", "text": value.to_string()}],
+                "structuredContent": value
+            })),
+            Err(error) => Ok(mcp_tool_error_text(&format!(
+                "MCP error -32602: Output validation error: Invalid structured content for tool {name}: {error}"
+            ))),
+        },
         Err(error) => Ok(mcp_tool_error(error)),
     }
 }
 
 fn mcp_tool_error(error: crate::story_tools::StoryToolError) -> Value {
+    mcp_tool_error_text(&error.message)
+}
+
+fn mcp_tool_error_text(message: &str) -> Value {
     json!({
-        "content": [{"type": "text", "text": error.message}],
+        "content": [{"type": "text", "text": message}],
         "isError": true
     })
 }
@@ -5707,21 +10542,15 @@ fn mcp_error(id: Value, code: i64, message: &str) -> Value {
     })
 }
 
-async fn invalidate_story_agent_tools(
-    State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
-) -> Response {
-    let Json(input) = match payload {
-        Ok(payload) => payload,
-        Err(error) => {
-            return story_tool_error(crate::story_tools::StoryToolError::new(
-                "STORY_AGENT_TOOL_POLICY_INVALID",
-                error.body_text(),
-                400,
-            ))
-        }
+async fn invalidate_story_agent_tools(State(state): State<AppState>, request: Request) -> Response {
+    let input = match fastify_request_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
     };
-    match state.story_tools.invalidate_story_agent_tools(&input) {
+    match state
+        .story_tools
+        .invalidate_story_agent_tools(input.as_ref())
+    {
         Ok(invalidated) => Json(ApiEnvelope {
             data: json!({"invalidated": invalidated}),
         })
@@ -5735,7 +10564,7 @@ async fn ai_session_story_content(
     Path(id): Path<String>,
 ) -> Response {
     let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+        return ai_session_was_not_found();
     };
     match state.story_tools.list(&session, 1, 20).await {
         Ok(documents) => Json(ApiEnvelope {
@@ -5749,14 +10578,14 @@ async fn ai_session_story_content(
 async fn get_ai_session_story_content(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<controlled_instance_protocol::StoryContentGetInput>, JsonRejection>,
+    request: Request,
 ) -> Response {
-    let Json(input) = match payload {
-        Ok(payload) => payload,
-        Err(error) => return ai_session_body_error(error),
+    let input = match fastify_request_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+        return ai_session_was_not_found();
     };
     match state.story_tools.get(&session, input).await {
         Ok(result) => Json(ApiEnvelope { data: result }).into_response(),
@@ -5767,14 +10596,14 @@ async fn get_ai_session_story_content(
 async fn set_ai_session_story_content(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<controlled_instance_protocol::StoryContentSetInput>, JsonRejection>,
+    request: Request,
 ) -> Response {
-    let Json(input) = match payload {
-        Ok(payload) => payload,
-        Err(error) => return ai_session_body_error(error),
+    let input = match fastify_request_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+        return ai_session_was_not_found();
     };
     match state.story_tools.set(&session, input).await {
         Ok(result) => Json(ApiEnvelope { data: result }).into_response(),
@@ -5785,9 +10614,9 @@ async fn set_ai_session_story_content(
 async fn update_ai_session_story(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -5823,6 +10652,9 @@ async fn update_ai_session_story(
             );
         }
     };
+    if state.ai_sessions.get(&id).is_none() {
+        return ai_session_was_not_found();
+    }
     match state.ai_session_controller.update_story(&id, story_id) {
         Ok(updated) => {
             state.publish_ai_session_snapshot("control-action");
@@ -5880,9 +10712,9 @@ async fn search_ai_session_mention_files(
 async fn execute_ai_session_command(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -5942,6 +10774,9 @@ async fn execute_ai_session_command(
 }
 
 fn ai_session_body_error(error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
     api_error(
         StatusCode::BAD_REQUEST,
         "AI_SESSION_CONTROL_INVALID",
@@ -5954,6 +10789,14 @@ fn ai_session_validation_error(issues: Vec<String>) -> Response {
         StatusCode::BAD_REQUEST,
         "AI_SESSION_CONTROL_INVALID",
         &issues.join("; "),
+    )
+}
+
+fn ai_session_zod_error(issues: Vec<ZodIssue>) -> Response {
+    api_error(
+        StatusCode::BAD_REQUEST,
+        "AI_SESSION_CONTROL_INVALID",
+        &zod_issue_message(&issues),
     )
 }
 
@@ -6047,23 +10890,33 @@ pub fn ai_session_action_response(
             .and_then(|turn| turn.get("providerTurnId"))
             .and_then(Value::as_str)
     });
-    json!({
-        "sessionId": result.session.id,
-        "provider": result.provider,
-        "action": result.action.action,
-        "decision": result.action.decision,
-        "turnId": turn_id,
-        "providerTurnId": provider_turn_id,
-        "queueId": result.action.queue_id,
-        "messageId": message_id,
-    })
+    let mut response = serde_json::Map::new();
+    response.insert("sessionId".to_string(), json!(result.session.id));
+    response.insert("provider".to_string(), json!(result.provider));
+    response.insert("action".to_string(), json!(result.action.action));
+    if let Some(decision) = result.action.decision.as_deref() {
+        response.insert("decision".to_string(), json!(decision));
+    }
+    if let Some(turn_id) = turn_id {
+        response.insert("turnId".to_string(), json!(turn_id));
+    }
+    if let Some(provider_turn_id) = provider_turn_id {
+        response.insert("providerTurnId".to_string(), json!(provider_turn_id));
+    }
+    if let Some(queue_id) = result.action.queue_id.as_deref() {
+        response.insert("queueId".to_string(), json!(queue_id));
+    }
+    if let Some(message_id) = message_id {
+        response.insert("messageId".to_string(), json!(message_id));
+    }
+    Value::Object(response)
 }
 
 async fn create_ai_session(
     State(state): State<AppState>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6074,7 +10927,7 @@ async fn create_ai_session(
                 StatusCode::BAD_REQUEST,
                 "AI_SESSION_CONTROL_INVALID",
                 &issues.join("; "),
-            )
+            );
         }
     };
     let request = match serde_json::from_value::<controlled_instance_ai_session::AiSessionCreateInput>(
@@ -6086,7 +10939,7 @@ async fn create_ai_session(
                 StatusCode::BAD_REQUEST,
                 "AI_SESSION_CONTROL_INVALID",
                 &format!("body: {error}"),
-            )
+            );
         }
     };
     if let Err(response) = validate_client_request_id(request.message.client_request_id.as_deref())
@@ -6116,23 +10969,84 @@ async fn create_ai_session(
 async fn send_ai_session_message(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    headers: HeaderMap,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let started = tokio::time::Instant::now();
+    let trace_id = headers
+        .get("x-task-handoff-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| valid_ai_session_trace_id(value))
+        .map(ToString::to_string);
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
-        Err(error) => return ai_session_body_error(error),
+        Err(error) => {
+            return ai_session_message_timing(
+                ai_session_body_error(error),
+                started,
+                trace_id.as_deref(),
+            );
+        }
     };
     let body = match normalize_ai_session_message_body(&body) {
         Ok(body) => body,
-        Err(issues) => return ai_session_validation_error(issues),
+        Err(issues) => {
+            return ai_session_message_timing(
+                ai_session_validation_error(issues),
+                started,
+                trace_id.as_deref(),
+            );
+        }
     };
     let request =
         match serde_json::from_value::<controlled_instance_ai_session::AiSessionMessageInput>(body)
         {
             Ok(request) => request,
-            Err(error) => return ai_session_deserialize_error(error),
+            Err(error) => {
+                return ai_session_message_timing(
+                    ai_session_deserialize_error(error),
+                    started,
+                    trace_id.as_deref(),
+                );
+            }
         };
-    send_ai_session_message_inner(state, id, Ok(Json(request))).await
+    ai_session_message_timing(
+        send_ai_session_message_inner(state, id, Ok(Json(request))).await,
+        started,
+        trace_id.as_deref(),
+    )
+}
+
+fn valid_ai_session_trace_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn ai_session_message_timing(
+    mut response: Response,
+    started: tokio::time::Instant,
+    trace_id: Option<&str>,
+) -> Response {
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if let Ok(value) =
+        header::HeaderValue::from_str(&format!("instance_action;dur={duration_ms:.1}"))
+    {
+        response
+            .headers_mut()
+            .insert(header::HeaderName::from_static("server-timing"), value);
+    }
+    if let Some(trace_id) = trace_id.filter(|value| valid_ai_session_trace_id(value)) {
+        if let Ok(value) = header::HeaderValue::from_str(trace_id) {
+            response.headers_mut().insert(
+                header::HeaderName::from_static("x-task-handoff-trace-id"),
+                value,
+            );
+        }
+    }
+    response
 }
 
 async fn send_ai_session_message_inner(
@@ -6231,9 +11145,9 @@ struct ResumeAiSessionRequest {
 async fn resume_ai_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6252,11 +11166,72 @@ async fn resume_ai_session(
             "AI session history entry not found.",
         );
     };
-    if detail.item.creation_source != "ai-session" {
+    if detail.item.creation_source != "ai-session" && request.model_selection.is_some() {
         return api_error(
             StatusCode::CONFLICT,
-            "AI_SESSION_RESUME_UNAVAILABLE",
-            "Only Direct AI Sessions can be resumed by this provider runtime.",
+            "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+            "Only Direct AI Sessions support selecting a model while resuming.",
+        );
+    }
+    if detail.item.creation_source != "ai-session" && request.reasoning_effort.is_some() {
+        return api_error(
+            StatusCode::CONFLICT,
+            "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+            "Reasoning effort selection is unavailable while resuming this session.",
+        );
+    }
+    let capability = state
+        .ai_session_controller
+        .provider(&detail.item.agent)
+        .ok()
+        .map(|provider| provider.capability());
+    if let Some(selection) = request.model_selection.as_ref() {
+        let model_selection = capability
+            .as_ref()
+            .and_then(|capability| capability.model_selection.as_ref())
+            .cloned()
+            .unwrap_or_default();
+        let current_entity_id = detail
+            .item
+            .model_selection
+            .as_ref()
+            .and_then(|selection| selection.get("modelEntityId"))
+            .and_then(Value::as_str);
+        if !model_selection.select_model_at_resume
+            || (current_entity_id != Some(selection.model_entity_id.as_str())
+                && !model_selection.select_provider_at_resume)
+        {
+            return api_error(
+                StatusCode::CONFLICT,
+                "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+                "Model selection is unavailable while resuming this session.",
+            );
+        }
+        if !matches!(
+            state.controlled_models.resolve_selection(
+                &detail.item.agent,
+                Some(selection),
+                controlled_instance_ai_session::AiSessionModelSelectionIntent::Target,
+            ),
+            Ok(Some(_))
+        ) {
+            return api_error(
+                StatusCode::CONFLICT,
+                "AI_SESSION_MODEL_SELECTION_UNAVAILABLE",
+                "Model selection is unavailable.",
+            );
+        }
+    }
+    if request.reasoning_effort.is_some()
+        && !capability
+            .as_ref()
+            .and_then(|capability| capability.reasoning_effort.as_ref())
+            .is_some_and(|reasoning_effort| reasoning_effort.select_at_create)
+    {
+        return api_error(
+            StatusCode::CONFLICT,
+            "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+            "Reasoning effort selection is unavailable while resuming this session.",
         );
     }
     let (model_selection, model_selection_intent) = match request.model_selection {
@@ -6273,14 +11248,11 @@ async fn resume_ai_session(
             controlled_instance_ai_session::AiSessionModelSelectionIntent::Session,
         ),
     };
-    let history_item_id = detail.item.id.clone();
-    let history_agent = detail.item.agent.clone();
-    let history_provider_session_id = detail.item.provider_session_id.clone();
     match state
-        .ai_session_controller
-        .resume_archived(
+        .ai_session_resume
+        .resume(
+            state.clone(),
             detail.item,
-            detail.turns,
             model_selection,
             model_selection_intent,
             request.reasoning_effort,
@@ -6288,17 +11260,6 @@ async fn resume_ai_session(
         .await
     {
         Ok(result) => {
-            if result.disposition == "resumed" && result.creation_source == "ai-session" {
-                if let Err(error) = state.ai_session_history.activate(&history_item_id) {
-                    warn!(%error, ai_session_id = %history_item_id, "failed to activate AI Session history");
-                }
-                if let Err(error) = state
-                    .ai_session_history
-                    .activate_identity(&history_agent, &history_provider_session_id)
-                {
-                    warn!(%error, ai_session_id = %history_item_id, "failed to activate AI Session history identity");
-                }
-            }
             state.publish_ai_session_snapshot("control-action");
             Json(ApiEnvelope {
                 data: serde_json::to_value(result).unwrap_or(Value::Null),
@@ -6327,59 +11288,110 @@ async fn open_ai_session_app(
     if let Err(response) = validate_client_request_id(Some(&request.client_request_id)) {
         return *response;
     }
-    let _operation = state.open_app_operations.lock().await;
     let Some(session) = state.ai_sessions.get(&id) else {
         return ai_session_not_found();
     };
+    let keys = ai_session_open_app_keys(&session);
+    let operation_state = state.clone();
+    let outcome = state
+        .ai_session_open_app
+        .open(keys, move || async move {
+            open_ai_session_app_for_session(operation_state, session).await
+        })
+        .await;
+    match outcome {
+        AiSessionOpenAppOutcome::Success(data) => Json(ApiEnvelope { data }).into_response(),
+        AiSessionOpenAppOutcome::Error(error) => ai_session_provider_error(error),
+    }
+}
+
+fn ai_session_open_app_keys(session: &controlled_instance_ai_session::AiSession) -> Vec<String> {
+    vec![
+        format!("ai:{}", session.id),
+        format!(
+            "provider:{}:{}",
+            session.agent,
+            session.provider_session_id.as_deref().unwrap_or("missing")
+        ),
+    ]
+}
+
+async fn open_ai_session_app_for_session(
+    state: AppState,
+    session: controlled_instance_ai_session::AiSession,
+) -> AiSessionOpenAppOutcome {
     if let Some(app_session_id) = session.app_session_id.as_deref() {
         if state
             .app_runtime
             .get_session(app_session_id)
-            .is_some_and(|app| app.status == "running")
+            .is_some_and(|app| app.status.is_empty() || app.status == "running")
         {
-            return Json(ApiEnvelope {
-                data: json!({
-                    "disposition": "already-open",
-                    "aiSessionId": session.id,
-                    "providerSessionId": session.provider_session_id,
-                    "appSessionId": app_session_id,
-                    "creationSource": session.creation_source,
-                }),
-            })
-            .into_response();
+            return AiSessionOpenAppOutcome::success(json!({
+                "disposition": "already-open",
+                "aiSessionId": session.id,
+                "providerSessionId": session.provider_session_id,
+                "appSessionId": app_session_id,
+                "creationSource": session.creation_source,
+            }));
         }
     }
     let Some(provider_session_id) = session.provider_session_id.clone() else {
-        return api_error(
-            StatusCode::CONFLICT,
+        return AiSessionOpenAppOutcome::error(
+            409,
             "AI_SESSION_OPEN_APP_UNAVAILABLE",
             "AI session has no resumable provider identity or cwd.",
         );
     };
     let Some(cwd) = session.cwd.clone() else {
-        return api_error(
-            StatusCode::CONFLICT,
+        return AiSessionOpenAppOutcome::error(
+            409,
             "AI_SESSION_OPEN_APP_UNAVAILABLE",
             "AI session has no resumable provider identity or cwd.",
         );
     };
     let app = match state
         .app_runtime
-        .start_resume(&session.agent, &cwd, &provider_session_id)
+        .start_resume(&session.agent, &cwd, &session.id, &provider_session_id)
         .await
     {
         Ok(app) => app,
         Err(error) => {
-            return api_error(
-                StatusCode::CONFLICT,
+            return AiSessionOpenAppOutcome::error(
+                409,
                 "AI_SESSION_OPEN_APP_FAILED",
-                &error.to_string(),
+                error.to_string(),
             );
         }
     };
     let app_session_id = app.id.clone();
+    if app_session_id.is_empty() || (!app.status.is_empty() && app.status != "running") {
+        if !app_session_id.is_empty() {
+            state.app_runtime.stop_session(&app_session_id).await;
+        }
+        return AiSessionOpenAppOutcome::error(
+            409,
+            "AI_SESSION_OPEN_APP_FAILED",
+            "App runtime did not create a running session.",
+        );
+    }
+    if await_open_ai_session_app_binding(
+        &state,
+        &session.id,
+        &session.agent,
+        &provider_session_id,
+        &app_session_id,
+    )
+    .await
+    .is_none()
+    {
+        state.app_runtime.stop_session(&app_session_id).await;
+        return AiSessionOpenAppOutcome::error(
+            409,
+            "AI_SESSION_OPEN_APP_FAILED",
+            "Timed out waiting for the App to bind the original provider session.",
+        );
+    }
     let bound = state.ai_sessions.update(&session.id, |session| {
-        session.app_session_id = Some(app_session_id.clone());
         let mut actions = session.actions.take().unwrap_or_else(|| json!({}));
         if let Some(actions) = actions.as_object_mut() {
             actions.insert("openApp".to_string(), json!(false));
@@ -6391,25 +11403,45 @@ async fn open_ai_session_app(
     match bound {
         Ok(bound) => {
             state.publish_ai_session_snapshot("control-action");
-            Json(ApiEnvelope {
-                data: json!({
-                    "disposition": "opened",
-                    "aiSessionId": bound.id,
-                    "providerSessionId": provider_session_id,
-                    "appSessionId": app_session_id,
-                    "creationSource": bound.creation_source,
-                }),
-            })
-            .into_response()
+            AiSessionOpenAppOutcome::success(json!({
+                "disposition": "opened",
+                "aiSessionId": bound.id,
+                "providerSessionId": provider_session_id,
+                "appSessionId": app_session_id,
+                "creationSource": session.creation_source,
+            }))
         }
         Err(error) => {
             state.app_runtime.stop_session(&app_session_id).await;
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "AI_SESSION_OPEN_APP_FAILED",
-                &error.to_string(),
-            )
+            AiSessionOpenAppOutcome::error(409, "AI_SESSION_OPEN_APP_FAILED", error.to_string())
         }
+    }
+}
+
+async fn await_open_ai_session_app_binding(
+    state: &AppState,
+    ai_session_id: &str,
+    agent: &str,
+    provider_session_id: &str,
+    app_session_id: &str,
+) -> Option<controlled_instance_ai_session::AiSession> {
+    let deadline = TokioInstant::now() + ai_session_open_app_binding_timeout();
+    loop {
+        if let Some(current) = state
+            .ai_sessions
+            .get_by_provider_session_id(agent, provider_session_id)
+        {
+            if current.id == ai_session_id
+                && current.app_session_id.as_deref() == Some(app_session_id)
+            {
+                return Some(current);
+            }
+        }
+        let now = TokioInstant::now();
+        if now >= deadline {
+            return None;
+        }
+        tokio::time::sleep((deadline - now).min(TokioDuration::from_millis(25))).await;
     }
 }
 
@@ -6440,9 +11472,9 @@ struct ForkAiSessionRequest {
 async fn fork_ai_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6457,22 +11489,14 @@ async fn fork_ai_session(
     if let Err(response) = validate_client_request_id(Some(&request.client_request_id)) {
         return *response;
     }
-    if request.workspace.mode != "current" {
-        return api_error(
-            StatusCode::CONFLICT,
-            "AI_SESSION_FORK_WORKTREE_UNAVAILABLE",
-            "Managed worktree Fork is not available in this runtime.",
-        );
-    }
     match state
-        .ai_session_controller
-        .fork_session(
-            &id,
-            controlled_instance_ai_session::ProviderForkInput {
-                through_turn_id: request.through_turn_id,
-                cwd: None,
-                story_agent_tools: None,
-            },
+        .ai_session_fork
+        .fork(
+            state.clone(),
+            id,
+            request.client_request_id,
+            request.through_turn_id,
+            request.workspace.mode,
         )
         .await
     {
@@ -6497,9 +11521,9 @@ struct UpdateAiSessionModelSelectionRequest {
 async fn update_ai_session_model_selection(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6513,6 +11537,9 @@ async fn update_ai_session_model_selection(
     };
     if let Err(response) = validate_client_request_id(Some(&request.client_request_id)) {
         return *response;
+    }
+    if state.ai_sessions.get(&id).is_none() {
+        return ai_session_was_not_found();
     }
     match state
         .ai_session_controller
@@ -6540,9 +11567,9 @@ struct UpdateAiSessionReasoningEffortRequest {
 async fn update_ai_session_reasoning_effort(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6556,6 +11583,9 @@ async fn update_ai_session_reasoning_effort(
     };
     if let Err(response) = validate_client_request_id(Some(&request.client_request_id)) {
         return *response;
+    }
+    if state.ai_sessions.get(&id).is_none() {
+        return ai_session_was_not_found();
     }
     match state
         .ai_session_controller
@@ -6648,7 +11678,11 @@ async fn ai_session_turns(
     let Some(session) = state.ai_sessions.get(&id) else {
         return ai_session_not_found();
     };
-    let turns = session.turns.as_deref().unwrap_or_default();
+    let turns = project_history_attachment_turns(
+        &session.id,
+        session.turns.as_deref().unwrap_or_default().to_vec(),
+        &state.ai_session_attachments,
+    );
     if query.projection.as_deref() == Some("index") {
         let revision = session.turns_revision();
         if query.revision.as_deref() == Some(revision.as_str()) {
@@ -6688,11 +11722,17 @@ async fn ai_session_turns(
         .into_response();
     }
 
-    let after_turn_id = query.after_turn_id.unwrap_or_default();
+    let after_turn_id = query
+        .after_turn_id
+        .as_deref()
+        .map(trim_js_whitespace)
+        .unwrap_or_default()
+        .to_string();
     let after_revision = query
         .after_revision
         .as_deref()
-        .and_then(|value| value.parse::<u64>().ok());
+        .and_then(parse_js_number)
+        .filter(|value| value.is_finite());
     let after_index = turns
         .iter()
         .position(|turn| turn.get("id").and_then(Value::as_str) == Some(after_turn_id.as_str()));
@@ -6709,7 +11749,7 @@ async fn ai_session_turns(
             }
             *index == after_index
                 && after_revision.is_some_and(|after_revision| {
-                    turn.get("revision").and_then(Value::as_u64).unwrap_or(0) > after_revision
+                    turn.get("revision").and_then(Value::as_f64).unwrap_or(0.0) > after_revision
                 })
         })
         .map(|(_, turn)| turn.clone())
@@ -6719,20 +11759,28 @@ async fn ai_session_turns(
         .and_then(|turn| {
             Some(json!({
                 "turnId": turn.get("id")?.as_str()?,
-                "revision": turn.get("revision").and_then(Value::as_u64).unwrap_or(0),
+                "revision": json_js_number(
+                    turn.get("revision").and_then(Value::as_f64).unwrap_or(0.0)
+                ),
             }))
         })
         .or_else(|| {
-            (!after_turn_id.is_empty()).then(
-                || json!({ "turnId": after_turn_id, "revision": after_revision.unwrap_or(0) }),
-            )
+            (!after_turn_id.is_empty()).then(|| {
+                json!({
+                    "turnId": after_turn_id,
+                    "revision": json_js_number(after_revision.unwrap_or(0.0)),
+                })
+            })
         });
+    let mut data = serde_json::Map::from_iter([
+        ("sessionId".to_string(), json!(session.id)),
+        ("turns".to_string(), Value::Array(filtered)),
+    ]);
+    if let Some(next_cursor) = next_cursor {
+        data.insert("nextCursor".to_string(), next_cursor);
+    }
     Json(ApiEnvelope {
-        data: json!({
-            "sessionId": session.id,
-            "turns": filtered,
-            "nextCursor": next_cursor,
-        }),
+        data: Value::Object(data),
     })
     .into_response()
 }
@@ -6768,6 +11816,14 @@ async fn ai_session_turn(
         );
     };
     let revision = controlled_instance_ai_session::ai_session_turn_body_revision(turn);
+    let turn = project_history_attachment_turns(
+        &session.id,
+        vec![turn.clone()],
+        &state.ai_session_attachments,
+    )
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| turn.clone());
     if query.revision.as_deref() == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
@@ -6784,22 +11840,54 @@ async fn ai_session_turn(
     .into_response()
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-struct AiSessionTimelineQuery {
-    revision: Option<String>,
+#[allow(clippy::result_large_err)]
+fn parse_ai_session_timeline_query(
+    query: std::collections::HashMap<String, String>,
+) -> Result<Option<String>, Response> {
+    let mut issues = Vec::new();
+    zod_unknown_object_keys(
+        &query
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect(),
+        &["revision"],
+        Vec::new(),
+        &mut issues,
+    );
+    let revision = query.get("revision").map(|value| {
+        let trimmed = trim_js_whitespace(value);
+        let path = vec![json!("revision")];
+        let length = trimmed.chars().count();
+        if length < 1 {
+            issues.push(zod_too_small("string", path.clone(), 1));
+        }
+        if length > 64 {
+            issues.push(zod_too_big("string", path, 64));
+        }
+        trimmed.to_string()
+    });
+    if issues.is_empty() {
+        Ok(revision)
+    } else {
+        Err(ai_session_zod_error(issues))
+    }
 }
 
 async fn ai_session_timeline(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<AiSessionTimelineQuery>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let revision_query = match parse_ai_session_timeline_query(query) {
+        Ok(revision) => revision,
+        Err(response) => return response,
+    };
     let timeline = match state.ai_session_controller.timeline(&id).await {
         Ok(timeline) => timeline,
         Err(error) => return ai_session_provider_error(error),
     };
     let revision = controlled_instance_ai_session::ai_session_timeline_revision(&timeline.items);
-    if query.revision.as_deref() == Some(revision.as_str()) {
+    if revision_query.as_deref() == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
         })
@@ -6814,8 +11902,12 @@ async fn ai_session_timeline(
 async fn ai_session_turn_timeline(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
-    Query(query): Query<AiSessionTimelineQuery>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let revision_query = match parse_ai_session_timeline_query(query) {
+        Ok(revision) => revision,
+        Err(response) => return response,
+    };
     let timeline = match state
         .ai_session_controller
         .turn_timeline(&id, &turn_id)
@@ -6825,7 +11917,7 @@ async fn ai_session_turn_timeline(
         Err(error) => return ai_session_provider_error(error),
     };
     let revision = controlled_instance_ai_session::ai_session_timeline_revision(&timeline.items);
-    if query.revision.as_deref() == Some(revision.as_str()) {
+    if revision_query.as_deref() == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
         })
@@ -6847,9 +11939,9 @@ struct AiSessionTimelineSyncRequest {
 async fn sync_ai_session_timeline(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6886,9 +11978,9 @@ async fn sync_ai_session_timeline(
 async fn sync_ai_session_turn_timeline(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -6950,12 +12042,7 @@ async fn ai_session_transcript(
             "AI session transcript not found.",
         );
     };
-    let tail = query
-        .tail
-        .as_deref()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(200)
-        .clamp(1, 1000) as usize;
+    let tail = transcript_tail_lines(query.tail.as_deref());
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let lines = content
@@ -6980,6 +12067,14 @@ async fn ai_session_transcript(
     }
 }
 
+fn transcript_tail_lines(value: Option<&str>) -> usize {
+    value
+        .and_then(parse_js_number)
+        .filter(|value| !value.is_nan() && *value != 0.0)
+        .unwrap_or(200.0)
+        .clamp(1.0, 1000.0) as usize
+}
+
 async fn ai_session_queue(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.ai_sessions.queue(&id) {
         Some(queue) => Json(ApiEnvelope { data: queue }).into_response(),
@@ -6987,8 +12082,7 @@ async fn ai_session_queue(State(state): State<AppState>, Path(id): Path<String>)
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug)]
 struct AttachmentDraftUploadQuery {
     scope_type: controlled_instance_protocol::AiSessionAttachmentScopeType,
     scope_id: String,
@@ -7000,16 +12094,22 @@ struct AttachmentDraftUploadQuery {
 
 async fn upload_ai_session_attachment_draft(
     State(state): State<AppState>,
-    Query(query): Query<AttachmentDraftUploadQuery>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
     body: Body,
 ) -> Response {
+    let query = match parse_attachment_upload_query(&query) {
+        Ok(query) => query,
+        Err(issues) => return ai_session_zod_error(issues),
+    };
     if query.scope_type == controlled_instance_protocol::AiSessionAttachmentScopeType::Session
-        && state.ai_sessions.get(query.scope_id.trim()).is_none()
+        && state.ai_sessions.get(&query.scope_id).is_none()
     {
-        return ai_session_not_found();
+        return attachment_ai_session_not_found();
     }
-    if !validate_attachment_draft_input(&query.scope_id, query.kind, &query.name, &query.mime) {
-        return attachment_invalid_response("AI session attachment metadata is invalid.");
+    if query.kind == controlled_instance_protocol::AiSessionAttachmentKind::Image
+        && !is_ai_session_inline_image_mime(&query.mime)
+    {
+        return attachment_invalid_response("Unsupported image MIME type.");
     }
     let content = match to_bytes(
         body,
@@ -7043,8 +12143,7 @@ async fn upload_ai_session_attachment_draft(
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug)]
 struct AttachmentDraftStreamCreateRequest {
     attachment_id: String,
     scope_type: controlled_instance_protocol::AiSessionAttachmentScopeType,
@@ -7057,24 +12156,20 @@ struct AttachmentDraftStreamCreateRequest {
 
 async fn begin_ai_session_attachment_draft_stream(
     State(state): State<AppState>,
-    payload: Result<Json<AttachmentDraftStreamCreateRequest>, JsonRejection>,
+    request: Request,
 ) -> Response {
-    let Json(request) = match payload {
-        Ok(payload) => payload,
-        Err(error) => return attachment_body_error(error),
+    let body = match fastify_request_body(request).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let request = match parse_attachment_stream_create_body(body.as_ref()) {
+        Ok(request) => request,
+        Err(issues) => return ai_session_zod_error(issues),
     };
     if request.scope_type == controlled_instance_protocol::AiSessionAttachmentScopeType::Session
-        && state.ai_sessions.get(request.scope_id.trim()).is_none()
+        && state.ai_sessions.get(&request.scope_id).is_none()
     {
-        return ai_session_not_found();
-    }
-    if !validate_attachment_draft_input(
-        &request.scope_id,
-        request.kind,
-        &request.name,
-        &request.mime,
-    ) {
-        return attachment_invalid_response("AI session attachment metadata is invalid.");
+        return attachment_ai_session_not_found();
     }
     match state.ai_session_attachment_streams.begin(
         controlled_instance_ai_session::AiSessionAttachmentDraftStreamBegin {
@@ -7092,8 +12187,7 @@ async fn begin_ai_session_attachment_draft_stream(
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct AttachmentDraftStreamAppendQuery {
     offset: u64,
 }
@@ -7101,9 +12195,16 @@ struct AttachmentDraftStreamAppendQuery {
 async fn append_ai_session_attachment_draft_stream(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
-    Query(query): Query<AttachmentDraftStreamAppendQuery>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
     body: Body,
 ) -> Response {
+    if let Err(issue) = validate_attachment_stream_id(&attachment_id) {
+        return ai_session_zod_error(vec![issue]);
+    }
+    let query = match parse_attachment_stream_append_query(&query) {
+        Ok(query) => query,
+        Err(issues) => return ai_session_zod_error(issues),
+    };
     let chunk = match to_bytes(
         body,
         controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT,
@@ -7141,6 +12242,9 @@ async fn complete_ai_session_attachment_draft_stream(
     if let Err(issues) = normalize_empty_object_body(&body) {
         return ai_session_validation_error(issues);
     }
+    if let Err(issue) = validate_attachment_stream_id(&attachment_id) {
+        return ai_session_zod_error(vec![issue]);
+    }
     match state.ai_session_attachment_streams.complete(&attachment_id) {
         Ok(draft) => Json(ApiEnvelope { data: draft }).into_response(),
         Err(error) => ai_session_attachment_error(error),
@@ -7151,14 +12255,16 @@ async fn cancel_ai_session_attachment_draft_stream(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
 ) -> Response {
+    if let Err(issue) = validate_attachment_stream_id(&attachment_id) {
+        return ai_session_zod_error(vec![issue]);
+    }
     match state.ai_session_attachment_streams.cancel(&attachment_id) {
         Ok(data) => Json(ApiEnvelope { data }).into_response(),
         Err(error) => ai_session_attachment_error(error),
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug)]
 struct AttachmentDraftCancelQuery {
     scope_type: controlled_instance_protocol::AiSessionAttachmentScopeType,
     scope_id: String,
@@ -7167,8 +12273,12 @@ struct AttachmentDraftCancelQuery {
 async fn cancel_ai_session_attachment_draft(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
-    Query(query): Query<AttachmentDraftCancelQuery>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let query = match parse_attachment_draft_cancel_query(&query) {
+        Ok(query) => query,
+        Err(issues) => return ai_session_zod_error(issues),
+    };
     match state.ai_session_attachments.cancel_draft(
         query.scope_type,
         &query.scope_id,
@@ -7200,31 +12310,35 @@ async fn ai_session_message_attachment_content(
             Ok(content) => content,
             Err(error) => return ai_session_attachment_error(error),
         };
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        == Some(content.etag.as_str())
-    {
-        return StatusCode::NOT_MODIFIED.into_response();
-    }
-    let filename = url::form_urlencoded::byte_serialize(content.attachment.name.as_bytes())
-        .collect::<String>();
+    let filename = encode_uri_component(&content.attachment.name);
     let inline_raster = matches!(
         content.attachment.mime.to_ascii_lowercase().as_str(),
         "image/bmp" | "image/gif" | "image/jpeg" | "image/png" | "image/webp"
     );
-    let bytes = match std::fs::read(&content.path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return api_error(
-                StatusCode::NOT_FOUND,
-                "AI_SESSION_ATTACHMENT_NOT_FOUND",
-                &error.to_string(),
-            );
+    let not_modified = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(content.etag.as_str());
+    let file = if not_modified {
+        None
+    } else {
+        match tokio::fs::File::open(&content.path).await {
+            Ok(file) => Some(file),
+            Err(error) => {
+                return api_error(
+                    StatusCode::NOT_FOUND,
+                    "AI_SESSION_ATTACHMENT_NOT_FOUND",
+                    &error.to_string(),
+                );
+            }
         }
     };
-    let mut response = Response::new(Body::from(bytes));
-    *response.status_mut() = StatusCode::OK;
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = if not_modified {
+        StatusCode::NOT_MODIFIED
+    } else {
+        StatusCode::OK
+    };
     let response_headers = response.headers_mut();
     if let Ok(value) = content.attachment.mime.parse() {
         response_headers.insert(header::CONTENT_TYPE, value);
@@ -7277,31 +12391,41 @@ async fn ai_session_message_attachment_content(
         .parse()
         .expect("content disposition"),
     );
+    if not_modified {
+        return response;
+    }
+    let stream =
+        futures_util::stream::try_unfold(file.expect("attachment file"), |mut file| async move {
+            let mut buffer = vec![0_u8; 64 * 1024];
+            let read = file.read(&mut buffer).await?;
+            if read == 0 {
+                return Ok::<_, io::Error>(None);
+            }
+            buffer.truncate(read);
+            Ok::<_, io::Error>(Some((Bytes::from(buffer), file)))
+        });
+    *response.body_mut() = Body::from_stream(stream);
     response
 }
 
-fn validate_attachment_draft_input(
-    scope_id: &str,
-    kind: controlled_instance_protocol::AiSessionAttachmentKind,
-    name: &str,
-    mime: &str,
-) -> bool {
-    let scope_id = scope_id.trim();
-    let name = name.trim();
-    let mime = mime.trim();
-    if scope_id.is_empty() || scope_id.encode_utf16().count() > 160 {
-        return false;
-    }
-    if name.is_empty() || name.encode_utf16().count() > 240 {
-        return false;
-    }
-    if mime.is_empty() || mime.encode_utf16().count() > 120 {
-        return false;
-    }
-    !matches!(
-        kind,
-        controlled_instance_protocol::AiSessionAttachmentKind::Image
-    ) || matches!(
+const JS_URI_COMPONENT_ENCODE_SET: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'!')
+        .remove(b'~')
+        .remove(b'*')
+        .remove(b'\'')
+        .remove(b'(')
+        .remove(b')');
+
+fn encode_uri_component(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, JS_URI_COMPONENT_ENCODE_SET).to_string()
+}
+
+fn is_ai_session_inline_image_mime(mime: &str) -> bool {
+    matches!(
         mime.split(';')
             .next()
             .unwrap_or_default()
@@ -7312,19 +12436,230 @@ fn validate_attachment_draft_input(
     )
 }
 
+fn attachment_query_object(
+    query: &std::collections::HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
+    query
+        .iter()
+        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+        .collect()
+}
+
+fn parse_attachment_scope_type(
+    value: String,
+) -> controlled_instance_protocol::AiSessionAttachmentScopeType {
+    match value.as_str() {
+        "create-request" => {
+            controlled_instance_protocol::AiSessionAttachmentScopeType::CreateRequest
+        }
+        _ => controlled_instance_protocol::AiSessionAttachmentScopeType::Session,
+    }
+}
+
+fn parse_attachment_kind(value: &str) -> controlled_instance_protocol::AiSessionAttachmentKind {
+    match value {
+        "image" => controlled_instance_protocol::AiSessionAttachmentKind::Image,
+        _ => controlled_instance_protocol::AiSessionAttachmentKind::File,
+    }
+}
+
+fn push_positive_number_issue(issues: &mut Vec<ZodIssue>, path: Vec<Value>) {
+    issues.push(ZodIssue::TooSmall {
+        origin: "number",
+        code: "too_small",
+        minimum: 0,
+        inclusive: false,
+        path,
+        message: "Too small: expected number to be >0".to_string(),
+    });
+}
+
+fn parse_attachment_upload_query(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<AttachmentDraftUploadQuery, Vec<ZodIssue>> {
+    let object = attachment_query_object(query);
+    let mut issues = Vec::new();
+    let scope_type = zod_required_enum_field_at(
+        &object,
+        "scopeType",
+        &["session", "create-request"],
+        &[],
+        &mut issues,
+    );
+    let scope_id = zod_required_string_field_at(&object, "scopeId", 1, 160, &[], &mut issues);
+    let kind = zod_required_enum_field_at(&object, "kind", &["image", "file"], &[], &mut issues);
+    let name = zod_required_string_field_at(&object, "name", 1, 240, &[], &mut issues);
+    let mime = zod_required_string_field_at(&object, "mime", 1, 120, &[], &mut issues);
+    let size = zod_required_coerced_integer_field_at(
+        &object,
+        "size",
+        i64::MIN,
+        controlled_instance_protocol::AI_SESSION_MAX_ATTACHMENT_BYTES as i64,
+        &[],
+        &mut issues,
+    );
+    if size.is_some_and(|value| value <= 0) {
+        push_positive_number_issue(&mut issues, vec![json!("size")]);
+    }
+    zod_unknown_object_keys(
+        &object,
+        &["scopeType", "scopeId", "kind", "name", "mime", "size"],
+        Vec::new(),
+        &mut issues,
+    );
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AttachmentDraftUploadQuery {
+        scope_type: parse_attachment_scope_type(scope_type.expect("validated scope type")),
+        scope_id: scope_id.expect("validated scope id"),
+        kind: parse_attachment_kind(kind.as_deref().expect("validated attachment kind")),
+        name: name.expect("validated attachment name"),
+        mime: mime.expect("validated attachment mime"),
+        size: size.expect("validated attachment size") as u64,
+    })
+}
+
+fn parse_attachment_stream_create_body(
+    body: Option<&Value>,
+) -> Result<AttachmentDraftStreamCreateRequest, Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(body) = body else {
+        issues.push(zod_invalid_type("object", Vec::new(), "undefined"));
+        return Err(issues);
+    };
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    let attachment_id =
+        zod_required_string_field_at(object, "attachmentId", 0, usize::MAX, &[], &mut issues);
+    if let Some(attachment_id) = attachment_id.as_deref() {
+        if !valid_attachment_stream_id(attachment_id) {
+            issues.push(invalid_attachment_stream_id_issue(vec![json!(
+                "attachmentId"
+            )]));
+        }
+    }
+    let scope_type = zod_required_enum_field_at(
+        object,
+        "scopeType",
+        &["session", "create-request"],
+        &[],
+        &mut issues,
+    );
+    let scope_id = zod_required_string_field_at(object, "scopeId", 1, 160, &[], &mut issues);
+    let kind = zod_required_enum_field_at(object, "kind", &["image", "file"], &[], &mut issues);
+    let name = zod_required_string_field_at(object, "name", 1, 240, &[], &mut issues);
+    let mime = zod_required_string_field_at(object, "mime", 1, 120, &[], &mut issues);
+    let size = zod_required_integer_field_at(
+        object,
+        "size",
+        i64::MIN,
+        controlled_instance_protocol::AI_SESSION_MAX_ATTACHMENT_BYTES as i64,
+        &[],
+        &mut issues,
+    );
+    if size.is_some_and(|value| value <= 0) {
+        push_positive_number_issue(&mut issues, vec![json!("size")]);
+    }
+    zod_unknown_object_keys(
+        object,
+        &[
+            "attachmentId",
+            "scopeType",
+            "scopeId",
+            "kind",
+            "name",
+            "mime",
+            "size",
+        ],
+        Vec::new(),
+        &mut issues,
+    );
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AttachmentDraftStreamCreateRequest {
+        attachment_id: attachment_id.expect("validated attachment id"),
+        scope_type: parse_attachment_scope_type(scope_type.expect("validated scope type")),
+        scope_id: scope_id.expect("validated scope id"),
+        kind: parse_attachment_kind(kind.as_deref().expect("validated attachment kind")),
+        name: name.expect("validated attachment name"),
+        mime: mime.expect("validated attachment mime"),
+        size: size.expect("validated attachment size") as u64,
+    })
+}
+
+fn parse_attachment_stream_append_query(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<AttachmentDraftStreamAppendQuery, Vec<ZodIssue>> {
+    let object = attachment_query_object(query);
+    let mut issues = Vec::new();
+    let offset =
+        zod_required_coerced_integer_field_at(&object, "offset", 0, i64::MAX, &[], &mut issues);
+    zod_unknown_object_keys(&object, &["offset"], Vec::new(), &mut issues);
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AttachmentDraftStreamAppendQuery {
+        offset: offset.expect("validated attachment offset") as u64,
+    })
+}
+
+fn parse_attachment_draft_cancel_query(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<AttachmentDraftCancelQuery, Vec<ZodIssue>> {
+    let object = attachment_query_object(query);
+    let mut issues = Vec::new();
+    let scope_type = zod_required_enum_field_at(
+        &object,
+        "scopeType",
+        &["session", "create-request"],
+        &[],
+        &mut issues,
+    );
+    let scope_id = zod_required_string_field_at(&object, "scopeId", 1, 160, &[], &mut issues);
+    zod_unknown_object_keys(&object, &["scopeType", "scopeId"], Vec::new(), &mut issues);
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+    Ok(AttachmentDraftCancelQuery {
+        scope_type: parse_attachment_scope_type(scope_type.expect("validated scope type")),
+        scope_id: scope_id.expect("validated scope id"),
+    })
+}
+
+fn valid_attachment_stream_id(value: &str) -> bool {
+    value.strip_prefix("cia_").is_some_and(|suffix| {
+        suffix.len() == 24
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn invalid_attachment_stream_id_issue(path: Vec<Value>) -> ZodIssue {
+    ZodIssue::InvalidFormat {
+        origin: "string",
+        code: "invalid_format",
+        format: "regex",
+        pattern: r"/^cia_[a-f0-9]{24}$/",
+        path,
+        message: r"Invalid string: must match pattern /^cia_[a-f0-9]{24}$/".to_string(),
+    }
+}
+
+fn validate_attachment_stream_id(value: &str) -> Result<(), ZodIssue> {
+    valid_attachment_stream_id(value)
+        .then_some(())
+        .ok_or_else(|| invalid_attachment_stream_id_issue(Vec::new()))
+}
+
 fn attachment_invalid_response(message: &str) -> Response {
     api_error(
         StatusCode::BAD_REQUEST,
         "AI_SESSION_ATTACHMENT_INVALID",
         message,
-    )
-}
-
-fn attachment_body_error(error: JsonRejection) -> Response {
-    api_error(
-        StatusCode::BAD_REQUEST,
-        "AI_SESSION_CONTROL_INVALID",
-        &format!("body: {error}"),
     )
 }
 
@@ -7370,9 +12705,9 @@ struct AiSessionQueueAttachmentSource {
 async fn edit_ai_session_queue_item(
     State(state): State<AppState>,
     Path((id, queue_id)): Path<(String, String)>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -7564,9 +12899,9 @@ struct AiSessionQueueReorderRequest {
 async fn reorder_ai_session_queue(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    payload: Result<Json<Value>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(body) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
@@ -7614,6 +12949,17 @@ async fn pause_ai_session_queue(
     match state.ai_sessions.set_queue_paused(&id, request.paused) {
         Ok(session) => {
             state.publish_ai_session_snapshot("control-action");
+            if !request.paused {
+                let drain_state = state.clone();
+                let session_id = session.id.clone();
+                tokio::spawn(async move {
+                    drain_state
+                        .ai_session_controller
+                        .drain_queue(&session_id)
+                        .await;
+                    drain_state.publish_ai_session_snapshot("control-action");
+                });
+            }
             queue_mutation_response(&session, "pause", None)
         }
         Err(error) => ai_session_store_error(error),
@@ -7637,8 +12983,41 @@ async fn remove_ai_session_queue_item(
     State(state): State<AppState>,
     Path((id, queue_id)): Path<(String, String)>,
 ) -> Response {
+    let queued = state.ai_sessions.queue(&id).and_then(|queue| {
+        queue
+            .items
+            .into_iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(queue_id.as_str()))
+    });
+    let attachment_ids = queued
+        .as_ref()
+        .and_then(|item| item.get("attachments"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str))
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let message_id = queued
+        .as_ref()
+        .and_then(|item| item.get("messageId"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            state
+                .ai_session_attachments
+                .message_id_for_attachments(&id, &attachment_ids)
+        });
     match state.ai_sessions.remove_queue_item(&id, &queue_id) {
         Ok(session) => {
+            if let Some(message_id) = message_id.as_deref() {
+                state
+                    .ai_session_attachments
+                    .rollback_message(&id, message_id);
+            }
             state.publish_ai_session_snapshot("control-action");
             queue_mutation_response(&session, "remove", Some(&queue_id))
         }
@@ -7708,6 +13087,7 @@ fn ai_session_store_error(error: controlled_instance_ai_session::AiSessionStoreE
         ),
         AiSessionStoreError::InvalidId
         | AiSessionStoreError::TitleConflict
+        | AiSessionStoreError::InvalidSession
         | AiSessionStoreError::Io(_)
         | AiSessionStoreError::Json(_) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -7879,89 +13259,58 @@ async fn send_private_ai_session_message(
     send_ai_session_message_inner(state, id, payload).await
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoryAutomationCwd {
-    #[serde(rename = "type")]
-    runtime_path_type: String,
-    path: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoryAutomationCreateRequest {
-    agent: String,
-    cwd: StoryAutomationCwd,
-    #[serde(default)]
-    cwd_folder_id: Option<String>,
-    #[serde(default)]
-    git_selection: Option<Value>,
-    #[serde(default)]
-    workspace_selection: Option<Value>,
-    message: String,
-    #[serde(default)]
-    permission_mode: Option<String>,
-    client_request_id: String,
-    #[serde(default)]
-    model_selection: Option<controlled_instance_protocol::AgentRunModelSelection>,
-    #[serde(default)]
-    reasoning_effort: Option<String>,
-    story_id: String,
-}
-
 async fn create_story_automation_ai_session(
     State(state): State<AppState>,
-    payload: Result<Json<StoryAutomationCreateRequest>, JsonRejection>,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(request) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
-    let wire = controlled_instance_protocol::StoryAutomationInstanceCreateInput {
-        agent: request.agent.clone(),
-        cwd: controlled_instance_protocol::StoryAutomationRuntimePath {
-            runtime_path_type: request.cwd.runtime_path_type.clone(),
-            path: request.cwd.path.clone(),
-        },
-        cwd_folder_id: request.cwd_folder_id.clone(),
-        git_selection: request.git_selection.clone(),
-        workspace_selection: request.workspace_selection.clone(),
-        message: request.message.clone(),
-        permission_mode: request.permission_mode.clone(),
-        client_request_id: request.client_request_id.clone(),
-        model_selection: request.model_selection.clone(),
-        reasoning_effort: request.reasoning_effort.clone(),
-        story_id: request.story_id.clone(),
+    let body = match normalize_story_automation_create_body(&body) {
+        Ok(body) => body,
+        Err(issues) => return ai_session_validation_error(issues),
     };
+    let wire: controlled_instance_protocol::StoryAutomationInstanceCreateInput =
+        match serde_json::from_value(body) {
+            Ok(wire) => wire,
+            Err(error) => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "AI_SESSION_CONTROL_INVALID",
+                    &format!("body: {error}"),
+                )
+            }
+        };
     if let Err(message) = wire.validate() {
         return api_error(
             StatusCode::BAD_REQUEST,
             "AI_SESSION_CONTROL_INVALID",
             &message,
         );
-    }
-    let permission_mode = match permission_mode_from_wire(request.permission_mode.as_deref()) {
+    };
+    let permission_mode = match permission_mode_from_wire(wire.permission_mode.as_deref()) {
         Ok(permission_mode) => permission_mode,
         Err(error) => return repository_error(error),
     };
     let input = controlled_instance_ai_session::AiSessionCreateInput {
-        agent: request.agent,
+        agent: wire.agent,
         cwd: controlled_instance_ai_session::AiSessionRuntimePathInput {
-            runtime_path_type: request.cwd.runtime_path_type,
-            path: request.cwd.path,
+            runtime_path_type: wire.cwd.runtime_path_type,
+            path: wire.cwd.path,
         },
-        cwd_folder_id: request.cwd_folder_id,
-        git_selection: request.git_selection,
-        workspace_selection: request.workspace_selection,
-        model_selection: request
+        cwd_folder_id: wire.cwd_folder_id,
+        git_selection: wire.git_selection,
+        workspace_selection: wire.workspace_selection,
+        model_selection: wire
             .model_selection
             .map(ai_session_model_selection_from_agent_run),
-        reasoning_effort: request.reasoning_effort,
-        story_id: Some(request.story_id),
+        reasoning_effort: wire.reasoning_effort,
+        story_id: Some(wire.story_id),
         message: controlled_instance_ai_session::AiSessionMessageInput {
-            message: request.message,
+            message: wire.message,
             mode: None,
-            client_request_id: Some(request.client_request_id),
+            client_request_id: Some(wire.client_request_id),
             attachments: Vec::new(),
             references: Vec::new(),
             permission_mode,
@@ -7972,10 +13321,10 @@ async fn create_story_automation_ai_session(
         match create_workspace_ai_session(&state, input).await {
             Ok(result) => result,
             Err(WorkspaceAiSessionCreateError::Repository(error)) => {
-                return repository_error(error)
+                return repository_error(error);
             }
             Err(WorkspaceAiSessionCreateError::Provider(error)) => {
-                return ai_session_provider_error(error)
+                return ai_session_provider_error(error);
             }
         }
     } else {
@@ -8006,15 +13355,27 @@ fn ai_session_model_selection_from_agent_run(
 
 async fn create_agent_run_member(
     State(state): State<AppState>,
-    payload: Result<
-        Json<controlled_instance_protocol::AgentRunMemberInstanceCreateInput>,
-        JsonRejection,
-    >,
+    payload: Result<JsonValueBody, JsonRejection>,
 ) -> Response {
-    let Json(request) = match payload {
+    let JsonValueBody(body) = match payload {
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
+    let body = match normalize_agent_run_member_create_body(&body) {
+        Ok(body) => body,
+        Err(issues) => return ai_session_validation_error(issues),
+    };
+    let request: controlled_instance_protocol::AgentRunMemberInstanceCreateInput =
+        match serde_json::from_value(body) {
+            Ok(request) => request,
+            Err(error) => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "AI_SESSION_CONTROL_INVALID",
+                    &format!("body: {error}"),
+                )
+            }
+        };
     if let Err(message) = request.validate() {
         return api_error(
             StatusCode::BAD_REQUEST,
@@ -8071,6 +13432,7 @@ async fn create_agent_run_member(
             PathBuf::from(&request.writable_roots.shared.path),
         ],
         agent_tools: Some(request.enabled_tools.clone()),
+        ..Default::default()
     };
     let result = match state
         .ai_session_controller
@@ -8196,7 +13558,7 @@ fn project_agent_run_member_status(
     let text = session
         .last_message
         .clone()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.is_empty())
         .or_else(|| session.summary.clone())
         .unwrap_or_default();
     if text.trim().is_empty() {
@@ -8216,17 +13578,17 @@ fn project_agent_run_member_status(
         };
     }
     let truncated =
-        text.chars().count() > controlled_instance_protocol::AGENT_RUN_MAX_RESULT_CHARACTERS;
+        utf16_len(&text) > controlled_instance_protocol::AGENT_RUN_MAX_RESULT_CHARACTERS;
     AgentRunMemberInstanceStatus {
         run_id,
         member_id,
         ai_session_id,
         status: "completed".to_string(),
         result: Some(AgentRunResult {
-            text: text
-                .chars()
-                .take(controlled_instance_protocol::AGENT_RUN_MAX_RESULT_CHARACTERS)
-                .collect(),
+            text: controlled_instance_core::text::truncate_utf16(
+                &text,
+                controlled_instance_protocol::AGENT_RUN_MAX_RESULT_CHARACTERS,
+            ),
             truncated,
             source: "provider-final-message".to_string(),
         }),
@@ -8275,6 +13637,12 @@ async fn story_ai_session_read(State(state): State<AppState>, Path(id): Path<Str
     let mut detail = session.detail();
     if let Some(detail) = detail.as_object_mut() {
         detail.insert("id".to_string(), Value::String(session.id.clone()));
+        if let Some(selection) = session.model_selection.clone() {
+            detail.insert("modelSelection".to_string(), selection);
+        }
+        if let Some(effort) = session.reasoning_effort.clone() {
+            detail.insert("reasoningEffort".to_string(), Value::String(effort));
+        }
     }
     Json(ApiEnvelope {
         data: json!({
@@ -8355,6 +13723,23 @@ async fn drain(State(state): State<AppState>) -> Json<ApiEnvelope<Value>> {
     state.set_draining(true);
     state.app_runtime.stop_all().await;
     state.publish_app_session_snapshot("app-session-updated");
+    state.close_lost_app_session_ai_sessions().await;
+    if let Err(error) = state.refresh_codex_ai_sessions().await {
+        warn!(%error, "Codex AI Session discovery failed after runtime drain");
+    }
+    if let Err(error) = state.refresh_claude_ai_sessions().await {
+        warn!(%error, "Claude AI Session discovery failed after runtime drain");
+    }
+    if state
+        .app_runtime
+        .catalog()
+        .iter()
+        .any(|app| app.id == "opencode")
+    {
+        if let Err(error) = state.ai_session_opencode.refresh().await {
+            warn!(%error, "OpenCode AI Session discovery failed after runtime drain");
+        }
+    }
     state.publish_ai_session_snapshot("app-session-updated");
     state.heartbeat_node_agent().await;
     Json(ApiEnvelope {
@@ -8403,10 +13788,14 @@ async fn update_node_agent_connection(
         .node_agent_client
         .update_node_agent_url(&request.node_agent_url)
     {
-        Ok(node_agent_url) => Json(ApiEnvelope {
-            data: json!({ "applied": true, "nodeAgentUrl": node_agent_url }),
-        })
-        .into_response(),
+        Ok(node_agent_url) => {
+            state.story_tools.clear_policies();
+            state.start_node_agent();
+            Json(ApiEnvelope {
+                data: json!({ "applied": true, "nodeAgentUrl": node_agent_url }),
+            })
+            .into_response()
+        }
         Err(error) => api_error(
             StatusCode::BAD_REQUEST,
             "NODE_AGENT_CONNECTION_UPDATE_INVALID",
@@ -8415,9 +13804,34 @@ async fn update_node_agent_connection(
     }
 }
 
+/// Node's global websocket `handleProtocols` echoes the first client-requested
+/// subprotocol for every route except the instance-shell control socket, which
+/// validates its own exact subprotocol before upgrading.
+fn websocket_client_subprotocol(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn websocket_upgrade_with_client_subprotocol(
+    websocket: WebSocketUpgrade,
+    headers: &HeaderMap,
+) -> WebSocketUpgrade {
+    match websocket_client_subprotocol(headers) {
+        Some(protocol) => websocket.protocols([protocol]),
+        None => websocket,
+    }
+}
+
 async fn events(
     websocket: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: HeaderMap,
     uri: Uri,
 ) -> impl IntoResponse {
     let query = url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
@@ -8427,7 +13841,7 @@ async fn events(
     let includes_authority_snapshot =
         query.get("aiSessionAuthoritySnapshot").map(String::as_str) == Some("1");
     let subagents = query.get("aiSessionHierarchy").map(String::as_str) == Some("subagents");
-    websocket.on_upgrade(move |socket| {
+    websocket_upgrade_with_client_subprotocol(websocket, &headers).on_upgrade(move |socket| {
         handle_events_socket(
             socket,
             state,
@@ -8466,10 +13880,17 @@ async fn instance_shell_websocket(
         .into_response()
 }
 
-async fn browser_tunnel_websocket(websocket: WebSocketUpgrade) -> Response {
+async fn browser_tunnel_websocket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    websocket: WebSocketUpgrade,
+) -> Response {
+    let shutdown = state.shutdown_receiver();
+    let websocket = websocket_upgrade_with_client_subprotocol(websocket, &headers);
     crate::browser_tunnel::websocket_upgrade(websocket)
-        .on_upgrade(|socket| async move {
-            crate::browser_tunnel::handle_browser_tunnel(socket).await;
+        .on_upgrade(move |socket| async move {
+            crate::browser_tunnel::handle_browser_tunnel_with_shutdown(socket, Some(shutdown))
+                .await;
         })
         .into_response()
 }
@@ -8573,6 +13994,12 @@ async fn handle_events_socket(
                     let result = socket.send(frame.message).await;
                     queued_bytes.fetch_sub(frame.bytes, Ordering::SeqCst);
                     if result.is_err() {
+                        let _ = socket
+                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                code: 1011,
+                                reason: "Event delivery failed.".into(),
+                            })))
+                            .await;
                         break;
                     }
                 }
@@ -8580,11 +14007,12 @@ async fn handle_events_socket(
         }
     });
     let events = state.events.clone();
+    let mut shutdown = state.shutdown_receiver();
     let instance_id = state.config.instance_id.clone();
     let (ai_stream_id, ai_revision, ai_earliest_retained_revision) = state.ai_session_stream_info();
     let (app_stream_id, app_revision, app_earliest_retained_revision) =
         state.app_session_stream_info();
-    let mut receiver = events.subscribe();
+    let mut receiver = events.subscribe_client();
     let mut subscription = ClientSubscription {
         topics: std::collections::HashSet::from(["*".to_string()]),
         transient: expects_transient.then(AiSessionTransientSubscription::default),
@@ -8641,10 +14069,51 @@ async fn handle_events_socket(
     });
     loop {
         tokio::select! {
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    let _ = wire.enqueue(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: 1001,
+                        reason: "Controlled instance is shutting down.".into(),
+                    })));
+                }
+                break;
+            }
             message = stream.next() => {
                 match message {
                     Some(Ok(Message::Text(text))) => {
                         if let Some(next) = parse_subscription(text.as_str()) {
+                            subscription = next;
+                            if let Some(replay_since) = subscription
+                                .transient
+                                .as_ref()
+                                .and_then(|transient| transient.replay_since.as_deref())
+                            {
+                                for event in events.replay_since(
+                                    replay_since,
+                                    &subscription.topics,
+                                    subscription.transient.as_ref(),
+                                ) {
+                                    last_replayed_seq = last_replayed_seq.max(event.seq);
+                                    let projected = project_ai_session_event_for_consumer(
+                                        &event,
+                                        subscription.subagents,
+                                    );
+                                    if !enqueue_wire_event(
+                                        &wire,
+                                        &projected,
+                                        subscription.compact,
+                                        true,
+                                    )
+                                    {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(Ok(Message::Binary(bytes))) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        if let Some(next) = parse_subscription(&text) {
                             subscription = next;
                             if let Some(replay_since) = subscription
                                 .transient
@@ -8686,8 +14155,14 @@ async fn handle_events_socket(
             },
             event = receiver.recv() => {
                 match event {
-                    Ok(event)
-                        if event.seq > last_replayed_seq
+                    Some(event)
+                        if (event.seq > last_replayed_seq
+                            || !matches!(
+                                event.r#type.as_str(),
+                                "ai-session.message-delta"
+                                    | "ai-session.timeline-item"
+                                    | "ai-session.timeline-item-delta"
+                            ))
                             && subscribed(&subscription.topics, &event.topic, &event.r#type)
                             && ai_session_transient_subscription_accepts(
                                 subscription.transient.as_ref(),
@@ -8708,12 +14183,8 @@ async fn handle_events_socket(
                             break;
                         }
                     },
-                    Ok(_) => {},
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        wire.mark_too_slow();
-                        break;
-                    },
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Some(_) => {},
+                    None => break,
                 }
             }
         }
@@ -8741,27 +14212,91 @@ fn parse_subscription(message: &str) -> Option<ClientSubscription> {
         .map(|topics| {
             topics
                 .iter()
-                .filter_map(Value::as_str)
+                .map(js_wire_string)
                 .filter(|topic| !topic.is_empty())
-                .map(ToString::to_string)
                 .collect()
         })
         .unwrap_or_else(|| std::collections::HashSet::from(["*".to_string()]));
     let transient = match value.get("aiSessionTransient") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
+        None => None,
+        Some(value) => Some(parse_ai_session_transient_subscription(value)?),
+    };
+    let subagents = match value.get("aiSessionHierarchy") {
+        None => false,
+        Some(Value::Object(hierarchy)) => match hierarchy.get("subagents") {
+            None => false,
+            Some(Value::Bool(subagents)) => *subagents,
+            Some(_) => return None,
+        },
+        Some(_) => return None,
     };
     Some(ClientSubscription {
         topics,
         transient,
         compact: value.get("eventEnvelopeVersion").and_then(Value::as_str)
             == Some(COMPACT_EVENT_ENVELOPE_VERSION),
-        subagents: value
-            .get("aiSessionHierarchy")
-            .and_then(|hierarchy| hierarchy.get("subagents"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        subagents,
     })
+}
+
+fn parse_ai_session_transient_subscription(
+    value: &Value,
+) -> Option<AiSessionTransientSubscription> {
+    if !value.is_object() {
+        return None;
+    }
+    if let Some(replay_since) = value.get("replaySince") {
+        let replay_since = replay_since.as_str()?;
+        // Zod's default `datetime()` accepts UTC timestamps only; replay
+        // cursors with numeric offsets are ignored rather than replayed.
+        if !replay_since.ends_with('Z') {
+            return None;
+        }
+        chrono::DateTime::parse_from_rfc3339(replay_since).ok()?;
+    }
+    let mut subscription: AiSessionTransientSubscription =
+        serde_json::from_value(value.clone()).ok()?;
+    if subscription.message_deltas.instance_ids.len() > 1_000
+        || subscription.timeline_sessions.len() > 1_000
+    {
+        return None;
+    }
+    for instance_id in &mut subscription.message_deltas.instance_ids {
+        *instance_id = instance_id.trim().to_string();
+        if instance_id.is_empty() || instance_id.chars().count() > 160 {
+            return None;
+        }
+    }
+    for session in &mut subscription.timeline_sessions {
+        session.instance_id = session.instance_id.trim().to_string();
+        session.session_id = session.session_id.trim().to_string();
+        if session.instance_id.is_empty()
+            || session.instance_id.chars().count() > 160
+            || session.session_id.is_empty()
+            || session.session_id.chars().count() > 120
+        {
+            return None;
+        }
+    }
+    Some(subscription)
+}
+
+fn js_wire_string(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| match value {
+                Value::Null => String::new(),
+                value => js_wire_string(value),
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        Value::Object(_) => "[object Object]".to_string(),
+    }
 }
 
 fn project_ai_session_event_for_consumer(
@@ -8935,6 +14470,69 @@ async fn api_not_found() -> Response {
     api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found.")
 }
 
+async fn static_ui_fallback(State(state): State<AppState>, request: Request) -> Response {
+    if request.uri().path().starts_with("/api/") {
+        return api_not_found().await;
+    }
+    let head_request = request.method() == Method::HEAD;
+    if matches!(request.method(), &Method::GET | &Method::HEAD) {
+        let relative =
+            percent_encoding::percent_decode_str(request.uri().path().trim_start_matches('/'))
+                .decode_utf8()
+                .ok();
+        if let Some(relative) = relative {
+            let relative = std::path::Path::new(relative.as_ref());
+            if relative.components().all(|component| {
+                matches!(
+                    component,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            }) {
+                let mut path = state.config.static_dir.join(relative);
+                if relative.as_os_str().is_empty() || request.uri().path().ends_with('/') {
+                    path.push("index.html");
+                }
+                if tokio::fs::metadata(&path)
+                    .await
+                    .is_ok_and(|metadata| metadata.is_file())
+                {
+                    match serve_static_file(path, request).await {
+                        Ok(response) if response.status() != StatusCode::NOT_FOUND => {
+                            return response.into_response()
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            warn!(%error, "failed to serve frozen UI asset");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let index_path = state.config.static_dir.join("index.html");
+    match tokio::fs::read(&index_path).await {
+        Ok(body) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html")
+            .body(if head_request {
+                Body::empty()
+            } else {
+                Body::from(body)
+            })
+            .expect("valid frozen UI response"),
+        Err(_) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(if head_request {
+                Body::empty()
+            } else {
+                Body::from("TaskHandoff Web UI has not been built yet. Run pnpm web:build.")
+            })
+            .expect("valid UI placeholder response"),
+    }
+}
+
 async fn auth_middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if !path.starts_with("/api/") {
@@ -8960,18 +14558,15 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
         }
         return next.run(request).await;
     }
-    if path.starts_with("/api/internal/agent-tools/") {
-        let authorized = token
-            .as_deref()
-            .map(|token| tokens_match(state.story_tools.token(), token))
-            .unwrap_or(false);
-        if !authorized {
-            return api_error(
-                StatusCode::FORBIDDEN,
-                "AGENT_TOOL_FORBIDDEN",
-                "Agent tool token is required.",
-            );
+    if is_mcp_route(path, request.method())
+        || (path == "/api/internal/agent-tools/invoke" && request.method() == Method::POST)
+    {
+        if !state.node_agent_client.enabled() {
+            return api_not_found().await;
         }
+        // Fastify parses the body before invoking the route preHandler. MCP
+        // and invoke handlers therefore perform the agent-token check after body
+        // parsing.
         return next.run(request).await;
     }
     if path.starts_with("/api/internal/node-agent/")
@@ -8984,9 +14579,14 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
                 .map(|(expected, token)| tokens_match(expected, token))
                 .unwrap_or(false);
         if !authorized {
+            let code = if path == "/api/internal/node-agent-connection" {
+                "NODE_AGENT_CONNECTION_UPDATE_FORBIDDEN"
+            } else {
+                "MANAGED_INSTANCE_CONTROL_FORBIDDEN"
+            };
             return api_error(
                 StatusCode::FORBIDDEN,
-                "MANAGED_INSTANCE_CONTROL_FORBIDDEN",
+                code,
                 "Instance registration token is required.",
             );
         }
@@ -9040,32 +14640,42 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
     next.run(request).await
 }
 
+fn is_mcp_route(path: &str, method: &Method) -> bool {
+    path == "/api/internal/agent-tools/mcp"
+        && matches!(
+            method,
+            &Method::GET | &Method::HEAD | &Method::POST | &Method::DELETE
+        )
+}
+
 fn ai_session_path_id(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("/api/ai-sessions/")?;
     let session_id = rest.split('/').next().unwrap_or_default();
     (!session_id.is_empty()).then_some(session_id)
 }
 
-fn request_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
-    if let Some(value) = headers
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers
         .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.to_str().ok())?;
+    let mut parts = value.splitn(2, char::is_whitespace);
+    if !parts
+        .next()
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer"))
     {
-        let mut parts = value.splitn(2, char::is_whitespace);
-        if parts
-            .next()
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer"))
-        {
-            let token = parts.next().unwrap_or_default().trim_start();
-            if !token.is_empty() {
-                return Some(token.to_string());
-            }
-        }
+        return None;
     }
-    url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-        .find(|(key, _)| key == "token")
-        .map(|(_, value)| value.into_owned())
-        .filter(|value| !value.is_empty())
+    let token = parts.next().unwrap_or_default().trim_start();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+fn request_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
+    bearer_token(headers).or_else(|| {
+        url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.into_owned())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn tokens_match(expected: &str, actual: &str) -> bool {
@@ -9137,15 +14747,17 @@ mod tests {
     use controlled_instance_app_runtime::AppSession;
     use controlled_instance_core::paths::StoragePaths;
     use controlled_instance_protocol::{
-        AiSessionCommandInput, AiSessionCommandResult, AiSessionMentionCandidate,
-        AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionMentionKind,
-        AiSessionProviderActions, AiSessionProviderCapability,
+        AiSessionCommandInput, AiSessionCommandResult, AiSessionHistoryItem,
+        AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionFileSearch,
+        AiSessionMentionKind, AiSessionProviderActions, AiSessionProviderCapability,
         AiSessionProviderTimelineCapabilities, AppLaunchOptions,
     };
     use controlled_instance_workspace::ConfigSyncEnvironment;
     use http_body_util::BodyExt;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    static OPEN_APP_TEST_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn config_sync_issues(value: Value) -> Value {
         serde_json::to_value(
@@ -9154,12 +14766,93 @@ mod tests {
         .expect("validation issues")
     }
 
+    fn drain_event_types(
+        receiver: &mut tokio::sync::broadcast::Receiver<
+            controlled_instance_protocol::EventEnvelope<Value>,
+        >,
+    ) -> Vec<String> {
+        let mut types = Vec::new();
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => types.push(event.r#type),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        types
+    }
+
+    async fn json_value_echo(JsonValueBody(value): JsonValueBody) -> Json<Value> {
+        Json(value)
+    }
+
     #[tokio::test]
-    async fn missing_static_ui_matches_the_node_plain_text_fallback_for_get_and_head() {
-        let (mut state, root) = test_state();
-        let mut config = (*state.config).clone();
-        config.static_dir = root.path().join("missing-ui");
-        state.config = Arc::new(config);
+    async fn json_value_body_defaults_only_an_actually_empty_body_to_an_object() {
+        let app = Router::new().route("/json", post(json_value_echo));
+        let empty = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("empty body");
+        assert_eq!(empty.status(), StatusCode::OK);
+        assert_eq!(body_json(empty).await, json!({}));
+
+        let body_without_length = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":1}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("body without content length");
+        assert_eq!(body_without_length.status(), StatusCode::OK);
+        assert_eq!(body_json(body_without_length).await, json!({ "value": 1 }));
+
+        let wrong_content_type = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Body::from("value"))
+                    .expect("request"),
+            )
+            .await
+            .expect("wrong content type");
+        assert_eq!(
+            wrong_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+
+        let invalid = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{"))
+                    .expect("request"),
+            )
+            .await
+            .expect("invalid body");
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn unknown_non_api_routes_use_the_node_static_fallback() {
+        let (state, _root) = test_state();
         let app = router(state);
 
         for method in [Method::GET, Method::HEAD] {
@@ -9177,9 +14870,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "{method}");
             assert_eq!(
                 response.headers().get(header::CONTENT_TYPE),
-                Some(&header::HeaderValue::from_static(
-                    "text/plain; charset=utf-8"
-                ))
+                Some(&header::HeaderValue::from_static("text/html"))
             );
             let body = response
                 .into_body()
@@ -9190,12 +14881,603 @@ mod tests {
             if method == Method::HEAD {
                 assert!(body.is_empty());
             } else {
-                assert_eq!(
-                    String::from_utf8_lossy(&body),
-                    "TaskHandoff Web UI has not been built yet. Run pnpm web:build."
-                );
+                assert_eq!(&body[..], b"<html>frozen ui</html>");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn missing_frozen_ui_uses_the_node_placeholder_response() {
+        let (state, root) = test_state();
+        std::fs::remove_file(root.path().join("ui/index.html")).expect("remove index");
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/apps")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("placeholder");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("text/plain"))
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(
+            &body[..],
+            b"TaskHandoff Web UI has not been built yet. Run pnpm web:build."
+        );
+    }
+
+    async fn mcp_request(
+        app: &Router,
+        state: &AppState,
+        method: Method,
+        headers: &[(&str, &str)],
+        body: Option<Value>,
+    ) -> Response {
+        mcp_request_with_authorization(
+            app,
+            method,
+            headers,
+            body.map_or_else(Body::empty, |body| {
+                Body::from(serde_json::to_vec(&body).expect("MCP body"))
+            }),
+            Some(format!("Bearer {}", state.story_tools.token())),
+        )
+        .await
+    }
+
+    async fn mcp_request_without_authorization(
+        app: &Router,
+        method: Method,
+        headers: &[(&str, &str)],
+        body: Body,
+    ) -> Response {
+        mcp_request_with_authorization(app, method, headers, body, None).await
+    }
+
+    async fn mcp_request_with_authorization(
+        app: &Router,
+        method: Method,
+        headers: &[(&str, &str)],
+        body: Body,
+        authorization: Option<String>,
+    ) -> Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri("/api/internal/agent-tools/mcp");
+        if let Some(authorization) = authorization {
+            builder = builder.header(header::AUTHORIZATION, authorization);
+        }
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        app.clone()
+            .oneshot(builder.body(body).expect("MCP request"))
+            .await
+            .expect("MCP response")
+    }
+
+    fn mcp_sse_payloads(body: &str) -> Vec<Value> {
+        body.split("\n\n")
+            .filter(|event| !event.is_empty() && !event.starts_with(':'))
+            .map(|event| {
+                assert!(event.starts_with("event: message\ndata: "));
+                serde_json::from_str(event.trim_start_matches("event: message\ndata: "))
+                    .expect("MCP SSE payload")
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn mcp_post_matches_the_node_sse_transport_contract() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        let response = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json; charset=utf-8"),
+            ],
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "1999-01-01",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"}
+                }
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("text/event-stream"))
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-cache, no-transform"))
+        );
+        assert_eq!(
+            response.headers().get("x-accel-buffering"),
+            Some(&header::HeaderValue::from_static("no"))
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("MCP body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["result"]["protocolVersion"], "2025-11-25");
+        assert_eq!(
+            payloads[0]["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+        assert_eq!(
+            payloads[0]["result"]["serverInfo"]["name"],
+            "task-handoff-story"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_post_rejects_headers_and_notifications_like_the_node_sdk() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}});
+
+        let not_acceptable = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json"),
+                ("content-type", "application/json"),
+            ],
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(not_acceptable.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(
+            body_json(not_acceptable).await["error"]["message"],
+            "Not Acceptable: Client must accept both application/json and text/event-stream"
+        );
+
+        let unsupported_media_type = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "text/plain"),
+            ],
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            unsupported_media_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            body_json(unsupported_media_type).await["error"]["message"],
+            "Unsupported Media Type: Content-Type must be application/json"
+        );
+
+        let unsupported_protocol = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+                ("mcp-protocol-version", "bad"),
+            ],
+            Some(body),
+        )
+        .await;
+        assert_eq!(unsupported_protocol.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(unsupported_protocol).await["error"]["message"],
+            "Bad Request: Unsupported protocol version: bad (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"
+        );
+
+        let notification = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+            ],
+            Some(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})),
+        )
+        .await;
+        assert_eq!(notification.status(), StatusCode::ACCEPTED);
+        assert!(notification
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_batch_cancellation_matches_the_node_sdk_message_order() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        let headers = [
+            ("accept", "application/json, text/event-stream"),
+            ("content-type", "application/json"),
+        ];
+
+        let cancelled_later = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!([
+                {"jsonrpc": "2.0", "id": 7, "method": "ping"},
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": 7, "reason": "test"}
+                }
+            ])),
+        )
+        .await;
+        assert_eq!(cancelled_later.status(), StatusCode::OK);
+        assert!(cancelled_later
+            .into_body()
+            .collect()
+            .await
+            .expect("cancelled body")
+            .to_bytes()
+            .is_empty());
+
+        let string_id_is_distinct = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!([
+                {"jsonrpc": "2.0", "id": "7", "method": "ping"},
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": 7}
+                }
+            ])),
+        )
+        .await;
+        let body = string_id_is_distinct
+            .into_body()
+            .collect()
+            .await
+            .expect("string id body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["id"], "7");
+
+        let cancellation_before_request = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!([
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": 8}
+                },
+                {"jsonrpc": "2.0", "id": 8, "method": "ping"}
+            ])),
+        )
+        .await;
+        let body = cancellation_before_request
+            .into_body()
+            .collect()
+            .await
+            .expect("early cancellation body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["id"], 8);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_call_validation_matches_node_tool_errors() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        let headers = [
+            ("accept", "application/json, text/event-stream"),
+            ("content-type", "application/json"),
+        ];
+
+        let invalid = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "story_get_content", "arguments": {}}
+            })),
+        )
+        .await;
+        let body = invalid
+            .into_body()
+            .collect()
+            .await
+            .expect("MCP body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(payloads[0]["result"]["isError"], true);
+        let message = payloads[0]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool error text");
+        assert!(message.starts_with(
+            "MCP error -32602: Input validation error: Invalid arguments for tool story_get_content:"
+        ));
+
+        let unknown = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "missing_tool", "arguments": {}}
+            })),
+        )
+        .await;
+        let body = unknown
+            .into_body()
+            .collect()
+            .await
+            .expect("MCP body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(
+            payloads[0]["result"]["content"][0]["text"],
+            "MCP error -32602: Tool missing_tool not found"
+        );
+        assert_eq!(payloads[0]["result"]["isError"], true);
+
+        let missing_identity = mcp_request(
+            &app,
+            &state,
+            Method::POST,
+            &headers,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "story_list_content", "arguments": {}}
+            })),
+        )
+        .await;
+        let body = missing_identity
+            .into_body()
+            .collect()
+            .await
+            .expect("MCP body")
+            .to_bytes();
+        let payloads = mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"));
+        assert_eq!(
+            payloads[0]["result"]["content"][0]["text"],
+            "Codex did not provide a thread identity for the Story tool call."
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_get_and_delete_match_the_node_transport_guards() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+
+        let no_accept = mcp_request(&app, &state, Method::GET, &[], None).await;
+        assert_eq!(no_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(
+            body_json(no_accept).await["error"]["message"],
+            "Not Acceptable: Client must accept text/event-stream"
+        );
+
+        let bad_protocol = mcp_request(
+            &app,
+            &state,
+            Method::GET,
+            &[
+                ("accept", "text/event-stream"),
+                ("mcp-protocol-version", "bad"),
+            ],
+            None,
+        )
+        .await;
+        assert_eq!(bad_protocol.status(), StatusCode::BAD_REQUEST);
+
+        let stream = mcp_request(
+            &app,
+            &state,
+            Method::GET,
+            &[("accept", "text/event-stream")],
+            None,
+        )
+        .await;
+        assert_eq!(stream.status(), StatusCode::OK);
+        assert_eq!(
+            stream.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("text/event-stream"))
+        );
+
+        let delete = mcp_request(&app, &state, Method::DELETE, &[], None).await;
+        assert_eq!(delete.status(), StatusCode::OK);
+
+        let delete_bad_protocol = mcp_request(
+            &app,
+            &state,
+            Method::DELETE,
+            &[("mcp-protocol-version", "bad")],
+            None,
+        )
+        .await;
+        assert_eq!(delete_bad_protocol.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mcp_head_uses_the_sdk_method_not_allowed_response() {
+        let (state, _root) = test_state();
+        let response = mcp_request(&router(state.clone()), &state, Method::HEAD, &[], None).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response.headers().get(header::ALLOW),
+            Some(&header::HeaderValue::from_static("GET, POST, DELETE"))
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_oversized_bodies_use_the_fastify_payload_too_large_response() {
+        let (state, _root) = test_state();
+        let response = mcp_request(
+            &router(state.clone()),
+            &state,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+            ],
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {"padding": "x".repeat(MCP_BODY_LIMIT)}
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static(
+                "application/json; charset=utf-8"
+            ))
+        );
+        assert_eq!(
+            response.headers().get(header::CONNECTION),
+            Some(&header::HeaderValue::from_static("close"))
+        );
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "statusCode": 413,
+                "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+                "error": "Payload Too Large",
+                "message": "Request body is too large"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_body_parse_errors_precede_agent_token_auth() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+
+        let invalid_json = mcp_request_without_authorization(
+            &app,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+            ],
+            Body::from("{"),
+        )
+        .await;
+        assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(invalid_json).await["code"],
+            "FST_ERR_CTP_INVALID_JSON_BODY"
+        );
+
+        let oversized = mcp_request_without_authorization(
+            &app,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+            ],
+            Body::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {"padding": "x".repeat(MCP_BODY_LIMIT)}
+                }))
+                .expect("MCP body"),
+            ),
+        )
+        .await;
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            body_json(oversized).await["code"],
+            "FST_ERR_CTP_BODY_TOO_LARGE"
+        );
+
+        let unauthorized = mcp_request_without_authorization(
+            &app,
+            Method::POST,
+            &[
+                ("accept", "application/json, text/event-stream"),
+                ("content-type", "application/json"),
+            ],
+            Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
+        )
+        .await;
+        assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_json(unauthorized).await["error"]["code"],
+            "AGENT_TOOL_FORBIDDEN"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_unregistered_methods_follow_fastify_auth_before_not_found() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        for method in [Method::PUT, Method::OPTIONS] {
+            let response = mcp_request(&app, &state, method, &[], None).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(body_json(response).await["error"]["code"], "NOT_FOUND");
+        }
+
+        let mut state = state;
+        state.auth = Arc::new(WebAuthState {
+            enabled: true,
+            source: Some(crate::auth::AuthSource::Env),
+            token_file: None,
+            token: Some("web-token".to_string()),
+        });
+        let response = mcp_request(&router(state.clone()), &state, Method::PUT, &[], None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["error"]["code"], "UNAUTHORIZED");
     }
 
     #[tokio::test]
@@ -9538,6 +15820,71 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct ForkCompensationProvider {
+        read_started: Arc<tokio::sync::Notify>,
+        continue_read: Arc<tokio::sync::Notify>,
+        delete_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl controlled_instance_ai_session::AiSessionControlProvider for ForkCompensationProvider {
+        fn agent(&self) -> &str {
+            "codex"
+        }
+
+        fn capability(&self) -> AiSessionProviderCapability {
+            AiSessionProviderCapability {
+                agent: "codex".to_string(),
+                actions: AiSessionProviderActions {
+                    fork: true,
+                    ..AiSessionProviderActions::default()
+                },
+                permission_modes: Vec::new(),
+                timeline: AiSessionProviderTimelineCapabilities::default(),
+                model_selection: None,
+                reasoning_effort: None,
+                hierarchy: None,
+            }
+        }
+
+        async fn fork_session(
+            &self,
+            _source: &AiSession,
+            input: controlled_instance_ai_session::ProviderForkInput,
+        ) -> Result<
+            controlled_instance_ai_session::ProviderCreateResult,
+            controlled_instance_ai_session::ProviderError,
+        > {
+            Ok(controlled_instance_ai_session::ProviderCreateResult {
+                provider_session_id: "forked-provider-session".to_string(),
+                cwd: input.cwd.expect("managed worktree cwd"),
+                model_selection: None,
+                reasoning_effort: None,
+            })
+        }
+
+        async fn read_session(
+            &self,
+            _provider_session_id: &str,
+        ) -> Result<(), controlled_instance_ai_session::ProviderError> {
+            self.read_started.notify_one();
+            self.continue_read.notified().await;
+            Err(controlled_instance_ai_session::ProviderError::bad_gateway(
+                "AI_SESSION_FORK_PROJECTION_FAILED",
+                "Injected Fork projection failure.",
+            ))
+        }
+
+        async fn delete_session(
+            &self,
+            _provider_session_id: &str,
+        ) -> Result<(), controlled_instance_ai_session::ProviderError> {
+            self.delete_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
     struct FailingCreateProvider(controlled_instance_ai_session::ProviderError);
 
     #[async_trait::async_trait]
@@ -9709,6 +16056,394 @@ mod tests {
         serde_json::from_slice(&bytes).expect("json")
     }
 
+    async fn kasm_upstream(request: Request) -> Response {
+        let uri = request.uri().to_string();
+        let path = request.uri().path().to_string();
+        let authorization = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let body = to_bytes(request.into_body(), 1024 * 1024)
+            .await
+            .expect("upstream body");
+        match path.as_str() {
+            "/index.html" => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html")
+                .header(header::ETAG, "upstream-etag")
+                .header("x-upstream", "html")
+                .body(Body::from(
+                    "<!doctype html><html><head></head><body>Ready</body></html>",
+                ))
+                .expect("html response"),
+            "/style.css" => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/css")
+                .body(Body::from(
+                    "#noVNC_transition { background: #fff url(spinner.svg); }",
+                ))
+                .expect("css response"),
+            "/asset.bin" => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(vec![0u8, 1, 2, 253, 254, 255]))
+                .expect("binary response"),
+            "/echo" => Json(json!({
+                "authorization": authorization,
+                "body": String::from_utf8_lossy(&body),
+                "uri": uri,
+            }))
+            .into_response(),
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    #[tokio::test]
+    async fn web_proxy_themes_kasm_responses_and_preserves_upstream_headers() {
+        let upstream = Router::new().fallback(any(kasm_upstream));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("upstream bind");
+        let address = listener.local_addr().expect("upstream address");
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, upstream).await;
+        });
+
+        let (state, _root) = test_state();
+        let mut session = serde_json::to_value(app_session_record(
+            "aps_0000000000200",
+            "vscode-web",
+            "running",
+        ))
+        .expect("session json");
+        session["kind"] = json!("web");
+        session["web"] = json!({
+            "host": "127.0.0.1",
+            "port": address.port(),
+            "webPath": "/api/apps/sessions/aps_0000000000200/web/"
+        });
+        session["vnc"] = json!({
+            "backend": "kasmvnc",
+            "host": "127.0.0.1",
+            "port": address.port(),
+            "webPath": "/api/apps/sessions/aps_0000000000200/web/",
+            "noVncPath": "/api/apps/sessions/aps_0000000000200/web/"
+        });
+        state
+            .app_runtime
+            .insert_session(serde_json::from_value(session).expect("app session"));
+        let app = router(state);
+
+        let html = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/apps/sessions/aps_0000000000200/web/index.html?theme=dark")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("html response");
+        assert_eq!(html.status(), StatusCode::OK);
+        assert!(html.headers().get(header::ETAG).is_none());
+        assert_eq!(html.headers()["x-upstream"], "html");
+        assert!(html.headers().contains_key(header::CONTENT_LENGTH));
+        let html = String::from_utf8(
+            html.into_body()
+                .collect()
+                .await
+                .expect("html body")
+                .to_bytes()
+                .to_vec(),
+        )
+        .expect("html utf8");
+        assert!(html.contains("task-handoff-kasm-loading-theme"));
+        assert!(html.contains("<body>Ready</body>"));
+
+        let css = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/apps/sessions/aps_0000000000200/web/style.css")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("css response");
+        let css = String::from_utf8(
+            css.into_body()
+                .collect()
+                .await
+                .expect("css body")
+                .to_bytes()
+                .to_vec(),
+        )
+        .expect("css utf8");
+        assert!(css.contains("#05090b url(spinner.svg)"));
+
+        let binary = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/apps/sessions/aps_0000000000200/web/asset.bin")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("binary response");
+        let binary = binary
+            .into_body()
+            .collect()
+            .await
+            .expect("binary body")
+            .to_bytes()
+            .to_vec();
+        assert_eq!(binary, vec![0u8, 1, 2, 253, 254, 255]);
+
+        let echoed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/apps/sessions/aps_0000000000200/web/echo?value=1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer browser-token")
+                    .body(Body::from(r#"{"ok":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("echo response");
+        let echoed = body_json(echoed).await;
+        assert_eq!(echoed["body"], r#"{"ok":true}"#);
+        assert_eq!(echoed["uri"], "/echo?value=1");
+        assert_eq!(echoed["authorization"], kasm_vnc_authorization_header());
+        task.abort();
+    }
+
+    #[test]
+    fn kasm_theme_skips_encoded_responses() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            "text/html".parse().expect("content type"),
+        );
+        headers.insert(
+            header::CONTENT_ENCODING,
+            "gzip".parse().expect("content encoding"),
+        );
+        assert!(!should_theme_kasm_vnc_response(&headers));
+        headers.remove(header::CONTENT_ENCODING);
+        assert!(should_theme_kasm_vnc_response(&headers));
+    }
+
+    #[test]
+    fn websocket_bridge_close_codes_and_reasons_match_the_node_contract() {
+        assert_eq!(BridgeClose::traffic_limit().code, Some(1009));
+        assert_eq!(
+            BridgeClose::traffic_limit().reason,
+            "WebSocket bridge traffic limit exceeded."
+        );
+        assert_eq!(BridgeClose::slow_consumer().code, Some(1013));
+        assert_eq!(
+            BridgeClose::slow_consumer().reason,
+            "WebSocket bridge consumer is too slow."
+        );
+        assert_eq!(BridgeClose::pending_frame_limit().code, Some(1011));
+        assert_eq!(
+            BridgeClose::pending_frame_limit().reason,
+            "WebSocket bridge pending frame limit exceeded."
+        );
+        assert_eq!(BridgeClose::send_failed().code, Some(1011));
+        assert_eq!(
+            BridgeClose::client_failed().reason,
+            "WebSocket bridge client failed."
+        );
+
+        let forwarded = BridgeClose::from_peer(Some(4001), &"界".repeat(100));
+        assert_eq!(forwarded.code, Some(4001));
+        assert!(forwarded.reason.len() <= 123);
+        assert!(forwarded.reason.is_char_boundary(forwarded.reason.len()));
+        assert_eq!(BridgeClose::from_peer(Some(1006), "abnormal").code, None);
+    }
+
+    #[test]
+    fn websocket_bridge_limits_distinguish_traffic_and_slow_consumers() {
+        use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+
+        let total = std::sync::atomic::AtomicU64::new(0);
+        let pending = AtomicUsize::new(0);
+        let error = accept_bridge_frame(
+            &UpstreamMessage::Binary(vec![0; 9].into()),
+            8,
+            1024,
+            &total,
+            1024,
+            &pending,
+        )
+        .expect_err("oversized frame");
+        assert_eq!(error.code, Some(1009));
+
+        let total = std::sync::atomic::AtomicU64::new(0);
+        let pending = AtomicUsize::new(0);
+        accept_bridge_frame(
+            &UpstreamMessage::Binary(vec![0; 8].into()),
+            8,
+            10,
+            &total,
+            1024,
+            &pending,
+        )
+        .expect("first frame");
+        let error = accept_bridge_frame(
+            &UpstreamMessage::Binary(vec![0; 3].into()),
+            8,
+            10,
+            &total,
+            1024,
+            &pending,
+        )
+        .expect_err("total limit");
+        assert_eq!(error.code, Some(1009));
+
+        let total = std::sync::atomic::AtomicU64::new(0);
+        let pending = AtomicUsize::new(4);
+        let error = accept_bridge_frame(
+            &UpstreamMessage::Binary(vec![0; 5].into()),
+            8,
+            1024,
+            &total,
+            8,
+            &pending,
+        )
+        .expect_err("slow consumer");
+        assert_eq!(error.code, Some(1013));
+    }
+
+    #[test]
+    fn websocket_upstream_request_rewrites_origin_auth_and_protocols() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            "https://panel.example".parse().expect("origin"),
+        );
+        headers.insert(
+            axum::http::HeaderName::from_static("sec-websocket-origin"),
+            "https://panel.example".parse().expect("ws origin"),
+        );
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "binary,base64".parse().expect("protocols"),
+        );
+        headers.insert(
+            header::SEC_WEBSOCKET_KEY,
+            "client-key".parse().expect("client key"),
+        );
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer browser-token".parse().expect("authorization"),
+        );
+        headers.insert(
+            header::REFERER,
+            "https://panel.example/".parse().expect("referer"),
+        );
+        headers.insert(
+            axum::http::HeaderName::from_static("sec-fetch-site"),
+            "same-origin".parse().expect("fetch metadata"),
+        );
+
+        let request = websocket_upstream_request(
+            "ws://127.0.0.1:5900/websockify?token=1",
+            "127.0.0.1",
+            5900,
+            &headers,
+            Some("Basic kasm-credentials"),
+            true,
+            Some("https://panel.example"),
+        )
+        .expect("upstream request");
+
+        assert_eq!(
+            request.uri().to_string(),
+            "ws://127.0.0.1:5900/websockify?token=1"
+        );
+        assert_eq!(request.headers()[header::ORIGIN], "http://127.0.0.1:5900");
+        assert_eq!(
+            request.headers()[axum::http::HeaderName::from_static("sec-websocket-origin")],
+            "https://panel.example"
+        );
+        assert_eq!(
+            request.headers()[header::AUTHORIZATION],
+            "Basic kasm-credentials"
+        );
+        assert_eq!(
+            request.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+            "binary,base64"
+        );
+        assert!(request.headers().get(header::REFERER).is_none());
+        assert!(request
+            .headers()
+            .get(axum::http::HeaderName::from_static("sec-fetch-site"))
+            .is_none());
+        assert_ne!(request.headers()[header::SEC_WEBSOCKET_KEY], "client-key");
+    }
+
+    #[test]
+    fn websocket_upstream_request_defaults_kasm_protocol_and_falls_back_origin() {
+        let request = websocket_upstream_request(
+            "ws://127.0.0.1:5900/websockify",
+            "127.0.0.1",
+            5900,
+            &HeaderMap::new(),
+            None,
+            true,
+            None,
+        )
+        .expect("upstream request");
+        assert_eq!(
+            request.headers()[axum::http::HeaderName::from_static("sec-websocket-origin")],
+            "http://127.0.0.1:5900"
+        );
+        assert_eq!(request.headers()[header::SEC_WEBSOCKET_PROTOCOL], "binary");
+        assert!(request.headers().get(header::AUTHORIZATION).is_none());
+
+        let request = websocket_upstream_request(
+            "ws://127.0.0.1:5900/websockify",
+            "127.0.0.1",
+            5900,
+            &HeaderMap::new(),
+            None,
+            false,
+            None,
+        )
+        .expect("upstream request");
+        assert!(request
+            .headers()
+            .get(header::SEC_WEBSOCKET_PROTOCOL)
+            .is_none());
+        assert!(request
+            .headers()
+            .get(axum::http::HeaderName::from_static("sec-websocket-origin"))
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn diagnostics_count_unchanged_app_refreshes_instead_of_reporting_zero() {
+        let (state, _root) = test_state();
+        state.publish_app_session_snapshot("diagnostic-test-prime");
+        let before = state.diagnostics()["sessionStreams"]["app"]["unchangedRefreshes"]
+            .as_u64()
+            .expect("before count");
+        let first = state.publish_app_session_snapshot("diagnostic-test");
+        let second = state.publish_app_session_snapshot("diagnostic-test");
+        assert!(first.is_none());
+        assert!(second.is_none());
+        let after = state.diagnostics()["sessionStreams"]["app"]["unchangedRefreshes"]
+            .as_u64()
+            .expect("after count");
+        assert!(after >= before + 2);
+    }
+
     fn git_stdout(root: &std::path::Path, args: &[&str]) -> String {
         use std::process::Command;
 
@@ -9819,6 +16554,11 @@ mod tests {
                     "updatedAt": "2026-11-02T00:03:00.000Z"
                 }
             ],
+            "actions": {
+                "send": true,
+                "rename": true,
+                "close": true
+            },
             "unread": true,
             "status": "running",
             "phase": "thinking",
@@ -9826,6 +16566,22 @@ mod tests {
             "updatedAt": "2026-11-02T00:00:00.000Z"
         }))
         .expect("AI session")
+    }
+
+    fn ai_session_history_item(id: &str, creation_source: &str) -> AiSessionHistoryItem {
+        serde_json::from_value(json!({
+            "id": id,
+            "agent": "codex",
+            "creationSource": creation_source,
+            "providerSessionId": "provider-archived",
+            "title": "Archived session",
+            "userPrompt": "Archived prompt",
+            "lastMessage": "Archived response",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:05:00.000Z",
+            "archivedAt": "2026-11-02T00:06:00.000Z"
+        }))
+        .expect("history item")
     }
 
     fn app_session_record(id: &str, app_id: &str, status: &str) -> AppSession {
@@ -10215,6 +16971,16 @@ mod tests {
         assert_eq!(delta.status(), StatusCode::OK);
         assert_eq!(body_json(delta).await["data"]["syncRequired"], false);
 
+        let oversized = get_json(
+            &app,
+            &format!("/api/apps/sessions?streamId={stream_id}&sinceRevision=1e20"),
+        )
+        .await;
+        assert_eq!(oversized.status(), StatusCode::OK);
+        let oversized = body_json(oversized).await;
+        assert_eq!(oversized["data"]["syncRequired"], true);
+        assert_eq!(oversized["data"]["sinceRevision"].as_f64(), Some(1e20));
+
         let renamed = app
             .clone()
             .oneshot(
@@ -10261,6 +17027,21 @@ mod tests {
         let logs = body_json(logs).await;
         assert_eq!(logs["data"]["sessionId"], id);
         assert_eq!(logs["data"]["maxBytes"], 2048);
+        for (query, expected) in [
+            ("maxBytes=-1", json!(1024)),
+            ("maxBytes=1024.5", json!(1024.5)),
+            ("maxBytes=1e3", json!(1024)),
+            ("maxBytes=not-a-number", json!(64 * 1024)),
+            ("maxBytes=", json!(64 * 1024)),
+        ] {
+            let logs = get_json(&app, &format!("/api/apps/sessions/{id}/logs?{query}")).await;
+            assert_eq!(logs.status(), StatusCode::OK, "{query}");
+            assert_eq!(
+                body_json(logs).await["data"]["maxBytes"],
+                expected,
+                "{query}"
+            );
+        }
 
         let stopped = post_json(&app, &format!("/api/apps/sessions/{id}/stop"), json!({})).await;
         assert_eq!(stopped.status(), StatusCode::OK);
@@ -10585,7 +17366,7 @@ mod tests {
         let invalid_request = post_json(
             &app,
             "/api/apps/codex/install",
-            json!({ "requestId": "INVALID" }),
+            json!({ "requestId": "-INVALID" }),
         )
         .await;
         assert_eq!(invalid_request.status(), StatusCode::BAD_REQUEST);
@@ -11105,6 +17886,7 @@ mod tests {
         assert!(claude["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
 
         let settings = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("PUT")
@@ -11112,7 +17894,7 @@ mod tests {
                     .header(header::AUTHORIZATION, "Bearer test-registration-token")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"modelVerbosity":"high","multiAgent":{"enabled":false,"futureField":"ignored"},"futureField":"ignored"}"#,
+                        r#"{"modelVerbosity":"high","multiAgent":{"enabled":false}}"#,
                     ))
                     .expect("request"),
             )
@@ -11127,6 +17909,28 @@ mod tests {
         .expect("toml");
         assert_eq!(config["model_verbosity"].as_str(), Some("high"));
         assert_eq!(config["agents"]["enabled"].as_bool(), Some(false));
+
+        let rejected = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/internal/codex-settings")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"futureField":"ignored"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("settings");
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(rejected).await,
+            json!({
+                "statusCode": 500,
+                "error": "Internal Server Error",
+                "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"futureField\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"futureField\\\"\"\n  }\n]"
+            })
+        );
     }
 
     #[tokio::test]
@@ -11202,7 +18006,9 @@ mod tests {
             .publish_ai_session_snapshot("startup")
             .expect("startup event");
         assert_eq!(event.r#type, "ai-session.snapshot");
-        let app = router(state);
+        state.start_app_session_services();
+        let mut events = state.events.subscribe();
+        let app = router(state.clone());
 
         let state_response = app
             .clone()
@@ -11282,6 +18088,12 @@ mod tests {
         let renamed = body_json(renamed).await;
         assert_eq!(renamed["data"]["disposition"], "renamed");
         assert_eq!(renamed["data"]["title"], "Renamed");
+        let rename_event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+            .await
+            .expect("rename event timeout")
+            .expect("rename event");
+        assert_eq!(rename_event.r#type, "ai-session.patch");
+        assert_eq!(rename_event.payload["upserted"][0]["title"], "Renamed");
 
         let read = app
             .clone()
@@ -11298,6 +18110,7 @@ mod tests {
         assert_eq!(read["data"]["unread"], false);
 
         let delta = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -11314,6 +18127,81 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0]["payload"]["upserted"][0]["title"], "Renamed");
         assert_eq!(events[1]["payload"]["upserted"][0]["unread"], false);
+
+        let oversized = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/ai-sessions?streamId={stream_id}&sinceRevision=1e20"
+                    ))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("oversized delta");
+        assert_eq!(oversized.status(), StatusCode::OK);
+        let oversized = body_json(oversized).await;
+        assert_eq!(oversized["data"]["syncRequired"], true);
+        assert_eq!(oversized["data"]["sinceRevision"].as_f64(), Some(1e20));
+    }
+
+    #[tokio::test]
+    async fn ai_session_reads_keep_the_last_published_snapshot_until_the_next_publish() {
+        let (state, _root) = test_state();
+        state.app_runtime.insert_session(app_session_record(
+            "aps_0000000000301",
+            "codex",
+            "running",
+        ));
+        let mut session = ai_session_record("ses_0000000000301", "aps_0000000000301");
+        session.title = Some("Published".to_string());
+        state.ai_sessions.save(session).expect("initial session");
+        state
+            .publish_ai_session_snapshot("startup")
+            .expect("startup snapshot");
+
+        let mut unpublished = state.ai_sessions.get("ses_0000000000301").expect("session");
+        unpublished.title = Some("Unpublished".to_string());
+        state
+            .ai_sessions
+            .save(unpublished)
+            .expect("direct store update");
+
+        let app = router(state.clone());
+        let snapshot = get_json(&app, "/api/ai-sessions").await;
+        assert_eq!(snapshot.status(), StatusCode::OK);
+        let snapshot = body_json(snapshot).await;
+        assert_eq!(snapshot["data"]["revision"], 1);
+        assert_eq!(
+            snapshot["data"]["snapshot"]["sessions"][0]["title"],
+            "Published"
+        );
+
+        let state_response = get_json(&app, "/api/ai-sessions/state").await;
+        assert_eq!(state_response.status(), StatusCode::OK);
+        let state_response = body_json(state_response).await;
+        assert_eq!(state_response["data"]["revision"], 1);
+        assert_eq!(
+            state_response["data"]["snapshot"]["sessions"][0]["title"],
+            "Published"
+        );
+
+        let startup = state.ai_session_startup_snapshot_event(false);
+        assert_eq!(
+            startup.payload["snapshot"]["sessions"][0]["title"],
+            "Published"
+        );
+
+        state
+            .publish_ai_session_snapshot("control-action")
+            .expect("next snapshot");
+        let snapshot = get_json(&app, "/api/ai-sessions/state").await;
+        let snapshot = body_json(snapshot).await;
+        assert_eq!(snapshot["data"]["revision"], 2);
+        assert_eq!(
+            snapshot["data"]["snapshot"]["sessions"][0]["title"],
+            "Unpublished"
+        );
     }
 
     #[tokio::test]
@@ -11359,6 +18247,91 @@ mod tests {
         let detail = body_json(detail).await;
         assert_eq!(detail["data"]["item"]["id"], "ses_0000000000002");
         assert!(detail["data"]["turns"].is_array());
+    }
+
+    #[tokio::test]
+    async fn ai_session_history_detail_reprojects_attachment_content_state() {
+        let (state, _root) = test_state();
+        let staged = state
+            .ai_session_attachments
+            .stage_message(
+                controlled_instance_ai_session::StageMessageAttachmentsInput {
+                    session_id: "ses_0000000000320".to_string(),
+                    message_id: "message-available".to_string(),
+                    attachments: vec![
+                        controlled_instance_ai_session::AiSessionMessageAttachmentInput::Inline {
+                            id: "att_history_available".to_string(),
+                            kind: controlled_instance_protocol::AiSessionAttachmentKind::File,
+                            name: "notes.txt".to_string(),
+                            mime: "text/plain".to_string(),
+                            size: 5,
+                            data: b"hello".to_vec(),
+                        },
+                    ],
+                    retained_attachment_ids: Vec::new(),
+                    runtime_path_root: None,
+                    draft_scope_type: None,
+                    draft_scope_id: None,
+                    draft_attachment_ids: Vec::new(),
+                },
+            )
+            .expect("stage attachment");
+        state.ai_session_attachments.commit_message(
+            "ses_0000000000320",
+            "message-available",
+            Some("turn-1"),
+        );
+        let available = serde_json::to_value(&staged.attachments[0]).expect("attachment");
+        let turns = vec![json!({
+            "id": "turn-1",
+            "status": "completed",
+            "userMessages": [
+                {
+                    "id": "message-available",
+                    "text": "attached",
+                    "attachments": [available]
+                },
+                {
+                    "id": "message-missing",
+                    "text": "missing",
+                    "attachments": [{
+                        "id": "att_history_missing",
+                        "kind": "file",
+                        "name": "missing.txt",
+                        "mime": "text/plain",
+                        "size": 1,
+                        "contentState": "available"
+                    }]
+                }
+            ]
+        })];
+        state
+            .ai_session_history
+            .upsert(
+                ai_session_history_item("ses_0000000000320", "ai-session"),
+                &turns,
+            )
+            .expect("history detail");
+        let app = router(state.clone());
+
+        let detail = get_json(&app, "/api/ai-sessions/history/ses_0000000000320").await;
+        assert_eq!(detail.status(), StatusCode::OK);
+        let detail = body_json(detail).await;
+        let messages = detail["data"]["turns"][0]["userMessages"]
+            .as_array()
+            .expect("user messages");
+        assert_eq!(messages[0]["attachments"][0]["contentState"], "available");
+        assert_eq!(messages[1]["attachments"][0]["contentState"], "missing");
+        assert_eq!(messages[1]["attachments"][0]["id"], "att_history_missing");
+
+        state.ai_session_attachments.set_retention_days(0);
+        let detail = get_json(&app, "/api/ai-sessions/history/ses_0000000000320").await;
+        assert_eq!(detail.status(), StatusCode::OK);
+        let detail = body_json(detail).await;
+        assert_eq!(
+            detail["data"]["turns"][0]["userMessages"][0]["attachments"][0]["contentState"],
+            "expired"
+        );
     }
 
     #[tokio::test]
@@ -11531,6 +18504,7 @@ mod tests {
         );
 
         let transcript = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/ai-sessions/ses_0000000000003/transcript?tail=2")
@@ -11542,6 +18516,170 @@ mod tests {
         let transcript = body_json(transcript).await;
         assert_eq!(transcript["data"]["lineCount"], 4);
         assert_eq!(transcript["data"]["tail"], "line-3\n");
+
+        for (query, expected) in [
+            ("tail=-1", ""),
+            ("tail=0", "line-1\nline-2\nline-3\n"),
+            ("tail=not-a-number", "line-1\nline-2\nline-3\n"),
+            ("tail=1e3", "line-1\nline-2\nline-3\n"),
+        ] {
+            let transcript = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/ai-sessions/ses_0000000000003/transcript?{query}"
+                        ))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("transcript");
+            assert_eq!(
+                body_json(transcript).await["data"]["tail"],
+                expected,
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn javascript_number_query_helpers_match_node_clamping() {
+        assert_eq!(app_logs_max_bytes(None), 64.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("")), 64.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("not-a-number")), 64.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("-1")), 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("1024.5")), 1024.5);
+        assert_eq!(app_logs_max_bytes(Some("1e3")), 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("0x400")), 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("524289")), 512.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some("inf")), 64.0 * 1024.0);
+        assert_eq!(json_js_number(2048.0), json!(2048));
+        assert_eq!(json_js_number(1024.5), json!(1024.5));
+
+        assert_eq!(transcript_tail_lines(None), 200);
+        assert_eq!(transcript_tail_lines(Some("")), 200);
+        assert_eq!(transcript_tail_lines(Some("0")), 200);
+        assert_eq!(transcript_tail_lines(Some("not-a-number")), 200);
+        assert_eq!(transcript_tail_lines(Some("NaN")), 200);
+        assert_eq!(transcript_tail_lines(Some("inf")), 200);
+        assert_eq!(transcript_tail_lines(Some("-1")), 1);
+        assert_eq!(transcript_tail_lines(Some("0x2")), 2);
+        assert_eq!(transcript_tail_lines(Some("1e3")), 1000);
+        assert_eq!(transcript_tail_lines(Some("1024.5")), 1000);
+        assert_eq!(transcript_tail_lines(Some("Infinity")), 1000);
+    }
+
+    #[tokio::test]
+    async fn ai_session_not_found_messages_follow_node_route_families() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        let cases = [
+            (Method::GET, "/api/ai-sessions/missing", None, false),
+            (Method::GET, "/api/ai-sessions/missing/turns", None, false),
+            (
+                Method::GET,
+                "/api/ai-sessions/missing/turns/turn-1",
+                None,
+                false,
+            ),
+            (Method::GET, "/api/ai-sessions/missing/queue", None, false),
+            (
+                Method::GET,
+                "/api/ai-sessions/missing/mentions",
+                None,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/ai-sessions/missing/open-app",
+                Some(json!({ "clientRequestId": "missing" })),
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/ai-sessions/missing/close",
+                Some(json!({ "clientRequestId": "missing" })),
+                false,
+            ),
+            (Method::POST, "/api/ai-sessions/missing/read", None, true),
+            (
+                Method::GET,
+                "/api/ai-sessions/missing/story-content",
+                None,
+                true,
+            ),
+            (
+                Method::PUT,
+                "/api/ai-sessions/missing/story",
+                Some(json!({ "storyId": "story-1" })),
+                true,
+            ),
+            (
+                Method::PUT,
+                "/api/ai-sessions/missing/model-selection",
+                Some(json!({
+                    "clientRequestId": "missing",
+                    "modelSelection": {
+                        "modelEntityId": "model-1",
+                        "modelName": "model-1"
+                    }
+                })),
+                true,
+            ),
+            (
+                Method::PUT,
+                "/api/ai-sessions/missing/reasoning-effort",
+                Some(json!({
+                    "clientRequestId": "missing",
+                    "reasoningEffort": "high"
+                })),
+                true,
+            ),
+        ];
+        for (method, uri, body, uppercase) in cases {
+            let mut request = Request::builder().method(method).uri(uri);
+            let body = match body {
+                Some(body) => {
+                    request = request.header(header::CONTENT_TYPE, "application/json");
+                    Body::from(body.to_string())
+                }
+                None => Body::empty(),
+            };
+            let response = app
+                .clone()
+                .oneshot(request.body(body).expect("request"))
+                .await
+                .expect("route");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+            let response = body_json(response).await;
+            assert_eq!(response["error"]["code"], "AI_SESSION_NOT_FOUND", "{uri}");
+            assert_eq!(
+                response["error"]["message"],
+                if uppercase {
+                    "AI Session was not found."
+                } else {
+                    "AI session not found."
+                },
+                "{uri}"
+            );
+        }
+
+        let internal = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/internal/node-agent/story-ai-sessions/missing")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("internal story route");
+        assert_eq!(internal.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(internal).await["error"]["message"],
+            "AI session not found."
+        );
     }
 
     #[tokio::test]
@@ -11727,6 +18865,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/ai-session-attachments/drafts?scopeType=session&scopeId=ses_0000000000006&kind=file&name=notes.txt&mime=text%2Fplain&size=5")
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("hello"))
                     .expect("request"),
             )
@@ -11781,6 +18920,32 @@ mod tests {
         assert_eq!(begun.status(), StatusCode::CREATED);
         assert_eq!(body_json(begun).await["data"]["offset"], 0);
 
+        let image_stream_id = "cia_89abcdef0123456789abcdef";
+        let image_stream = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai-session-attachments/draft-streams")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "attachmentId": image_stream_id,
+                            "scopeType": "session",
+                            "scopeId": "ses_0000000000006",
+                            "kind": "image",
+                            "name": "not-an-image.txt",
+                            "mime": "text/plain",
+                            "size": 5
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("image stream begin");
+        assert_eq!(image_stream.status(), StatusCode::CREATED);
+
         let appended = app
             .clone()
             .oneshot(
@@ -11789,12 +18954,16 @@ mod tests {
                     .uri(format!(
                         "/api/ai-session-attachments/draft-streams/{stream_id}?offset=0"
                     ))
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("hello"))
                     .expect("request"),
             )
             .await
             .expect("stream append");
-        assert_eq!(body_json(appended).await["data"]["offset"], 5);
+        let appended_status = appended.status();
+        let appended = body_json(appended).await;
+        assert_eq!(appended_status, StatusCode::OK, "{appended}");
+        assert_eq!(appended["data"]["offset"], 5, "{appended}");
         let offset_mismatch = app
             .clone()
             .oneshot(
@@ -11803,6 +18972,7 @@ mod tests {
                     .uri(format!(
                         "/api/ai-session-attachments/draft-streams/{stream_id}?offset=0"
                     ))
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("world"))
                     .expect("request"),
             )
@@ -11821,6 +18991,7 @@ mod tests {
                     .uri(format!(
                         "/api/ai-session-attachments/draft-streams/{stream_id}?offset=5"
                     ))
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
                     .body(Body::from("world"))
                     .expect("request"),
             )
@@ -11933,13 +19104,137 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(&uri)
-                    .header(header::IF_NONE_MATCH, etag)
+                    .header(header::IF_NONE_MATCH, etag.clone())
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("content not modified");
         assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            not_modified
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain")
+        );
+        assert_eq!(
+            not_modified
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()),
+            Some("5")
+        );
+        assert_eq!(
+            not_modified
+                .headers()
+                .get(header::ETAG)
+                .and_then(|value| value.to_str().ok()),
+            Some(etag.as_str())
+        );
+        assert!(not_modified
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("filename*=UTF-8''notes.txt")));
+        assert_eq!(
+            not_modified
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, max-age=0, must-revalidate")
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_session_attachment_content_streams_large_blobs_and_reports_deleted_paths() {
+        use controlled_instance_protocol::{AiSessionAttachmentKind, AiSessionAttachmentScopeType};
+
+        let (state, _root) = test_state();
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000006", "aps_0000000000006"))
+            .expect("save");
+        let content_bytes = vec![b'x'; 500_017];
+        let draft = state
+            .ai_session_attachments
+            .create_draft(
+                controlled_instance_ai_session::AiSessionAttachmentDraftInput {
+                    id: Some("att_0123456789abcdef01234568".to_string()),
+                    scope_type: AiSessionAttachmentScopeType::Session,
+                    scope_id: "ses_0000000000006".to_string(),
+                    kind: AiSessionAttachmentKind::File,
+                    name: "large.bin".to_string(),
+                    mime: "application/octet-stream".to_string(),
+                    size: content_bytes.len() as u64,
+                    content: content_bytes.clone(),
+                },
+            )
+            .expect("draft");
+        state
+            .ai_session_attachments
+            .stage_message(
+                controlled_instance_ai_session::StageMessageAttachmentsInput {
+                    session_id: "ses_0000000000006".to_string(),
+                    message_id: "msg_0000000000006".to_string(),
+                    attachments: Vec::new(),
+                    retained_attachment_ids: Vec::new(),
+                    runtime_path_root: None,
+                    draft_scope_type: Some(AiSessionAttachmentScopeType::Session),
+                    draft_scope_id: Some("ses_0000000000006".to_string()),
+                    draft_attachment_ids: vec![draft.id.clone()],
+                },
+            )
+            .expect("stage");
+        state.ai_session_attachments.commit_message(
+            "ses_0000000000006",
+            "msg_0000000000006",
+            Some("turn-1"),
+        );
+        let app = router(state.clone());
+        let uri = format!(
+            "/api/ai-sessions/ses_0000000000006/messages/msg_0000000000006/attachments/{}/content",
+            draft.id
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("content");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(bytes.len(), content_bytes.len());
+        assert_eq!(&bytes[..], content_bytes.as_slice());
+
+        let content = state
+            .ai_session_attachments
+            .content("ses_0000000000006", "msg_0000000000006", &draft.id)
+            .expect("content metadata");
+        std::fs::remove_file(content.path).expect("delete attachment blob");
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("missing content");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(missing).await["error"]["code"],
+            "AI_SESSION_ATTACHMENT_NOT_FOUND"
+        );
     }
 
     #[tokio::test]
@@ -12327,6 +19622,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn story_agent_tool_policy_invalidation_uses_the_fastify_zod_error_shape() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"storyId":"s","revision":"x"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("invalidation");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "statusCode": 500,
+                "error": "Internal Server Error",
+                "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[a-f0-9]{64}$/\",\n    \"path\": [\n      \"revision\"\n    ],\n    \"message\": \"Invalid string: must match pattern /^[a-f0-9]{64}$/\"\n  }\n]"
+            })
+        );
+
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("missing body");
+        assert_eq!(missing.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(missing).await,
+            json!({
+                "statusCode": 500,
+                "error": "Internal Server Error",
+                "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
+            })
+        );
+
+        let empty_json = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("empty JSON body");
+        assert_eq!(empty_json.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(empty_json).await,
+            json!({
+                "statusCode": 400,
+                "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+                "error": "Bad Request",
+                "message": "Body cannot be empty when content-type is set to 'application/json'"
+            })
+        );
+
+        let invalid_json = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{"))
+                    .expect("request"),
+            )
+            .await
+            .expect("invalid JSON body");
+        assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(invalid_json).await,
+            json!({
+                "statusCode": 400,
+                "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+                "error": "Bad Request",
+                "message": "Body is not valid JSON but content-type is set to 'application/json'"
+            })
+        );
+
+        let text_body = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Body::from("hello"))
+                    .expect("request"),
+            )
+            .await
+            .expect("text body");
+        assert_eq!(text_body.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(text_body).await,
+            json!({
+                "statusCode": 500,
+                "error": "Internal Server Error",
+                "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
+            })
+        );
+
+        let unsupported_media_type = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/internal/node-agent/story-agent-tools/invalidate")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/xml")
+                    .body(Body::from("<invalid />"))
+                    .expect("request"),
+            )
+            .await
+            .expect("unsupported content type");
+        assert_eq!(
+            unsupported_media_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            body_json(unsupported_media_type).await,
+            json!({
+                "statusCode": 415,
+                "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+                "error": "Unsupported Media Type",
+                "message": "Unsupported Media Type"
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn ai_session_close_and_delete_walk_the_subagent_subtree() {
         let (state, root) = test_state();
         state
@@ -12445,7 +19887,9 @@ mod tests {
 
         let stopped = post_json(&app, "/api/apps/sessions/aps_0000000000300/stop", json!({})).await;
         assert_eq!(stopped.status(), StatusCode::OK);
-        assert_eq!(body_json(stopped).await["data"]["status"], "stopped");
+        let stopped = body_json(stopped).await;
+        assert_eq!(stopped["data"]["status"], "stopped");
+        assert_eq!(stopped["data"]["bindings"], json!([]));
         assert!(state.ai_sessions.list().is_empty());
         assert!(state.ai_session_history.get("ses_0000000000300").is_some());
         assert_eq!(
@@ -12468,6 +19912,11 @@ mod tests {
         ));
         let mut session = ai_session_record("ses_0000000000301", "aps_0000000000301");
         session.agent = "claude".to_string();
+        session.actions = Some(json!({
+            "send": true,
+            "rename": true,
+            "close": true
+        }));
         state.ai_sessions.save(session).expect("AI session");
         let app = router(state.clone());
 
@@ -12483,9 +19932,11 @@ mod tests {
             .await
             .expect("rename");
         assert_eq!(renamed.status(), StatusCode::OK);
-        assert_eq!(
-            body_json(renamed).await["data"]["title"],
-            "Renamed from App"
+        let renamed = body_json(renamed).await;
+        assert_eq!(renamed["data"]["title"], "Renamed from App");
+        assert!(
+            renamed["data"].get("bindings").is_none(),
+            "rename responses must keep the AppSession wire shape before schema reparsing"
         );
         assert_eq!(
             state
@@ -12507,6 +19958,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ai_session_resume_enforces_resume_time_capabilities() {
+        let (state, _root) = test_state();
+        state
+            .ai_session_controller
+            .register_provider(Arc::new(DurableTimelineProvider(
+                state.ai_session_timeline.as_ref().clone(),
+            )));
+        let item = ai_session_history_item("ses_0000000000310", "ai-session");
+        state
+            .ai_session_history
+            .upsert(item, &[])
+            .expect("history item");
+        let app = router(state);
+
+        let model = post_json(
+            &app,
+            "/api/ai-sessions/ses_0000000000310/resume",
+            json!({
+                "modelSelection": {
+                    "modelEntityId": "model-1",
+                    "modelName": "model-1"
+                }
+            }),
+        )
+        .await;
+        let model_status = model.status();
+        let model = body_json(model).await;
+        assert_eq!(
+            model_status,
+            StatusCode::CONFLICT,
+            "unexpected resume response: {model}"
+        );
+        assert_eq!(
+            model["error"]["code"],
+            "AI_SESSION_MODEL_SELECTION_UNSUPPORTED"
+        );
+
+        let reasoning = post_json(
+            &app,
+            "/api/ai-sessions/ses_0000000000310/resume",
+            json!({ "reasoningEffort": "high" }),
+        )
+        .await;
+        assert_eq!(reasoning.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body_json(reasoning).await["error"]["code"],
+            "AI_SESSION_REASONING_EFFORT_UNSUPPORTED"
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_session_resume_restores_history_as_an_active_session() {
+        let (state, _root) = test_state();
+        state
+            .ai_session_controller
+            .register_provider(Arc::new(DurableTimelineProvider(
+                state.ai_session_timeline.as_ref().clone(),
+            )));
+        let mut previous = ai_session_record("ses_0000000000311", "aps_0000000000311");
+        previous.creation_source = "ai-session".to_string();
+        previous.provider_session_id = Some("provider-archived".to_string());
+        previous.app_session_id = None;
+        previous.cwd = Some("/workspace".to_string());
+        state.ai_sessions.save(previous).expect("previous session");
+        let item = ai_session_history_item("ses_0000000000311", "ai-session");
+        state
+            .ai_session_history
+            .upsert(item, &[])
+            .expect("history item");
+        let app = router(state.clone());
+
+        let resumed = post_json(&app, "/api/ai-sessions/ses_0000000000311/resume", json!({})).await;
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let resumed = body_json(resumed).await;
+        assert_eq!(resumed["data"]["disposition"], "resumed");
+        assert_eq!(resumed["data"]["providerSessionId"], "provider-archived");
+        let session = state
+            .ai_sessions
+            .get("ses_0000000000311")
+            .expect("restored session");
+        assert_eq!(session.status, "idle");
+        assert_eq!(session.turns.as_ref().map(Vec::len), Some(2));
+        assert!(state.ai_session_history.get("ses_0000000000311").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn app_session_resume_restores_the_history_entry_before_starting_the_app() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (state, _root) = test_state();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let script = state
+            .config
+            .storage_paths
+            .data_dir
+            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+            .expect("permissions");
+        std::env::set_var("TASK_HANDOFF_CODEX_COMMAND", &script);
+        std::env::set_var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED", "1");
+        let mut item = ai_session_history_item("ses_0000000000312", "app-session");
+        item.cwd = workspace.path().display().to_string();
+        state
+            .ai_session_history
+            .upsert(item, &[])
+            .expect("history item");
+        let app = router(state.clone());
+
+        let resumed = post_json(&app, "/api/ai-sessions/ses_0000000000312/resume", json!({})).await;
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let resumed = body_json(resumed).await;
+        assert_eq!(resumed["data"]["disposition"], "resumed");
+        assert!(resumed["data"]["appSessionId"].as_str().is_some());
+        assert_eq!(
+            state
+                .ai_sessions
+                .get("ses_0000000000312")
+                .expect("restored session")
+                .status,
+            "idle"
+        );
+        std::env::remove_var("TASK_HANDOFF_CODEX_COMMAND");
+        std::env::remove_var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED");
+    }
+
+    #[tokio::test]
     async fn drain_stops_apps_and_publishes_authoritative_snapshots() {
         let (state, _root) = test_state();
         state.app_runtime.insert_session(app_session_record(
@@ -12514,6 +20094,8 @@ mod tests {
             "codex",
             "running",
         ));
+        let mut events = state.events.subscribe();
+        let _ = drain_event_types(&mut events);
         let before_app_revision = state.app_sessions_state().revision;
         let before_ai_revision = state.ai_sessions_state().revision;
         let app = router(state.clone());
@@ -12543,6 +20125,10 @@ mod tests {
         );
         assert!(state.app_sessions_state().revision > before_app_revision);
         assert!(state.ai_sessions_state().revision > before_ai_revision);
+        let drain_events = drain_event_types(&mut events);
+        assert!(!drain_events
+            .iter()
+            .any(|event_type| event_type == "instance.draining"));
 
         let resumed = app
             .oneshot(
@@ -12559,6 +20145,10 @@ mod tests {
         assert_eq!(body_json(resumed).await["data"]["resumed"], true);
         assert!(!state.is_draining());
         assert!(!state.app_runtime.is_draining());
+        let resume_events = drain_event_types(&mut events);
+        assert!(!resume_events
+            .iter()
+            .any(|event_type| event_type == "instance.resumed"));
     }
 
     #[tokio::test]
@@ -12626,6 +20216,7 @@ mod tests {
     async fn ai_session_open_app_starts_binds_and_closes_the_managed_app() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
         let script = state
@@ -12649,6 +20240,28 @@ mod tests {
         session.cwd = Some(workspace.path().display().to_string());
         session.app_session_id = None;
         state.ai_sessions.save(session).expect("save session");
+        let binding_state = state.clone();
+        let binding_cwd = workspace.path().display().to_string();
+        let binding_task = tokio::spawn(async move {
+            loop {
+                let app = binding_state
+                    .app_runtime
+                    .list_sessions()
+                    .into_iter()
+                    .find(|app| app.status == "running" && app.workspace.cwd == binding_cwd);
+                if let Some(app) = app {
+                    binding_state
+                        .ai_sessions
+                        .update("ses_0000000000022", |session| {
+                            session.app_session_id = Some(app.id);
+                            Ok(true)
+                        })
+                        .expect("bind app session");
+                    break;
+                }
+                tokio::time::sleep(TokioDuration::from_millis(5)).await;
+            }
+        });
         let app = router(state.clone());
 
         let opened = app
@@ -12665,6 +20278,7 @@ mod tests {
             .expect("open app");
         assert_eq!(opened.status(), StatusCode::OK);
         let opened = body_json(opened).await;
+        binding_task.await.expect("binding task");
         assert_eq!(opened["data"]["disposition"], "opened");
         let app_session_id = opened["data"]["appSessionId"]
             .as_str()
@@ -12715,6 +20329,180 @@ mod tests {
         assert!(state.ai_session_history.get("ses_0000000000022").is_some());
         std::env::remove_var("TASK_HANDOFF_CODEX_COMMAND");
         std::env::remove_var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ai_session_open_app_stops_the_app_when_the_provider_binding_never_arrives() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
+        let (state, _root) = test_state();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let script = state
+            .config
+            .storage_paths
+            .data_dir
+            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+            .expect("permissions");
+        std::env::set_var("TASK_HANDOFF_CODEX_COMMAND", &script);
+        std::env::set_var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED", "1");
+        let mut session = ai_session_record("ses_0000000000023", "aps_0000000000023");
+        session.provider_session_id = Some("provider-unbound".to_string());
+        session.cwd = Some(workspace.path().display().to_string());
+        session.app_session_id = None;
+        state.ai_sessions.save(session).expect("save session");
+        let app = router(state.clone());
+
+        let failed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai-sessions/ses_0000000000023/open-app")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"clientRequestId":"open-unbound"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("open app");
+        assert_eq!(failed.status(), StatusCode::CONFLICT);
+        let failed = body_json(failed).await;
+        assert_eq!(failed["error"]["code"], "AI_SESSION_OPEN_APP_FAILED");
+        assert_eq!(
+            failed["error"]["message"],
+            "Timed out waiting for the App to bind the original provider session."
+        );
+        assert_eq!(
+            state
+                .ai_sessions
+                .get("ses_0000000000023")
+                .expect("session")
+                .app_session_id,
+            None
+        );
+        let launched = state
+            .app_runtime
+            .list_sessions()
+            .into_iter()
+            .find(|app| app.workspace.cwd == workspace.path().display().to_string())
+            .expect("launched app");
+        assert_eq!(launched.status, "stopped");
+        std::env::remove_var("TASK_HANDOFF_CODEX_COMMAND");
+        std::env::remove_var("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED");
+    }
+
+    #[tokio::test]
+    async fn ai_session_fork_compensation_uses_the_source_snapshot_after_source_close() {
+        let (mut state, root) = test_state();
+        let repository = git_repository();
+        let managed = tempfile::tempdir().expect("managed root");
+        state.repository_service =
+            controlled_instance_workspace::RepositoryService::new_with_managed_root(
+                vec![repository.path().to_path_buf()],
+                managed.path(),
+            );
+        let provider = Arc::new(ForkCompensationProvider {
+            read_started: Arc::new(tokio::sync::Notify::new()),
+            continue_read: Arc::new(tokio::sync::Notify::new()),
+            delete_calls: Arc::new(AtomicUsize::new(0)),
+        });
+        state
+            .ai_session_controller
+            .register_provider(provider.clone());
+        let mut source = ai_session_record("ses_0000000000024", "aps_0000000000024");
+        source.provider_session_id = Some("provider-source".to_string());
+        source.cwd = Some(repository.path().display().to_string());
+        source.status = "idle".to_string();
+        source.phase = "unknown".to_string();
+        source.active_turn_id = None;
+        source.turns = Some(vec![json!({
+            "id": "turn-1",
+            "providerTurnId": "provider-turn-1",
+            "userPrompt": "Fork this",
+            "status": "completed",
+            "phase": "unknown",
+            "revision": 1,
+            "startedAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:01:00.000Z"
+        })]);
+        source.actions = Some(json!({ "fork": true }));
+        state.ai_sessions.save(source).expect("save source");
+        let app = router(state.clone());
+        let request_app = app.clone();
+        let request = tokio::spawn(async move {
+            post_json(
+                &request_app,
+                "/api/ai-sessions/ses_0000000000024/fork",
+                json!({
+                    "clientRequestId": "fork-snapshot-cleanup",
+                    "workspace": { "mode": "managed-worktree" }
+                }),
+            )
+            .await
+        });
+
+        provider.read_started.notified().await;
+        let operation_store: Value = serde_json::from_slice(
+            &std::fs::read(
+                root.path()
+                    .join("data/runtime/ai-session-fork-operations.json"),
+            )
+            .expect("fork operation store"),
+        )
+        .expect("fork operation json");
+        let operation = operation_store["operations"]
+            .as_array()
+            .expect("operations")
+            .iter()
+            .find(|operation| operation["clientRequestId"] == "fork-snapshot-cleanup")
+            .expect("fork operation");
+        assert_eq!(operation["stage"], "provider-created");
+        let worktree_id = operation["worktreeId"]
+            .as_str()
+            .expect("worktree id")
+            .to_string();
+
+        state
+            .ai_sessions
+            .remove("ses_0000000000024")
+            .expect("remove source");
+        provider.continue_read.notify_one();
+
+        let failed = request.await.expect("fork request");
+        assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            body_json(failed).await["error"]["code"],
+            "AI_SESSION_FORK_PROJECTION_FAILED"
+        );
+        assert_eq!(provider.delete_calls.load(Ordering::SeqCst), 1);
+        assert!(state.ai_sessions.list().into_iter().all(|session| {
+            session.provider_session_id.as_deref() != Some("forked-provider-session")
+        }));
+        let registry: Value = serde_json::from_slice(
+            &std::fs::read(managed.path().join("registry.json")).expect("worktree registry"),
+        )
+        .expect("registry json");
+        assert!(!registry["entries"]
+            .as_array()
+            .expect("registry entries")
+            .iter()
+            .any(|entry| entry["worktreeId"] == worktree_id));
+        let operations: Value = serde_json::from_slice(
+            &std::fs::read(
+                root.path()
+                    .join("data/runtime/ai-session-fork-operations.json"),
+            )
+            .expect("fork operation store"),
+        )
+        .expect("fork operation json");
+        assert!(!operations["operations"]
+            .as_array()
+            .expect("operations")
+            .iter()
+            .any(|operation| operation["clientRequestId"] == "fork-snapshot-cleanup"));
     }
 
     #[tokio::test]
@@ -13579,6 +21367,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_shell_websocket_routes_echo_the_first_client_subprotocol() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let (state, _root) = test_state();
+        let app = router(state);
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind websocket route");
+        let address = listener.local_addr().expect("websocket route address");
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        for path in ["/api/events", "/api/browser-tunnel"] {
+            let mut request = format!("ws://{address}{path}")
+                .as_str()
+                .into_client_request()
+                .expect("client request");
+            request.headers_mut().insert(
+                header::SEC_WEBSOCKET_PROTOCOL,
+                header::HeaderValue::from_static("diff-subprotocol, other-subprotocol"),
+            );
+            let (_client, response) = tokio_tungstenite::connect_async(request)
+                .await
+                .unwrap_or_else(|error| panic!("{path} upgrade failed: {error}"));
+            assert_eq!(
+                response.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+                "diff-subprotocol",
+                "{path}"
+            );
+        }
+
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn events_hello_projects_the_authoritative_stream_revisions() {
         let (state, _root) = test_state();
         state.publish_app_session_snapshot("test");
@@ -13788,6 +21612,232 @@ mod tests {
     }
 
     #[test]
+    fn invalid_event_subscriptions_are_ignored_and_topics_follow_js_string_coercion() {
+        assert!(parse_subscription(
+            r#"{"type":"subscribe","aiSessionTransient":{"replaySince":"not-a-date"}}"#
+        )
+        .is_none());
+        assert!(parse_subscription(r#"{"type":"subscribe","aiSessionTransient":null}"#).is_none());
+        assert!(parse_subscription(r#"{"type":"subscribe","aiSessionHierarchy":null}"#).is_none());
+        assert!(parse_subscription(
+            r#"{"type":"subscribe","aiSessionHierarchy":{"subagents":"yes"}}"#
+        )
+        .is_none());
+
+        let subscription = parse_subscription(
+            r#"{"type":"subscribe","topics":[123,true,"",null,{"kind":"topic"}],"aiSessionTransient":{"replaySince":"2026-11-03T00:00:00.000Z"}}"#,
+        )
+        .expect("subscription");
+        assert!(subscription.topics.contains("123"));
+        assert!(subscription.topics.contains("true"));
+        assert!(subscription.topics.contains("null"));
+        assert!(subscription.topics.contains("[object Object]"));
+        assert!(!subscription.topics.contains(""));
+        assert_eq!(
+            subscription
+                .transient
+                .and_then(|transient| transient.replay_since)
+                .as_deref(),
+            Some("2026-11-03T00:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn content_disposition_uses_encode_uri_component_semantics() {
+        assert_eq!(
+            encode_uri_component("a b+c/😀'()!~*"),
+            "a%20b%2Bc%2F%F0%9F%98%80'()!~*"
+        );
+    }
+
+    #[test]
+    fn action_response_omits_absent_optional_fields() {
+        let result = controlled_instance_ai_session::AiSessionActionResult {
+            session: ai_session_record("ses_0000000000009", "aps_0000000000009"),
+            provider: "codex".to_string(),
+            action: controlled_instance_ai_session::ProviderAction::simple("interrupt"),
+        };
+        let response = ai_session_action_response(&result);
+        assert!(response.get("decision").is_none());
+        assert!(response.get("queueId").is_none());
+        assert!(response.get("messageId").is_none());
+    }
+
+    #[tokio::test]
+    async fn app_display_and_management_validation_match_node_zod_errors() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        let display = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/apps/sessions/aps_missing/display")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"width":319}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("display");
+        assert_eq!(display.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(display).await,
+            json!({
+                "error": {
+                    "code": "APP_DISPLAY_INVALID",
+                    "message": "width: Too small: expected number to be >=320"
+                }
+            })
+        );
+
+        let management = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/apps/browser/install")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"requestId":1}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("management");
+        assert_eq!(management.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(management).await,
+            json!({
+                "error": {
+                    "code": "app_management_input_invalid",
+                    "message": "requestId: Invalid input: expected string, received number"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_settings_validation_uses_the_fastify_zod_500_shape() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        let environment = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/internal/model-environment")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"OPENAI_API_KEY":null}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("environment");
+        assert_eq!(environment.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let environment = body_json(environment).await;
+        assert_eq!(environment["statusCode"], 500);
+        let issues: Value = serde_json::from_str(
+            environment["message"]
+                .as_str()
+                .expect("environment message"),
+        )
+        .expect("environment issues");
+        assert_eq!(
+            issues,
+            json!([{
+                "expected": "string",
+                "code": "invalid_type",
+                "path": ["OPENAI_API_KEY"],
+                "message": "Invalid input: expected string, received null"
+            }])
+        );
+
+        let persistence = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/internal/ai-session-persistence-settings")
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("persistence");
+        assert_eq!(persistence.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let persistence = body_json(persistence).await;
+        let issues: Value = serde_json::from_str(
+            persistence["message"]
+                .as_str()
+                .expect("persistence message"),
+        )
+        .expect("persistence issues");
+        assert_eq!(
+            issues,
+            json!([{
+                "expected": "number",
+                "code": "invalid_type",
+                "path": ["historyLimit"],
+                "message": "Invalid input: expected number, received undefined"
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_limits_and_empty_json_rejections_match_fastify() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        let too_large = json!({ "padding": "x".repeat(DEFAULT_JSON_BODY_LIMIT) }).to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/triggers")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(too_large))
+                    .expect("request"),
+            )
+            .await
+            .expect("body limit response");
+        let status = response.status();
+        let response = body_json(response).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{response}");
+        assert_eq!(response["code"], "FST_ERR_CTP_BODY_TOO_LARGE", "{response}");
+
+        let empty = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/triggers")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("empty body");
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+
+        let large_ai_session = json!({
+            "agent": "codex",
+            "cwd": {"type": "runtime-path", "path": "/workspace"},
+            "message": "hello",
+            "padding": "x".repeat(2 * 1024 * 1024),
+        })
+        .to_string();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai-sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(large_ai_session))
+                    .expect("request"),
+            )
+            .await
+            .expect("AI Session body limit response");
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
     fn app_launch_request_matches_the_node_strict_wire_schema() {
         let valid = parse_app_launch_request(&json!({
             "appId": "fixture-shell",
@@ -13811,7 +21861,9 @@ mod tests {
             json!({"unknown": true}),
             json!({"appId": "UPPER"}),
             json!({"title": "   "}),
+            json!({"title": "😀".repeat(121)}),
             json!({"args": vec!["x"; 65]}),
+            json!({"args": ["😀".repeat(4097)]}),
             json!({"env": {"INVALID-KEY": "value"}}),
             json!({"display": {"width": 319}}),
             json!({"display": {"depth": 20}}),
@@ -13829,6 +21881,10 @@ mod tests {
             .expect("null body defaults")
             .app_id
             .is_none());
+        assert!(normalize_app_text_body(&json!({"title": "😀".repeat(61)}), "title", 120).is_ok());
+        assert!(
+            normalize_app_text_body(&json!({"title": "😀".repeat(121)}), "title", 120).is_err()
+        );
     }
 
     #[test]
@@ -13867,16 +21923,16 @@ mod tests {
     }
 
     #[test]
-    fn repository_commit_message_uses_js_trim_and_utf16_limit() {
+    fn repository_commit_message_uses_js_trim_and_zod_codepoint_limit() {
         assert_eq!(
             normalize_repository_commit_message("  subject  ").expect("trimmed"),
             "subject"
         );
         assert_eq!(
-            normalize_repository_commit_message(&"😀".repeat(32_768)).expect("boundary"),
-            "😀".repeat(32_768)
+            normalize_repository_commit_message(&"😀".repeat(65_536)).expect("boundary"),
+            "😀".repeat(65_536)
         );
-        assert!(normalize_repository_commit_message(&"😀".repeat(32_769)).is_err());
+        assert!(normalize_repository_commit_message(&"😀".repeat(65_537)).is_err());
         assert!(normalize_repository_commit_message(" \n\t ").is_err());
     }
 

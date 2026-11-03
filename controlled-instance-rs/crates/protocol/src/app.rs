@@ -222,9 +222,9 @@ pub struct AppSessionProcess {
     pub pid: Option<u32>,
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
+    pub exit_code: Option<Option<i32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signal: Option<String>,
+    pub signal: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -551,5 +551,20 @@ mod tests {
         assert_eq!(normalized.bindings[0].agent.as_deref(), Some("codex"));
         assert_eq!(normalized.bindings[1].kind, "app-session");
         assert_eq!(normalized.bindings[2].agent.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn process_null_exit_fields_are_serialized_as_explicit_nulls() {
+        let mut value = session("session-id", "exited");
+        value.process = Some(AppSessionProcess {
+            pid: Some(42),
+            command: "app".to_string(),
+            exit_code: Some(None),
+            signal: Some(None),
+        });
+
+        let serialized = serde_json::to_value(value).expect("serialize app session");
+        assert_eq!(serialized["process"]["exitCode"], Value::Null);
+        assert_eq!(serialized["process"]["signal"], Value::Null);
     }
 }

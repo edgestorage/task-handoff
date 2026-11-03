@@ -12,6 +12,7 @@ mod event;
 mod git_credentials;
 mod id;
 mod instance_shell;
+pub(crate) mod json_number;
 mod model_config;
 mod repository;
 mod status;

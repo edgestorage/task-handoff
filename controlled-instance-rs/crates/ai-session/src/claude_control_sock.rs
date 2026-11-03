@@ -66,6 +66,8 @@ pub struct ClaudeDaemonJob {
     #[serde(default)]
     pub intent: Option<String>,
     #[serde(default)]
+    pub needs: Option<Value>,
+    #[serde(default)]
     pub cli_version: Option<String>,
     #[serde(default)]
     pub source: Option<String>,
@@ -182,7 +184,6 @@ impl ClaudeControlClient {
         short: &str,
         socket_path: &Path,
     ) -> Result<bool, ClaudeControlError> {
-        validate_short(short)?;
         let response = self
             .call_at(json!({ "op": "has", "short": short }), socket_path)
             .await?;
@@ -198,7 +199,6 @@ impl ClaudeControlClient {
         text: &str,
         socket_path: &Path,
     ) -> Result<Value, ClaudeControlError> {
-        validate_short(short)?;
         self.call_at(
             json!({ "op": "reply", "short": short, "text": text }),
             socket_path,
@@ -212,7 +212,6 @@ impl ClaudeControlClient {
         signal: &str,
         socket_path: &Path,
     ) -> Result<Value, ClaudeControlError> {
-        validate_short(short)?;
         self.call_at(
             json!({ "op": "kill", "short": short, "signal": signal }),
             socket_path,
@@ -226,7 +225,6 @@ impl ClaudeControlClient {
         socket_path: &Path,
         tail: Option<u64>,
     ) -> Result<ClaudeSubscription, ClaudeControlError> {
-        validate_short(short)?;
         let endpoint = LocalIpcEndpoint::explicit(socket_path)
             .map_err(|error| ClaudeControlError::Connection(error.to_string()))?;
         let mut stream = connect_local_ipc(&endpoint)
@@ -293,6 +291,10 @@ pub struct ClaudeSubscription {
 impl ClaudeSubscription {
     pub fn stop(&self) {
         self.abort.abort();
+    }
+
+    pub fn abort_handle(&self) -> AbortHandle {
+        self.abort.clone()
     }
 }
 
@@ -456,9 +458,6 @@ fn claude_short(session: &AiSession) -> Result<&str, ProviderError> {
                 400,
             )
         })?;
-    validate_short(short).map_err(|error| {
-        ProviderError::new("AI_SESSION_CLAUDE_SHORT_INVALID", error.to_string(), 400)
-    })?;
     Ok(short)
 }
 
@@ -473,18 +472,6 @@ fn claude_socket_for_session(session: &AiSession) -> PathBuf {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(claude_control_socket_path_from_env)
-}
-
-fn validate_short(short: &str) -> Result<(), ClaudeControlError> {
-    if short.len() == 8
-        && short
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(())
-    } else {
-        Err(ClaudeControlError::InvalidShort(short.to_string()))
-    }
 }
 
 fn claude_message_text(input: &ProviderMessage) -> Result<String, ProviderError> {
@@ -543,7 +530,7 @@ fn claude_message_text(input: &ProviderMessage) -> Result<String, ProviderError>
             attachment.path.display()
         ));
     }
-    let mut message = input.message.trim().to_string();
+    let mut message = input.message.clone();
     if !paths.is_empty() {
         if !message.is_empty() {
             message.push_str("\n\n");
@@ -739,6 +726,8 @@ mod tests {
                     source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
                 },
                 path: attachment.clone(),
+                source: crate::ProviderAttachmentSource::RuntimePath,
+                runtime_path: Some(attachment.clone()),
             }],
             references: Vec::new(),
             permission_mode: None,
@@ -758,7 +747,7 @@ mod tests {
         assert_eq!(requests[0]["short"], "a1b2c3d4");
         assert_eq!(
             requests[0]["text"],
-            format!("describe this\n\n图片路径：{}\n", attachment.display())
+            format!("  describe this  \n\n图片路径：{}\n", attachment.display())
         );
     }
 
@@ -792,7 +781,7 @@ mod tests {
         assert_eq!(error.message, "missing worker");
         assert!(server.await.is_ok());
 
-        let invalid = session("not-hex!", &socket);
+        let invalid = session("", &socket);
         let error = ClaudeControlSockProvider::new(ClaudeControlClient::with_timeout(
             Duration::from_secs(1),
         ))
@@ -809,8 +798,8 @@ mod tests {
             },
         )
         .await
-        .expect_err("invalid short");
-        assert_eq!(error.code, "AI_SESSION_CLAUDE_SHORT_INVALID");
+        .expect_err("missing short");
+        assert_eq!(error.code, "AI_SESSION_CLAUDE_SHORT_NOT_FOUND");
     }
 
     #[tokio::test]

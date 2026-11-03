@@ -2,14 +2,17 @@ use controlled_instance_core::atomic::{read_json, write_json_atomic};
 use controlled_instance_protocol::{mint_entity_id, AppProfile};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use crate::AppRuntimeError;
 
 const PROFILE_REGISTRY_VERSION: u32 = 1;
 const DEFAULT_PROFILE_NAME: &str = "Default";
+const PROFILE_USAGE_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,10 +39,69 @@ fn registry_version() -> u32 {
     PROFILE_REGISTRY_VERSION
 }
 
+fn sanitize_registry(value: serde_json::Value) -> ChromiumProfileRegistry {
+    let Some(record) = value.as_object() else {
+        return ChromiumProfileRegistry {
+            version: PROFILE_REGISTRY_VERSION,
+            default_profile_id: None,
+            profiles: Vec::new(),
+        };
+    };
+    let profiles = record
+        .get("profiles")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(sanitize_profile)
+        .collect::<Vec<_>>();
+    let default_profile_id = record
+        .get("defaultProfileId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| profiles.iter().any(|profile| profile.id == *value))
+        .map(ToString::to_string);
+    ChromiumProfileRegistry {
+        version: record
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|version| u32::try_from(version).ok())
+            .unwrap_or(PROFILE_REGISTRY_VERSION),
+        default_profile_id,
+        profiles,
+    }
+}
+
+fn sanitize_profile(value: &serde_json::Value) -> Option<ChromiumProfileRecord> {
+    let item = value.as_object()?;
+    let text = |key: &str| item.get(key).and_then(serde_json::Value::as_str);
+    let id = text("id")?.trim();
+    let name = text("name")?.trim();
+    let directory = text("directory")?.trim();
+    let created_at = text("createdAt")?;
+    let updated_at = text("updatedAt")?;
+    if id.is_empty()
+        || name.is_empty()
+        || created_at.is_empty()
+        || updated_at.is_empty()
+        || !Path::new(directory).is_absolute()
+    {
+        return None;
+    }
+    Some(ChromiumProfileRecord {
+        id: id.to_string(),
+        name: name.to_string(),
+        directory: directory.to_string(),
+        created_at: created_at.to_string(),
+        updated_at: updated_at.to_string(),
+    })
+}
+
 #[derive(Clone)]
 pub struct ChromiumProfileStore {
     root: Arc<PathBuf>,
     mutation: Arc<Mutex<()>>,
+    usage_cache: Arc<Mutex<HashMap<String, (u64, Instant)>>>,
 }
 
 impl std::fmt::Debug for ChromiumProfileStore {
@@ -56,6 +118,7 @@ impl ChromiumProfileStore {
         Self {
             root: Arc::new(data_dir.as_ref().join("chromium-profiles")),
             mutation: Arc::new(Mutex::new(())),
+            usage_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -117,7 +180,7 @@ impl ChromiumProfileStore {
         if registry
             .profiles
             .iter()
-            .any(|profile| profile.name.eq_ignore_ascii_case(&name))
+            .any(|profile| profile.name.to_lowercase() == name.to_lowercase())
         {
             return Err(AppRuntimeError::ProfileNameConflict(format!(
                 "Browser profile name \"{name}\" already exists."
@@ -154,11 +217,9 @@ impl ChromiumProfileStore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut registry = self.read();
-        if registry
-            .profiles
-            .iter()
-            .any(|profile| profile.id != profile_id && profile.name.eq_ignore_ascii_case(&name))
-        {
+        if registry.profiles.iter().any(|profile| {
+            profile.id != profile_id && profile.name.to_lowercase() == name.to_lowercase()
+        }) {
             return Err(AppRuntimeError::ProfileNameConflict(format!(
                 "Browser profile name \"{name}\" already exists."
             )));
@@ -168,9 +229,10 @@ impl ChromiumProfileStore {
             .iter_mut()
             .find(|profile| profile.id == profile_id)
         else {
-            return Err(AppRuntimeError::ProfileNotFound(format!(
-                "Browser profile {profile_id} was not found."
-            )));
+            return Err(AppRuntimeError::ProfileNotFound {
+                message: format!("Browser profile {profile_id} was not found."),
+                profile_id: None,
+            });
         };
         profile.name = name;
         profile.updated_at = now_iso();
@@ -191,15 +253,17 @@ impl ChromiumProfileStore {
             .find(|profile| profile.id == profile_id)
             .cloned()
         else {
-            return Err(AppRuntimeError::ProfileNotFound(format!(
-                "Browser profile {profile_id} was not found."
-            )));
+            return Err(AppRuntimeError::ProfileNotFound {
+                message: format!("Browser profile {profile_id} was not found."),
+                profile_id: None,
+            });
         };
         if registry.default_profile_id.as_deref() == Some(profile_id) {
-            return Err(AppRuntimeError::ProfileDefaultProtected(
-                "The default browser profile cannot be removed; change the default profile first."
+            return Err(AppRuntimeError::ProfileDefaultProtected {
+                message: "The default browser profile cannot be removed; change the default profile first."
                     .to_string(),
-            ));
+                profile_id: profile_id.to_string(),
+            });
         }
         registry.profiles.retain(|profile| profile.id != profile_id);
         if registry
@@ -210,7 +274,15 @@ impl ChromiumProfileStore {
             registry.default_profile_id = None;
         }
         self.write(&registry)?;
-        let _ = std::fs::remove_dir_all(profile.directory);
+        match std::fs::remove_dir_all(&profile.directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(AppRuntimeError::storage(error.to_string())),
+        }
+        self.usage_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(profile_id);
         Ok(())
     }
 
@@ -226,9 +298,10 @@ impl ChromiumProfileStore {
             .find(|profile| profile.id == profile_id)
             .cloned()
         else {
-            return Err(AppRuntimeError::ProfileNotFound(format!(
-                "Browser profile {profile_id} was not found."
-            )));
+            return Err(AppRuntimeError::ProfileNotFound {
+                message: format!("Browser profile {profile_id} was not found."),
+                profile_id: None,
+            });
         };
         registry.default_profile_id = Some(profile_id.to_string());
         self.write(&registry)?;
@@ -242,9 +315,10 @@ impl ChromiumProfileStore {
             || profile_id.contains('\\')
             || profile_id.contains('\0')
         {
-            return Err(AppRuntimeError::ProfileNotFound(
-                "Browser profile id is invalid.".to_string(),
-            ));
+            return Err(AppRuntimeError::ProfileNotFound {
+                message: "Browser profile id is invalid.".to_string(),
+                profile_id: Some(profile_id.to_string()),
+            });
         }
         let Some(profile) = self
             .read()
@@ -252,17 +326,34 @@ impl ChromiumProfileStore {
             .into_iter()
             .find(|profile| profile.id == profile_id)
         else {
-            return Err(AppRuntimeError::ProfileNotFound(format!(
-                "Browser profile {profile_id} was not found."
-            )));
+            return Err(AppRuntimeError::ProfileNotFound {
+                message: format!("Browser profile {profile_id} was not found."),
+                profile_id: Some(profile_id.to_string()),
+            });
         };
         self.ensure_directory(PathBuf::from(&profile.directory))?;
         Ok(profile)
     }
 
     pub fn usage_bytes(&self, profile_id: &str) -> Result<u64, AppRuntimeError> {
+        if let Some((bytes, measured_at)) = self
+            .usage_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(profile_id)
+            .copied()
+        {
+            if measured_at.elapsed() < PROFILE_USAGE_CACHE_TTL {
+                return Ok(bytes);
+            }
+        }
         let profile = self.resolve(profile_id)?;
-        Ok(directory_size(Path::new(&profile.directory)))
+        let bytes = directory_size(Path::new(&profile.directory))?;
+        self.usage_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(profile_id.to_string(), (bytes, Instant::now()));
+        Ok(bytes)
     }
 
     fn env_override_directory(&self) -> Option<PathBuf> {
@@ -292,24 +383,7 @@ impl ChromiumProfileStore {
                 profiles: Vec::new(),
             };
         };
-        let mut registry =
-            serde_json::from_value::<ChromiumProfileRegistry>(raw).unwrap_or_default();
-        registry.version = PROFILE_REGISTRY_VERSION;
-        registry.profiles.retain(|profile| {
-            !profile.id.trim().is_empty()
-                && !profile.name.trim().is_empty()
-                && Path::new(&profile.directory).is_absolute()
-                && !profile.created_at.is_empty()
-                && !profile.updated_at.is_empty()
-        });
-        if registry
-            .default_profile_id
-            .as_ref()
-            .is_some_and(|id| !registry.profiles.iter().any(|profile| &profile.id == id))
-        {
-            registry.default_profile_id = None;
-        }
-        registry
+        sanitize_registry(raw)
     }
 
     fn write(&self, registry: &ChromiumProfileRegistry) -> Result<(), AppRuntimeError> {
@@ -347,8 +421,10 @@ pub fn profile_view(profile: ChromiumProfileRecord, default_profile_id: &str) ->
 fn normalize_profile_name(name: &str) -> Result<String, AppRuntimeError> {
     let trimmed = name.trim();
     if trimmed.is_empty()
-        || trimmed.chars().count() > 60
-        || trimmed.chars().any(|character| character.is_control())
+        || controlled_instance_core::text::utf16_len(trimmed) > 60
+        || trimmed
+            .chars()
+            .any(|character| matches!(character, '\u{0000}'..='\u{001f}' | '\u{007f}'))
     {
         return Err(AppRuntimeError::ProfileNameInvalid(
             "Browser profile name must contain between 1 and 60 visible characters.".to_string(),
@@ -357,28 +433,36 @@ fn normalize_profile_name(name: &str) -> Result<String, AppRuntimeError> {
     Ok(trimmed.to_string())
 }
 
-fn directory_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
+fn directory_size(path: &Path) -> Result<u64, AppRuntimeError> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(AppRuntimeError::storage(error.to_string())),
     };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| {
-            let Ok(file_type) = entry.file_type() else {
-                return 0;
-            };
-            if file_type.is_symlink() {
-                return 0;
+    let mut total = 0;
+    for entry in entries {
+        // Profile usage is best-effort: concurrent Chromium writes can remove
+        // an entry between readdir and stat.
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            total += directory_size(&entry.path()).unwrap_or(0);
+            continue;
+        }
+        if file_type.is_file() {
+            if let Ok(metadata) = entry.metadata() {
+                total += metadata.len();
             }
-            if file_type.is_dir() {
-                return directory_size(&entry.path());
-            }
-            if file_type.is_file() {
-                return entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-            }
-            0
-        })
-        .sum()
+        }
+    }
+    Ok(total)
 }
 
 fn now_iso() -> String {
@@ -402,5 +486,42 @@ mod tests {
         let profiles = store.list().expect("list");
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, "Work");
+    }
+
+    #[test]
+    fn profile_names_conflict_with_unicode_case_folding() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = ChromiumProfileStore::new(root.path());
+        store.create("Ärger").expect("profile");
+        let error = store
+            .create("ärger")
+            .expect_err("case-insensitive conflict");
+        assert_eq!(error.code(), "BROWSER_PROFILE_NAME_CONFLICT");
+    }
+
+    #[test]
+    fn profile_names_reject_ascii_controls_but_allow_c1_characters() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = ChromiumProfileStore::new(root.path());
+        let accepted = store.create("C1 \u{0085} name").expect("C1 profile name");
+        assert_eq!(accepted.name, "C1 \u{0085} name");
+        for rejected in ["\u{0000}", "\u{001f}", "\u{007f}"] {
+            let error = store
+                .create(rejected)
+                .expect_err("ASCII control character must be rejected");
+            assert_eq!(error.code(), "BROWSER_PROFILE_NAME_INVALID");
+        }
+    }
+
+    #[test]
+    fn directory_size_only_treats_missing_directories_as_empty() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("missing");
+        assert_eq!(directory_size(&missing).expect("missing directory"), 0);
+
+        let file = root.path().join("not-a-directory");
+        std::fs::write(&file, b"content").expect("file");
+        let error = directory_size(&file).expect_err("non-directory must fail");
+        assert_eq!(error.code(), "APP_PERSISTENCE_FAILED");
     }
 }

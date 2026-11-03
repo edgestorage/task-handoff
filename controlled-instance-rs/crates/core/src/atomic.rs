@@ -5,7 +5,12 @@ pub fn write_atomic(path: &Path, bytes: &[u8], _mode: Option<u32>) -> io::Result
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    let parent_created = !parent.exists();
     std::fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    if parent_created {
+        crate::fs_permissions::restrict_path(parent, 0o700)?;
+    }
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     temporary.write_all(bytes)?;
     temporary.as_file_mut().sync_all()?;

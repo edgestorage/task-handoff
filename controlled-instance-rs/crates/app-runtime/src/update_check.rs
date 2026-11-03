@@ -1,17 +1,37 @@
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::LazyLock, time::Duration};
 
+use controlled_instance_core::text::truncate_utf16;
 use controlled_instance_protocol::{
     AppInstallPrivilege, AppInstaller, FinalComputerCapabilities, ManagedAppUpdateStatus,
 };
+use regex::Regex;
 use serde_json::Value;
 
 use crate::{
-    resolve_executable, run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult,
-    AppRecipeHooks, InstallRecipe,
+    run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeHooks, InstallRecipe,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_VERSION_CHARS: usize = 120;
+
+static PACKAGE_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+._:@/-]{0,199}$")
+        .expect("the system package name pattern is valid")
+});
+static NODE_PACKAGE_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:@[a-z0-9][a-z0-9._-]{0,99}/)?[a-z0-9][a-z0-9._-]{0,99}$")
+        .expect("the Node package name pattern is valid")
+});
+static POLICY_BLOCK_SEPARATOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\n\s*\n").expect("the apt policy block separator is valid"));
+
+#[derive(Clone, Copy)]
+struct NodeUpdateCheckOptions<'a> {
+    managed: bool,
+    version: Option<&'a str>,
+    privilege: AppInstallPrivilege,
+    managed_context: Option<(&'a str, &'a std::path::Path)>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppUpdateCheckResult {
@@ -43,7 +63,8 @@ impl AppUpdateCheckResult {
 
     fn reason(mut self, value: impl Into<String>) -> Self {
         let value = value.into();
-        self.reason = (!value.trim().is_empty()).then(|| value.trim().chars().take(500).collect());
+        self.reason =
+            (!value.trim().is_empty()).then(|| truncate_utf16(value.trim(), MAX_VERSION_CHARS));
         self
     }
 }
@@ -52,29 +73,31 @@ fn version(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(MAX_VERSION_CHARS).collect())
+        .map(|value| truncate_utf16(value, MAX_VERSION_CHARS))
 }
 
 fn first_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
+fn package_name_valid(value: &str) -> bool {
+    PACKAGE_NAME.is_match(value)
+}
+
+fn node_package_name_valid(value: &str) -> bool {
+    NODE_PACKAGE_NAME.is_match(value)
+}
+
 pub fn parse_apt_policy(stdout: &str) -> AppUpdateCheckResult {
     let mut installed_version = None;
     let mut latest_version = None;
-    for block in stdout.split("\n\n") {
-        let installed = block.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("Installed:")
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && *value != "(none)")
-        });
-        let candidate = block.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("Candidate:")
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && *value != "(none)")
-        });
+    for block in POLICY_BLOCK_SEPARATOR.split(stdout) {
+        let installed = block
+            .lines()
+            .find_map(|line| policy_value(line, "Installed:"));
+        let candidate = block
+            .lines()
+            .find_map(|line| policy_value(line, "Candidate:"));
         if installed_version.is_none() {
             installed_version = installed.map(ToString::to_string);
         }
@@ -94,14 +117,27 @@ pub fn parse_apt_policy(stdout: &str) -> AppUpdateCheckResult {
         .latest(latest_version.as_deref())
 }
 
+fn policy_value<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    line.trim()
+        .strip_prefix(prefix)?
+        .split_whitespace()
+        .next()
+        .filter(|value| !value.is_empty() && *value != "(none)")
+}
+
 pub fn parse_brew_outdated(stdout: &str) -> AppUpdateCheckResult {
-    let Ok(Value::Object(source)) = serde_json::from_str::<Value>(stdout) else {
+    let Ok(parsed) = serde_json::from_str::<Value>(stdout) else {
         return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
             .reason("brew outdated output could not be parsed.");
     };
+    let source = parsed.as_object();
     let entries = ["formulae", "casks"]
         .into_iter()
-        .filter_map(|name| source.get(name).and_then(Value::as_array))
+        .filter_map(|name| {
+            source
+                .and_then(|source| source.get(name))
+                .and_then(Value::as_array)
+        })
         .flatten()
         .collect::<Vec<_>>();
     for entry in entries {
@@ -117,7 +153,7 @@ pub fn parse_brew_outdated(stdout: &str) -> AppUpdateCheckResult {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>();
         let latest = record.get("current_version").and_then(Value::as_str);
-        if let Some(latest) = latest {
+        if let Some(latest) = latest.filter(|latest| !latest.is_empty()) {
             if installed.is_empty() || installed.iter().any(|value| *value != latest) {
                 return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
                     .installed(installed.first().copied())
@@ -235,11 +271,13 @@ impl AppUpdateChecker {
                 self.check_node(
                     *installer,
                     packages,
-                    *managed,
-                    version.as_deref(),
-                    privilege.unwrap_or(AppInstallPrivilege::User),
+                    NodeUpdateCheckOptions {
+                        managed: *managed,
+                        version: version.as_deref(),
+                        privilege: privilege.unwrap_or(AppInstallPrivilege::User),
+                        managed_context,
+                    },
                     capabilities,
-                    managed_context,
                 )
                 .await
             }
@@ -252,11 +290,7 @@ impl AppUpdateChecker {
         packages: &[String],
         capabilities: &FinalComputerCapabilities,
     ) -> AppUpdateCheckResult {
-        if packages.is_empty()
-            || packages
-                .iter()
-                .any(|package| package.is_empty() || package.len() > 200)
-        {
+        if packages.is_empty() || packages.iter().any(|package| !package_name_valid(package)) {
             return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
                 .reason("The built-in system package recipe contains an invalid package name.");
         }
@@ -268,7 +302,15 @@ impl AppUpdateChecker {
         }
         match installer {
             AppInstaller::Apt => {
-                let response = self.run("apt-cache", &["policy"], packages, false).await;
+                let response = self
+                    .run(
+                        "apt-cache",
+                        &["policy"],
+                        packages,
+                        false,
+                        capabilities.platform,
+                    )
+                    .await;
                 if response.exit_code != 0 {
                     return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
                         .reason(first_line(&response.stderr).unwrap_or("apt-cache failed."));
@@ -277,7 +319,13 @@ impl AppUpdateChecker {
             }
             AppInstaller::Dnf => {
                 let response = self
-                    .run("dnf", &["-q", "check-update"], packages, false)
+                    .run(
+                        "dnf",
+                        &["-q", "check-update"],
+                        packages,
+                        false,
+                        capabilities.platform,
+                    )
                     .await;
                 if response.exit_code == 100 {
                     return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
@@ -291,7 +339,13 @@ impl AppUpdateChecker {
             }
             AppInstaller::Brew => {
                 let response = self
-                    .run("brew", &["outdated", "--json=v2"], packages, false)
+                    .run(
+                        "brew",
+                        &["outdated", "--json=v2"],
+                        packages,
+                        false,
+                        capabilities.platform,
+                    )
                     .await;
                 if response.exit_code != 0 && response.stdout.trim().is_empty() {
                     return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
@@ -307,12 +361,15 @@ impl AppUpdateChecker {
         &self,
         installer: AppInstaller,
         packages: &[String],
-        managed: bool,
-        version: Option<&str>,
-        recipe_privilege: AppInstallPrivilege,
+        options: NodeUpdateCheckOptions<'_>,
         capabilities: &FinalComputerCapabilities,
-        managed_context: Option<(&str, &std::path::Path)>,
     ) -> AppUpdateCheckResult {
+        let NodeUpdateCheckOptions {
+            managed,
+            version,
+            privilege: recipe_privilege,
+            managed_context,
+        } = options;
         if managed {
             let Some(version) = version else {
                 return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
@@ -357,7 +414,7 @@ impl AppUpdateChecker {
         if packages.is_empty()
             || packages
                 .iter()
-                .any(|package| package.is_empty() || package.len() > 201)
+                .any(|package| !node_package_name_valid(package))
         {
             return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
                 .reason("The built-in Node package recipe contains an invalid package name.");
@@ -376,6 +433,7 @@ impl AppUpdateChecker {
                 &["outdated", "--global", "--json", "--depth=0"],
                 packages,
                 elevate,
+                capabilities.platform,
             )
             .await;
         if response.stdout.trim().is_empty() {
@@ -394,9 +452,32 @@ impl AppUpdateChecker {
         prefix_args: &[&str],
         packages: &[String],
         elevate: bool,
+        platform: controlled_instance_protocol::FinalComputerPlatform,
     ) -> AppRecipeCommandResult {
-        let resolution_path = resolve_executable(executable, &self.env, None)
-            .unwrap_or_else(|| PathBuf::from(executable));
+        let platform = match platform {
+            controlled_instance_protocol::FinalComputerPlatform::Linux => {
+                crate::executable_resolver::Platform::Linux
+            }
+            controlled_instance_protocol::FinalComputerPlatform::Darwin => {
+                crate::executable_resolver::Platform::MacOs
+            }
+            controlled_instance_protocol::FinalComputerPlatform::Win32 => {
+                crate::executable_resolver::Platform::Windows
+            }
+            _ => crate::executable_resolver::Platform::OtherUnix,
+        };
+        let defaults = crate::executable_resolver::ExecutableResolverOptions::default();
+        let mut env = defaults.env.clone();
+        env.extend(self.env.clone());
+        let resolver_options = crate::executable_resolver::ExecutableResolverOptions {
+            platform,
+            env,
+            ..defaults
+        };
+        let resolution_path =
+            crate::executable_resolver::resolve_executable(executable, &resolver_options)
+                .map(|resolution| resolution.executable)
+                .unwrap_or_else(|| PathBuf::from(executable));
         let args = prefix_args
             .iter()
             .map(ToString::to_string)
@@ -509,5 +590,59 @@ mod tests {
             parse_npm_outdated("null").status,
             ManagedAppUpdateStatus::Unknown
         );
+    }
+
+    #[test]
+    fn update_check_package_names_match_the_node_patterns() {
+        assert!(package_name_valid("codex"));
+        assert!(!package_name_valid("@openai/codex"));
+        assert!(package_name_valid("libssl1.1:amd64"));
+        assert!(!package_name_valid("-invalid"));
+        assert!(!package_name_valid("has space"));
+        assert!(!package_name_valid(&"a".repeat(201)));
+
+        assert!(node_package_name_valid("codex"));
+        assert!(node_package_name_valid("@openai/codex"));
+        assert!(node_package_name_valid("Codex"));
+        assert!(!node_package_name_valid("@openai/"));
+        assert!(!node_package_name_valid("has space"));
+        assert!(!node_package_name_valid(&format!("@{}", "a".repeat(101))));
+    }
+
+    #[test]
+    fn update_check_output_accepts_the_same_valid_json_shapes_as_node() {
+        assert_eq!(
+            parse_brew_outdated("[]").status,
+            ManagedAppUpdateStatus::UpToDate
+        );
+        assert_eq!(
+            parse_brew_outdated("\"not-an-object\"").status,
+            ManagedAppUpdateStatus::UpToDate
+        );
+        assert_eq!(
+            parse_brew_outdated("not json").status,
+            ManagedAppUpdateStatus::Unknown
+        );
+        assert_eq!(
+            parse_brew_outdated(r#"{"formulae":[{"installed":[],"current_version":""}]}"#).status,
+            ManagedAppUpdateStatus::UpToDate
+        );
+    }
+
+    #[test]
+    fn update_check_reasons_use_the_node_character_limit() {
+        let result =
+            AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown).reason("x".repeat(500));
+        assert_eq!(result.reason.as_deref(), Some("x".repeat(120).as_str()));
+    }
+
+    #[test]
+    fn apt_policy_blocks_allow_whitespace_only_separator_lines() {
+        let result = parse_apt_policy(
+            "one:\n  Installed: 1.0\n  Candidate: 1.0\n   \ntwo:\n  Installed: 2.0\n  Candidate: 2.1\n",
+        );
+        assert_eq!(result.status, ManagedAppUpdateStatus::UpdateAvailable);
+        assert_eq!(result.installed_version.as_deref(), Some("2.0"));
+        assert_eq!(result.latest_version.as_deref(), Some("2.1"));
     }
 }

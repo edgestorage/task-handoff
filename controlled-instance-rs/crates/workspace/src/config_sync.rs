@@ -4,6 +4,8 @@ use controlled_instance_protocol::{
     ConfigSyncItemType, ConfigSyncPreset, ConfigSyncPresetItem, ConfigSyncPresetSummary,
     ConfigSyncProgram, ConfigSyncProgramResult, ConfigSyncRequest, FolderTreeEntry,
 };
+use icu_collator::{options::CollatorOptions, Collator, CollatorBorrowed};
+use icu_locale_core::Locale;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -79,16 +81,19 @@ pub struct ConfigSyncEnvironment {
 }
 
 impl ConfigSyncEnvironment {
-    pub fn from_storage_paths(paths: &StoragePaths) -> Self {
+    pub fn from_storage_paths(_paths: &StoragePaths) -> Self {
         let home = home_dir();
         Self {
             workspace: env_path(["TASK_HANDOFF_WORKSPACE", "WORKSPACE"])
                 .unwrap_or_else(|| PathBuf::from("/workspace")),
             codex_home: env_path(["CODEX_HOME"]).unwrap_or_else(|| home.join(".codex")),
             claude_home: env_path(["CLAUDE_HOME"]).unwrap_or_else(|| home.join(".claude")),
-            data_dir: paths.data_dir.clone(),
-            log_dir: paths.log_dir.clone(),
-            artifact_dir: paths.artifact_dir.clone(),
+            data_dir: env_path(["TASK_HANDOFF_DATA_DIR"])
+                .unwrap_or_else(|| PathBuf::from("/data/task-handoff")),
+            log_dir: env_path(["TASK_HANDOFF_LOG_DIR"])
+                .unwrap_or_else(|| PathBuf::from("/data/logs")),
+            artifact_dir: env_path(["TASK_HANDOFF_ARTIFACT_DIR"])
+                .unwrap_or_else(|| PathBuf::from("/data/artifacts")),
             home,
         }
     }
@@ -180,7 +185,7 @@ impl ConfigSyncService {
         let selected = resolve_workspace_folder(&self.environment, &request.workspace_folder)?;
         let workspace_folder = relative_workspace_path(&selected.workspace, &selected.resolved);
         let available = self.presets();
-        let mut programs = Vec::with_capacity(request.program_ids.len());
+        let mut selected = Vec::with_capacity(request.program_ids.len());
         for program_id in &request.program_ids {
             let preset = available
                 .iter()
@@ -198,7 +203,11 @@ impl ConfigSyncService {
             } else {
                 format!("{workspace_folder}/{}", preset.id)
             };
-            programs.push(self.run(request.direction, program_id, Some(&preset))?);
+            selected.push((program_id.clone(), preset));
+        }
+        let mut programs = Vec::with_capacity(selected.len());
+        for (program_id, preset) in selected {
+            programs.push(self.run(request.direction, &program_id, Some(&preset))?);
         }
         Ok(ConfigSyncBatchResult {
             direction: request.direction,
@@ -396,19 +405,16 @@ fn run(
         .items
         .iter()
         .map(|item| {
-            item.profile_id
-                .as_ref()
-                .and_then(|id| browser_profiles.iter().find(|profile| profile.id == *id))
-                .or_else(|| {
-                    profiles_by_directory
-                        .get(&absolute_path(Path::new(&item.container_path)))
-                        .copied()
-                })
+            item.profile_id.clone().or_else(|| {
+                profiles_by_directory
+                    .get(&absolute_path(Path::new(&item.container_path)))
+                    .map(|profile| profile.id.clone())
+            })
         })
         .collect::<Vec<_>>();
-    for profile in item_profiles.iter().flatten() {
+    for profile_id in item_profiles.iter().flatten() {
         if let Some(assert_profile_idle) = assert_profile_idle {
-            assert_profile_idle(&profile.id)?;
+            assert_profile_idle(profile_id)?;
         }
     }
 
@@ -470,10 +476,12 @@ fn list_folders(
             400,
         ));
     }
+    let collator = folder_name_collator()?;
     Ok(vec![folder_tree_entry(
         &real_workspace,
         &real_resolved,
         depth.min(2),
+        &collator,
     )?])
 }
 
@@ -481,6 +489,7 @@ fn folder_tree_entry(
     workspace: &Path,
     directory: &Path,
     depth: u32,
+    collator: &CollatorBorrowed<'_>,
 ) -> Result<FolderTreeEntry, ConfigSyncError> {
     let mut children = Vec::new();
     if depth > 0 {
@@ -489,12 +498,18 @@ fn folder_tree_entry(
             .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| {
-            let left = left.file_name().to_string_lossy().to_lowercase();
-            let right = right.file_name().to_string_lossy().to_lowercase();
-            left.cmp(&right)
+            collator.compare(
+                &left.file_name().to_string_lossy(),
+                &right.file_name().to_string_lossy(),
+            )
         });
         for entry in entries {
-            children.push(folder_tree_entry(workspace, &entry.path(), depth - 1)?);
+            children.push(folder_tree_entry(
+                workspace,
+                &entry.path(),
+                depth - 1,
+                collator,
+            )?);
         }
     }
     let name = if directory == workspace {
@@ -513,6 +528,46 @@ fn folder_tree_entry(
         path: relative_workspace_path(workspace, directory),
         children,
     })
+}
+
+pub(crate) fn node_name_collator() -> Result<CollatorBorrowed<'static>, ConfigSyncError> {
+    collator_for_locale(node_default_locale())
+}
+
+fn folder_name_collator() -> Result<CollatorBorrowed<'static>, ConfigSyncError> {
+    node_name_collator()
+}
+
+fn collator_for_locale(locale: Locale) -> Result<CollatorBorrowed<'static>, ConfigSyncError> {
+    Collator::try_new(locale.into(), CollatorOptions::default()).map_err(ConfigSyncError::failed)
+}
+
+fn node_default_locale() -> Locale {
+    let configured = ["LC_ALL", "LC_COLLATE", "LANG"]
+        .into_iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "en-US".to_string());
+    let language = configured
+        .trim()
+        .split(['.', '@'])
+        .next()
+        .unwrap_or_default();
+    if language.is_empty()
+        || language.eq_ignore_ascii_case("C")
+        || language.eq_ignore_ascii_case("POSIX")
+    {
+        en_us_locale()
+    } else {
+        Locale::try_from_str(&language.replace('_', "-")).unwrap_or_else(|_| en_us_locale())
+    }
+}
+
+fn en_us_locale() -> Locale {
+    Locale::try_from_str("en-US").expect("en-US is a valid locale")
 }
 
 #[derive(Debug, Clone)]
@@ -723,6 +778,14 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), ConfigSyncError> {
             }
             target_file.write_all(&buffer[..read])?;
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            target_file.set_permissions(fs::Permissions::from_mode(
+                metadata.permissions().mode() & 0o777,
+            ))?;
+        }
+        #[cfg(not(unix))]
         target_file.set_permissions(metadata.permissions())?;
         target_file.sync_all()?;
         drop(target_file);
@@ -896,7 +959,43 @@ fn home_dir() -> PathBuf {
                 .zip(std::env::var_os("HOMEPATH"))
                 .map(|(drive, path)| PathBuf::from(drive).join(path))
         })
+        .or_else(system_home_dir)
         .unwrap_or_else(|| PathBuf::from("/home/agent"))
+}
+
+#[cfg(unix)]
+fn system_home_dir() -> Option<PathBuf> {
+    use std::ffi::CStr;
+
+    let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut buffer = vec![0_u8; 16 * 1024];
+    let mut result = std::ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            passwd.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    let passwd = unsafe { passwd.assume_init() };
+    if passwd.pw_dir.is_null() {
+        return None;
+    }
+    let home = unsafe { CStr::from_ptr(passwd.pw_dir) };
+    home.to_str()
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(not(unix))]
+fn system_home_dir() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(test)]
@@ -938,6 +1037,105 @@ mod tests {
     }
 
     #[test]
+    fn browser_profile_slugs_collisions_and_empty_names_match_the_node_contract() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let profiles = [
+            ("default", "Ignored", true),
+            ("primary", " Work / Primary ", false),
+            ("duplicate", "Work / Primary", false),
+            ("turkish", "İ", false),
+            ("kelvin", "Kelvin", false),
+            ("empty", "---", false),
+            (
+                "long",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                false,
+            ),
+        ]
+        .into_iter()
+        .map(|(id, name, is_default)| ConfigSyncBrowserProfile {
+            id: id.to_string(),
+            name: name.to_string(),
+            directory: temporary.path().join(id),
+            is_default,
+        })
+        .collect::<Vec<_>>();
+        let service = ConfigSyncService::new(environment(temporary.path()), profiles, None);
+        let browser = service
+            .presets()
+            .into_iter()
+            .find(|preset| preset.id == "browser")
+            .expect("browser preset");
+        let paths = browser
+            .items
+            .iter()
+            .skip(1)
+            .map(|item| item.project_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "chromium-default",
+                "chromium-work-primary",
+                "chromium-work-primary-2",
+                "chromium-i",
+                "chromium-kelvin",
+                "chromium-profile",
+                "chromium-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_sorting_matches_node_locale_compare() {
+        let collator = collator_for_locale(en_us_locale()).expect("collator");
+        let mut names = vec![
+            "b",
+            "A",
+            "a",
+            "ä",
+            "Z",
+            "z",
+            "10",
+            "2",
+            "a-b",
+            "a_b",
+            "É",
+            "e",
+            "E",
+            "folder 1",
+            "folder 01",
+            "Å",
+            "Ö",
+            "o",
+        ];
+        names.sort_by(|left, right| collator.compare(left, right));
+        assert_eq!(
+            names,
+            [
+                "10",
+                "2",
+                "a",
+                "A",
+                "Å",
+                "ä",
+                "a_b",
+                "a-b",
+                "b",
+                "e",
+                "E",
+                "É",
+                "folder 01",
+                "folder 1",
+                "o",
+                "Ö",
+                "z",
+                "Z",
+            ]
+        );
+    }
+
+    #[test]
     fn folder_listing_rejects_absolute_and_symlink_escapes() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let environment = environment(temporary.path());
@@ -956,6 +1154,34 @@ mod tests {
             let error = list_folders(&environment, "link", 0).expect_err("symlink rejection");
             assert_eq!(error.code, "CONFIG_SYNC_FOLDER_INVALID");
         }
+    }
+
+    #[test]
+    fn container_paths_use_node_default_data_log_and_artifact_roots() {
+        let environment = ConfigSyncEnvironment {
+            home: PathBuf::from("/home/agent"),
+            workspace: PathBuf::from("/workspace"),
+            codex_home: PathBuf::from("/home/agent/.codex"),
+            claude_home: PathBuf::from("/home/agent/.claude"),
+            data_dir: PathBuf::from("/data/task-handoff"),
+            log_dir: PathBuf::from("/data/logs"),
+            artifact_dir: PathBuf::from("/data/artifacts"),
+        };
+
+        assert_eq!(
+            resolve_container_path(&environment, "/data/task-handoff/state.json")
+                .expect("data path"),
+            PathBuf::from("/data/task-handoff/state.json")
+        );
+        assert_eq!(
+            resolve_container_path(&environment, "/data/logs/instance.log").expect("log path"),
+            PathBuf::from("/data/logs/instance.log")
+        );
+        assert_eq!(
+            resolve_container_path(&environment, "/data/artifacts/result.json")
+                .expect("artifact path"),
+            PathBuf::from("/data/artifacts/result.json")
+        );
     }
 
     #[test]
@@ -995,6 +1221,64 @@ mod tests {
         );
         assert!(!profile_dir.join("SingletonLock").exists());
         assert!(!profile_dir.join("Cache").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_permissions_only_apply_to_new_targets() {
+        use std::os::unix::fs::PermissionsExt;
+
+        fn mode(path: &Path) -> u32 {
+            fs::symlink_metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        }
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let source = temporary.path().join("source");
+        fs::create_dir_all(source.join("nested")).expect("source");
+        fs::write(source.join("nested/file"), "value").expect("file");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o750)).expect("source mode");
+        fs::set_permissions(source.join("nested"), fs::Permissions::from_mode(0o700))
+            .expect("nested mode");
+
+        let new_target = temporary.path().join("new-target");
+        copy_directory(&source, &new_target, false).expect("new target copy");
+        assert_eq!(mode(&new_target), 0o750);
+        assert_eq!(mode(&new_target.join("nested")), 0o700);
+
+        let existing_target = temporary.path().join("existing-target");
+        fs::create_dir(&existing_target).expect("existing target");
+        fs::set_permissions(&existing_target, fs::Permissions::from_mode(0o711))
+            .expect("existing target mode");
+        copy_directory(&source, &existing_target, false).expect("existing target copy");
+        assert_eq!(mode(&existing_target), 0o711);
+        assert_eq!(mode(&existing_target.join("nested")), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copied_files_keep_only_the_node_low_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let source = temporary.path().join("source");
+        let target = temporary.path().join("target");
+        fs::write(&source, "value").expect("source file");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o7755)).expect("source mode");
+
+        copy_file(&source, &target).expect("copy file");
+
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o0755
+        );
     }
 
     #[test]

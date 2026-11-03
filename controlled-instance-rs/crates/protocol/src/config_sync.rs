@@ -46,7 +46,7 @@ impl ConfigSyncRequest {
         if self
             .program_ids
             .iter()
-            .any(|id| id.is_empty() || id.len() > 120)
+            .any(|id| id.is_empty() || id.chars().count() > 120)
         {
             return Err("Config sync program ids are invalid.".to_string());
         }
@@ -57,7 +57,7 @@ impl ConfigSyncRequest {
         if unique.len() != self.program_ids.len() {
             return Err("Config sync program ids must be unique.".to_string());
         }
-        if self.workspace_folder.is_empty() || self.workspace_folder.len() > 1000 {
+        if self.workspace_folder.is_empty() || self.workspace_folder.chars().count() > 1000 {
             return Err("Config sync workspace folder is invalid.".to_string());
         }
         Ok(self)
@@ -79,7 +79,7 @@ pub struct ConfigSyncPresetItem {
     pub item_type: ConfigSyncItemType,
     pub project_path: String,
     pub container_path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
 }
 
@@ -145,4 +145,38 @@ pub struct FolderTreeEntry {
     pub name: String,
     pub path: String,
     pub children: Vec<FolderTreeEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_preset_deserialization_strips_profile_id_but_public_output_retains_it() {
+        let preset: ConfigSyncPreset = serde_json::from_value(json!({
+            "id": "browser",
+            "label": "Browser",
+            "projectRoot": ".task-handoff/configs/browser",
+            "items": [{
+                "id": "chromium-profile-brp_1",
+                "type": "dir",
+                "projectPath": "chromium-default",
+                "containerPath": "/home/agent/.config/chromium-default",
+                "profileId": "brp_1"
+            }]
+        }))
+        .expect("legacy preset");
+        assert_eq!(preset.items[0].profile_id, None);
+
+        let output = serde_json::to_value(ConfigSyncPresetItem {
+            id: "chromium-profile-brp_1".to_string(),
+            item_type: ConfigSyncItemType::Dir,
+            project_path: "chromium-default".to_string(),
+            container_path: "/home/agent/.config/chromium-default".to_string(),
+            profile_id: Some("brp_1".to_string()),
+        })
+        .expect("serialized item");
+        assert_eq!(output["profileId"], "brp_1");
+    }
 }

@@ -323,7 +323,7 @@ function functionSupportsWebSocket(name, functions, seen = new Set()) {
 
 function rustRouteSurface() {
   const source = fs.readFileSync(serverPath, "utf8");
-  const testModule = source.indexOf("#[cfg(test)]");
+  const testModule = source.lastIndexOf("#[cfg(test)]");
   assert.notEqual(testModule, -1, "server.rs must keep tests behind #[cfg(test)]");
   const production = source.slice(0, testModule);
   const functions = rustFunctions(production);

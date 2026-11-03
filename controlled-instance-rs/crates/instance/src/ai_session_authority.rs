@@ -14,7 +14,28 @@ struct RetainedAiSessionEvent {
     created_at_ms: i64,
 }
 
-#[derive(Debug)]
+pub(crate) fn event_trace_id(prefix: &str) -> String {
+    let millis = Utc::now().timestamp_millis().max(0) as u64;
+    let mut value = millis;
+    let mut digits = Vec::new();
+    if value == 0 {
+        digits.push(b'0');
+    }
+    while value > 0 {
+        let digit = (value % 36) as u8;
+        digits.push(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        });
+        value /= 36;
+    }
+    digits.reverse();
+    let timestamp = String::from_utf8(digits).unwrap_or_else(|_| "0".to_string());
+    let random = Uuid::new_v4().simple().to_string();
+    format!("{prefix}_{timestamp}_{}", &random[..8])
+}
+
 pub struct AiSessionAuthority {
     instance_id: String,
     stream_id: String,
@@ -60,6 +81,10 @@ impl AiSessionAuthority {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn published_snapshot(&self) -> Option<&AiSessionsSnapshot> {
+        self.last_snapshot.as_ref()
     }
 
     pub fn earliest_retained_revision(&self) -> u64 {
@@ -111,7 +136,7 @@ impl AiSessionAuthority {
             "streamId": self.stream_id,
             "instanceId": self.instance_id,
             "revision": self.revision,
-            "traceId": format!("ais_evt_{}_{}", Utc::now().timestamp_millis(), Uuid::new_v4().simple()),
+            "traceId": event_trace_id("ais_evt"),
             "generatedAt": generated_at,
             "reason": reason,
         });
@@ -123,7 +148,7 @@ impl AiSessionAuthority {
         ) {
             object.insert("nodeId".to_string(), Value::String(node_id));
         }
-        if self.revision > 1 {
+        if self.revision > 0 {
             meta.as_object_mut().expect("meta object").insert(
                 "previousRevision".to_string(),
                 json!(self.revision.saturating_sub(1)),
@@ -132,14 +157,14 @@ impl AiSessionAuthority {
         (meta, generated_at)
     }
 
-    pub fn delta(&self, stream_id: &str, since_revision: u64) -> Value {
+    pub fn delta(&self, stream_id: &str, since_revision: f64) -> Value {
         let latest_revision = self.revision;
         let earliest_retained_revision = self
             .history
             .front()
             .map(|event| event.revision)
             .unwrap_or(latest_revision.saturating_add(1));
-        if stream_id != self.stream_id || since_revision > latest_revision {
+        if stream_id != self.stream_id || since_revision > latest_revision as f64 {
             return delta_response(
                 &self.stream_id,
                 &self.instance_id,
@@ -150,7 +175,7 @@ impl AiSessionAuthority {
                 Vec::new(),
             );
         }
-        if since_revision == latest_revision {
+        if since_revision == latest_revision as f64 {
             return delta_response(
                 &self.stream_id,
                 &self.instance_id,
@@ -164,11 +189,11 @@ impl AiSessionAuthority {
         let events = self
             .history
             .iter()
-            .filter(|event| event.revision > since_revision)
+            .filter(|event| event.revision as f64 > since_revision)
             .collect::<Vec<_>>();
         let sync_required = events
             .first()
-            .is_none_or(|event| event.revision != since_revision.saturating_add(1));
+            .is_none_or(|event| event.revision as f64 != since_revision + 1.0);
         let events = if sync_required {
             Vec::new()
         } else {
@@ -257,7 +282,7 @@ fn project_authority_change(
 fn delta_response(
     stream_id: &str,
     instance_id: &str,
-    since_revision: u64,
+    since_revision: f64,
     latest_revision: u64,
     earliest_retained_revision: u64,
     sync_required: bool,
@@ -266,12 +291,20 @@ fn delta_response(
     json!({
         "streamId": stream_id,
         "instanceId": instance_id,
-        "sinceRevision": since_revision,
+        "sinceRevision": js_number_value(since_revision),
         "latestRevision": latest_revision,
         "earliestRetainedRevision": earliest_retained_revision,
         "syncRequired": sync_required,
         "events": events,
     })
+}
+
+fn js_number_value(number: f64) -> Value {
+    if number >= 0.0 && number <= u64::MAX as f64 && number.fract() == 0.0 {
+        json!(number as u64)
+    } else {
+        json!(number)
+    }
 }
 
 fn now_iso() -> String {
@@ -314,6 +347,20 @@ mod tests {
     }
 
     #[test]
+    fn trace_ids_use_base36_millis_and_a_short_random_suffix() {
+        let trace = event_trace_id("ais_evt");
+        let parts = trace.split('_').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "ais");
+        assert_eq!(parts[1], "evt");
+        assert!(parts[2]
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() && !value.is_ascii_uppercase()));
+        assert_eq!(parts[3].len(), 8);
+        assert!(parts[3].chars().all(|value| value.is_ascii_hexdigit()));
+    }
+
+    #[test]
     fn first_change_is_a_snapshot_and_later_changes_are_ordered_patches() {
         let mut authority =
             AiSessionAuthority::new("ins_1", "ais_1", "2026-11-02T00:00:00.000Z".to_string());
@@ -325,7 +372,7 @@ mod tests {
             .expect("snapshot");
         assert_eq!(first.event_type, "ai-session.snapshot");
         assert_eq!(first.payload["meta"]["revision"], 1);
-        assert!(first.payload["meta"].get("previousRevision").is_none());
+        assert_eq!(first.payload["meta"]["previousRevision"], 0);
         assert!(authority
             .prepare(
                 snapshot("2026-11-02T00:00:01.000Z", vec![summary("ses_1", "One")]),
@@ -347,9 +394,9 @@ mod tests {
         assert_eq!(patch.payload["meta"]["previousRevision"], 1);
         assert_eq!(patch.payload["upserted"][0]["title"], "Renamed");
 
-        let delta = authority.delta("ais_1", 1);
+        let delta = authority.delta("ais_1", 1.0);
         assert_eq!(delta["syncRequired"], false);
         assert_eq!(delta["events"][0]["type"], "ai-session.patch");
-        assert_eq!(authority.delta("other", 1)["syncRequired"], true);
+        assert_eq!(authority.delta("other", 1.0)["syncRequired"], true);
     }
 }

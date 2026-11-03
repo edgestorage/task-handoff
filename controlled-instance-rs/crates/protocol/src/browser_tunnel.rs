@@ -213,8 +213,9 @@ pub fn encode_browser_tunnel_open(
     stream_id: u32,
     payload: &BrowserTunnelOpenPayload,
 ) -> Result<Vec<u8>, BrowserTunnelProtocolError> {
-    validate_open_payload(payload)?;
-    let bytes = serde_json::to_vec(payload)
+    let payload = normalized_open_payload(payload);
+    validate_open_payload(&payload)?;
+    let bytes = serde_json::to_vec(&payload)
         .map_err(|_| BrowserTunnelProtocolError::new("Browser tunnel open payload is invalid."))?;
     encode_browser_tunnel_frame(BrowserTunnelFrame {
         frame_type: BrowserTunnelFrameType::Open,
@@ -229,6 +230,7 @@ pub fn decode_browser_tunnel_open(
     require_frame_type(frame, BrowserTunnelFrameType::Open)?;
     let payload: BrowserTunnelOpenPayload = serde_json::from_slice(&frame.payload)
         .map_err(|_| BrowserTunnelProtocolError::new("Browser tunnel open payload is invalid."))?;
+    let payload = normalized_open_payload(&payload);
     validate_open_payload(&payload)?;
     Ok(payload)
 }
@@ -239,6 +241,7 @@ pub fn parse_browser_tunnel_error_payload(
     require_frame_type(frame, BrowserTunnelFrameType::Error)?;
     let payload: BrowserTunnelErrorPayload = serde_json::from_slice(&frame.payload)
         .map_err(|_| BrowserTunnelProtocolError::new("Browser tunnel error payload is invalid."))?;
+    let payload = normalized_error_payload(&payload);
     validate_error_payload(&payload)?;
     Ok(payload)
 }
@@ -247,8 +250,9 @@ pub fn encode_browser_tunnel_error(
     stream_id: u32,
     payload: &BrowserTunnelErrorPayload,
 ) -> Result<Vec<u8>, BrowserTunnelProtocolError> {
-    validate_error_payload(payload)?;
-    let bytes = serde_json::to_vec(payload)
+    let payload = normalized_error_payload(payload);
+    validate_error_payload(&payload)?;
+    let bytes = serde_json::to_vec(&payload)
         .map_err(|_| BrowserTunnelProtocolError::new("Browser tunnel error payload is invalid."))?;
     encode_browser_tunnel_frame(BrowserTunnelFrame {
         frame_type: BrowserTunnelFrameType::Error,
@@ -332,7 +336,7 @@ fn validate_open_payload(
 ) -> Result<(), BrowserTunnelProtocolError> {
     let host = payload.host.trim();
     if host.is_empty()
-        || host.len() > 255
+        || host.chars().count() > 255
         || host.chars().any(|character| {
             character.is_whitespace() || "/?#@\\[]".contains(character) || character == '\0'
         })
@@ -349,12 +353,26 @@ fn validate_error_payload(
     payload: &BrowserTunnelErrorPayload,
 ) -> Result<(), BrowserTunnelProtocolError> {
     let message = payload.message.trim();
-    if message.is_empty() || message.len() > 2048 {
+    if message.is_empty() || message.chars().count() > 2048 {
         return Err(BrowserTunnelProtocolError::new(
             "Browser tunnel error payload is invalid.",
         ));
     }
     Ok(())
+}
+
+fn normalized_open_payload(payload: &BrowserTunnelOpenPayload) -> BrowserTunnelOpenPayload {
+    BrowserTunnelOpenPayload {
+        host: payload.host.trim().to_string(),
+        port: payload.port,
+    }
+}
+
+fn normalized_error_payload(payload: &BrowserTunnelErrorPayload) -> BrowserTunnelErrorPayload {
+    BrowserTunnelErrorPayload {
+        code: payload.code,
+        message: payload.message.trim().to_string(),
+    }
 }
 
 fn require_frame_type(
@@ -386,6 +404,25 @@ mod tests {
             decode_browser_tunnel_frame(&encoded).expect("decode"),
             frame
         );
+    }
+
+    #[test]
+    fn open_and_error_payloads_are_trimmed_like_the_node_schemas() {
+        let open = decode_browser_tunnel_open(&BrowserTunnelFrame {
+            frame_type: BrowserTunnelFrameType::Open,
+            stream_id: 1,
+            payload: br#"{"host":" 127.0.0.1 ","port":8080}"#.to_vec(),
+        })
+        .expect("trimmed host");
+        assert_eq!(open.host, "127.0.0.1");
+
+        let error = parse_browser_tunnel_error_payload(&BrowserTunnelFrame {
+            frame_type: BrowserTunnelFrameType::Error,
+            stream_id: 1,
+            payload: br#"{"code":"BROWSER_TUNNEL_CLOSED","message":" closed "}"#.to_vec(),
+        })
+        .expect("trimmed message");
+        assert_eq!(error.message, "closed");
     }
 
     #[test]

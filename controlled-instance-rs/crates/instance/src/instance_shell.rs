@@ -12,7 +12,7 @@ use controlled_instance_protocol::{
     InstanceShellDataDirection, InstanceShellMode, InstanceShellSignal,
     INSTANCE_SHELL_ACTIVITY_LIMIT, INSTANCE_SHELL_SOCKET_BACKLOG_MAX_BYTES,
 };
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -58,6 +58,85 @@ pub struct InstanceShellRuntime {
     active: Arc<AtomicUsize>,
     processes: Arc<Mutex<BTreeMap<u32, ProcessControl>>>,
     shutdown: broadcast::Sender<ShellShutdown>,
+}
+
+struct ShellOutbound {
+    sender: Option<mpsc::UnboundedSender<(Message, usize)>>,
+    pending: Arc<AtomicUsize>,
+    writer: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ShellOutbound {
+    fn new(mut sink: futures_util::stream::SplitSink<WebSocket, Message>) -> Self {
+        let (sender, mut receiver) = mpsc::unbounded_channel::<(Message, usize)>();
+        let pending = Arc::new(AtomicUsize::new(0));
+        let writer_pending = pending.clone();
+        let writer = tokio::spawn(async move {
+            while let Some((message, bytes)) = receiver.recv().await {
+                if sink.send(message).await.is_err() {
+                    break;
+                }
+                writer_pending.fetch_sub(bytes, Ordering::SeqCst);
+            }
+        });
+        Self {
+            sender: Some(sender),
+            pending,
+            writer: Some(writer),
+        }
+    }
+
+    fn enqueue(&self, message: Message, bytes: usize) -> bool {
+        let Some(sender) = self.sender.as_ref() else {
+            return false;
+        };
+        let current = self.pending.load(Ordering::SeqCst);
+        if current.saturating_add(bytes) > INSTANCE_SHELL_SOCKET_BACKLOG_MAX_BYTES {
+            return false;
+        }
+        self.pending.fetch_add(bytes, Ordering::SeqCst);
+        if sender.send((message, bytes)).is_err() {
+            self.pending.fetch_sub(bytes, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    fn text(&self, text: String) -> bool {
+        let bytes = text.len();
+        self.enqueue(Message::Text(text.into()), bytes)
+    }
+
+    fn binary(&self, bytes: Vec<u8>) -> bool {
+        let len = bytes.len();
+        self.enqueue(Message::Binary(bytes.into()), len)
+    }
+
+    fn close(&self, code: u16, reason: &str) -> bool {
+        let Some(sender) = self.sender.as_ref() else {
+            return false;
+        };
+        let frame = Message::Close(Some(axum::extract::ws::CloseFrame {
+            code,
+            reason: reason.chars().take(123).collect::<String>().into(),
+        }));
+        // Close frames must not be dropped just because the data backlog is at
+        // its limit; otherwise a backpressure close becomes a silent socket
+        // teardown.
+        self.pending.fetch_add(2, Ordering::SeqCst);
+        if sender.send((frame, 2)).is_err() {
+            self.pending.fetch_sub(2, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    async fn finish(mut self) {
+        drop(self.sender.take());
+        if let Some(writer) = self.writer.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), writer).await;
+        }
+    }
 }
 
 impl InstanceShellRuntime {
@@ -171,7 +250,9 @@ impl InstanceShellRuntime {
         .await;
     }
 
-    pub async fn handle_socket(&self, mut socket: WebSocket) {
+    pub async fn handle_socket(&self, socket: WebSocket) {
+        let (socket_sink, mut socket_rx) = socket.split();
+        let outbound = ShellOutbound::new(socket_sink);
         let mut shutdown = self.shutdown.subscribe();
         let (events_tx, mut events_rx) = mpsc::channel::<ShellEvent>(32);
         let mut activity = None;
@@ -183,10 +264,11 @@ impl InstanceShellRuntime {
         let mut stdout_done = false;
         let mut stderr_done = false;
         let mut terminal_failure: Option<ShellFailure> = None;
+        let mut backpressure = false;
 
         loop {
             tokio::select! {
-                message = socket.next() => {
+                message = socket_rx.next() => {
                     let Some(message) = message else { break; };
                     let message = match message {
                         Ok(message) => message,
@@ -289,16 +371,12 @@ impl InstanceShellRuntime {
                                             self.register_process(pid, spawned.control.clone());
                                             terminal = Some(spawned.terminal);
                                             started_frame = Some(frame.clone());
-                                            if send_text(
-                                                &mut socket,
-                                                encode_instance_shell_started_frame(
-                                                    frame.mode,
-                                                    frame.tty,
-                                                ),
-                                            )
-                                            .await
-                                            .is_err()
-                                            {
+                                            let started = encode_instance_shell_started_frame(
+                                                frame.mode,
+                                                frame.tty,
+                                            );
+                                            if !outbound.text(started) {
+                                                backpressure = true;
                                                 break;
                                             }
                                         }
@@ -391,7 +469,8 @@ impl InstanceShellRuntime {
                                 ));
                                 break;
                             };
-                            if socket.send(Message::Binary(frame.into())).await.is_err() {
+                            if !outbound.binary(frame) {
+                                backpressure = true;
                                 break;
                             }
                         }
@@ -421,24 +500,26 @@ impl InstanceShellRuntime {
                             let pty = match terminal { Terminal::Pty(handle) => Some(handle), Terminal::Exec { .. } => None };
                             self.stop_process(pid, pty).await;
                         }
-                        let _ = close_socket(&mut socket, close.code, &close.reason).await;
+                        outbound.close(close.code, &close.reason);
+                        outbound.finish().await;
                         return;
                     }
                     break;
                 }
             }
 
-            let streams_done = if started_frame.as_ref().is_some_and(|frame| frame.tty) {
-                stdout_done
+            let tty = started_frame.as_ref().is_some_and(|frame| frame.tty);
+            let streams_done = if tty {
+                stdout_done || exit_frame.is_some()
             } else {
                 stdout_done && stderr_done
             };
             if streams_done {
                 if let Some((code, signal)) = exit_frame.take() {
                     drop(activity.take());
-                    let _ = send_text(&mut socket, encode_instance_shell_exit_frame(code, signal))
-                        .await;
-                    let _ = close_socket(&mut socket, 1000, "Instance shell process exited.").await;
+                    outbound.text(encode_instance_shell_exit_frame(code, signal));
+                    outbound.close(1000, "Instance shell process exited.");
+                    outbound.finish().await;
                     return;
                 }
             }
@@ -450,14 +531,16 @@ impl InstanceShellRuntime {
         });
         self.stop_process(pid, pty).await;
         drop(activity);
-        if let Some(failure) = terminal_failure {
-            let _ = send_text(
-                &mut socket,
-                encode_instance_shell_error_frame(&failure.code, &failure.message),
-            )
-            .await;
-            let _ = close_socket(&mut socket, 1008, &failure.code).await;
+        if backpressure {
+            outbound.close(1008, "Instance shell socket backpressure limit reached.");
+        } else if let Some(failure) = terminal_failure {
+            outbound.text(encode_instance_shell_error_frame(
+                &failure.code,
+                &failure.message,
+            ));
+            outbound.close(1008, &failure.code);
         }
+        outbound.finish().await;
     }
 }
 
@@ -546,16 +629,7 @@ async fn spawn_shell(
             .transpose()
             .map_err(|_| ())?
             .unwrap_or((args, env));
-        let invocation = command_invocation(
-            &command,
-            &args,
-            &CommandInvocationOptions::from(ExecutableResolverOptions {
-                env,
-                cwd: workspace.to_path_buf(),
-                ..Default::default()
-            }),
-        )
-        .map_err(|_| ())?;
+        let invocation = resolve_invocation(&command, &args, workspace, &env)?;
         let spawned = spawn_pty(
             &invocation.executable.display().to_string(),
             &invocation.args,
@@ -583,16 +657,7 @@ async fn spawn_shell(
             .transpose()
             .map_err(|_| ())?
             .unwrap_or((args, env));
-        let invocation = command_invocation(
-            command,
-            &args,
-            &CommandInvocationOptions::from(ExecutableResolverOptions {
-                env,
-                cwd: workspace.to_path_buf(),
-                ..Default::default()
-            }),
-        )
-        .map_err(|_| ())?;
+        let invocation = resolve_invocation(command, &args, workspace, &env)?;
         let mut process = Command::new(&invocation.executable);
         process
             .args(&invocation.args)
@@ -618,6 +683,20 @@ async fn spawn_shell(
             control: ProcessControl::Exec(pid),
         })
     }
+}
+
+fn resolve_invocation(
+    command: &str,
+    args: &[String],
+    workspace: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<controlled_instance_app_runtime::command_invocation::CommandInvocation, ()> {
+    let options = CommandInvocationOptions::from(ExecutableResolverOptions {
+        env: env.clone(),
+        cwd: workspace.to_path_buf(),
+        ..ExecutableResolverOptions::default()
+    });
+    command_invocation(command, args, &options).map_err(|_| ())
 }
 
 fn spawn_pty_reader(mut reader: std::fs::File, events: mpsc::Sender<ShellEvent>) {
@@ -721,6 +800,41 @@ fn exit_parts(status: std::process::ExitStatus) -> (Option<i32>, Option<String>)
 
 #[cfg(unix)]
 fn signal_name(signal: i32) -> &'static str {
+    #[cfg(target_os = "macos")]
+    return match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        10 => "SIGBUS",
+        11 => "SIGSEGV",
+        12 => "SIGSYS",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        16 => "SIGURG",
+        17 => "SIGSTOP",
+        18 => "SIGTSTP",
+        19 => "SIGCONT",
+        20 => "SIGCHLD",
+        21 => "SIGTTIN",
+        22 => "SIGTTOU",
+        23 => "SIGIO",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        26 => "SIGVTALRM",
+        27 => "SIGPROF",
+        28 => "SIGWINCH",
+        29 => "SIGINFO",
+        30 => "SIGUSR1",
+        31 => "SIGUSR2",
+        _ => "SIGUNKNOWN",
+    };
+    #[cfg(not(target_os = "macos"))]
     match signal {
         1 => "SIGHUP",
         2 => "SIGINT",
@@ -733,10 +847,22 @@ fn signal_name(signal: i32) -> &'static str {
         13 => "SIGPIPE",
         14 => "SIGALRM",
         15 => "SIGTERM",
+        16 => "SIGSTKFLT",
         17 => "SIGCHLD",
         18 => "SIGCONT",
         19 => "SIGSTOP",
         20 => "SIGTSTP",
+        21 => "SIGTTIN",
+        22 => "SIGTTOU",
+        23 => "SIGURG",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        26 => "SIGVTALRM",
+        27 => "SIGPROF",
+        28 => "SIGWINCH",
+        29 => "SIGIO",
+        30 => "SIGPWR",
+        31 => "SIGSYS",
         _ => "SIGUNKNOWN",
     }
 }
@@ -749,23 +875,6 @@ fn signal_process_group(pid: u32, _signal: i32) {
     unsafe {
         libc::kill(-(pid as libc::pid_t), _signal);
     }
-}
-
-async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
-    socket
-        .send(Message::Text(text.into()))
-        .await
-        .map_err(|_| ())
-}
-
-async fn close_socket(socket: &mut WebSocket, code: u16, reason: &str) -> Result<(), ()> {
-    socket
-        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-            code,
-            reason: reason.chars().take(123).collect::<String>().into(),
-        })))
-        .await
-        .map_err(|_| ())
 }
 
 pub fn websocket_upgrade_options(
@@ -926,6 +1035,18 @@ mod tests {
     fn exit_status_signal_names_are_protocol_compatible() {
         assert!(signal_name(15).starts_with("SIG"));
         assert_eq!(signal_name(15), "SIGTERM");
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(signal_name(10), "SIGBUS");
+            assert_eq!(signal_name(29), "SIGINFO");
+            assert_eq!(signal_name(30), "SIGUSR1");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(signal_name(10), "SIGUSR1");
+            assert_eq!(signal_name(29), "SIGIO");
+            assert_eq!(signal_name(30), "SIGPWR");
+        }
     }
 
     #[tokio::test]

@@ -1,17 +1,17 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const STORY_DEFAULT_MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const STORY_DEFAULT_MAX_BATCH_PATHS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentIndexEntry {
     pub title: String,
     pub story_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentPagePagination {
     pub page: u64,
     pub page_size: u64,
@@ -21,7 +21,7 @@ pub struct StoryContentPagePagination {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentPageResult {
     pub story_created_at: String,
     pub documents: Vec<StoryContentIndexEntry>,
@@ -29,7 +29,7 @@ pub struct StoryContentPageResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryAgentPagination {
     pub total_items: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,7 +37,7 @@ pub struct StoryAgentPagination {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryAgentContentListResult {
     pub documents: Vec<StoryContentIndexEntry>,
     pub pagination: StoryAgentPagination,
@@ -51,14 +51,14 @@ pub struct StoryContentGetInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentTransferError {
     pub code: String,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentTransferItem {
     pub story_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,7 +70,7 @@ pub struct StoryContentTransferItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentGetResult {
     pub items: Vec<StoryContentTransferItem>,
 }
@@ -79,15 +79,23 @@ pub struct StoryContentGetResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoryContentSetInput {
     pub story_path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_option"
+    )]
     pub title: Option<String>,
     pub source_path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_option"
+    )]
     pub expected_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryContentSetResult {
     pub title: String,
     pub story_path: String,
@@ -98,7 +106,7 @@ pub struct StoryContentSetResult {
 pub fn validate_story_path(path: &str) -> bool {
     let path = path.trim();
     !path.is_empty()
-        && path.len() <= 1024
+        && path.chars().count() <= 1024
         && !path.starts_with('/')
         && !path.contains('\\')
         && path
@@ -111,6 +119,20 @@ pub fn validate_story_revision(revision: &str) -> bool {
         && revision
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom("expected a value, not null"));
+    }
+    T::deserialize(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]

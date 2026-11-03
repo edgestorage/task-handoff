@@ -1,9 +1,11 @@
 use crate::{
-    AiSession, AiSessionControlProvider, AiSessionModelSelection, AiSessionPermissionMode,
-    AiSessionTimelineStore, ProviderAction, ProviderCreateInput, ProviderCreateResult,
-    ProviderError, ProviderEvent, ProviderForkInput, ProviderMessage, ProviderResumeResult,
+    provider::default_provider_actions, AiSession, AiSessionControlProvider,
+    AiSessionModelSelection, AiSessionPermissionMode, AiSessionTimelineStore, ProviderAction,
+    ProviderAttachmentSource, ProviderCreateInput, ProviderCreateResult, ProviderError,
+    ProviderEvent, ProviderForkInput, ProviderMessage, ProviderResumeResult,
 };
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use controlled_instance_protocol::{
     codex_model_provider_id, AiSessionAttachmentKind, AiSessionCommandInput, AiSessionCommandName,
@@ -12,7 +14,7 @@ use controlled_instance_protocol::{
     AiSessionMentionFileSearch, AiSessionMentionKind, AiSessionModelSelectionCapabilities,
     AiSessionProviderActions, AiSessionProviderCapability, AiSessionProviderTimelineCapabilities,
     AiSessionReasoningEffortCapabilities, AiSessionTimeline, AiSessionTimelineActivityStatus,
-    AiSessionTimelineItem, AiSessionTurnTimeline,
+    AiSessionTimelineItem, AiSessionTurnTimeline, AI_SESSION_MAX_INLINE_FILE_BYTES,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Map, Value};
@@ -43,6 +45,528 @@ const FULL_HISTORY_FORK_MIN_VERSION: [u64; 3] = [0, 129, 0];
 const THREAD_FORK_THROUGH_TURN_MIN_VERSION: [u64; 3] = [0, 143, 0];
 const THREAD_SETTINGS_UPDATE_MIN_VERSION: [u64; 3] = [0, 133, 0];
 const NATIVE_TIMELINE_MIN_VERSION: [u64; 3] = [0, 145, 0];
+const STRUCTURED_TURN_TIMEOUT: Duration = Duration::from_secs(30);
+const STRUCTURED_RESPONSE_MAX_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexSubAgentObservation {
+    State,
+    Activity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexSubAgentActivityOrigin {
+    Snapshot,
+    Realtime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexSubAgent {
+    thread_id: String,
+    path: Option<String>,
+    status: String,
+    activity: Option<String>,
+    message: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CodexSubAgentObservationState {
+    state_at: Option<String>,
+    activity_at: Option<String>,
+    activity_origin: Option<CodexSubAgentActivityOrigin>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexSubAgentUpdate {
+    thread_id: String,
+    path: Option<String>,
+    status: String,
+    activity: Option<String>,
+    message: Option<String>,
+    observation: CodexSubAgentObservation,
+    observed_at: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CodexSubAgentTracker {
+    sub_agents: HashMap<String, CodexSubAgent>,
+    observations: HashMap<String, CodexSubAgentObservationState>,
+}
+
+impl CodexSubAgentTracker {
+    pub(crate) fn replace(&mut self, sub_agents: &[Value]) -> Vec<Value> {
+        for sub_agent in sub_agents.iter().filter_map(codex_sub_agent_from_value) {
+            let current = self.sub_agents.get(&sub_agent.thread_id).cloned();
+            let observation = self
+                .observations
+                .get(&sub_agent.thread_id)
+                .cloned()
+                .unwrap_or_default();
+            let preserve_newer_state = current.as_ref().is_some_and(|current| {
+                codex_sub_agent_state_regression(&current.status, &sub_agent.status)
+            });
+            let preserve_realtime_activity =
+                observation.activity_origin == Some(CodexSubAgentActivityOrigin::Realtime);
+            let merged = if let Some(current) = current.as_ref() {
+                CodexSubAgent {
+                    thread_id: current.thread_id.clone(),
+                    status: if preserve_newer_state {
+                        current.status.clone()
+                    } else {
+                        sub_agent.status.clone()
+                    },
+                    message: if preserve_newer_state {
+                        current.message.clone()
+                    } else {
+                        sub_agent.message.clone()
+                    },
+                    path: sub_agent.path.clone().or_else(|| current.path.clone()),
+                    activity: if preserve_realtime_activity {
+                        current.activity.clone()
+                    } else {
+                        sub_agent
+                            .activity
+                            .clone()
+                            .or_else(|| current.activity.clone())
+                    },
+                    updated_at: current.updated_at.clone(),
+                }
+            } else {
+                sub_agent.clone()
+            };
+            let changed = current.as_ref().is_none_or(|current| {
+                current.path != merged.path
+                    || current.status != merged.status
+                    || current.activity != merged.activity
+                    || current.message != merged.message
+            });
+            let stored = if changed {
+                CodexSubAgent {
+                    updated_at: max_codex_timestamp(
+                        current.as_ref().map(|value| value.updated_at.as_str()),
+                        &sub_agent.updated_at,
+                    )
+                    .unwrap_or_else(|| sub_agent.updated_at.clone()),
+                    ..merged
+                }
+            } else {
+                current.expect("current sub-agent")
+            };
+            self.sub_agents.insert(sub_agent.thread_id.clone(), stored);
+            self.observations.insert(
+                sub_agent.thread_id.clone(),
+                CodexSubAgentObservationState {
+                    state_at: if preserve_newer_state {
+                        observation.state_at
+                    } else {
+                        max_codex_timestamp(observation.state_at.as_deref(), &sub_agent.updated_at)
+                    },
+                    activity_at: if sub_agent.activity.is_some() && !preserve_realtime_activity {
+                        max_codex_timestamp(
+                            observation.activity_at.as_deref(),
+                            &sub_agent.updated_at,
+                        )
+                    } else {
+                        observation.activity_at
+                    },
+                    activity_origin: if preserve_realtime_activity {
+                        Some(CodexSubAgentActivityOrigin::Realtime)
+                    } else if sub_agent.activity.is_some() {
+                        Some(CodexSubAgentActivityOrigin::Snapshot)
+                    } else {
+                        observation.activity_origin
+                    },
+                },
+            );
+        }
+        self.prune();
+        self.current_snapshot()
+    }
+
+    pub(crate) fn apply(&mut self, updates: &[Value], updated_at: &str) -> Vec<Value> {
+        for update in updates.iter().filter_map(codex_sub_agent_update_from_value) {
+            let current = self.sub_agents.get(&update.thread_id).cloned();
+            let observation = self
+                .observations
+                .get(&update.thread_id)
+                .cloned()
+                .unwrap_or_default();
+            let observation_at = update
+                .observed_at
+                .clone()
+                .unwrap_or_else(|| updated_at.to_string());
+            let state_stale = update.observation == CodexSubAgentObservation::State
+                && timestamp_before(&observation_at, observation.state_at.as_deref());
+            let activity_stale = update.observation == CodexSubAgentObservation::Activity
+                && timestamp_before(&observation_at, observation.activity_at.as_deref());
+            let next = match update.observation {
+                CodexSubAgentObservation::State => CodexSubAgent {
+                    thread_id: update.thread_id.clone(),
+                    path: current
+                        .as_ref()
+                        .and_then(|current| current.path.clone())
+                        .or_else(|| update.path.clone()),
+                    status: if state_stale {
+                        current
+                            .as_ref()
+                            .map(|current| current.status.clone())
+                            .unwrap_or_else(|| update.status.clone())
+                    } else {
+                        update.status.clone()
+                    },
+                    activity: current
+                        .as_ref()
+                        .and_then(|current| current.activity.clone()),
+                    message: if state_stale {
+                        current
+                            .as_ref()
+                            .and_then(|current| current.message.clone())
+                            .or_else(|| update.message.clone())
+                    } else {
+                        update.message.clone()
+                    },
+                    updated_at: current
+                        .as_ref()
+                        .map(|current| current.updated_at.clone())
+                        .unwrap_or_else(|| observation_at.clone()),
+                },
+                CodexSubAgentObservation::Activity => CodexSubAgent {
+                    thread_id: update.thread_id.clone(),
+                    path: if update.path.is_some()
+                        && (!activity_stale
+                            || current.as_ref().is_none_or(|value| value.path.is_none()))
+                    {
+                        update.path.clone()
+                    } else {
+                        current.as_ref().and_then(|current| current.path.clone())
+                    },
+                    status: if current.is_some() && observation.state_at.is_some() {
+                        current
+                            .as_ref()
+                            .map(|current| current.status.clone())
+                            .unwrap_or_else(|| update.status.clone())
+                    } else if activity_stale {
+                        current
+                            .as_ref()
+                            .map(|current| current.status.clone())
+                            .unwrap_or_else(|| update.status.clone())
+                    } else {
+                        update.status.clone()
+                    },
+                    activity: if activity_stale {
+                        current
+                            .as_ref()
+                            .and_then(|current| current.activity.clone())
+                            .or_else(|| update.activity.clone())
+                    } else {
+                        update.activity.clone().or_else(|| {
+                            current
+                                .as_ref()
+                                .and_then(|current| current.activity.clone())
+                        })
+                    },
+                    message: current.as_ref().and_then(|current| current.message.clone()),
+                    updated_at: current
+                        .as_ref()
+                        .map(|current| current.updated_at.clone())
+                        .unwrap_or_else(|| observation_at.clone()),
+                },
+            };
+            let changed = current.as_ref().is_none_or(|current| {
+                current.path != next.path
+                    || current.status != next.status
+                    || current.activity != next.activity
+                    || current.message != next.message
+            });
+            let stored = if changed {
+                CodexSubAgent {
+                    updated_at: max_codex_timestamp(
+                        current.as_ref().map(|value| value.updated_at.as_str()),
+                        &observation_at,
+                    )
+                    .unwrap_or_else(|| observation_at.clone()),
+                    ..next
+                }
+            } else {
+                current.expect("current sub-agent")
+            };
+            self.sub_agents.insert(update.thread_id.clone(), stored);
+            self.observations.insert(
+                update.thread_id.clone(),
+                match update.observation {
+                    CodexSubAgentObservation::State => CodexSubAgentObservationState {
+                        state_at: if state_stale {
+                            observation.state_at
+                        } else {
+                            Some(observation_at)
+                        },
+                        ..observation
+                    },
+                    CodexSubAgentObservation::Activity => CodexSubAgentObservationState {
+                        activity_at: if activity_stale {
+                            observation.activity_at
+                        } else {
+                            Some(observation_at)
+                        },
+                        activity_origin: if activity_stale {
+                            observation.activity_origin
+                        } else {
+                            Some(CodexSubAgentActivityOrigin::Realtime)
+                        },
+                        ..observation
+                    },
+                },
+            );
+        }
+        self.prune();
+        self.current_snapshot()
+    }
+
+    pub(crate) fn contains(&self, thread_id: &str) -> bool {
+        self.sub_agents.contains_key(thread_id)
+    }
+
+    fn current_snapshot(&self) -> Vec<Value> {
+        let mut sub_agents = self.sub_agents.values().collect::<Vec<_>>();
+        sub_agents.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+        sub_agents
+            .into_iter()
+            .filter(|sub_agent| sub_agent.status != "completed")
+            .map(codex_sub_agent_to_value)
+            .collect()
+    }
+
+    fn prune(&mut self) {
+        if self.sub_agents.len() <= 50 {
+            return;
+        }
+        let mut retained = self.sub_agents.values().collect::<Vec<_>>();
+        retained.sort_by(|left, right| {
+            let active_order = usize::from(is_active_codex_sub_agent(&right.status))
+                .cmp(&usize::from(is_active_codex_sub_agent(&left.status)));
+            active_order
+                .then_with(|| timestamp_cmp(&right.updated_at, &left.updated_at))
+                .then_with(|| left.thread_id.cmp(&right.thread_id))
+        });
+        let retained_ids = retained
+            .into_iter()
+            .take(50)
+            .map(|sub_agent| sub_agent.thread_id.clone())
+            .collect::<HashSet<_>>();
+        self.sub_agents
+            .retain(|thread_id, _| retained_ids.contains(thread_id));
+        self.observations
+            .retain(|thread_id, _| retained_ids.contains(thread_id));
+    }
+}
+
+fn is_active_codex_sub_agent(status: &str) -> bool {
+    matches!(
+        status,
+        "pending-init" | "running" | "interrupted" | "errored"
+    )
+}
+
+fn codex_sub_agent_state_regression(current: &str, incoming: &str) -> bool {
+    fn rank(status: &str) -> u8 {
+        match status {
+            "pending-init" => 0,
+            "running" => 1,
+            "interrupted" => 2,
+            "completed" | "errored" | "shutdown" | "not-found" => 3,
+            _ => 0,
+        }
+    }
+    rank(incoming) < rank(current)
+}
+
+fn timestamp_before(left: &str, right: Option<&str>) -> bool {
+    right.is_some_and(|right| timestamp_value(left) < timestamp_value(right))
+}
+
+fn timestamp_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    timestamp_value(left).cmp(&timestamp_value(right))
+}
+
+fn timestamp_value(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.timestamp_millis())
+        .unwrap_or_default()
+}
+
+fn max_codex_timestamp(left: Option<&str>, right: &str) -> Option<String> {
+    match left {
+        Some(left) if timestamp_value(left) >= timestamp_value(right) => Some(left.to_string()),
+        _ => Some(right.to_string()),
+    }
+}
+
+fn codex_sub_agent_to_value(sub_agent: &CodexSubAgent) -> Value {
+    let mut value = Map::new();
+    value.insert("threadId".to_string(), json!(sub_agent.thread_id));
+    if let Some(path) = sub_agent
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        value.insert("path".to_string(), json!(path));
+    }
+    value.insert("status".to_string(), json!(sub_agent.status));
+    if let Some(activity) = sub_agent.activity.as_deref() {
+        value.insert("activity".to_string(), json!(activity));
+    }
+    if let Some(message) = sub_agent
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        value.insert("message".to_string(), json!(message));
+    }
+    value.insert("updatedAt".to_string(), json!(sub_agent.updated_at));
+    Value::Object(value)
+}
+
+fn codex_sub_agent_from_value(value: &Value) -> Option<CodexSubAgent> {
+    let record = value.as_object()?;
+    Some(CodexSubAgent {
+        thread_id: string_value(record.get("threadId"))?.trim().to_string(),
+        path: string_value(record.get("path")).map(|value| value.trim().to_string()),
+        status: codex_sub_agent_status(record.get("status").and_then(Value::as_str))?.to_string(),
+        activity: record
+            .get("activity")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "started" | "interacted" | "interrupted"))
+            .map(ToString::to_string),
+        message: string_value(record.get("message")).map(|value| value.trim().to_string()),
+        updated_at: string_value(record.get("updatedAt"))?.trim().to_string(),
+    })
+}
+
+fn codex_sub_agent_update_from_value(value: &Value) -> Option<CodexSubAgentUpdate> {
+    let record = value.as_object()?;
+    Some(CodexSubAgentUpdate {
+        thread_id: string_value(record.get("threadId"))?.trim().to_string(),
+        path: string_value(record.get("path")).map(|value| value.trim().to_string()),
+        status: codex_sub_agent_status(record.get("status").and_then(Value::as_str))?.to_string(),
+        activity: record
+            .get("activity")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "started" | "interacted" | "interrupted"))
+            .map(ToString::to_string),
+        message: string_value(record.get("message")).map(|value| value.trim().to_string()),
+        observation: match record.get("observation").and_then(Value::as_str) {
+            Some("state") => CodexSubAgentObservation::State,
+            Some("activity") => CodexSubAgentObservation::Activity,
+            _ => return None,
+        },
+        observed_at: string_value(record.get("observedAt")),
+    })
+}
+
+fn string_value(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn codex_sub_agent_status(value: Option<&str>) -> Option<&str> {
+    match value {
+        Some("pendingInit") => Some("pending-init"),
+        Some(
+            value @ ("pending-init" | "running" | "interrupted" | "completed" | "errored"
+            | "shutdown" | "not-found"),
+        ) => Some(value),
+        Some("notFound") => Some("not-found"),
+        _ => None,
+    }
+}
+
+fn codex_sub_agent_updates(item: &Value, observed_at: Option<&str>) -> Vec<Value> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+    if item_type == "subAgentActivity" {
+        let Some(thread_id) = string_value(item.get("agentThreadId")) else {
+            return Vec::new();
+        };
+        let Some(activity) = item
+            .get("kind")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "started" | "interacted" | "interrupted"))
+        else {
+            return Vec::new();
+        };
+        let mut update = json!({
+            "threadId": thread_id,
+            "status": match activity {
+                "interrupted" => "interrupted",
+                "started" => "pending-init",
+                _ => "running",
+            },
+            "activity": activity,
+            "observation": "activity",
+        });
+        if let Some(path) = string_value(item.get("agentPath")) {
+            update["path"] = json!(path);
+        }
+        if let Some(observed_at) = observed_at {
+            update["observedAt"] = json!(observed_at);
+        }
+        return vec![update];
+    }
+    if item_type != "collabAgentToolCall" {
+        return Vec::new();
+    }
+    item.get("agentsStates")
+        .and_then(Value::as_object)
+        .map(|states| {
+            states
+                .iter()
+                .filter_map(|(thread_id, state)| {
+                    let thread_id = thread_id.trim();
+                    if thread_id.is_empty() {
+                        return None;
+                    }
+                    let status =
+                        codex_sub_agent_status(state.get("status").and_then(Value::as_str))?;
+                    let mut update = json!({
+                        "threadId": thread_id,
+                        "status": status,
+                        "observation": "state",
+                    });
+                    if let Some(message) = string_value(state.get("message")) {
+                        update["message"] = json!(message);
+                    }
+                    if let Some(observed_at) = observed_at {
+                        update["observedAt"] = json!(observed_at);
+                    }
+                    Some(update)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn rebuild_codex_sub_agents(turns: &Value, updated_at: &str) -> Vec<Value> {
+    let mut tracker = CodexSubAgentTracker::default();
+    for turn in turns.as_array().into_iter().flatten() {
+        for item in turn
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let updates = codex_sub_agent_updates(item, None);
+            if !updates.is_empty() {
+                tracker.apply(&updates, updated_at);
+            }
+        }
+    }
+    tracker.current_snapshot()
+}
 
 fn managed_model_environment_key(key: &str) -> bool {
     matches!(
@@ -88,6 +612,13 @@ pub struct CodexThreadResumeOptions {
     pub story_agent_tools: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CodexThreadSettingsUpdate {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub model_provider: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CodexThreadSnapshot {
     pub provider_session_id: String,
@@ -99,7 +630,9 @@ pub struct CodexThreadSnapshot {
     pub status: String,
     pub phase: String,
     pub turns: Value,
+    pub sub_agents: Vec<Value>,
     pub paginated_history: bool,
+    pub fork_supported: bool,
     pub lineage: Option<Value>,
     pub turns_authoritative: bool,
 }
@@ -150,6 +683,16 @@ pub trait CodexAppServerTargetResolver: Send + Sync {
     async fn resolve_codex_app_server_target(
         &self,
     ) -> Result<Option<CodexAppServerTarget>, ProviderError>;
+
+    async fn ensure_codex_app_server_target(
+        &self,
+    ) -> Result<Option<CodexAppServerTarget>, ProviderError> {
+        self.resolve_codex_app_server_target().await
+    }
+
+    fn allows_private_codex_app_server(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -173,7 +716,8 @@ struct ClientInner {
     generation: AtomicU64,
     connected: AtomicBool,
     approvals: Mutex<Vec<CodexApprovalRequest>>,
-    live_items: Mutex<HashMap<String, BTreeMap<String, LiveThreadItem>>>,
+    live_items: Mutex<HashMap<String, Vec<(String, LiveThreadItem)>>>,
+    timeline_store: RwLock<Option<AiSessionTimelineStore>>,
     events: broadcast::Sender<ProviderEvent>,
     notifications: broadcast::Sender<Value>,
     version: Mutex<Option<String>>,
@@ -227,6 +771,7 @@ impl CodexAppServerClient {
                 connected: AtomicBool::new(false),
                 approvals: Mutex::new(Vec::new()),
                 live_items: Mutex::new(HashMap::new()),
+                timeline_store: RwLock::new(None),
                 events,
                 notifications,
                 version: Mutex::new(None),
@@ -274,6 +819,27 @@ impl CodexAppServerClient {
             .external_target_resolver
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = resolver;
+    }
+
+    async fn resolve_external_target(&self, ensure: bool) -> Result<bool, ProviderError> {
+        let resolver = self
+            .inner
+            .external_target_resolver
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(resolver) = resolver else {
+            return Ok(true);
+        };
+        let target = if ensure {
+            resolver.ensure_codex_app_server_target().await?
+        } else {
+            resolver.resolve_codex_app_server_target().await?
+        };
+        if self.update_external_target(target) {
+            self.disconnect().await;
+        }
+        Ok(resolver.allows_private_codex_app_server())
     }
 
     fn update_external_target(&self, target: Option<CodexAppServerTarget>) -> bool {
@@ -355,10 +921,26 @@ impl CodexAppServerClient {
             .is_some_and(codex_thread_settings_update_supported)
     }
 
+    /// Matches the Node adapter contract: provider reload is available when the
+    /// client exposes the archive/unarchive/resume methods as a complete set.
+    /// This client always implements all three, so the capability is stable
+    /// before the first connection and does not depend on the artifact version.
+    pub fn supports_provider_reload(&self) -> bool {
+        true
+    }
+
     pub fn supports_paginated_timeline(&self) -> bool {
         self.capability_version()
             .as_deref()
             .is_some_and(codex_paginated_timeline_supported)
+    }
+
+    fn set_timeline_store(&self, store: AiSessionTimelineStore) {
+        *self
+            .inner
+            .timeline_store
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(store);
     }
 
     pub fn thread_fork_capabilities(&self) -> CodexThreadForkCapabilities {
@@ -388,7 +970,7 @@ impl CodexAppServerClient {
             .await
             .get(provider_session_id)
             .copied()
-            .unwrap_or_else(|| self.supports_paginated_timeline())
+            .unwrap_or(false)
     }
 
     async fn record_timeline_history(&self, snapshot: &CodexThreadSnapshot) {
@@ -399,18 +981,7 @@ impl CodexAppServerClient {
     }
 
     async fn ensure_connected(&self) -> Result<(), ProviderError> {
-        let resolver = self
-            .inner
-            .external_target_resolver
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        if let Some(resolver) = resolver {
-            let target = resolver.resolve_codex_app_server_target().await?;
-            if self.update_external_target(target) {
-                self.disconnect().await;
-            }
-        }
+        let allows_private = self.resolve_external_target(false).await?;
         if self.is_connected() {
             return Ok(());
         }
@@ -418,7 +989,42 @@ impl CodexAppServerClient {
         if self.is_connected() {
             return Ok(());
         }
+        if !allows_private
+            && self
+                .inner
+                .external_target
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none()
+        {
+            return Err(ProviderError::new(
+                "AI_SESSION_PROVIDER_UNAVAILABLE",
+                "Codex app-server is not running.",
+                503,
+            ));
+        }
         self.connect_locked().await
+    }
+
+    pub async fn ensure_ready(&self) -> Result<(), ProviderError> {
+        self.resolve_external_target(true).await?;
+        self.ensure_connected().await
+    }
+
+    async fn prepare_discovery(&self) -> Result<bool, ProviderError> {
+        let allows_private = self.resolve_external_target(false).await?;
+        if !allows_private
+            && self
+                .inner
+                .external_target
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none()
+        {
+            return Ok(false);
+        }
+        self.ensure_connected().await?;
+        Ok(true)
     }
 
     async fn connect_locked(&self) -> Result<(), ProviderError> {
@@ -924,9 +1530,13 @@ impl CodexAppServerClient {
         );
         apply_permissions(&mut params, input.permission_mode);
         params.insert("ephemeral".to_string(), Value::Bool(false));
+        let story_agent_tools = input.story_agent_tools.clone().unwrap_or_default();
         let config = thread_config(
-            input.reasoning_effort.as_deref(),
-            input.story_agent_tools.as_deref(),
+            input
+                .reasoning_effort
+                .as_deref()
+                .or(Some(DEFAULT_REASONING_EFFORT)),
+            Some(story_agent_tools.as_slice()),
         );
         if !config.is_empty() {
             params.insert("config".to_string(), Value::Object(config));
@@ -937,7 +1547,8 @@ impl CodexAppServerClient {
             params.insert("historyMode".to_string(), json!("paginated"));
         }
         let result = self.request("thread/start", Value::Object(params)).await?;
-        let snapshot = thread_from_result(result, input.cwd.clone(), false)?;
+        let mut snapshot = thread_from_result(result, input.cwd.clone(), false)?;
+        snapshot.fork_supported = self.thread_fork_capabilities().full_history;
         self.mark_thread_subscribed(&snapshot.provider_session_id)
             .await;
         self.record_timeline_history(&snapshot).await;
@@ -977,21 +1588,26 @@ impl CodexAppServerClient {
         }
         params.insert("model".to_string(), json!(model));
         params.insert("modelProvider".to_string(), json!(model_provider));
+        let story_agent_tools = input.story_agent_tools.clone().unwrap_or_default();
         let config = thread_config(
-            input.reasoning_effort.as_deref(),
-            input.story_agent_tools.as_deref(),
+            input
+                .reasoning_effort
+                .as_deref()
+                .or(Some(DEFAULT_REASONING_EFFORT)),
+            Some(story_agent_tools.as_slice()),
         );
         if !config.is_empty() {
             params.insert("config".to_string(), Value::Object(config));
         }
         params.insert("ephemeral".to_string(), Value::Bool(false));
         let result = self.request("thread/fork", Value::Object(params)).await?;
-        let snapshot = thread_from_result(
+        let mut snapshot = thread_from_result(
             result,
             cwd.map(Path::to_path_buf)
                 .unwrap_or_else(|| input.cwd.clone()),
             false,
         )?;
+        snapshot.fork_supported = capability.full_history;
         self.mark_thread_subscribed(&snapshot.provider_session_id)
             .await;
         self.record_timeline_history(&snapshot).await;
@@ -1025,7 +1641,8 @@ impl CodexAppServerClient {
             params.insert("config".to_string(), Value::Object(config));
         }
         let result = self.request("thread/resume", Value::Object(params)).await?;
-        let snapshot = thread_from_result(result, PathBuf::new(), true)?;
+        let mut snapshot = thread_from_result(result, PathBuf::new(), true)?;
+        snapshot.fork_supported = self.thread_fork_capabilities().full_history;
         self.mark_thread_subscribed(&snapshot.provider_session_id)
             .await;
         self.record_timeline_history(&snapshot).await;
@@ -1042,7 +1659,8 @@ impl CodexAppServerClient {
                 json!({ "threadId": provider_session_id, "includeTurns": true }),
             )
             .await?;
-        let snapshot = thread_from_result(result, PathBuf::new(), true)?;
+        let mut snapshot = thread_from_result(result, PathBuf::new(), true)?;
+        snapshot.fork_supported = self.thread_fork_capabilities().full_history;
         self.record_timeline_history(&snapshot).await;
         Ok(snapshot)
     }
@@ -1133,6 +1751,22 @@ impl CodexAppServerClient {
         Ok(threads)
     }
 
+    pub async fn active_thread_exists(
+        &self,
+        provider_session_id: &str,
+    ) -> Result<bool, ProviderError> {
+        let threads = self.list_threads().await.map_err(|error| {
+            ProviderError::new(
+                "AI_SESSION_READ_FAILED",
+                error.message,
+                if error.code == Some(-32601) { 409 } else { 502 },
+            )
+        })?;
+        Ok(threads
+            .iter()
+            .any(|thread| thread.get("id").and_then(Value::as_str) == Some(provider_session_id)))
+    }
+
     /// Synchronizes the current app-server generation with the persisted app
     /// session thread bindings. The returned snapshots are authoritative reads
     /// for loaded threads and resumed reads for unloaded app-bound threads.
@@ -1140,7 +1774,9 @@ impl CodexAppServerClient {
         &self,
         recoverable_thread_ids: &[String],
     ) -> Result<Vec<CodexThreadSnapshot>, ProviderError> {
-        self.ensure_connected().await?;
+        if !self.prepare_discovery().await? {
+            return Ok(Vec::new());
+        }
         let loaded_thread_ids = self.list_loaded_thread_ids().await.map_err(|error| {
             ProviderError::new(
                 "AI_SESSION_DISCOVERY_FAILED",
@@ -1156,18 +1792,13 @@ impl CodexAppServerClient {
                 .await
                 .retain(|thread_id| loaded.contains(thread_id));
         }
-        let mut summaries = HashMap::<String, CodexThreadSnapshot>::new();
-        if let Ok(threads) = self.list_threads().await {
-            for thread in threads {
-                if let Some(snapshot) = thread_snapshot(&thread, PathBuf::new()) {
-                    summaries
-                        .entry(snapshot.provider_session_id.clone())
-                        .or_insert(snapshot);
-                }
+        let (mut summaries, mut snapshots) = match self.list_threads().await {
+            Ok(threads) => {
+                project_thread_list_entries(threads, self.thread_fork_capabilities().full_history)
             }
-        }
+            Err(_) => (HashMap::new(), Vec::new()),
+        };
 
-        let mut snapshots = Vec::new();
         let mut seen = HashSet::new();
         for thread_id in loaded_thread_ids {
             if !seen.insert(thread_id.clone()) {
@@ -1186,7 +1817,9 @@ impl CodexAppServerClient {
                     snapshot = Some(resumed);
                 }
             }
-            snapshots.push(snapshot.unwrap_or_else(|| empty_thread_snapshot(&thread_id)));
+            let mut snapshot = snapshot.unwrap_or_else(|| empty_thread_snapshot(&thread_id));
+            snapshot.fork_supported = self.thread_fork_capabilities().full_history;
+            snapshots.push(snapshot);
         }
         for thread_id in recoverable_thread_ids {
             let thread_id = thread_id.trim();
@@ -1254,7 +1887,7 @@ impl CodexAppServerClient {
         input: &ProviderMessage,
     ) -> Result<ProviderAction, ProviderError> {
         let provider_session_id = require_provider_session(session)?;
-        let (_message, codex_inputs) = prepare_inputs(input);
+        let (_message, codex_inputs) = prepare_inputs(input)?;
         let mut params = Map::new();
         params.insert("threadId".to_string(), json!(provider_session_id));
         params.insert("input".to_string(), Value::Array(codex_inputs));
@@ -1282,17 +1915,34 @@ impl CodexAppServerClient {
                 "AI session has no active turn to steer.",
             )
         })?;
-        let (_, codex_inputs) = prepare_inputs(input);
-        let result = self
+        let (_, codex_inputs) = prepare_inputs(input)?;
+        let result = match self
             .request(
                 "turn/steer",
                 json!({
                     "threadId": provider_session_id,
                     "expectedTurnId": expected_turn_id,
-                    "input": codex_inputs,
+                    "input": codex_inputs.clone(),
                 }),
             )
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let Some(found_turn_id) = active_turn_mismatch_found_id(&error) else {
+                    return Err(error);
+                };
+                self.request(
+                    "turn/steer",
+                    json!({
+                        "threadId": provider_session_id,
+                        "expectedTurnId": found_turn_id,
+                        "input": codex_inputs,
+                    }),
+                )
+                .await?
+            }
+        };
         let turn_id = result
             .get("turnId")
             .and_then(Value::as_str)
@@ -1319,18 +1969,47 @@ impl CodexAppServerClient {
                 400,
             )
         })?;
-        self.request(
-            "turn/interrupt",
-            json!({ "threadId": provider_session_id, "turnId": turn_id }),
-        )
-        .await?;
-        Ok(ProviderAction {
-            action: "interrupt".to_string(),
-            turn_id: Some(turn_id.to_string()),
-            provider_turn_id: Some(turn_id.to_string()),
-            decision: None,
-            queue_id: None,
-        })
+        match self
+            .request(
+                "turn/interrupt",
+                json!({ "threadId": provider_session_id, "turnId": turn_id }),
+            )
+            .await
+        {
+            Ok(_) => Ok(ProviderAction {
+                action: "interrupt".to_string(),
+                turn_id: Some(turn_id.to_string()),
+                provider_turn_id: Some(turn_id.to_string()),
+                decision: None,
+                queue_id: None,
+            }),
+            Err(error) => {
+                if let Some(found_turn_id) = active_turn_mismatch_found_id(&error) {
+                    self.request(
+                        "turn/interrupt",
+                        json!({ "threadId": provider_session_id, "turnId": found_turn_id }),
+                    )
+                    .await?;
+                    return Ok(ProviderAction {
+                        action: "interrupt".to_string(),
+                        turn_id: Some(found_turn_id.clone()),
+                        provider_turn_id: Some(found_turn_id),
+                        decision: None,
+                        queue_id: None,
+                    });
+                }
+                if !is_no_active_turn_error(&error) {
+                    return Err(error);
+                }
+                Ok(ProviderAction {
+                    action: "interrupt".to_string(),
+                    turn_id: Some(turn_id.to_string()),
+                    provider_turn_id: Some(turn_id.to_string()),
+                    decision: None,
+                    queue_id: None,
+                })
+            }
+        }
     }
 
     pub async fn resolve_approval(
@@ -1339,19 +2018,22 @@ impl CodexAppServerClient {
         decision: &str,
     ) -> Result<ProviderAction, ProviderError> {
         let provider_session_id = require_provider_session(session)?;
-        let approval = {
-            let approvals = self.inner.approvals.lock().await;
-            let index = approvals
-                .iter()
-                .rposition(|approval| approval.provider_session_id == provider_session_id)
-                .ok_or_else(|| {
-                    ProviderError::conflict(
-                        "AI_SESSION_APPROVAL_NOT_ATTACHED",
-                        "Codex approval request is not attached to this control connection.",
-                    )
-                })?;
-            approvals[index].clone()
-        };
+        let mut approval = self.latest_approval(provider_session_id).await;
+        if approval.is_none() {
+            self.ensure_thread_ready(provider_session_id, session_resume_options(session))
+                .await?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            while approval.is_none() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                approval = self.latest_approval(provider_session_id).await;
+            }
+        }
+        let approval = approval.ok_or_else(|| {
+            ProviderError::conflict(
+                "AI_SESSION_APPROVAL_NOT_ATTACHED",
+                "Codex approval request is not attached to this control connection. The app-server did not replay a pending approval request for this session.",
+            )
+        })?;
         let result = approval_response(&approval, decision);
         self.send_response(approval.response_id, result).await?;
         self.inner
@@ -1370,6 +2052,14 @@ impl CodexAppServerClient {
             decision: Some(decision.to_string()),
             queue_id: None,
         })
+    }
+
+    async fn latest_approval(&self, provider_session_id: &str) -> Option<CodexApprovalRequest> {
+        let approvals = self.inner.approvals.lock().await;
+        approvals
+            .iter()
+            .rfind(|approval| approval.provider_session_id == provider_session_id)
+            .cloned()
     }
 
     async fn send_response(&self, id: u64, result: Value) -> Result<(), ProviderError> {
@@ -1433,17 +2123,214 @@ impl CodexAppServerClient {
         Ok(())
     }
 
+    pub async fn run_ephemeral_structured_turn(
+        &self,
+        cwd: &str,
+        model: &str,
+        model_provider: &str,
+        prompt: &str,
+        output_schema: Value,
+        reasoning_effort: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        self.ensure_ready().await?;
+        let effective = self
+            .request("config/read", json!({ "includeLayers": false, "cwd": cwd }))
+            .await?;
+        let mut config = temporary_thread_disabled_config();
+        if let Some(servers) = effective
+            .pointer("/config/mcp_servers")
+            .and_then(Value::as_object)
+        {
+            for name in servers.keys() {
+                if !name
+                    .chars()
+                    .all(|value| value.is_ascii_alphanumeric() || value == '_' || value == '-')
+                {
+                    return Err(ProviderError::bad_gateway(
+                        "AI_SESSION_TITLE_GENERATION_FAILED",
+                        "Codex MCP server name cannot be represented as a thread config path.",
+                    ));
+                }
+                config.insert(format!("mcp_servers.{name}.enabled"), Value::Bool(false));
+            }
+        }
+        let started = self
+            .request(
+                "thread/start",
+                json!({
+                    "model": model,
+                    "modelProvider": model_provider,
+                    "cwd": cwd,
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "runtimeWorkspaceRoots": [],
+                    "ephemeral": true,
+                    "threadSource": "system",
+                    "environments": [],
+                    "dynamicTools": [],
+                    "selectedCapabilityRoots": [],
+                    "config": Value::Object(config),
+                }),
+            )
+            .await?;
+        let thread = started
+            .get("thread")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ProviderError::bad_gateway(
+                    "AI_SESSION_TITLE_GENERATION_FAILED",
+                    "Codex temporary structured thread returned no identity.",
+                )
+            })?;
+        let thread_id = thread
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                ProviderError::bad_gateway(
+                    "AI_SESSION_TITLE_GENERATION_FAILED",
+                    "Codex temporary structured thread returned no identity.",
+                )
+            })?;
+        if thread.get("ephemeral").and_then(Value::as_bool) != Some(true)
+            || started.get("model").and_then(Value::as_str) != Some(model)
+            || started.get("modelProvider").and_then(Value::as_str) != Some(model_provider)
+            || started
+                .get("sandbox")
+                .and_then(|sandbox| sandbox.get("type"))
+                .and_then(Value::as_str)
+                != Some("readOnly")
+        {
+            let _ = self
+                .request("thread/unsubscribe", json!({ "threadId": thread_id }))
+                .await;
+            return Err(ProviderError::bad_gateway(
+                "AI_SESSION_TITLE_GENERATION_FAILED",
+                "Codex temporary structured thread did not preserve its expected identity, model, or sandbox.",
+            ));
+        }
+        let mut notifications = self.subscribe_notifications();
+        let mut turn_params = serde_json::Map::new();
+        turn_params.insert("threadId".to_string(), json!(thread_id));
+        turn_params.insert(
+            "input".to_string(),
+            json!([{ "type": "text", "text": prompt, "text_elements": [] }]),
+        );
+        turn_params.insert("outputSchema".to_string(), output_schema);
+        if let Some(effort) = reasoning_effort {
+            turn_params.insert("effort".to_string(), json!(effort));
+        }
+        let turn = match self.request("turn/start", Value::Object(turn_params)).await {
+            Ok(turn) => turn,
+            Err(error) => {
+                let _ = self
+                    .request("thread/unsubscribe", json!({ "threadId": thread_id }))
+                    .await;
+                return Err(error);
+            }
+        };
+        let Some(turn_id) = turn_id_from_result(&turn) else {
+            let _ = self
+                .request("thread/unsubscribe", json!({ "threadId": thread_id }))
+                .await;
+            return Err(ProviderError::bad_gateway(
+                "AI_SESSION_TITLE_GENERATION_FAILED",
+                "Codex temporary structured turn returned no turn identity.",
+            ));
+        };
+        let outcome = tokio::time::timeout(STRUCTURED_TURN_TIMEOUT, async {
+            let mut latest_response = None::<String>;
+            loop {
+                let Ok(notification) = notifications.recv().await else {
+                    return Err(ProviderError::bad_gateway(
+                        "AI_SESSION_TITLE_GENERATION_FAILED",
+                        "Codex notification stream closed during temporary structured turn.",
+                    ));
+                };
+                let method = notification
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let params = notification.get("params").unwrap_or(&Value::Null);
+                if params.get("threadId").and_then(Value::as_str) != Some(thread_id.as_str()) {
+                    continue;
+                }
+                if method == "item/completed"
+                    && params.get("turnId").and_then(Value::as_str) == Some(turn_id.as_str())
+                {
+                    let Some(item) = params.get("item") else {
+                        continue;
+                    };
+                    if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
+                        continue;
+                    }
+                    let Some(text) = item.get("text").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if text.len() > STRUCTURED_RESPONSE_MAX_BYTES {
+                        return Err(ProviderError::bad_gateway(
+                            "AI_SESSION_TITLE_GENERATION_FAILED",
+                            "Codex temporary structured response is too large.",
+                        ));
+                    }
+                    latest_response = Some(text.to_string());
+                    continue;
+                }
+                if method != "turn/completed" {
+                    continue;
+                }
+                let Some(completed_turn) = params.get("turn") else {
+                    continue;
+                };
+                if completed_turn.get("id").and_then(Value::as_str) != Some(turn_id.as_str()) {
+                    continue;
+                }
+                if completed_turn.get("status").and_then(Value::as_str) != Some("completed") {
+                    return Err(ProviderError::bad_gateway(
+                        "AI_SESSION_TITLE_GENERATION_FAILED",
+                        "Codex temporary structured turn did not complete.",
+                    ));
+                }
+                return latest_response.ok_or_else(|| {
+                    ProviderError::bad_gateway(
+                        "AI_SESSION_TITLE_GENERATION_FAILED",
+                        "Codex temporary structured turn completed without a response.",
+                    )
+                });
+            }
+        })
+        .await;
+        let _ = self
+            .request("thread/unsubscribe", json!({ "threadId": thread_id }))
+            .await;
+        let result = outcome.map_err(|_| {
+            ProviderError::bad_gateway(
+                "AI_SESSION_TITLE_GENERATION_FAILED",
+                "Codex temporary structured turn timed out.",
+            )
+        })??;
+        Ok(result)
+    }
+
     pub async fn update_thread_settings(
         &self,
         provider_session_id: &str,
         model: Option<&str>,
         effort: Option<&str>,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<CodexThreadSettingsUpdate, ProviderError> {
         if !self.supports_thread_settings_update() {
             return Err(ProviderError::new(
                 "AI_SESSION_THREAD_SETTINGS_UNSUPPORTED",
                 "This Codex version does not support thread settings updates.",
                 409,
+            ));
+        }
+        if model.is_none() && effort.is_none() {
+            return Err(ProviderError::new(
+                "AI_SESSION_THREAD_SETTINGS_INVALID",
+                "Codex thread settings update requires model or effort.",
+                400,
             ));
         }
         let mut params = Map::new();
@@ -1454,9 +2341,62 @@ impl CodexAppServerClient {
         if let Some(effort) = effort {
             params.insert("effort".to_string(), json!(effort));
         }
+        let mut notifications = self.subscribe_notifications();
         self.request("thread/settings/update", Value::Object(params))
             .await?;
-        Ok(())
+        let timeout = self.inner.request_timeout;
+        let update = tokio::time::timeout(timeout, async {
+            loop {
+                let Ok(notification) = notifications.recv().await else {
+                    return Err(ProviderError::bad_gateway(
+                        "AI_SESSION_THREAD_SETTINGS_FAILED",
+                        "Codex notification stream closed during thread settings update.",
+                    ));
+                };
+                if notification.get("method").and_then(Value::as_str)
+                    != Some("thread/settings/updated")
+                {
+                    continue;
+                }
+                let params = notification.get("params").unwrap_or(&Value::Null);
+                if params.get("threadId").and_then(Value::as_str) != Some(provider_session_id) {
+                    continue;
+                }
+                let settings = params.get("threadSettings").and_then(Value::as_object);
+                if model.is_some_and(|model| {
+                    settings
+                        .and_then(|settings| settings.get("model"))
+                        .and_then(Value::as_str)
+                        != Some(model)
+                }) {
+                    continue;
+                }
+                if effort.is_some_and(|effort| {
+                    settings
+                        .and_then(|settings| settings.get("effort"))
+                        .and_then(Value::as_str)
+                        != Some(effort)
+                }) {
+                    continue;
+                }
+                return Ok(CodexThreadSettingsUpdate {
+                    model: model.map(ToString::to_string),
+                    effort: effort.map(ToString::to_string),
+                    model_provider: settings
+                        .and_then(|settings| settings.get("modelProvider"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                });
+            }
+        })
+        .await
+        .map_err(|_| {
+            ProviderError::bad_gateway(
+                "AI_SESSION_THREAD_SETTINGS_TIMEOUT",
+                format!("Codex thread settings update timed out for {provider_session_id}."),
+            )
+        })??;
+        Ok(update)
     }
 
     pub async fn list_thread_items(
@@ -1617,8 +2557,8 @@ impl CodexAppServerClient {
             .get(provider_session_id)
             .map(|items| {
                 items
-                    .values()
-                    .map(|entry| (entry.turn_id.clone(), entry.item.clone()))
+                    .iter()
+                    .map(|(_, entry)| (entry.turn_id.clone(), entry.item.clone()))
                     .collect()
             })
             .unwrap_or_default()
@@ -1643,6 +2583,7 @@ impl Default for CodexAppServerClient {
 pub struct CodexAppServerProvider {
     client: CodexAppServerClient,
     timeline_store: Option<AiSessionTimelineStore>,
+    armed_title_sessions: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl CodexAppServerProvider {
@@ -1650,10 +2591,28 @@ impl CodexAppServerProvider {
         client: CodexAppServerClient,
         timeline_store: Option<AiSessionTimelineStore>,
     ) -> Self {
+        if let Some(store) = timeline_store.as_ref() {
+            client.set_timeline_store(store.clone());
+        }
         Self {
             client,
             timeline_store,
+            armed_title_sessions: std::sync::Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
+    }
+
+    pub fn arm_title_generation(&self, provider_session_id: &str) {
+        self.armed_title_sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(provider_session_id.to_string());
+    }
+
+    pub fn take_armed_title_generation(&self, provider_session_id: &str) -> bool {
+        self.armed_title_sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(provider_session_id)
     }
 
     pub fn client(&self) -> &CodexAppServerClient {
@@ -1672,6 +2631,7 @@ impl CodexAppServerProvider {
         &self,
         provider_session_id: &str,
     ) -> Result<CodexThreadSnapshot, ProviderError> {
+        self.client.ensure_ready().await?;
         let snapshot = self.client.read_thread(provider_session_id).await?;
         publish_thread_snapshot(&self.client, &snapshot);
         Ok(snapshot)
@@ -1679,9 +2639,70 @@ impl CodexAppServerProvider {
 
     async fn ensure_session_thread_ready(&self, session: &AiSession) -> Result<(), ProviderError> {
         let provider_session_id = require_provider_session(session)?;
+        self.client.ensure_ready().await?;
         self.client
             .ensure_thread_ready(provider_session_id, session_resume_options(session))
             .await
+    }
+
+    async fn resume_session_with_tools(
+        &self,
+        session: &AiSession,
+        story_agent_tools: Option<Vec<String>>,
+    ) -> Result<ProviderResumeResult, ProviderError> {
+        let provider_session_id = require_provider_session(session)?;
+        self.client.ensure_ready().await?;
+        let requested = session
+            .model_selection
+            .clone()
+            .and_then(|value| serde_json::from_value::<AiSessionModelSelection>(value).ok());
+        let model = requested
+            .as_ref()
+            .map(AiSessionModelSelection::upstream_name);
+        let model_provider = requested.as_ref().map(codex_model_provider_for_selection);
+        let snapshot = self
+            .client
+            .resume_thread(
+                provider_session_id,
+                CodexThreadResumeOptions {
+                    model: model.map(ToString::to_string),
+                    model_provider: model_provider.clone(),
+                    reasoning_effort: Some(
+                        session
+                            .reasoning_effort
+                            .clone()
+                            .unwrap_or_else(|| DEFAULT_REASONING_EFFORT.to_string()),
+                    ),
+                    story_agent_tools: Some(story_agent_tools.unwrap_or_default()),
+                },
+            )
+            .await?;
+        if let (Some(requested), Some(actual_model)) =
+            (requested.as_ref(), snapshot.model.as_deref())
+        {
+            if requested.upstream_name() != actual_model {
+                return Err(ProviderError::bad_gateway(
+                    "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
+                    "Codex resumed the thread with a different model.",
+                ));
+            }
+        }
+        if let (Some(expected_provider), Some(actual_provider)) = (
+            model_provider.as_deref(),
+            snapshot.model_provider.as_deref(),
+        ) {
+            if expected_provider != actual_provider {
+                return Err(ProviderError::bad_gateway(
+                    "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
+                    "Codex resumed the thread with a different provider.",
+                ));
+            }
+        }
+        publish_thread_snapshot(&self.client, &snapshot);
+        Ok(ProviderResumeResult {
+            model_selection: requested,
+            reasoning_effort: snapshot.reasoning_effort,
+        })
     }
 
     async fn read_timeline(
@@ -1691,6 +2712,7 @@ impl CodexAppServerProvider {
         public_turn_id: Option<&str>,
     ) -> Result<AiSessionTimeline, ProviderError> {
         let provider_session_id = require_provider_session(session)?;
+        self.client.ensure_ready().await?;
         let matches_turn = |turn_id: &str| {
             provider_turn_id
                 .is_none_or(|expected| turn_id == expected || public_turn_id == Some(turn_id))
@@ -1722,7 +2744,7 @@ impl CodexAppServerProvider {
                 }
             }
         } else {
-            let snapshot = self.read_session(provider_session_id).await?;
+            let snapshot = self.client.read_thread(provider_session_id).await?;
             project_thread_turns(&snapshot.turns)
         };
         persisted.retain(|item| matches_turn(item.turn_id()));
@@ -1764,6 +2786,17 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         "codex"
     }
 
+    fn session_actions(&self, status: Option<&str>) -> Value {
+        let mut actions = default_provider_actions(status);
+        if let Some(object) = actions.as_object_mut() {
+            object.insert(
+                "fork".to_string(),
+                json!(self.client.thread_fork_capabilities().full_history),
+            );
+        }
+        actions
+    }
+
     fn timeline_capabilities(&self) -> AiSessionProviderTimelineCapabilities {
         let connected = self.client.is_connected();
         AiSessionProviderTimelineCapabilities {
@@ -1776,6 +2809,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
     fn capability(&self) -> AiSessionProviderCapability {
         self.client.warm_capability_version();
         let thread_settings = self.client.supports_thread_settings_update();
+        let provider_reload = self.client.supports_provider_reload();
         AiSessionProviderCapability {
             agent: "codex".to_string(),
             actions: AiSessionProviderActions {
@@ -1809,10 +2843,10 @@ impl AiSessionControlProvider for CodexAppServerProvider {
             model_selection: Some(AiSessionModelSelectionCapabilities {
                 select_model_at_create: true,
                 select_provider_at_create: true,
-                select_model_at_resume: true,
-                select_provider_at_resume: true,
+                select_model_at_resume: provider_reload,
+                select_provider_at_resume: provider_reload,
                 switch_model_within_provider: thread_settings,
-                switch_provider_during_session: true,
+                switch_provider_during_session: provider_reload,
                 stable_identity: true,
             }),
             reasoning_effort: Some(AiSessionReasoningEffortCapabilities {
@@ -1831,6 +2865,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         &self,
         input: ProviderCreateInput,
     ) -> Result<ProviderCreateResult, ProviderError> {
+        self.client.ensure_ready().await?;
         let snapshot = self.client.start_thread(&input).await?;
         verify_thread_selection(&snapshot, input.model_selection.as_ref())?;
         if snapshot.cwd.trim().is_empty() {
@@ -1840,12 +2875,23 @@ impl AiSessionControlProvider for CodexAppServerProvider {
             ));
         }
         publish_thread_snapshot(&self.client, &snapshot);
+        self.arm_title_generation(&snapshot.provider_session_id);
         Ok(ProviderCreateResult {
             provider_session_id: snapshot.provider_session_id,
             cwd: PathBuf::from(snapshot.cwd),
             model_selection: input.model_selection,
-            reasoning_effort: snapshot.reasoning_effort.or(input.reasoning_effort),
+            reasoning_effort: snapshot
+                .reasoning_effort
+                .or(input.reasoning_effort)
+                .or_else(|| Some(DEFAULT_REASONING_EFFORT.to_string())),
         })
+    }
+
+    async fn read_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+        self.client.ensure_ready().await?;
+        let snapshot = self.client.read_thread(provider_session_id).await?;
+        publish_thread_snapshot(&self.client, &snapshot);
+        Ok(())
     }
 
     async fn start_message(
@@ -1892,58 +2938,16 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         &self,
         session: &AiSession,
     ) -> Result<ProviderResumeResult, ProviderError> {
-        let provider_session_id = require_provider_session(session)?;
-        let requested = session
-            .model_selection
-            .clone()
-            .and_then(|value| serde_json::from_value::<AiSessionModelSelection>(value).ok());
-        let model = requested
-            .as_ref()
-            .map(AiSessionModelSelection::upstream_name);
-        let model_provider = requested.as_ref().map(codex_model_provider_for_selection);
-        let snapshot = self
-            .client
-            .resume_thread(
-                provider_session_id,
-                CodexThreadResumeOptions {
-                    model: model.map(ToString::to_string),
-                    model_provider: model_provider.clone(),
-                    reasoning_effort: Some(
-                        session
-                            .reasoning_effort
-                            .clone()
-                            .unwrap_or_else(|| DEFAULT_REASONING_EFFORT.to_string()),
-                    ),
-                    story_agent_tools: None,
-                },
-            )
-            .await?;
-        if let (Some(requested), Some(actual_model)) =
-            (requested.as_ref(), snapshot.model.as_deref())
-        {
-            if requested.upstream_name() != actual_model {
-                return Err(ProviderError::bad_gateway(
-                    "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
-                    "Codex resumed the thread with a different model.",
-                ));
-            }
-        }
-        if let (Some(expected_provider), Some(actual_provider)) = (
-            model_provider.as_deref(),
-            snapshot.model_provider.as_deref(),
-        ) {
-            if expected_provider != actual_provider {
-                return Err(ProviderError::bad_gateway(
-                    "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
-                    "Codex resumed the thread with a different provider.",
-                ));
-            }
-        }
-        publish_thread_snapshot(&self.client, &snapshot);
-        Ok(ProviderResumeResult {
-            model_selection: requested,
-            reasoning_effort: snapshot.reasoning_effort,
-        })
+        self.resume_session_with_tools(session, None).await
+    }
+
+    async fn resume_session_with_story_tools(
+        &self,
+        session: &AiSession,
+        story_agent_tools: Option<Vec<String>>,
+    ) -> Result<ProviderResumeResult, ProviderError> {
+        self.resume_session_with_tools(session, story_agent_tools)
+            .await
     }
 
     async fn fork_session(
@@ -1951,6 +2955,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         source: &AiSession,
         input: ProviderForkInput,
     ) -> Result<ProviderCreateResult, ProviderError> {
+        self.client.ensure_ready().await?;
         let provider_session_id = require_provider_session(source)?;
         let create_input = ProviderCreateInput {
             cwd: input
@@ -1989,11 +2994,15 @@ impl AiSessionControlProvider for CodexAppServerProvider {
             ));
         }
         publish_thread_snapshot(&self.client, &snapshot);
+        self.arm_title_generation(&snapshot.provider_session_id);
         Ok(ProviderCreateResult {
             provider_session_id: snapshot.provider_session_id,
             cwd: PathBuf::from(snapshot.cwd),
             model_selection: create_input.model_selection,
-            reasoning_effort: snapshot.reasoning_effort.or(create_input.reasoning_effort),
+            reasoning_effort: snapshot
+                .reasoning_effort
+                .or(create_input.reasoning_effort)
+                .or_else(|| Some(DEFAULT_REASONING_EFFORT.to_string())),
         })
     }
 
@@ -2002,6 +3011,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         session: &AiSession,
         selection: &AiSessionModelSelection,
     ) -> Result<Option<AiSessionModelSelection>, ProviderError> {
+        self.client.ensure_ready().await?;
         let current = session
             .model_selection
             .clone()
@@ -2098,9 +3108,27 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 },
             )
             .await?;
-        self.client
+        let updated = self
+            .client
             .update_thread_settings(provider_session_id, Some(selection.upstream_name()), None)
             .await?;
+        if updated.model.is_none() {
+            return Err(ProviderError::bad_gateway(
+                "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
+                "Codex reported no model after updating thread settings.",
+            ));
+        }
+        let expected_provider = codex_model_provider_for_selection(selection);
+        if updated
+            .model_provider
+            .as_deref()
+            .is_some_and(|provider| provider != expected_provider)
+        {
+            return Err(ProviderError::conflict(
+                "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION",
+                "Codex changed to an unexpected provider.",
+            ));
+        }
         Ok(Some(selection.clone()))
     }
 
@@ -2109,6 +3137,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         session: &AiSession,
         reasoning_effort: &str,
     ) -> Result<Option<String>, ProviderError> {
+        self.client.ensure_ready().await?;
         if !self.client.supports_thread_settings_update() {
             return Err(ProviderError::new(
                 "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
@@ -2126,21 +3155,42 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 },
             )
             .await?;
-        self.client
+        let updated = self
+            .client
             .update_thread_settings(provider_session_id, None, Some(reasoning_effort))
             .await?;
+        if updated.effort.as_deref() != Some(reasoning_effort) {
+            return Err(ProviderError::bad_gateway(
+                "AI_SESSION_REASONING_EFFORT_INVALID_RESPONSE",
+                "Codex reported an invalid reasoning effort.",
+            ));
+        }
         Ok(Some(reasoning_effort.to_string()))
     }
 
     async fn archive_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+        self.client.ensure_ready().await?;
         self.client.archive_thread(provider_session_id).await
     }
 
     async fn delete_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+        self.client.ensure_ready().await?;
         self.client.delete_thread(provider_session_id).await
     }
 
+    async fn active_session_exists(
+        &self,
+        provider_session_id: &str,
+    ) -> Result<Option<bool>, ProviderError> {
+        self.client.ensure_ready().await?;
+        self.client
+            .active_thread_exists(provider_session_id)
+            .await
+            .map(Some)
+    }
+
     async fn unsubscribe_session(&self, provider_session_id: &str) -> Result<(), ProviderError> {
+        self.client.ensure_ready().await?;
         self.client.unsubscribe_thread(provider_session_id).await
     }
 
@@ -2149,6 +3199,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         session: &AiSession,
     ) -> Result<AiSessionMentionCatalog, ProviderError> {
         let (provider_session_id, cwd) = mention_context(session)?;
+        self.client.ensure_ready().await?;
         let (skills, plugins, apps) = tokio::join!(
             self.client.lists_skills(&cwd),
             self.client.lists_plugins(&cwd),
@@ -2195,6 +3246,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         query: &str,
     ) -> Result<AiSessionMentionFileSearch, ProviderError> {
         let (_, cwd) = mention_context(session)?;
+        self.client.ensure_ready().await?;
         let request_id = format!(
             "mention_{}",
             &uuid::Uuid::new_v4().simple().to_string()[..20]
@@ -2254,6 +3306,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         session: &AiSession,
         input: &AiSessionCommandInput,
     ) -> Result<AiSessionCommandResult, ProviderError> {
+        self.client.ensure_ready().await?;
         let provider_session_id = require_provider_session(session)?;
         if matches!(
             input.command,
@@ -2645,9 +3698,14 @@ fn publish_thread_snapshot(client: &CodexAppServerClient, snapshot: &CodexThread
         name: snapshot.name.clone(),
         model: snapshot.model.clone(),
         model_provider: snapshot.model_provider.clone(),
+        model_selection: None,
         reasoning_effort: snapshot.reasoning_effort.clone(),
         status: snapshot.status.clone(),
         phase: Some(snapshot.phase.clone()),
+    });
+    let _ = client.inner.events.send(ProviderEvent::SubAgentSnapshot {
+        provider_session_id: snapshot.provider_session_id.clone(),
+        sub_agents: snapshot.sub_agents.clone(),
     });
 }
 
@@ -2791,7 +3849,11 @@ fn project_codex_timeline_activity(
         }
         "mcpToolCall" => {
             input = safe_json(item.get("arguments"));
-            output = safe_json(item.get("error").or_else(|| item.get("result")));
+            output = safe_json(
+                item.get("error")
+                    .filter(|value| js_truthy(value))
+                    .or_else(|| item.get("result")),
+            );
         }
         "dynamicToolCall" => {
             input = safe_json(item.get("arguments"));
@@ -2826,7 +3888,11 @@ fn project_codex_timeline_activity(
         turn_id: turn_id.to_string(),
         activity_kind: activity_kind.to_string(),
         title,
-        status: timeline_activity_status(item.get("status")),
+        status: if activity_kind == "contextCompaction" {
+            Some(AiSessionTimelineActivityStatus::Completed)
+        } else {
+            timeline_activity_status(item.get("status"))
+        },
         summary: bounded(summary, 4_000),
         input: bounded(input, 100_000),
         output: bounded(output, 1_000_000),
@@ -2889,9 +3955,13 @@ fn merge_timeline_items(
     if live_items.is_empty() {
         return snapshot.to_vec();
     }
-    let mut live_by_id = HashMap::<String, AiSessionTimelineItem>::new();
+    let mut live_by_id = Vec::<(String, AiSessionTimelineItem)>::new();
     for item in live_items {
-        live_by_id.insert(item.id().to_string(), item.clone());
+        if let Some((_, current)) = live_by_id.iter_mut().find(|(id, _)| id == item.id()) {
+            *current = item.clone();
+        } else {
+            live_by_id.push((item.id().to_string(), item.clone()));
+        }
     }
     let snapshot_ids = snapshot
         .iter()
@@ -2899,7 +3969,7 @@ fn merge_timeline_items(
         .collect::<std::collections::HashSet<_>>();
     let mut insert_before = HashMap::<String, Vec<AiSessionTimelineItem>>::new();
     let mut pending = Vec::new();
-    for item in live_by_id.values() {
+    for (_, item) in &live_by_id {
         if !snapshot_ids.contains(item.id()) {
             pending.push(item.clone());
             continue;
@@ -2915,8 +3985,9 @@ fn merge_timeline_items(
         }
         merged.push(
             live_by_id
-                .get(item.id())
-                .cloned()
+                .iter()
+                .find(|(id, _)| id == item.id())
+                .map(|(_, item)| item.clone())
                 .unwrap_or_else(|| item.clone()),
         );
     }
@@ -2926,13 +3997,9 @@ fn merge_timeline_items(
 
 fn codex_timeline_semantic_identity(item: &AiSessionTimelineItem) -> String {
     match item {
-        AiSessionTimelineItem::UserMessage {
-            turn_id,
-            text,
-            attachments,
-            ..
-        } => serde_json::to_string(&json!([turn_id, "user-message", text, attachments,]))
-            .unwrap_or_default(),
+        AiSessionTimelineItem::UserMessage { turn_id, text, .. } => {
+            serde_json::to_string(&json!([turn_id, "user-message", text])).unwrap_or_default()
+        }
         AiSessionTimelineItem::AiMessage { turn_id, text, .. } => {
             serde_json::to_string(&json!([turn_id, "ai-message", text])).unwrap_or_default()
         }
@@ -2982,8 +4049,7 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
     value
         .get(field)
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
 }
 
@@ -3011,13 +4077,11 @@ fn safe_json(value: Option<&Value>) -> Option<String> {
 
 fn bounded(value: Option<String>, limit: usize) -> Option<String> {
     let value = value?;
-    if value.chars().count() <= limit {
+    if controlled_instance_core::text::utf16_len(&value) <= limit {
         return Some(value);
     }
-    let mut truncated = value
-        .chars()
-        .take(limit.saturating_sub(1))
-        .collect::<String>();
+    let mut truncated =
+        controlled_instance_core::text::truncate_utf16(&value, limit.saturating_sub(1));
     truncated.push('…');
     Some(truncated)
 }
@@ -3153,19 +4217,53 @@ async fn record_live_timeline_item(
 ) {
     let mut live = inner.live_items.lock().await;
     let thread = live.entry(provider_session_id.to_string()).or_default();
-    thread.insert(
-        item_id.to_string(),
-        LiveThreadItem {
-            turn_id: turn_id.to_string(),
-            item,
-        },
-    );
-    while thread.len() > 1_000 {
-        let Some(first) = thread.keys().next().cloned() else {
-            break;
-        };
-        thread.remove(&first);
+    let entry = LiveThreadItem {
+        turn_id: turn_id.to_string(),
+        item,
+    };
+    if let Some((_, current)) = thread.iter_mut().find(|(id, _)| id == item_id) {
+        *current = entry;
+    } else {
+        thread.push((item_id.to_string(), entry));
     }
+    while thread.len() > 1_000 {
+        thread.remove(0);
+    }
+}
+
+async fn emit_timeline_item(
+    inner: &Arc<ClientInner>,
+    provider_session_id: &str,
+    item: AiSessionTimelineItem,
+) {
+    let uses_paginated_history = inner
+        .paginated_timeline_threads
+        .lock()
+        .await
+        .get(provider_session_id)
+        .copied()
+        .unwrap_or(false);
+    if !uses_paginated_history {
+        let store = inner
+            .timeline_store
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(store) = store {
+            if let Err(error) = store.upsert(provider_session_id, item.clone()) {
+                tracing::warn!(
+                    %error,
+                    provider_session_id,
+                    item_id = item.id(),
+                    "failed to persist Codex Timeline item"
+                );
+            }
+        }
+    }
+    let _ = inner.events.send(ProviderEvent::TimelineItem {
+        provider_session_id: provider_session_id.to_string(),
+        item,
+    });
 }
 
 async fn clear_thread_approvals(inner: &Arc<ClientInner>, provider_session_id: &str) {
@@ -3208,10 +4306,7 @@ async fn publish_retry_warning(
             "message": error,
         }),
     ) {
-        let _ = inner.events.send(ProviderEvent::TimelineItem {
-            provider_session_id: provider_session_id.to_string(),
-            item,
-        });
+        emit_timeline_item(inner, provider_session_id, item).await;
     }
 }
 
@@ -3247,10 +4342,7 @@ async fn clear_retry_warning(
     )
     .await;
     if let Some(item) = project_codex_timeline_item(&warning.item_id, &warning.turn_id, &item) {
-        let _ = inner.events.send(ProviderEvent::TimelineItem {
-            provider_session_id: provider_session_id.to_string(),
-            item,
-        });
+        emit_timeline_item(inner, provider_session_id, item).await;
     }
 }
 
@@ -3260,14 +4352,19 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
             if let Some(thread) = params.get("thread") {
                 if let Some(snapshot) = thread_snapshot(thread, PathBuf::new()) {
                     let _ = inner.events.send(ProviderEvent::ThreadSnapshot {
-                        provider_session_id: snapshot.provider_session_id,
+                        provider_session_id: snapshot.provider_session_id.clone(),
                         cwd: non_empty(snapshot.cwd),
                         name: snapshot.name,
                         model: snapshot.model,
                         model_provider: snapshot.model_provider,
+                        model_selection: None,
                         reasoning_effort: snapshot.reasoning_effort,
                         status: snapshot.status,
                         phase: Some(snapshot.phase),
+                    });
+                    let _ = inner.events.send(ProviderEvent::SubAgentSnapshot {
+                        provider_session_id: snapshot.provider_session_id,
+                        sub_agents: snapshot.sub_agents,
                     });
                 }
             }
@@ -3287,6 +4384,7 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
                 name: None,
                 model: None,
                 model_provider: None,
+                model_selection: None,
                 reasoning_effort: None,
                 status,
                 phase: Some(phase),
@@ -3437,15 +4535,13 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
                     "completedAtMs"
                 })
                 .and_then(iso_from_millis);
+            let sub_agent_updates = codex_sub_agent_updates(item, observed_at.as_deref());
             if item_type == "contextCompaction" {
                 clear_retry_warning(inner, provider_session_id, Some(turn_id)).await;
                 if let Some(timeline_item) =
                     project_codex_notification_timeline_item(item, turn_id, running)
                 {
-                    let _ = inner.events.send(ProviderEvent::TimelineItem {
-                        provider_session_id: provider_session_id.to_string(),
-                        item: timeline_item,
-                    });
+                    emit_timeline_item(inner, provider_session_id, timeline_item).await;
                 }
                 let _ = inner.events.send(ProviderEvent::ContextCompaction {
                     provider_session_id: provider_session_id.to_string(),
@@ -3462,9 +4558,12 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
             if let Some(timeline_item) =
                 project_codex_notification_timeline_item(item, turn_id, running)
             {
-                let _ = inner.events.send(ProviderEvent::TimelineItem {
+                emit_timeline_item(inner, provider_session_id, timeline_item).await;
+            }
+            if !sub_agent_updates.is_empty() {
+                let _ = inner.events.send(ProviderEvent::SubAgentActivity {
                     provider_session_id: provider_session_id.to_string(),
-                    item: timeline_item,
+                    updates: sub_agent_updates,
                 });
             }
             if item_type == "userMessage" {
@@ -3475,21 +4574,20 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
                         item_id: item_id.to_string(),
                         text,
                         observed_at,
+                        completed: !running,
                     });
                 }
                 return;
             }
             if item_type == "agentMessage" && !running {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    if !text.trim().is_empty() {
-                        let _ = inner.events.send(ProviderEvent::AgentMessageCompleted {
-                            provider_session_id: provider_session_id.to_string(),
-                            turn_id: turn_id.to_string(),
-                            item_id: item_id.to_string(),
-                            text: text.trim().to_string(),
-                            observed_at,
-                        });
-                    }
+                    let _ = inner.events.send(ProviderEvent::AgentMessageCompleted {
+                        provider_session_id: provider_session_id.to_string(),
+                        turn_id: turn_id.to_string(),
+                        item_id: item_id.to_string(),
+                        text: text.to_string(),
+                        observed_at,
+                    });
                 }
                 return;
             }
@@ -3537,57 +4635,39 @@ async fn fail_pending(pending: &PendingRequests, message: &str) {
 }
 
 fn approval_from_request(id: u64, method: &str, params: &Value) -> Option<CodexApprovalRequest> {
-    let provider_session_id = params.get("threadId").and_then(Value::as_str)?.to_string();
-    let turn_id = params
-        .get("turnId")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    let item_id = params
-        .get("itemId")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    let reason = params
-        .get("reason")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let provider_session_id = string_field(params, "threadId")?;
+    let turn_id = string_field(params, "turnId");
+    let item_id = string_field(params, "itemId");
+    let reason = string_field(params, "reason");
     let (kind, summary) = if method == "item/commandExecution/requestApproval" {
-        let command = params
-            .get("command")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let command = string_field(params, "command");
+        let summary = [reason, command.map(|command| format!("Command: {command}"))]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
         (
             "command",
-            [reason, &format!("Command: {command}")]
-                .into_iter()
-                .filter(|part| !part.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join(" · "),
+            if summary.is_empty() {
+                "Codex is requesting command approval.".to_string()
+            } else {
+                summary
+            },
         )
     } else if method == "item/fileChange/requestApproval" {
-        let grant_root = params
-            .get("grantRoot")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let grant_root = string_field(params, "grantRoot");
         (
             "file-change",
-            if reason.is_empty() {
-                if grant_root.is_empty() {
-                    "Codex is requesting file change approval.".to_string()
-                } else {
-                    format!("Approve file changes under {grant_root}")
-                }
-            } else {
-                reason.to_string()
-            },
+            reason
+                .or_else(|| {
+                    grant_root.map(|grant_root| format!("Approve file changes under {grant_root}"))
+                })
+                .unwrap_or_else(|| "Codex is requesting file change approval.".to_string()),
         )
     } else {
         (
             "permissions",
-            if reason.is_empty() {
-                "Codex is requesting additional permissions.".to_string()
-            } else {
-                reason.to_string()
-            },
+            reason.unwrap_or_else(|| "Codex is requesting additional permissions.".to_string()),
         )
     };
     Some(CodexApprovalRequest {
@@ -3740,6 +4820,7 @@ fn thread_snapshot(thread: &Value, fallback_cwd: PathBuf) -> Option<CodexThreadS
                     })
                 })
         });
+    let turns = thread.get("turns").cloned().unwrap_or_else(|| json!([]));
     Some(CodexThreadSnapshot {
         provider_session_id,
         cwd,
@@ -3762,11 +4843,35 @@ fn thread_snapshot(thread: &Value, fallback_cwd: PathBuf) -> Option<CodexThreadS
             .map(ToString::to_string),
         status,
         phase,
-        turns: thread.get("turns").cloned().unwrap_or_else(|| json!([])),
+        sub_agents: rebuild_codex_sub_agents(&turns, &now_iso()),
+        turns,
         paginated_history: thread.get("historyMode").and_then(Value::as_str) == Some("paginated"),
+        fork_supported: false,
         lineage,
         turns_authoritative: false,
     })
+}
+
+fn project_thread_list_entries(
+    threads: Vec<Value>,
+    fork_supported: bool,
+) -> (
+    HashMap<String, CodexThreadSnapshot>,
+    Vec<CodexThreadSnapshot>,
+) {
+    let mut summaries = HashMap::new();
+    let mut snapshots = Vec::new();
+    for thread in threads {
+        if thread.get("ephemeral").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if let Some(mut snapshot) = thread_snapshot(&thread, PathBuf::new()) {
+            snapshot.fork_supported = fork_supported;
+            summaries.insert(snapshot.provider_session_id.clone(), snapshot.clone());
+            snapshots.push(snapshot);
+        }
+    }
+    (summaries, snapshots)
 }
 
 fn empty_thread_snapshot(provider_session_id: &str) -> CodexThreadSnapshot {
@@ -3780,7 +4885,9 @@ fn empty_thread_snapshot(provider_session_id: &str) -> CodexThreadSnapshot {
         status: "idle".to_string(),
         phase: "unknown".to_string(),
         turns: json!([]),
+        sub_agents: Vec::new(),
         paginated_history: false,
+        fork_supported: false,
         lineage: None,
         turns_authoritative: false,
     }
@@ -3788,26 +4895,8 @@ fn empty_thread_snapshot(provider_session_id: &str) -> CodexThreadSnapshot {
 
 fn thread_lifecycle_state(thread: &Value) -> (String, String) {
     let status = thread.get("status").unwrap_or(&Value::Null);
-    let status_type = status
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let (mut lifecycle, mut phase) = thread_lifecycle_from_status(status);
-    if status_type.is_empty() {
-        let latest_turn_status = thread
-            .get("turns")
-            .and_then(Value::as_array)
-            .and_then(|turns| turns.last())
-            .and_then(|turn| turn.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        (lifecycle, phase) = match latest_turn_status {
-            "inProgress" | "running" | "waiting" => ("running".to_string(), "thinking".to_string()),
-            "failed" => ("failed".to_string(), "unknown".to_string()),
-            _ => ("idle".to_string(), "unknown".to_string()),
-        };
-    }
-    if lifecycle == "idle"
+    let (mut lifecycle, phase) = thread_lifecycle_from_status(status);
+    if !matches!(lifecycle.as_str(), "running" | "waiting")
         && thread
             .get("turns")
             .and_then(Value::as_array)
@@ -3844,6 +4933,45 @@ fn thread_lifecycle_from_status(status: &Value) -> (String, String) {
         "systemError" => ("failed".to_string(), "unknown".to_string()),
         _ => ("idle".to_string(), "unknown".to_string()),
     }
+}
+
+fn temporary_thread_disabled_config() -> serde_json::Map<String, Value> {
+    [
+        ("features.apps", false),
+        ("features.code_mode", false),
+        ("features.code_mode_only", false),
+        ("features.context_management", false),
+        ("features.current_time_reminder", false),
+        ("features.deferred_executor", false),
+        ("features.enable_fanout", false),
+        ("features.goals", false),
+        ("features.hooks", false),
+        ("features.image_generation", false),
+        ("features.memories", false),
+        ("features.multi_agent", false),
+        ("features.multi_agent_v2", false),
+        ("features.plugins", false),
+        ("features.request_permissions_tool", false),
+        ("features.shell_snapshot", false),
+        ("features.shell_tool", false),
+        ("features.standalone_web_search", false),
+        ("features.token_budget", false),
+        ("features.tool_suggest", false),
+        ("features.unified_exec", false),
+        ("features.view_image", false),
+        ("orchestrator.skills.enabled", false),
+        ("skills.include_instructions", false),
+        ("token_budget.use_history_notes_extension", false),
+        ("tools.experimental_request_user_input.enabled", false),
+        ("tools.update_plan.enabled", false),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), Value::Bool(value)))
+    .chain(std::iter::once((
+        "web_search".to_string(),
+        Value::String("disabled".to_string()),
+    )))
+    .collect()
 }
 
 fn thread_config(
@@ -3887,7 +5015,7 @@ fn apply_permissions(
     params.insert("permissions".to_string(), json!(permissions));
 }
 
-fn prepare_inputs(input: &ProviderMessage) -> (String, Vec<Value>) {
+fn prepare_inputs(input: &ProviderMessage) -> Result<(String, Vec<Value>), ProviderError> {
     let mut message = input.message.trim().to_string();
     let mut inputs = vec![json!({
         "type": "text",
@@ -3897,10 +5025,31 @@ fn prepare_inputs(input: &ProviderMessage) -> (String, Vec<Value>) {
     let mut file_paths = Vec::new();
     for attachment in &input.attachments {
         if attachment.meta.kind == AiSessionAttachmentKind::Image {
-            inputs.push(json!({
-                "type": "localImage",
-                "path": attachment.path.display().to_string(),
-            }));
+            let inline_image = if attachment.source == ProviderAttachmentSource::Inline {
+                let data = std::fs::read(&attachment.path).map_err(|error| {
+                    ProviderError::new(
+                        "AI_SESSION_ATTACHMENT_CONTENT_MISSING",
+                        format!("Inline attachment content is unavailable: {error}"),
+                        400,
+                    )
+                })?;
+                (data.len() as u64 <= AI_SESSION_MAX_INLINE_FILE_BYTES).then(|| {
+                    format!(
+                        "data:{};base64,{}",
+                        attachment.meta.mime,
+                        STANDARD.encode(data)
+                    )
+                })
+            } else {
+                None
+            };
+            inputs.push(match inline_image {
+                Some(url) => json!({ "type": "image", "url": url }),
+                None => json!({
+                    "type": "localImage",
+                    "path": attachment.path.display().to_string(),
+                }),
+            });
         } else {
             file_paths.push((attachment.meta.kind, attachment.path.display().to_string()));
         }
@@ -3952,7 +5101,7 @@ fn prepare_inputs(input: &ProviderMessage) -> (String, Vec<Value>) {
             json!({ "type": "mention", "name": reference.name, "path": reference.path })
         });
     }
-    (message, inputs)
+    Ok((message, inputs))
 }
 
 fn require_provider_session(session: &AiSession) -> Result<&str, ProviderError> {
@@ -3977,6 +5126,25 @@ fn turn_id_from_result(result: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .or_else(|| result.get("turnId").and_then(Value::as_str))
         .map(ToString::to_string)
+}
+
+fn is_no_active_turn_error(error: &ProviderError) -> bool {
+    error
+        .message
+        .to_ascii_lowercase()
+        .contains("no active turn")
+}
+
+fn active_turn_mismatch_found_id(error: &ProviderError) -> Option<String> {
+    let lowercase = error.message.to_ascii_lowercase();
+    if !lowercase.contains("expected active turn id") {
+        return None;
+    }
+    let marker = "but found `";
+    let start = lowercase.find(marker)? + marker.len();
+    let rest = error.message.get(start..)?;
+    let end = rest.find('`')?;
+    (end > 0).then(|| rest[..end].to_string())
 }
 
 fn codex_error_message(error: &Value) -> Option<String> {
@@ -4163,12 +5331,26 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
                 .and_then(Value::as_u64)
                 .map(|duration| format!("{duration} ms")),
         ),
-        "collabAgentToolCall" => (
-            "Sub-agent".to_string(),
-            item.get("prompt")
+        "collabAgentToolCall" => {
+            let tool = item
+                .get("tool")
                 .and_then(Value::as_str)
-                .map(ToString::to_string),
-        ),
+                .unwrap_or("collabAgentToolCall");
+            let name = match tool {
+                "spawnAgent" => "Spawn agent",
+                "sendInput" => "Send agent input",
+                "resumeAgent" => "Resume agent",
+                "wait" => "Wait for agents",
+                "closeAgent" => "Close agent",
+                _ => tool,
+            };
+            (
+                name.to_string(),
+                item.get("prompt")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            )
+        }
         _ => return None,
     };
     let mut tool = Map::new();
@@ -4176,10 +5358,9 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
     tool.insert("kind".to_string(), json!(item_type));
     tool.insert("name".to_string(), json!(name));
     if let Some(input_preview) = input_preview {
-        tool.insert(
-            "inputPreview".to_string(),
-            json!(truncate_chars(&input_preview, 500)),
-        );
+        if let Some(input_preview) = compact_preview(&input_preview) {
+            tool.insert("inputPreview".to_string(), json!(input_preview));
+        }
     }
     if let Some(started_at) = started_at {
         tool.insert("startedAt".to_string(), json!(started_at));
@@ -4378,16 +5559,29 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn truncate_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        return value.to_string();
+fn compact_preview(value: &str) -> Option<String> {
+    let mut compacted = String::new();
+    let mut pending_space = false;
+    for character in value.chars() {
+        if character.is_whitespace() || character == '\u{feff}' {
+            pending_space = !compacted.is_empty();
+            continue;
+        }
+        if pending_space {
+            compacted.push(' ');
+            pending_space = false;
+        }
+        compacted.push(character);
     }
-    let mut truncated = value
-        .chars()
-        .take(max.saturating_sub(1))
-        .collect::<String>();
-    truncated.push('…');
-    truncated
+    if compacted.is_empty() {
+        return None;
+    }
+    if controlled_instance_core::text::utf16_len(&compacted) <= 500 {
+        return Some(compacted);
+    }
+    let mut truncated = controlled_instance_core::text::truncate_utf16(&compacted, 497);
+    truncated.push_str("...");
+    Some(truncated)
 }
 
 fn non_empty(value: impl AsRef<str>) -> Option<String> {
@@ -4504,6 +5698,152 @@ mod tests {
     }
 
     #[test]
+    fn sub_agent_tracker_matches_node_updates_sorting_and_limit() {
+        let activity = codex_sub_agent_updates(
+            &json!({
+                "type": "subAgentActivity",
+                "agentThreadId": "sub-1",
+                "agentPath": "researcher",
+                "kind": "started"
+            }),
+            Some("2026-11-02T00:00:01.000Z"),
+        );
+        assert_eq!(activity[0]["status"], "pending-init");
+        assert_eq!(activity[0]["activity"], "started");
+        assert_eq!(activity[0]["path"], "researcher");
+
+        let states = codex_sub_agent_updates(
+            &json!({
+                "type": "collabAgentToolCall",
+                "agentsStates": {
+                    "sub-2": { "status": "running", "message": "working" },
+                    "sub-3": { "status": "notFound" }
+                }
+            }),
+            Some("2026-11-02T00:00:02.000Z"),
+        );
+        assert_eq!(states.len(), 2);
+        assert!(states.iter().any(|update| {
+            update["threadId"] == "sub-2"
+                && update["status"] == "running"
+                && update["message"] == "working"
+        }));
+
+        let mut tracker = CodexSubAgentTracker::default();
+        let snapshot = tracker.apply(&activity, "2026-11-02T00:00:01.000Z");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0]["threadId"], "sub-1");
+        assert_eq!(snapshot[0]["path"], "researcher");
+
+        let snapshot = tracker.apply(&states, "2026-11-02T00:00:02.000Z");
+        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot[0]["threadId"], "sub-1");
+        assert_eq!(snapshot[1]["threadId"], "sub-2");
+        assert_eq!(snapshot[2]["threadId"], "sub-3");
+
+        for index in 0..55 {
+            let update = json!({
+                "threadId": format!("bulk-{index:02}"),
+                "status": "running",
+                "observation": "state",
+                "observedAt": "2026-11-01T00:00:00.000Z"
+            });
+            tracker.apply(&[update], "2026-11-01T00:00:00.000Z");
+        }
+        let snapshot = tracker.current_snapshot();
+        assert_eq!(snapshot.len(), 50);
+        assert!(snapshot.iter().any(|value| value["threadId"] == "sub-1"));
+        assert!(!snapshot.iter().any(|value| value["threadId"] == "bulk-54"));
+
+        let completed = json!({
+            "threadId": "sub-1",
+            "status": "completed",
+            "observation": "state",
+            "observedAt": "2026-11-02T00:00:04.000Z"
+        });
+        let snapshot = tracker.apply(&[completed], "2026-11-02T00:00:04.000Z");
+        assert!(!snapshot.iter().any(|value| value["threadId"] == "sub-1"));
+    }
+
+    #[test]
+    fn sub_agent_snapshots_rebuild_from_thread_turns() {
+        let snapshot = thread_snapshot(
+            &json!({
+                "id": "thread-1",
+                "cwd": "/workspace",
+                "turns": [{
+                    "id": "turn-1",
+                    "items": [{
+                        "type": "subAgentActivity",
+                        "agentThreadId": "sub-1",
+                        "agentPath": "researcher",
+                        "kind": "interacted"
+                    }]
+                }]
+            }),
+            PathBuf::new(),
+        )
+        .expect("thread snapshot");
+        assert_eq!(snapshot.sub_agents.len(), 1);
+        assert_eq!(snapshot.sub_agents[0]["threadId"], "sub-1");
+        assert_eq!(snapshot.sub_agents[0]["status"], "running");
+        assert_eq!(snapshot.sub_agents[0]["path"], "researcher");
+    }
+
+    #[tokio::test]
+    async fn live_timeline_items_keep_first_event_order() {
+        let client = test_client();
+        for item_id in ["item-z", "item-a", "item-m"] {
+            record_live_timeline_item(
+                &client.inner,
+                "thread-1",
+                "turn-1",
+                item_id,
+                json!({ "id": item_id, "type": "commandExecution", "status": "inProgress" }),
+            )
+            .await;
+        }
+        record_live_timeline_item(
+            &client.inner,
+            "thread-1",
+            "turn-1",
+            "item-z",
+            json!({ "id": "item-z", "type": "commandExecution", "status": "completed" }),
+        )
+        .await;
+
+        let ids = client
+            .live_items("thread-1")
+            .await
+            .into_iter()
+            .map(|(_, item)| item["id"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["item-z", "item-a", "item-m"]);
+    }
+
+    #[test]
+    fn collab_tool_titles_match_node() {
+        for (tool, expected) in [
+            ("spawnAgent", "Spawn agent"),
+            ("sendInput", "Send agent input"),
+            ("resumeAgent", "Resume agent"),
+            ("wait", "Wait for agents"),
+            ("closeAgent", "Close agent"),
+        ] {
+            let descriptor = codex_tool_descriptor(
+                &json!({
+                    "id": "collab-1",
+                    "type": "collabAgentToolCall",
+                    "tool": tool
+                }),
+                None,
+            )
+            .expect("tool descriptor");
+            assert_eq!(descriptor["name"], expected);
+        }
+    }
+
+    #[test]
     fn codex_capabilities_follow_the_artifact_version_contract() {
         assert!(!codex_thread_settings_update_supported(
             "codex_cli_rs/0.132.9"
@@ -4575,7 +5915,9 @@ mod tests {
             status: "idle".to_string(),
             phase: "unknown".to_string(),
             turns: Value::Array(Vec::new()),
+            sub_agents: Vec::new(),
             paginated_history: false,
+            fork_supported: false,
             lineage: None,
             turns_authoritative: false,
         };
@@ -4607,6 +5949,29 @@ mod tests {
         )
         .expect("snapshot");
         assert!(!snapshot.paginated_history);
+    }
+
+    #[test]
+    fn thread_list_entries_skip_ephemeral_and_keep_the_last_duplicate() {
+        let (summaries, snapshots) = project_thread_list_entries(
+            vec![
+                json!({ "id": "thread-1", "cwd": "/workspace", "name": "first" }),
+                json!({ "id": "thread-2", "cwd": "/workspace", "ephemeral": true }),
+                json!({ "id": "thread-1", "cwd": "/workspace", "name": "second" }),
+                json!({ "cwd": "/workspace" }),
+            ],
+            true,
+        );
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].name.as_deref(), Some("first"));
+        assert_eq!(snapshots[1].name.as_deref(), Some("second"));
+        assert_eq!(
+            summaries
+                .get("thread-1")
+                .and_then(|snapshot| snapshot.name.as_deref()),
+            Some("second")
+        );
+        assert!(snapshots.iter().all(|snapshot| snapshot.fork_supported));
     }
 
     #[test]
@@ -4999,6 +6364,13 @@ mod tests {
             None,
         );
         let capability = provider.capability();
+        assert!(
+            !capability
+                .model_selection
+                .as_ref()
+                .expect("model selection capability")
+                .switch_model_within_provider
+        );
         assert!(capability.timeline.session_read);
         assert!(capability.timeline.turn_read);
         assert!(capability.timeline.live_items);
@@ -5006,6 +6378,98 @@ mod tests {
         assert!(!timeline.session_read);
         assert!(!timeline.turn_read);
         assert!(timeline.live_items);
+    }
+
+    #[test]
+    fn provider_reload_capability_matches_the_complete_client_method_set() {
+        let client = CodexAppServerClient::with_command("missing-codex-for-capability-test");
+        assert!(client.supports_provider_reload());
+        let provider = CodexAppServerProvider::new(client, None);
+        let capability = provider.capability();
+        let model_selection = capability
+            .model_selection
+            .expect("model selection capability");
+        assert!(model_selection.select_model_at_resume);
+        assert!(model_selection.select_provider_at_resume);
+        assert!(model_selection.switch_provider_during_session);
+    }
+
+    #[test]
+    fn codex_story_tool_config_disables_mcp_when_the_tool_list_is_empty() {
+        let empty = thread_config(None, Some(&[]));
+        assert_eq!(empty["mcp_servers.task_handoff_story.enabled"], false);
+        assert!(!empty.contains_key("mcp_servers.task_handoff_story.enabled_tools"));
+
+        let omitted = thread_config(None, None);
+        assert!(!omitted.contains_key("mcp_servers.task_handoff_story.enabled"));
+        assert!(!omitted.contains_key("mcp_servers.task_handoff_story.enabled_tools"));
+    }
+
+    #[derive(Default)]
+    struct DeferredTargetResolver {
+        resolve_calls: std::sync::atomic::AtomicUsize,
+        ensure_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl CodexAppServerTargetResolver for DeferredTargetResolver {
+        async fn resolve_codex_app_server_target(
+            &self,
+        ) -> Result<Option<CodexAppServerTarget>, ProviderError> {
+            self.resolve_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(None)
+        }
+
+        async fn ensure_codex_app_server_target(
+            &self,
+        ) -> Result<Option<CodexAppServerTarget>, ProviderError> {
+            self.ensure_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(None)
+        }
+
+        fn allows_private_codex_app_server(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_reuses_an_existing_target_without_starting_codex() {
+        let resolver = Arc::new(DeferredTargetResolver::default());
+        let client = CodexAppServerClient::with_command("missing-codex-for-discovery-test");
+        client.set_external_target_resolver(Some(resolver.clone()));
+
+        let snapshots = client
+            .discover_thread_snapshots(&[])
+            .await
+            .expect("discovery without a shared target");
+        assert!(snapshots.is_empty());
+        assert!(!client.is_connected());
+        assert_eq!(
+            resolver
+                .resolve_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            resolver
+                .ensure_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let error = client
+            .ensure_ready()
+            .await
+            .expect_err("control actions require the shared target");
+        assert_eq!(error.code, "AI_SESSION_PROVIDER_UNAVAILABLE");
+        assert_eq!(
+            resolver
+                .ensure_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 
     #[test]

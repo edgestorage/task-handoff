@@ -1,6 +1,6 @@
 use crate::{
     changes::mutation_result,
-    context::{repository_worktree_id, require_repository},
+    context::{repository_worktree_id, require_operation_repository as require_repository},
     error::RepositoryOperationError,
     git::{GitError, GitProcess},
     worktrees::{canonical_worktree_path, parse_worktree_porcelain},
@@ -566,20 +566,15 @@ fn summary_is_clean(summary: &RepositoryChangeSummary) -> bool {
 }
 
 fn parse_track(value: &str, direction: &str) -> u64 {
-    let prefix = format!("{direction} ");
     value
-        .split(' ')
+        .split([' ', ','])
+        .filter(|token| !token.is_empty())
         .collect::<Vec<_>>()
         .windows(2)
         .find_map(|window| {
             (window[0] == direction)
                 .then(|| window[1].parse().ok())
                 .flatten()
-        })
-        .or_else(|| {
-            value
-                .strip_prefix(&prefix)
-                .and_then(|number| number.parse().ok())
         })
         .unwrap_or(0)
 }
@@ -602,22 +597,23 @@ fn git_error(
             message, stderr, ..
         } => format!("{message}\n{stderr}"),
         _ => error.to_string(),
-    };
+    }
+    .to_lowercase();
     let code = if message.contains("non-fast-forward")
         || message.contains("fetch first")
-        || message.contains("Not possible to fast-forward")
+        || message.contains("not possible to fast-forward")
         || (message.contains("rejected") && message.contains("behind"))
     {
         "REPOSITORY_NON_FAST_FORWARD"
-    } else if message.contains("TASK_HANDOFF_GIT_CREDENTIAL_ERROR=AMBIGUOUS") {
+    } else if message.contains("task_handoff_git_credential_error=ambiguous") {
         "REPOSITORY_CREDENTIAL_AMBIGUOUS"
-    } else if message.contains("TASK_HANDOFF_GIT_CREDENTIAL_ERROR=UNSUPPORTED") {
+    } else if message.contains("task_handoff_git_credential_error=unsupported") {
         "REPOSITORY_REMOTE_UNSUPPORTED"
-    } else if message.contains("TASK_HANDOFF_GIT_CREDENTIAL_ERROR=MISSING_HOST_KEY") {
+    } else if message.contains("task_handoff_git_credential_error=missing_host_key") {
         "REPOSITORY_HOST_KEY_REQUIRED"
-    } else if message.contains("TASK_HANDOFF_GIT_CREDENTIAL_ERROR=REJECTED") {
+    } else if message.contains("task_handoff_git_credential_error=rejected") {
         "REPOSITORY_AUTHENTICATION_REJECTED"
-    } else if message.contains("could not read Username")
+    } else if message.contains("could not read username")
         || message.contains("terminal prompts disabled")
     {
         "REPOSITORY_CREDENTIAL_MISSING"
@@ -642,6 +638,10 @@ fn git_error(
         "REPOSITORY_DIRTY"
     } else if matches!(error, GitError::Timeout(_)) {
         "REPOSITORY_COMMAND_TIMEOUT"
+    } else if matches!(error, GitError::OutputLimit(_)) {
+        "REPOSITORY_OUTPUT_LIMIT"
+    } else if matches!(error, GitError::Aborted) {
+        "REPOSITORY_OPERATION_ABORTED"
     } else {
         "REPOSITORY_OPERATION_FAILED"
     };
@@ -672,4 +672,59 @@ fn context_with_snapshot(context: &RepositoryContext, snapshot_id: String) -> Re
     let mut context = context.clone();
     context.snapshot_id = Some(snapshot_id);
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use controlled_instance_protocol::{RepositoryAvailability, RepositorySessionKind};
+
+    fn repository_state() -> ResolvedRepository {
+        crate::context::unavailable_repository(
+            &crate::RepositorySessionTarget {
+                kind: RepositorySessionKind::AiSession,
+                id: "session-test".to_string(),
+                session_found: true,
+                cwd: None,
+                status: None,
+            },
+            "2026-11-02T00:00:00.000Z".to_string(),
+            RepositoryAvailability::NotWorktree,
+        )
+    }
+
+    #[test]
+    fn parse_track_reads_diverged_ahead_and_behind_counts() {
+        assert_eq!(parse_track("ahead 1, behind 2", "ahead"), 1);
+        assert_eq!(parse_track("ahead 1, behind 2", "behind"), 2);
+        assert_eq!(parse_track("ahead 7", "ahead"), 7);
+        assert_eq!(parse_track("", "ahead"), 0);
+    }
+
+    #[test]
+    fn git_authentication_errors_are_classified_case_insensitively() {
+        let error = git_error(
+            GitError::Exit {
+                message: "AUTHENTICATION FAILED".to_string(),
+                exit_code: Some(128),
+                stderr: String::new(),
+            },
+            "fetch",
+            "Git fetch failed.",
+            &repository_state(),
+        );
+        assert_eq!(error.code, "REPOSITORY_AUTHENTICATION_REJECTED");
+
+        let error = git_error(
+            GitError::Exit {
+                message: "fatal: Could not read Username".to_string(),
+                exit_code: Some(128),
+                stderr: String::new(),
+            },
+            "fetch",
+            "Git fetch failed.",
+            &repository_state(),
+        );
+        assert_eq!(error.code, "REPOSITORY_CREDENTIAL_MISSING");
+    }
 }

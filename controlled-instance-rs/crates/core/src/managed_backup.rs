@@ -31,11 +31,7 @@ pub fn prune_managed_backups(path: &Path, limit: usize) -> io::Result<Vec<PathBu
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
             let generation = name.strip_prefix(&prefix)?;
-            if parse_generation(generation).is_some() {
-                Some((name, entry.path()))
-            } else {
-                None
-            }
+            parse_generation(generation).map(|key| (key, name, entry.path()))
         })
         .collect::<Vec<_>>();
     backups.sort_by(|left, right| left.0.cmp(&right.0));
@@ -43,7 +39,7 @@ pub fn prune_managed_backups(path: &Path, limit: usize) -> io::Result<Vec<PathBu
     let removed = backups
         .into_iter()
         .take(remove_count)
-        .map(|(_, path)| path)
+        .map(|(_, _, path)| path)
         .collect::<Vec<_>>();
     for path in &removed {
         fs::remove_file(path)?;
@@ -51,7 +47,7 @@ pub fn prune_managed_backups(path: &Path, limit: usize) -> io::Result<Vec<PathBu
     Ok(removed)
 }
 
-fn parse_generation(value: &str) -> Option<DateTime<Utc>> {
+fn parse_generation(value: &str) -> Option<(DateTime<Utc>, u64)> {
     const STAMP_LEN: usize = 24;
     let stamp = if value.len() == STAMP_LEN {
         value
@@ -68,9 +64,13 @@ fn parse_generation(value: &str) -> Option<DateTime<Utc>> {
     if !stamp.ends_with('Z') {
         return None;
     }
+    let tie = value
+        .get(STAMP_LEN + 1..)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
     NaiveDateTime::parse_from_str(&stamp[..stamp.len() - 1], "%Y-%m-%dT%H-%M-%S-%3f")
         .ok()
-        .map(|value| Utc.from_utc_datetime(&value))
+        .map(|value| (Utc.from_utc_datetime(&value), tie))
 }
 
 pub fn create_managed_backup(path: &Path) -> io::Result<PathBuf> {
@@ -104,6 +104,33 @@ pub fn create_managed_backup_at(path: &Path, now: DateTime<Utc>) -> io::Result<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_millisecond_ties_sort_numerically() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("settings.json");
+        fs::write(&path, "current").expect("settings");
+        for tie in 0..12 {
+            let mut name = "settings.json.bak.2026-01-01T00-00-00-000Z".to_string();
+            if tie > 0 {
+                name.push_str(&format!("-{tie}"));
+            }
+            fs::write(temporary.path().join(name), "backup").expect("backup");
+        }
+        prune_managed_backups(&path, 10).expect("prune");
+        assert!(temporary
+            .path()
+            .join("settings.json.bak.2026-01-01T00-00-00-000Z-9")
+            .exists());
+        assert!(temporary
+            .path()
+            .join("settings.json.bak.2026-01-01T00-00-00-000Z-10")
+            .exists());
+        assert!(!temporary
+            .path()
+            .join("settings.json.bak.2026-01-01T00-00-00-000Z-1")
+            .exists());
+    }
 
     #[test]
     fn managed_backups_are_bounded_and_ignore_unrelated_files() {
