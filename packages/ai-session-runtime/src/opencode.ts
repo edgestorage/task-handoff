@@ -64,6 +64,14 @@ export type OpenCodeSessionBridgeOptions = {
   }) => Promise<string | undefined>;
 };
 
+// Timeline reads are served from the last projection. SSE events still drive
+// reconciliation, so a bounded staleness window avoids fetching four OpenCode
+// endpoints on every timeline request while keeping a lossy stream recoverable.
+const OPENCODE_TIMELINE_PROJECTION_MAX_AGE_MS = 30_000;
+// Provider events arrive in bursts. Coalesce the resulting reconcile instead of
+// reading session/status/messages/permissions for every event.
+const OPENCODE_RECONCILE_COALESCE_MS = 300;
+
 export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessionDiscoveryProvider {
   readonly agent = "opencode";
   readonly id = "opencode-session-discovery";
@@ -73,6 +81,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly client: OpenCodeClient;
   private readonly directoryBySession = new Map<string, string>();
   private readonly projectionBySession = new Map<string, OpenCodeProjection>();
+  private readonly projectionRefreshedAt = new Map<string, number>();
+  private readonly projectionRefreshes = new Map<string, Promise<OpenCodeProjection>>();
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
   private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; chunks: string[]; size: number }>>();
@@ -364,7 +374,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   async timeline(session: AiSessionStatus) {
     if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
-    await this.refreshProjection(session.providerSessionId, session.cwd);
+    const projection = this.projectionBySession.get(session.providerSessionId);
+    const refreshedAt = this.projectionRefreshedAt.get(session.providerSessionId) || 0;
+    if (!projection || Date.now() - refreshedAt > OPENCODE_TIMELINE_PROJECTION_MAX_AGE_MS) {
+      await this.refreshProjection(session.providerSessionId, session.cwd);
+    }
     return {
       sessionId: session.id,
       providerSessionId: session.providerSessionId,
@@ -393,6 +407,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     for (const timer of this.reconcileTimers.values()) clearTimeout(timer);
     this.reconcileTimers.clear();
+    this.projectionRefreshes.clear();
+    this.projectionRefreshedAt.clear();
   }
 
   private async reconcile(providerSessionId: string, directory: string, supplied?: OpenCodeSession, creationSource?: "ai-session" | "app-session") {
@@ -423,7 +439,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     return session;
   }
 
-  private async refreshProjection(providerSessionId: string, directory: string, supplied?: OpenCodeSession) {
+  private refreshProjection(providerSessionId: string, directory: string, supplied?: OpenCodeSession) {
+    const inFlight = this.projectionRefreshes.get(providerSessionId);
+    if (inFlight) return inFlight;
+    const refresh = this.loadProjection(providerSessionId, directory, supplied);
+    this.projectionRefreshes.set(providerSessionId, refresh);
+    const cleanup = () => {
+      if (this.projectionRefreshes.get(providerSessionId) === refresh) this.projectionRefreshes.delete(providerSessionId);
+    };
+    void refresh.then(cleanup, cleanup);
+    return refresh;
+  }
+
+  private async loadProjection(providerSessionId: string, directory: string, supplied?: OpenCodeSession) {
     const [session, statuses, messages, permissions] = await Promise.all([
       supplied || this.client.getSession(providerSessionId, directory),
       this.client.status(directory),
@@ -466,6 +494,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       }
     }
     this.projectionBySession.set(providerSessionId, projection);
+    this.projectionRefreshedAt.set(providerSessionId, Date.now());
     return projection;
   }
 
@@ -675,7 +704,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       void this.reconcile(sessionID, directory).catch((error) => {
         this.options.onDiagnostic?.({ code: "OPENCODE_RECONCILE_FAILED", providerSessionId: sessionID, error: errorText(error) });
       });
-    }, 25);
+    }, OPENCODE_RECONCILE_COALESCE_MS);
     timer.unref?.();
     this.reconcileTimers.set(sessionID, timer);
   }
@@ -707,6 +736,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private forget(providerSessionId: string) {
     this.directoryBySession.delete(providerSessionId);
     this.projectionBySession.delete(providerSessionId);
+    this.projectionRefreshedAt.delete(providerSessionId);
+    this.projectionRefreshes.delete(providerSessionId);
     this.lineageBySession.delete(providerSessionId);
     this.pendingSettingsBySession.delete(providerSessionId);
     this.pendingPartDeltas.delete(providerSessionId);

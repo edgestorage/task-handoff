@@ -120,10 +120,16 @@ export function isAppAvailable(app: AppCatalogItem) {
   return Boolean(command && executablePath(command, { ...process.env, ...app.env }, app.cwd));
 }
 
+const APP_CATALOG_LIST_CACHE_MS = 30_000;
+
 export class AppCatalogRepository {
   private readonly customStore: DomainStore<CustomCatalog>;
   private readonly customCatalogSchema: ReturnType<typeof customCatalogSchema>;
   private inventoryCache?: { fingerprint: string; items: InstanceAppInventoryItem[] };
+  // Executable resolution probes PATH/Homebrew/npm candidates with accessSync.
+  // Shared-resource ensure runs on every OpenCode request, so keep the resolved
+  // catalog warm instead of re-probing every executable on each request.
+  private listCache?: { expiresAt: number; items: AppCatalogItem[] };
 
   constructor(paths: TaskHandoffStoragePaths, private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry) {
     this.customCatalogSchema = customCatalogSchema(registry);
@@ -135,6 +141,8 @@ export class AppCatalogRepository {
   }
 
   list() {
+    const now = Date.now();
+    if (this.listCache && this.listCache.expiresAt > now) return this.listCache.items;
     const merged = new Map<string, AppCatalogItem>();
     for (const { launcher: app } of this.registry.launchableDefinitions()) {
       merged.set(app.id, resolveAppExecutable(app));
@@ -145,7 +153,9 @@ export class AppCatalogRepository {
         merged.set(app.id, resolveAppExecutable(app));
       }
     }
-    return Array.from(merged.values());
+    const items = Array.from(merged.values());
+    this.listCache = { expiresAt: now + APP_CATALOG_LIST_CACHE_MS, items };
+    return items;
   }
 
   available() {
@@ -233,6 +243,7 @@ export class AppCatalogRepository {
   saveCustom(value: unknown) {
     this.customStore.save(this.customCatalogSchema.parse(value));
     this.inventoryCache = undefined;
+    this.listCache = undefined;
     return this.customStore.load();
   }
 

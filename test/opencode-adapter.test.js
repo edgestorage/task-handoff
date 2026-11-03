@@ -388,6 +388,55 @@ test("OpenCode timeline reads refresh projection without reconciling session sta
   bridge.close();
 });
 
+test("OpenCode timeline serves a cached projection and refreshes after the staleness window", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-timeline-cache-")) });
+  const providerSession = {
+    id: "ses_timeline_cache",
+    directory: "/workspace",
+    title: "Timeline cache",
+    version: "1.18.21",
+    time: { created: 1700000000000, updated: 1700000005000 },
+  };
+  const messages = [{
+    info: { id: "msg_timeline_cache", sessionID: providerSession.id, role: "user", time: { created: 1700000001000 } },
+    parts: [{ id: "part_timeline_cache", sessionID: providerSession.id, messageID: "msg_timeline_cache", type: "text", text: "Inspect" }],
+  }];
+  const session = registry.applyAdapterSnapshot(projectOpenCodeSession({
+    session: providerSession,
+    status: { type: "idle" },
+    permissions: [],
+    messages,
+  }).snapshot);
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  let clientCalls = 0;
+  const track = (value) => async () => {
+    clientCalls += 1;
+    return value;
+  };
+  bridge.client = {
+    getSession: track(providerSession),
+    status: async () => { clientCalls += 1; return { [providerSession.id]: { type: "idle" } }; },
+    messages: track(messages),
+    permissions: async () => { clientCalls += 1; return []; },
+  };
+  const realNow = Date.now;
+  try {
+    await bridge.timeline(session);
+    assert.equal(clientCalls, 4);
+    await bridge.timeline(session);
+    assert.equal(clientCalls, 4, "a fresh timeline read must not refetch the provider");
+    Date.now = () => realNow() + 31_000;
+    await bridge.timeline(session);
+    assert.equal(clientCalls, 8, "a stale timeline must refresh the projection");
+  } finally {
+    Date.now = realNow;
+    bridge.close();
+  }
+});
+
 test("OpenCode realtime parts separate reasoning activity deltas from assistant output", async () => {
   const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-realtime-role-")) });
   const providerSession = {
@@ -1115,17 +1164,24 @@ test("OpenCode snapshots keep controlled attachment identities in Turn bodies an
 test("OpenCode shared runtime keeps Basic auth private and attaches TTY sessions to the owned server", () => {
   const child = Object.assign(new (require("node:events").EventEmitter)(), { killed: false, exitCode: null, pid: 4321 });
   let readiness;
+  let commandChecks = 0;
   const stopped = [];
   const runtime = createOpenCodeRuntime({
     paths: { logDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-log-")) },
     allocatePort: () => 43210,
-    hasCommand: () => true,
+    hasCommand: () => {
+      commandChecks += 1;
+      return true;
+    },
     spawnLogged: () => child,
     stopProcessTree: (value) => stopped.push(value),
     waitForHttp: (url, headers) => { readiness = { url, headers }; },
   });
   const app = { id: "opencode", command: "opencode" };
   const publicInfo = runtime.sharedResource.ensure({ app, cwd: "/workspace", env: {} });
+  assert.equal(commandChecks, 1);
+  runtime.sharedResource.ensure({ app, cwd: "/workspace", env: {} });
+  assert.equal(commandChecks, 1, "a running shared server must not re-probe the executable on every request");
   const connection = runtime.sharedResource.privateConnection();
   assert.equal(publicInfo.details.endpoint, "http://127.0.0.1:43210");
   assert.equal(JSON.stringify(publicInfo).includes("Authorization"), false);
@@ -1133,6 +1189,7 @@ test("OpenCode shared runtime keeps Basic auth private and attaches TTY sessions
   const launch = runtime.prepareTtyLaunch({ app, sessionId: "app_1", command: "opencode", cwd: "/workspace", env: {}, launchArgs: [], resumeArgs: ["--session", "ses_1"] });
   assert.deepEqual(launch.args, ["attach", "http://127.0.0.1:43210", "--dir", "/workspace", "--session", "ses_1"]);
   assert.equal(launch.env.OPENCODE_CLIENT, "task-handoff");
+  assert.equal(commandChecks, 1);
   runtime.stopAll();
   assert.equal(stopped.length, 1);
 });

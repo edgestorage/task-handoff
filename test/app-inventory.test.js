@@ -282,6 +282,35 @@ test("app inventory recovers valid custom entries and reports a sanitized issue"
   assert.deepEqual(updated.issues, []);
 });
 
+test("app catalog caches resolved executables and invalidates on custom catalog writes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-catalog-cache-"));
+  const originalAccessSync = fs.accessSync;
+  let accessCalls = 0;
+  fs.accessSync = (...args) => {
+    accessCalls += 1;
+    return originalAccessSync.apply(fs, args);
+  };
+  try {
+    const repository = new AppCatalogRepository(storagePaths(root));
+    const first = repository.list();
+    const afterFirst = accessCalls;
+    const second = repository.list();
+    assert.deepEqual(second.map((app) => app.id), first.map((app) => app.id));
+    assert.equal(accessCalls, afterFirst, "a cached list must not re-probe executable candidates");
+
+    repository.saveCustom({
+      schemaVersion: 1,
+      items: [{ id: "cached-new", name: "Cached New", kind: "tty", command: "/definitely/missing" }],
+    });
+    const updated = repository.list();
+    assert.equal(updated.some((app) => app.id === "cached-new"), true);
+    assert.ok(accessCalls > afterFirst, "saving the custom catalog must invalidate the list cache");
+  } finally {
+    fs.accessSync = originalAccessSync;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("records the launch of a logged app session ahead of its output", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-launch-log-"));
   const logDir = path.join(root, "logs");

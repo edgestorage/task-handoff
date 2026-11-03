@@ -75,14 +75,20 @@ export class OpenCodeRuntimeExtension implements ManagedAppRuntimeExtension {
 
   private acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string) {
     const childEnvironment = { ...env, ...this.privateEnvironment };
-    if (!this.host.hasCommand(command, childEnvironment, cwd)) {
-      throw Object.assign(new Error(`Missing required command: ${command}`), { code: "APP_DEPENDENCY_MISSING" });
-    }
-    if (this.shared && this.isRunning(this.shared)) {
+    // connection() calls ensure on every OpenCode HTTP request. A healthy
+    // server with the same command is already the result of a successful
+    // dependency check, so do not re-probe PATH with accessSync on each call.
+    if (this.shared && this.isRunning(this.shared) && this.shared.command === command) {
       this.shared.consumers.add(consumerId);
       return this.shared;
     }
-    if (this.shared) this.host.stopProcessTree(this.shared.child);
+    if (this.shared) {
+      this.host.stopProcessTree(this.shared.child);
+      this.shared = undefined;
+    }
+    if (!this.host.hasCommand(command, childEnvironment, cwd)) {
+      throw Object.assign(new Error(`Missing required command: ${command}`), { code: "APP_DEPENDENCY_MISSING" });
+    }
 
     const port = this.host.allocatePort("web");
     const endpoint = `http://127.0.0.1:${port}`;
