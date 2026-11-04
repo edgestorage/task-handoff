@@ -5,11 +5,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { modelRelayRoutePath } = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
-const { ModelRelayService } = require("../packages/control-plane/src/node-agent/models/relay/server.ts");
-const { createOpenAiResponsesAdapter } = require("../packages/control-plane/src/node-agent/models/relay/adapters/openai-responses.ts");
+const { modelRelayRoutePath } = require("../packages/node-agent/src/models/relay-routes.ts");
+const { ModelRelayService } = require("../packages/node-agent/src/models/relay/server.ts");
+const { createOpenAiResponsesAdapter } = require("../packages/node-agent/src/models/relay/adapters/openai-responses.ts");
 
 const INSTANCE_ID = "inst_adapters";
 const INSTANCE_TOKEN = "instance-adapters-token";

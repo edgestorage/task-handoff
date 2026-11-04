@@ -6,7 +6,7 @@ import {
   type GitSshHostKeyEntry,
   type GitSshHostKeyProbeResponse,
 } from "@task-handoff/protocol/managed-git-credentials";
-import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
+import { defaultCommandRunner, type CommandRunner } from "@task-handoff/runtime-shared/process/command-runner";
 
 const DEFAULT_SSH_PORT = 22;
 const PROBE_TIMEOUT_MS = 15_000;

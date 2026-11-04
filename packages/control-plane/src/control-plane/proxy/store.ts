@@ -1,4 +1,4 @@
-import { JsonFile } from "../../shared/persistence/store.ts";
+import { JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 import {
   ControlPlaneProxyAuthoritySchema,
   sanitizeStoredProxyAuthority,

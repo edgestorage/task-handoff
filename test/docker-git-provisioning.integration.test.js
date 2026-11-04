@@ -5,7 +5,7 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { defaultCommandRunner, dockerGitProvisionArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { defaultCommandRunner, dockerGitProvisionArgs } = require("../packages/node-agent/src/runtimes/docker.ts");
 
 const enabled = process.env.TASK_HANDOFF_DOCKER_GIT_INTEGRATION === "1";
 const image = process.env.TASK_HANDOFF_DOCKER_TEST_IMAGE || "task-handoff-controlled-browser:local";

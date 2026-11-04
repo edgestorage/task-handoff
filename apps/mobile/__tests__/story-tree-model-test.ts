@@ -1,7 +1,7 @@
 import { ControlPlaneAiSessionsSchema, normalizeManualStoryOrder, reorderStoryKeys, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, replaceVisibleStoryOrder, sortStoryTree, storyDragPreview, storyDragRowHeight, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, replaceVisibleStoryOrder, sortStoryTree, storyDragPreview, storyDragRowHeight, storyDragShifts, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -60,6 +60,26 @@ describe('mobile Story tree model', () => {
     const secondSwap = storyDragPreview(keys, 'n1:a', 50, targets, 250, STORY_TREE_ROW_GAP);
     expect(secondSwap.keys).toEqual(['n1:b', 'n1:c', 'n1:a']);
     expect(secondSwap.offsetY).toBe(-26);
+  });
+
+  test('moves surrounding Story rows by their preview positions without reordering the list', () => {
+    const source = ['n1:a', 'n1:b', 'n1:c'];
+    const targets = [
+      { key: 'n1:a', height: 100 },
+      { key: 'n1:b', height: 200 },
+      { key: 'n1:c', height: 60 },
+    ];
+
+    expect(Object.fromEntries(storyDragShifts(source, ['n1:b', 'n1:a', 'n1:c'], targets, STORY_TREE_ROW_GAP))).toEqual({
+      'n1:a': 208,
+      'n1:b': -108,
+      'n1:c': 0,
+    });
+    expect(Object.fromEntries(storyDragShifts(source, ['n1:b', 'n1:c', 'n1:a'], targets, STORY_TREE_ROW_GAP))).toEqual({
+      'n1:a': 276,
+      'n1:b': -108,
+      'n1:c': -108,
+    });
   });
 
   test('uses the collapsed header height instead of a stale expanded group measurement', () => {

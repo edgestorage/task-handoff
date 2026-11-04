@@ -6,15 +6,15 @@ const test = require("node:test");
 const ts = require("typescript");
 const Fastify = require("fastify");
 
-const { registerInstanceLifecycleRoutes } = require("../packages/control-plane/src/node-agent/instances/lifecycle-routes.ts");
-const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
-const { LocalhostRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/local-adapter.ts");
+const { registerInstanceLifecycleRoutes } = require("../packages/node-agent/src/instances/lifecycle-routes.ts");
+const { InstanceOperationGate } = require("../packages/node-agent/src/instances/instance-operation-gate.ts");
+const { LocalhostRuntimeAdapter } = require("../packages/node-agent/src/runtimes/local-adapter.ts");
 const { createLocalIpcTempEndpoint } = require("../packages/core/src/core/local-ipc-endpoint.ts");
 const { ControlledInstanceSchema, NodeAgentInstanceLifecycleResultSchema } = require("../packages/protocol/src/control-plane.ts");
 const { EventEmitter } = require("node:events");
 
 test("node-agent app wires local runtime exits into immediate recovery", () => {
-  const filename = path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts");
+  const filename = path.join(__dirname, "../packages/node-agent/src/app.ts");
   const source = ts.createSourceFile(
     filename,
     fs.readFileSync(filename, "utf8"),
@@ -54,7 +54,7 @@ test("node-agent app wires local runtime exits into immediate recovery", () => {
 });
 
 test("node-agent app starts runtime availability monitoring and resumes recovery when a runtime returns", () => {
-  const filename = path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts");
+  const filename = path.join(__dirname, "../packages/node-agent/src/app.ts");
   const source = ts.createSourceFile(
     filename,
     fs.readFileSync(filename, "utf8"),
@@ -622,7 +622,7 @@ test("stop cancels in-flight start, reconcile, and restart before waiting for li
 });
 
 test("node-agent app forwards lifecycle cancellation into the start continuation guard", () => {
-  const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "../packages/node-agent/src/app.ts"), "utf8");
   assert.match(source, /start:\s*\(id, shouldContinue, signal\)\s*=>\s*startInstanceWithFailureState\(id, "request", shouldContinue, signal\)/);
   assert.match(source, /if \(!shouldContinue\(\)\) return state\.requireInstance\(id\);/);
   assert.ok(

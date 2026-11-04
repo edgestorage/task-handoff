@@ -14,8 +14,8 @@ const {
   sanitizeStoredControlledInstance,
   sanitizeStoredEnvironmentTemplate,
 } = require("../packages/protocol/src/control-plane.ts");
-const { EnvironmentTemplateStore } = require("../packages/control-plane/src/node-agent/environment-templates/store.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { EnvironmentTemplateStore } = require("../packages/node-agent/src/environment-templates/store.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
 

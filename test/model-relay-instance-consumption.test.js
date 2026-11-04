@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
 const {
   INSTANCE_PRIVATE_MODEL_CATALOG_RELAY_PROTOCOL_VERSION,

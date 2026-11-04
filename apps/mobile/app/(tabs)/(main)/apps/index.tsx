@@ -1,6 +1,6 @@
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppSessionDetailScreen } from '../../../../src/app-sessions/AppSessionDetailScreen';
 import { AppSessionList } from '../../../../src/app-sessions/AppSessionList';
 import { useAppSessionInboxHeaderActions } from '../../../../src/app-sessions/use-app-session-inbox-header-actions';
@@ -16,6 +16,7 @@ import { MasterDetailEmptyState, MasterDetailLayout, useMasterDetailBack, useMas
 import { NativeSplitEmptyDetail } from '../../../../src/components/NativeSplitEmptyDetail';
 import { iosSplitDetailHeaderOptions, iosSplitListHeaderOptions } from '../../../../src/components/navigation-header';
 import { useMobileTheme } from '../../../../src/components/theme';
+import { AnimatedSegmentedControl } from '../../../../src/components/AnimatedSegmentedControl';
 import { useI18n } from '../../../../src/i18n';
 import {
   appSessionDetailSelection,
@@ -38,14 +39,21 @@ export default function AppsRoute() {
   const storedBrowser = useDetailSelection(browserTabDetailSelection);
   const selectedApp = storedApp?.controlPlaneId === controlPlaneId ? storedApp : undefined;
   const selectedBrowser = storedBrowser?.controlPlaneId === controlPlaneId ? storedBrowser : undefined;
-  const [section, setSection] = useState<'apps' | 'browser'>(storedBrowser && !storedApp ? 'browser' : 'apps');
+  const [sectionState, setSectionState] = useState(() => {
+    const initial = storedBrowser && !storedApp ? 'browser' as const : 'apps' as const;
+    return { animateFrom: initial, value: initial };
+  });
+  const { animateFrom: animateFromSection, value: section } = sectionState;
+  const setSection = useCallback((value: 'apps' | 'browser') => {
+    setSectionState((current) => current.value === value ? current : { animateFrom: current.value, value });
+  }, []);
   const previousSelection = useRef({ app: selectedApp, browser: selectedBrowser });
   useEffect(() => {
     const previous = previousSelection.current;
     previousSelection.current = { app: selectedApp, browser: selectedBrowser };
     if (selectedBrowser && selectedBrowser !== previous.browser) setSection('browser');
     else if (selectedApp && selectedApp !== previous.app) setSection('apps');
-  }, [selectedApp, selectedBrowser]);
+  }, [selectedApp, selectedBrowser, setSection]);
   const activeDetailHref = section === 'browser' && selectedBrowser ? {
     pathname: '/browser/[instanceId]/[browserTabId]' as const,
     params: { browserTabId: selectedBrowser.browserTabId, instanceId: selectedBrowser.instanceId },
@@ -105,7 +113,7 @@ export default function AppsRoute() {
     message={t(section === 'browser' ? 'masterDetail.selectBrowserTab' : 'masterDetail.selectAppSession')}
     testID="app-session-detail-empty"
   />;
-  const header = <SectionTabs onChange={setSection} section={section} />;
+  const header = <SectionTabs animateFrom={animateFromSection} onChange={setSection} section={section} />;
   return <MasterDetailLayout
     detail={detail}
     emptyDetail={emptyDetail}
@@ -127,39 +135,22 @@ export default function AppsRoute() {
   />;
 }
 
-function SectionTabs({ section, onChange }: { section: 'apps' | 'browser'; onChange(value: 'apps' | 'browser'): void }) {
-  const { colors } = useMobileTheme();
+function SectionTabs({ animateFrom, section, onChange }: { animateFrom: 'apps' | 'browser'; section: 'apps' | 'browser'; onChange(value: 'apps' | 'browser'): void }) {
   const { t } = useI18n();
-  const [trackWidth, setTrackWidth] = useState(0);
-  const [offset] = useState(() => new Animated.Value(0));
-  const tabPadding = 3;
-  const optionWidth = Math.max(0, (trackWidth - tabPadding * 2) / 2);
-  useEffect(() => {
-    if (!optionWidth) return;
-    const animation = Animated.spring(offset, {
-      damping: 24,
-      mass: 0.75,
-      stiffness: 260,
-      toValue: (section === 'browser' ? 1 : 0) * optionWidth,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [offset, optionWidth, section]);
   return <View style={styles.tabsHeader}>
-    <View accessibilityRole="tablist" onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)} style={[styles.tabs, { backgroundColor: colors.workbenchSelectionBackground }]}>
-      {optionWidth > 0 ? <Animated.View pointerEvents="none" style={[styles.tabSelection, { backgroundColor: colors.surface, transform: [{ translateX: offset }], width: optionWidth }]} /> : null}
-      {([['apps', t('nav.appSessions')], ['browser', t('browser.webSessions')]] as const).map(([value, label]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: section === value }} key={value} onPress={() => onChange(value)} style={styles.tab}>
-        <Text style={[styles.tabLabel, { color: section === value ? colors.text : colors.textMuted }]}>{label}</Text>
-      </Pressable>)}
-    </View>
+    <AnimatedSegmentedControl
+      animateFrom={animateFrom}
+      onChange={onChange}
+      options={[
+        { label: t('nav.appSessions'), testID: 'app-session-section-apps', value: 'apps' },
+        { label: t('browser.webSessions'), testID: 'app-session-section-browser', value: 'browser' },
+      ]}
+      testID="app-session-section-tabs"
+      value={section}
+    />
   </View>;
 }
 
 const styles = StyleSheet.create({
   tabsHeader: { paddingBottom: 12, paddingHorizontal: 20, paddingTop: 16 },
-  tabs: { borderRadius: 999, flexDirection: 'row', padding: 3, position: 'relative', width: '100%' },
-  tabSelection: { borderRadius: 999, bottom: 3, left: 3, position: 'absolute', top: 3 },
-  tab: { alignItems: 'center', borderRadius: 999, flex: 1, justifyContent: 'center', minHeight: 34, paddingHorizontal: 4, zIndex: 1 },
-  tabLabel: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
 });

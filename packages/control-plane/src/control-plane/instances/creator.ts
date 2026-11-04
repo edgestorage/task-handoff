@@ -11,7 +11,7 @@ import { resolveGitCredential, type GitCredentialRetention, type GitWorkspacePro
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { now } from "../application/helpers.ts";
 import { publicInstanceWithAccess } from "../public-records.ts";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
 import type { PreparedModelAssignment } from "../models/service.ts";
 

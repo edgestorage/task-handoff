@@ -10,7 +10,7 @@ const {
 } = require("../packages/protocol/src/control-plane.ts");
 const { ControlPlaneNodeAgentTunnelTransport, registerNodeAgentTunnelRoutes } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
 const { NodeTunnelIngress } = require("../packages/control-plane/src/control-plane/nodes/tunnel-ingress.ts");
-const { createNodeAgentHmacHeaders } = require("../packages/control-plane/src/shared/security/node-agent-auth.ts");
+const { createNodeAgentHmacHeaders } = require("../packages/runtime-shared/src/security/node-agent-auth.ts");
 
 class TestSocket extends EventEmitter {
   constructor() {

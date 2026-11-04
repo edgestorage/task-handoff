@@ -7,7 +7,7 @@ import {
 } from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneCurrentAuthorization } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserDatabaseConfigInput } from "./database/index.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";

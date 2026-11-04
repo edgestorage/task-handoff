@@ -1,0 +1,578 @@
+import { z } from "zod";
+import { nowIso as now } from "@task-handoff/core/core/time";
+import { createId, createSecret } from "@task-handoff/runtime-shared/persistence/store";
+import { sha256Hex } from "@task-handoff/runtime-shared/security/node-agent-auth";
+import type { NodeAgentStorePaths } from "../persistence/paths.ts";
+import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./schemas.ts";
+import { NodeAgentIdentityStore } from "./store.ts";
+import type { NodeAgentControlPlaneConnection, NodeAgentControlPlanePairing, NodeAgentIdentity, PublicNodeAgentControlPlanePairing } from "./types.ts";
+import { EphemeralTokenStore } from "@task-handoff/runtime-shared/security/ephemeral-token-store";
+import type { NodeAgentCloudRelayBinding, NodeAgentCloudRelayStoredError } from "../cloud-relay/types.ts";
+import type {
+  NodeAgentControlPlaneTrustActor,
+  NodeAgentCloudControlPlaneRevokeInput,
+  NodeAgentCloudControlPlaneTrustContext,
+  NodeAgentCloudControlPlaneTrustDecision,
+} from "../cloud-relay/trust-types.ts";
+import { projectNodeAgentControlPlaneTrust } from "../cloud-relay/trust-projection.ts";
+import type { AccessRepository } from "../persistence/access-repository.ts";
+import { createNodeAgentRepository } from "../persistence/repository.ts";
+import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
+
+type NodeAgentPairingInvite = {
+  tokenHash: string;
+  expiresAt: string;
+  createdAt: string;
+  controlPlaneName?: string;
+};
+
+type StagedControlPlaneConnection = {
+  operationId: string;
+  pairing: NodeAgentControlPlanePairing;
+  connection: NodeAgentControlPlaneConnection;
+  replacedConnections: NodeAgentControlPlaneConnection[];
+};
+
+const NODE_AGENT_PAIRING_INVITE_TTL_MS = 10 * 60 * 1000;
+const CLOUD_CONTROL_PLANE_TRUST_TTL_MS = 24 * 60 * 60 * 1000;
+
+export class NodeAgentIdentityService {
+  private readonly store: NodeAgentIdentityStore;
+  private readonly repository: AccessRepository;
+  private readonly pairingInvites = new EphemeralTokenStore<NodeAgentPairingInvite>();
+  private readonly controlPlaneConnectionOperations = new Map<string, Promise<void>>();
+
+  constructor(paths: NodeAgentStorePaths, repository?: AccessRepository) {
+    this.repository = repository || createNodeAgentRepository(openNodeAgentDatabaseSync(paths)).access;
+    this.store = new NodeAgentIdentityStore(paths, this.repository);
+    this.store.init();
+    this.recoverControlPlaneConnectionOperations();
+  }
+
+  async runControlPlaneConnectionOperation<T>(controlPlaneUrl: string, operation: () => Promise<T>): Promise<T> {
+    const key = controlPlaneUrl.replace(/\/$/, "");
+    const previous = this.controlPlaneConnectionOperations.get(key) || Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.controlPlaneConnectionOperations.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.controlPlaneConnectionOperations.get(key) === current) {
+        this.controlPlaneConnectionOperations.delete(key);
+      }
+    }
+  }
+
+  resolveNodeId(explicitNodeId?: string) {
+    if (explicitNodeId?.trim()) {
+      this.writeNodeId(explicitNodeId.trim());
+      return explicitNodeId.trim();
+    }
+    const existing = this.store.read();
+    if (existing?.nodeId) return existing.nodeId;
+    const nodeId = createId("node");
+    this.writeNodeId(nodeId);
+    return nodeId;
+  }
+
+  createPairingInvite(input: z.infer<typeof NodeAgentPairingInviteSchema>) {
+    const createdAt = now();
+    const expiresAt = new Date(Date.now() + (input.expiresInMs || NODE_AGENT_PAIRING_INVITE_TTL_MS)).toISOString();
+    const token = createSecret();
+    const invite = {
+      tokenHash: sha256Hex(token),
+      createdAt,
+      expiresAt,
+      ...(input.controlPlaneName ? { controlPlaneName: input.controlPlaneName } : {}),
+    };
+    this.pairingInvites.put(invite.tokenHash, invite);
+    return { ...invite, token };
+  }
+
+  completePairingInvite(input: z.infer<typeof NodeAgentPairingCompleteSchema>) {
+    const current = this.store.read() || this.newIdentity();
+    const tokenHash = sha256Hex(input.joinToken);
+    const invite = this.pairingInvites.take(tokenHash);
+    if (!invite) {
+      const error = new Error("Node agent pairing invite is invalid or expired.");
+      Object.assign(error, { statusCode: 401, code: "NODE_AGENT_PAIRING_INVITE_INVALID" });
+      throw error;
+    }
+    const timestamp = now();
+    const pairing: NodeAgentControlPlanePairing = {
+      id: input.controlPlaneId || createId("cp"),
+      keyId: createId("key"),
+      ...(input.controlPlaneName || invite.controlPlaneName ? { name: input.controlPlaneName || invite.controlPlaneName } : {}),
+      secret: createSecret(),
+      pairedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.store.write({
+      ...current,
+      controlPlanePairings: [...(current.controlPlanePairings || []).filter((item) => item.id !== pairing.id), pairing],
+    });
+    return pairing;
+  }
+
+  stageControlPlaneConnection(input: { url: string; name?: string; enabled?: boolean }): StagedControlPlaneConnection {
+    const { pairing, connection } = this.createControlPlaneConnection(input);
+    const current = this.store.read() || this.newIdentity();
+    const normalizedUrl = connection.url.replace(/\/$/, "");
+    const replacedConnections = (current.controlPlaneConnections || []).filter(
+      (item) => item.id === connection.id || item.url.replace(/\/$/, "") === normalizedUrl,
+    );
+    const staged = { operationId: createId("connection_operation"), pairing, connection, replacedConnections };
+    const timestamp = now();
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((item) => item.keyId !== pairing.keyId),
+          pairing,
+        ],
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id && item.url.replace(/\/$/, "") !== normalizedUrl),
+          connection,
+        ],
+      });
+      this.repository.putOperation({
+        id: staged.operationId, kind: "create-connection", phase: "prepared",
+        requested: staged as unknown as Record<string, unknown>, pairingKeyId: pairing.keyId, connectionId: connection.id,
+        replacedConnections: replacedConnections as unknown as Array<Record<string, unknown>>,
+        createdAt: timestamp, updatedAt: timestamp,
+      });
+    });
+    return staged;
+  }
+
+  markControlPlaneConnectionRemoteAccepted(staged: StagedControlPlaneConnection) {
+    const current = this.repository.listOperations().find((operation) => operation.id === staged.operationId);
+    if (!current) throw Object.assign(new Error("Control-plane connection operation was not found."), { code: "NODE_AGENT_CONNECTION_OPERATION_NOT_FOUND", statusCode: 409 });
+    this.repository.putOperation({ ...current, phase: "remote-accepted", updatedAt: now() });
+  }
+
+  commitControlPlaneConnection(staged: StagedControlPlaneConnection, input: { name?: string } = {}) {
+    const current = this.store.read() || this.newIdentity();
+    const pairing = { ...staged.pairing, ...(input.name ? { name: input.name } : {}) };
+    const connection = { ...staged.connection, ...(input.name ? { name: input.name } : {}) };
+    const activePairingKeyIds = new Set((current.controlPlaneConnections || []).map((item) => item.pairingKeyId));
+    const replacedPairingKeyIds = new Set(staged.replacedConnections.map((item) => item.pairingKeyId));
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((item) => (
+            item.keyId !== pairing.keyId
+            && (!replacedPairingKeyIds.has(item.keyId) || activePairingKeyIds.has(item.keyId))
+          )),
+          pairing,
+        ],
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id),
+          connection,
+        ],
+      });
+      const operation = this.repository.listOperations().find((candidate) => candidate.id === staged.operationId);
+      if (operation) this.repository.putOperation({ ...operation, phase: "committed", updatedAt: now() });
+      this.repository.deleteOperation(staged.operationId);
+    });
+    return { pairing, connection };
+  }
+
+  rollbackControlPlaneConnection(staged: StagedControlPlaneConnection) {
+    const current = this.store.read();
+    if (!current) return;
+    const restoredConnectionIds = new Set(staged.replacedConnections.map((connection) => connection.id));
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: (current.controlPlanePairings || []).filter((pairing) => pairing.keyId !== staged.pairing.keyId),
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter(
+            (connection) => connection.id !== staged.connection.id && !restoredConnectionIds.has(connection.id),
+          ),
+          ...staged.replacedConnections,
+        ],
+      });
+      this.repository.deleteOperation(staged.operationId);
+    });
+  }
+
+  private recoverControlPlaneConnectionOperations() {
+    for (const operation of this.repository.listOperations(["prepared", "remote-accepted"])) {
+      const staged = operation.requested as unknown as StagedControlPlaneConnection;
+      if (!staged?.pairing?.keyId || !staged?.connection?.id) {
+        this.repository.putOperation({ ...operation, phase: "failed", error: { code: "NODE_AGENT_CONNECTION_OPERATION_INVALID" }, updatedAt: now() });
+        continue;
+      }
+      if (operation.phase === "remote-accepted") {
+        this.repository.putOperation({ ...operation, phase: "committed", updatedAt: now() });
+        this.repository.deleteOperation(operation.id);
+      } else {
+        this.rollbackControlPlaneConnection(staged);
+      }
+    }
+  }
+
+  private createControlPlaneConnection(input: { url: string; name?: string; enabled?: boolean }) {
+    const timestamp = now();
+    const pairing = {
+      id: createId("cp"),
+      keyId: createId("key"),
+      ...(input.name ? { name: input.name } : {}),
+      secret: createSecret(),
+      pairedAt: timestamp,
+      updatedAt: timestamp,
+    } satisfies NodeAgentControlPlanePairing;
+    const connection = {
+      id: createId("connection"),
+      pairingKeyId: pairing.keyId,
+      ...(input.name ? { name: input.name } : {}),
+      url: input.url,
+      enabled: input.enabled !== false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    } satisfies NodeAgentControlPlaneConnection;
+    return { pairing, connection };
+  }
+
+  resolvedControlPlaneAccess() {
+    const identity = this.store.read();
+    const pairings = new Map((identity?.controlPlanePairings || [])
+      .filter((pairing) => !pairing.revokedAt)
+      .map((pairing) => [pairing.keyId, pairing]));
+    const connections = identity?.controlPlaneConnections || [];
+    return {
+      hasPersistedAccess: connections.length > 0 || pairings.size > 0,
+      connections: connections.map((connection) => ({
+        connection,
+        pairing: pairings.get(connection.pairingKeyId),
+      })),
+    };
+  }
+
+  listControlPlanePairings(currentKeyId = ""): PublicNodeAgentControlPlanePairing[] {
+    return (this.store.read()?.controlPlanePairings || [])
+      .filter((pairing) => !pairing.revokedAt)
+      .map(({ secret: _secret, ...pairing }) => ({ ...pairing, current: Boolean(currentKeyId && pairing.keyId === currentKeyId) }))
+      .sort((a, b) => Number(b.current) - Number(a.current) || b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  listControlPlaneConnections() {
+    return [...(this.store.read()?.controlPlaneConnections || [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  deleteControlPlanePairing(keyId: string, currentKeyId = "") {
+    if (currentKeyId && keyId === currentKeyId) {
+      const error = new Error("Cannot delete the pairing used to authenticate the current request.");
+      Object.assign(error, { statusCode: 409, code: "NODE_AGENT_PAIRING_CURRENT_REQUEST" });
+      throw error;
+    }
+    const current = this.store.read();
+    if (!current) return false;
+    if ((current.controlPlaneConnections || []).some((connection) => connection.pairingKeyId === keyId)) {
+      throw Object.assign(new Error("Cannot delete a pairing used by a configured control-plane connection."), { statusCode: 409, code: "NODE_AGENT_PAIRING_IN_USE" });
+    }
+    const nextPairings = (current.controlPlanePairings || []).filter((pairing) => pairing.keyId !== keyId);
+    if (nextPairings.length === (current.controlPlanePairings || []).length) return false;
+    this.store.write({ ...current, controlPlanePairings: nextPairings });
+    return true;
+  }
+
+  revokeCurrentControlPlanePairing(currentKeyId: string) {
+    if (!currentKeyId) {
+      throw Object.assign(new Error("Current paired-HMAC authentication is required to revoke this pairing."), {
+        statusCode: 403,
+        code: "NODE_AGENT_PAIRING_SELF_REVOKE_HMAC_REQUIRED",
+      });
+    }
+    const current = this.store.read();
+    const pairing = current?.controlPlanePairings?.find((candidate) => candidate.keyId === currentKeyId);
+    if (!current || !pairing) {
+      throw Object.assign(new Error("The current control-plane pairing no longer exists."), {
+        statusCode: 404,
+        code: "NODE_AGENT_PAIRING_NOT_FOUND",
+      });
+    }
+    if (pairing.revokedAt) {
+      return { keyId: currentKeyId, revoked: true as const, revokedAt: pairing.revokedAt };
+    }
+    if ((current.controlPlaneConnections || []).some((connection) => connection.pairingKeyId === currentKeyId)) {
+      throw Object.assign(new Error("Cannot revoke a pairing used by a configured control-plane connection."), {
+        statusCode: 409,
+        code: "NODE_AGENT_PAIRING_IN_USE",
+      });
+    }
+    const revokedAt = now();
+    this.store.write({
+      ...current,
+      controlPlanePairings: current.controlPlanePairings.map((candidate) => candidate.keyId === currentKeyId
+        ? { ...candidate, revokedAt, updatedAt: revokedAt }
+        : candidate),
+    });
+    return { keyId: currentKeyId, revoked: true as const, revokedAt };
+  }
+
+  deleteControlPlaneConnection(connectionId: string) {
+    const current = this.store.read();
+    if (!current) return false;
+    const nextConnections = (current.controlPlaneConnections || []).filter((connection) => connection.id !== connectionId);
+    if (nextConnections.length === (current.controlPlaneConnections || []).length) return false;
+    this.store.write({ ...current, controlPlaneConnections: nextConnections });
+    return true;
+  }
+
+  /**
+   * Cloud relay binding (account-level). The credential and relay private key
+   * live only here; every relay channel, pairing and credential write goes
+   * through this service so the identity tables stay the single source.
+   */
+  cloudRelayBinding() {
+    return this.repository.readCloudRelayBinding();
+  }
+
+  saveCloudRelayBinding(binding: Omit<NodeAgentCloudRelayBinding, "updatedAt"> & { updatedAt?: string }) {
+    const current = this.repository.readCloudRelayBinding();
+    return this.repository.writeCloudRelayBinding({
+      ...binding,
+      pairedControlPlaneIds: binding.pairedControlPlaneIds ?? current?.pairedControlPlaneIds ?? [],
+      updatedAt: now(),
+    });
+  }
+
+  clearCloudRelayBinding() {
+    this.repository.deleteCloudRelayBinding();
+  }
+
+  updateCloudRelayBinding(mutate: (current: NodeAgentCloudRelayBinding) => NodeAgentCloudRelayBinding) {
+    const current = this.repository.readCloudRelayBinding();
+    if (!current) return undefined;
+    return this.repository.writeCloudRelayBinding({ ...mutate(current), updatedAt: now() });
+  }
+
+  markCloudRelayRebindRequired(error: NodeAgentCloudRelayStoredError) {
+    return this.updateCloudRelayBinding((current) => ({ ...current, status: "rebind-required", lastError: error }));
+  }
+
+  /** The pairing created when this Control Plane first claimed the node over the relay. */
+  cloudRelayPairing(controlPlaneId: string) {
+    const pairing = (this.store.read()?.controlPlanePairings || [])
+      .find((candidate) => candidate.id === controlPlaneId && !candidate.revokedAt);
+    return pairing ? { keyId: pairing.keyId, secret: pairing.secret } : undefined;
+  }
+
+  /** Stores (or replaces) the relay pairing for one Control Plane without touching direct/reverse pairings. */
+  saveCloudRelayPairing(input: { controlPlaneId: string; keyId: string; secret: string; name?: string }) {
+    const current = this.store.read() || this.newIdentity();
+    const pairedControlPlaneIds = new Set(this.cloudRelayBinding()?.pairedControlPlaneIds || []);
+    pairedControlPlaneIds.add(input.controlPlaneId);
+    const existing = (current.controlPlanePairings || []).find((candidate) => candidate.id === input.controlPlaneId);
+    const timestamp = now();
+    const pairing: NodeAgentControlPlanePairing = {
+      id: input.controlPlaneId,
+      keyId: input.keyId,
+      ...(input.name || existing?.name ? { name: input.name || existing?.name } : {}),
+      secret: input.secret,
+      pairedAt: existing?.pairedAt || timestamp,
+      updatedAt: timestamp,
+    };
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((candidate) => candidate.id !== input.controlPlaneId && candidate.keyId !== input.keyId),
+          pairing,
+        ],
+      });
+      const binding = this.repository.readCloudRelayBinding();
+      if (binding) {
+        this.repository.writeCloudRelayBinding({ ...binding, pairedControlPlaneIds: [...pairedControlPlaneIds], updatedAt: timestamp });
+      }
+    });
+    return pairing;
+  }
+
+  listCloudControlPlaneTrust() {
+    return this.repository.listCloudControlPlaneTrust(now());
+  }
+
+  cloudControlPlaneTrustSnapshot() {
+    const trust = this.listCloudControlPlaneTrust();
+    return projectNodeAgentControlPlaneTrust(this.repository, {
+      nodeId: this.resolveNodeId(),
+      ...(this.cloudRelayBinding()?.nodeHandle ? { nodeHandle: this.cloudRelayBinding()!.nodeHandle } : {}),
+      ...trust,
+    });
+  }
+
+  expireCloudControlPlaneTrustRequests(now = new Date().toISOString()) {
+    return this.repository.expireCloudControlPlaneTrustRequests(now);
+  }
+
+  withdrawCloudControlPlaneTrustRequests(controlPlaneId: string, reason: string, options: { now?: string } = {}) {
+    return this.repository.withdrawCloudControlPlaneTrustRequests({
+      controlPlaneId,
+      reason,
+      now: options.now ?? now(),
+    });
+  }
+
+  observeCloudControlPlaneTrust(context: NodeAgentCloudControlPlaneTrustContext, options: { now?: string; ttlMs?: number } = {}) {
+    return this.repository.observeCloudControlPlaneTrust({
+      context,
+      fingerprint: this.repository.cloudControlPlaneTrustFingerprint(context.controlPlanePublicKey),
+      now: options.now ?? now(),
+      ttlMs: options.ttlMs ?? CLOUD_CONTROL_PLANE_TRUST_TTL_MS,
+    });
+  }
+
+  decideCloudControlPlaneTrust(input: NodeAgentCloudControlPlaneTrustDecision, options: { now?: string } = {}) {
+    const result = this.repository.decideCloudControlPlaneTrust(input, {
+      now: options.now ?? now(),
+    });
+    for (const pin of result.revokedPins) this.cleanupCloudRelayPairingIfUnused(pin.controlPlaneId);
+    return result;
+  }
+
+  revokeCloudControlPlaneTrustPin(input: NodeAgentCloudControlPlaneRevokeInput, options: { now?: string } = {}) {
+    const pin = this.repository.revokeCloudControlPlaneTrustPin(input, options.now ?? now());
+    this.cleanupCloudRelayPairingIfUnused(pin.controlPlaneId);
+    return pin;
+  }
+
+  retryCloudControlPlaneTrustRequest(requestId: string, actor: NodeAgentControlPlaneTrustActor, options: { now?: string } = {}) {
+    return this.repository.retryCloudControlPlaneTrustRequest({
+      requestId,
+      actor,
+      now: options.now ?? now(),
+      ttlMs: CLOUD_CONTROL_PLANE_TRUST_TTL_MS,
+    });
+  }
+
+  private cleanupCloudRelayPairingIfUnused(controlPlaneId: string) {
+    if (this.repository.activeCloudControlPlanePinCount(controlPlaneId) > 0) return;
+    const binding = this.repository.readCloudRelayBinding();
+    if (!binding?.pairedControlPlaneIds.includes(controlPlaneId)) return;
+    const current = this.store.read();
+    if (!current) return;
+    const timestamp = now();
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: (current.controlPlanePairings || []).filter((pairing) => pairing.id !== controlPlaneId),
+      });
+      this.repository.writeCloudRelayBinding({
+        ...binding,
+        pairedControlPlaneIds: binding.pairedControlPlaneIds.filter((id) => id !== controlPlaneId),
+        updatedAt: timestamp,
+      });
+    });
+  }
+
+  /** Removes exactly the pairings a relay claim created, leaving direct/reverse pairings intact. */
+  clearCloudRelayPairings() {
+    const binding = this.repository.readCloudRelayBinding();
+    const relayPairingIds = new Set(binding?.pairedControlPlaneIds || []);
+    if (!relayPairingIds.size) return 0;
+    const current = this.store.read();
+    if (!current) return 0;
+    const next = (current.controlPlanePairings || []).filter((candidate) => !relayPairingIds.has(candidate.id));
+    const removed = (current.controlPlanePairings || []).length - next.length;
+    this.store.write({ ...current, controlPlanePairings: next });
+    return removed;
+  }
+
+  remoteSecrets(overrideSecret?: string, overrideKeyId?: string, includeRevoked = false) {
+    return [
+      ...(this.store.read()?.controlPlanePairings || [])
+        .filter((pairing) => includeRevoked || !pairing.revokedAt)
+        .map((pairing) => ({ keyId: pairing.keyId, secret: pairing.secret })),
+      ...(overrideSecret && overrideKeyId ? [{ keyId: overrideKeyId, secret: overrideSecret }] : []),
+    ];
+  }
+
+  resolveControlPlaneAuthority(keyId: string) {
+    const current = this.store.read();
+    const pairing = (current?.controlPlanePairings || [])
+      .find((candidate) => candidate.keyId === keyId && !candidate.revokedAt);
+    if (!pairing) return undefined;
+    const connection = (current?.controlPlaneConnections || []).find((candidate) => candidate.pairingKeyId === keyId);
+    const relayPairing = this.cloudRelayPairing(pairing.id);
+    return {
+      controlPlaneId: pairing.id,
+      connectionType: connection ? "reverse" as const : relayPairing?.keyId === keyId ? "node-relay" as const : "direct" as const,
+    };
+  }
+
+  isRevokedPairing(keyId: string) {
+    return Boolean(this.store.read()?.controlPlanePairings?.some((pairing) => pairing.keyId === keyId && pairing.revokedAt));
+  }
+
+  reverseTunnelSecret(controlPlaneUrl?: string, overrideSecret?: string, overrideKeyId?: string) {
+    if (overrideSecret && overrideKeyId) return { keyId: overrideKeyId, secret: overrideSecret };
+    const identity = this.store.read();
+    const pairings = (identity?.controlPlanePairings || []).filter((pairing) => !pairing.revokedAt);
+    if (!pairings.length) return undefined;
+    if (controlPlaneUrl) {
+      const normalizedUrl = controlPlaneUrl.replace(/\/$/, "");
+      const connection = (identity?.controlPlaneConnections || []).find((item) => item.url.replace(/\/$/, "") === normalizedUrl);
+      const exact = connection && pairings.find((pairing) => pairing.keyId === connection.pairingKeyId);
+      if (exact) return { keyId: exact.keyId, secret: exact.secret };
+    }
+    const latest = [...pairings].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    return latest ? { keyId: latest.keyId, secret: latest.secret } : undefined;
+  }
+
+  private newIdentity(): NodeAgentIdentity {
+    return { nodeId: this.resolveNodeId(), createdAt: now(), updatedAt: now(), controlPlanePairings: [], controlPlaneConnections: [] };
+  }
+
+  private writeNodeId(nodeId: string) {
+    const current = this.store.read();
+    this.store.write({
+      ...(current || { createdAt: now() }),
+      nodeId,
+      updatedAt: now(),
+      controlPlanePairings: current?.controlPlanePairings || [],
+      controlPlaneConnections: current?.controlPlaneConnections || [],
+    });
+  }
+
+}
+
+export function assertHttpControlPlaneUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    const error = new Error("Control-plane URL must use http or https.");
+    Object.assign(error, { statusCode: 400, code: "NODE_AGENT_REMOTE_CONTROL_PLANE_URL_INVALID" });
+    throw error;
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+export async function completeControlPlaneJoin(fetchImpl: typeof fetch, controlPlaneUrl: string, input: {
+  joinToken: string;
+  nodeId: string;
+  nodeName?: string;
+  keyId: string;
+  secret: string;
+  pairedAt: string;
+}) {
+  const response = await fetchImpl(new URL("/api/node-join/complete", controlPlaneUrl).toString(), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { data?: { id?: unknown; name?: unknown }; error?: { message?: string; code?: string } };
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || `Control-plane node join failed with HTTP ${response.status}.`);
+    Object.assign(error, { statusCode: response.status, code: payload.error?.code || "NODE_AGENT_REMOTE_JOIN_FAILED" });
+    throw error;
+  }
+  return payload.data || {};
+}

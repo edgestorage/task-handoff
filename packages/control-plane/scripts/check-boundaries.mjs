@@ -10,16 +10,18 @@ function option(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-const sourceRoot = path.resolve(option("--source-root") || path.join(defaultPackageRoot, "src"));
-const packageRoot = path.resolve(option("--package-root") || path.dirname(sourceRoot));
+const requestedSourceRoot = path.resolve(option("--source-root") || path.join(defaultPackageRoot, "src"));
+const sourceRoot = canonicalPath(requestedSourceRoot) || requestedSourceRoot;
+const requestedPackageRoot = path.resolve(option("--package-root") || path.dirname(sourceRoot));
+const packageRoot = canonicalPath(requestedPackageRoot) || requestedPackageRoot;
 const packageJsonPath = path.join(packageRoot, "package.json");
 const packageJson = fs.existsSync(packageJsonPath)
   ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
   : {};
 const packageName = option("--package-name") || packageJson.name || "@task-handoff/control-plane";
 const controlPlaneRoot = path.join(sourceRoot, "control-plane");
-const nodeAgentRoot = path.join(sourceRoot, "node-agent");
-const sharedRoot = path.join(sourceRoot, "shared");
+const nodeAgentRoot = path.resolve(packageRoot, "../node-agent/src");
+const sharedRoot = path.resolve(packageRoot, "../runtime-shared/src");
 const monorepoSharedRoot = path.resolve(packageRoot, "../../shared");
 const compilerOptions = {
   allowImportingTsExtensions: true,

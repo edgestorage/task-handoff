@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import { z } from "zod";
-import { JsonFile, createId } from "../../shared/persistence/store.ts";
+import { JsonFile, createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 
 const CloudConnectivityStateSchema = z.object({

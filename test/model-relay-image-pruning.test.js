@@ -9,8 +9,8 @@ const {
   IMAGE_OMITTED_PLACEHOLDER,
   ImagePruningBodyError,
   pruneModelRelayImages,
-} = require("../packages/control-plane/src/node-agent/models/relay/image-pruning.ts");
-const { ModelRelayService } = require("../packages/control-plane/src/node-agent/models/relay/server.ts");
+} = require("../packages/node-agent/src/models/relay/image-pruning.ts");
+const { ModelRelayService } = require("../packages/node-agent/src/models/relay/server.ts");
 
 function chatImage(url, index) {
   return {
@@ -547,7 +547,7 @@ test("the image-pruning gate rejects queued work with a retryable busy error", a
 });
 
 test("image pruning source has no decoder, resizer, encoder, or remote-URL fetch dependency", () => {
-  const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/models/relay/image-pruning.ts"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "../packages/node-agent/src/models/relay/image-pruning.ts"), "utf8");
   assert.doesNotMatch(source, /from\s+["'](?:sharp|jimp|image-size|canvas)|require\(["'](?:sharp|jimp|image-size|canvas)/i);
   assert.doesNotMatch(source, /\bfetch\s*\(|https?\.request|node:https/);
 });

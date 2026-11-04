@@ -15,14 +15,22 @@ const BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]
 const CONTROL_PLANE_DATABASE_DEPENDENCIES = new Set(["drizzle-orm", "pg"]);
 const NODE_AGENT_FORBIDDEN_DATABASE_DEPENDENCIES = new Set(["better-sqlite3", "node-gyp", "pg", "sqlite3"]);
 const NODE_AGENT_FORBIDDEN_DRIZZLE_SPECIFIERS = new Set(["drizzle-orm/node-postgres", "drizzle-orm/pg-core"]);
+const FORBIDDEN_WORKSPACE_DEPENDENCIES = new Map([
+  ["@task-handoff/control-plane", new Set(["@task-handoff/node-agent"])],
+  ["@task-handoff/node-agent", new Set(["@task-handoff/control-plane"])],
+]);
+
+function forbidsWorkspaceDependency(ownerName, dependencyName) {
+  return FORBIDDEN_WORKSPACE_DEPENDENCIES.get(ownerName)?.has(dependencyName) === true;
+}
 
 function forbidsDatabaseDependency(root, file, specifier, dependency) {
   const relative = path.relative(root, file).split(path.sep).join("/");
-  if (relative.startsWith("packages/control-plane/src/node-agent/")) {
+  if (relative.startsWith("packages/node-agent/src/")) {
     return NODE_AGENT_FORBIDDEN_DATABASE_DEPENDENCIES.has(dependency)
       || NODE_AGENT_FORBIDDEN_DRIZZLE_SPECIFIERS.has(specifier);
   }
-  return relative.startsWith("packages/control-plane/src/shared/")
+  return relative.startsWith("packages/runtime-shared/src/")
     || relative.startsWith("packages/controlled-instance/")
     || relative.startsWith("apps/controlled-instance-image/")
     ? CONTROL_PLANE_DATABASE_DEPENDENCIES.has(dependency)
@@ -162,6 +170,9 @@ function checkWorkspace(root = DEFAULT_ROOT) {
     const declared = declaredDependencies(owner.manifest);
     for (const dependency of declared) {
       const target = packagesByName.get(dependency);
+      if (forbidsWorkspaceDependency(owner.manifest.name, dependency)) {
+        violations.push(`${path.relative(root, owner.packageDir)}/package.json: ${owner.manifest.name} must not depend on ${dependency}`);
+      }
       if (owner.kind === "package" && target?.kind === "app") {
         violations.push(`${path.relative(root, owner.packageDir)}/package.json: reusable packages must not depend on app ${dependency}`);
       }

@@ -11,7 +11,7 @@ import {
   type ControlPlaneCliClient,
 } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneUserAuthentication } from "./user-authentication.ts";
 import type { ControlPlaneUserService } from "./user-service.ts";
 

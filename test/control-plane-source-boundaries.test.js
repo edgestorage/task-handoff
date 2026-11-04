@@ -16,24 +16,30 @@ function write(rootDir, relativePath, source) {
 }
 
 function fixture() {
-  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-boundaries-"));
+  const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "control-plane-boundaries-"));
+  const packageRoot = path.join(repositoryRoot, "packages", "control-plane");
+  const nodeAgentRoot = path.join(repositoryRoot, "packages", "node-agent");
+  const runtimeSharedRoot = path.join(repositoryRoot, "packages", "runtime-shared");
   write(packageRoot, "package.json", JSON.stringify({
     name: packageName,
     type: "module",
     exports: {
       ".": "./src/index.ts",
       "./service": "./src/service.ts",
-      "./node-agent": "./src/node-agent.ts",
     },
   }));
-  write(packageRoot, "src/shared/value.ts", "export const value = 1;\n");
-  write(packageRoot, "src/control-plane/service.ts", "import { value } from \"../shared/value.ts\"; export const service = value;\n");
-  write(packageRoot, "src/node-agent/app.ts", "import { value } from \"../shared/value.ts\"; export const app = value;\n");
-  write(packageRoot, "src/public/store.ts", "export * from \"../shared/value.ts\";\n");
+  write(nodeAgentRoot, "package.json", JSON.stringify({ name: "@fixture/node-agent", type: "module" }));
+  write(runtimeSharedRoot, "src/value.ts", "export const value = 1;\n");
+  write(packageRoot, "src/control-plane/service.ts", "import { value } from \"../../../runtime-shared/src/value.ts\"; export const service = value;\n");
+  write(nodeAgentRoot, "src/app.ts", "import { value } from \"../../runtime-shared/src/value.ts\"; export const app = value;\n");
+  write(packageRoot, "src/public/store.ts", "export * from \"../../../runtime-shared/src/value.ts\";\n");
   write(packageRoot, "src/service.ts", "export * from \"./control-plane/service.ts\";\n");
-  write(packageRoot, "src/node-agent.ts", "export * from \"./node-agent/app.ts\";\n");
-  write(packageRoot, "src/index.ts", "export * from \"./service.ts\"; export * from \"./node-agent.ts\";\n");
+  write(packageRoot, "src/index.ts", "export * from \"./service.ts\";\n");
   return packageRoot;
+}
+
+function cleanup(packageRoot) {
+  fs.rmSync(path.resolve(packageRoot, "../.."), { recursive: true, force: true });
 }
 
 function runChecker(packageRoot) {
@@ -47,33 +53,33 @@ function runChecker(packageRoot) {
 
 test("control-plane source boundary checker accepts the intended dependency graph", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
+  t.after(() => cleanup(packageRoot));
   const result = runChecker(packageRoot);
   assert.equal(result.status, 0, result.stderr);
 });
 
 test("control-plane source boundary checker rejects control-plane imports from node-agent", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/control-plane/service.ts", "import { app } from \"../node-agent/app.ts\"; export const service = app;\n");
+  t.after(() => cleanup(packageRoot));
+  write(packageRoot, "src/control-plane/service.ts", "import { app } from \"../../node-agent/src/app.ts\"; export const service = app;\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /control-plane modules must only import control-plane or shared modules/);
-  assert.match(result.stderr, /src\/control-plane\/service\.ts imports \.\.\/node-agent\/app\.ts/);
+  assert.match(result.stderr, /src\/control-plane\/service\.ts imports \.\.\/\.\.\/node-agent\/src\/app\.ts/);
 });
 
 test("control-plane source boundary checker rejects internal imports through a root facade", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/node-agent/app.ts", "import { service } from \"../service.ts\"; export const app = service;\n");
+  t.after(() => cleanup(packageRoot));
+  write(path.resolve(packageRoot, "../node-agent"), "src/app.ts", "import { service } from \"../../control-plane/src/service.ts\"; export const app = service;\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /src\/node-agent\/app\.ts imports \.\.\/service\.ts/);
+  assert.match(result.stderr, /\.\.\/node-agent\/src\/app\.ts imports \.\.\/\.\.\/control-plane\/src\/service\.ts/);
 });
 
 test("control-plane source boundary checker rejects internal imports through a public facade", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
+  t.after(() => cleanup(packageRoot));
   write(packageRoot, "src/control-plane/service.ts", "import { value } from \"../public/store.ts\"; export const service = value;\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
@@ -82,8 +88,8 @@ test("control-plane source boundary checker rejects internal imports through a p
 
 test("control-plane source boundary checker resolves and rejects own-package subpaths", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/node-agent/app.ts", `import { service } from "${packageName}/service"; export const app = service;\n`);
+  t.after(() => cleanup(packageRoot));
+  write(path.resolve(packageRoot, "../node-agent"), "src/app.ts", `import { service } from "${packageName}/service"; export const app = service;\n`);
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
   assert.match(result.stderr, new RegExp(`${packageName.replace("/", "\\/")}\\/service`));
@@ -92,38 +98,38 @@ test("control-plane source boundary checker resolves and rejects own-package sub
 
 test("control-plane source boundary checker rejects import types that cross a boundary", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/shared/value.ts", "export type Leaked = typeof import(\"../control-plane/service.ts\");\n");
+  t.after(() => cleanup(packageRoot));
+  write(path.resolve(packageRoot, "../runtime-shared"), "src/value.ts", "export type Leaked = typeof import(\"../../control-plane/src/service.ts\");\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /src\/shared\/value\.ts imports \.\.\/control-plane\/service\.ts/);
+  assert.match(result.stderr, /\.\.\/runtime-shared\/src\/value\.ts imports \.\.\/\.\.\/control-plane\/src\/service\.ts/);
 });
 
 test("control-plane source boundary checker rejects dynamic imports with attributes that cross a boundary", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/node-agent/app.ts", "export const app = import(\"../control-plane/service.ts\", { with: { type: \"json\" } });\n");
+  t.after(() => cleanup(packageRoot));
+  write(path.resolve(packageRoot, "../node-agent"), "src/app.ts", "export const app = import(\"../../control-plane/src/service.ts\", { with: { type: \"json\" } });\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /src\/node-agent\/app\.ts imports \.\.\/control-plane\/service\.ts/);
+  assert.match(result.stderr, /\.\.\/node-agent\/src\/app\.ts imports \.\.\/\.\.\/control-plane\/src\/service\.ts/);
 });
 
 test("control-plane source boundary checker rejects cross-boundary imports hidden behind symlinks", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  fs.symlinkSync(path.join(packageRoot, "src/control-plane/service.ts"), path.join(packageRoot, "src/node-agent/linked-service.ts"));
-  write(packageRoot, "src/node-agent/app.ts", "import { service } from \"./linked-service.ts\"; export const app = service;\n");
+  t.after(() => cleanup(packageRoot));
+  fs.symlinkSync(path.join(packageRoot, "src/control-plane/service.ts"), path.join(packageRoot, "../node-agent/src/linked-service.ts"));
+  write(path.resolve(packageRoot, "../node-agent"), "src/app.ts", "import { service } from \"./linked-service.ts\"; export const app = service;\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /src\/node-agent\/app\.ts imports \.\/linked-service\.ts/);
+  assert.match(result.stderr, /\.\.\/node-agent\/src\/app\.ts imports \.\/linked-service\.ts/);
   assert.match(result.stderr, /src\/control-plane\/service\.ts/);
 });
 
 test("control-plane source boundary checker parses TSX with the matching script kind", (t) => {
   const packageRoot = fixture();
-  t.after(() => fs.rmSync(packageRoot, { recursive: true, force: true }));
-  write(packageRoot, "src/node-agent/view.tsx", "export const view = <section>{import(\"../control-plane/service.ts\")}</section>;\n");
+  t.after(() => cleanup(packageRoot));
+  write(path.resolve(packageRoot, "../node-agent"), "src/view.tsx", "export const view = <section>{import(\"../../control-plane/src/service.ts\")}</section>;\n");
   const result = runChecker(packageRoot);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /src\/node-agent\/view\.tsx imports \.\.\/control-plane\/service\.ts/);
+  assert.match(result.stderr, /\.\.\/node-agent\/src\/view\.tsx imports \.\.\/\.\.\/control-plane\/src\/service\.ts/);
 });

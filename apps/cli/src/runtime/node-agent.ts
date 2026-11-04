@@ -9,7 +9,7 @@ import {
   nodeAgentIpcPath,
   runNodeAgentServer,
   uninstallNodeAgent,
-} from "@task-handoff/control-plane/node-agent";
+} from "@task-handoff/node-agent";
 import {
   NodeAgentControlPlaneTrustSnapshotSchema,
   type NodeAgentControlPlaneTrustSnapshot,

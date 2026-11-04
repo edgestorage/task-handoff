@@ -17,7 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
-const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/node-agent/src/events.ts");
 const { eventTopic } = require("../packages/protocol/src/events.ts");
 const { parseInstanceAppManagementSnapshot } = require("../packages/control-plane/src/control-plane/application/service.ts");
 
@@ -321,16 +321,11 @@ test("node-agent waits for matched runtime convergence before opening instance e
 });
 
 test("node-agent app management remains a transport concern", () => {
-  const sourceRoot = path.join(__dirname, "../packages/control-plane/src");
-  const nodeAgentRoot = path.join(sourceRoot, "node-agent");
-  const facadeFilename = path.join(sourceRoot, "node-agent.ts");
-  const sources = [
-    { filename: facadeFilename, source: fs.readFileSync(facadeFilename, "utf8") },
-    ...typescriptSources(nodeAgentRoot),
-  ];
+  const sourceRoot = path.join(__dirname, "../packages/node-agent/src");
+  const sources = typescriptSources(sourceRoot);
   const sourceByRelativePath = new Map(sources.map(({ filename, source }) => [path.relative(sourceRoot, filename), source]));
-  const appSource = sourceByRelativePath.get(path.join("node-agent", "app.ts")) || "";
-  const proxySource = sourceByRelativePath.get(path.join("node-agent", "instances", "proxy-routes.ts")) || "";
+  const appSource = sourceByRelativePath.get("app.ts") || "";
+  const proxySource = sourceByRelativePath.get(path.join("instances", "proxy-routes.ts")) || "";
   assert.match(appSource, /registerInstanceProxyRoutes\(/);
   assert.match(proxySource, /instances\/:id\/proxy/);
   for (const { filename, source } of sources) {

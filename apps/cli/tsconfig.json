@@ -8,6 +8,8 @@
     "../../packages/core/src/**/*",
     "../../packages/protocol/src/**/*",
     "../../packages/control-plane/src/**/*",
+    "../../packages/node-agent/src/**/*",
+    "../../packages/runtime-shared/src/**/*",
     "../../packages/controlled-instance/src/**/*",
     "../../packages/app-runtime/src/**/*"
   ]

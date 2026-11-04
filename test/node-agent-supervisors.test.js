@@ -3,15 +3,15 @@ const { EventEmitter } = require("node:events");
 const net = require("node:net");
 const test = require("node:test");
 
-const { allocateNodeAgentExternalListener, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent/external-listener-manager.ts");
-const { NodeAgentRecoverySupervisor } = require("../packages/control-plane/src/node-agent/recovery-supervisor.ts");
+const { allocateNodeAgentExternalListener, NodeAgentExternalListenerManager } = require("../packages/node-agent/src/external-listener-manager.ts");
+const { NodeAgentRecoverySupervisor } = require("../packages/node-agent/src/recovery-supervisor.ts");
 const {
   DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS,
   LocalProcessSupervisor,
   localProcessReadyTimeoutMs,
-} = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
-const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
-const { RuntimeAdapterRegistry } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
+} = require("../packages/node-agent/src/runtimes/local-process-supervisor.ts");
+const { InstanceOperationGate } = require("../packages/node-agent/src/instances/instance-operation-gate.ts");
+const { RuntimeAdapterRegistry } = require("../packages/node-agent/src/runtimes/adapters.ts");
 
 test("node-agent global shutdown stops only the Local Runtime adapter", async () => {
   const calls = [];

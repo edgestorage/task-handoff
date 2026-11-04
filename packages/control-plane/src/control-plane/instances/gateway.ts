@@ -1,7 +1,7 @@
 import { controlledInstanceAcceptsTraffic, type ControlledInstance, type ControlledInstanceHeartbeat, type Node } from "@task-handoff/protocol/control-plane";
 import { plainHeaders } from "../common/helpers.ts";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts";
-import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "@task-handoff/runtime-shared/http/server-timing";
 
 export type ControlledInstanceGatewayOptions = {
   requireNode: (nodeId: string) => Node;

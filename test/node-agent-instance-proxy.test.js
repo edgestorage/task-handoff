@@ -6,14 +6,14 @@ const {
   proxyResponseHeaders,
   proxyWebSocketProtocols,
   readResponseBodyWithLimit,
-} = require("../packages/control-plane/src/node-agent/instance-proxy-codec.ts");
+} = require("../packages/node-agent/src/instance-proxy-codec.ts");
 const { EventEmitter } = require("node:events");
 const Fastify = require("fastify");
 const websocket = require("@fastify/websocket");
 const {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
-} = require("../packages/control-plane/src/node-agent/instances/proxy-routes.ts");
+} = require("../packages/node-agent/src/instances/proxy-routes.ts");
 
 test("instance proxy codec preserves binary request bodies", () => {
   assert.deepEqual(proxyRequestBody({ bodyBase64: "AAH/" }), Buffer.from([0, 1, 255]));

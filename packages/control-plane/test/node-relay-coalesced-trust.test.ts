@@ -8,7 +8,7 @@ import {
   nodeAgentControlPlaneTrustSigningInput,
 } from "@task-handoff/protocol/node-relay-channel";
 import { CloudNodeRelayConnector } from "../src/control-plane/cloud-connectivity/node-relay-connector.ts";
-import { nodeRelayFingerprint } from "../src/shared/cloud-relay/node-relay-session.ts";
+import { nodeRelayFingerprint } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { ed25519Identity } from "./support/cloud-relay-node-harness.ts";
 
 async function verifyCoalescedTrust(frameFirst: boolean) {

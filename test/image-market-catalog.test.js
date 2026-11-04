@@ -22,7 +22,7 @@ const {
 } = require("../packages/control-plane/src/control-plane/catalog/market.ts");
 const { ControlPlaneCatalogService } = require("../packages/control-plane/src/control-plane/catalog/service.ts");
 const { ControlPlaneSettingsSchema } = require("../packages/control-plane/src/control-plane/catalog/inputs.ts");
-const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
+const { JsonCollection, JsonFile } = require("../packages/runtime-shared/src/persistence/store.ts");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
 const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runWebServer } from "@task-handoff/controlled-instance/web/server";
 import { runControlPlaneServer } from "@task-handoff/control-plane/server";
-import { runNodeAgentServer } from "@task-handoff/control-plane/node-agent";
+import { runNodeAgentServer } from "@task-handoff/node-agent";
 
 function box(title: string, lines: string[]) {
   const width = Math.max(title.length + 4, ...lines.map((line) => line.length + 4));

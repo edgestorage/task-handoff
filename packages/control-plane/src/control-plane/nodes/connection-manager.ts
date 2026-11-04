@@ -8,9 +8,9 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
-import { createId } from "../../shared/persistence/store.ts";
-import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
-import { parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
+import { createDirectNodeAgentAuthHeaders } from "@task-handoff/runtime-shared/security/node-agent-auth";
+import { parseNodeAgentIpcEndpoint } from "@task-handoff/runtime-shared/transport/node-agent-ipc";
 import { CreateNodeInputSchema } from "../application/inputs.ts";
 import { now } from "../application/helpers.ts";
 import { publicNode, publicNodeAgentCapabilities } from "../public-records.ts";

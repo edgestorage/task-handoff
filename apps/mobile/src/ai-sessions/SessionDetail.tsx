@@ -18,7 +18,7 @@ import {
 import { activeMobileStreamingMessage, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
-import { NativeSessionModePicker } from './NativeSessionModePicker';
+import { AnimatedSegmentedControl } from '../components/AnimatedSegmentedControl';
 import { ToolActivityText } from './ToolActivityText';
 import { RetryWarning } from './RetryWarning';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
@@ -249,7 +249,17 @@ export function SessionDetail({
       <Text numberOfLines={3} style={[styles.contentErrorText, { color: colors.error }]}>{contentError}</Text>
       {onRetryContent ? <Text style={[styles.contentErrorAction, { color: colors.error }]}>{t('common.retry')}</Text> : null}
     </Pressable> : null}
-    {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
+    {showModePicker && turns.length ? <AnimatedSegmentedControl
+      accessibilityLabel={t('sessions.sessionViewMode')}
+      onChange={selectMode}
+      options={[
+        { label: t('sessions.conversation'), testID: 'session-mode-conversation', value: 'conversation' },
+        { label: t('sessions.compact'), testID: 'session-mode-compact', value: 'turn' },
+      ]}
+      style={styles.modePicker}
+      testID="session-mode-picker"
+      value={selectedMode}
+    /> : null}
     <View style={styles.sessionBar}>
       {instanceName && workspaceName ? <View style={styles.sessionContext} testID="session-detail-context">
         <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
@@ -765,7 +775,7 @@ const styles = StyleSheet.create({
   tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 24, paddingHorizontal: 2 },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: mobileWebMetric(16) },
-  modePicker: { alignItems: 'center' },
+  modePicker: { alignSelf: 'center', maxWidth: '100%', width: 210 },
   sessionBar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 36 },
   metaRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   sessionContext: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 6, minWidth: 0 },

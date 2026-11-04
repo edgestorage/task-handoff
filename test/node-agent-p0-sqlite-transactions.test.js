@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { DatabaseSync } = require("node:sqlite");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { CONTROL_PLANE_PROTOCOL_VERSION, createModelEntityId } = require("../packages/protocol/src/control-plane.ts");
 
 function image(timestamp) {

@@ -12,7 +12,7 @@ import { runtimePackages } from "../runtime-packages.config.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { resolveFeatureFlags } = createRequire(import.meta.url)("../shared/feature-flags.cjs");
-const builtinProjects = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
+const builtinProjects = await import(pathToFileURL(path.join(root, "packages/node-agent/src/builtin-projects/assets.ts")).href);
 const npmCache = path.join(os.tmpdir(), "task-handoff-npm-cache");
 const targetNames = Object.keys(runtimePackages);
 const cliArgv = process.argv[2] === "--" ? [...process.argv.slice(0, 2), ...process.argv.slice(3)] : process.argv;

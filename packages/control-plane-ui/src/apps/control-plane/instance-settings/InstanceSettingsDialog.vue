@@ -242,74 +242,78 @@
                   <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
                 </div>
                 <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
-                <div v-else-if="!appManagement.apps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
-                <template v-else>
-                <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
-                  <div class="instance-app-filters">
-                    <Button v-for="filter in appFilters" :key="filter.value" size="sm" :variant="appFilter === filter.value ? 'secondary' : 'ghost'" :aria-pressed="appFilter === filter.value" @click="appFilter = filter.value">
-                      {{ filter.label }} <span>{{ filter.count }}</span>
-                    </Button>
-                  </div>
-                  <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
-                </div>
-                <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
-                <div v-else class="instance-app-list instance-directory-list">
-                  <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
-                    <div class="instance-app-main">
-                      <div class="instance-app-identity">
-                        <span class="instance-app-icon" aria-hidden="true">
-                          <AiAgentIcon v-if="app.id === 'codex' || app.id === 'claude'" :agent="app.id" :size="17" />
-                          <component :is="managedAppIcon(app)" v-else :size="17" />
-                        </span>
-                        <div class="instance-app-copy">
-                          <strong>{{ app.name }}</strong>
-                          <small v-if="app.description">{{ app.description }}</small>
-                          <code>{{ app.id }} · {{ app.kind }}<template v-if="app.version"> · {{ app.version }}</template></code>
-                          <small v-if="updateCheckLabel(app)" class="instance-app-update-check" :class="updateCheckClass(app)">{{ updateCheckLabel(app) }}</small>
-                          <small v-if="appActionHint(app)" class="instance-app-action-reason">{{ appActionHint(app) }}</small>
+                <Tabs v-else v-model="appView" class="instance-app-views">
+                  <TabsList class="instance-app-view-tabs" :aria-label="t('instances.settings.appViews')">
+                    <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}</TabsTrigger>
+                    <TabsTrigger ref="appTasksTab" value="tasks">{{ t("instances.settings.appTasks") }}<span v-if="appManagement.activeJobs.length" class="instance-app-task-count">{{ appManagement.activeJobs.length }}</span></TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="catalog" class="instance-app-view-content">
+                    <div v-if="primaryAppTask" class="instance-app-task-summary">
+                      <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="14" aria-hidden="true" />
+                      <span class="instance-app-task-summary-copy" role="status">{{ appTaskSummary }}<span v-if="appManagement.activeJobs.length > 1"> · {{ t("instances.settings.otherAppTasks", { count: appManagement.activeJobs.length - 1 }) }}</span></span>
+                      <Button size="sm" variant="ghost" @click="openAppTask(primaryAppTask.id)">{{ t("instances.settings.viewAppTasks") }}<ChevronRight :size="14" aria-hidden="true" /></Button>
+                    </div>
+                    <div v-if="!appManagement.apps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
+                    <template v-else>
+                      <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
+                        <div class="instance-app-filters">
+                          <Button v-for="filter in appFilters" :key="filter.value" size="sm" :variant="appFilter === filter.value ? 'secondary' : 'ghost'" :aria-pressed="appFilter === filter.value" @click="appFilter = filter.value">
+                            {{ filter.label }} <span>{{ filter.count }}</span>
+                          </Button>
                         </div>
+                        <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                       </div>
-                      <div class="instance-app-controls">
-                        <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
-                        <Button v-if="activeJob(app)" size="sm" disabled>
-                          <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="13" />
-                          {{ operationLabel(activeJob(app)!.operation) }}
-                        </Button>
-                        <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
-                        <DropdownMenu v-else-if="hasAppMenuActions(app)">
-                          <DropdownMenuTrigger as-child>
-                            <Button size="sm" variant="outline" :disabled="operationSubmitting === app.id || checkingApps.has(app.id)" :aria-label="t('instances.settings.appActions')">
-                              <LoaderCircle v-if="checkingApps.has(app.id)" class="animate-spin motion-reduce:animate-none" :size="13" />
-                              <MoreHorizontal v-else :size="14" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" :side-offset="6" class="instance-app-actions-menu">
-                            <DropdownMenuItem v-if="app.canUpdate" :disabled="checkingApps.has(app.id)" @select="runAppUpdateCheck(app)">{{ checkingApps.has(app.id) ? t("instances.settings.checkingUpdate") : t("instances.settings.checkUpdate") }}</DropdownMenuItem>
-                            <DropdownMenuItem v-if="app.canUpdate" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'update')">{{ t("instances.settings.update") }}</DropdownMenuItem>
-                            <DropdownMenuSeparator v-if="app.canUpdate && app.canUninstall" />
-                            <DropdownMenuItem v-if="app.canUninstall" class="instance-app-action-danger" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                      <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
+                      <div v-else class="instance-app-list instance-directory-list">
+                        <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
+                          <div class="instance-app-main">
+                            <div class="instance-app-identity">
+                              <span class="instance-app-icon" aria-hidden="true">
+                                <AiAgentIcon v-if="app.id === 'codex' || app.id === 'claude'" :agent="app.id" :size="17" />
+                                <component :is="managedAppIcon(app)" v-else :size="17" />
+                              </span>
+                              <div class="instance-app-copy">
+                                <strong>{{ app.name }}</strong>
+                                <small v-if="app.description">{{ app.description }}</small>
+                                <code>{{ app.id }} · {{ app.kind }}<template v-if="app.version"> · {{ app.version }}</template></code>
+                                <small v-if="updateCheckLabel(app)" class="instance-app-update-check" :class="updateCheckClass(app)">{{ updateCheckLabel(app) }}</small>
+                                <small v-if="appActionHint(app)" class="instance-app-action-reason">{{ appActionHint(app) }}</small>
+                              </div>
+                            </div>
+                            <div class="instance-app-controls">
+                              <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
+                              <Button v-if="activeJob(app)" size="sm" variant="outline" @click="openAppTask(activeJob(app)!.id)">
+                                {{ t("instances.settings.viewAppTasks") }}
+                              </Button>
+                              <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
+                              <DropdownMenu v-else-if="hasAppMenuActions(app)">
+                                <DropdownMenuTrigger as-child>
+                                  <Button size="sm" variant="outline" :disabled="operationSubmitting === app.id || checkingApps.has(app.id)" :aria-label="t('instances.settings.appActions')">
+                                    <LoaderCircle v-if="checkingApps.has(app.id)" class="animate-spin motion-reduce:animate-none" :size="13" />
+                                    <MoreHorizontal v-else :size="14" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" :side-offset="6" class="instance-app-actions-menu">
+                                  <DropdownMenuItem v-if="app.canUpdate" :disabled="checkingApps.has(app.id)" @select="runAppUpdateCheck(app)">{{ checkingApps.has(app.id) ? t("instances.settings.checkingUpdate") : t("instances.settings.checkUpdate") }}</DropdownMenuItem>
+                                  <DropdownMenuItem v-if="app.canUpdate" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'update')">{{ t("instances.settings.update") }}</DropdownMenuItem>
+                                  <DropdownMenuSeparator v-if="app.canUpdate && app.canUninstall" />
+                                  <DropdownMenuItem v-if="app.canUninstall" class="instance-app-action-danger" :disabled="operationSubmitting === app.id" @select="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </div>
+                        </article>
                       </div>
-                    </div>
-                    <div v-if="activeJob(app) || executionJob(app)?.command || executionJob(app)?.logTail || terminalJob(app)" class="instance-app-activity">
-                      <small v-if="activeJob(app)" class="instance-app-job-line">{{ jobLabel(activeJob(app)!) }}</small>
-                      <Progress v-if="progressPercent(activeJob(app)) !== undefined" :model-value="progressPercent(activeJob(app))" class="instance-app-progress" />
-                      <details v-if="executionJob(app)?.command || executionJob(app)?.logTail" class="instance-app-terminal" :open="Boolean(activeJob(app))">
-                        <summary>{{ activeJob(app) ? t("instances.settings.liveInstallerOutput") : t("instances.settings.installerOutput") }}<template v-if="executionJob(app)?.logTruncated"> · {{ t("instances.settings.latestLog") }}</template></summary>
-                        <pre aria-live="polite">{{ executionOutput(executionJob(app)!) }}</pre>
-                      </details>
-                      <small v-if="terminalJob(app)" :class="terminalJob(app)?.state === 'succeeded' ? 'instance-settings-success' : 'instance-settings-error'" role="status">
-                        {{ terminalJobLabel(terminalJob(app)!) }}<template v-if="terminalJob(app)?.error"> · {{ terminalJob(app)?.error?.message }}</template><template v-if="terminalJob(app)?.error?.retryable"> {{ t("instances.settings.retryDetected") }}</template>
-                      </small>
-                    </div>
-                  </article>
-                </div>
-                </template>
+                    </template>
+                  </TabsContent>
+                  <TabsContent value="tasks" class="instance-app-view-content">
+                    <AppManagementTasks v-model:selected-job-id="selectedAppTaskId" :snapshot="appManagement" :submitting="operationSubmitting" @retry="retryAppTask" />
+                  </TabsContent>
+                </Tabs>
               </div>
             </section>
 
-            <section class="instance-settings-card instance-settings-group">
+            <section v-if="appView === 'catalog'" class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
                 <div class="instance-settings-section-heading">
                   <h3>{{ t("instances.settings.customLaunchers") }}</h3>
@@ -364,9 +368,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Bot, Boxes, ChevronRight, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -380,13 +384,14 @@ import { sameModelSelectionRef } from "../../../components/ai-session/modelSelec
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
-import { Progress } from "../../../components/ui/progress";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import BrowserProfilesSection from "./BrowserProfilesSection.vue";
+import AppManagementTasks from "./AppManagementTasks.vue";
+import { appTaskGroups, appTaskStatusKey, retryableAppTask } from "./appTaskPresentation";
 import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
@@ -457,6 +462,26 @@ const operationSubmitting = ref("");
 const checkingApps = reactive(new Set<string>());
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appFilter = ref<AppFilter>("all");
+const appView = ref("catalog");
+const appTasksTab = ref<InstanceType<typeof TabsTrigger>>();
+const selectedAppTaskId = ref("");
+const primaryAppTask = computed(() => props.appManagement ? appTaskGroups(props.appManagement).active[0] : undefined);
+const appTaskSummary = computed(() => {
+  const job = primaryAppTask.value;
+  if (!job) return "";
+  const name = props.appManagement?.apps.find((app) => app.id === job.appId)?.name || job.appId;
+  return `${name} · ${t(appTaskStatusKey(job))}`;
+});
+function openAppTask(jobId: string) {
+  selectedAppTaskId.value = jobId;
+  appView.value = "tasks";
+  void nextTick(() => appTasksTab.value?.$el?.focus());
+}
+function retryAppTask(job: AppManagementJob) {
+  if (!props.appManagement || operationSubmitting.value) return;
+  const app = retryableAppTask(props.appManagement, job);
+  if (app) openAppConfirmation(app, job.operation);
+}
 const noGitCredentialValue = "__none__";
 const selectedGitCredentialId = ref(noGitCredentialValue);
 const gitCredentialBusy = ref(false);
@@ -711,6 +736,8 @@ watch(
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
     appFilter.value = "all";
+    appView.value = "catalog";
+    selectedAppTaskId.value = "";
   },
   { immediate: true },
 );
@@ -840,56 +867,10 @@ function activeJob(app: ManagedAppProjection) {
   return props.appManagement?.activeJobs.find((job) => job.id === app.activeJobId || job.appId === app.id);
 }
 
-function terminalJob(app: ManagedAppProjection) {
-  return props.appManagement?.recentJobs.find((job) => job.appId === app.id);
-}
-
-function executionJob(app: ManagedAppProjection) {
-  return activeJob(app) || terminalJob(app);
-}
-
-function executionOutput(job: AppManagementJob) {
-  if (job.logTail) return job.logTail;
-  if (!job.command) return t("instances.settings.waitingInstaller");
-  return `$ ${[job.command.executable, ...job.command.args].map(commandArgument).join(" ")}\n`;
-}
-
-function commandArgument(value: string) {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
-}
-
-function progressPercent(job?: AppManagementJob) {
-  if (!job?.progress?.total || job.progress.current === undefined) return undefined;
-  return Math.max(0, Math.min(100, (job.progress.current / job.progress.total) * 100));
-}
-
-function jobLabel(job: AppManagementJob) {
-  const operation = operationLabel(job.operation);
-  return `${job.state === "queued" ? t("instances.settings.queued") : operation}${job.phase ? ` · ${humanizeJobPhase(job.phase)}` : ""}`;
-}
-
-function operationLabel(operation: AppManagementOperation) {
-  return operation === "install" ? t("instances.settings.installing")
-    : operation === "update" ? t("instances.settings.updating")
-      : t("instances.settings.uninstalling");
-}
-
 function operationNoun(operation: AppManagementOperation) {
   return operation === "install" ? t("instances.settings.installation")
     : operation === "update" ? t("instances.settings.update")
       : t("instances.settings.uninstallation");
-}
-
-function humanizeJobPhase(phase: string) {
-  return phase.replace(/[-_]+/g, " ").replace(/^./, (value) => value.toUpperCase());
-}
-
-function terminalJobLabel(job: AppManagementJob) {
-  const operation = operationNoun(job.operation);
-  if (job.state === "succeeded") return t("instances.settings.succeeded", { operation });
-  if (job.state === "cancelled") return t("instances.settings.cancelled", { operation });
-  if (job.state === "interrupted") return t("instances.settings.interrupted", { operation });
-  return t("instances.settings.failed", { operation });
 }
 
 function managedAppBadgeVariant(state: ManagedAppProjection["state"]): "default" | "secondary" | "destructive" {
@@ -1371,6 +1352,16 @@ async function confirmAppOperation() {
   min-width: 0;
 }
 
+.instance-app-views { min-width: 0; }
+.instance-app-view-tabs { display: flex; width: fit-content; max-width: calc(100% - 20px); margin: 10px; }
+.instance-app-view-tabs :deep(button) { min-height: 30px; font-size: 12px; font-weight: 500; }
+.instance-app-task-count { margin-left: 6px; color: var(--text-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.instance-app-view-content { margin-top: 0; }
+.instance-app-task-summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-block: 1px solid var(--line); background: var(--surface-inset); color: var(--text); font-size: 12px; }
+.instance-app-task-summary > svg { flex-shrink: 0; color: var(--brand-accent-muted); }
+.instance-app-task-summary-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.instance-app-task-summary button { flex-shrink: 0; font-size: 12px; font-weight: 400; }
+
 .instance-app-toolbar {
   display: flex;
   min-height: 36px;
@@ -1383,7 +1374,7 @@ async function confirmAppOperation() {
 
 .instance-app-toolbar > small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -1448,6 +1439,7 @@ async function confirmAppOperation() {
 .instance-app-copy > strong {
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 500;
 }
 
 .instance-app-main,
@@ -1503,33 +1495,6 @@ async function confirmAppOperation() {
   color: var(--status-danger, #dc2626);
 }
 
-.instance-app-activity {
-  display: grid !important;
-  gap: 5px !important;
-  border-top: 1px solid var(--line);
-  margin-top: 10px;
-  padding-top: 9px;
-}
-
-.instance-app-job-line {
-  color: var(--brand-accent-muted) !important;
-  font-weight: 700;
-}
-
-.instance-app-progress {
-  width: min(300px, 100%);
-  margin-top: 3px;
-}
-
-.instance-app-terminal {
-  width: 100%;
-  margin-top: 5px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #071014;
-}
-
 .instance-app-confirmation-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1561,29 +1526,6 @@ async function confirmAppOperation() {
   white-space: nowrap;
 }
 
-.instance-app-terminal summary {
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 7px 9px;
-  user-select: none;
-}
-
-.instance-app-terminal pre {
-  max-height: 180px;
-  overflow: auto;
-  margin: 0;
-  border-top: 1px solid var(--line);
-  color: #d7e3e7;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.5;
-  padding: 9px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .instance-app-row code,
 .instance-app-issues code {
   overflow-wrap: anywhere;
@@ -1601,20 +1543,6 @@ async function confirmAppOperation() {
 
 .instance-app-issues p {
   margin: 5px 0 0;
-}
-
-.instance-settings-error {
-  margin: 0;
-  padding: 0 16px 12px;
-  color: var(--status-danger);
-  font-size: 12px;
-}
-
-.instance-settings-success {
-  margin: 0;
-  padding: 0 16px 12px;
-  color: var(--status-success);
-  font-size: 12px;
 }
 
 .instance-settings-empty {

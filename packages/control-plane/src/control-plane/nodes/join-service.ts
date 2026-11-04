@@ -1,10 +1,10 @@
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
 import crypto from "node:crypto";
 import { z } from "zod";
-import { createId, createSecret } from "../../shared/persistence/store.ts";
+import { createId, createSecret } from "@task-handoff/runtime-shared/persistence/store";
 import { CreateNodeJoinInviteInputSchema } from "../application/inputs.ts";
 import { now } from "../application/helpers.ts";
-import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import { EphemeralTokenStore } from "@task-handoff/runtime-shared/security/ephemeral-token-store";
 import type { ControlPlaneNodeStorage } from "./repository.ts";
 
 const DEFAULT_INVITE_TTL_MS = 10 * 60 * 1000;

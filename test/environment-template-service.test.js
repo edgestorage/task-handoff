@@ -4,12 +4,12 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { EnvironmentTemplateService } = require("../packages/control-plane/src/node-agent/environment-templates/service.ts");
-const { EnvironmentTemplateStore } = require("../packages/control-plane/src/node-agent/environment-templates/store.ts");
-const { InstancePrivateConfigStore } = require("../packages/control-plane/src/node-agent/instances/private-config-store.ts");
-const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { LocalDockerExecutor } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { EnvironmentTemplateService } = require("../packages/node-agent/src/environment-templates/service.ts");
+const { EnvironmentTemplateStore } = require("../packages/node-agent/src/environment-templates/store.ts");
+const { InstancePrivateConfigStore } = require("../packages/node-agent/src/instances/private-config-store.ts");
+const { InstanceOperationGate } = require("../packages/node-agent/src/instances/instance-operation-gate.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { LocalDockerExecutor } = require("../packages/node-agent/src/runtimes/docker.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
 const imageId = `sha256:${"c".repeat(64)}`;

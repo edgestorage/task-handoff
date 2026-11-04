@@ -21,7 +21,7 @@ import {
   acceptNodeRelayHandshake,
   nodeRelayFingerprint,
   type NodeRelayFrameSocket,
-} from "../../src/shared/cloud-relay/node-relay-session.ts";
+} from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { NODE_RELAY_MAIN_STREAM_ID, type NodeRelayDataFrame } from "@task-handoff/protocol/node-relay-channel";
 import { linkedFrameSockets, ed25519Identity, type InMemoryFrameSocket } from "./cloud-relay-node-harness.ts";
 

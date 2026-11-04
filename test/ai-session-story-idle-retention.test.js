@@ -4,7 +4,7 @@ const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
 
-const { StoryIdleSessionRetentionCoordinator } = require("../packages/control-plane/src/node-agent/stories/idle-retention.ts");
+const { StoryIdleSessionRetentionCoordinator } = require("../packages/node-agent/src/stories/idle-retention.ts");
 
 function candidate(index) {
   return {

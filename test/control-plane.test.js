@@ -14,7 +14,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp, initializeControlPlaneCredentials, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
-const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentContainerIpcServer, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, nodeAgentContainerIpcPath, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual, syncControlledInstanceNodeAgentConnection } = require("../packages/control-plane/src/node-agent.ts");
+const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentContainerIpcServer, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, nodeAgentContainerIpcPath, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual, syncControlledInstanceNodeAgentConnection } = require("../packages/node-agent/src/index.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -25,29 +25,29 @@ const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { AiSessionAttachmentStore } = require("../packages/control-plane/src/control-plane/sessions/ai-session-attachments.ts");
 const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/app-session-aggregator.ts");
-const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/node-agent/src/events.ts");
 const { AiSessionMessageDeltaCoalescer } = require("../packages/controlled-instance/src/web/ai-session-message-delta-coalescer.ts");
-const { NodeAgentPairedHmacVerifier } = require("../packages/control-plane/src/node-agent/identity/hmac-verifier.ts");
-const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
-const { NodeAgentIdentityStore } = require("../packages/control-plane/src/node-agent/identity/store.ts");
+const { NodeAgentPairedHmacVerifier } = require("../packages/node-agent/src/identity/hmac-verifier.ts");
+const { NodeAgentIdentityService } = require("../packages/node-agent/src/identity/service.ts");
+const { NodeAgentIdentityStore } = require("../packages/node-agent/src/identity/store.ts");
 const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
-const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = require("../packages/control-plane/src/shared/security/node-agent-auth.ts");
-const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
+const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = require("../packages/runtime-shared/src/security/node-agent-auth.ts");
+const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/runtime-shared/src/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
-const { LocalDockerExecutor, agentRunRuntimeVolume, DOCKER_AGENT_RUN_ROOT, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { waitForChildExit } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
-const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
-const { ProcessSingletonError, acquireProcessSingletonLock, readProcessSingletonLockOwner } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
+const { LocalDockerExecutor, agentRunRuntimeVolume, DOCKER_AGENT_RUN_ROOT, dockerRunArgs } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { waitForChildExit } = require("../packages/node-agent/src/runtimes/local-process-supervisor.ts");
+const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/node-agent/src/updates.ts");
+const { ProcessSingletonError, acquireProcessSingletonLock, readProcessSingletonLockOwner } = require("../packages/runtime-shared/src/process/singleton-lock.ts");
 const { processStartIdentity, verifiedProcessLockOwnerPid } = require("../packages/core/src/core/process-singleton-lock.ts");
 const { acquireLocalControlledInstanceLock, localControlledInstanceLockPath, readLocalControlledInstanceLockOwner } = require("../packages/core/src/core/local-controlled-instance-lock.ts");
 const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
-const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
-const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
-const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
+const { acquireNodeAgentSingletonLock } = require("../packages/node-agent/src/process/singleton-lock.ts");
+const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/runtime-shared/src/events/connection-retry.ts");
+const { JsonCollection, JsonFile } = require("../packages/runtime-shared/src/persistence/store.ts");
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { openNodeAgentDatabaseSync } = require("../packages/control-plane/src/node-agent/persistence/database.ts");
-const { createNodeAgentRepository } = require("../packages/control-plane/src/node-agent/persistence/repository.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { openNodeAgentDatabaseSync } = require("../packages/node-agent/src/persistence/database.ts");
+const { createNodeAgentRepository } = require("../packages/node-agent/src/persistence/repository.ts");
 const { createControlPlaneDatabase } = require("../packages/control-plane/src/control-plane/persistence/database/index.ts");
 const { SecretEnvelopeService } = require("../packages/control-plane/src/control-plane/persistence/secret-envelope.ts");
 const { ControlPlaneModelRepository } = require("../packages/control-plane/src/control-plane/models/repository.ts");
@@ -3204,7 +3204,7 @@ test("node agent process lock enforces one owner independent of port", () => {
 });
 
 test("node agent acquires its singleton before reading settings and does not persist conflict fallback ports", () => {
-  const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "../packages/node-agent/src/app.ts"), "utf8");
   const runServer = source.slice(source.indexOf("export async function runNodeAgentServer"));
   const lock = runServer.indexOf("acquireNodeAgentSingletonLock");
   const settings = runServer.indexOf("createRuntimeSettingsFile");
@@ -3324,7 +3324,7 @@ test("process lock allows exactly one concurrent child-process owner", async () 
   const dataDir = tempDataDir("concurrent-process-lock");
   const lockPath = path.join(dataDir, "system.lock");
   const gatePath = path.join(dataDir, "start");
-  const modulePath = path.resolve(__dirname, "../packages/control-plane/src/shared/process/singleton-lock.ts");
+  const modulePath = path.resolve(__dirname, "../packages/runtime-shared/src/process/singleton-lock.ts");
   const script = String.raw`
     const fs = require("node:fs");
     const { acquireProcessSingletonLock } = require(process.argv[1]);
@@ -4954,7 +4954,7 @@ test("standalone node-agent update checks include the controlled-instance compan
 
 test("node agent resolves update workers in source and bundled runtime layouts", () => {
   const root = tempDataDir("node-agent-worker-layouts");
-  const sourceModuleDir = path.join(root, "packages", "control-plane", "src", "node-agent");
+  const sourceModuleDir = path.join(root, "packages", "node-agent", "src");
   const sourceWorker = path.join(root, "scripts", "node-update-worker.cts");
   fs.mkdirSync(sourceModuleDir, { recursive: true });
   fs.mkdirSync(path.dirname(sourceWorker), { recursive: true });
@@ -4962,7 +4962,7 @@ test("node agent resolves update workers in source and bundled runtime layouts",
   assert.deepEqual(resolveNodeAgentUpdateWorker(sourceModuleDir), {
     worker: sourceWorker,
     packaged: false,
-    expectedWorker: path.join(root, "packages", "control-plane", "src", "bin", "task-handoff-node-update-worker"),
+    expectedWorker: path.join(root, "packages", "node-agent", "bin", "task-handoff-node-update-worker"),
   });
 
   const packageRoot = path.join(root, "release", "npm", "node-agent");

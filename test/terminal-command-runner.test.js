@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const test = require("node:test");
-const { resolveTerminalCommand } = require("../packages/control-plane/src/shared/process/terminal-command-runner.ts");
+const { resolveTerminalCommand } = require("../packages/runtime-shared/src/process/terminal-command-runner.ts");
 
 const DOCKER_BIN = "C:\\Program Files\\Docker\\Docker\\resources\\bin";
 const DOCKER_EXE = path.win32.join(DOCKER_BIN, "docker.exe");

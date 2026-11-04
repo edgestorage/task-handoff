@@ -1,4 +1,4 @@
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
 import type {
   CloudDeviceTrustRequest,

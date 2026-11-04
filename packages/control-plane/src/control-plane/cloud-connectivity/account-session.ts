@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { JsonFile } from "../../shared/persistence/store.ts";
+import { JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 
 // A Control Plane holds one Thandoff account session at a time. The refresh credential
 // lives next to (but separate from) the binding credential: signing out of the account

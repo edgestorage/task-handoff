@@ -6,8 +6,8 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { InstancePrivateConfigStore } = require("../packages/control-plane/src/node-agent/instances/private-config-store.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { InstancePrivateConfigStore } = require("../packages/node-agent/src/instances/private-config-store.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 const {
   LocalDockerExecutor,
   agentRunRuntimeVolume,
@@ -15,7 +15,7 @@ const {
   dockerGitProvisionArgs,
   dockerRunArgs,
   GIT_WORKSPACE_PROVISIONING_PENDING_CODE,
-} = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+} = require("../packages/node-agent/src/runtimes/docker.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
 

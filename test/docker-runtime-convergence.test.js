@@ -6,9 +6,9 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 
-const { LocalDockerExecutor } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { DockerRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
-const { materializeDockerBootstrapAssets } = require("../packages/control-plane/src/node-agent/runtimes/bootstrap-assets.ts");
+const { LocalDockerExecutor } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { DockerRuntimeAdapter } = require("../packages/node-agent/src/runtimes/adapters.ts");
+const { materializeDockerBootstrapAssets } = require("../packages/node-agent/src/runtimes/bootstrap-assets.ts");
 
 const identity = {
   packageName: "@task-handoff/controlled-instance",

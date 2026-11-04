@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { JsonFile } from "../../shared/persistence/store.ts";
+import { JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 
 const EncodedKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const SecretKeyFileSchema = z.object({

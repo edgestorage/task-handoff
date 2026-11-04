@@ -5,7 +5,7 @@
  * The tool baseline is derived from the task-handoff-images base layer: this script does not
  * invent tooling, it takes that rootfs, enables systemd for the WSL boot model, records the
  * observed tool versions for diagnostics, and packages a deterministic `wsl-base-<version>-<arch>.tar.gz`
- * plus the manifest consumed by `packages/control-plane/src/node-agent/runtimes/wsl-provisioning.ts`.
+ * plus the manifest consumed by `packages/node-agent/src/runtimes/wsl-provisioning.ts`.
  *
  * Output contract (must match WslBaseTemplateManifestSchema):
  *   { id: "wsl-base", version, platform: "linux", arch, formatVersion: 1, sha256, sizeBytes, createdAt, tools }

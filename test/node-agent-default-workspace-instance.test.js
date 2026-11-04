@@ -3,13 +3,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/app.ts");
 const {
   DEFAULT_WORKSPACE_HOSTNAME_MAX_LENGTH,
   DEFAULT_WORKSPACE_INSTANCE_INITIALIZATION_KEY,
   defaultWorkspaceInstanceName,
   resolveDefaultWorkspacePath,
-} = require("../packages/control-plane/src/node-agent/default-workspace.ts");
+} = require("../packages/node-agent/src/default-workspace.ts");
 
 function tempDir(t, prefix) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

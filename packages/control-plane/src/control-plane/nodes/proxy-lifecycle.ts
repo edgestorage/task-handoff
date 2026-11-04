@@ -13,7 +13,7 @@ import {
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
 import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
-import { createId, createSecret } from "../../shared/persistence/store.ts";
+import { createId, createSecret } from "@task-handoff/runtime-shared/persistence/store";
 import { publicNode } from "../public-records.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import { controlPlaneProxyAuthenticationHeaders } from "./control-plane-proxy-transport.ts";

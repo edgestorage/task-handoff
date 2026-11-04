@@ -4,7 +4,7 @@ const test = require("node:test");
 const {
   RuntimeAvailabilityMonitor,
   runtimeAvailabilityIntervalMs,
-} = require("../packages/control-plane/src/node-agent/runtime-availability.ts");
+} = require("../packages/node-agent/src/runtime-availability.ts");
 
 function dockerRuntime(overrides = {}) {
   return {

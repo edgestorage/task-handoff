@@ -19,7 +19,7 @@ for (const workspaceDir of ["apps", "packages"]) {
   }
 }
 
-function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = []) {
+function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = [], excludedNames = []) {
   const dependencies = new Map();
   const pending = [...workspaceRoots];
   const visited = new Set();
@@ -47,6 +47,7 @@ function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = [])
       throw new Error(`Bundled runtime dependency ${name} is not reachable from the runtime workspace dependencies.`);
     }
   }
+  for (const name of excludedNames) dependencies.delete(name);
   return Object.fromEntries([...dependencies].sort(([left], [right]) => left.localeCompare(right)));
 }
 
@@ -98,12 +99,14 @@ export const runtimePackages = {
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff-node-agent",
-    bundledDependencies: bundledControlPlaneDependencies,
+    // Docker execution streams through the PTY command runner, so node-pty is
+    // part of the runtime payload rather than a separately installed package.
     bundledNativeDependencies: ["node-pty"],
     dependencies: runtimeDependencies(
-      ["@task-handoff/control-plane"],
-      ["commander", "drizzle-orm"],
-      bundledControlPlaneDependencies,
+      ["@task-handoff/node-agent"],
+      ["commander"],
+      [],
+      ["telegramify-markdown"],
     ),
   },
   thctl: {

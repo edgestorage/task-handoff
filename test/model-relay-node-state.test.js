@@ -4,14 +4,14 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const {
   NodeModelRelayResolver,
   deriveModelRelayRouteId,
   modelRelayRouteBaseUrl,
   modelRelayRoutePath,
   parseModelRelayRoutePathname,
-} = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
+} = require("../packages/node-agent/src/models/relay-routes.ts");
 const { modelContentRevision } = require("../packages/protocol/src/control-plane.ts");
 
 function tempDataDir() {

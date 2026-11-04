@@ -4,7 +4,7 @@ import test from "node:test";
 import { ControlPlaneNodeAgentTunnelTransport } from "../src/control-plane/nodes/tunnel.ts";
 import { CloudRelayNodeAgentTransport, MultiplexedNodeRelaySocket } from "../src/control-plane/nodes/cloud-relay-transport.ts";
 import { NodeAgentTransportResolver } from "../src/control-plane/nodes/transport-resolver.ts";
-import { acceptNodeRelayHandshake, initiateNodeRelayHandshake } from "../src/shared/cloud-relay/node-relay-session.ts";
+import { acceptNodeRelayHandshake, initiateNodeRelayHandshake } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import {
   ed25519Identity,
   linkedFrameSockets,

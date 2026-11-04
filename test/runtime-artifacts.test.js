@@ -15,7 +15,7 @@ const {
   runtimeReleaseKey,
   switchCurrentRuntime,
   validateExtractedRuntimeArtifact,
-} = require("../packages/control-plane/src/node-agent/runtime-artifacts.ts");
+} = require("../packages/node-agent/src/runtime-artifacts.ts");
 
 async function fixture(version = "1.2.3", overrides = {}) {
   const { payloadMarker = version, ...identityOverrides } = overrides;

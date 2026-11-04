@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { CloudNodeRelayChangedEvent } from "@task-handoff/protocol/control-plane";
-import { nodeAgentControlPlaneComparisonCode, type NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
+import { nodeAgentControlPlaneComparisonCode, type NodeRelayFrameSocket } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { verifyCoordinatorNodeRelayAllocation } from "./relay-connector.ts";
 import type { CloudNodeRelayConnectorResult, VerifiedNodeRelayAllocation } from "./node-relay-connector.ts";
 

@@ -16,6 +16,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@task-handoff/control-plane": "workspace:*"
+    "@task-handoff/control-plane": "workspace:*",
+    "@task-handoff/node-agent": "workspace:*"
   }
 }

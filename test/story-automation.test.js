@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 
 test("Node Agent owns Story Automation lifecycle and rejects dangling Action updates", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-story-automation-routes-"));

@@ -90,13 +90,13 @@ import {
 } from "@task-handoff/protocol/repository";
 import { StorySchema } from "@task-handoff/protocol/stories";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
-import { clientRequestTraceId, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { clientRequestTraceId, type RequestTimingDiagnostics } from "@task-handoff/runtime-shared/http/server-timing";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
-import type { CommandRunner } from "../../shared/process/command-runner.ts";
+import type { CommandRunner } from "@task-handoff/runtime-shared/process/command-runner";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import type { ControlPlaneNodeFleetUpdatedEvent } from "@task-handoff/protocol/control-plane-directory";
@@ -151,7 +151,7 @@ import {
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { ControlPlanePersistenceMaintenance } from "../persistence/maintenance.ts";
-import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
+import { JsonCollection, JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import {

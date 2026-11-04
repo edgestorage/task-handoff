@@ -10,8 +10,8 @@ const { NodeConnectionRuntime } = require("../packages/control-plane/src/control
 const { createDirectNodeAgentTransport } = require("../packages/control-plane/src/control-plane/nodes/direct-transport.ts");
 const { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
 const { NodeTunnelIngress } = require("../packages/control-plane/src/control-plane/nodes/tunnel-ingress.ts");
-const { WebSocketConnectionSupervisor } = require("../packages/control-plane/src/shared/transport/websocket-connection-supervisor.ts");
-const { runtimeVersionStateForActual, runtimeVersionStateForReport } = require("../packages/control-plane/src/node-agent/runtime-version-state.ts");
+const { WebSocketConnectionSupervisor } = require("../packages/runtime-shared/src/transport/websocket-connection-supervisor.ts");
+const { runtimeVersionStateForActual, runtimeVersionStateForReport } = require("../packages/node-agent/src/runtime-version-state.ts");
 
 function fakeClock() {
   let timestamp = 0;

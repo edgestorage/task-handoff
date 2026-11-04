@@ -4,7 +4,7 @@ import {
   type ChatSessionBinding,
 } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneChatStore } from "./repository.ts";
-import { createId } from "../../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import { defaultChatBridgeName, mergeChatBridgeSettings, publicChatBridge } from "./records.ts";
 import { CreateChatBridgeInputSchema, UpdateChatBridgeInputSchema } from "./inputs.ts";
 import { now, throwNotFound } from "../../common/helpers.ts";

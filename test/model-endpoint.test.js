@@ -5,15 +5,15 @@ const path = require("node:path");
 const test = require("node:test");
 const Fastify = require("fastify");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { NodeModelRegistry } = require("../packages/control-plane/src/node-agent/models/registry.ts");
-const { registerNodeModelRoutes } = require("../packages/control-plane/src/node-agent/models/routes.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { NodeModelRegistry } = require("../packages/node-agent/src/models/registry.ts");
+const { registerNodeModelRoutes } = require("../packages/node-agent/src/models/routes.ts");
 
 const {
   discoverModels,
   modelListCandidates,
   testModelEndpoint,
-} = require("../packages/control-plane/src/shared/models/model-endpoint.ts");
+} = require("../packages/runtime-shared/src/models/model-endpoint.ts");
 
 test("model discovery derives versioned and origin candidates without provider-specific branches", () => {
   assert.deepEqual(modelListCandidates("https://gateway.example/api/v1"), [

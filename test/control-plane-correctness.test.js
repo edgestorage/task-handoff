@@ -7,9 +7,9 @@ const path = require("node:path");
 const { CONTROL_PLANE_PROTOCOL_VERSION } = require("../packages/protocol/src/control-plane.ts");
 const { NodeConnectionManager } = require("../packages/control-plane/src/control-plane/nodes/connection-manager.ts");
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
-const { NodeAgentIdentityStore } = require("../packages/control-plane/src/node-agent/identity/store.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
+const { NodeAgentIdentityStore } = require("../packages/node-agent/src/identity/store.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 
 const pairingSecret = "pairing-secret-must-not-leak-123456";
 

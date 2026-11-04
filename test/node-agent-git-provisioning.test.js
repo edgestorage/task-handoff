@@ -3,8 +3,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
-const { agentRunRuntimeVolume } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/app.ts");
+const { agentRunRuntimeVolume } = require("../packages/node-agent/src/runtimes/docker.ts");
 
 const gitProvisionScript = "/run/task-handoff/bootstrap/git-provision.sh";
 const commit = "a".repeat(40);

@@ -503,7 +503,7 @@ test("node agent services persist the absolute npm command for managed updates",
 test("node agent updates discover the package that owns their launcher", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
   const remoteInstaller = fs.readFileSync(nodeAgentInstallerPath, "utf8");
-  const updater = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "updates.ts"), "utf8");
+  const updater = fs.readFileSync(path.join(root, "packages", "node-agent", "src", "updates.ts"), "utf8");
 
   assert.doesNotMatch(installer, /TASK_HANDOFF_NODE_UPDATE_PACKAGE/);
   assert.doesNotMatch(remoteInstaller, /TASK_HANDOFF_NODE_UPDATE_PACKAGE/);
@@ -531,7 +531,7 @@ test("server package owns the unified management command and runtimes stay indep
   assert.equal(runtimePackages["control-plane"].dependencies["drizzle-orm"], "1.0.0-rc.4");
   assert.equal(runtimePackages["control-plane"].dependencies.pg, "8.16.3");
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
-  assert.deepEqual(runtimePackages["node-agent"].bundledDependencies, ["@fastify/compress"]);
+  assert.equal(runtimePackages["node-agent"].bundledDependencies, undefined);
   assert.equal(runtimePackages["node-agent"].dependencies["@fastify/compress"], undefined);
   assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], "1.0.0-rc.4");
   assert.equal(runtimePackages["node-agent"].dependencies.pg, undefined);
@@ -615,7 +615,7 @@ test("standalone node-agent CLI can connect an existing service to a control pla
 
 test("standalone node-agent CLI can uninstall while preserving data by default", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
-  const uninstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "uninstall.ts"), "utf8");
+  const uninstaller = fs.readFileSync(path.join(root, "packages", "node-agent", "src", "uninstall.ts"), "utf8");
   assert.match(runtimeCli, /\.command\("uninstall"\)/);
   assert.match(runtimeCli, /\.option\("--delete-data"/);
   assert.match(runtimeCli, /\.option\("--keep-data"/);
@@ -734,19 +734,14 @@ test("server update CLI delegates configuration, installation, rollback, and res
 
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
   const { controlledInstancePackageVersionResolver, executablePackageVersionResolver, packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
-  const sourceRoot = path.join(root, "packages", "control-plane", "src");
-  const nodeAgentRoot = path.join(sourceRoot, "node-agent");
-  const facadeFilename = path.join(sourceRoot, "node-agent.ts");
-  const nodeAgentSources = [
-    { filename: facadeFilename, source: fs.readFileSync(facadeFilename, "utf8") },
-    ...typescriptSources(nodeAgentRoot),
-  ];
+  const sourceRoot = path.join(root, "packages", "node-agent", "src");
+  const nodeAgentSources = typescriptSources(sourceRoot);
   const resolverSources = nodeAgentSources.filter(({ source }) => /\bpackageVersionResolver\b/.test(source));
-  assert.deepEqual(resolverSources.map(({ filename }) => path.relative(sourceRoot, filename)), [path.join("node-agent", "runtime-version-state.ts")]);
+  assert.deepEqual(resolverSources.map(({ filename }) => path.relative(sourceRoot, filename)), ["runtime-version-state.ts"]);
   const runtimeVersionState = resolverSources[0].source;
   assert.equal(runtimeVersionState.match(/\bpackageVersionResolver\s*\(/g)?.length, 1);
   assert.match(runtimeVersionState, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
-  const appSource = nodeAgentSources.find(({ filename }) => path.relative(sourceRoot, filename) === path.join("node-agent", "app.ts"))?.source || "";
+  const appSource = nodeAgentSources.find(({ filename }) => path.relative(sourceRoot, filename) === "app.ts")?.source || "";
   assert.match(appSource, /import\s*\{[^}]*\bdesiredControlledInstanceVersion\b[^}]*\}\s*from\s*"\.\/runtime-version-state\.ts"/);
   assert.match(appSource, /desiredControlledInstanceVersion\(\)/);
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");

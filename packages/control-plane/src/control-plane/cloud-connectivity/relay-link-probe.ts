@@ -1,5 +1,5 @@
 import { cloudEnvironmentForServiceOrigin } from "../../../../../shared/cloud-environments.cjs";
-import { relayEndpointProbeUrl } from "../../shared/relay-probe-url.ts";
+import { relayEndpointProbeUrl } from "@task-handoff/runtime-shared/relay-probe-url";
 
 export { relayEndpointProbeUrl };
 

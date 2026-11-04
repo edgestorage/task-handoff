@@ -3,5 +3,5 @@
   "compilerOptions": {
     "rootDir": "../.."
   },
-  "include": ["src/**/*", "../protocol/src/**/*"]
+  "include": ["src/**/*", "../protocol/src/**/*", "../runtime-shared/src/**/*"]
 }

@@ -20,7 +20,7 @@ import {
   type RelayRoleProof,
   type RelayRoleProofPayload,
 } from "@task-handoff/cloud-contracts";
-import { JsonFile } from "../../shared/persistence/store.ts";
+import { JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 
 const IDENTITY_DOCUMENT_TTL_MS = 5 * 60 * 1000;
 

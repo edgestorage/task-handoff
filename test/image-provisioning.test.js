@@ -9,10 +9,10 @@ const {
   normalizeDockerImageReference,
   sanitizeStoredImageProfile,
 } = require("../packages/protocol/src/control-plane.ts");
-const { DockerImageService } = require("../packages/control-plane/src/node-agent/docker-images.ts");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
-const { agentRunRuntimeVolume } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { defaultTerminalCommandRunner } = require("../packages/control-plane/src/shared/process/terminal-command-runner.ts");
+const { DockerImageService } = require("../packages/node-agent/src/docker-images.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/app.ts");
+const { agentRunRuntimeVolume } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { defaultTerminalCommandRunner } = require("../packages/runtime-shared/src/process/terminal-command-runner.ts");
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import { externalIdentityProviderAdapter } from "./external-identity-providers.ts";
 import type { ControlPlaneIdentityProviderService } from "./identity-provider-service.ts";
 import { OidcDiscoverySchema, verifyOidcIdToken } from "./oidc.ts";

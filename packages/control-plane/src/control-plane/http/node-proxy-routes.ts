@@ -20,7 +20,7 @@ import { ControlPlaneProxyEventHub } from "../proxy/event-hub.ts";
 import { publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import type { ControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import { PROXY_BINDING_ROUTE } from "./auth-boundary.ts";
-import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "../../shared/http/server-timing.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "@task-handoff/runtime-shared/http/server-timing";
 
 const BindingParamsSchema = z.object({ bindingId: z.string().trim().min(1).max(160) }).passthrough();
 const WebSocketQuerySchema = z.object({ route: NodeAgentProxyRouteSchema }).strict();

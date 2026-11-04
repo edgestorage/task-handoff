@@ -9,7 +9,7 @@ import {
   initiateNodeRelayHandshake,
   nodeRelayFingerprint,
   type NodeRelayFrameSocket,
-} from "../../src/shared/cloud-relay/node-relay-session.ts";
+} from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { NODE_RELAY_MAIN_STREAM_ID } from "@task-handoff/protocol/node-relay-channel";
 import type { CloudNodeRelayChannelConnector } from "../../src/control-plane/cloud-connectivity/node-relay-channels.ts";
 import type { ConnectedNodeRelayChannel, VerifiedNodeRelayAllocation } from "../../src/control-plane/cloud-connectivity/node-relay-connector.ts";

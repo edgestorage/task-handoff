@@ -4,9 +4,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { NodeUpdateController } = require("../packages/control-plane/src/node-agent/node-update-controller.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { NodeUpdateJobs } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { NodeUpdateController } = require("../packages/node-agent/src/node-update-controller.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { NodeUpdateJobs } = require("../packages/node-agent/src/updates.ts");
 
 test("node update launch failure persists a terminal failed job", async () => {
   const globalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "node-update-launch-failure-"));
@@ -17,7 +17,7 @@ test("node update launch failure persists a terminal failed job", async () => {
   const controller = new NodeUpdateController({
     nodeId: "node_update_failure",
     jobs,
-    moduleDir: path.join(__dirname, "../packages/control-plane/src/node-agent"),
+    moduleDir: path.join(__dirname, "../packages/node-agent/src"),
     currentRuntimeVersion: () => "1.0.0",
     listInstances: () => [],
     resolveRuntimeArtifacts: async () => [],
@@ -61,7 +61,7 @@ test("node update systemd handoff fails when the worker never claims the queued 
   const controller = new NodeUpdateController({
     nodeId: "node_update_unclaimed",
     jobs,
-    moduleDir: path.join(__dirname, "../packages/control-plane/src/node-agent"),
+    moduleDir: path.join(__dirname, "../packages/node-agent/src"),
     currentRuntimeVersion: () => "1.0.0",
     listInstances: () => [],
     resolveRuntimeArtifacts: async () => [],

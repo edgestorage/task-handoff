@@ -70,3 +70,17 @@ test("runtime dependency smoke links preserve bundled native packages", async ()
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("node-agent runtime dependencies come from the node-agent package boundary", async () => {
+  const { runtimePackages } = await import("../runtime-packages.config.mjs");
+  const dependencies = runtimePackages["node-agent"].dependencies;
+
+  assert.equal(dependencies["@task-handoff/control-plane"], undefined);
+  assert.equal(dependencies["pg"], undefined);
+  assert.equal(dependencies["@larksuiteoapi/node-sdk"], undefined);
+  assert.equal(dependencies["dingtalk-stream"], undefined);
+  assert.equal(dependencies["telegramify-markdown"], undefined);
+  assert.equal(dependencies["node-pty"], "^1.1.0");
+  assert.deepEqual(runtimePackages["node-agent"].bundledNativeDependencies, ["node-pty"]);
+  assert.equal(typeof dependencies["drizzle-orm"], "string");
+});

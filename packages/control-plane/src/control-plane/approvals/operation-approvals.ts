@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ApprovalOperation, ApprovalRequest } from "@task-handoff/protocol/operation-approvals";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
 export type ApprovalStatus = "pending" | "approved" | "denied";

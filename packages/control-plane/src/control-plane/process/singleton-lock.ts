@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { acquireProcessSingletonLock } from "../../shared/process/singleton-lock.ts";
+import { acquireProcessSingletonLock } from "@task-handoff/runtime-shared/process/singleton-lock";
 
 export function defaultControlPlaneSingletonLockPath() {
   const override = process.env.TASK_HANDOFF_CONTROL_PLANE_LOCK_PATH?.trim();

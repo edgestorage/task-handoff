@@ -1,0 +1,91 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { ModelConfigSchema, NodeModelConfigSchema, supportsNodeModelProviderCapabilities } from "@task-handoff/protocol/control-plane";
+import { openNodeAgentDatabaseSync } from "../src/persistence/database.ts";
+import { createModelRepositories } from "../src/persistence/model-repository.ts";
+import { nodeAgentStorePaths } from "../src/persistence/paths.ts";
+import { openCodeProvider } from "../src/models/registry.ts";
+
+const model = (capabilities?: { image: boolean }) => NodeModelConfigSchema.parse({
+  id: "mdl_provider_capabilities",
+  name: "Provider",
+  endpoint: "https://models.example.test/v1",
+  key: "secret",
+  model: "model-a",
+  modelNames: [{ name: "model-a", order: 100 }, { name: "model-b", order: 200 }],
+  mappings: [],
+  protocols: ["openai-chat-completions"],
+  app: "opencode",
+  enabled: true,
+  order: 0,
+  labels: {},
+  ...(capabilities ? { capabilities } : {}),
+  createdAt: "2026-11-01T00:00:00.000Z",
+  updatedAt: "2026-11-01T00:00:00.000Z",
+});
+
+test("provider image capability expands to every OpenCode model", () => {
+  const provider = openCodeProvider(model({ image: true }), ["model-a", "model-b"]) as any;
+  for (const name of ["model-a", "model-b"]) {
+    assert.deepEqual(provider.models[name].modalities, { input: ["text", "image"], output: ["text"] });
+    assert.equal(provider.models[name].attachment, true);
+  }
+});
+
+test("provider image capability stays off for legacy records", () => {
+  const provider = openCodeProvider(model(), ["model-a"]) as any;
+  assert.equal(provider.models["model-a"].modalities, undefined);
+  assert.equal(provider.models["model-a"].attachment, undefined);
+});
+
+test("node model persistence keeps provider image capability for OpenCode projection", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-model-capabilities-"));
+  const database = openNodeAgentDatabaseSync(nodeAgentStorePaths(dataDir));
+  try {
+    const { models } = createModelRepositories(database.client);
+    const stored = models.put(NodeModelConfigSchema.parse({
+      ...model({ image: true }),
+      id: "mdl_persisted_capabilities",
+      app: "opencode",
+    }));
+
+    assert.deepEqual(models.get(stored.id)?.capabilities, { image: true });
+    const row = database.client.prepare("SELECT capabilities_json FROM na_models WHERE id = ?").get(stored.id) as { capabilities_json: string };
+    assert.deepEqual(JSON.parse(row.capabilities_json), { image: true });
+
+    const provider = openCodeProvider(models.get(stored.id)!, ["model-a"]) as any;
+    assert.equal(provider.models["model-a"].attachment, true);
+    assert.deepEqual(provider.models["model-a"].modalities, { input: ["text", "image"], output: ["text"] });
+
+    const legacy = models.put(NodeModelConfigSchema.parse({ ...model(), id: "mdl_legacy_capabilities", app: "opencode" }));
+    assert.deepEqual(models.get(legacy.id)?.capabilities, { image: false });
+  } finally {
+    await database.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("model records keep provider capabilities optional for older records", () => {
+  const legacy = ModelConfigSchema.parse({
+    id: "mdl_legacy",
+    name: "Legacy",
+    endpoint: "https://models.example.test/v1",
+    key: "secret",
+    model: "legacy-model",
+    modelNames: [{ name: "legacy-model", order: 100 }],
+    mappings: [],
+    protocols: ["openai-chat-completions"],
+    app: "opencode",
+    enabled: true,
+    order: 0,
+    labels: {},
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+  });
+  assert.equal(legacy.capabilities, undefined);
+  assert.equal(supportsNodeModelProviderCapabilities({}), false);
+  assert.equal(supportsNodeModelProviderCapabilities({ managedModels: { providerCapabilities: true } }), true);
+});

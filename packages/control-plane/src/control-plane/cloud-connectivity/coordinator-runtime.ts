@@ -22,7 +22,7 @@ import type { ControlPlaneIdentityService } from "../identity/service.ts";
 import { CloudRelayConnector, verifyCoordinatorRelayAllocation, verifyCoordinatorRelaySessionGrant, type RelaySessionBridge } from "./relay-connector.ts";
 import { CloudNodeRelayConnector } from "./node-relay-connector.ts";
 import { CloudNodeRelayChannels, type CloudNodeRelayChannelConnector, type CloudNodeRelayChannelTransport, type CloudNodeRelayChannelsOptions } from "./node-relay-channels.ts";
-import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
+import type { NodeRelayFrameSocket } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { RelayLinkProbeLoop } from "./relay-link-probe.ts";
 import { RelayTraceRecorder } from "./relay-trace.ts";
 import type { CloudEndpointResolver } from "../../../../../shared/cloud-discovery.cjs";

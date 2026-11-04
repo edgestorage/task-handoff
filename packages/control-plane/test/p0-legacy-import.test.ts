@@ -15,7 +15,7 @@ import { ControlPlaneGitRepository } from "../src/control-plane/git-credentials/
 
 // Compatibility for v0.0.28: the fixture is retained to verify the supported
 // one-time upgrade path, not as a current persistence format.
-const fixturePath = path.resolve("test/fixtures/v0.0.28-control-plane-p0-baseline.json");
+const fixturePath = path.resolve(import.meta.dirname, "../../../test/fixtures/v0.0.28-control-plane-p0-baseline.json");
 
 function write(directory: string, record: { id: string }) {
   fs.mkdirSync(directory, { recursive: true });

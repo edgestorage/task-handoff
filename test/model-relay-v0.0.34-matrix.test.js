@@ -4,11 +4,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const {
   NodeModelRelayResolver,
   deriveModelRelayRouteId,
-} = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
+} = require("../packages/node-agent/src/models/relay-routes.ts");
 const { supportsControlledInstanceModelRelay } = require("../packages/protocol/src/control-plane.ts");
 
 // Compatibility for v0.0.34: this file pins the N-1 mixed-version matrix for

@@ -1,12 +1,17 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+/* eslint-disable react-hooks/refs -- Gesture callbacks need the latest JS handlers without rebuilding an active gesture. */
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { GripVertical } from 'lucide-react-native';
-import { PanResponder, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSharedValue, type SharedValue } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 
 import { mobileWebMetric } from './mobile-web-typography';
 import { useMobileTheme } from './theme';
 
 export function ReorderDragHandle({
   disabled,
+  dragTranslationY,
   label,
   moveDownLabel,
   moveUpLabel,
@@ -19,6 +24,7 @@ export function ReorderDragHandle({
   testID = 'reorder-drag-handle',
 }: {
   disabled?: boolean;
+  dragTranslationY?: SharedValue<number>;
   label: string;
   moveDownLabel: string;
   moveUpLabel: string;
@@ -31,27 +37,34 @@ export function ReorderDragHandle({
   testID?: string;
 }) {
   const { colors } = useMobileTheme();
+  const fallbackDragTranslationY = useSharedValue(0);
+  const translationY = dragTranslationY ?? fallbackDragTranslationY;
   const callbacks = useRef({ onDragCancel, onDragEnd, onDragMove, onDragStart });
-  const disabledRef = useRef(disabled);
   useLayoutEffect(() => {
     callbacks.current = { onDragCancel, onDragEnd, onDragMove, onDragStart };
-    disabledRef.current = disabled;
-  }, [disabled, onDragCancel, onDragEnd, onDragMove, onDragStart]);
-  // PanResponder retains these functions for native events; refs keep their inputs current.
-  // eslint-disable-next-line react-hooks/refs
-  const [responder] = useState(() => PanResponder.create({
-    onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
-    onMoveShouldSetPanResponder: () => !disabledRef.current,
-    onPanResponderGrant: () => callbacks.current.onDragStart(),
-    onPanResponderMove: (_event, gesture) => callbacks.current.onDragMove(gesture.dy),
-    onPanResponderRelease: () => callbacks.current.onDragEnd(),
-    onPanResponderTerminate: () => callbacks.current.onDragCancel(),
-    onPanResponderTerminationRequest: () => false,
-    onShouldBlockNativeResponder: () => true,
-    onStartShouldSetPanResponderCapture: () => !disabledRef.current,
-    onStartShouldSetPanResponder: () => !disabledRef.current,
-  }));
-  return <View
+  }, [onDragCancel, onDragEnd, onDragMove, onDragStart]);
+  const emitDragCancel = useCallback(() => callbacks.current.onDragCancel(), []);
+  const emitDragEnd = useCallback(() => callbacks.current.onDragEnd(), []);
+  const emitDragMove = useCallback((dy: number) => callbacks.current.onDragMove(dy), []);
+  const emitDragStart = useCallback(() => callbacks.current.onDragStart(), []);
+  const gesture = useMemo(() => Gesture.Pan()
+    .enabled(!disabled)
+    .minDistance(1)
+    .onStart(() => {
+      translationY.set(0);
+      scheduleOnRN(emitDragStart);
+    })
+    .onUpdate((event) => {
+      translationY.set(event.translationY);
+      scheduleOnRN(emitDragMove, event.translationY);
+    })
+    .onEnd((_event, success) => {
+      if (success) scheduleOnRN(emitDragEnd);
+    })
+    .onFinalize((_event, success) => {
+      if (!success) scheduleOnRN(emitDragCancel);
+    }), [disabled, emitDragCancel, emitDragEnd, emitDragMove, emitDragStart, translationY]);
+  return <GestureDetector gesture={gesture}><View
     accessibilityActions={[{ name: 'decrement', label: moveUpLabel }, { name: 'increment', label: moveDownLabel }]}
     accessibilityLabel={label}
     accessibilityRole="adjustable"
@@ -63,8 +76,7 @@ export function ReorderDragHandle({
     }}
     style={[styles.handle, disabled && styles.disabled]}
     testID={testID}
-    {...responder.panHandlers}
-  ><GripVertical color={colors.textMuted} size={mobileWebMetric(17)} strokeWidth={1.8} /></View>;
+  ><GripVertical color={colors.textMuted} size={mobileWebMetric(17)} strokeWidth={1.8} /></View></GestureDetector>;
 }
 
 const styles = StyleSheet.create({

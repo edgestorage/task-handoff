@@ -5,9 +5,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { ControlledInstanceSchema, modelContentRevision } = require("../packages/protocol/src/control-plane.ts");
-const { deriveModelRelayRouteId } = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
+const { deriveModelRelayRouteId } = require("../packages/node-agent/src/models/relay-routes.ts");
 
 function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-core-"));

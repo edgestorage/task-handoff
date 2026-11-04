@@ -25,22 +25,22 @@ function readSource(relativePath) {
  * branch fails this guard instead of silently re-entering the codebase.
  */
 const RETAINED_NODE_AGENT_COMPAT_SITES = new Map([
-  ["packages/control-plane/src/node-agent/app.ts", "客户端边界：实例能力未声明时不推送固定字段"],
-  ["packages/control-plane/src/node-agent/events.ts", "客户端边界：订阅方与事件信封协商"],
-  ["packages/control-plane/src/node-agent/identity/normalize.ts", "历史数据：node-agent 身份文档一次性导入"],
-  ["packages/control-plane/src/node-agent/instances/lifecycle-routes.ts", "客户端边界：可选的生命周期请求字段"],
-  ["packages/control-plane/src/node-agent/models/registry.ts", "历史数据与客户端边界：旧模型 id 与 assignment"],
-  ["packages/control-plane/src/node-agent/models/routes.ts", "客户端边界：旧控制面的严格响应解析"],
-  ["packages/control-plane/src/node-agent/node-update-controller.ts", "更新与救援链路"],
-  ["packages/control-plane/src/node-agent/persistence/legacy-migration.ts", "历史数据：P0 JSON 迁移"],
-  ["packages/control-plane/src/node-agent/persistence/migrations.ts", "历史数据：已发布行的可读性"],
-  ["packages/control-plane/src/node-agent/persistence/topology-repository.ts", "历史数据：P0 SQLite 实例快照的当前协议清洗"],
-  ["packages/control-plane/src/node-agent/runtimes/docker.ts", "历史数据与更新链路：卷标签迁移与 artifact 热替换"],
-  ["packages/control-plane/src/node-agent/schemas.ts", "客户端边界：旧控制面的可选字段"],
-  ["packages/control-plane/src/node-agent/stories/action-execution-service.ts", "历史数据：历史 Story Action"],
-  ["packages/control-plane/src/node-agent/stories/idle-retention.ts", "历史数据：缺失时间戳的旧会话"],
-  ["packages/control-plane/src/node-agent/stories/routes.ts", "客户端边界：管理上传响应"],
-  ["packages/control-plane/src/node-agent/updates.ts", "更新与救援链路"],
+  ["packages/node-agent/src/app.ts", "客户端边界：实例能力未声明时不推送固定字段"],
+  ["packages/node-agent/src/events.ts", "客户端边界：订阅方与事件信封协商"],
+  ["packages/node-agent/src/identity/normalize.ts", "历史数据：node-agent 身份文档一次性导入"],
+  ["packages/node-agent/src/instances/lifecycle-routes.ts", "客户端边界：可选的生命周期请求字段"],
+  ["packages/node-agent/src/models/registry.ts", "历史数据与客户端边界：旧模型 id 与 assignment"],
+  ["packages/node-agent/src/models/routes.ts", "客户端边界：旧控制面的严格响应解析"],
+  ["packages/node-agent/src/node-update-controller.ts", "更新与救援链路"],
+  ["packages/node-agent/src/persistence/legacy-migration.ts", "历史数据：P0 JSON 迁移"],
+  ["packages/node-agent/src/persistence/migrations.ts", "历史数据：已发布行的可读性"],
+  ["packages/node-agent/src/persistence/topology-repository.ts", "历史数据：P0 SQLite 实例快照的当前协议清洗"],
+  ["packages/node-agent/src/runtimes/docker.ts", "历史数据与更新链路：卷标签迁移与 artifact 热替换"],
+  ["packages/node-agent/src/schemas.ts", "客户端边界：旧控制面的可选字段"],
+  ["packages/node-agent/src/stories/action-execution-service.ts", "历史数据：历史 Story Action"],
+  ["packages/node-agent/src/stories/idle-retention.ts", "历史数据：缺失时间戳的旧会话"],
+  ["packages/node-agent/src/stories/routes.ts", "客户端边界：管理上传响应"],
+  ["packages/node-agent/src/updates.ts", "更新与救援链路"],
 ]);
 
 const SCANNED_EXTENSIONS = new Set([".ts", ".tsx", ".cts", ".mts", ".js", ".jsx", ".cjs", ".mjs", ".vue", ".sh"]);
@@ -80,14 +80,14 @@ test("preserved client-boundary and update-chain compatibility branches remain i
     ["packages/control-plane/src/control-plane/instances/creator.ts", /supportsNodeAiSessionFileAttachmentLimit\(agentCapabilities\)/],
     ["packages/control-plane/src/control-plane/instances/creator.ts", /supportsNodeCodexManagedSettings\(agentCapabilities\)/],
     ["packages/control-plane/src/control-plane/instances/gateway.ts", /legacyProxyFailure/],
-    ["packages/control-plane/src/node-agent/app.ts", /Compatibility for older controlled instances: endpoint updates are additive/],
-    ["packages/control-plane/src/node-agent/events.ts", /AiSessionTransientSubscriptionSchema\.parse\(\{\}\)/],
-    ["packages/control-plane/src/node-agent/events.ts", /AiSessionHierarchyCapabilitiesSchema\.parse\(undefined\)/],
-    ["packages/control-plane/src/node-agent/instances/lifecycle-routes.ts", /gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema\.optional\(\)/],
-    ["packages/control-plane/src/node-agent/models/registry.ts", /isModelEntityId\(input\.id\) \? input\.id : migratedModelEntityId\(input\.id\)/],
-    ["packages/control-plane/src/node-agent/schemas.ts", /defaultImageSelection: ImageSelectionSchema\.optional\(\)/],
-    ["packages/control-plane/src/node-agent/updates.ts", /export function resolveNodeAgentUpdateWorker/],
-    ["packages/control-plane/src/node-agent/runtimes/docker.ts", /Compatibility for v0\.0\.34: the controlled-instance artifact is hot-swapped/],
+    ["packages/node-agent/src/app.ts", /Compatibility for older controlled instances: endpoint updates are additive/],
+    ["packages/node-agent/src/events.ts", /AiSessionTransientSubscriptionSchema\.parse\(\{\}\)/],
+    ["packages/node-agent/src/events.ts", /AiSessionHierarchyCapabilitiesSchema\.parse\(undefined\)/],
+    ["packages/node-agent/src/instances/lifecycle-routes.ts", /gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema\.optional\(\)/],
+    ["packages/node-agent/src/models/registry.ts", /isModelEntityId\(input\.id\) \? input\.id : migratedModelEntityId\(input\.id\)/],
+    ["packages/node-agent/src/schemas.ts", /defaultImageSelection: ImageSelectionSchema\.optional\(\)/],
+    ["packages/node-agent/src/updates.ts", /export function resolveNodeAgentUpdateWorker/],
+    ["packages/node-agent/src/runtimes/docker.ts", /Compatibility for v0\.0\.34: the controlled-instance artifact is hot-swapped/],
   ];
   for (const [file, pattern] of expectations) {
     assert.match(readSource(file), pattern, file);
@@ -95,7 +95,7 @@ test("preserved client-boundary and update-chain compatibility branches remain i
 });
 
 test("node-agent and control-plane historical data migrations remain readable", () => {
-  const { migrateLegacyP0State } = require("../packages/control-plane/src/node-agent/persistence/legacy-migration.ts");
+  const { migrateLegacyP0State } = require("../packages/node-agent/src/persistence/legacy-migration.ts");
   const { importLegacyP0Json, planLegacyP0Migration } = require("../packages/control-plane/src/control-plane/persistence/database/legacy-p0-import.ts");
   const { LegacyControlPlaneSecretReader } = require("../packages/control-plane/src/control-plane/persistence/legacy-secret-reader.ts");
   assert.equal(typeof migrateLegacyP0State, "function");
@@ -105,14 +105,14 @@ test("node-agent and control-plane historical data migrations remain readable", 
 
   // The released `registrationToken` credential alias stays readable, and the
   // node-agent model registry still upgrades legacy model identities in place.
-  assert.match(readSource("packages/control-plane/src/node-agent/instances/private-config-store.ts"), /source\.instanceCredential \?\? source\.registrationToken/);
-  assert.match(readSource("packages/control-plane/src/node-agent/models/registry.ts"), /upgradeModelIdentity/);
-  assert.match(readSource("packages/control-plane/src/node-agent/persistence/legacy-migration.ts"), /Compatibility for v/);
+  assert.match(readSource("packages/node-agent/src/instances/private-config-store.ts"), /source\.instanceCredential \?\? source\.registrationToken/);
+  assert.match(readSource("packages/node-agent/src/models/registry.ts"), /upgradeModelIdentity/);
+  assert.match(readSource("packages/node-agent/src/persistence/legacy-migration.ts"), /Compatibility for v/);
   assert.ok(fs.existsSync(path.join(REPO_ROOT, "scripts/node-update-worker.cts")));
 });
 
 test("no `Compatibility for v` branch survives outside the preserved runtime boundaries", () => {
-  const sites = collectCompatibilitySites(path.join(REPO_ROOT, "packages/control-plane/src/node-agent"));
+  const sites = collectCompatibilitySites(path.join(REPO_ROOT, "packages/node-agent/src"));
   assert.ok(sites.size > 0, "the scan must observe the retained node-agent compatibility sites");
   const unclassified = [...sites.keys()].filter((file) => !RETAINED_NODE_AGENT_COMPAT_SITES.has(file));
   assert.deepEqual(unclassified, [], "internal runtime compat branches must not be reintroduced; classify new sites explicitly");
@@ -122,7 +122,7 @@ test("no `Compatibility for v` branch survives outside the preserved runtime bou
   // created by older node agents keep starting until they are recreated.
   for (const file of [
     "packages/controlled-instance/src/web/private-model-catalog.ts",
-    "packages/control-plane/src/node-agent/instances/private-config-store.ts",
+    "packages/node-agent/src/instances/private-config-store.ts",
   ]) {
     assert.equal(readSource(file).includes("Compatibility for v"), false, file);
     assert.equal(readSource(file).includes("instance-private-config.json"), false, file);

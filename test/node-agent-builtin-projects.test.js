@@ -13,21 +13,21 @@ const {
   loadBuiltinProjectDefinitions,
   packagedBuiltinProjectsDir,
   readBuiltinProjectSource,
-} = require("../packages/control-plane/src/node-agent/builtin-projects/assets.ts");
+} = require("../packages/node-agent/src/builtin-projects/assets.ts");
 const {
   BUILTIN_PROJECT_MARKER_DIR,
   BUILTIN_PROJECT_MARKER_FILE,
   ensureBuiltinProjectMaterialized,
   readBuiltinProjectMarker,
-} = require("../packages/control-plane/src/node-agent/builtin-projects/initializer.ts");
+} = require("../packages/node-agent/src/builtin-projects/initializer.ts");
 const {
   builtinProjectFolderId,
   createBuiltinProjectFolderProjection,
-} = require("../packages/control-plane/src/node-agent/builtin-projects/catalog.ts");
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
+} = require("../packages/node-agent/src/builtin-projects/catalog.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/app.ts");
 const { NodeLocalFolderSchema, sanitizeStoredNodeLocalFolder } = require("../packages/protocol/src/control-plane.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
 
 function tempDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

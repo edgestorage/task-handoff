@@ -270,11 +270,13 @@ The preference is stored only in the current browser. Terminal output, logs, AI 
 apps/cli/                         CLI entry point
 apps/desktop-shell/               Electron desktop shell
 apps/mobile/                      Expo iOS and Android client
-packages/control-plane/           Control plane, Node Agent, and chat gateway
+packages/control-plane/           Control plane and chat gateway
 packages/control-plane-client/    Shared Control Plane API and realtime client
 packages/control-plane-ui/        Control-plane Vue UI
 packages/controlled-instance/     Controlled-instance HTTP/WebSocket API
 packages/controlled-instance-ui/  Frozen controlled-instance Vue UI
+packages/node-agent/              Node Agent runtime and controlled-instance orchestration
+packages/runtime-shared/          Runtime helpers shared by Control Plane and Node Agent
 packages/ai-session-runtime/      AI session runtime
 packages/app-runtime/             Managed application runtime and catalog
 packages/protocol/                Cross-component protocols and data models

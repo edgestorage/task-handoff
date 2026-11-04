@@ -5,10 +5,10 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { RuntimeConvergenceCoordinator } = require("../packages/control-plane/src/node-agent/runtime-convergence.ts");
-const { NodeUpdateJobs } = require("../packages/control-plane/src/node-agent/updates.ts");
-const { GIT_WORKSPACE_PROVISIONING_PENDING_CODE } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { RuntimeConvergenceCoordinator } = require("../packages/node-agent/src/runtime-convergence.ts");
+const { NodeUpdateJobs } = require("../packages/node-agent/src/updates.ts");
+const { GIT_WORKSPACE_PROVISIONING_PENDING_CODE } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 
 function instance(overrides = {}) {
   const timestamp = new Date().toISOString();

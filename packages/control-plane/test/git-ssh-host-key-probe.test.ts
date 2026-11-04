@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
 import { parseSshKeyscanOutput, probeGitSshHostKeys } from "../src/control-plane/git-credentials/ssh-host-key-probe.ts";
-import type { CommandRunner } from "../src/shared/process/command-runner.ts";
+import type { CommandRunner } from "@task-handoff/runtime-shared/process/command-runner";
 
 function sshBlob(keyType: string, payload = Buffer.alloc(32, 7)) {
   const type = Buffer.from(keyType, "utf8");

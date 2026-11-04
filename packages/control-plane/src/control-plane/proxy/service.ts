@@ -13,8 +13,8 @@ import {
   type PublicProxyBinding,
   type PublicProxyInvite,
 } from "@task-handoff/protocol/control-plane-proxy";
-import { createId } from "../../shared/persistence/store.ts";
-import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
+import { EphemeralTokenStore } from "@task-handoff/runtime-shared/security/ephemeral-token-store";
 import { publicProxyBinding, publicProxyInvite, type ProxyBindingRecord, type ProxyInviteRecord } from "./records.ts";
 import { ControlPlaneProxyStore } from "./store.ts";
 import type { ControlPlaneProxyTarget } from "./target-projector.ts";

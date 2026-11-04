@@ -1,3 +1,2 @@
-export * from "../shared/persistence/store.ts";
+export * from "@task-handoff/runtime-shared/persistence/store";
 export * from "../control-plane/persistence/paths.ts";
-export * from "../node-agent/persistence/paths.ts";

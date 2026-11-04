@@ -63,7 +63,7 @@ import {
   INSTANCE_DIRECTORY_PROJECTION,
   INSTANCE_PROJECTION_HEADER,
   projectInstancesForFleetComparison,
-} from "../../shared/instances/fleet-projection.ts";
+} from "@task-handoff/runtime-shared/instances/fleet-projection";
 import {
   NodeAgentControlPlaneTrustDecisionSchema,
   NodeAgentControlPlaneTrustRetrySchema,

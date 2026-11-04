@@ -160,7 +160,7 @@ export function SessionWorkspace({
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
-  const [queueDragOffsetY, setQueueDragOffsetY] = useState(0);
+  const queueDragOffsetY = useSharedValue(0);
   const [storyDecisionList, setStoryDecisionList] = useState<readonly StoryDecision[]>([]);
   const [decisionBusyId, setDecisionBusyId] = useState('');
   const [decisionError, setDecisionError] = useState<{ decisionId: string; message: string }>();
@@ -455,9 +455,9 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
     setDraggingQueueId(undefined);
-    setQueueDragOffsetY(0);
+    queueDragOffsetY.set(0);
     queueDrag.current = undefined;
-  }, [session?.queue.revision, sessionId]);
+  }, [queueDragOffsetY, session?.queue.revision, sessionId]);
   // 决策的权威归属是 sessionId：只拉取当前会话自己的待决策。列表在打开会话/切换故事
   // 时拉取，之后只在故事决策事件到达时刷新，不再跟着会话快照的每次更新重拉。
   const decisionsSessionId = session?.id;
@@ -485,6 +485,9 @@ export function SessionWorkspace({
   }));
   const composerBackdropStyle = useAnimatedStyle(() => ({
     height: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]),
+  }));
+  const queueDragStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: queueDragOffsetY.value }],
   }));
   if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
@@ -641,13 +644,13 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = sourceIds;
     setQueueOrderPreview(sourceIds);
     setDraggingQueueId(queueId);
-    setQueueDragOffsetY(0);
+    queueDragOffsetY.set(0);
   };
   const updateQueueDrag = (queueId: string, dy: number) => {
     const drag = queueDrag.current;
     if (!drag || drag.queueId !== queueId) return;
     const preview = queueDragPreview(drag.sourceIds, queueId, drag.sourceCenter, drag.targets, dy);
-    setQueueDragOffsetY(preview.offsetY);
+    queueDragOffsetY.set(preview.offsetY);
     if (!arraysEqual(preview.queueIds, queueOrderPreviewRef.current)) {
       queueOrderPreviewRef.current = preview.queueIds;
       setQueueOrderPreview(preview.queueIds);
@@ -659,7 +662,7 @@ export function SessionWorkspace({
     const reordered = queueOrderPreviewRef.current || drag.sourceIds;
     queueDrag.current = undefined;
     setDraggingQueueId(undefined);
-    setQueueDragOffsetY(0);
+    queueDragOffsetY.set(0);
     if (arraysEqual(reordered, drag.sourceIds)) {
       queueOrderPreviewRef.current = undefined;
       setQueueOrderPreview(undefined);
@@ -673,7 +676,7 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
     setDraggingQueueId(undefined);
-    setQueueDragOffsetY(0);
+    queueDragOffsetY.set(0);
   };
   const restoreDraftAfterQueueEdit = (edit: NonNullable<typeof activeQueueEdit>) => {
     if (queueEditRef.current !== edit) return;
@@ -1004,14 +1007,15 @@ export function SessionWorkspace({
               item.references.length ? t('workspace.queueReferences', { count: item.references.length }) : undefined,
             ].filter(Boolean).join(' · ');
             return (
-              <View
+              <Animated.View
                 onLayout={(event) => queueRowHeights.current.set(item.id, event.nativeEvent.layout.height)}
-                style={[styles.queueRow, draggingQueueId === item.id && styles.queueRowDragging, draggingQueueId === item.id && { transform: [{ translateY: queueDragOffsetY }], zIndex: 1 }]}
+                style={[styles.queueRow, draggingQueueId === item.id && styles.queueRowDragging, draggingQueueId === item.id && queueDragStyle]}
                 testID={`queued-message-row-${item.id}`}
               >
                 <View style={styles.queueContent}>
                   {item.status === 'queued' ? <ReorderDragHandle
                     disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-reorder')?.phase || '')}
+                    dragTranslationY={queueDragOffsetY}
                     label={t('workspace.reorderAction')}
                     moveDownLabel={t('workspace.moveDownAction')}
                     moveUpLabel={t('workspace.moveUpAction')}
@@ -1035,7 +1039,7 @@ export function SessionWorkspace({
                   {item.status === 'failed' ? <QueueActionButton icon={queueActionIcon('retry')} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.retryAction'), () => actions.queue(instanceId, session.id, item.id, 'retry')); }} /> : null}
                   <QueueActionButton destructive icon={queueActionIcon('remove')} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.removeAction'), () => actions.queue(instanceId, session.id, item.id, 'remove')); }} />
                 </View>
-              </View>
+              </Animated.View>
             );
           }}
         /></View> : null}
@@ -1221,7 +1225,7 @@ const styles = StyleSheet.create({
   queueHeaderTitle: { flex: 1, fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 30 },
   queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 7, paddingVertical: 8 },
-  queueRowDragging: { opacity: 0.72 },
+  queueRowDragging: { elevation: 4, opacity: 0.72, zIndex: 1 },
   queueContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 4, minWidth: 0 },
   queueCopy: { flex: 1, gap: 1, minWidth: 0 },
   queueText: { fontSize: mobileWebType.meta, fontWeight: '500', lineHeight: mobileWebType.metaLine },

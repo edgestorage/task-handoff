@@ -13,7 +13,7 @@ import {
   type InstanceGitCredentialAssignment,
   type NodeGitCredentialPayload,
 } from "@task-handoff/protocol/managed-git-credentials";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import { ControlPlaneGitRepository, type GitAssignmentRecord, type GitAuditRecord, type GitProvisioningIntentRecord } from "./repository.ts";
 
 type RepositoryCredentialReference = { id: string; name: string; url: string; authType: "ssh-key" | "https-token" };

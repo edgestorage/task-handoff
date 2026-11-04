@@ -4,9 +4,9 @@ const test = require("node:test");
 const WebSocket = require("ws");
 
 const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceSchema, InstanceResourceMetricsSchema } = require("../packages/protocol/src/control-plane.ts");
-const { DockerRuntimeMetricsCollector, parseDockerByteSize, parseDockerStatsOutput } = require("../packages/control-plane/src/node-agent/runtime-metrics.ts");
-const { defaultCommandRunner } = require("../packages/control-plane/src/shared/process/command-runner.ts");
-const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { DockerRuntimeMetricsCollector, parseDockerByteSize, parseDockerStatsOutput } = require("../packages/node-agent/src/runtime-metrics.ts");
+const { defaultCommandRunner } = require("../packages/runtime-shared/src/process/command-runner.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/node-agent/src/events.ts");
 
 test("docker metric sizes normalize decimal and binary units", () => {
   assert.equal(parseDockerByteSize("512B"), 512);

@@ -14,8 +14,8 @@ const {
   supportsNodeManagedGitCredentialRegistry,
 } = require("../packages/protocol/src/control-plane.ts");
 const { RepositoryErrorSchema } = require("../packages/protocol/src/repository.ts");
-const { InstancePrivateConfigStore } = require("../packages/control-plane/src/node-agent/instances/private-config-store.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { InstancePrivateConfigStore } = require("../packages/node-agent/src/instances/private-config-store.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 const { CreateProjectInputSchema, UpdateProjectInputSchema } = require("../packages/control-plane/src/control-plane/catalog/inputs.ts");
 
 const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/v0.0.21-managed-git-baseline.json"), "utf8"));

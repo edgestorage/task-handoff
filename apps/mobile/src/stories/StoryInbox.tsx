@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
   FadeOut,
   LinearTransition,
   ReduceMotion,
+  type SharedValue,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -40,6 +41,7 @@ import {
   replaceVisibleStoryOrder,
   sortStoryTree,
   storyDragRowHeight,
+  storyDragShifts,
   storyDragPreview,
   storyTreeKey,
   visibleStoryTreeDocuments,
@@ -79,13 +81,15 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [manualOrderPreview, setManualOrderPreview] = useState<string[]>();
+  const [storyDragShiftsByKey, setStoryDragShiftsByKey] = useState<Map<string, number>>();
   const [draggingStoryKey, setDraggingStoryKey] = useState<string>();
   const [pressedStoryKey, setPressedStoryKey] = useState<string>();
-  const [storyDragOffsetY, setStoryDragOffsetY] = useState(0);
+  const storyDragOffsetY = useSharedValue(0);
   const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const storyGroupHeights = useRef(new Map<string, number>());
   const storyHeaderHeights = useRef(new Map<string, number>());
   const storyDrag = useRef<{
+    activeTargetKey: string;
     key: string;
     sourceCenter: number;
     sourceOrder: string[];
@@ -114,8 +118,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     }
     return result;
   }, [directory.instances, sessions]);
-  const displayedManualKeys = manualOrderPreview ?? preferences.manualKeys;
-  const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, displayedManualKeys), [displayedManualKeys, locale, preferences.sortMode, sessionsByStory, visibleStories]);
+  const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, preferences.manualKeys), [locale, preferences.manualKeys, preferences.sortMode, sessionsByStory, visibleStories]);
   useEffect(() => {
     if (!stories.length || manualOrderPreview) return;
     const manualKeys = preferences.sortMode === 'manual'
@@ -192,17 +195,24 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     });
     const source = targets.find((target) => target.key === key);
     if (!source || targets.length !== sourceOrder.length || targets.length < 2) return;
-    storyDrag.current = { baseManualOrder, key, sourceCenter: source.center, sourceOrder, targets };
+    storyDrag.current = { activeTargetKey: key, baseManualOrder, key, sourceCenter: source.center, sourceOrder, targets };
     manualOrderPreviewRef.current = sourceOrder;
     setManualOrderPreview(sourceOrder);
+    setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(key);
-    setStoryDragOffsetY(0);
+    storyDragOffsetY.value = 0;
   };
   const updateStoryDrag = (key: string, dy: number) => {
     const drag = storyDrag.current;
     if (!drag || drag.key !== key) return;
+    const pointerCenter = drag.sourceCenter + dy;
+    const target = drag.targets.reduce((closest, candidate) => (
+      Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
+    ));
+    if (target.key === drag.activeTargetKey) return;
+    drag.activeTargetKey = target.key;
     const preview = storyDragPreview(drag.sourceOrder, key, drag.sourceCenter, drag.targets, dy, STORY_TREE_ROW_GAP);
-    setStoryDragOffsetY(preview.offsetY);
+    setStoryDragShiftsByKey(storyDragShifts(drag.sourceOrder, preview.keys, drag.targets, STORY_TREE_ROW_GAP));
     if (!sameStringOrder(preview.keys, manualOrderPreviewRef.current)) {
       manualOrderPreviewRef.current = preview.keys;
       setManualOrderPreview(preview.keys);
@@ -215,8 +225,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     storyDrag.current = undefined;
     manualOrderPreviewRef.current = undefined;
     setManualOrderPreview(undefined);
+    setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(undefined);
-    setStoryDragOffsetY(0);
+    storyDragOffsetY.value = 0;
     if (!sameStringOrder(manualKeys, drag.sourceOrder)) {
       updateStoryViewPreferences({ manualKeys: replaceVisibleStoryOrder(drag.baseManualOrder, manualKeys) });
     }
@@ -226,8 +237,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     storyDrag.current = undefined;
     manualOrderPreviewRef.current = undefined;
     setManualOrderPreview(undefined);
+    setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(undefined);
-    setStoryDragOffsetY(0);
+    storyDragOffsetY.value = 0;
   };
 
   useStoryEvents(refresh);
@@ -278,13 +290,17 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         );
         const isPressed = pressedStoryKey === key;
         const storyIconColor = storyMuted ? colors.textMuted : colors.text;
-        return <Animated.View
-          layout={draggingStoryKey === key ? undefined : STORY_GROUP_LAYOUT}
+        const dragShift = draggingStoryKey ? storyDragShiftsByKey?.get(key) ?? 0 : 0;
+        return <StoryDragFrame
+          dragging={draggingStoryKey === key}
+          dragTranslationY={storyDragOffsetY}
+          dragActive={Boolean(draggingStoryKey)}
           onLayout={(event) => storyGroupHeights.current.set(key, event.nativeEvent.layout.height)}
           style={[styles.storyGroup, {
             backgroundColor: colors.surface,
             borderColor: colors.workbenchCardBorder,
-          }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
+          }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging]}
+          shift={dragShift}
           testID={`story-row-${key}`}
         >
         <View
@@ -341,6 +357,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           </MenuView>
           {preferences.sortMode === 'manual' ? <ReorderDragHandle
             disabled={sortedStories.length < 2}
+            dragTranslationY={storyDragOffsetY}
             label={t('stories.sort.reorder', { name: story.title })}
             moveDownLabel={t('stories.sort.moveDown')}
             moveUpLabel={t('stories.sort.moveUp')}
@@ -408,7 +425,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           })}
           {!storySessions.length ? <Text style={[styles.emptyChild, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text> : null}
         </StoryChildren>
-      </Animated.View>;
+      </StoryDragFrame>;
     }}
   />
   <Modal animationType="fade" onRequestClose={() => setRenamingDocument(undefined)} transparent visible={Boolean(renamingDocument)}>
@@ -434,7 +451,7 @@ const styles = StyleSheet.create({
   emptyState: { minHeight: 180 },
   storyGroup: { borderRadius: STORY_GROUP_RADIUS, borderWidth: STORY_GROUP_BORDER_WIDTH, marginBottom: STORY_TREE_ROW_GAP, overflow: 'hidden' },
   storyGroupUnavailable: { opacity: 0.5 },
-  storyGroupDragging: { opacity: 0.72 },
+  storyGroupDragging: { elevation: 4, opacity: 0.72, zIndex: 1 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 48, paddingRight: 6 },
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
@@ -474,6 +491,7 @@ function sameStringOrder(left: readonly string[] | undefined, right: readonly st
 }
 
 const DISCLOSURE_ROTATION_DURATION = 200;
+const STORY_DRAG_SHIFT_DURATION = 160;
 const STORY_CHILDREN_EXPAND_DURATION = 220;
 const STORY_CHILDREN_COLLAPSE_DURATION = 170;
 const STORY_GROUP_LAYOUT = LinearTransition
@@ -488,6 +506,37 @@ const STORY_CHILDREN_EXITING = FadeOut
   .duration(STORY_CHILDREN_COLLAPSE_DURATION)
   .easing(Easing.in(Easing.cubic))
   .reduceMotion(ReduceMotion.System);
+
+function StoryDragFrame({ children, dragActive, dragging, dragTranslationY, onLayout, shift, style, testID }: {
+  children: ReactNode;
+  dragActive: boolean;
+  dragging: boolean;
+  dragTranslationY: SharedValue<number>;
+  onLayout(event: LayoutChangeEvent): void;
+  shift: number;
+  style: StyleProp<ViewStyle>;
+  testID: string;
+}) {
+  const shiftY = useSharedValue(0);
+  useLayoutEffect(() => {
+    shiftY.value = dragActive
+      ? withTiming(shift, {
+        duration: STORY_DRAG_SHIFT_DURATION,
+        easing: Easing.out(Easing.cubic),
+        reduceMotion: ReduceMotion.System,
+      })
+      : 0;
+  }, [dragActive, shift, shiftY]);
+  const dragStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: dragging ? dragTranslationY.value : shiftY.value }],
+  }));
+  return <Animated.View
+    layout={dragging ? undefined : STORY_GROUP_LAYOUT}
+    onLayout={onLayout}
+    style={[style, dragStyle]}
+    testID={testID}
+  >{children}</Animated.View>;
+}
 
 function StoryDisclosure({ accessibilityLabel, color, expanded, onPress }: {
   accessibilityLabel: string;

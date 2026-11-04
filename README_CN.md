@@ -255,11 +255,13 @@ task-handoff help
 apps/cli/                         CLI 入口
 apps/desktop-shell/               Electron 桌面外壳
 apps/mobile/                      Expo iOS 与 Android 客户端
-packages/control-plane/           控制平面、Node Agent 与聊天网关
+packages/control-plane/           控制平面与聊天网关
 packages/control-plane-client/    Web 与移动端共享的 Control Plane API 和实时客户端
 packages/control-plane-ui/        控制平面 Vue UI
 packages/controlled-instance/     受控实例 HTTP/WebSocket API
 packages/controlled-instance-ui/  受控实例 Vue UI（已冻结功能演进）
+packages/node-agent/              Node Agent 运行时与受控实例编排
+packages/runtime-shared/          Control Plane 与 Node Agent 共用的运行时模块
 packages/ai-session-runtime/      AI 会话运行时
 packages/app-runtime/             托管应用运行时与应用目录
 packages/protocol/                跨组件协议和数据模型

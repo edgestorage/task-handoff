@@ -10,7 +10,7 @@ import {
   type ControlPlaneMobileDevice,
 } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { createId, createSecret } from "../../shared/persistence/store.ts";
+import { createId, createSecret } from "@task-handoff/runtime-shared/persistence/store";
 import { normalizeControlPlaneLoginName, verifyControlPlanePassword } from "./passwords.ts";
 import type { ControlPlaneUserService } from "./user-service.ts";
 

@@ -6,7 +6,7 @@ import {
   type ControlPlaneTriggerMutationFailure,
   type TriggerConfig,
 } from "@task-handoff/protocol/triggers";
-import type { JsonCollection } from "../../shared/persistence/store.ts";
+import type { JsonCollection } from "@task-handoff/runtime-shared/persistence/store";
 import {
   ApplyControlPlaneTriggerSchema,
   BindAiSessionTriggerSchema,

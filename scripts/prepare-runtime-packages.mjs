@@ -11,7 +11,7 @@ import { exactInstalledDependencies } from "./runtime-dependency-versions.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const { resolveFeatureFlags } = require("../shared/feature-flags.cjs");
-const builtinProjects = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
+const builtinProjects = await import(pathToFileURL(path.join(root, "packages/node-agent/src/builtin-projects/assets.ts")).href);
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 // Published runtime packages mirror the product entry points, so the root
 // manifest is the single source for the homepage, repository, and issues URL.

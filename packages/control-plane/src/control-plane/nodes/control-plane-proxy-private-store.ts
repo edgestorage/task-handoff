@@ -7,7 +7,7 @@ import {
   type ProxyNodeCredential,
   type PublicPendingProxyClaim,
 } from "@task-handoff/protocol/control-plane-proxy";
-import { createId, JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
+import { createId, JsonCollection, JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 
 export type ControlPlaneProxyPrivateStorePaths = {
   pendingClaimsDir: string;

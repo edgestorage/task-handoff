@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { createAssignedModelEnvironmentConvergence, syncAssignedModelEnvironment } = require("../packages/control-plane/src/node-agent/app.ts");
+const { createAssignedModelEnvironmentConvergence, syncAssignedModelEnvironment } = require("../packages/node-agent/src/app.ts");
 
 const catalog = {
   protocolVersion: "2026-08-27",

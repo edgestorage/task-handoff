@@ -224,6 +224,9 @@ importers:
       '@task-handoff/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@task-handoff/node-agent':
+        specifier: workspace:*
+        version: link:../../packages/node-agent
       '@task-handoff/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -266,6 +269,9 @@ importers:
       '@task-handoff/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
+      '@task-handoff/node-agent':
+        specifier: workspace:*
+        version: link:../../packages/node-agent
 
   apps/mobile:
     dependencies:
@@ -337,7 +343,7 @@ importers:
         version: 0.2.2(patch_hash=htaeyyjmdlkat5buzm362in2am)(expo@57.0.31)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       expo-router:
         specifier: ~57.0.29
-        version: 57.0.29(ouvxmpv34y3g7nz2t2sununldu)
+        version: 57.0.29(e4uv5qidlztin64rucfdc2fyp4)
       expo-secure-store:
         specifier: ~57.0.4
         version: 57.0.4(expo@57.0.31)
@@ -560,6 +566,9 @@ importers:
       '@task-handoff/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@task-handoff/runtime-shared':
+        specifier: workspace:*
+        version: link:../runtime-shared
       dingtalk-stream:
         specifier: 2.1.5
         version: 2.1.5
@@ -873,6 +882,52 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
+  packages/node-agent:
+    dependencies:
+      '@fastify/websocket':
+        specifier: ^11.2.0
+        version: 11.2.0
+      '@task-handoff/cloud-contracts':
+        specifier: workspace:*
+        version: link:../cloud-contracts
+      '@task-handoff/core':
+        specifier: workspace:*
+        version: link:../core
+      '@task-handoff/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@task-handoff/runtime-shared':
+        specifier: workspace:*
+        version: link:../runtime-shared
+      drizzle-orm:
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@sinclair/typebox@0.34.52)(@types/pg@8.15.5)(pg@8.16.3)(zod@4.6.7)
+      fastify:
+        specifier: ^5.6.2
+        version: 5.8.5
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
+      tar:
+        specifier: ^7.5.20
+        version: 7.5.20
+      write-file-atomic:
+        specifier: ^7.0.1
+        version: 7.0.1
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/semver':
+        specifier: ^7.7.1
+        version: 7.7.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/protocol:
     dependencies:
       '@noble/hashes':
@@ -881,6 +936,34 @@ importers:
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+
+  packages/runtime-shared:
+    dependencies:
+      '@task-handoff/cloud-contracts':
+        specifier: workspace:*
+        version: link:../cloud-contracts
+      '@task-handoff/core':
+        specifier: workspace:*
+        version: link:../core
+      '@task-handoff/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
+      write-file-atomic:
+        specifier: ^7.0.1
+        version: 7.0.1
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   packages/web-theme:
     dependencies:
@@ -9382,7 +9465,7 @@ snapshots:
       ws: 8.21.0
       zod: 3.25.76
     optionalDependencies:
-      expo-router: 57.0.29(ouvxmpv34y3g7nz2t2sununldu)
+      expo-router: 57.0.29(e4uv5qidlztin64rucfdc2fyp4)
       react-native: 0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3)
     transitivePeerDependencies:
       - '@expo/metro-runtime'
@@ -9665,7 +9748,7 @@ snapshots:
       react: 19.2.3
     optionalDependencies:
       '@expo/metro-runtime': 57.0.17(expo@57.0.31)(react-dom@19.2.3(react@19.2.3))(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
-      expo-router: 57.0.29(ouvxmpv34y3g7nz2t2sununldu)
+      expo-router: 57.0.29(e4uv5qidlztin64rucfdc2fyp4)
       react-dom: 19.2.3(react@19.2.3)
     transitivePeerDependencies:
       - supports-color
@@ -13231,7 +13314,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3)
 
-  expo-router@57.0.29(ouvxmpv34y3g7nz2t2sununldu):
+  expo-router@57.0.29(e4uv5qidlztin64rucfdc2fyp4):
     dependencies:
       '@expo/log-box': 57.0.4(expo@57.0.31)(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@expo/metro-runtime': 57.0.17(expo@57.0.31)(react-dom@19.2.3(react@19.2.3))(react-native@0.86.3(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.3)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)

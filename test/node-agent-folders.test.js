@@ -4,10 +4,10 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { filesystemRoots, folderPlaces, listFolderTree, MAX_FOLDER_TREE_CHILDREN, requireBrowsableFolderPath } = require("../packages/control-plane/src/node-agent/folders.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { UpdateLocalFolderSchema } = require("../packages/control-plane/src/node-agent/schemas.ts");
-const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
+const { filesystemRoots, folderPlaces, listFolderTree, MAX_FOLDER_TREE_CHILDREN, requireBrowsableFolderPath } = require("../packages/node-agent/src/folders.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { UpdateLocalFolderSchema } = require("../packages/node-agent/src/schemas.ts");
+const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
 
 test("folder picker starts at filesystem roots", () => {
   const roots = filesystemRoots();

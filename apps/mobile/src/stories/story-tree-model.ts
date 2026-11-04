@@ -61,6 +61,28 @@ export function storyDragPreview(
   };
 }
 
+export function storyDragShifts(
+  sourceOrder: readonly string[],
+  previewOrder: readonly string[],
+  targets: readonly { key: string; height: number }[],
+  rowGap: number,
+) {
+  const heights = new Map(targets.map((target) => [target.key, target.height]));
+  const sourceTops = new Map<string, number>();
+  const previewTops = new Map<string, number>();
+  let sourceTop = 0;
+  let previewTop = 0;
+  for (const key of sourceOrder) {
+    sourceTops.set(key, sourceTop);
+    sourceTop += (heights.get(key) ?? 0) + rowGap;
+  }
+  for (const key of previewOrder) {
+    previewTops.set(key, previewTop);
+    previewTop += (heights.get(key) ?? 0) + rowGap;
+  }
+  return new Map(previewOrder.map((key) => [key, (previewTops.get(key) ?? 0) - (sourceTops.get(key) ?? 0)]));
+}
+
 export function sortStoryTree(stories: readonly Story[], locale: string, mode: StorySortMode = 'name', sessionsByStory?: ReadonlyMap<string, StoryTreeSession[]>, manualKeys: readonly string[] = []) {
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
   const byArchiveState = (left: Story, right: Story) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt));

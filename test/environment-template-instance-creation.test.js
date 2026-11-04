@@ -4,9 +4,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { dockerRunArgs } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
 
 const imageId = `sha256:${"d".repeat(64)}`;
 const timestamp = "2026-08-04T00:00:00.000Z";

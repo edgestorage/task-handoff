@@ -8,7 +8,7 @@ const {
   LocalDockerExecutor,
   assertDockerConfigHasNoSecrets,
   defaultCommandRunner,
-} = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+} = require("../packages/node-agent/src/runtimes/docker.ts");
 
 const enabled = process.env.TASK_HANDOFF_DOCKER_INTEGRATION === "1";
 const baseImage = process.env.TASK_HANDOFF_DOCKER_TEST_IMAGE || "task-handoff-controlled-browser:local";

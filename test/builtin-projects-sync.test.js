@@ -11,7 +11,7 @@ const {
   builtinProjectContentDigest,
   listBuiltinProjectFiles,
   loadBuiltinProjectDefinitions,
-} = require("../packages/control-plane/src/node-agent/builtin-projects/assets.ts");
+} = require("../packages/node-agent/src/builtin-projects/assets.ts");
 
 const syncScript = path.resolve(__dirname, "../scripts/sync-builtin-projects.mjs");
 

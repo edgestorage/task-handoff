@@ -5,11 +5,11 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { DatabaseSync } = require("node:sqlite");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { nodeAgentMigrations } = require("../packages/control-plane/src/node-agent/persistence/migrations.ts");
-const { openNodeAgentDatabaseSync } = require("../packages/control-plane/src/node-agent/persistence/database.ts");
-const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
-const { RuntimeAdapterRegistry } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { nodeAgentMigrations } = require("../packages/node-agent/src/persistence/migrations.ts");
+const { openNodeAgentDatabaseSync } = require("../packages/node-agent/src/persistence/database.ts");
+const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
+const { RuntimeAdapterRegistry } = require("../packages/node-agent/src/runtimes/adapters.ts");
 
 const WSL_RUNTIME_ID = "runtime_wsl_host";
 

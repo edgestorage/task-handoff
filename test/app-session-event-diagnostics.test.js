@@ -3,7 +3,7 @@ const { EventEmitter } = require("node:events");
 const test = require("node:test");
 const WebSocket = require("ws");
 
-const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/node-agent/src/events.ts");
 
 class TestSocket extends EventEmitter {
   constructor(readyState = WebSocket.CONNECTING) {

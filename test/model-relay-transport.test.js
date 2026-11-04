@@ -6,11 +6,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { deriveModelRelayRouteId } = require("../packages/control-plane/src/node-agent/models/relay-routes.ts");
-const { resolveModelRelayLimits } = require("../packages/control-plane/src/node-agent/models/relay/limits.ts");
-const { ModelRelayService } = require("../packages/control-plane/src/node-agent/models/relay/server.ts");
+const { deriveModelRelayRouteId } = require("../packages/node-agent/src/models/relay-routes.ts");
+const { resolveModelRelayLimits } = require("../packages/node-agent/src/models/relay/limits.ts");
+const { ModelRelayService } = require("../packages/node-agent/src/models/relay/server.ts");
 
 test("relay waits five minutes for upstream response headers by default while allowing overrides", () => {
   assert.equal(resolveModelRelayLimits({}).responseHeadersTimeoutMs, 300_000);

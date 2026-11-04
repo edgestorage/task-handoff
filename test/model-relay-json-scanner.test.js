@@ -8,8 +8,8 @@ const {
   rewriteJsonModelBuffer,
   rewriteJsonModelResponseBody,
   createModelRelayRequestBody,
-} = require("../packages/control-plane/src/node-agent/models/relay/json-model-rewrite.ts");
-const { rewriteSseModelResponseBody } = require("../packages/control-plane/src/node-agent/models/relay/sse-model-rewrite.ts");
+} = require("../packages/node-agent/src/models/relay/json-model-rewrite.ts");
+const { rewriteSseModelResponseBody } = require("../packages/node-agent/src/models/relay/sse-model-rewrite.ts");
 
 function rewriteWithScanner(buffer, paths, replace) {
   const scanner = new JsonModelScanner({ paths, onModelValue: replace });

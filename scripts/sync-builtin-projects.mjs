@@ -31,7 +31,7 @@ const require = createRequire(import.meta.url);
 const { FEATURE_FLAG_DEFINITIONS, resolveFeatureFlags } = require("../shared/feature-flags.cjs");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const assets = await import(pathToFileURL(path.join(root, "packages/control-plane/src/node-agent/builtin-projects/assets.ts")).href);
+const assets = await import(pathToFileURL(path.join(root, "packages/node-agent/src/builtin-projects/assets.ts")).href);
 const skills = await import(pathToFileURL(path.join(root, "apps/thctl/src/skill.ts")).href);
 
 function argValue(name) {

@@ -76,6 +76,7 @@ test('App Sessions keeps local browser tabs visible after leaving the browser ro
   expect(appsRoute).toMatch(/const header = <SectionTabs/);
   expect(appsRoute).toMatch(/section === 'browser'[\s\S]*?<BrowserTabList/);
   expect(appsRoute.match(/header=\{header\}/g)).toHaveLength(2);
+  expect(appsRoute).toMatch(/animateFrom=\{animateFromSection\}/);
   expect(appsRoute).toMatch(/router\.push\(`\/browser/);
   expect(browserList).toMatch(/mobileBrowserTabStore\.subscribe/);
   expect(browserList).toMatch(/onOpen\?\.\(tab\.instanceId, tab\.id\)/);

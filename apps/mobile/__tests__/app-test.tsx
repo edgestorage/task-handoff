@@ -148,7 +148,9 @@ describe('<InboxRoute />', () => {
     expect(screen.getByTestId('session-status-filter-scroll').props.horizontal).toBe(true);
     expect(screen.getByTestId('session-status-filters').props.accessibilityRole).toBe('tablist');
     expect(StyleSheet.flatten(screen.getByTestId('session-status-filters').props.style).backgroundColor).toBe(mobileLightColors.workbenchSelectionBackground);
-    expect(StyleSheet.flatten(screen.getByTestId('session-status-filter-all').props.style).backgroundColor).toBe(mobileLightColors.statusFilterSelectedBackground);
+    expect(screen.getByTestId('session-status-filter-indicator')).toBeTruthy();
+    expect(screen.getByTestId('session-status-filter-all').props.accessibilityState).toEqual({ selected: true });
+    expect(screen.getByTestId('session-status-filter-problem').props.accessibilityState).toEqual({ selected: false });
     expect(screen.getByText('Problem').props.numberOfLines).toBe(1);
     expect(StyleSheet.flatten(screen.getByTestId('session-status-filter-problem').props.style)).toEqual(expect.objectContaining({ flexGrow: 1, flexShrink: 0, minWidth: 44 }));
   });

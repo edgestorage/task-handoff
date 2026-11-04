@@ -9,10 +9,10 @@ const { DatabaseSync } = require("node:sqlite");
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
 const { ControlPlanePersistenceMaintenance } = require("../packages/control-plane/src/control-plane/persistence/maintenance.ts");
-const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { NodeAgentPersistenceMaintenance } = require("../packages/control-plane/src/node-agent/persistence/maintenance.ts");
-const { EphemeralTokenStore } = require("../packages/control-plane/src/shared/security/ephemeral-token-store.ts");
+const { NodeAgentIdentityService } = require("../packages/node-agent/src/identity/service.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { NodeAgentPersistenceMaintenance } = require("../packages/node-agent/src/persistence/maintenance.ts");
+const { EphemeralTokenStore } = require("../packages/runtime-shared/src/security/ephemeral-token-store.ts");
 const { copyTruncateOpenLog } = require("../packages/core/src/storage/open-log-retention.ts");
 const { enforceInstanceLogBudget, RotatingLogWriter } = require("../packages/app-runtime/src/log-retention.ts");
 

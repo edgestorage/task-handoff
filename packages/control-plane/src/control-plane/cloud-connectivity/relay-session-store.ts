@@ -1,6 +1,6 @@
 import { RelaySessionGrantSchema, type RelaySessionGrant } from "@task-handoff/cloud-contracts";
 import { z } from "zod";
-import { JsonFile } from "../../shared/persistence/store.ts";
+import { JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 
 const PersistedRelaySessionSchema = z.object({
   allocationId: z.string().trim().min(1).max(160),

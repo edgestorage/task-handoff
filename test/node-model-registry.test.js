@@ -6,7 +6,7 @@ const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
 
-const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/index.ts");
 const { createModelEntityId, migratedModelEntityId, modelContentRevision } = require("../packages/protocol/src/control-plane.ts");
 
 const openCodeReasoningVariants = Object.fromEntries(

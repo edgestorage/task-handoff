@@ -15,7 +15,7 @@ import {
   NODE_RELAY_DIRECTION_NODE,
   nodeRelaySessionError,
   type NodeRelayFrameSocket,
-} from "../../shared/cloud-relay/node-relay-session.ts";
+} from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import type { NodeRelayTraceRecorder } from "../cloud-connectivity/node-relay-trace.ts";
 
 /**

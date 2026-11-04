@@ -1,13 +1,13 @@
 import type { Node } from "@task-handoff/protocol/control-plane";
 import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import { WebSocket as WsClient } from "ws";
-import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
+import { createDirectNodeAgentAuthHeaders } from "@task-handoff/runtime-shared/security/node-agent-auth";
 import {
   assertLocalIpcSocketOwnedByCurrentUser,
   createNodeAgentIpcWebSocket,
   fetchNodeAgentIpc,
   parseNodeAgentIpcEndpoint,
-} from "../../shared/transport/node-agent-ipc.ts";
+} from "@task-handoff/runtime-shared/transport/node-agent-ipc";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "./client.ts";
 
 type FetchImpl = typeof fetch;

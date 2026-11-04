@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { reduceInstanceLifecycle } = require("../packages/control-plane/src/node-agent/instance-lifecycle-state.ts");
+const { reduceInstanceLifecycle } = require("../packages/node-agent/src/instance-lifecycle-state.ts");
 
 function instance(overrides = {}) {
   return ControlledInstanceSchema.parse({

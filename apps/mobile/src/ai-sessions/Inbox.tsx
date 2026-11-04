@@ -1,5 +1,5 @@
 import { Profiler, useEffect, useMemo, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import {
   aiSessionLastUserMessageAt,
@@ -25,6 +25,7 @@ import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { SessionContextRow } from './SessionContextRow';
 import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
+import { AnimatedTabStrip } from '../components/AnimatedTabStrip';
 import { useI18n } from '../i18n';
 import {
   aiSessionInboxSections,
@@ -46,7 +47,6 @@ export { inboxCardContent, inboxEntries, sessionScopeOptions } from './InboxMode
 
 const ALL_SCOPE: AiSessionScope = { kind: 'all' };
 const STATUS_FILTERS = ['all', 'active', 'waiting', 'idle', 'problem'] as const;
-const STATUS_FILTER_PADDING = 3;
 const LIST_ROW_PADDING_HORIZONTAL = 10;
 const LIST_ROW_GAP = 8;
 const LIST_LEADING_SLOT_WIDTH = 20;
@@ -145,23 +145,18 @@ export function AiSessionInbox({
           itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : sessionContainerStyle(item, false)}
           keyExtractor={(item) => item.type === 'group' ? item.key : `${item.instanceId}:${item.session.id}`}
           ListHeaderComponent={<View style={styles.header}>
-            <View
-              accessibilityRole="tablist"
-              style={[styles.statusFilters, { backgroundColor: colors.workbenchSelectionBackground }]}
+            <AnimatedTabStrip<SessionStatusFilter>
+              indicatorTestID="session-status-filter-indicator"
+              onChange={setStatusFilter}
+              options={STATUS_FILTERS.map((filter) => ({
+                label: statusFilterLabel(filter, t),
+                testID: `session-status-filter-${filter}`,
+                value: filter,
+              }))}
+              scrollTestID="session-status-filter-scroll"
               testID="session-status-filters"
-            >
-              <ScrollView
-                bounces={false}
-                contentContainerStyle={styles.statusFilterContent}
-                contentInsetAdjustmentBehavior="never"
-                horizontal
-                keyboardShouldPersistTaps="handled"
-                showsHorizontalScrollIndicator={false}
-                testID="session-status-filter-scroll"
-              >
-                {STATUS_FILTERS.map((filter) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: statusFilter === filter }} key={filter} onPress={() => setStatusFilter(filter)} style={[styles.statusFilter, { backgroundColor: statusFilter === filter ? colors.statusFilterSelectedBackground : 'transparent' }]} testID={`session-status-filter-${filter}`}><Text numberOfLines={1} style={[styles.statusFilterText, { color: statusFilter === filter ? colors.text : colors.textMuted }]}>{statusFilterLabel(filter, t)}</Text></Pressable>)}
-              </ScrollView>
-            </View>
+              value={statusFilter}
+            />
             {statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
           </View>}
           ListEmptyComponent={<EmptyState
@@ -361,10 +356,6 @@ const styles = StyleSheet.create({
   header: { alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingBottom: 12, paddingTop: 16 },
   notice: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#854d0e', fontSize: 13, lineHeight: 18, padding: 12, width: '100%' },
   empty: { minHeight: 240 },
-  statusFilters: { borderRadius: 999, overflow: 'hidden', width: '100%' },
-  statusFilterContent: { flexDirection: 'row', flexGrow: 1, minWidth: '100%', padding: STATUS_FILTER_PADDING },
-  statusFilter: { alignItems: 'center', borderRadius: 999, flexGrow: 1, flexShrink: 0, justifyContent: 'center', minHeight: 34, minWidth: 44, paddingHorizontal: 5 },
-  statusFilterText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   cardContainer: { borderRadius: 16, marginBottom: 12, marginHorizontal: 20 },
   listRowContainer: { marginBottom: 2, marginHorizontal: 20 },
   groupContainer: { marginHorizontal: 20 },

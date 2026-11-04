@@ -5,7 +5,7 @@ import type { ControlPlaneAuth } from "../auth/service.ts";
 import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 import { OperationApprovals } from "../approvals/operation-approvals.ts";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 
 const IdSchema = z.object({ id: z.string().min(1) }).strict();
 const DecisionSchema = z.object({ decision: z.enum(["approve", "deny"]) }).strict();

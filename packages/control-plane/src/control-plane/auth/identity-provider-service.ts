@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ControlPlaneIdentityProviderSummarySchema } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
-import { createId } from "../../shared/persistence/store.ts";
+import { createId } from "@task-handoff/runtime-shared/persistence/store";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";
 import { externalIdentityProviderAdapter } from "./external-identity-providers.ts";

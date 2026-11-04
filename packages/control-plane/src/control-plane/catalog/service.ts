@@ -14,7 +14,7 @@ import {
   type SelectableImage,
 } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
-import { createId, type JsonCollection, type JsonFile } from "../../shared/persistence/store.ts";
+import { createId, type JsonCollection, type JsonFile } from "@task-handoff/runtime-shared/persistence/store";
 import {
   CreateImageInputSchema,
   CreateProjectInputSchema,

@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { appTaskGroups, appTaskProgress, appTaskStatusKey, retryableAppTask } from "../src/apps/control-plane/instance-settings/appTaskPresentation.ts";
 import { useInstanceAppManagement } from "../src/apps/control-plane/instance-settings/useInstanceAppManagement.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -170,22 +171,27 @@ test("a manual update check merges into the cached snapshot without resolving th
 
 test("Apps settings exposes capability states, task feedback, safe confirmation, and launcher separation", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  const tasks = read("src/apps/control-plane/instance-settings/AppManagementTasks.vue");
   const queries = read("src/api/queries.ts");
   const events = read("src/apps/control-plane/useControlPlaneEvents.ts");
   const protocol = read("../protocol/src/control-plane.ts");
 
   assert.match(protocol, /\["installed", "not-installed", "broken", "unsupported"\]/);
   assert.match(dialog, /managedAppStateLabel\(app\.state\)/);
-  for (const value of ["queued", "succeeded", "failed", "cancelled", "interrupted"])
-    assert.match(dialog, new RegExp(value));
+  for (const state of ["queued", "succeeded", "failed", "cancelled", "interrupted"])
+    assert.equal(appTaskStatusKey(job({ state })), `instances.settings.${state}`);
   assert.match(dialog, /insufficient|Privilege|installReason|uninstallReason/i);
   assert.match(dialog, /t\("instances\.settings\.uninstallDescription"\)/);
   assert.match(dialog, /t\("instances\.settings\.customLaunchers"\)/);
   assert.match(dialog, /t\("instances\.settings\.customLaunchersDescription"\)/);
   assert.match(dialog, /AlertDialogContent/);
-  assert.match(dialog, /Progress/);
-  assert.match(dialog, /t\("instances\.settings\.liveInstallerOutput"\)/);
-  assert.match(dialog, /executionOutput/);
+  assert.match(tasks, /Progress/);
+  assert.match(tasks, /t\("instances\.settings\.liveInstallerOutput"\)/);
+  assert.match(tasks, /executionOutput/);
+  assert.match(dialog, /<AppManagementTasks/);
+  assert.match(dialog, /<TabsTrigger ref="appTasksTab" value="tasks">/);
+  assert.match(dialog, /openAppTask\(activeJob\(app\)!\.id\)/);
+  assert.doesNotMatch(dialog, /instance-app-activity|instance-app-terminal|executionJob|terminalJob/);
   assert.match(dialog, /t\('instances\.settings\.appFilters'\)/);
   assert.match(dialog, /filteredManagedApps/);
   assert.match(dialog, /t\('instances\.settings\.refreshApps'\)/);
@@ -213,4 +219,40 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.doesNotMatch(queries, /packageName|downloadUrl|command|script/);
   assert.match(events, /recoverOpen/);
   assert.match(events, /event\.scope\.instanceId/);
+});
+
+test("task groups retain every operation and keep the snapshot order untouched", () => {
+  const queued = job({ id: "queued", state: "queued", startedAt: undefined });
+  const running = job({ id: "running", appId: "codex" });
+  const old = job({ id: "old", state: "succeeded", finishedAt: now });
+  const latest = job({ id: "latest", state: "failed", finishedAt: "2026-07-16T01:00:00.000Z" });
+  const current = snapshot(1, { activeJobs: [queued, running], recentJobs: [old, latest] });
+  const groups = appTaskGroups(current);
+  assert.deepEqual(groups.active.map((item) => item.id), ["running", "queued"]);
+  assert.deepEqual(groups.recent.map((item) => item.id), ["latest", "old"]);
+  assert.deepEqual(current.activeJobs, [queued, running]);
+  assert.deepEqual(current.recentJobs, [old, latest]);
+});
+
+test("task retry requires both a retryable failure and the current authoritative action permission", () => {
+  const failed = job({ state: "failed", error: { code: "download_failed", message: "Download failed", retryable: true } });
+  const current = snapshot(1);
+  assert.equal(retryableAppTask(current, failed), current.apps[0]);
+  assert.equal(retryableAppTask(current, { ...failed, error: { ...failed.error, retryable: false } }), undefined);
+  assert.equal(retryableAppTask(current, { ...failed, state: "succeeded" }), undefined);
+  assert.equal(retryableAppTask(current, { ...failed, operation: "update" }), undefined);
+  assert.equal(retryableAppTask({ ...current, activeJobs: [job()] }, failed), undefined);
+  assert.equal(retryableAppTask({ ...current, apps: [] }, failed), undefined);
+  assert.equal(retryableAppTask({ ...current, apps: [app({ canInstall: false })] }, failed), undefined);
+  const installed = snapshot(2, { apps: [app({ state: "installed", canInstall: false, canUpdate: true, canUninstall: true })] });
+  assert.equal(retryableAppTask(installed, { ...failed, operation: "update" }), installed.apps[0]);
+  assert.equal(retryableAppTask(installed, { ...failed, operation: "uninstall", state: "interrupted" }), installed.apps[0]);
+});
+
+test("tasks only display a percentage when progress has a measured current and total", () => {
+  assert.equal(appTaskProgress(), undefined);
+  assert.equal(appTaskProgress(job()), undefined);
+  assert.equal(appTaskProgress(job({ progress: { total: 100 } })), undefined);
+  assert.equal(appTaskProgress(job({ progress: { current: 0, total: 100 } })), 0);
+  assert.equal(appTaskProgress(job({ progress: { current: 25, total: 100 } })), 25);
 });

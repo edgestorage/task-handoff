@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { ControlPlaneNodeAgentTunnelTransport } from "../src/control-plane/nodes/tunnel.ts";
 import { CloudRelayNodeAgentTransport } from "../src/control-plane/nodes/cloud-relay-transport.ts";
-import { acceptNodeRelayHandshake } from "../src/shared/cloud-relay/node-relay-session.ts";
+import { acceptNodeRelayHandshake } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import { NodeRelayTraceRecorder, nodeRelayTraceEnabled, nodeRelayTraceFromEnvironment } from "../src/control-plane/cloud-connectivity/node-relay-trace.ts";
 import { ed25519Identity, linkedFrameSockets, nodeRelayFingerprint, startNodeSession } from "./support/cloud-relay-node-harness.ts";
 

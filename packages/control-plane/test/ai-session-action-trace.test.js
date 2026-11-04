@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AiSessionActionService } from "../src/control-plane/sessions/ai-session-actions.ts";
-import { clientRequestTraceId, TRACE_ID_HEADER } from "../src/shared/http/server-timing.ts";
+import { clientRequestTraceId, TRACE_ID_HEADER } from "@task-handoff/runtime-shared/http/server-timing";
 
 const session = {
   id: "ais_trace",

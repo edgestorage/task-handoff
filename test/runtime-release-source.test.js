@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { resolvePublishedRuntimeArtifact } = require("../packages/control-plane/src/node-agent/runtime-release-source.ts");
+const { resolvePublishedRuntimeArtifact } = require("../packages/node-agent/src/runtime-release-source.ts");
 
 const identity = {
   packageName: "@task-handoff/controlled-instance",

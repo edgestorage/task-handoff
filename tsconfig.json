@@ -24,8 +24,15 @@
       "@task-handoff/cloud-contracts/*": ["packages/cloud-contracts/src/*.ts"],
       "@task-handoff/core": ["packages/core/src/index.ts"],
       "@task-handoff/core/*": ["packages/core/src/*"],
+      "@task-handoff/node-agent": ["packages/node-agent/src/index.ts"],
+      "@task-handoff/node-agent/app": ["packages/node-agent/src/app.ts"],
+      "@task-handoff/node-agent/bootstrap-assets": ["packages/node-agent/src/runtimes/bootstrap-assets.ts"],
+      "@task-handoff/node-agent/executor": ["packages/node-agent/src/runtimes/docker.ts"],
+      "@task-handoff/node-agent/folders": ["packages/node-agent/src/folders.ts"],
+      "@task-handoff/node-agent/schemas": ["packages/node-agent/src/schemas.ts"],
       "@task-handoff/protocol": ["packages/protocol/src/index.ts"],
-      "@task-handoff/protocol/*": ["packages/protocol/src/*.ts"]
+      "@task-handoff/protocol/*": ["packages/protocol/src/*.ts"],
+      "@task-handoff/runtime-shared/*": ["packages/runtime-shared/src/*.ts"]
     },
     "types": ["node"],
     "forceConsistentCasingInFileNames": true
@@ -41,7 +48,9 @@
     "packages/app-runtime/src/**/*",
     "packages/ai-session-runtime/src/**/*",
     "packages/controlled-instance/src/**/*",
-    "packages/control-plane/src/**/*"
+    "packages/control-plane/src/**/*",
+    "packages/node-agent/src/**/*",
+    "packages/runtime-shared/src/**/*"
   ],
   "exclude": ["packages/control-plane-ui/**/*", "packages/controlled-instance-ui/**/*"]
 }

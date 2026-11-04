@@ -10,10 +10,10 @@ const {
   ControlledInstanceRegisterSchema,
   ControlledInstanceSchema,
 } = require("../packages/protocol/src/control-plane.ts");
-const { nodeLocalInstanceWebBase } = require("../packages/control-plane/src/node-agent/instance-target.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { LocalDockerExecutor } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
+const { nodeLocalInstanceWebBase } = require("../packages/node-agent/src/instance-target.ts");
+const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
+const { LocalDockerExecutor } = require("../packages/node-agent/src/runtimes/docker.ts");
+const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 
 const timestamp = "2026-08-21T00:00:00.000Z";

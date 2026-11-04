@@ -12,7 +12,7 @@ import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-agg
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
 import type { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
-import { appendServerTiming, clientRequestTraceId, serverTimingDuration, traceId as normalizedTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { appendServerTiming, clientRequestTraceId, serverTimingDuration, traceId as normalizedTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "@task-handoff/runtime-shared/http/server-timing";
 import {
   IdParamsSchema,
   InstanceSessionParamsSchema,

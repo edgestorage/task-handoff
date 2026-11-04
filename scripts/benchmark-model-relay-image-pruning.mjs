@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { pruneModelRelayImages } from "../packages/control-plane/src/node-agent/models/relay/image-pruning.ts";
+import { pruneModelRelayImages } from "../packages/node-agent/src/models/relay/image-pruning.ts";
 
 const MIB = 1024 * 1024;
 const SIZES_MIB = [8, 16, 32];

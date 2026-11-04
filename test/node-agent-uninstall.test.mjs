@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { uninstallNodeAgent } from "../packages/control-plane/src/node-agent/uninstall.ts";
+import { uninstallNodeAgent } from "../packages/node-agent/src/uninstall.ts";
 
 const unitPath = "/etc/systemd/system/task-handoff-node-agent.service";
 const envPath = "/etc/task-handoff/node-agent.env";

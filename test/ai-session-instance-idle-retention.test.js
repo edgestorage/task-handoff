@@ -4,7 +4,7 @@ const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
 
-const { InstanceIdleSessionRetentionCoordinator } = require("../packages/control-plane/src/node-agent/stories/idle-retention.ts");
+const { InstanceIdleSessionRetentionCoordinator } = require("../packages/node-agent/src/stories/idle-retention.ts");
 
 test("instance idle retention closes the oldest idle sessions above the 100-session budget", async () => {
   const instance = { id: "inst_1", registrationToken: "token" };

@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
-import type { NodeRelayFrameSocket } from "../../shared/cloud-relay/node-relay-session.ts";
-import { acceptNodeRelayHandshake, createNodeRelayHandshakeFrameReader, type NodeRelayHandshakeFrameReader } from "../../shared/cloud-relay/node-relay-session.ts";
+import type { NodeRelayFrameSocket } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
+import { acceptNodeRelayHandshake, createNodeRelayHandshakeFrameReader, type NodeRelayHandshakeFrameReader } from "@task-handoff/runtime-shared/cloud-relay/node-relay-session";
 import type { NodeAgentControlPlaneTrustOutcome } from "@task-handoff/protocol/node-relay-channel";
 import { trustedRelayUrl } from "./relay-connector.ts";
 import { observeRelaySocketErrors } from "./relay-socket.ts";

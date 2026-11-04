@@ -2,8 +2,8 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
-const { InstanceImageProvisioningController } = require("../packages/control-plane/src/node-agent/instances/image-provisioning.ts");
-const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
+const { InstanceImageProvisioningController } = require("../packages/node-agent/src/instances/image-provisioning.ts");
+const { InstanceOperationGate } = require("../packages/node-agent/src/instances/instance-operation-gate.ts");
 
 function imageProvisioningInstance(generation) {
   const timestamp = "2026-08-02T00:00:00.000Z";

@@ -78,7 +78,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
-import { clientRequestTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { clientRequestTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "@task-handoff/runtime-shared/http/server-timing";
 import {
   RepositoryAiSessionWorkspaceSchema,
   type RepositoryAiSessionGitSelection,

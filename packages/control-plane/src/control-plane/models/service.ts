@@ -35,7 +35,7 @@ import { CopyModelInputSchema, CreateModelInputSchema, ModelDiscoveryInputSchema
 import { now, throwNotFound } from "../application/helpers.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { normalizeModel, publicModel } from "../public-records.ts";
-import { discoverModels, testModelEndpoint } from "../../shared/models/model-endpoint.ts";
+import { discoverModels, testModelEndpoint } from "@task-handoff/runtime-shared/models/model-endpoint";
 
 function nodeAgentCapabilities(node: Node) {
   const agent = node.capabilities.agent;

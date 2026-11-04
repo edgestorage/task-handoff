@@ -94,8 +94,8 @@ const iconStyle = \`url("\${icons[current]}")\`;
 
 test("package boundary checker allows the Node Agent SQLite persistence stack", () => {
   const root = fixture({
-    "packages/control-plane/package.json": manifest("@example/control-plane", { "drizzle-orm": "1.0.0" }),
-    "packages/control-plane/src/node-agent/database.ts": "import { drizzle } from 'drizzle-orm/node-sqlite';\nimport { sqliteTable } from 'drizzle-orm/sqlite-core';\nvoid drizzle; void sqliteTable;",
+    "packages/node-agent/package.json": manifest("@example/node-agent", { "drizzle-orm": "1.0.0" }),
+    "packages/node-agent/src/database.ts": "import { drizzle } from 'drizzle-orm/node-sqlite';\nimport { sqliteTable } from 'drizzle-orm/sqlite-core';\nvoid drizzle; void sqliteTable;",
   });
 
   assert.deepEqual(checkWorkspace(root), []);
@@ -103,12 +103,12 @@ test("package boundary checker allows the Node Agent SQLite persistence stack", 
 
 test("package boundary checker keeps foreign and native databases out of the Node Agent", () => {
   const root = fixture({
-    "packages/control-plane/package.json": manifest("@example/control-plane", {
+    "packages/node-agent/package.json": manifest("@example/node-agent", {
       "better-sqlite3": "1.0.0",
       "drizzle-orm": "1.0.0",
       "pg": "1.0.0",
     }),
-    "packages/control-plane/src/node-agent/database.ts": "import pg from 'pg';\nimport { drizzle } from 'drizzle-orm/node-postgres';\nimport sqlite from 'better-sqlite3';\nvoid pg; void drizzle; void sqlite;",
+    "packages/node-agent/src/database.ts": "import pg from 'pg';\nimport { drizzle } from 'drizzle-orm/node-postgres';\nimport sqlite from 'better-sqlite3';\nvoid pg; void drizzle; void sqlite;",
   });
   const violations = checkWorkspace(root).join("\n");
 
@@ -119,9 +119,33 @@ test("package boundary checker keeps foreign and native databases out of the Nod
 
 test("package boundary checker keeps database implementations out of shared runtime code", () => {
   const root = fixture({
-    "packages/control-plane/package.json": manifest("@example/control-plane", { "drizzle-orm": "1.0.0" }),
-    "packages/control-plane/src/shared/database.ts": "import { sql } from 'drizzle-orm';\nvoid sql;",
+    "packages/runtime-shared/package.json": manifest("@example/runtime-shared", { "drizzle-orm": "1.0.0" }),
+    "packages/runtime-shared/src/database.ts": "import { sql } from 'drizzle-orm';\nvoid sql;",
   });
 
   assert.match(checkWorkspace(root).join("\n"), /runtime boundary: drizzle-orm/);
+});
+
+test("package boundary checker keeps Control Plane and Node Agent packages independent", () => {
+  const root = fixture({
+    "packages/control-plane/package.json": manifest("@task-handoff/control-plane", { "@task-handoff/node-agent": "workspace:*" }),
+    "packages/control-plane/src/main.ts": "import '@task-handoff/node-agent';\n",
+    "packages/node-agent/package.json": manifest("@task-handoff/node-agent", { "@task-handoff/control-plane": "workspace:*" }),
+    "packages/node-agent/src/main.ts": "import '@task-handoff/control-plane';\n",
+  });
+  const violations = checkWorkspace(root).join("\n");
+
+  assert.match(violations, /@task-handoff\/control-plane must not depend on @task-handoff\/node-agent/);
+  assert.match(violations, /@task-handoff\/node-agent must not depend on @task-handoff\/control-plane/);
+});
+
+test("package boundary checker rejects manifest-only Control Plane and Node Agent coupling", () => {
+  const root = fixture({
+    "packages/control-plane/package.json": manifest("@task-handoff/control-plane", { "@task-handoff/node-agent": "workspace:*" }),
+    "packages/node-agent/package.json": manifest("@task-handoff/node-agent", { "@task-handoff/control-plane": "workspace:*" }),
+  });
+  const violations = checkWorkspace(root).join("\n");
+
+  assert.match(violations, /@task-handoff\/control-plane must not depend on @task-handoff\/node-agent/);
+  assert.match(violations, /@task-handoff\/node-agent must not depend on @task-handoff\/control-plane/);
 });
