@@ -19,6 +19,7 @@ export const stories = {
   viewMode: "视图",
   compactMode: "简约模式",
   detailedMode: "详细模式",
+  showNodeNames: "显示节点名称",
   sort: {
     title: "排序",
     name: "按名称",

@@ -16,6 +16,7 @@ export const stories = {
   viewMode: "View",
   compactMode: "Compact",
   detailedMode: "Detailed",
+  showNodeNames: "Show node names",
   sort: {
     title: "Sort",
     name: "Name",

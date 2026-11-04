@@ -18,6 +18,7 @@
                   <DropdownMenuRadioItem class="story-list-options-item option-item" value="compact">{{ t("stories.compactMode") }}</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem class="story-list-options-item option-item" value="detailed">{{ t("stories.detailedMode") }}</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
+                <DropdownMenuCheckboxItem class="story-list-options-item option-item" :model-value="showNodeNames" @update:model-value="setShowNodeNames(Boolean($event))">{{ t("stories.showNodeNames") }}</DropdownMenuCheckboxItem>
                 <DropdownMenuSeparator class="story-list-options-separator" />
                 <DropdownMenuLabel class="story-list-options-label">{{ t("stories.sort.title") }}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup :model-value="storySortMode" @update:model-value="setStorySortMode($event as StorySortMode)">
@@ -51,6 +52,7 @@
                     <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" :aria-keyshortcuts="storySortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined" :disabled="!storyIsOnline(story)" @click="selectStory(story)" @keydown="handleStorySortKeydown($event, story)">
                       <BookOpen :size="15" />
                       <span class="story-tree-item-copy"><strong>{{ story.title }}</strong></span>
+                      <small v-if="showStoryNodeNames" class="story-tree-item-hint story-tree-node-name">{{ storyOwnerNodeName(story.ownerNodeId) }}</small>
                     </button>
                   </ContextMenuTrigger>
                   <StoryTreeContextMenu
@@ -530,7 +532,7 @@ import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import Input from "../../../components/ui/input/Input.vue";
 import Textarea from "../../../components/ui/textarea/Textarea.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -630,6 +632,15 @@ function storedExpandedStoryKeys() { try { const value = JSON.parse(window.local
 function persistExpandedStoryKeys(keys: Set<string>) { try { window.localStorage?.setItem(EXPANDED_STORY_KEYS_STORAGE_KEY, JSON.stringify([...keys])); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } }
 const STORY_SORT_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.sort-mode";
 const STORY_MANUAL_ORDER_STORAGE_KEY = "task-handoff.control-plane.stories.manual-order";
+const SHOW_NODE_NAMES_STORAGE_KEY = "task-handoff.control-plane.stories.show-node-names";
+function storedShowNodeNames() {
+  try { return window.localStorage?.getItem(SHOW_NODE_NAMES_STORAGE_KEY) !== "false"; } catch { return true; }
+}
+const showNodeNames = ref(storedShowNodeNames());
+function setShowNodeNames(value: boolean) {
+  showNodeNames.value = value;
+  try { window.localStorage?.setItem(SHOW_NODE_NAMES_STORAGE_KEY, String(value)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ }
+}
 function storedStorySortMode(): StorySortMode {
   try {
     const value = window.localStorage?.getItem(STORY_SORT_MODE_STORAGE_KEY);
@@ -684,6 +695,7 @@ const storyCatalog = useStoryCatalog();
 const { boundTriggers, isTriggerBound, toggleTrigger, triggerActionKey, triggerBusyKey, triggerTemplates } = useAiSessionTriggers();
 const allStories = computed(() => storyCatalog.stories.value);
 const filteredStories = computed(() => allStories.value.filter((story) => nodeIsVisible(props.nodeFilter, story.ownerNodeId)));
+const showStoryNodeNames = computed(() => showNodeNames.value && props.nodes.filter((node) => nodeIsVisible(props.nodeFilter, node.id)).length > 1);
 const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
 )));
@@ -2079,7 +2091,10 @@ onBeforeUnmount(() => {
 .story-tree-collapse { display:grid; grid-template-rows:1fr; opacity:1; transition:grid-template-rows 180ms ease,opacity 140ms ease; }
 .story-tree-collapse-inner { min-height:0; overflow:hidden; }
 .story-tree-collapse-enter-from,.story-tree-collapse-leave-to { grid-template-rows:0fr; opacity:0; }
-.story-tree-story-row { position:relative; }
+.story-tree-story-row { position:relative; --story-tree-row-bg:var(--workspace-bg); }
+.story-tree-story-row:hover,.story-tree-story-row:focus-within { --story-tree-row-bg:var(--sidebar-row-hover-bg,var(--surface-active)); }
+.story-tree-story-row:has(.story-tree-story.active) { --story-tree-row-bg:var(--sidebar-row-selected-bg,var(--surface-active)); }
+.story-tree-story-row .story-tree-story { background:var(--story-tree-row-bg); }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
 .story-tree-story { padding-right:36px; padding-left:32px; padding-block:10px; }
 .story-tree-archived { --story-tree-archived-foreground:color-mix(in srgb,var(--text-muted) 72%,transparent); }
@@ -2152,15 +2167,19 @@ onBeforeUnmount(() => {
 .story-tree-item-hint { position:absolute; top:50%; right:8px; z-index:1; max-width:64%; overflow:hidden; padding-left:18px; color:var(--text-muted); font-size:12px; white-space:nowrap; text-overflow:ellipsis; pointer-events:none; opacity:0; transform:translateY(-50%); background:linear-gradient(90deg, transparent, var(--surface-active) 18px); transition:opacity 140ms ease; }
 .story-tree-item:hover > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-hover-bg,var(--surface-active)) 18px); opacity:1; }
 .story-tree-item.active > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-selected-bg,var(--surface-active)) 18px); }
+.story-tree-story > .story-tree-node-name { opacity:1; background:linear-gradient(90deg,transparent,var(--story-tree-row-bg) 18px); }
+.story-tree-story-row:hover .story-tree-node-name,.story-tree-story-row:focus-within .story-tree-node-name { opacity:0; }
+.story-tree-archived .story-tree-node-name { right:68px; color:var(--story-tree-archived-foreground); }
 .story-tree-item-unread > .story-tree-item-hint { right:24px; }
 .story-session-unread { width:7px; height:7px; flex:0 0 auto; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
 .story-tree-add { display:grid; grid:1fr/1fr; width:18px; height:18px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
-.story-tree-story-add { position:absolute; top:50%; right:6px; width:24px; height:24px; transform:translateY(-50%); opacity:0; pointer-events:none; transition:opacity 120ms ease; }
-.story-tree-story-row:hover .story-tree-story-add,.story-tree-story-add:focus-visible { opacity:1; pointer-events:auto; }
+.story-tree-story-add { position:absolute; z-index:2; isolation:isolate; top:50%; right:6px; width:24px; height:24px; background:var(--story-tree-row-bg); transform:translateY(-50%); opacity:0; pointer-events:none; transition:opacity 120ms ease; }
+.story-tree-story-add::before { position:absolute; z-index:-1; inset:0 100% 0 -18px; background:linear-gradient(90deg,transparent,var(--story-tree-row-bg)); pointer-events:none; content:""; }
+.story-tree-story-row:hover .story-tree-story-add,.story-tree-story-row:focus-within .story-tree-story-add { opacity:1; pointer-events:auto; }
 .story-tree-add:hover,.story-tree-add:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-tree-add:disabled { cursor:default; }
 .story-tree-story-add:disabled { opacity:0; pointer-events:none; }
-.story-tree-story-row:hover .story-tree-story-add:disabled { opacity:.4; }
+.story-tree-story-row:hover .story-tree-story-add:disabled,.story-tree-story-row:focus-within .story-tree-story-add:disabled { opacity:1; color:color-mix(in srgb,var(--text-muted) 40%,var(--story-tree-row-bg)); }
 .story-tree-empty { padding:8px; }
 .story-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .story-content.story-session-pane { padding:0; }
