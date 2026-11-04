@@ -52,11 +52,8 @@ impl StoragePaths {
     }
 
     pub fn ensure_directories(&self) -> std::io::Result<()> {
-        for path in [&self.data_dir, &self.log_dir] {
-            std::fs::create_dir_all(path)?;
-            crate::fs_permissions::restrict_path(path, 0o700)?;
-        }
-        Ok(())
+        std::fs::create_dir_all(&self.data_dir)?;
+        crate::fs_permissions::restrict_path(&self.data_dir, 0o700)
     }
 }
 
@@ -124,10 +121,9 @@ mod tests {
             web_token_path: data.join("web-token"),
         };
         paths.ensure_directories().expect("directories");
-        for path in [&paths.data_dir, &paths.log_dir] {
-            assert!(path.is_dir(), "{} should exist", path.display());
-        }
+        assert!(paths.data_dir.is_dir());
         for path in [
+            &paths.log_dir,
             &paths.app_catalog_dir,
             &paths.app_sessions_dir,
             &paths.runtime_dir,

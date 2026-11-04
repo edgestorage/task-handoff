@@ -431,7 +431,9 @@ impl AppState {
         );
         ai_session_controller.register_provider(ai_session_codex.clone());
         ai_session_controller.register_provider(ai_session_claude.clone());
-        ai_session_controller.register_provider(ai_session_opencode.clone());
+        if app_runtime.catalog().iter().any(|app| app.id == "opencode") {
+            ai_session_controller.register_provider(ai_session_opencode.clone());
+        }
         ai_session_controller.set_story_agent_tool_resolver(Arc::new(story_tools.clone()));
         let ai_session_resume = Arc::new(AiSessionResumeCoordinator::default());
         let ai_session_fork = Arc::new(AiSessionForkCoordinator::new(

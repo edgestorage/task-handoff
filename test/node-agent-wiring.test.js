@@ -175,7 +175,7 @@ test("localhost adapter materializes its private Codex home before startup readi
       name: "ready commit",
       registrationToken: "registration-token",
       source: { type: "local-folder", path: dataDir },
-      runtime: { kind: "local", labels: {}, port: 32123 },
+      runtime: { kind: "local", labels: {} },
     },
     project: { id: "project_ready_commit" },
     node: { id: "node_ready_commit" },

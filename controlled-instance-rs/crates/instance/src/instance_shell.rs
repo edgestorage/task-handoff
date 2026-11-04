@@ -800,69 +800,44 @@ fn exit_parts(status: std::process::ExitStatus) -> (Option<i32>, Option<String>)
 
 #[cfg(unix)]
 fn signal_name(signal: i32) -> &'static str {
-    #[cfg(target_os = "macos")]
-    return match signal {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        10 => "SIGBUS",
-        11 => "SIGSEGV",
-        12 => "SIGSYS",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        16 => "SIGURG",
-        17 => "SIGSTOP",
-        18 => "SIGTSTP",
-        19 => "SIGCONT",
-        20 => "SIGCHLD",
-        21 => "SIGTTIN",
-        22 => "SIGTTOU",
-        23 => "SIGIO",
-        24 => "SIGXCPU",
-        25 => "SIGXFSZ",
-        26 => "SIGVTALRM",
-        27 => "SIGPROF",
-        28 => "SIGWINCH",
-        29 => "SIGINFO",
-        30 => "SIGUSR1",
-        31 => "SIGUSR2",
-        _ => "SIGUNKNOWN",
-    };
-    #[cfg(not(target_os = "macos"))]
     match signal {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        6 => "SIGABRT",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        16 => "SIGSTKFLT",
-        17 => "SIGCHLD",
-        18 => "SIGCONT",
-        19 => "SIGSTOP",
-        20 => "SIGTSTP",
-        21 => "SIGTTIN",
-        22 => "SIGTTOU",
-        23 => "SIGURG",
-        24 => "SIGXCPU",
-        25 => "SIGXFSZ",
-        26 => "SIGVTALRM",
-        27 => "SIGPROF",
-        28 => "SIGWINCH",
-        29 => "SIGIO",
-        30 => "SIGPWR",
-        31 => "SIGSYS",
+        libc::SIGHUP => "SIGHUP",
+        libc::SIGINT => "SIGINT",
+        libc::SIGQUIT => "SIGQUIT",
+        libc::SIGILL => "SIGILL",
+        libc::SIGTRAP => "SIGTRAP",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGUSR1 => "SIGUSR1",
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGUSR2 => "SIGUSR2",
+        libc::SIGPIPE => "SIGPIPE",
+        libc::SIGALRM => "SIGALRM",
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGCHLD => "SIGCHLD",
+        libc::SIGCONT => "SIGCONT",
+        libc::SIGSTOP => "SIGSTOP",
+        libc::SIGTSTP => "SIGTSTP",
+        libc::SIGTTIN => "SIGTTIN",
+        libc::SIGTTOU => "SIGTTOU",
+        libc::SIGURG => "SIGURG",
+        libc::SIGXCPU => "SIGXCPU",
+        libc::SIGXFSZ => "SIGXFSZ",
+        libc::SIGVTALRM => "SIGVTALRM",
+        libc::SIGPROF => "SIGPROF",
+        libc::SIGWINCH => "SIGWINCH",
+        libc::SIGIO => "SIGIO",
+        libc::SIGSYS => "SIGSYS",
+        #[cfg(target_os = "macos")]
+        libc::SIGEMT => "SIGEMT",
+        #[cfg(target_os = "macos")]
+        libc::SIGINFO => "SIGINFO",
+        #[cfg(target_os = "linux")]
+        libc::SIGSTKFLT => "SIGSTKFLT",
+        #[cfg(target_os = "linux")]
+        libc::SIGPWR => "SIGPWR",
         _ => "SIGUNKNOWN",
     }
 }
@@ -1034,8 +1009,20 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn exit_status_signal_names_are_protocol_compatible() {
-        assert!(signal_name(15).starts_with("SIG"));
-        assert_eq!(signal_name(15), "SIGTERM");
+        use std::os::unix::process::ExitStatusExt;
+        for (signal, name) in [
+            (libc::SIGTERM, "SIGTERM"),
+            (libc::SIGTRAP, "SIGTRAP"),
+            (libc::SIGBUS, "SIGBUS"),
+            (libc::SIGUSR1, "SIGUSR1"),
+            (libc::SIGUSR2, "SIGUSR2"),
+        ] {
+            assert_eq!(signal_name(signal), name);
+            assert_eq!(
+                exit_parts(std::process::ExitStatus::from_raw(signal)),
+                (None, Some(name.to_string()))
+            );
+        }
         #[cfg(target_os = "macos")]
         {
             assert_eq!(signal_name(10), "SIGBUS");

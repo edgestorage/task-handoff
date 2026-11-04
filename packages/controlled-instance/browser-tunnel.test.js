@@ -25,7 +25,7 @@ class TestWebSocket extends EventEmitter {
     this.sent = [];
     this.closes = [];
   }
-  send(data, options) { this.sent.push({ data, options }); }
+  send(data, options) { this.sent.push({ data, options }); this.emit("sent"); }
   close(code, reason) { this.closes.push({ code, reason }); this.readyState = 3; }
 }
 
@@ -35,6 +35,14 @@ function nextFrame(ws, type) {
   return entry;
 }
 
+async function waitForFrame(ws, type) {
+  const signal = AbortSignal.timeout(5_000);
+  while (!ws.sent.some(({ data }) => Buffer.isBuffer(data) && decodeBrowserTunnelFrame(data).type === type)) {
+    await once(ws, "sent", { signal });
+  }
+  return nextFrame(ws, type);
+}
+
 test("controlled instance browser tunnel connects TCP in its runtime and preserves half-close", async (t) => {
   const server = net.createServer((socket) => {
     socket.on("data", (data) => socket.write(Buffer.concat([Buffer.from("echo:"), data])));
@@ -42,22 +50,22 @@ test("controlled instance browser tunnel connects TCP in its runtime and preserv
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  t.after(() => server.close());
   const address = server.address();
   const ws = new TestWebSocket();
   attachBrowserTunnel(ws);
+  t.after(async () => {
+    ws.emit("close");
+    await new Promise((resolve) => server.close(resolve));
+  });
   ws.emit("message", encodeBrowserTunnelHello(), false);
   assert.equal(JSON.parse(ws.sent[0].data).type, "browser-tunnel.ready");
   ws.emit("message", encodeBrowserTunnelOpen(1, { host: "127.0.0.1", port: address.port }), true);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(nextFrame(ws, BrowserTunnelFrameType.OpenOk).streamId, 1);
+  assert.equal((await waitForFrame(ws, BrowserTunnelFrameType.OpenOk)).streamId, 1);
   ws.emit("message", encodeBrowserTunnelFrame({ type: BrowserTunnelFrameType.Data, streamId: 1, payload: Buffer.from("hello") }), true);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(nextFrame(ws, BrowserTunnelFrameType.Data).payload.toString(), "echo:hello");
+  assert.equal((await waitForFrame(ws, BrowserTunnelFrameType.Data)).payload.toString(), "echo:hello");
   assert.equal(decodeBrowserTunnelWindowUpdate(nextFrame(ws, BrowserTunnelFrameType.WindowUpdate)), 5);
   ws.emit("message", encodeBrowserTunnelFrame({ type: BrowserTunnelFrameType.HalfClose, streamId: 1, payload: Buffer.alloc(0) }), true);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(ws.sent.map((item) => item.data).filter(Buffer.isBuffer).map(decodeBrowserTunnelFrame).some((frame) => frame.type === BrowserTunnelFrameType.Close));
+  assert.equal((await waitForFrame(ws, BrowserTunnelFrameType.Close)).streamId, 1);
 });
 
 test("controlled instance browser tunnel isolates duplicate close and flow violations", () => {

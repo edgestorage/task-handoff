@@ -7076,16 +7076,15 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    CODEX_HOME: codexHome,
 	    TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
 	  });
-	  const appRuntime = {
+	  const appRuntime = Object.assign(new AppRuntimeManager(paths), {
 	    catalog: () => [],
-	    replaceManagedEnvironment: () => undefined,
 	    listSessions: () => [{ id: "app_existing", appId: "codex", status: "running", ai: { threadIds: ["thread_existing"] } }],
 	    runningSessionCount: () => 1,
 	    sharedResourceSessionAi: () => undefined,
 	    on: () => undefined,
 	    beginDrain: () => undefined,
 	    stopAll: () => undefined,
-	  };
+	  });
   const aiSessionRegistry = createAiSessionRegistry({ dir: aiSessionDir });
   const app = await createWebApp({
     staticDir: path.join(root, "missing-static"),
@@ -7230,16 +7229,15 @@ test("controlled instance publishes provider changes immediately and ignores ext
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-session-discovery-"));
   const paths = appRuntimeTestPaths(root);
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
-  const appRuntime = {
+  const appRuntime = Object.assign(new AppRuntimeManager(paths), {
     catalog: () => [],
-    replaceManagedEnvironment: () => undefined,
     listSessions: () => [{ id: "app_discovery", appId: "codex", status: "running" }],
     runningSessionCount: () => 1,
     sharedResourceSessionAi: () => undefined,
     on: () => undefined,
     beginDrain: () => undefined,
     stopAll: () => undefined,
-  };
+  });
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
@@ -10067,7 +10065,7 @@ test("codex app server uses a short unix socket path outside deep runtime direct
   const session = runtime.acquireSharedResource("codex", "codex", root, process.env, "app_test");
   try {
     assert.equal(spawned.length, 1);
-    assert.equal(spawned[0].command, "codex");
+    assert.equal(spawned[0].command, path.join(paths.dataDir, "managed-apps/node-package/codex/node_modules/.bin/codex"));
     const appServerIndex = spawned[0].args.indexOf("app-server");
     assert.notEqual(appServerIndex, -1);
     assert.deepEqual(spawned[0].args.slice(appServerIndex, appServerIndex + 3), [

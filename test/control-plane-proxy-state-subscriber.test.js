@@ -139,6 +139,7 @@ test("subscriber applies snapshot before opening WSS and then consumes contiguou
 
 test("a quiet proxy event stream is pinged and recycled once it stops answering", async (t) => {
   const service = await fixture(t);
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
   const sockets = [];
   let fetches = 0;
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
@@ -159,11 +160,17 @@ test("a quiet proxy event stream is pinged and recycled once it stops answering"
 
   // An idle stream still carries traffic, so a reverse proxy between the two
   // Control Planes cannot reap the subscription for being quiet.
-  await waitFor(() => sockets[0].pings >= 2);
+  t.mock.timers.tick(5);
+  t.mock.timers.tick(5);
+  assert.equal(sockets[0].pings, 2);
   assert.equal(sockets[0].closed, undefined);
 
-  // Silence past the liveness window is recycled instead of waiting for TCP.
-  await waitFor(() => sockets[0].closed === true);
+  // A pong refreshes liveness; only silence beyond that window recycles it.
+  sockets[0].emit("pong");
+  t.mock.timers.tick(25);
+  assert.equal(sockets[0].closed, undefined);
+  t.mock.timers.tick(10);
+  assert.equal(sockets[0].closed, true);
   sockets[0].disconnect(1006, "stream closed");
   await waitFor(() => sockets.length === 2);
   assert.equal(fetches, 2);
