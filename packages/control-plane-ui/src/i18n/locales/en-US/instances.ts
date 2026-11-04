@@ -394,6 +394,7 @@ export const instances = {
     readyToStart: "The instance is ready to start.",
     failedDetail: "The instance could not be started. Retry the failed operation or inspect its runtime.",
     stoppedDetail: "The instance is stopped. Start it when you are ready to continue.",
+    stoppedRuntimeUnavailableDetail: "The instance is stopped. Start {runtime} on the node before starting the instance.",
     unhealthyDetail: "The instance health check is {health}. Restart the instance or inspect its runtime.",
     stoppingDetail: "Waiting for the instance runtime to stop safely.",
     waitingDetail: "Waiting for the controlled instance to connect · {status} · {connection}",

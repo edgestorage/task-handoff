@@ -188,7 +188,11 @@ export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) 
   // instance that never reached Git provisioning still shows its real reason.
   if (instance.status === "failed" && instance.workspace.error) return instance.workspace.error;
   if (instance.status === "failed") return t("instances.lifecycle.failedDetail");
-  if (instance.status === "stopped") return t("instances.lifecycle.stoppedDetail");
+  if (instance.status === "stopped") {
+    return isInstanceRuntimeOffline(instance)
+      ? t("instances.lifecycle.stoppedRuntimeUnavailableDetail", { runtime: instanceRuntimeNameLabel(instance, t) })
+      : t("instances.lifecycle.stoppedDetail");
+  }
   if (instance.status === "unhealthy") return t("instances.lifecycle.unhealthyDetail", { health: translateStatus(healthStatusKeys, instance.health, t) });
   if (instance.status === "stopping") return t("instances.lifecycle.stoppingDetail");
   return t("instances.lifecycle.waitingDetail", {

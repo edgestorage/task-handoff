@@ -380,6 +380,7 @@ export const instances = {
     pullingImageDetail: "正在准备 Docker 镜像，完成后容器才能启动。", resolvingImageDetail: "正在将拉取的镜像解析为仓库 digest。",
     readyToStart: "实例已可启动。", failedDetail: "实例无法启动。请重试失败操作或检查其运行环境。",
     stoppedDetail: "实例已停止，可在准备好后重新启动。", unhealthyDetail: "实例健康检查状态为 {health}。请重启实例或检查其运行环境。",
+    stoppedRuntimeUnavailableDetail: "实例已停止。请先启动节点上的 {runtime}，再启动实例。",
     stoppingDetail: "正在等待实例运行环境安全停止。", waitingDetail: "正在等待受管实例连接 · {status} · {connection}",
     nodeDisconnected: "节点已断开",
     nodeDisconnectedDetail: "此节点的连接已暂停。实例不会被停止；重新连接节点后可继续查看和操作。",

@@ -175,3 +175,24 @@ test("a stopped instance keeps its own lifecycle and an online runtime stays unt
   assert.equal(hasInstanceStatusPage(online), false);
   assert.equal(canShowInstanceAction(online, "restart"), true);
 });
+
+test("stopped instances explain the runtime prerequisite until Docker comes online", () => {
+  const stopped = dockerInstance("offline", {
+    status: "stopped",
+    connectionStatus: "offline",
+    access: { status: "endpoint-unreachable" },
+  });
+  assert.equal(instanceStatusTitle(stopped, chinese), "实例已停止");
+  assert.equal(isInstanceStatusPending(stopped), false);
+  assert.equal(instanceStatusDetail(stopped, chinese), "实例已停止。请先启动节点上的 Docker/OrbStack，再启动实例。");
+  assert.equal(instanceStatusDetail(stopped, english), "The instance is stopped. Start Docker on the node before starting the instance.");
+  assert.equal(canShowInstanceAction(stopped, "start"), false);
+  assert.equal(canShowInstanceAction(stopped, "delete"), true);
+
+  const recovered = { ...stopped, runtime: dockerInstance("online").runtime };
+  assert.equal(instanceStatusDetail(recovered, chinese), "实例已停止，可在准备好后重新启动。");
+  assert.equal(canShowInstanceAction(recovered, "start"), true);
+
+  // An absent runtime record is not evidence that Docker needs starting.
+  assert.equal(instanceStatusDetail({ ...stopped, runtime: undefined }, chinese), instanceStatusDetail(recovered, chinese));
+});
