@@ -518,43 +518,45 @@ impl AppState {
         let app_management_sessions = app_runtime.clone();
         let app_management_runtime = app_runtime.clone();
         let app_management_ai_sessions = ai_sessions.clone();
-        let app_management = Arc::new(AppManagementManager::new_with_runtime_hook_and_install_environment(
-            app_management_state_dir,
-            managed_app_root,
-            move || {
-                let mut sessions = app_management_sessions
-                    .list_sessions()
-                    .into_iter()
-                    .map(|session| AppManagementSession {
-                        id: session.id,
-                        app_id: session.app_id,
-                        status: session.status,
-                    })
-                    .collect::<Vec<_>>();
-                sessions.extend(
-                    app_management_ai_sessions
-                        .list()
+        let app_management = Arc::new(
+            AppManagementManager::new_with_runtime_hook_and_install_environment(
+                app_management_state_dir,
+                managed_app_root,
+                move || {
+                    let mut sessions = app_management_sessions
+                        .list_sessions()
                         .into_iter()
-                        .filter(|session| session.active_turn_id.is_some())
                         .map(|session| AppManagementSession {
                             id: session.id,
-                            app_id: session.agent,
-                            status: "running".into(),
-                        }),
-                );
-                sessions
-            },
-            move |event| {
-                if let Ok(payload) = serde_json::to_value(event) {
-                    let _ = app_management_events.publish("app.management", payload);
-                }
-            },
-            move |app_id| {
-                app_management_runtime.stop_shared_resource(app_id);
-                app_management_runtime.invalidate_catalog();
-            },
-            install_environment.clone(),
-        ));
+                            app_id: session.app_id,
+                            status: session.status,
+                        })
+                        .collect::<Vec<_>>();
+                    sessions.extend(
+                        app_management_ai_sessions
+                            .list()
+                            .into_iter()
+                            .filter(|session| session.active_turn_id.is_some())
+                            .map(|session| AppManagementSession {
+                                id: session.id,
+                                app_id: session.agent,
+                                status: "running".into(),
+                            }),
+                    );
+                    sessions
+                },
+                move |event| {
+                    if let Ok(payload) = serde_json::to_value(event) {
+                        let _ = app_management_events.publish("app.management", payload);
+                    }
+                },
+                move |app_id| {
+                    app_management_runtime.stop_shared_resource(app_id);
+                    app_management_runtime.invalidate_catalog();
+                },
+                install_environment.clone(),
+            ),
+        );
         let management_admission = Arc::downgrade(&app_management);
         app_runtime.set_app_launch_admission(move |app_id| {
             management_admission
@@ -588,7 +590,8 @@ impl AppState {
             let ai_session_codex = ai_session_codex.clone();
             install_environment.clone().on_change(move || {
                 let overrides = install_environment.runtime_overrides();
-                controlled_models.sync_app_environment_with_overrides(&app_runtime, overrides.clone());
+                controlled_models
+                    .sync_app_environment_with_overrides(&app_runtime, overrides.clone());
                 let mut environment = controlled_models.runtime_environment();
                 environment.extend(overrides);
                 ai_session_codex

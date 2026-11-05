@@ -8,10 +8,9 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::{
-    install_environment::{
-        AppInstallEnvironmentManager, AppInstallExecutionPolicy,
-    },
-    run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeHooks, InstallRecipe,
+    install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
+    run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeHooks,
+    InstallRecipe,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -567,10 +566,14 @@ impl AppUpdateChecker {
             .collect::<Vec<_>>();
         let command = if elevate {
             let mut forwarded = Vec::new();
-            for key in ["PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY", "npm_config_cache"] {
-                if let Some((name, value)) = env
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            for key in [
+                "PATH",
+                "npm_config_registry",
+                "NPM_CONFIG_REGISTRY",
+                "npm_config_cache",
+            ] {
+                if let Some((name, value)) =
+                    env.iter().find(|(name, _)| name.eq_ignore_ascii_case(key))
                 {
                     forwarded.push(format!("{name}={value}"));
                 }

@@ -202,7 +202,7 @@ pub struct AppInstallEnvironmentTestResponse {
     pub tested_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlledInstanceAppInstallEnvironmentCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,18 +211,6 @@ pub struct ControlledInstanceAppInstallEnvironmentCapabilities {
     pub node_toolchain: bool,
     pub npm_sources: bool,
     pub apt_sources: bool,
-}
-
-impl Default for ControlledInstanceAppInstallEnvironmentCapabilities {
-    fn default() -> Self {
-        Self {
-            protocol_version: None,
-            source_profiles: Vec::new(),
-            node_toolchain: false,
-            npm_sources: false,
-            apt_sources: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

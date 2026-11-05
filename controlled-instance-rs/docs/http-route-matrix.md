@@ -33,7 +33,7 @@ When web auth is disabled, web routes remain reachable without a token. Node Age
 
 ## `v0.0.46` compatibility baseline
 
-This section freezes 201 explicit Node registrations at tag `v0.0.46`, including five WebSocket upgrade registrations. The baseline is authoritative for migration compatibility checks; target-current Node has 202 registrations, with only `GET /api/internal/instance-shell` added after the baseline.
+This section freezes 201 explicit Node registrations at tag `v0.0.46`, including five WebSocket upgrade registrations. The baseline is authoritative for migration compatibility checks; target-current Node has 206 registrations, with `GET /api/internal/instance-shell` and the four App install-environment routes added after the baseline.
 
 ### Route matrix
 
@@ -243,11 +243,15 @@ This section freezes 201 explicit Node registrations at tag `v0.0.46`, including
 
 ## Target-current Node extensions after `v0.0.46`
 
-This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has one route.
+This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has five routes.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/internal/instance-shell` | Node Agent | WebSocket | 101 then framed; post-`v0.0.46` only |
+| `GET` | `/api/apps/install-environment` | Web | JSON | 200; post-`v0.0.46` only |
+| `PUT` | `/api/apps/install-environment` | Web | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/apps/install-environment/test` | Web | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/apps/install-environment/prepare` | Web | JSON | 200; post-`v0.0.46` only |
 
 ## Additional contract families
 
@@ -266,7 +270,7 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- The route matrix now records both the 201-route `v0.0.46` baseline and the 202-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- The route matrix now records both the 201-route `v0.0.46` baseline and the 206-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

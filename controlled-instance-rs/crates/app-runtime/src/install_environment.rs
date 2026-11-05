@@ -134,19 +134,10 @@ impl std::fmt::Display for AppInstallEnvironmentError {
 
 impl std::error::Error for AppInstallEnvironmentError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct StoredInstallSources {
     revision: u64,
     settings: AppInstallSourceSettings,
-}
-
-impl Default for StoredInstallSources {
-    fn default() -> Self {
-        Self {
-            revision: 0,
-            settings: AppInstallSourceSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

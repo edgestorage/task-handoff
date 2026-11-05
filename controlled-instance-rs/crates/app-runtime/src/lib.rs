@@ -19,6 +19,11 @@ pub use catalog::{
     builtin_app_catalog, resolve_executable, AppCatalogRepository, AppSource, CatalogEntry,
 };
 pub use controlled_instance_protocol::AppSession;
+pub use install_environment::{
+    AppInstallEnvironmentError, AppInstallEnvironmentManager, AppInstallEnvironmentOptions,
+    AppInstallExecutionPolicy, AptSourceConfiguration, APP_INSTALL_SOURCE_PROFILES,
+    MANAGED_NODE_VERSION, MINIMUM_NODE_VERSION,
+};
 pub use managed::{
     builtin_managed_app_definitions, current_arch, current_platform,
     detect_final_computer_capabilities, detect_final_computer_capabilities_sync,
@@ -30,11 +35,6 @@ pub use managed::{
     ManagedAppOwnershipContext,
 };
 pub use managed_node_apps::ManagedNodeApps;
-pub use install_environment::{
-    AppInstallEnvironmentError, AppInstallEnvironmentManager, AppInstallEnvironmentOptions,
-    AppInstallExecutionPolicy, AptSourceConfiguration, APP_INSTALL_SOURCE_PROFILES,
-    MANAGED_NODE_VERSION, MINIMUM_NODE_VERSION,
-};
 pub use management::{AppManagementManager, AppManagementRequestError, AppManagementSession};
 pub use profiles::ChromiumProfileStore;
 pub use pty::{
